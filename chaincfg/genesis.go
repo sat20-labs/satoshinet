@@ -143,6 +143,38 @@ var testNet3GenesisBlock = wire.MsgBlock{
 	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
 }
 
+// genesisMerkleRoot is the hash of the first transaction in the genesis block
+// for the testnet4 network.
+var testNet4GenesisMerkleRoot = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
+	0x7b, 0x67, 0x66, 0xe6, 0x7e, 0x57, 0xd5, 0xcd,
+	0x0c, 0x40, 0xe4, 0x7e, 0x07, 0x80, 0xb8, 0xcb,
+	0x4c, 0x14, 0x41, 0x34, 0x23, 0x22, 0xe2, 0x1e,
+	0xe1, 0xae, 0x7a, 0xa7, 0x0a, 0xa0, 0xaa, 0x7a,
+})
+
+// testNet4GenesisBlock defines the genesis block of the block chain which
+// serves as the public transaction ledger for the test network (version 3).
+var testNet4GenesisBlock = wire.MsgBlock{
+	Header: wire.BlockHeader{
+		Version:    1,
+		PrevBlock:  chainhash.Hash{},          // 0000000000000000000000000000000000000000000000000000000000000000
+		MerkleRoot: testNet4GenesisMerkleRoot, // 7aa0a7ae1e223414cb807e40cd57e667b718e42aaf9306db9102fe28912b7b4e
+		Timestamp:  time.Unix(1714777860, 0),  // ???
+		Bits:       0x1d00ffff,                // 486604799 [00000000ffff0000000000000000000000000000000000000000000000000000]
+		Nonce:      0x17780CBB,                // 393743547
+	},
+	Transactions: []*wire.MsgTx{&genesisCoinbaseTx}, // FIXME: tx is different
+}
+
+// testNet4GenesisHash is the hash of the first block in the block chain for the
+// test network (version 4).
+var testNet4GenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
+	0xe5, 0xae, 0x2a, 0x72, 0xa7, 0x5a, 0x25, 0xe2,
+	0xee, 0xde, 0x3d, 0x53, 0xc5, 0xbc, 0xbb, 0xfb,
+	0xaf, 0xba, 0x2b, 0xf2, 0x4f, 0x84, 0xa8, 0xda,
+	0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+})
+
 // simNetGenesisHash is the hash of the first block in the block chain for the
 // simulation test network.
 var simNetGenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
