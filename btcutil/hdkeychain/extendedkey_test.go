@@ -17,8 +17,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/btcsuite/btcd/chaincfg"
 	secp_ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 )
 
 // TestBIP0032Vectors tests the vectors provided by [BIP32] to ensure the

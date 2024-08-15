@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/go-socks/socks"
+	"github.com/sat20-labs/satoshinet/btcjson"
 )
 
 // newHTTPClient returns a new HTTP client that is configured according to the

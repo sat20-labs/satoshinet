@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/btcsuite/btcd/blockchain/internal/testhelper"
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/satoshinet/blockchain/internal/testhelper"
+	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 // TestHaveBlock tests the HaveBlock API to ensure proper functionality.

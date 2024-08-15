@@ -12,10 +12,10 @@ import (
 	"testing"
 	"testing/quick"
 
-	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/davecgh/go-spew/spew"
 	secp_ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4"
 	ecdsa_schnorr "github.com/decred/dcrd/dcrec/secp256k1/v4/schnorr"
+	"github.com/sat20-labs/satoshinet/btcec"
 )
 
 type bip340Test struct {

@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/btcsuite/btcd/blockchain"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/integration/rpctest"
-	"github.com/btcsuite/btcd/rpcclient"
+	"github.com/sat20-labs/satoshinet/blockchain"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/integration/rpctest"
+	"github.com/sat20-labs/satoshinet/rpcclient"
 )
 
 func testGetBestBlock(r *rpctest.Harness, t *testing.T) {

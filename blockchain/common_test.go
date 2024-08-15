@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/btcsuite/btcd/blockchain/internal/testhelper"
-	"github.com/btcsuite/btcd/btcutil"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/database"
-	_ "github.com/btcsuite/btcd/database/ffldb"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/satoshinet/blockchain/internal/testhelper"
+	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/database"
+	_ "github.com/sat20-labs/satoshinet/database/ffldb"
+	"github.com/sat20-labs/satoshinet/txscript"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (

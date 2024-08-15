@@ -8,10 +8,10 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcutil/base58"
-	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcutil/base58"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 )
 
 // ErrMalformedPrivateKey describes an error where a WIF-encoded private

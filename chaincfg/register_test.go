@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/btcsuite/btcd/chaincfg"
+	. "github.com/sat20-labs/satoshinet/chaincfg"
 )
 
 // Define some of the required parameters for a user-registered

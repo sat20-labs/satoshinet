@@ -8,11 +8,11 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/schnorr"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 // TapscriptLeafVersion represents the various possible versions of a tapscript

@@ -12,8 +12,8 @@ import (
 	"io"
 	"sort"
 
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/satoshinet/txscript"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 // WriteTxWitness is a utility function due to non-exported witness

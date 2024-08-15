@@ -7,7 +7,7 @@ package main
 import (
 	"log"
 
-	"github.com/btcsuite/btcd/rpcclient"
+	"github.com/sat20-labs/satoshinet/rpcclient"
 )
 
 func main() {
@@ -15,11 +15,11 @@ func main() {
 	// Unix Socket.
 	connCfg := &rpcclient.ConnConfig{
 		// For unix sockets, use unix:// + "your unix socket path".
-		Host:		"unix:///tmp/test.XXXX",		    
-		User:		"yourrpcuser",
-		Pass:		"yourrpcpass",
-		HTTPPostMode:	true, // Bitcoin core only supports HTTP POST mode.
-		DisableTLS:	true, // Bitcoin core does not provide TLS by default.
+		Host:         "unix:///tmp/test.XXXX",
+		User:         "yourrpcuser",
+		Pass:         "yourrpcpass",
+		HTTPPostMode: true, // Bitcoin core only supports HTTP POST mode.
+		DisableTLS:   true, // Bitcoin core does not provide TLS by default.
 	}
 
 	// Notice the notification parameter is nil since notifications are

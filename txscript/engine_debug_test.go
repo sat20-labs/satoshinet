@@ -7,9 +7,9 @@ package txscript
 import (
 	"testing"
 
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/schnorr"
-	"github.com/btcsuite/btcd/wire"
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
+	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
 

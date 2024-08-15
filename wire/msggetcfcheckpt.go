@@ -7,7 +7,7 @@ package wire
 import (
 	"io"
 
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 )
 
 // MsgGetCFCheckpt is a request for filter headers at evenly spaced intervals

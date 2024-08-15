@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/sat20-labs/satoshinet/btcec"
 )
 
 const (

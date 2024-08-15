@@ -49,6 +49,6 @@ btcutil/psbt/coverage.txt
 # Binaries produced by "make build"
 /addblock
 /btcctl
-/btcd
+/satoshinet
 /findcheckpoint
 /gencerts
