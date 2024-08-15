@@ -36,6 +36,7 @@ type config struct {
 	RegressionTest bool   `long:"regtest" description:"Use the regression test network"`
 	SimNet         bool   `long:"simnet" description:"Use the simulation test network"`
 	TestNet3       bool   `long:"testnet" description:"Use the test network"`
+	TestNet4       bool   `long:"testnet4" description:"Use the test network (4th version of testnet)"`
 }
 
 // fileExists reports whether the named file or directory exists.
@@ -72,6 +73,8 @@ func netName(chainParams *chaincfg.Params) string {
 	switch chainParams.Net {
 	case wire.TestNet3:
 		return "testnet"
+	case wire.TestNet4:
+		return "testnet4"
 	default:
 		return chainParams.Name
 	}
@@ -88,6 +91,10 @@ func setupGlobalConfig() error {
 	if cfg.TestNet3 {
 		numNets++
 		activeNetParams = &chaincfg.TestNet3Params
+	}
+	if cfg.TestNet4 {
+		numNets++
+		activeNetParams = &chaincfg.TestNet4Params
 	}
 	if cfg.RegressionTest {
 		numNets++

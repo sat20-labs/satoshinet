@@ -125,6 +125,13 @@ func normalizeAddress(addr string, chain *chaincfg.Params, useWallet bool) (stri
 			} else {
 				defaultPort = "18334"
 			}
+		case &chaincfg.TestNet4Params:
+			if useWallet {
+				defaultPort = "48332"
+			} else {
+				defaultPort = "48334"
+			}
+		case &chaincfg.RegressionNetParams:
 		case &chaincfg.SimNetParams:
 			if useWallet {
 				defaultPort = "18554"
