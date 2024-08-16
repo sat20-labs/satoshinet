@@ -14,5 +14,15 @@
             "program": "${workspaceFolder}",
             "args": []
         },
+        {
+            "name": "client",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "cwd": "${workspaceFolder}/client",
+            "console": "integratedTerminal",
+            "program": "${workspaceFolder}/client",
+            "args": []
+        },
     ]
 }
