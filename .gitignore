@@ -40,6 +40,8 @@ coverage.txt
 btcec/coverage.txt
 btcutil/coverage.txt
 btcutil/psbt/coverage.txt
+cmd/btcctl/btcctl
+client/client
 
 # vim
 *.swp
