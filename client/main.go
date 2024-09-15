@@ -61,6 +61,12 @@ func main() {
 	}
 	log.Println(result2)
 
+	result4, err := client.GetBlockChainInfo()
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println(result4)
+
 	defer client.Shutdown()
 
 	// Query the RPC server for the current block count and display it.
