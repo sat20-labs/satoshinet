@@ -37,6 +37,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	result, err := client.EstimateSmartFee(6, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println(result)
 	defer client.Shutdown()
 
 	// Query the RPC server for the current block count and display it.
