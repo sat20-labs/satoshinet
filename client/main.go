@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 
 	// "github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/btcjson"
 	"github.com/sat20-labs/satoshinet/rpcclient"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 func main() {
@@ -41,8 +43,24 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	log.Println(result)
+
+	cmd := btcjson.NewTestMempoolAcceptCmd([]string{"rawhex"}, 0.1)
+	var respChan rpcclient.FutureTestMempoolAcceptResult = client.SendCmd(cmd)
+	result1, err := respChan.Receive()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Println(result1)
+
+	var txns []*wire.MsgTx
+	result2, err := client.TestMempoolAccept(txns, 0.1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println(result2)
+
 	defer client.Shutdown()
 
 	// Query the RPC server for the current block count and display it.
