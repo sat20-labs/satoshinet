@@ -5,17 +5,39 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "main",
+            "name": "satoshinet-mainnet",
             "type": "go",
             "request": "launch",
             "mode": "auto",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "program": "${workspaceFolder}",
-            "args": []
+            "args": [
+                "-C",
+                "conf/mainnet.conf",
+                "--txindex",
+                "--addrindex",
+            ]
         },
         {
-            "name": "client",
+            "name": "satoshinet-regtest",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "program": "${workspaceFolder}",
+            "args": [
+                "-C",
+                "conf/regtest.conf",
+                "--txindex",
+                "--addrindex",
+                "--miningaddr",
+                "SQLoAw7Q24DiLkoecZEsULUYbqcuGi2LTS",
+            ]
+        },
+        {
+            "name": "rpc-client",
             "type": "go",
             "request": "launch",
             "mode": "auto",

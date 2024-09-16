@@ -48,6 +48,9 @@ client/client
 *.swo
 /.vim
 
+# data
+data
+
 # Binaries produced by "make build"
 /addblock
 /btcctl
