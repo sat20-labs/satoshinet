@@ -42,6 +42,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	result0, err := client.GetInfo()
+	if err != nil {
+		log.Print(err)
+	}
+	log.Println(result0)
+
 	// no implement in btcd, but will implement soon
 	result, err := client.EstimateSmartFee(6, nil)
 	if err != nil {
