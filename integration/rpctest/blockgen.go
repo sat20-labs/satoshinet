@@ -185,13 +185,13 @@ func CreateBlock(prevBlock *btcutil.Block, inclusionTxs []*btcutil.Tx,
 
 	// We must add the witness commitment to the coinbase if any
 	// transactions are segwit.
-	witnessIncluded := false
-	for i := 1; i < len(blockTxns); i++ {
-		if blockTxns[i].MsgTx().HasWitness() {
-			witnessIncluded = true
-			break
-		}
-	}
+	witnessIncluded := true // always true
+	// for i := 1; i < len(blockTxns); i++ {
+	// 	if blockTxns[i].MsgTx().HasWitness() {
+	// 		witnessIncluded = true
+	// 		break
+	// 	}
+	// }
 
 	if witnessIncluded {
 		_ = mining.AddWitnessCommitment(coinbaseTx, blockTxns)

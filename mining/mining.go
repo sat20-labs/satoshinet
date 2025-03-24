@@ -632,8 +632,7 @@ mempoolLoop:
 	// }
 	// segwitActive := segwitState == blockchain.ThresholdActive
 	segwitActive := true // satsnet support segwit always
-
-	witnessIncluded := false
+	witnessIncluded := true // 
 
 	// Choose which transactions make it into the block.
 	for priorityQueue.Len() > 0 {
@@ -795,12 +794,12 @@ mempoolLoop:
 		blockSigOpCost += int64(sigOpCost)
 		totalFees += prioItem.fee
 		if len(prioItem.feeAssets) > 0 {
-			totalFeeAssets = append(totalFeeAssets, prioItem.feeAssets...)
+			totalFeeAssets.Merge(&prioItem.feeAssets)
 		}
 		txFees = append(txFees, prioItem.fee)
 		txSigOpCosts = append(txSigOpCosts, int64(sigOpCost))
 
-		log.Debugf("Adding tx %s (priority %.2f, feePerKB %.2f)",
+		log.Debugf("Adding tx %s (priority %.2f, feePerKB %d)",
 			prioItem.tx.Hash(), prioItem.priority, prioItem.feePerKB)
 
 		// Add transactions which depend on this one (and also do not
