@@ -31,19 +31,11 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 
 	// address
 	// 获取某个地址上所有资产和数量的列表
-	r.GET(proxy+"/v2/address/summary/:address", s.handle.getAssetSummary)
-	// 获取某个地址上某个资产的utxo数据列表(utxo包含其他资产), ticker格式：protocol:type:ticker
-	r.GET(proxy+"/v2/address/asset/:address/:ticker", s.handle.getUtxosWithTicker)
-
-	// utxo
-	// 获取某个UTXO上所有的资产信息
-	r.GET(proxy+"/v2/utxo/info/:utxo", s.handle.getUtxoInfo)
-	r.POST(proxy+"/v2/utxos/info", s.handle.getUtxoInfoList)
-	r.POST(proxy+"/v2/utxos/existing", s.handle.getExistingUtxos)
-	r.GET(proxy+"/v2/ascend/:utxo", s.handle.getAscendData)
-	r.GET(proxy+"/v2/descend/:utxo", s.handle.getDescendData)
-	r.GET(proxy+"/v2/corenode/all", s.handle.getAllCoreNode)
-	r.GET(proxy+"/v2/corenode/check/:pubkey", s.handle.checkCoreNode)
+	r.POST(proxy+"/v3/utxos/existing", s.handle.getExistingUtxos)
+	r.GET(proxy+"/v3/ascend/:utxo", s.handle.getAscendData)
+	r.GET(proxy+"/v3/descend/:utxo", s.handle.getDescendData)
+	r.GET(proxy+"/v3/corenode/all", s.handle.getAllCoreNode)
+	r.GET(proxy+"/v3/corenode/check/:pubkey", s.handle.checkCoreNode)
 
 	r.GET(proxy+"/v3/address/summary/:address", s.handle.getAssetSummaryV3)
 	// 获取某个地址上某个资产的utxo数据列表(utxo包含其他资产), ticker格式：wire.AssetName.String()

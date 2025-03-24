@@ -52,13 +52,16 @@ func (b *IndexerMgr) GetTxOutputWithUtxoV3(utxo string) *common.AssetsInUtxo {
 	}
 
 	var assetsInUtxo common.AssetsInUtxo
+	assetsInUtxo.UtxoId = output.UtxoId
 	assetsInUtxo.OutPoint = utxo
 	assetsInUtxo.Value = output.OutValue.Value
+	assetsInUtxo.PkScript = output.OutValue.PkScript
 	
 	for _, asset := range output.OutValue.Assets {
 		asset := common.DisplayAsset{
 			AssetName:  asset.Name,
 			Amount:     asset.Amount.String(),
+			Precision:  asset.Amount.Precision,
 			BindingSat: b.GetBindingSat(&asset.Name),
 		}
 

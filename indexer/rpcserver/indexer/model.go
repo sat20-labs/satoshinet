@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/btcsuite/btcd/wire"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
@@ -207,71 +206,23 @@ func (s *Model) GetExistingUtxos(req *indexerwire.UtxosReq) ([]string, error) {
 }
 
 func (s *Model) GetUtxoInfo(utxo string) (*indexerwire.TxOutputInfo, error) {
-	txOut := s.indexer.GetTxOutputWithUtxo(utxo)
-	if txOut == nil {
-		return nil, fmt.Errorf("can't get txout from %s", utxo)
-	}
-
-	assets := make([]*indexerwire.UtxoAssetInfo, 0)
-	for _, asset := range txOut.OutValue.Assets {
-
-		info := indexerwire.UtxoAssetInfo{
-			Asset:   asset,
-			Offsets: nil,
-		}
-		assets = append(assets, &info)
-	}
-
-	outvalue := wire.TxOut{
-		Value:    txOut.Value(),
-		PkScript: txOut.OutValue.PkScript,
-	}
-
-	output := indexerwire.TxOutputInfo{
-		UtxoId:    txOut.UtxoId,
-		OutPoint:  txOut.OutPointStr,
-		OutValue:  outvalue,
-		AssetInfo: assets,
-	}
-
-	return &output, nil
+	return s.indexer.GetTxOutputWithUtxoV3(utxo), nil
 }
 
 func (s *Model) GetUtxosWithAssetName(address, name string, start, limit int) ([]*indexerwire.TxOutputInfo, int, error) {
 	result := make([]*indexerwire.TxOutputInfo, 0)
 	assetName := swire.NewAssetNameFromString(name)
-	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTick(address, assetName)
+	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, assetName)
 	if err != nil {
 		return nil, 0, err
 	}
 	for _, txOut := range outputMap {
-		assets := make([]*indexerwire.UtxoAssetInfo, 0)
-		for _, asset := range txOut.OutValue.Assets {
 
-			info := indexerwire.UtxoAssetInfo{
-				Asset:   asset,
-				Offsets: nil,
-			}
-			assets = append(assets, &info)
-		}
-
-		outvalue := wire.TxOut{
-			Value:    txOut.Value(),
-			PkScript: txOut.OutValue.PkScript,
-		}
-
-		output := indexerwire.TxOutputInfo{
-			UtxoId:    txOut.UtxoId,
-			OutPoint:  txOut.OutPointStr,
-			OutValue:  outvalue,
-			AssetInfo: assets,
-		}
-
-		result = append(result, &output)
+		result = append(result, txOut)
 	}
 
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].OutValue.Value > result[j].OutValue.Value
+		return result[i].Value > result[j].Value
 	})
 
 	return result, len(result), nil

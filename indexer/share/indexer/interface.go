@@ -34,7 +34,6 @@ type Indexer interface {
 	// return: tick->UTXOs
 	GetAssetUTXOsInAddress(address string) map[common.TickerName][]*common.TxOutput
 	// return: utxo->asset amount
-	GetAssetUTXOsInAddressWithTick(address string, tickerName *common.TickerName) (map[uint64]*common.TxOutput, error)
 	GetAssetUTXOsInAddressWithTickV3(address string, ticker *common.TickerName) (map[uint64]*indexer.AssetsInUtxo, error)
 	HasAssetInUtxo(utxo string) bool
 	GetTxOutputWithUtxo(utxo string) *common.TxOutput
