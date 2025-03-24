@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
@@ -747,23 +746,38 @@ type AnthorInfo struct {
 	BindingSat uint32 `json:"BindingSat"`
 }
 
+type AnchorInfo struct {
+	Utxo string `json:"utxo"` // the utxo with locked in lnd
+	// WitnessScript []byte          `json:"witnessScript"` // WitnessScript for locked in lnd
+	Value    int64           `json:"value"`    // the amount with locked in lnd
+	TxAssets []*DisplayAsset `json:"txAssets"` // The assets locked
+	// Sig           []byte          `json:"sig"`
+}
+
+type AscendInfo struct {
+	AnchorInfo
+	// Address string `json:"address"`
+	// PubKeyA []byte `json:"pubKeyA"` // server node
+	// PubKeyB []byte `json:"pubKeyB"` // client node
+}
+
 // TxRawResult models the data from the getrawtransaction command.
 type TxRawResult struct {
-	Hex           string               `json:"hex"`
-	Txid          string               `json:"txid"`
-	Hash          string               `json:"hash,omitempty"`
-	Size          int32                `json:"size,omitempty"`
-	Vsize         int32                `json:"vsize,omitempty"`
-	Weight        int32                `json:"weight,omitempty"`
-	Version       uint32               `json:"version"`
-	LockTime      uint32               `json:"locktime"`
-	Vin           []Vin                `json:"vin"`
-	Vout          []Vout               `json:"vout"`
-	BlockHash     string               `json:"blockhash,omitempty"`
-	Confirmations uint64               `json:"confirmations,omitempty"`
-	Time          int64                `json:"time,omitempty"`
-	Blocktime     int64                `json:"blocktime,omitempty"`
-	AscendInfo    *anchortx.AscendInfo `json:"ascendInfo,omitempty"`
+	Hex           string      `json:"hex"`
+	Txid          string      `json:"txid"`
+	Hash          string      `json:"hash,omitempty"`
+	Size          int32       `json:"size,omitempty"`
+	Vsize         int32       `json:"vsize,omitempty"`
+	Weight        int32       `json:"weight,omitempty"`
+	Version       uint32      `json:"version"`
+	LockTime      uint32      `json:"locktime"`
+	Vin           []Vin       `json:"vin"`
+	Vout          []Vout      `json:"vout"`
+	BlockHash     string      `json:"blockhash,omitempty"`
+	Confirmations uint64      `json:"confirmations,omitempty"`
+	Time          int64       `json:"time,omitempty"`
+	Blocktime     int64       `json:"blocktime,omitempty"`
+	AscendInfo    *AscendInfo `json:"ascendInfo,omitempty"`
 }
 
 // SearchRawTransactionsResult models the data from the searchrawtransaction
