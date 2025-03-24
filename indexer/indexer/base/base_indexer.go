@@ -127,6 +127,11 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 	for key, value := range b.utxoIndex.Index {
 		newInst.utxoIndex.Index[key] = value
 	}
+	for _, value := range b.delUTXOs {
+		delete(newInst.utxoIndex.Index, value.Utxo)
+	}
+	newInst.delUTXOs = make([]*UtxoValue, 0)
+	
 	for key, value := range b.utxoIndex.AscendMap {
 		newInst.utxoIndex.AscendMap[key] = value
 	}
@@ -134,8 +139,7 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		newInst.utxoIndex.DescendMap[key] = value
 	}
 
-	newInst.delUTXOs = make([]*UtxoValue, len(b.delUTXOs))
-	copy(newInst.delUTXOs, b.delUTXOs)
+
 
 	newInst.tickInfoMap = make(map[string]*common.TickerInfo)
 	for k, v := range b.tickInfoMap {
