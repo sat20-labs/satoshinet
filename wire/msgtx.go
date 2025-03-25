@@ -334,7 +334,6 @@ func (t TxWitness) ToHexStrings() []string {
 // TxOut defines a bitcoin transaction output.
 type TxOut struct {
 	Value int64
-	//	SatsRanges TxRanges // sats index range for the output
 	Assets   TxAssets // TxOut.Value必须大于等于Assets的GetBindingSatAmout
 	PkScript []byte
 }
