@@ -118,7 +118,7 @@ func (s *Model) getAllUtxos(address string, start, limit int) ([]*indexerwire.Pl
 		}
 
 		// 效率很低，需要内部实现内存池
-		if IsExistUtxoInMemPool(utxo) {
+		if IsExistingInMemPool(utxo) {
 			continue
 		}
 
@@ -176,20 +176,6 @@ func (s *Model) GetAssetSummary(address string, start int, limit int) (*indexerw
 	return &result, nil
 }
 
-func (s *Model) GetUtxoInfoList(req *indexerwire.UtxosReq) ([]*indexerwire.TxOutputInfo, error) {
-	result := make([]*indexerwire.TxOutputInfo, 0)
-	for _, utxo := range req.Utxos {
-
-		txOutput, err := s.GetUtxoInfo(utxo)
-		if err != nil {
-			continue
-		}
-
-		result = append(result, txOutput)
-	}
-
-	return result, nil
-}
 
 func (s *Model) GetExistingUtxos(req *indexerwire.UtxosReq) ([]string, error) {
 	result := make([]string, 0)
@@ -199,33 +185,14 @@ func (s *Model) GetExistingUtxos(req *indexerwire.UtxosReq) ([]string, error) {
 			continue
 		}
 
+		if IsExistingInMemPool(utxo) {
+			continue
+		}
+
 		result = append(result, utxo)
 	}
 
 	return result, nil
-}
-
-func (s *Model) GetUtxoInfo(utxo string) (*indexerwire.TxOutputInfo, error) {
-	return s.indexer.GetTxOutputWithUtxoV3(utxo), nil
-}
-
-func (s *Model) GetUtxosWithAssetName(address, name string, start, limit int) ([]*indexerwire.TxOutputInfo, int, error) {
-	result := make([]*indexerwire.TxOutputInfo, 0)
-	assetName := swire.NewAssetNameFromString(name)
-	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, assetName)
-	if err != nil {
-		return nil, 0, err
-	}
-	for _, txOut := range outputMap {
-
-		result = append(result, txOut)
-	}
-
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Value > result[j].Value
-	})
-
-	return result, len(result), nil
 }
 
 func (s *Model) GetAscend(utxo string) (*common.AscendData, error) {
@@ -285,15 +252,15 @@ func (s *Model) GetAssetSummaryV3(address string, start int, limit int) ([]*inde
 }
 
 func (s *Model) GetUtxoInfoV3(utxo string) (*indexer.AssetsInUtxo, error) {
+	if IsExistingInMemPool(utxo) {
+		return nil, fmt.Errorf("utxo %s is in mempool", utxo)
+	}
 	return s.indexer.GetTxOutputWithUtxoV3(utxo), nil
 }
 
 func (s *Model) GetUtxoInfoListV3(req *indexerwire.UtxosReq) ([]*indexer.AssetsInUtxo, error) {
 	result := make([]*indexer.AssetsInUtxo, 0)
 	for _, utxo := range req.Utxos {
-		if IsExistUtxoInMemPool(utxo) {
-			continue
-		}
 		txOutput, err := s.GetUtxoInfoV3(utxo)
 		if err != nil {
 			continue
@@ -313,6 +280,9 @@ func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) 
 		return nil, 0, err
 	}
 	for _, txOut := range outputMap {
+		if IsExistingInMemPool(txOut.OutPoint) {
+			continue
+		}
 		result = append(result, txOut)
 	}
 

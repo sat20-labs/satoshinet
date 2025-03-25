@@ -6,7 +6,7 @@ import (
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 )
 
-func IsExistUtxoInMemPool(utxo string) bool {
+func IsExistingInMemPool(utxo string) bool {
 	isExist, err := satsnet_rpc.IsExistUtxoInMemPool(utxo)
 	if err != nil {
 		common.Log.Errorf("GetUnspendTxOutput %s failed. %v", utxo, err)
@@ -26,5 +26,5 @@ func IsAvailableUtxo(utxo string) bool {
 		return false
 	}
 
-	return !IsExistUtxoInMemPool(utxo)
+	return !IsExistingInMemPool(utxo)
 }
