@@ -740,25 +740,10 @@ type InfoChainResult struct {
 	Errors          string  `json:"errors"`
 }
 
-type AnthorInfo struct {
-	Utxo       string `json:"utxo"`
-	Value      string `json:"value"`
-	BindingSat uint32 `json:"BindingSat"`
-}
-
-type AnchorInfo struct {
-	Utxo string `json:"utxo"` // the utxo with locked in lnd
-	// WitnessScript []byte          `json:"witnessScript"` // WitnessScript for locked in lnd
+type AscendInfo struct {
+	Utxo     string          `json:"utxo"`     // the utxo with locked in lnd
 	Value    int64           `json:"value"`    // the amount with locked in lnd
 	TxAssets []*DisplayAsset `json:"txAssets"` // The assets locked
-	// Sig           []byte          `json:"sig"`
-}
-
-type AscendInfo struct {
-	AnchorInfo
-	// Address string `json:"address"`
-	// PubKeyA []byte `json:"pubKeyA"` // server node
-	// PubKeyB []byte `json:"pubKeyB"` // client node
 }
 
 // TxRawResult models the data from the getrawtransaction command.

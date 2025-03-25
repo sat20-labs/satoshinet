@@ -342,42 +342,6 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 	return signature.Verify(msgDigest, pubKey)
 }
 
-func GetAnchorInfo(anchorPkScript []byte) (*AscendInfo, error) {
-	lockedTxInfo, err := ParseAnchorScript(anchorPkScript)
-	if err != nil {
-		return nil, err
-	}
-	pkScript, err := WitnessScriptHash(lockedTxInfo.WitnessScript)
-	if err != nil {
-		return nil, err
-	}
-	addrType, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, anchorManager.anchorConfig.ChainParams)
-	if err != nil {
-		return nil, err
-	}
-	if addrType != txscript.WitnessV0ScriptHashTy {
-		return nil, fmt.Errorf("invalid addr type %d", addrType)
-	}
-	addrType2, addresses2, _, err := txscript.ExtractPkScriptAddrs(lockedTxInfo.WitnessScript, anchorManager.anchorConfig.ChainParams)
-	if err != nil {
-		return nil, err
-	}
-	if addrType2 != txscript.MultiSigTy {
-		return nil, fmt.Errorf("invalid addr type %d", addrType)
-	}
-	if len(addresses2) != 2 {
-		return nil, fmt.Errorf("invalid multi-sig addresses")
-	}
-	pubkeyBytes0 := addresses2[0].ScriptAddress()
-	pubkeyBytes1 := addresses2[1].ScriptAddress()
-	return &AscendInfo{
-		AnchorInfo: *lockedTxInfo,
-		Address:    addresses[0].EncodeAddress(),
-		PubKeyA:    pubkeyBytes0,
-		PubKeyB:    pubkeyBytes1,
-	}, nil
-}
-
 func CheckAnchorPkScript(anchorPkScript []byte) (*AscendInfo, error) {
 	lockedTxInfo, err := ParseAnchorScript(anchorPkScript)
 	if err != nil {

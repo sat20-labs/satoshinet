@@ -2853,21 +2853,17 @@ func handleGetRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan str
 		return nil, err
 	}
 	if blockchain.IsAnchorTx(mtx) {
-		ascendInfo, _ := anchortx.GetAnchorInfo(mtx.TxIn[0].SignatureScript)
+		ascendInfo, err := anchortx.ParseAnchorScript(mtx.TxIn[0].SignatureScript)
+		if err != nil {
+			rpcsLog.Errorf("handleGetRawTransaction err: %s", err.Error())
+			return nil, err
+		}
 		rawTxn.AscendInfo = &btcjson.AscendInfo{
-			AnchorInfo: btcjson.AnchorInfo{
-				Utxo: ascendInfo.Utxo,
-				// WitnessScript: ascendInfo.WitnessScript,
-				// Value:         ascendInfo.Value,
-				// Sig:           ascendInfo.Sig,
-			},
-			// Address: ascendInfo.Address,
-			// PubKeyA: ascendInfo.PubKeyA,
-			// PubKeyB: ascendInfo.PubKeyB,
+			Utxo:  ascendInfo.Utxo,
+			Value: ascendInfo.Value,
 		}
 		rawTxn.AscendInfo.TxAssets = btcjson.ConvertAssets(*ascendInfo.TxAssets)
 	}
-
 	return *rawTxn, nil
 }
 
