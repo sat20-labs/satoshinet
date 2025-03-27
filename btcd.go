@@ -299,9 +299,9 @@ func btcdMain(serverChan chan<- *server) error {
 	// initialize anchor config
 	anchorCfg := &anchortx.AnchorConfig{
 		IndexerScheme: cfg.IndexerScheme,
-		IndexerHost: cfg.IndexerHost,
-		IndexerNet:  cfg.IndexerNet,
-		ChainParams: activeNetParams.Params,
+		IndexerHost:   cfg.IndexerHost,
+		IndexerProxy:  cfg.IndexerProxy,
+		ChainParams:   activeNetParams.Params,
 	}
 	if !anchortx.StartAnchorManager(anchorCfg) {
 		btcdLog.Errorf("Unable to start anchor manager")
@@ -327,7 +327,7 @@ func btcdMain(serverChan chan<- *server) error {
 		server.WaitForShutdown()
 		srvrLog.Infof("Server shutdown complete")
 	}()
-	
+
 	server.Start()
 	if serverChan != nil {
 		serverChan <- server
@@ -341,7 +341,7 @@ func btcdMain(serverChan chan<- *server) error {
 }
 
 func getUserInput(scanner *bufio.Scanner, interrupt <-chan struct{}) (string, error) {
-	
+
 	// 创建输入通道
 	inputChan := make(chan string)
 	defer close(inputChan) // 关闭通道，表示输入结束
@@ -394,7 +394,6 @@ func userCreateWallet(scanner *bufio.Scanner, interrupt <-chan struct{}) error {
 			}
 
 			fmt.Printf("Wallet created. Record your mnemonic and password carefully. Mnemonic:\n%s\nPubkey:\n%s\n", Mnemonic, hex.EncodeToString(pubkey))
-			
 
 			return nil
 		}
@@ -465,7 +464,6 @@ func walletInterAction(interrupt <-chan struct{}) error {
 		}
 	}
 }
-
 
 // removeRegressionDB removes the existing regression test database if running
 // in regression test mode and it already exists.

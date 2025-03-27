@@ -24,10 +24,10 @@ func GetLockedUtxoInfo(utxo string) (*LockedInfoInBTCChain, error) {
 	lockedInfo := &LockedInfoInBTCChain{}
 	scheme := anchorManager.anchorConfig.IndexerScheme
 	host := anchorManager.anchorConfig.IndexerHost
-	net := anchorManager.anchorConfig.IndexerNet
+	proxy := anchorManager.anchorConfig.IndexerProxy
 
 	// Get TxInfo from BTC chain (Layer 1 chain)
-	indexerClient := httpclient.NewIndexerClient(scheme, host, net)
+	indexerClient := httpclient.NewIndexerClient(scheme, host, proxy)
 	utxoAssetsInfo, err := indexerClient.GetTxUtxoAssets(utxo)
 	if err != nil {
 		fmt.Printf("GetRawTx failed: %s\n", err.Error())

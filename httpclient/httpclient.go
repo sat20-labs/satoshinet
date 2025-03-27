@@ -151,9 +151,9 @@ type RESTClient struct {
 	Http   HttpClient
 }
 
-func NewRESTClient(scheme, host, net string, http HttpClient) *RESTClient {
-	if net == "" {
-		net = "testnet"
+func NewRESTClient(scheme, host, proxy string, http HttpClient) *RESTClient {
+	if proxy == "" {
+		proxy = "testnet"
 	}
 
 	if scheme == "" {
@@ -163,7 +163,7 @@ func NewRESTClient(scheme, host, net string, http HttpClient) *RESTClient {
 	return &RESTClient{
 		Scheme: scheme,
 		Host:   host,
-		Proxy:  net,
+		Proxy:  proxy,
 		Http:   http,
 	}
 }

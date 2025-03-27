@@ -16,14 +16,14 @@ type IndexerClient struct {
 	*RESTClient
 }
 
-func NewIndexerClient(scheme, host string, net string) *IndexerClient {
+func NewIndexerClient(scheme, host string, proxy string) *IndexerClient {
 	// net = "mainnet"  -- btc mainnet
 	// net = "testnet"  -- btc testnet4, for indexer, it's "testnet"
 
 	
 	http := newHTTPClient()
 
-	client := NewRESTClient(scheme, host, net, http)
+	client := NewRESTClient(scheme, host, proxy, http)
 	return &IndexerClient{client}
 }
 

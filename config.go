@@ -137,7 +137,7 @@ type config struct {
 	TimerGenerate        bool          `long:"timergenerate" description:"Generate (mine) bitcoins using the POS with timer enabled"`
 	IndexerScheme        string        `long:"indexerscheme" description:"The scheme for indexer"`
 	IndexerHost          string        `long:"indexerhost" description:"The host for indexer"`
-	IndexerNet           string        `long:"indexernet" description:"The net for indexer, one of mainnet and testnet"`
+	IndexerProxy         string        `long:"indexerproxy" description:"The proxy for indexer"`
 	FreeTxRelayLimit     float64       `long:"limitfreerelay" description:"Limit relay of transactions with no transaction fee to the given amount in thousands of bytes per minute"`
 	Listeners            []string      `long:"listen" description:"Add an interface/port to listen for connections (default all interfaces port: 8333, testnet: 18333)"`
 	LogDir               string        `long:"logdir" description:"Directory to log output."`
@@ -453,7 +453,7 @@ func loadConfig() (*config, []string, error) {
 	if commandCfg.HomeDir != "" {
 		homeBtcdDir = commandCfg.HomeDir
 	}
-	
+
 	fmt.Println("homeDir is ", homeBtcdDir)
 
 	configFile = filepath.Join("./", defaultConfigFilename)
@@ -1033,7 +1033,7 @@ func loadConfig() (*config, []string, error) {
 				if err != nil {
 					return nil, nil, fmt.Errorf("failed to decode public key: %v", err)
 				}
-				
+
 				addr, err := getP2TRAddress(pubKey, activeNetParams.Params)
 				if err != nil {
 					return nil, nil, err
@@ -1377,42 +1377,42 @@ func btcdLookup(host string) ([]net.IP, error) {
 }
 
 func ValidatePubKeyAddress(pubKeyStr string, address string, params *chaincfg.Params) (bool, error) {
-    // 检查输入参数
-    if len(pubKeyStr) == 0 || address == "" {
-        return false, fmt.Errorf("invalid input parameters")
-    }
+	// 检查输入参数
+	if len(pubKeyStr) == 0 || address == "" {
+		return false, fmt.Errorf("invalid input parameters")
+	}
 	pubKey, err := hex.DecodeString(pubKeyStr)
 	if err != nil {
 		return false, fmt.Errorf("failed to decode public key: %v", err)
 	}
 
-    // 解析地址类型
+	// 解析地址类型
 	var addr2 btcutil.Address
-    switch {
-    case strings.HasPrefix(address, "bc1p"), 
-         strings.HasPrefix(address, "tb1p"):
-        // P2TR (Taproot) 地址
-        addr2, err = getP2TRAddress(pubKey, params)
-        
-    case strings.HasPrefix(address, "bc1"),
-         strings.HasPrefix(address, "tb1"):
-        // Native SegWit 地址
-        addr2, err = getP2WPKHAddress(pubKey, params)
-        
-    case strings.HasPrefix(address, "3"),
-         strings.HasPrefix(address, "2"):
-        // P2SH-P2WPKH 地址
-        addr2, err = getP2SHAddress(pubKey, params)
-        
-    case strings.HasPrefix(address, "1"),
-         strings.HasPrefix(address, "m"),
-         strings.HasPrefix(address, "n"):
-        // P2PKH 地址
-        addr2, err = getP2PKHAddress(pubKey, params)
-        
-    default:
-        return false, fmt.Errorf("unsupported address format")
-    }
+	switch {
+	case strings.HasPrefix(address, "bc1p"),
+		strings.HasPrefix(address, "tb1p"):
+		// P2TR (Taproot) 地址
+		addr2, err = getP2TRAddress(pubKey, params)
+
+	case strings.HasPrefix(address, "bc1"),
+		strings.HasPrefix(address, "tb1"):
+		// Native SegWit 地址
+		addr2, err = getP2WPKHAddress(pubKey, params)
+
+	case strings.HasPrefix(address, "3"),
+		strings.HasPrefix(address, "2"):
+		// P2SH-P2WPKH 地址
+		addr2, err = getP2SHAddress(pubKey, params)
+
+	case strings.HasPrefix(address, "1"),
+		strings.HasPrefix(address, "m"),
+		strings.HasPrefix(address, "n"):
+		// P2PKH 地址
+		addr2, err = getP2PKHAddress(pubKey, params)
+
+	default:
+		return false, fmt.Errorf("unsupported address format")
+	}
 
 	if err != nil {
 		return false, err
@@ -1422,57 +1422,57 @@ func ValidatePubKeyAddress(pubKeyStr string, address string, params *chaincfg.Pa
 }
 
 func getP2PKHAddress(pubKey []byte, params *chaincfg.Params) (btcutil.Address, error) {
-    pk, err := btcec.ParsePubKey(pubKey)
-    if err != nil {
-        return nil, fmt.Errorf("failed to parse public key: %v", err)
-    }
+	pk, err := btcec.ParsePubKey(pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %v", err)
+	}
 
-    // 检查压缩和未压缩格式
+	// 检查压缩和未压缩格式
 	var pubKeyHash []byte
 	// if bCompressed {
-		pubKeyHash = btcutil.Hash160(pk.SerializeCompressed())
+	pubKeyHash = btcutil.Hash160(pk.SerializeCompressed())
 	// } else {
 	// 	pubKeyHash = btcutil.Hash160(pk.SerializeUncompressed())
 	// }
 
-    return btcutil.NewAddressPubKeyHash(pubKeyHash, params)
+	return btcutil.NewAddressPubKeyHash(pubKeyHash, params)
 }
 
 func getP2WPKHAddress(pubKey []byte, params *chaincfg.Params) (btcutil.Address, error) {
-    pk, err := btcec.ParsePubKey(pubKey)
-    if err != nil {
-        return nil, fmt.Errorf("failed to parse public key: %v", err)
-    }
+	pk, err := btcec.ParsePubKey(pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %v", err)
+	}
 
-    witnessProg := btcutil.Hash160(pk.SerializeCompressed())
-    return btcutil.NewAddressWitnessPubKeyHash(witnessProg, params)
+	witnessProg := btcutil.Hash160(pk.SerializeCompressed())
+	return btcutil.NewAddressWitnessPubKeyHash(witnessProg, params)
 }
 
 func getP2SHAddress(pubKey []byte, params *chaincfg.Params) (btcutil.Address, error) {
-    pk, err := btcec.ParsePubKey(pubKey)
-    if err != nil {
-        return nil, fmt.Errorf("failed to parse public key: %v", err)
-    }
+	pk, err := btcec.ParsePubKey(pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %v", err)
+	}
 
-    compressedPubKeyHash := btcutil.Hash160(pk.SerializeCompressed())
-    
-    p2shScript := []byte{0x00, 0x14}
-    p2shScript = append(p2shScript, compressedPubKeyHash...)
-    p2shHash := btcutil.Hash160(p2shScript)
-    
-    return btcutil.NewAddressScriptHashFromHash(p2shHash, params)
+	compressedPubKeyHash := btcutil.Hash160(pk.SerializeCompressed())
+
+	p2shScript := []byte{0x00, 0x14}
+	p2shScript = append(p2shScript, compressedPubKeyHash...)
+	p2shHash := btcutil.Hash160(p2shScript)
+
+	return btcutil.NewAddressScriptHashFromHash(p2shHash, params)
 }
 
 func getP2TRAddress(pubKey []byte, params *chaincfg.Params) (btcutil.Address, error) {
-    pk, err := btcec.ParsePubKey(pubKey)
-    if err != nil {
-        return nil, fmt.Errorf("failed to parse public key: %v", err)
-    }
+	pk, err := btcec.ParsePubKey(pubKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %v", err)
+	}
 
-    tapTweaked := txscript.ComputeTaprootKeyNoScript(pk)
-    if tapTweaked == nil {
-        return nil, fmt.Errorf("failed to compute taproot key")
-    }
+	tapTweaked := txscript.ComputeTaprootKeyNoScript(pk)
+	if tapTweaked == nil {
+		return nil, fmt.Errorf("failed to compute taproot key")
+	}
 
-    return btcutil.NewAddressTaproot(schnorr.SerializePubKey(tapTweaked), params)
+	return btcutil.NewAddressTaproot(schnorr.SerializePubKey(tapTweaked), params)
 }

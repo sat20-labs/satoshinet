@@ -42,7 +42,7 @@ const (
 type AnchorConfig struct {
 	IndexerScheme string
 	IndexerHost   string
-	IndexerNet    string
+	IndexerProxy  string
 	ChainParams   *chaincfg.Params
 }
 type AnchorManager struct {
@@ -82,12 +82,12 @@ func StartAnchorManager(config *AnchorConfig) bool {
 	anchorManager.quit = make(chan struct{})
 	log.Debugf("AnchorConfig: IndexerScheme: %s", anchorManager.anchorConfig.IndexerScheme)
 	log.Debugf("AnchorConfig: IndexerHost: %s", anchorManager.anchorConfig.IndexerHost)
-	log.Debugf("AnchorConfig: IndexerNet: %s", anchorManager.anchorConfig.IndexerNet)
+	log.Debugf("AnchorConfig: IndexerNet: %s", anchorManager.anchorConfig.IndexerProxy)
 	log.Debugf("AnchorConfig: ChainParams: %s", anchorManager.anchorConfig.ChainParams.Name)
 
 	// Default， the node will check anchor tx
 	anchorManager.verifyAnchorTx = true
-	if anchorManager.anchorConfig.IndexerHost == "" || anchorManager.anchorConfig.IndexerNet == "" {
+	if anchorManager.anchorConfig.IndexerHost == "" || anchorManager.anchorConfig.IndexerProxy == "" {
 		//anchorManager.verifyAnchorTx = false
 		//log.Debugf("The node not config indexer infomation, will not check anchor tx")
 		return false
