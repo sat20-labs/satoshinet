@@ -55,7 +55,7 @@ func (p *IndexerClient) GetRawTx(tx string) (string, error) {
 }
 
 func (p *IndexerClient) GetTxUtxoAssets(utxo string) (*TxOutputInfo, error) {
-	path := p.GetUrl("/v2/utxo/info/" + utxo)
+	path := p.GetUrl("/v3/utxo/info/" + utxo)
 	rsp, err := p.Http.SendGetRequest(path)
 	if err != nil {
 		//Log.Errorf("SendGetRequest %v failed. %v", url, err)
