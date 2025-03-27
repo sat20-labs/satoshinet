@@ -47,7 +47,6 @@ type AnchorConfig struct {
 type AnchorManager struct {
 	anchorConfig   *AnchorConfig
 	superNodeList  map[string][]byte // address > public key
-	verifyAnchorTx bool
 	quit           chan struct{}
 }
 
@@ -60,7 +59,7 @@ type AnchorInfo struct {
 	Utxo          string         `json:"utxo"`          // the utxo with locked in lnd
 	WitnessScript []byte         `json:"witnessScript"` // WitnessScript for locked in lnd
 	Value         int64          `json:"value"`         // the amount with locked in lnd
-	TxAssets      *wire.TxAssets `json:"txAssets"`      // The assets locked
+	TxAssets      wire.TxAssets `json:"txAssets"`      // The assets locked
 	Sig           []byte         `json:"sig"`
 }
 
@@ -85,7 +84,6 @@ func StartAnchorManager(config *AnchorConfig) bool {
 	log.Debugf("AnchorConfig: ChainParams: %s", anchorManager.anchorConfig.ChainParams.Name)
 
 	// Default， the node will check anchor tx
-	anchorManager.verifyAnchorTx = true
 	if anchorManager.anchorConfig.IndexerHost == "" || anchorManager.anchorConfig.IndexerProxy == "" {
 		//anchorManager.verifyAnchorTx = false
 		//log.Debugf("The node not config indexer infomation, will not check anchor tx")
@@ -101,46 +99,48 @@ func Stop() {
 	}
 }
 
-func CheckAnchorTxValid(tx *wire.MsgTx) error {
-	if !anchorManager.verifyAnchorTx {
-		log.Debugf("Not check anchor tx.")
-		return nil
-	}
+func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AscendInfo, error) {
 
 	if len(tx.TxIn) != 1 {
 		err := fmt.Errorf("invalid Anchor tx, No Anchor info: %s", tx.TxHash().String())
-		return err
+		return nil, err
 	}
 	AnchorScript := tx.TxIn[0].SignatureScript
 
 	// Check the Anchor tx has completed, all the assets is locked in lnd will be mapped to sats net only one times
-	lockedInfo, err := CheckAnchorPkScript(AnchorScript)
+	lockedInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets)
 	//	err = fmt.Errorf("invalid Anchor tx <%s>, just for test", tx.TxHash().String()) // Just for test
 	if err != nil {
 		log.Debugf("invalid Anchor tx, invalid Anchor script: %s, err: %s", tx.TxHash().String(), err.Error())
-		return err
+		return nil, err
 	}
 
 	// Check anchor amount is same with locked amount
 
-	anchorAmount := int64(0)
+	var anchorAssets wire.TxAssets
+	anchorValue := int64(0)
 	for _, out := range tx.TxOut {
-		anchorAmount += out.Value
+		anchorValue += out.Value
+		anchorAssets.Merge(&out.Assets)
 	}
 
-	if anchorAmount > lockedInfo.Value {
-		err := fmt.Errorf("invalid Anchor tx, Anchor amount(%d) is exceed the locked amount (%d): %s", anchorAmount, lockedInfo.Value, tx.TxHash().String())
-		return err
+	if anchorValue != lockedInfo.Value {
+		err := fmt.Errorf("invalid Anchor tx, Anchor amount(%d) is exceed the locked amount (%d): %s", anchorValue, lockedInfo.Value, tx.TxHash().String())
+		return nil, err
+	}
+	if anchorAssets.Equal(&lockedInfo.TxAssets) {
+		log.Errorf("anchor tx assets not equal %v %v", anchorAssets, lockedInfo.TxAssets)
+		return nil, fmt.Errorf("anchor tx assets not equal %v %v", anchorAssets, lockedInfo.TxAssets)
 	}
 
 	// Check the Anchor tx is valid
-	return nil
+	return lockedInfo, nil
 }
 
 // The Anchor tx info is record in Anchor tx input script
 // return txscript.NewScriptBuilder().AddData(data).AddData(outputScript).
 // AddInt64(int64(amount)).AddInt64(int64(extraNonce)).Script()
-func GetLockedTxInfo(tx *wire.MsgTx) (*AnchorInfo, error) {
+func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AnchorInfo, error) {
 	if len(tx.TxIn) != 1 {
 		err := fmt.Errorf("invalid Anchor tx: %s", tx.TxHash().String())
 		return nil, err
@@ -154,7 +154,7 @@ func GetLockedTxInfo(tx *wire.MsgTx) (*AnchorInfo, error) {
 
 	fmt.Printf("AnchorScript: %x\n", AnchorScript)
 
-	lockedTxInfo, err := CheckAnchorPkScript(AnchorScript)
+	lockedTxInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets)
 	if err != nil {
 		err := fmt.Errorf("%s : anchortx[%s]", err.Error(), tx.TxHash().String())
 		return nil, err
@@ -227,9 +227,9 @@ func ParseAnchorScript(AnchorScript []byte) (*AnchorInfo, error) {
 	}
 	assetsData := tokenizer.Data()
 
-	txAssets := &wire.TxAssets{}
+	txAssets := wire.TxAssets{}
 	if assetsData != nil {
-		err := wire.DeserializeTxAssets(txAssets, assetsData)
+		err := wire.DeserializeTxAssets(&txAssets, assetsData)
 		if err != nil {
 			return nil, err
 		}
@@ -341,7 +341,7 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 	return signature.Verify(msgDigest, pubKey)
 }
 
-func CheckAnchorPkScript(anchorPkScript []byte) (*AscendInfo, error) {
+func CheckAnchorPkScript(anchorPkScript []byte, bCheckUtxoAssets bool) (*AscendInfo, error) {
 	lockedTxInfo, err := ParseAnchorScript(anchorPkScript)
 	if err != nil {
 		return nil, err
@@ -370,7 +370,7 @@ func CheckAnchorPkScript(anchorPkScript []byte) (*AscendInfo, error) {
 	}
 
 	invoice, err := StandardAnchorScript(lockedTxInfo.Utxo, lockedTxInfo.WitnessScript,
-		lockedTxInfo.Value, *lockedTxInfo.TxAssets)
+		lockedTxInfo.Value, lockedTxInfo.TxAssets)
 	if err != nil {
 		return nil, err
 	}
@@ -408,28 +408,32 @@ func CheckAnchorPkScript(anchorPkScript []byte) (*AscendInfo, error) {
 		return nil, fmt.Errorf("not signed by core node")
 	}
 
-	//utxoLocked := fmt.Sprintf("%s:%d", lockedTxInfo.TxId, lockedTxInfo.Index)
-	lockedInfoInBTC, err := GetLockedUtxoInfo(lockedTxInfo.Utxo)
-	if err != nil {
-		return nil, err
-	}
-	if lockedInfoInBTC.Value != lockedTxInfo.Value {
-		log.Debugf("lockedInfoInBTC.Amount: %d, lockedTxInfo.Amount: %d", lockedInfoInBTC.Value, lockedTxInfo.Value)
-		return nil, fmt.Errorf("invalid value %d", lockedTxInfo.Value)
-	}
-	if !bytes.Equal(lockedInfoInBTC.pkScript, pkScript) {
-		return nil, fmt.Errorf("invalid pkscript")
-	}
+	if bCheckUtxoAssets {
+		// 因为L1 indexer没有保存已经花费的utxo，所以仅在该Tx广播时检查，其他时间都不检查
+		//utxoLocked := fmt.Sprintf("%s:%d", lockedTxInfo.TxId, lockedTxInfo.Index)
+		lockedInfoInBTC, err := GetLockedUtxoInfo(lockedTxInfo.Utxo)
+		if err != nil {
+			return nil, err
+		}
+		if lockedInfoInBTC.Value != lockedTxInfo.Value {
+			log.Debugf("lockedInfoInBTC.Amount: %d, lockedTxInfo.Amount: %d", lockedInfoInBTC.Value, lockedTxInfo.Value)
+			return nil, fmt.Errorf("invalid value %d", lockedTxInfo.Value)
+		}
+		if !bytes.Equal(lockedInfoInBTC.pkScript, pkScript) {
+			return nil, fmt.Errorf("invalid pkscript")
+		}
 
-	bindedValue := lockedTxInfo.TxAssets.GetBindingSatAmout()
-	if bindedValue > lockedTxInfo.Value {
-		log.Debugf("bindedValue: %d, lockedTxInfo.Amount: %d", bindedValue, lockedTxInfo.Value)
-		return nil, fmt.Errorf("invalid binded value %d", bindedValue)
-	}
+		bindedValue := lockedTxInfo.TxAssets.GetBindingSatAmout()
+		if bindedValue > lockedTxInfo.Value {
+			log.Debugf("bindedValue: %d, lockedTxInfo.Amount: %d", bindedValue, lockedTxInfo.Value)
+			return nil, fmt.Errorf("invalid binded value %d", bindedValue)
+		}
 
-	if !includeAssets(lockedInfoInBTC.AssetInfo, lockedTxInfo.TxAssets) {
-		return nil, fmt.Errorf("invalid assets")
+		if !includeAssets(lockedInfoInBTC.AssetInfo, lockedTxInfo.TxAssets) {
+			return nil, fmt.Errorf("invalid assets")
+		}
 	}
+	
 
 	return &AscendInfo{
 		AnchorInfo: *lockedTxInfo,
@@ -439,7 +443,7 @@ func CheckAnchorPkScript(anchorPkScript []byte) (*AscendInfo, error) {
 	}, nil
 }
 
-func includeAssets(utxoAssetInfo wire.TxAssets, txAssets *wire.TxAssets) bool {
+func includeAssets(utxoAssetInfo wire.TxAssets, txAssets wire.TxAssets) bool {
 	if utxoAssetInfo == nil && txAssets == nil {
 		return true
 	}
@@ -449,12 +453,12 @@ func includeAssets(utxoAssetInfo wire.TxAssets, txAssets *wire.TxAssets) bool {
 		return false
 	}
 
-	if len(utxoAssetInfo) < len(*txAssets) {
+	if len(utxoAssetInfo) < len(txAssets) {
 		log.Errorf("includeAssets failed, utxoAssetInfo: %v, txAssets: %v", utxoAssetInfo, txAssets)
 		return false
 	}
 
-	for _, assetLocked := range *txAssets {
+	for _, assetLocked := range txAssets {
 		assetFound := false
 		for _, assetUtxo := range utxoAssetInfo {
 			if assetUtxo.Equal(&assetLocked) {

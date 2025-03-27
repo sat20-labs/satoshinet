@@ -2862,7 +2862,7 @@ func handleGetRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan str
 			Utxo:  ascendInfo.Utxo,
 			Value: ascendInfo.Value,
 		}
-		rawTxn.AscendInfo.TxAssets = btcjson.ConvertAssets(*ascendInfo.TxAssets)
+		rawTxn.AscendInfo.TxAssets = btcjson.ConvertAssets(ascendInfo.TxAssets)
 	}
 	return *rawTxn, nil
 }

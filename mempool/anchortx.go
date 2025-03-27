@@ -28,18 +28,13 @@ const (
 // 	Amount   int64  // the amount with locked in lnd
 // }
 
-func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, txHeight int32) error {
+func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32) error {
 	fmt.Printf("CheckAnchorTxValid ...\n")
 
 	// Check the locked tx out is valid
-	err := anchortx.CheckAnchorTxValid(tx)
+	txInfo, err := anchortx.CheckAnchorTxValid(tx, isNew)
 	if err != nil {
 		log.Errorf("invalid Anchor tx: %s", tx.TxHash().String())
-		return err
-	}
-
-	txInfo, err := anchortx.GetLockedTxInfo(tx)
-	if err != nil {
 		return err
 	}
 	fmt.Printf("The locked txInfo: %v\n", txInfo)
@@ -72,7 +67,7 @@ func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, txHeight int32) error {
 func (mp *TxPool) AddAnchorTx(tx *wire.MsgTx) error {
 	fmt.Printf("CheckAnchorTxValid ...\n")
 
-	txInfo, err := anchortx.GetLockedTxInfo(tx)
+	txInfo, err := anchortx.GetLockedTxInfo(tx, false)
 	if err != nil {
 		return err
 	}

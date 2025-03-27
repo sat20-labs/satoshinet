@@ -1408,7 +1408,7 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 	// Anchor verify tx from BTC Network.
 	if blockchain.IsAnchorTx(tx.MsgTx()) {
 		fmt.Printf("current tx is an anchor tx\n")
-		err := mp.CheckAnchorTxValid(tx.MsgTx(), nextBlockHeight)
+		err := mp.CheckAnchorTxValid(tx.MsgTx(), isNew, nextBlockHeight)
 		if err != nil {
 			str := fmt.Sprintf("The anchor tx is invalid %v:%v",
 				txHash, err)
@@ -1536,7 +1536,7 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 	// NOTE: this check must be performed before `validateStandardness` to
 	// make sure a nil entry is not returned from `utxoView.LookupEntry`.
 	txFee, feeAssets, err := blockchain.CheckTransactionInputs(
-		tx, nextBlockHeight, utxoView, mp.cfg.ChainParams,
+		tx, isNew, nextBlockHeight, utxoView, mp.cfg.ChainParams,
 	)
 	if err != nil {
 		if cerr, ok := err.(blockchain.RuleError); ok {

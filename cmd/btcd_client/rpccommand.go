@@ -94,7 +94,7 @@ func testGetAccordingLockedInfo(txid string) {
 
 	//btcwallet.LogMsgTx(result.MsgTx())
 
-	lockedTxInfo, err := anchortx.GetLockedTxInfo(result.MsgTx())
+	lockedTxInfo, err := anchortx.GetLockedTxInfo(result.MsgTx(), false)
 	if err != nil {
 		fmt.Printf("GetLockedTxInfo error: %s\n", err)
 		return

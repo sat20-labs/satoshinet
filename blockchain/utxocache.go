@@ -463,7 +463,7 @@ func (s *utxoCache) addTxIns(tx *btcutil.Tx, stxos *[]SpentTxOut, anchorTxInfos 
 	if IsAnchorTx(tx.MsgTx()) {
 		if anchorTxInfos != nil {
 			// Add the anchor tx info to anchor tx cache
-			lockedTxInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx())
+			lockedTxInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
 			if err != nil {
 				return err
 			}

@@ -170,7 +170,7 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 // anchorPkScript, err := StandardAnchorScript(txid, witnessScript, amount)
 func GenAscendFromAnchorPkScript(anchorPkScript []byte, netParams *chaincfg.Params) (*common.AscendData, error) {
 
-	ascend, err := anchortx.CheckAnchorPkScript(anchorPkScript)
+	ascend, err := anchortx.CheckAnchorPkScript(anchorPkScript, false)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func GenAscendFromAnchorPkScript(anchorPkScript []byte, netParams *chaincfg.Para
 	return &common.AscendData{
 		FundingUtxo: ascend.Utxo,
 		Value:       ascend.Value,
-		Assets:      *ascend.TxAssets,
+		Assets:      ascend.TxAssets,
 		Sig:         ascend.Sig,
 		Address:     ascend.Address,
 		PubA:        ascend.PubKeyA,
