@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	indexer "github.com/sat20-labs/indexer/common"
+	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 )
 
 const (
@@ -40,7 +42,7 @@ func (p *IndexerClient) GetRawTx(tx string) (string, error) {
 	fmt.Printf("%v response: %s", path, string(rsp))
 
 	// Unmarshal the response.
-	var result TxResp
+	var result indexerwire.TxResp
 	if err := json.Unmarshal(rsp, &result); err != nil {
 		err := fmt.Errorf("%s response data format failed: %s", path, string(rsp))
 		return "", err
@@ -54,7 +56,7 @@ func (p *IndexerClient) GetRawTx(tx string) (string, error) {
 	return result.Data.(string), nil
 }
 
-func (p *IndexerClient) GetTxUtxoAssets(utxo string) (*TxOutputInfo, error) {
+func (p *IndexerClient) GetTxUtxoAssets(utxo string) (*indexer.AssetsInUtxo, error) {
 	path := p.GetUrl("/v3/utxo/info/" + utxo)
 	rsp, err := p.Http.SendGetRequest(path)
 	if err != nil {
@@ -65,7 +67,7 @@ func (p *IndexerClient) GetTxUtxoAssets(utxo string) (*TxOutputInfo, error) {
 	fmt.Printf("%v response: %s\n", path, string(rsp))
 
 	// Unmarshal the response.
-	var result TxOutputResp
+	var result indexerwire.TxOutputRespV3
 	if err := json.Unmarshal(rsp, &result); err != nil {
 		err := fmt.Errorf("%s response data format failed: %s", path, string(rsp))
 		return nil, err
@@ -77,30 +79,4 @@ func (p *IndexerClient) GetTxUtxoAssets(utxo string) (*TxOutputInfo, error) {
 	}
 
 	return result.Data, nil
-}
-
-
-func (p *IndexerClient) GetAssetSummaryWithAddress(address string) *AssetSummary {
-	url := p.GetUrl("/v2/address/summary/" + address)
-	rsp, err := p.Http.SendGetRequest(url)
-	if err != nil {
-		log.Errorf("SendGetRequest %v failed. %v", url, err)
-		return nil
-	}
-
-	log.Infof("%v response: %s", url, string(rsp))
-
-	// Unmarshal the response.
-	var result AssetSummaryResp
-	if err := json.Unmarshal(rsp, &result); err != nil {
-		log.Errorf("Unmarshal failed. %v", err)
-		return nil
-	}
-
-	if result.Code != 0 {
-		log.Errorf("%v response message %s", url, result.Msg)
-		return nil
-	}
-
-	return result.Data
 }

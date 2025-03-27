@@ -9,6 +9,8 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/httpclient"
 )
 
@@ -17,7 +19,7 @@ type LockedInfoInBTCChain struct {
 	//LockedAddresses []string // the locked addresses, it should be multi sig address
 	pkScript  []byte // the pkscript
 	Value     int64  // the sats with locked in lnd
-	AssetInfo []*httpclient.UtxoAssetInfo
+	AssetInfo indexer.TxAssets
 }
 
 func GetLockedUtxoInfo(utxo string) (*LockedInfoInBTCChain, error) {
@@ -35,9 +37,9 @@ func GetLockedUtxoInfo(utxo string) (*LockedInfoInBTCChain, error) {
 	}
 
 	lockedInfo.Utxo = utxo
-	lockedInfo.pkScript = utxoAssetsInfo.OutValue.PkScript
-	lockedInfo.Value = utxoAssetsInfo.OutValue.Value
-	lockedInfo.AssetInfo = utxoAssetsInfo.AssetInfo
+	lockedInfo.pkScript = utxoAssetsInfo.PkScript
+	lockedInfo.Value = utxoAssetsInfo.Value
+	lockedInfo.AssetInfo = utxoAssetsInfo.ToTxAssets()
 
 	return lockedInfo, nil
 }

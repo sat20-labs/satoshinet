@@ -16,7 +16,6 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/httpclient"
 	"github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -440,47 +439,7 @@ func CheckAnchorPkScript(anchorPkScript []byte) (*AscendInfo, error) {
 	}, nil
 }
 
-func isSameAssets(utxoAssetInfo []*httpclient.UtxoAssetInfo, txAssets *wire.TxAssets) bool {
-	if utxoAssetInfo == nil && txAssets == nil {
-		return true
-	}
-
-	if utxoAssetInfo == nil || txAssets == nil {
-		log.Errorf("isSameAssets failed, utxoAssetInfo: %v, txAssets: %v", utxoAssetInfo, txAssets)
-		return false
-	}
-
-	if len(utxoAssetInfo) != len(*txAssets) {
-		log.Errorf("isSameAssets failed, utxoAssetInfo: %v, txAssets: %v", utxoAssetInfo, txAssets)
-		return false
-	}
-
-	for i := 0; i < len(utxoAssetInfo); i++ {
-		if utxoAssetInfo[i].Asset.Name.Protocol != (*txAssets)[i].Name.Protocol {
-			log.Errorf("isSameAssets failed, utxoAssetInfo: %v, txAssets: %v", utxoAssetInfo, txAssets)
-			return false
-		}
-		if utxoAssetInfo[i].Asset.Name.Type != (*txAssets)[i].Name.Type {
-			log.Errorf("isSameAssets failed, utxoAssetInfo: %v, txAssets: %v", utxoAssetInfo, txAssets)
-			return false
-		}
-		if utxoAssetInfo[i].Asset.Name.Ticker != (*txAssets)[i].Name.Ticker {
-			log.Errorf("isSameAssets failed, utxoAssetInfo: %v, txAssets: %v", utxoAssetInfo, txAssets)
-			return false
-		}
-		if utxoAssetInfo[i].Asset.Amount.Cmp(&(*txAssets)[i].Amount) != 0 {
-			log.Errorf("isSameAssets failed, utxoAssetInfo: %v, txAssets: %v", utxoAssetInfo, txAssets)
-			return false
-		}
-		if utxoAssetInfo[i].Asset.BindingSat != (*txAssets)[i].BindingSat {
-			log.Errorf("isSameAssets failed, utxoAssetInfo: %v, txAssets: %v", utxoAssetInfo, txAssets)
-			return false
-		}
-	}
-
-	return true
-}
-func includeAssets(utxoAssetInfo []*httpclient.UtxoAssetInfo, txAssets *wire.TxAssets) bool {
+func includeAssets(utxoAssetInfo wire.TxAssets, txAssets *wire.TxAssets) bool {
 	if utxoAssetInfo == nil && txAssets == nil {
 		return true
 	}
@@ -498,7 +457,7 @@ func includeAssets(utxoAssetInfo []*httpclient.UtxoAssetInfo, txAssets *wire.TxA
 	for _, assetLocked := range *txAssets {
 		assetFound := false
 		for _, assetUtxo := range utxoAssetInfo {
-			if isEqualAsset(assetUtxo, &assetLocked) {
+			if assetUtxo.Equal(&assetLocked) {
 				assetFound = true
 				break
 			}
@@ -507,26 +466,6 @@ func includeAssets(utxoAssetInfo []*httpclient.UtxoAssetInfo, txAssets *wire.TxA
 			log.Errorf("includeAssets failed, locked Asset: %v not found in utxo", assetLocked)
 			return false
 		}
-	}
-
-	return true
-}
-
-func isEqualAsset(utxoAssetInfo *httpclient.UtxoAssetInfo, assetLocked *wire.AssetInfo) bool {
-	if utxoAssetInfo.Asset.Name.Protocol != assetLocked.Name.Protocol {
-		return false
-	}
-	if utxoAssetInfo.Asset.Name.Type != assetLocked.Name.Type {
-		return false
-	}
-	if utxoAssetInfo.Asset.Name.Ticker != assetLocked.Name.Ticker {
-		return false
-	}
-	if utxoAssetInfo.Asset.Amount.Cmp(&assetLocked.Amount) != 0 {
-		return false
-	}
-	if utxoAssetInfo.Asset.BindingSat != assetLocked.BindingSat {
-		return false
 	}
 
 	return true
