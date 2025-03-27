@@ -2489,7 +2489,7 @@ func (vm *ValidatorManager) OnVCState(vcStateCmd *validatorcommand.MsgVCState, v
 
 // Received get vc list command
 func (vm *ValidatorManager) GetVCList(validatorId uint64, start int64, end int64) (*validatorcommand.MsgVCList, error) {
-	utils.Log.Errorf("[ValidatorManager]GetVCList: Start [%d] End [%d]", start, end)
+	utils.Log.Infof("[ValidatorManager]GetVCList: Start [%d] End [%d]", start, end)
 	VCList := make([]*validatorcommand.VCItem, 0)
 	count := 0
 	for i := start; i <= end; i++ {
@@ -2533,7 +2533,7 @@ func (vm *ValidatorManager) OnVCList(vclistCmd *validatorcommand.MsgVCList, vali
 
 // Received get vc block command
 func (vm *ValidatorManager) GetVCBlock(validatorId uint64, blockType uint32, hash chainhash.Hash) (*validatorcommand.MsgVCBlock, error) {
-	utils.Log.Errorf("[ValidatorManager]GetVCBlock: Block type [%d] Hash [%s] from %d", blockType, hash.String(), validatorId)
+	utils.Log.Infof("[ValidatorManager]GetVCBlock: Block type [%d] Hash [%s] from %d", blockType, hash.String(), validatorId)
 	var blockData []byte
 	if blockType == validatorcommand.BlockType_VCBlock {
 		// Get VC Block Data
@@ -2620,7 +2620,7 @@ func (vm *ValidatorManager) OnVCBlock(vcblockCmd *validatorcommand.MsgVCBlock, v
 		// check the block is valid
 		err = vm.isReceptVCBlock(vcBlock)
 		if err != nil {
-			utils.Log.Error("Block isnot recepted:%v", err)
+			utils.Log.Errorf("Block isnot recepted:%v", err)
 			return
 		}
 		// Save VC Block data to local
