@@ -2,6 +2,7 @@ package base
 
 import (
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
 
@@ -607,43 +608,10 @@ func (b *BaseIndexer) syncToBlock(height int, stopChan chan struct{}) int {
 			}
 			//common.Log.Infof("BaseIndexer.SyncToBlock-> get block: cost: %v", time.Since(startTime))
 
-			// make sure that we are at the correct block height
-			if block.Height != i {
-				common.Log.Panicf("BaseIndexer.SyncToBlock-> expected block height %d, got %d", i, block.Height)
-			}
-
-			// detect reorgs
-			if i > 0 && block.PrevBlockHash != b.lastHash {
-				common.Log.WithField("BaseIndexer.SyncToBlock-> height", i).Warn("reorg detected")
+			ret := b.syncBlock(block, height)
+			if ret != 0 {
 				stopBlockFetcherChan <- struct{}{}
-				return b.handleReorg(block)
-			}
-
-			//localStartTime := time.Now()
-			b.prefetchIndexesFromDB(block)
-			//common.Log.Infof("BaseIndexer.SyncToBlock-> prefetchIndexesFromDB: cost: %v", time.Since(localStartTime))
-			//localStartTime = time.Now()
-			b.processBlock(block)
-			//common.Log.Infof("BaseIndexer.SyncToBlock-> assignOrdinals: cost: %v", time.Since(localStartTime))
-
-			// Update the sync stats
-			b.stats.ChainTip = height
-			b.lastHeight = block.Height
-			b.lastHash = block.Hash
-			b.prevBlockHashMap[b.lastHeight] = b.lastHash
-			if len(b.prevBlockHashMap) > b.keepBlockHistory {
-				delete(b.prevBlockHashMap, b.lastHeight-b.keepBlockHistory)
-			}
-
-			//localStartTime = time.Now()
-			b.blockprocCB(block)
-			//common.Log.Infof("BaseIndexer.SyncToBlock-> blockproc: cost: %v", time.Since(localStartTime))
-
-			if (block.Height%b.periodFlushToDB == 0 && height-block.Height > b.keepBlockHistory) ||
-				height-block.Height == b.keepBlockHistory {
-				//localStartTime = time.Now()
-				b.forceUpdateDB()
-				//common.Log.Infof("BaseIndexer.SyncToBlock-> forceUpdateDB: cost: %v", time.Since(localStartTime))
+				return ret
 			}
 
 			if i%logProgressPeriod == 0 {
@@ -662,6 +630,52 @@ func (b *BaseIndexer) syncToBlock(height int, stopChan chan struct{}) int {
 	//b.forceUpdateDB()
 
 	common.Log.Infof("BaseIndexer.SyncToBlock-> already synced to block %d-%d\n", b.lastHeight, b.stats.SyncHeight)
+	return 0
+}
+
+
+// sync
+func (b *BaseIndexer) syncBlock(block *common.Block, tip int) int {
+	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, targetHeight %d", b.lastHeight, block.Height)
+
+	if block.Height != b.lastHeight + 1 {
+		common.Log.Warningf("BaseIndexer.syncBlock-> expected block height %d, got %d", b.lastHeight, block.Height)
+		return -1
+	}
+
+	// detect reorgs
+	if b.lastHash != "" && block.PrevBlockHash != b.lastHash {
+		common.Log.Warningf("BaseIndexer.syncBlock-> height %d reorg detected", block.Height)
+		return b.handleReorg(block)
+	}
+
+	//localStartTime := time.Now()
+	b.prefetchIndexesFromDB(block)
+	//common.Log.Infof("BaseIndexer.syncBlock-> prefetchIndexesFromDB: cost: %v", time.Since(localStartTime))
+	//localStartTime = time.Now()
+	b.processBlock(block)
+	//common.Log.Infof("BaseIndexer.syncBlock-> assignOrdinals: cost: %v", time.Since(localStartTime))
+
+	// Update the sync stats
+	b.stats.ChainTip = tip
+	b.lastHeight = block.Height
+	b.lastHash = block.Hash
+	b.prevBlockHashMap[b.lastHeight] = b.lastHash
+	if len(b.prevBlockHashMap) > b.keepBlockHistory {
+		delete(b.prevBlockHashMap, b.lastHeight-b.keepBlockHistory)
+	}
+
+	//localStartTime = time.Now()
+	b.blockprocCB(block)
+	//common.Log.Infof("BaseIndexer.syncBlock-> blockproc: cost: %v", time.Since(localStartTime))
+
+	if (block.Height%b.periodFlushToDB == 0 && tip-block.Height > b.keepBlockHistory) ||
+	tip-block.Height == b.keepBlockHistory {
+		//localStartTime = time.Now()
+		b.forceUpdateDB()
+		//common.Log.Infof("BaseIndexer.syncBlock-> forceUpdateDB: cost: %v", time.Since(localStartTime))
+	}
+
 	return 0
 }
 
@@ -824,6 +838,15 @@ func (b *BaseIndexer) SyncToChainTip(stopChan chan struct{}) int {
 	}
 
 	return b.syncToBlock(int(count), stopChan)
+}
+
+func (b *BaseIndexer) SyncBlock(block *wire.MsgBlock, height, tip int) error {
+	bk := ConvertBlock(block, height, b.chaincfgParam)
+	ret := b.syncBlock(bk, tip)
+	if ret != 0 {
+		return fmt.Errorf("syncBlock %d failed.", height)
+	}
+	return nil
 }
 
 func (b *BaseIndexer) loadUtxoFromDB(txn *badger.Txn, utxostr string) error {

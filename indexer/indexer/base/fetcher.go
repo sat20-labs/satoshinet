@@ -3,8 +3,10 @@ package base
 import (
 	"encoding/hex"
 
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 // 不要panic，可能会影响写数据库
@@ -23,6 +25,10 @@ func (b *BaseIndexer) fetchBlock(height int) *common.Block {
 		//common.Log.Fatalln(err)
 	}
 
+	return ConvertBlock(block, height, b.chaincfgParam)
+}
+
+func ConvertBlock(block *wire.MsgBlock, height int, chaincfgParam *chaincfg.Params) *common.Block {
 	transactions := block.Transactions
 	txs := make([]*common.Transaction, len(transactions))
 	for i, tx := range transactions {
@@ -39,7 +45,7 @@ func (b *BaseIndexer) fetchBlock(height int) *common.Block {
 		// parse the raw tx values
 		for j, v := range tx.TxOut {
 			// Determine the type of the script and extract the address
-			scyptClass, addrs, reqSig, err := txscript.ExtractPkScriptAddrs(v.PkScript, b.chaincfgParam)
+			scyptClass, addrs, reqSig, err := txscript.ExtractPkScriptAddrs(v.PkScript, chaincfgParam)
 			if err != nil {
 				common.Log.Errorf("ExtractPkScriptAddrs %d failed. %v", height, err)
 				return nil
@@ -90,16 +96,15 @@ func (b *BaseIndexer) fetchBlock(height int) *common.Block {
 	}
 
 	t := block.Header.Timestamp
-	bl := &common.Block{
+	return &common.Block{
 		Timestamp:     t,
 		Height:        height,
 		Hash:          block.BlockHash().String(),
 		PrevBlockHash: block.Header.PrevBlock.String(),
 		Transactions:  txs,
 	}
-
-	return bl
 }
+
 
 // Prefetches blocks from bitcoind and sends them to the blocksChan
 func (b *BaseIndexer) spawnBlockFetcher(startHeigh int, endHeight int, stopChan chan struct{}) {

@@ -32,7 +32,7 @@ func NewIndexerMgr(dbPath, port, user, ps string, enableTls, bTestNet bool, inte
 	shareIndexer.InitIndexer(indexerMgr)
 	indexerMgr.Init()
 
-	_, err = InitRpcService(dbPath, bTestNet, indexerMgr)
+	_, err = initRpcService(dbPath, bTestNet, indexerMgr)
 	if err != nil {
 		common.Log.Error(err)
 		return nil, err
@@ -40,7 +40,7 @@ func NewIndexerMgr(dbPath, port, user, ps string, enableTls, bTestNet bool, inte
 	return indexerMgr, nil
 }
 
-func InitRpcService(dbPath string, bTestNet bool, indexerMgr *indexer.IndexerMgr) (*rpcserver.Rpc, error) {
+func initRpcService(dbPath string, bTestNet bool, indexerMgr *indexer.IndexerMgr) (*rpcserver.Rpc, error) {
 	
 	addr := "0.0.0.0:9528"
 	proxy := "mainnet"

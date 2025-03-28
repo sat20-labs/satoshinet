@@ -107,6 +107,7 @@ func (b *IndexerMgr) Init() {
 	b.compiling = base_indexer.NewBaseIndexer(b.baseDB, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 	b.compiling.Init(b.processBlock, b.forceUpdateDB)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
+	
 
 	dbver := b.GetBaseDBVer()
 	common.Log.Infof("base db version: %s", dbver)
@@ -117,6 +118,10 @@ func (b *IndexerMgr) Init() {
 	b.rpcService = base_indexer.NewRpcIndexer(b.compiling)
 
 	b.compilingBackupDB = nil
+
+	if b.lastCheckHeight == -1 {
+		b.ConnectBlock(b.chaincfgParam.GenesisBlock, 0, 0)
+	}
 
 }
 
@@ -161,7 +166,8 @@ func (b *IndexerMgr) Start() error {
 
 	if !b.bRunning {
 		b.bRunning = true
-		go b.StartDaemon(b.interrupt)
+		// 直接使用 ConnectBlock
+		//go b.StartDaemon(b.interrupt)
 	}
 	
 	return nil
@@ -400,3 +406,21 @@ func (p *IndexerMgr) dbStatistic() bool {
 	//return p.searchName()
 	return false
 }
+
+func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
+	err := p.compiling.SyncBlock(block, height, tip)
+	if err != nil {
+		common.Log.Errorf("ConnectBlock failed, %v", err)
+		return 
+	}
+	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
+	p.updateDB()
+	if height == tip {	
+		p.dbgc()
+	}
+}
+
+func (p *IndexerMgr) DisconnectBlock(height, tip int) {
+	p.handleReorg(height)
+}
+

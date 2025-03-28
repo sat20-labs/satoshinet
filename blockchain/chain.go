@@ -15,6 +15,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/database"
+	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -101,6 +102,7 @@ type BlockChain struct {
 	timeSource          MedianTimeSource
 	sigCache            *txscript.SigCache
 	indexManager        IndexManager
+	assetIndexerMgr     *indexer.IndexerMgr
 	hashCache           *txscript.HashCache
 
 	// The following fields are calculated based upon the provided chain
@@ -160,6 +162,7 @@ type BlockChain struct {
 	// chain state can be quickly reconstructed on load.
 	stateLock     sync.RWMutex
 	stateSnapshot *BestState
+	tipHeight     int
 
 	// The following caches are used to efficiently keep track of the
 	// current deployment threshold state of each rule change deployment.
@@ -718,6 +721,8 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 		b.sendNotification(NTBlockConnected, block)
 	}()
 
+	b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), b.tipHeight)
+
 	// Since we may have changed the UTXO cache, we make sure it didn't exceed its
 	// maximum size.  If we're pruned and have flushed already, this will be a no-op.
 	return b.db.Update(func(dbTx database.Tx) error {
@@ -941,6 +946,8 @@ func (b *BlockChain) reorganizeChain(detachNodes, attachNodes *list.List) error 
 	if attachNodes.Len() > 0 {
 		forkNode = newBest
 	}
+
+	b.assetIndexerMgr.DisconnectBlock(int(forkNode.height), b.tipHeight)
 
 	// Connect the new best chain blocks using the utxocache directly.  It's more
 	// efficient and since we already checked that the blocks are correct and that
@@ -2179,6 +2186,8 @@ type Config struct {
 	// index manager.
 	IndexManager IndexManager
 
+	AssetIndexManager *indexer.IndexerMgr
+
 	// HashCache defines a transaction hash mid-state cache to use when
 	// validating transactions. This cache has the potential to greatly
 	// speed up transaction validation as re-using the pre-calculated
@@ -2238,6 +2247,7 @@ func New(config *Config) (*BlockChain, error) {
 		timeSource:          config.TimeSource,
 		sigCache:            config.SigCache,
 		indexManager:        config.IndexManager,
+		assetIndexerMgr:     config.AssetIndexManager,
 		minRetargetTimespan: targetTimespan / adjustmentFactor,
 		maxRetargetTimespan: targetTimespan * adjustmentFactor,
 		blocksPerRetarget:   int32(targetTimespan / targetTimePerBlock),

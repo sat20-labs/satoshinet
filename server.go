@@ -2655,14 +2655,13 @@ func (s *server) Start() {
 		s.posMiner.Start()
 
 		s.rpcServer.SetVCStore(s.posMiner.GetVCStore())
+		go s.syncEpochMemberHandle()
+		go s.monitorCurrentState()
 	}
 
 	if cfg.SaveMempool {
 		s.loadMempoolCache()
 	}
-
-	go s.monitorCurrentState()
-	go s.syncEpochMemberHandle()
 }
 
 // Stop gracefully shuts down the server by stopping and disconnecting all
@@ -3093,6 +3092,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 		TimeSource:       s.timeSource,
 		SigCache:         s.sigCache,
 		IndexManager:     indexManager,
+		AssetIndexManager: assetIndexer,
 		HashCache:        s.hashCache,
 		Prune:            cfg.Prune * 1024 * 1024,
 		UtxoCacheMaxSize: uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
@@ -3200,12 +3200,17 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 
 	miningPubKey, _ := hex.DecodeString(cfg.MiningPubKey)
 
+	var miningAddr btcutil.Address
+	if len(cfg.miningAddrs) != 0 {
+		miningAddr = cfg.miningAddrs[0]
+	}
+
 	s.posMiner = posminer.New(&posminer.Config{
 		ChainParams:            chainParams,
 		Dial:                   btcdDial,
 		Lookup:                 cfg.lookup,
 		BlockTemplateGenerator: blockTemplateGenerator,
-		MiningAddr:             cfg.miningAddrs[0],
+		MiningAddr:             miningAddr,
 		MiningPubKey:           miningPubKey,
 		TimerGenerate:          cfg.TimerGenerate,
 		ProcessBlock:           s.syncManager.ProcessBlock,
