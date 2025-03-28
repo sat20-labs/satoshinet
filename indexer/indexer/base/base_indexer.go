@@ -610,7 +610,7 @@ func (b *BaseIndexer) SyncToBlock(height int, stopChan chan struct{}) int {
 
 // sync
 func (b *BaseIndexer) syncBlock(block *common.Block, tip int) int {
-	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, targetHeight %d", b.lastHeight, block.Height)
+	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, blockHeight %d", b.lastHeight, block.Height)
 
 	if block.Height != b.lastHeight + 1 {
 		common.Log.Warningf("BaseIndexer.syncBlock-> expected block height %d, got %d", b.lastHeight, block.Height)
@@ -672,14 +672,14 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 	satsOutput := int64(0)
 	for _, tx := range block.Transactions {
 		//ranges := make([]*common.Range, 0)
-		for _, input := range tx.Inputs {
+		for i, input := range tx.Inputs {
 			if uint32(input.Vout) == wire.MaxTxInSequenceNum { // coinbase
 				continue
 			}
 			if uint32(input.Vout) == wire.AnchorTxOutIndex { // transcend
 				ascend, err := GenAscendFromAnchorPkScript(input.SignatureScript, b.chaincfgParam)
 				if err != nil {
-					common.Log.Errorf("GenAscendFromAnchorPkScript failed. %v", err)
+					common.Log.Errorf("GenAscendFromAnchorPkScript %s input %d failed. %v", tx.Txid, i, err)
 					continue
 				}
 				ascend.Height = block.Height
@@ -755,18 +755,18 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 							// 	}
 							// }
 						} else {
-							common.Log.Errorf("GenDescend failed, %v", err)
+							common.Log.Errorf("GenDescend %s:%d failed, %v", tx.Txid, i, err)
 						}
 					case common.CONTENT_TYPE_ASCENDING:
 						tickerInfo, err := GenTickerInfo(data)
 						if err == nil {
 							b.tickInfoMap[tickerInfo.AssetName.String()] = tickerInfo
 						} else {
-							common.Log.Errorf("GenTickerInfo failed, %v", err)
+							common.Log.Errorf("GenTickerInfo %s:%d failed, %v",tx.Txid, i, err)
 						}
 					}
 				} else {
-					common.Log.Errorf("ReadDataFromNullDataScript failed, %v", err)
+					common.Log.Errorf("ReadDataFromNullDataScript %s:%d failed, %v", tx.Txid, i, err)
 				}
 			}
 
