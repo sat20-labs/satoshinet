@@ -670,7 +670,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 
 	satsInput := int64(0)
 	satsOutput := int64(0)
-	for _, tx := range block.Transactions {
+	for txIndex, tx := range block.Transactions {
 		//ranges := make([]*common.Range, 0)
 		for i, input := range tx.Inputs {
 			if uint32(input.Vout) == wire.MaxTxInSequenceNum { // coinbase
@@ -735,7 +735,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 		}
 
 		for i, output := range tx.Outputs {
-			if common.IsOpReturn(output.Address.PkScript) {
+			if txIndex != 0 && common.IsOpReturn(output.Address.PkScript) {
 				ctype, data, err := ReadDataFromNullDataScript(output.Address.PkScript)
 				if err == nil {
 					switch ctype {

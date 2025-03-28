@@ -418,9 +418,9 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 		stopIndexerChan := make(chan struct{}, 1) // 非阻塞
 		ret := p.compiling.SyncToBlock(height - 1, stopIndexerChan)
 		if ret  == 0 {
-			common.Log.Infof("sync to %d succeed", height)
+			common.Log.Infof("sync to %d succeed", height-1)
 		} else {
-			common.Log.Errorf("sync to %d failed", height)
+			common.Log.Errorf("sync to %d failed", height-1)
 			// then ?
 		}
 	}
