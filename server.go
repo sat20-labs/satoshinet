@@ -55,8 +55,8 @@ const (
 	defaultRequiredServices = wire.SFNodeNetwork
 
 	// defaultTargetOutbound is the default number of outbound peers to target.
-	//	defaultTargetOutbound = 8
-	defaultTargetOutbound = 1 // just for testing purposes
+	defaultTargetOutbound = 8
+	// defaultTargetOutbound = 1 // just for testing purposes
 
 	// connectionRetryInterval is the base amount of time to wait in between
 	// retries when connecting to persistent peers.  It is adjusted by the
