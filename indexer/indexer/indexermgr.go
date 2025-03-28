@@ -168,6 +168,10 @@ func (b *IndexerMgr) Start() error {
 		b.bRunning = true
 		// 直接使用 ConnectBlock
 		//go b.StartDaemon(b.interrupt)
+		tip := b.compiling.GetChainTip()
+		if b.compiling.GetSyncHeight() < tip {
+			b.ConnectBlock(nil, tip+1, tip)
+		}
 	}
 	
 	return nil
@@ -421,11 +425,14 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 		}
 	}
 
-	err := p.compiling.SyncBlock(block, height, tip)
-	if err != nil {
-		common.Log.Errorf("ConnectBlock failed, %v", err)
-		return 
+	if block != nil {
+		err := p.compiling.SyncBlock(block, height, tip)
+		if err != nil {
+			common.Log.Errorf("ConnectBlock failed, %v", err)
+			return 
+		}
 	}
+	
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
 	// TODO 优化indexer的设计
 	p.updateDB()
