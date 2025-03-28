@@ -188,32 +188,6 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 
 
 func (b *BaseIndexer) Repair() {
-	if !b.IsMainnet() {
-		tickerInfo := common.TickerInfo{
-			AssetName: *wire.NewAssetNameFromString("runes:f:53022_14"),
-			MaxSupply: "2000000",
-			Precition: 1,
-		}
-		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
-		tickerInfo = common.TickerInfo{
-			AssetName: *wire.NewAssetNameFromString("runes:f:54507_1"),
-			MaxSupply: "2000000",
-			Precition: 1,
-		}
-		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
-		tickerInfo = common.TickerInfo{
-			AssetName: *wire.NewAssetNameFromString("runes:f:56455_317"),
-			MaxSupply: "2000000",
-			Precition: 1,
-		}
-		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
-		tickerInfo = common.TickerInfo{
-			AssetName: *wire.NewAssetNameFromString("runes:f:39241_1"),
-			MaxSupply: "100000000000000100000000000000",
-			Precition: 1,
-		}
-		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
-	}
 
 }
 
@@ -568,8 +542,8 @@ func (b *BaseIndexer) handleReorg(currentBlock *common.Block) int {
 	return reorgHeight
 }
 
-// syncToBlock continues from the sync height to the current height
-func (b *BaseIndexer) syncToBlock(height int, stopChan chan struct{}) int {
+// SyncToBlock continues from the sync height to the current height
+func (b *BaseIndexer) SyncToBlock(height int, stopChan chan struct{}) int {
 	if b.lastHeight == height {
 		//common.Log.Infof("BaseIndexer.SyncToBlock-> already synced to block %d", height)
 		return 0
@@ -705,6 +679,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			if uint32(input.Vout) == wire.AnchorTxOutIndex { // transcend
 				ascend, err := GenAscendFromAnchorPkScript(input.SignatureScript, b.chaincfgParam)
 				if err != nil {
+					common.Log.Errorf("GenAscendFromAnchorPkScript failed. %v", err)
 					continue
 				}
 				ascend.Height = block.Height
@@ -779,13 +754,19 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 							// 		b.coreNodeMapUpdated = true
 							// 	}
 							// }
+						} else {
+							common.Log.Errorf("GenDescend failed, %v", err)
 						}
 					case common.CONTENT_TYPE_ASCENDING:
 						tickerInfo, err := GenTickerInfo(data)
 						if err == nil {
 							b.tickInfoMap[tickerInfo.AssetName.String()] = tickerInfo
+						} else {
+							common.Log.Errorf("GenTickerInfo failed, %v", err)
 						}
 					}
+				} else {
+					common.Log.Errorf("ReadDataFromNullDataScript failed, %v", err)
 				}
 			}
 
@@ -837,7 +818,7 @@ func (b *BaseIndexer) SyncToChainTip(stopChan chan struct{}) int {
 		count = int64(b.lastHeight) + 1
 	}
 
-	return b.syncToBlock(int(count), stopChan)
+	return b.SyncToBlock(int(count), stopChan)
 }
 
 func (b *BaseIndexer) SyncBlock(block *wire.MsgBlock, height, tip int) error {

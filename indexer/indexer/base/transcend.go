@@ -228,7 +228,7 @@ func GenDescend(tx *common.Transaction, index int, descendTxId string) (*common.
 
 func GenTickerInfo(data []byte) (*common.TickerInfo, error) {
 	var result common.TickerInfo
-	parts := strings.Split(string(data), ":")
+	parts := strings.Split(string(data), "-")
 	if len(parts) != 4 {
 		return nil, fmt.Errorf("invalid ascending payload %s", string(data))
 	}

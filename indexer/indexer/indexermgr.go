@@ -408,12 +408,26 @@ func (p *IndexerMgr) dbStatistic() bool {
 }
 
 func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
+
+	if p.compiling.GetHeight() + 1 < height && height > 1 {
+		// 因为规避分叉问题，数据库数据高度不够，需要先同步到指定高度
+		stopIndexerChan := make(chan struct{}, 1) // 非阻塞
+		ret := p.compiling.SyncToBlock(height - 1, stopIndexerChan)
+		if ret  == 0 {
+			common.Log.Infof("sync to %d succeed", height)
+		} else {
+			common.Log.Errorf("sync to %d failed", height)
+			// then ?
+		}
+	}
+
 	err := p.compiling.SyncBlock(block, height, tip)
 	if err != nil {
 		common.Log.Errorf("ConnectBlock failed, %v", err)
 		return 
 	}
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
+	// TODO 优化indexer的设计
 	p.updateDB()
 	if height == tip {	
 		p.dbgc()
