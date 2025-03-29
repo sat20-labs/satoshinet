@@ -399,7 +399,7 @@ func (b *IndexerMgr) updateServiceInstance() {
 }
 
 func (p *IndexerMgr) repair() bool {
-	//p.compiling.Repair()
+	p.compiling.Repair()
 	return false
 }
 
