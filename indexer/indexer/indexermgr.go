@@ -130,16 +130,16 @@ func (b *IndexerMgr) GetBaseDB() *badger.DB {
 }
 
 
-func InitRpcClient(dbPath string, cfg *RPCConfig) error {
-	err := satsnet_rpc.InitSatsNetClient(
+func (b *IndexerMgr) initRpcClient(dbPath string, cfg *RPCConfig) error {
+	tip, err := satsnet_rpc.InitSatsNetClient(
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, dbPath, cfg.EnableTls,
 	)
 	if err != nil {
 		go func() {
 			n := 0
 			var err error
-			for n < 10 {
-				err = satsnet_rpc.InitSatsNetClient(
+			for n < 30 {
+				tip, err = satsnet_rpc.InitSatsNetClient(
 					cfg.Host, cfg.Port, cfg.User, cfg.Password, dbPath, cfg.EnableTls,
 				)
 				if err == nil {
@@ -150,15 +150,24 @@ func InitRpcClient(dbPath string, cfg *RPCConfig) error {
 			}
 			if err != nil {
 				common.Log.Panic("rpc client init failed")
+			} else {
+				if b.compiling.GetSyncHeight() < tip {
+					b.ConnectBlock(nil, tip+1, tip)
+				}
 			}
 		}()
+	} else {
+		if b.compiling.GetSyncHeight() < tip {
+			b.ConnectBlock(nil, tip+1, tip)
+		}
 	}
+
 	
 	return nil
 }
 
 func (b *IndexerMgr) Start() error {
-	err := InitRpcClient(b.cfg.DataPath, b.cfg.RPCCfg)
+	err := b.initRpcClient(b.cfg.DataPath, b.cfg.RPCCfg)
 	if err != nil {
 		common.Log.Error(err)
 		return err
@@ -168,10 +177,6 @@ func (b *IndexerMgr) Start() error {
 		b.bRunning = true
 		// 直接使用 ConnectBlock
 		//go b.StartDaemon(b.interrupt)
-		tip := b.compiling.GetChainTip()
-		if b.compiling.GetSyncHeight() < tip {
-			b.ConnectBlock(nil, tip+1, tip)
-		}
 	}
 	
 	return nil

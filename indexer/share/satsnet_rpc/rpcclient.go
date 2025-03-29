@@ -31,7 +31,8 @@ func RpcClientReady() bool {
 	return _client.client != nil
 }
 
-func InitSatsNetClient(host string, port int, user, passwd, dataPath string, enableTls bool) error {
+func InitSatsNetClient(host string, port int, user, passwd, dataPath string, 
+	enableTls bool) (int, error) {
 	ntfnHandlers := rpcclient.NotificationHandlers{
 		OnFilteredBlockConnected: func(height int32, header *wire.BlockHeader, txns []*btcutil.Tx) {
 			common.Log.Infof("Block connected: %v (%d) %v",
@@ -58,7 +59,7 @@ func InitSatsNetClient(host string, port int, user, passwd, dataPath string, ena
 		certs, err = os.ReadFile(certFile)
 		if err != nil {
 			common.Log.Errorf("ReadFile %s failed, %v", certFile, err)
-			return err
+			return -1, err
 		}
 	} 
 
@@ -75,13 +76,13 @@ func InitSatsNetClient(host string, port int, user, passwd, dataPath string, ena
 	client, err := rpcclient.New(connCfg, &ntfnHandlers)
 	if err != nil {
 		common.Log.Errorf("rpcclient.New failed. %v", err)
-		return err
+		return -1, err
 	}
 
 	// Register for block connect and disconnect notifications.
 	if err := client.NotifyBlocks(); err != nil {
 		common.Log.Errorf("client.NotifyBlocks failed. %v", err)
-		return err
+		return -1, err
 	}
 	common.Log.Infof("NotifyBlocks: Registration Complete")
 
@@ -89,14 +90,14 @@ func InitSatsNetClient(host string, port int, user, passwd, dataPath string, ena
 	blockCount, err := client.GetBlockCount()
 	if err != nil {
 		common.Log.Errorf("client.GetBlockCount failed. %v", err)
-		return err
+		return -1, err
 	}
-	common.Log.Infof("Block count: %d", blockCount)
+	common.Log.Infof("Block height: %d", blockCount)
 
 	common.Log.Infof("rpc client connected")
 	_client.client = client
 
-	return nil
+	return int(blockCount), nil
 }
 
 func ShutdownSatsNetClient() {
