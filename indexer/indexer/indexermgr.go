@@ -177,6 +177,7 @@ func (b *IndexerMgr) Start() error {
 		b.bRunning = true
 		// 直接使用 ConnectBlock
 		//go b.StartDaemon(b.interrupt)
+		b.repair()
 	}
 	
 	return nil
