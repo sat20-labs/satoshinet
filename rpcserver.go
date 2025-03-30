@@ -4431,6 +4431,8 @@ func (s *rpcServer) processRequest(request *btcjson.Request, isAdmin bool, close
 	var err error
 	var jsonErr *btcjson.RPCError
 
+	rpcsLog.Infof("processRequest %s", request.Method)
+
 	if !isAdmin {
 		if _, ok := rpcLimited[request.Method]; !ok {
 			jsonErr = internalRPCError("limited user not "+
