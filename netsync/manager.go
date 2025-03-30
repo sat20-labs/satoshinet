@@ -280,7 +280,7 @@ func (sm *SyncManager) startSync() {
 	}
 
 	best := sm.chain.BestSnapshot()
-	log.Debugf("Current peer best hieght is %d", best.Height)
+	log.Debugf("Current peer best height is %d", best.Height)
 	var higherPeers, equalPeers []*peerpkg.Peer
 	for peer, state := range sm.peerStates {
 		if !state.syncCandidate {
@@ -316,7 +316,7 @@ func (sm *SyncManager) startSync() {
 		// This peer has a height greater than our own, we'll consider
 		// it in the set of better peers from which we'll randomly
 		// select.
-		log.Debugf("Adding peer %s to higher peers., The peer hieght is %d", peer.String(), peer.LastBlock())
+		log.Debugf("Adding peer %s to higher peers., The peer height is %d", peer.String(), peer.LastBlock())
 		higherPeers = append(higherPeers, peer)
 	}
 
@@ -1180,7 +1180,7 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	peer := imsg.peer
 
-	log.Warnf("handleInvMsg from peer %s", peer)
+	log.Infof("handleInvMsg from peer %s", peer)
 
 	state, exists := sm.peerStates[peer]
 	if !exists {
