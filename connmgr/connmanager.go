@@ -175,6 +175,7 @@ type handleFailed struct {
 type ConnManager struct {
 	// The following variables must only be used atomically.
 	connReqCount uint64
+	connCount    uint64
 	start        int32
 	stop         int32
 
@@ -256,6 +257,7 @@ out:
 
 			case handleConnected:
 				connReq := msg.c
+				atomic.AddUint64(&cm.connCount, 1)
 
 				if _, ok := pending[connReq.id]; !ok {
 					if msg.conn != nil {
@@ -306,6 +308,11 @@ out:
 				// callback.
 				log.Debugf("Disconnected [%d] %s", connReq.id, connReq.Addr.String())
 				delete(conns, msg.id)
+				connCount := atomic.LoadUint64(&cm.connCount)
+				if connCount > 1 {
+					connCount--
+				}
+				atomic.StoreUint64(&cm.connCount, connCount)
 
 				if connReq.conn != nil {
 					connReq.conn.Close()
@@ -373,7 +380,7 @@ func (cm *ConnManager) NewConnReq() {
 		return
 	}
 
-	connCount := atomic.LoadUint64(&cm.connReqCount)
+	connCount := atomic.LoadUint64(&cm.connCount)
 	if connCount >= uint64(cm.cfg.TargetOutbound) {
 		log.Errorf("NewConnReq: Already have %d connections, target is %d", connCount, cm.cfg.TargetOutbound)
 		return
@@ -425,6 +432,12 @@ func (cm *ConnManager) NewConnReq() {
 // corresponding address.
 func (cm *ConnManager) ConnectSpecificAddress(addr net.Addr) {
 	if atomic.LoadInt32(&cm.stop) != 0 {
+		return
+	}
+
+	connCount := atomic.LoadUint64(&cm.connCount)
+	if connCount >= uint64(cm.cfg.TargetOutbound) {
+		log.Errorf("NewConnReq: Already have %d connections, target is %d", connCount, cm.cfg.TargetOutbound)
 		return
 	}
 
@@ -601,7 +614,7 @@ func (cm *ConnManager) Start() {
 		}
 	}
 
-	for i := atomic.LoadUint64(&cm.connReqCount); i < uint64(cm.cfg.TargetOutbound); i++ {
+	for i := atomic.LoadUint64(&cm.connCount); i < uint64(cm.cfg.TargetOutbound); i++ {
 		go cm.NewConnReq()
 	}
 }
