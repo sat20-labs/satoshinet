@@ -1426,7 +1426,11 @@ out:
 				msg.reply <- peerID
 
 			case processBlockMsg:
-				sm.chain.SetTipHeight(int(sm.syncPeer.LastBlock()))
+				var lastBlock int
+				if sm.syncPeer != nil {
+					lastBlock = int(sm.syncPeer.LastBlock())
+				} 
+				sm.chain.SetTipHeight(lastBlock)
 				_, isOrphan, err := sm.chain.ProcessBlock(
 					msg.block, msg.flags)
 				if err != nil {

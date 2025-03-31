@@ -154,6 +154,9 @@ func (b *BlockChain) showCurrentOrphans() {
 }
 
 func (b *BlockChain) SetTipHeight(tip int) {
+	if tip == 0 {
+		tip = int(b.bestChain.Height())
+	}
 	b.chainLock.Lock()
 	defer b.chainLock.Unlock()
 	b.tipHeight = tip
