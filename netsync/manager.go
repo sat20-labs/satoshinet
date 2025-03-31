@@ -714,7 +714,7 @@ func (sm *SyncManager) current() bool {
 func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	peer := bmsg.peer
 
-	log.Warnf("handleBlockMsg from peer %s", peer)
+	log.Infof("handleBlockMsg from peer %s", peer)
 
 	state, exists := sm.peerStates[peer]
 	if !exists {
@@ -770,7 +770,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 
 	// Process the block to include validation, best chain selection, orphan
 	// handling, etc.
-	sm.chain.SetTipHeight(int(sm.syncPeer.LastBlock()))
+	var lastBlock int
+	if sm.syncPeer != nil {
+		lastBlock = int(sm.syncPeer.LastBlock())
+	} 
+	sm.chain.SetTipHeight(lastBlock)
 	_, isOrphan, err := sm.chain.ProcessBlock(bmsg.block, behaviorFlags)
 	if err != nil {
 		// When the error is a rule error, it means the block was simply
