@@ -418,9 +418,8 @@ func (p *IndexerMgr) dbStatistic() bool {
 }
 
 func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
-
+	p.mutex.Lock()
 	common.Log.Infof("compiling height %d, block %d, tip %d", p.compiling.GetHeight(), height, tip)
-
 	if p.compiling.GetHeight() + 1 < height && height > 1 {
 		// 因为规避分叉问题，数据库数据高度不够，需要先同步到指定高度
 		stopIndexerChan := make(chan struct{}, 1) // 非阻塞
@@ -432,6 +431,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 			// then ?
 		}
 	}
+	p.mutex.Unlock()
 
 	if block != nil {
 		err := p.compiling.SyncBlock(block, height, tip)
