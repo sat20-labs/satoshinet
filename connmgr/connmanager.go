@@ -452,7 +452,7 @@ func (cm *ConnManager) ConnectSpecificAddress(addr net.Addr) {
 		return
 	}
 
-	log.Debugf("Registered connection (%d) to pending list with addr", c.id, c.Addr.String())
+	log.Debugf("Registered connection (%d) to pending list with addr %s", c.id, c.Addr.String())
 
 	// addr, err := cm.cfg.GetNewAddress()
 	// if err != nil {

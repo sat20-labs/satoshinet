@@ -563,7 +563,7 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 	// Remove the peer from the list of candidate peers.
 	delete(sm.peerStates, peer)
 
-	log.Infof("Lost peer %s", peer)
+	log.Infof("Lost peer %s %d", peer, peer.ID())
 	log.Infof(" %s has removed to peerStates", peer)
 
 	sm.clearRequestedState(state)

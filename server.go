@@ -2053,6 +2053,19 @@ func (s *server) handleSyncEpochMemberMsg(state *peerState, semmsg *syncEpochMem
 				break
 			}
 		}
+		for _, sp := range state.inboundPeers {
+			addr := sp.Addr()
+			hostpeer, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				srvrLog.Warnf("Failed to get host and port: %v", err)
+				continue
+			}
+			if hostpeer == memberHost {
+				srvrLog.Debugf("sync epoch member %s", memberHost)
+				isConnected = true
+				break
+			}
+		}
 		if !isConnected {
 			srvrLog.Debugf("sync epoch member %s not connected, will connect", memberHost)
 			// Attempt to look up an IP address associated with the parsed host.

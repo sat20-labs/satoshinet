@@ -1954,7 +1954,7 @@ func (p *Peer) Disconnect() {
 		return
 	}
 
-	log.Debugf("Disconnecting %s", p)
+	log.Debugf("Disconnecting %s %d", p, p.id)
 	if atomic.LoadInt32(&p.connected) != 0 {
 		p.conn.Close()
 	}
