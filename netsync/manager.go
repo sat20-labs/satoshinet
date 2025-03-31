@@ -623,7 +623,7 @@ func (sm *SyncManager) updateSyncPeer(dcSyncPeer bool) {
 // handleTxMsg handles transaction messages from all peers.
 func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	peer := tmsg.peer
-	log.Warnf("handleTxMsg from peer %s", peer)
+	log.Infof("handleTxMsg from peer %s", peer)
 
 	state, exists := sm.peerStates[peer]
 	if !exists {
