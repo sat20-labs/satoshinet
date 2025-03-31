@@ -50,12 +50,12 @@ func newAnchorTxCache(db database.DB) *AnchorTxCache {
 }
 
 // FetchAnchorTxInfo returns the anchor tx info for the locked txid.
-func (s *AnchorTxCache) FetchAnchorTxInfo(lockedTxid string) (*AnchorTxInfo, error) {
+func (s *AnchorTxCache) FetchAnchorTxInfo(lockedUtxo string) (*AnchorTxInfo, error) {
 	s.anchorTxInfoLock.RLock()
 	defer s.anchorTxInfoLock.RUnlock()
-	anchorTxInfo, ok := s.anchorTxInfoMap[lockedTxid]
+	anchorTxInfo, ok := s.anchorTxInfoMap[lockedUtxo]
 	if !ok {
-		err := fmt.Errorf("no anchor tx info found.")
+		err := fmt.Errorf("no anchor tx info found")
 		return nil, err
 	}
 	return anchorTxInfo, nil
@@ -68,7 +68,7 @@ func (s *AnchorTxCache) addAnchorTxInfos(anchorTxInfos *[]AnchorTxInfo) error {
 	for _, anchorTxInfo := range *anchorTxInfos {
 		_, ok := s.anchorTxInfoMap[anchorTxInfo.LockedUtxo]
 		if ok {
-			err := fmt.Errorf("locked tx has anchor tx info.")
+			err := fmt.Errorf("locked tx has anchor tx info")
 			return err
 		}
 		s.anchorTxInfoMap[anchorTxInfo.LockedUtxo] = &anchorTxInfo
@@ -83,7 +83,7 @@ func (s *AnchorTxCache) AddAnchorTx(anchorTxInfo *AnchorTxInfo) error {
 	defer s.anchorTxInfoLock.RUnlock()
 	_, ok := s.anchorTxInfoMap[anchorTxInfo.LockedUtxo]
 	if ok {
-		err := fmt.Errorf("locked tx has anchor tx info.")
+		err := fmt.Errorf("locked tx has anchor tx info")
 		return err
 	}
 	s.anchorTxInfoMap[anchorTxInfo.LockedUtxo] = anchorTxInfo
@@ -93,12 +93,12 @@ func (s *AnchorTxCache) AddAnchorTx(anchorTxInfo *AnchorTxInfo) error {
 
 // FetchAnchorTx fetch anchor tx with given locked txid from the point of view of the end of the main chain.
 // This function is safe for concurrent access however the returned view is NOT.
-func (b *BlockChain) FetchAnchorTx(lockedTxid string) (*AnchorTxInfo, error) {
-	log.Infof("FetchAnchorTx: %s", lockedTxid)
+func (b *BlockChain) FetchAnchorTx(lockedUtxo string) (*AnchorTxInfo, error) {
+	log.Infof("FetchAnchorTx: %s", lockedUtxo)
 	if b.anchorTxCache == nil {
 		return nil, fmt.Errorf("anchor tx cache is nil")
 	}
-	return b.anchorTxCache.FetchAnchorTxInfo(lockedTxid)
+	return b.anchorTxCache.FetchAnchorTxInfo(lockedUtxo)
 }
 
 // AddAnchorTx add anchor to anchor tx cache and saved to db from the point of view of the end of the main chain.

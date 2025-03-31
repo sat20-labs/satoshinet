@@ -1121,14 +1121,14 @@ func (r FutureGetAnchorTxInfoResult) Receive() (*btcjson.GetAnchorTxInfoResult, 
 // the returned instance.
 //
 // See GetRawTransaction for the blocking version and more details.
-func (c *Client) GetAnchorTxInfoAsync(lockedTxid string) FutureGetAnchorTxInfoResult {
-	cmd := btcjson.NewGetAnchorTxInfoCmd(lockedTxid)
+func (c *Client) GetAnchorTxInfoAsync(lockedUtxo string) FutureGetAnchorTxInfoResult {
+	cmd := btcjson.NewGetAnchorTxInfoCmd(lockedUtxo)
 	return c.SendCmd(cmd)
 }
 
 // GetLockedTxInfo returns a locked tx info according to satsnet anchortx given its hash.
 //
 
-func (c *Client) GetAnchorTxInfo(lockedTxid string) (*btcjson.GetAnchorTxInfoResult, error) {
-	return c.GetAnchorTxInfoAsync(lockedTxid).Receive()
+func (c *Client) GetAnchorTxInfo(lockedUtxo string) (*btcjson.GetAnchorTxInfoResult, error) {
+	return c.GetAnchorTxInfoAsync(lockedUtxo).Receive()
 }

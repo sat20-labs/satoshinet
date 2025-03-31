@@ -108,11 +108,11 @@ func testGetAccordingLockedInfo(txid string) {
 	fmt.Printf("Anchor TX txid(Satsnet): %s\n", txid)
 }
 
-func testGetAccordingAnchorInfo(lockedTxid string) {
+func testGetAccordingAnchorInfo(lockedUtxo string) {
 	fmt.Printf("testGetAccordingAnchorInfo...\n")
 
 	// SendRawTransaction(raw)
-	result, err := satsnet_rpc.GetAnchorTxInfo(lockedTxid)
+	result, err := satsnet_rpc.GetAnchorTxInfo(lockedUtxo)
 	if err != nil {
 		fmt.Printf("testGetAccordingAnchorInfo error: %s\n", err)
 		return

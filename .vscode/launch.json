@@ -22,7 +22,7 @@
             ]
         },
         {
-            "name": "satsnet_btcd_client",
+            "name": "satsnet_client",
             "type": "go",
             "request": "launch",
             "mode": "debug",
@@ -31,7 +31,7 @@
             "env": {
             },
             "console": "integratedTerminal",
-            "program": "${workspaceFolder}/cmd/btcd_client",
+            "program": "${workspaceFolder}/cmd/satsnet_client",
             "args": [
                 "--homedir",
                 "/home/satsnet/data"

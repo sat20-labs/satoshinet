@@ -324,12 +324,12 @@ func main() {
 			continue
 		} else if method == "accordinganchorinfo" {
 			if length < 2 {
-				fmt.Printf("accordinganchorinfo need txid\n")
+				fmt.Printf("accordinganchorinfo need utxo\n")
 				continue
 			}
-			txid := words[1]
+			utxo := words[1]
 
-			testGetAccordingAnchorInfo(txid)
+			testGetAccordingAnchorInfo(utxo)
 			continue
 		} else if method == "sendrawtransaction" {
 			raw := ""

@@ -157,9 +157,9 @@ func GetRawBlockVerbose(blockstr string) (*btcjson.GetBlockVerboseResult, error)
 	return client.GetBlockVerbose(hash)
 }
 
-func GetAnchorTxInfo(lockedTxid string) (*btcjson.GetAnchorTxInfoResult, error) {
+func GetAnchorTxInfo(lockedUtxo string) (*btcjson.GetAnchorTxInfoResult, error) {
 
-	return client.GetAnchorTxInfo(lockedTxid)
+	return client.GetAnchorTxInfo(lockedUtxo)
 }
 
 // EncodeMsgBlockToString takes a wire.MsgBlock and encodes it to a string

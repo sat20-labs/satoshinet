@@ -29,7 +29,7 @@ const (
 // }
 
 func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32) error {
-	fmt.Printf("CheckAnchorTxValid ...\n")
+	log.Debug("CheckAnchorTxValid ...\n")
 
 	// Check the locked tx out is valid
 	txInfo, err := anchortx.CheckAnchorTxValid(tx, isNew)
@@ -37,46 +37,35 @@ func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32)
 		log.Errorf("invalid Anchor tx: %s", tx.TxHash().String())
 		return err
 	}
-	fmt.Printf("The locked txInfo: %v\n", txInfo)
+	log.Debugf("The locked txInfo: %v", txInfo)
 
 	// Check the locked tx is is not anchor in sats net
 	anchorTxInfo, err := mp.cfg.FetchAnchorTx(txInfo.Utxo)
 	if err == nil && anchorTxInfo != nil {
-		fmt.Printf("The anchor is exist, anchor txInfo: %v\n", txInfo)
+		log.Errorf("The anchor is exist, anchor txInfo: %v\n", txInfo)
 		// The anchor tx is found in sats net
 		err = fmt.Errorf("the locked tx is anchored already in sats net")
 		return err
 	}
 
-	// for _, out := range tx.TxOut {
-	// 	// Get the range size of the out
-	// 	rangeSize := out.SatsRanges.GetSize()
-	// 	if rangeSize != out.Value {
-	// 		err = fmt.Errorf("the txOut TxRanges of anchor tx  is invalid")
-	// 		return err
-	// 	}
-
-	// }
-
 	// Check the locked tx has completed, all the assets is locked in lnd will be mapped to sats net only one times
 
-	fmt.Printf("The anchor tx is valid\n")
+	log.Infof("The anchor tx %s is valid", tx.TxID())
 	return nil
 }
 
 func (mp *TxPool) AddAnchorTx(tx *wire.MsgTx) error {
-	fmt.Printf("CheckAnchorTxValid ...\n")
+	log.Debugf("AddAnchorTx ...\n")
 
 	txInfo, err := anchortx.GetLockedTxInfo(tx, false)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("The locked txInfo: %v\n", txInfo)
 
 	// Check the locked tx is is not anchor in sats net
 	anchorTxInfo, err := mp.cfg.FetchAnchorTx(txInfo.Utxo)
 	if err == nil && anchorTxInfo != nil {
-		fmt.Printf("The anchor is exist, anchor txInfo: %v\n", txInfo)
+		log.Errorf("The anchor is exist, anchor txInfo: %v\n", txInfo)
 		// The anchor tx is found in sats net
 		err = fmt.Errorf("the locked tx is anchored already in sats net")
 		return err
@@ -96,7 +85,7 @@ func (mp *TxPool) AddAnchorTx(tx *wire.MsgTx) error {
 	if err != nil {
 		return err
 	}
+	log.Infof("AddAnchorTx added locked txInfo: %v\n", txInfo)
 
-	fmt.Printf("The anchor tx is valid\n")
 	return nil
 }

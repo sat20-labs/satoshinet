@@ -276,14 +276,14 @@ func NewGetBlockHashCmd(index int64) *GetBlockHashCmd {
 
 // GetBlockHashCmd defines the getblockhash JSON-RPC command.
 type GetAnchorTxInfoCmd struct {
-	TxId string
+	LockedUtxo string
 }
 
 // NewGetBlockHashCmd returns a new instance which can be used to issue a
 // getblockhash JSON-RPC command.
-func NewGetAnchorTxInfoCmd(txid string) *GetAnchorTxInfoCmd {
+func NewGetAnchorTxInfoCmd(utxo string) *GetAnchorTxInfoCmd {
 	return &GetAnchorTxInfoCmd{
-		TxId: txid,
+		LockedUtxo: utxo,
 	}
 }
 

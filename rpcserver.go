@@ -2484,7 +2484,7 @@ func handleEstimateSmartFee(s *rpcServer, cmd interface{}, closeChan <-chan stru
 // handleGetBlockHash implements the getblockhash command.
 func handleGetAnchorTxInfo(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	c := cmd.(*btcjson.GetAnchorTxInfoCmd)
-	anchorInfo, err := s.cfg.Chain.FetchAnchorTx(c.TxId)
+	anchorInfo, err := s.cfg.Chain.FetchAnchorTx(c.LockedUtxo)
 	if err != nil {
 		return nil, &btcjson.RPCError{
 			Code:    btcjson.ErrRPCNoTxInfo,

@@ -152,7 +152,7 @@ func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AnchorInfo, error)
 	// 	return nil, err
 	// }
 
-	fmt.Printf("AnchorScript: %x\n", AnchorScript)
+	log.Debugf("AnchorScript: %x\n", AnchorScript)
 
 	lockedTxInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets)
 	if err != nil {
