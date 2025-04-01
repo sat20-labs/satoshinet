@@ -1472,7 +1472,7 @@ func (vm *ValidatorManager) HandoverToNextGenerator() {
 }
 
 func (vm *ValidatorManager) BroadcastCommand(command validatorcommand.Message) {
-	utils.Log.Debugf("[ValidatorManager]Will broadcast command from all connected validators...")
+	utils.Log.Debugf("[ValidatorManager]Will broadcast command to all connected validators...")
 	for _, validator := range vm.ConnectedList {
 		utils.Log.Debugf("[ValidatorManager]Send command <%s> to %s...", command.Command(), validator.String())
 		validator.SendCommand(command)

@@ -839,8 +839,10 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 			continueHash := invMsg.InvList[invListLen-1].Hash
 			sp.continueHash = &continueHash
 		}
-		sp.QueueMessage(invMsg, nil)
+		//sp.QueueMessage(invMsg, nil)
 	}
+	// 空白消息也要应答，不然会导致对端以为连接中断
+	sp.QueueMessage(invMsg, nil)
 }
 
 // OnGetHeaders is invoked when a peer receives a getheaders bitcoin

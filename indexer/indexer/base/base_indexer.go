@@ -641,7 +641,7 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int) int {
 	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, blockHeight %d", b.lastHeight, block.Height)
 
 	if block.Height != b.lastHeight + 1 {
-		common.Log.Warningf("BaseIndexer.syncBlock-> expected block height %d, got %d", b.lastHeight, block.Height)
+		common.Log.Warningf("BaseIndexer.syncBlock-> expected block height %d, got %d", b.lastHeight + 1, block.Height)
 		return -1
 	}
 

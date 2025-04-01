@@ -1268,6 +1268,7 @@ out:
 				// message if needed.
 				p.maybeAddDeadline(pendingResponses,
 					msg.message.Command())
+				log.Debugf("sccSendMessage %s", msg.message.Command())
 
 			case sccReceiveMessage:
 				// Remove received messages from the expected
@@ -1290,6 +1291,7 @@ out:
 				default:
 					delete(pendingResponses, msgCmd)
 				}
+				log.Debugf("sccReceiveMessage %s", msg.message.Command())
 
 			case sccHandlerStart:
 				// Warn on unbalanced callback signalling.
@@ -1811,8 +1813,6 @@ out:
 				}
 			}
 
-			p.stallControl <- stallControlMsg{sccSendMessage, msg.msg}
-
 			err := p.writeMessage(msg.msg, msg.encoding)
 			if err != nil {
 				p.Disconnect()
@@ -1825,6 +1825,8 @@ out:
 				}
 				continue
 			}
+
+			p.stallControl <- stallControlMsg{sccSendMessage, msg.msg}
 
 			// At this point, the message was successfully sent, so
 			// update the last send time, signal the sender of the
