@@ -62,7 +62,7 @@ func (b *IndexerMgr) GetTxOutputWithUtxoV3(utxo string) *common.AssetsInUtxo {
 			AssetName:  asset.Name,
 			Amount:     asset.Amount.String(),
 			Precision:  asset.Amount.Precision,
-			BindingSat: b.GetBindingSat(&asset.Name),
+			BindingSat: int(asset.BindingSat),
 		}
 
 		assetsInUtxo.Assets = append(assetsInUtxo.Assets, &asset)
