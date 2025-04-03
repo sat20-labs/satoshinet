@@ -73,7 +73,7 @@ func VerifyTaprootKeySpend(witnessProgram []byte, rawSig []byte, tx *wire.MsgTx,
 		annex, _ = extractAnnex(witness)
 	}
 
-	logOut("Verify RawSig : %x", rawSig)
+	logOut("Verify RawSig : %v", rawSig)
 	// Now that we have the public key, we can create a new top-level
 	// keyspend verifier that'll handle all the sighash and schnorr
 	// specifics for us.

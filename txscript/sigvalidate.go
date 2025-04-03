@@ -348,7 +348,7 @@ func (t *taprootSigVerifier) verifySig(sigHash []byte) bool {
 		}
 	}
 
-	logOut("Verify public key: %x", t.pubKey.SerializeCompressed())
+	logOut("Verify public key: %v", t.pubKey.SerializeCompressed())
 	// If we didn't find the entry in the cache, then we'll perform full
 	// verification as normal, adding the entry to the cache if it's found
 	// to be valid.
@@ -378,9 +378,9 @@ func (t *taprootSigVerifier) Verify() verifyResult {
 
 	logOut("****************************************************************")
 	logOut("taprootSigVerifier Verify")
-	logOut("sigHashes = %x", t.hashCache)
-	logOut("hashType = %x", t.hashType)
-	logOut("idx = %x", t.inputIndex)
+	logOut("sigHashes = %v", t.hashCache)
+	logOut("hashType = %v", t.hashType)
+	logOut("idx = %v", t.inputIndex)
 
 	// Before we attempt to verify the signature, we'll need to first
 	// compute the sighash based on the input and tx information.
@@ -485,9 +485,9 @@ func (b *baseTapscriptSigVerifier) Verify() verifyResult {
 
 	logOut("****************************************************************")
 	logOut("baseTapscriptSigVerifier Verify")
-	logOut("sigHashes = %x", b.hashCache)
-	logOut("hashType = %x", b.hashType)
-	logOut("idx = %x", b.inputIndex)
+	logOut("sigHashes = %v", b.hashCache)
+	logOut("hashType = %v", b.hashType)
+	logOut("idx = %v", b.inputIndex)
 	// Otherwise, we'll compute the sighash using the tapscript message
 	// extensions and return the outcome.
 	sigHash, err := calcTaprootSignatureHashRaw(

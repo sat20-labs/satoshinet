@@ -75,13 +75,13 @@ func RawTxInTaprootSignature(tx *wire.MsgTx, sigHashes *TxSigHashes, idx int,
 
 	logOut("****************************************************************")
 	logOut("RawTxInTaprootSignature")
-	logOut("sigHashes = %x", sigHashes)
-	logOut("hashType = %x", hashType)
-	logOut("idx = %x", idx)
-	logOut("pkScript = %x", pkScript)
-	logOut("amt = %x", amt)
-	logOut("assets = %x", assets)
-	logOut("tapScriptRootHash = %x", tapScriptRootHash)
+	logOut("sigHashes = %v", sigHashes)
+	logOut("hashType = %v", hashType)
+	logOut("idx = %v", idx)
+	logOut("pkScript = %v", pkScript)
+	logOut("amt = %v", amt)
+	logOut("assets = %v", assets)
+	logOut("tapScriptRootHash = %v", tapScriptRootHash)
 	// First, we'll start by compute the top-level taproot sighash.
 	sigHash, err := calcTaprootSignatureHashRaw(
 		sigHashes, hashType, tx, idx,
@@ -90,19 +90,19 @@ func RawTxInTaprootSignature(tx *wire.MsgTx, sigHashes *TxSigHashes, idx int,
 	if err != nil {
 		return nil, err
 	}
-	logOut("Taproot sign sighash: %x", sigHash)
+	logOut("Taproot sign sighash: %v", sigHash)
 	logOut("****************************************************************")
 
 	// Before we sign the sighash, we'll need to apply the taptweak to the
 	// private key based on the tapScriptRootHash.
 	privKeyTweak := TweakTaprootPrivKey(*key, tapScriptRootHash)
 
-	logOut("User priv key: %x", key.Serialize())
-	logOut("User public key: %x", key.PubKey().SerializeCompressed())
+	logOut("User priv key: %v", key.Serialize())
+	logOut("User public key: %v", key.PubKey().SerializeCompressed())
 
-	logOut("Sign priv key: %x", privKeyTweak.Serialize())
+	logOut("Sign priv key: %v", privKeyTweak.Serialize())
 
-	logOut("Sign public key: %x", privKeyTweak.PubKey().SerializeCompressed())
+	logOut("Sign public key: %v", privKeyTweak.PubKey().SerializeCompressed())
 
 	// With the sighash constructed, we can sign it with the specified
 	// private key.
@@ -113,7 +113,7 @@ func RawTxInTaprootSignature(tx *wire.MsgTx, sigHashes *TxSigHashes, idx int,
 
 	sig := signature.Serialize()
 
-	logOut("Sign RawSig : %x", sig)
+	logOut("Sign RawSig : %v", sig)
 
 	// If this is sighash default, then we can just return the signature
 	// directly.
@@ -173,12 +173,12 @@ func RawTxInTapscriptSignature(tx *wire.MsgTx, sigHashes *TxSigHashes, idx int,
 
 	logOut("****************************************************************")
 	logOut("RawTxInTapscriptSignature")
-	logOut("sigHashes = %x", sigHashes)
-	logOut("hashType = %x", hashType)
-	logOut("idx = %x", idx)
-	logOut("pkScript = %x", pkScript)
-	logOut("amt = %x", amt)
-	logOut("assets = %x", assets)
+	logOut("sigHashes = %v", sigHashes)
+	logOut("hashType = %v", hashType)
+	logOut("idx = %v", idx)
+	logOut("pkScript = %v", pkScript)
+	logOut("amt = %v", amt)
+	logOut("assets = %v", assets)
 	// First, we'll start by compute the top-level taproot sighash.
 	tapLeafHash := tapLeaf.TapHash()
 	sigHash, err := calcTaprootSignatureHashRaw(
@@ -190,7 +190,7 @@ func RawTxInTapscriptSignature(tx *wire.MsgTx, sigHashes *TxSigHashes, idx int,
 		return nil, err
 	}
 
-	logOut("Taproot Script sign sighash: %x", sigHash)
+	logOut("Taproot Script sign sighash: %v", sigHash)
 	logOut("****************************************************************")
 
 	// With the sighash constructed, we can sign it with the specified
