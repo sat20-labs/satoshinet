@@ -196,12 +196,14 @@ func (b *BaseIndexer) Repair() {
 			AssetName: *wire.NewAssetNameFromString("::"),
 			MaxSupply: "21000000000000000",
 			Precition: 0,
+			N: 		   1,
 		}
 		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
 		tickerInfo = common.TickerInfo{
 			AssetName: *wire.NewAssetNameFromString("ordx:f:rarepizza"),
 			MaxSupply: "210000000",
 			Precition: 0,
+			N: 		   1,
 		}
 		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
 		tickerInfo = common.TickerInfo{
