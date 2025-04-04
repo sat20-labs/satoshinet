@@ -73,6 +73,7 @@ func (p *TxOutput) HasPlainSat() bool {
 	return p.OutValue.Value > assetAmt
 }
 
+// 去掉已经绑定了资产的聪
 func (p *TxOutput) GetPlainSat() int64 {
 	if len(p.OutValue.Assets) == 0 {
 		return p.OutValue.Value

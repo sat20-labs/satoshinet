@@ -272,6 +272,7 @@ func (s *Model) GetUtxoInfoListV3(req *indexerwire.UtxosReq) ([]*indexer.AssetsI
 	return result, nil
 }
 
+// name == * , 返回所有utxo
 func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) ([]*indexer.AssetsInUtxo, int, error) {
 	result := make([]*indexer.AssetsInUtxo, 0)
 	assetName := swire.NewAssetNameFromString(name)

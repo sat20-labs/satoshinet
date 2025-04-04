@@ -29,7 +29,8 @@ func (b *IndexerMgr) GetAssetUTXOsInAddressWithTickV3(address string, ticker *sw
 		if ticker == nil {
 			result[utxoId] = info
 		} else if common.IsPlainAsset(ticker) {
-			if len(info.Assets) == 0 {
+			// 即使包含其他资产，只有有白聪存在，就可以放进来
+			if info.HasPlainSat() {
 				result[utxoId] = info
 			}
 		} else {
