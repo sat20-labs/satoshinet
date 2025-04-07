@@ -1036,7 +1036,10 @@ var SatsMainNetParams = Params{
 	Name:        "satsnet",
 	Net:         wire.SatsNet,
 	DefaultPort: "9526",
-	DNSSeeds:    []DNSSeed{},
+	DNSSeeds:    []DNSSeed{
+		{"seed.sat20.org", true},
+		{"seed.ordx.market", true},
+	},
 
 	// Chain parameters
 	GenesisBlock:             &genesisBlock,
@@ -1145,9 +1148,8 @@ var SatsTestNetParams = Params{
 	Net:         wire.SatsTestNet,
 	DefaultPort: "19526",
 	DNSSeeds: []DNSSeed{
-		//{"39.108.147.241", true},
-		{"192.168.10.104", true},
-		{"192.168.10.103", true},
+		{"seed_testnet.sat20.org", true},
+		{"seed_testnet.ordx.market", true},
 	},
 
 	// Chain parameters
