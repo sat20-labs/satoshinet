@@ -1148,8 +1148,8 @@ var SatsTestNetParams = Params{
 	Net:         wire.SatsTestNet,
 	DefaultPort: "19526",
 	DNSSeeds: []DNSSeed{
-		{"seed_testnet.sat20.org", true},
-		{"seed_testnet.ordx.market", true},
+		// {"seed_testnet.sat20.org", true},
+		// {"seed_testnet.ordx.market", true},
 	},
 
 	// Chain parameters
