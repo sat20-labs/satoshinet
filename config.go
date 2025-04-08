@@ -185,10 +185,8 @@ type config struct {
 	SigNet               bool          `long:"signet" description:"Use the signet test network"`
 	SigNetChallenge      string        `long:"signetchallenge" description:"Connect to a custom signet network defined by this challenge instead of using the global default signet test network -- Can be specified multiple times"`
 	SigNetSeedNode       []string      `long:"signetseednode" description:"Specify a seed node for the signet network instead of using the global default signet network seed nodes"`
-	TestNet3             bool          `long:"testnet" description:"Use the test network"`
-	TestNet4             bool          `long:"testnet4" description:"Use the test network"`
-	SatsNet              bool          `long:"satsnet" description:"Use sats main network"`
-	SatsTestNet          bool          `long:"satstestnet" description:"Use sats test network"`
+	TestNet              bool          `long:"testnet" description:"Use the test network"`
+	MainNet              bool          `long:"mainnet" description:"Use the main network"`
 	TorIsolation         bool          `long:"torisolation" description:"Enable Tor stream isolation by randomizing user credentials for each connection."`
 	TrickleInterval      time.Duration `long:"trickleinterval" description:"Minimum time between attempts to send new inventory to a connected peer"`
 	UtxoCacheMaxSizeMiB  uint          `long:"utxocachemaxsize" description:"The maximum size in MiB of the UTXO cache"`
@@ -603,14 +601,6 @@ func loadConfig() (*config, []string, error) {
 	numNets := 0
 	// Count number of network flags passed; assign active network params
 	// while we're at it
-	if cfg.TestNet3 {
-		numNets++
-		activeNetParams = &testNet3Params
-	}
-	if cfg.TestNet4 {
-		numNets++
-		activeNetParams = &testNet4Params
-	}
 	if cfg.RegressionTest {
 		numNets++
 		activeNetParams = &regressionNetParams
@@ -662,13 +652,13 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	// Sats networks
-	if cfg.SatsNet {
+	if cfg.MainNet {
 		numNets++
-		activeNetParams = &mainSatsNetParams
+		activeNetParams = &mainNetParams
 	}
-	if cfg.SatsTestNet {
+	if cfg.TestNet {
 		numNets++
-		activeNetParams = &testSatsNetParams
+		activeNetParams = &testNetParams
 	}
 
 	if numNets > 1 {

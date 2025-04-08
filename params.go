@@ -10,7 +10,7 @@ import (
 
 // activeNetParams is a pointer to the parameters specific to the
 // currently active bitcoin network.
-var activeNetParams = &mainSatsNetParams
+var activeNetParams = &mainNetParams
 
 // params is used to group parameters for various networks such as the main
 // network and test networks.
@@ -19,54 +19,27 @@ type params struct {
 	rpcPort string
 }
 
-// mainNetParams contains parameters specific to the main network
-// (wire.MainNet).  NOTE: The RPC port is intentionally different than the
-// reference implementation because btcd does not handle wallet requests.  The
-// separate wallet process listens on the well-known port and forwards requests
-// it does not handle on to btcd.  This approach allows the wallet process
-// to emulate the full reference implementation RPC API.
-var mainNetParams = params{
-	Params:  &chaincfg.MainNetParams,
-	rpcPort: "8334",
-}
-
 // regressionNetParams contains parameters specific to the regression test
 // network (wire.TestNet).  NOTE: The RPC port is intentionally different
 // than the reference implementation - see the mainNetParams comment for
 // details.
 var regressionNetParams = params{
 	Params:  &chaincfg.RegressionNetParams,
-	rpcPort: "18334",
-}
-
-// testNet3Params contains parameters specific to the test network (version 3)
-// (wire.TestNet3).  NOTE: The RPC port is intentionally different than the
-// reference implementation - see the mainNetParams comment for details.
-var testNet3Params = params{
-	Params:  &chaincfg.TestNet3Params,
-	rpcPort: "18334",
-}
-
-// testNet4Params contains parameters specific to the test network (version 4)
-// (wire.TestNet4).  NOTE: The RPC port is intentionally different than the
-// reference implementation - see the mainNetParams comment for details.
-var testNet4Params = params{
-	Params:  &chaincfg.TestNet4Params,
-	rpcPort: "48334",
+	rpcPort: "39527",
 }
 
 // simNetParams contains parameters specific to the simulation test network
 // (wire.SimNet).
 var simNetParams = params{
 	Params:  &chaincfg.SimNetParams,
-	rpcPort: "18556",
+	rpcPort: "49527",
 }
 
 // sigNetParams contains parameters specific to the Signet network
 // (wire.SigNet).
 var sigNetParams = params{
 	Params:  &chaincfg.SigNetParams,
-	rpcPort: "38332",
+	rpcPort: "59527",
 }
 
 // mainSatsNetParams contains parameters specific to the main network
@@ -75,8 +48,8 @@ var sigNetParams = params{
 // separate wallet process listens on the well-known port and forwards requests
 // it does not handle on to btcd.  This approach allows the wallet process
 // to emulate the full reference implementation RPC API.
-var mainSatsNetParams = params{
-	Params:  &chaincfg.SatsMainNetParams,
+var mainNetParams = params{
+	Params:  &chaincfg.MainNetParams,
 	rpcPort: "9527",
 }
 
@@ -94,8 +67,8 @@ var mainSatsNetParams = params{
 // separate wallet process listens on the well-known port and forwards requests
 // it does not handle on to btcd.  This approach allows the wallet process
 // to emulate the full reference implementation RPC API.
-var testSatsNetParams = params{
-	Params:  &chaincfg.SatsTestNetParams,
+var testNetParams = params{
+	Params:  &chaincfg.TestNetParams,
 	rpcPort: "19527",
 }
 

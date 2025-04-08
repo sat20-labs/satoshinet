@@ -213,7 +213,7 @@ func GetWalletInst() *BTCWalletManager {
 
 func InitWalletManager(workDir string) {
 	if BtcWalletMgr == nil {
-		NetParams = &chaincfg.SatsTestNetParams
+		NetParams = &chaincfg.TestNetParams
 		BtcWalletMgr = &BTCWalletManager{}
 		BtcWalletMgr.BTCWalletList = make(map[string]*BTCWallet)
 		BtcWalletMgr.InitBTCWalletList(workDir)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	flags "github.com/jessevdk/go-flags"
@@ -111,10 +112,9 @@ type config struct {
 	RPCUser        string `short:"u" long:"rpcuser" description:"RPC username"`
 	SimNet         bool   `long:"simnet" description:"Connect to the simulation test network"`
 	TLSSkipVerify  bool   `long:"skipverify" description:"Do not verify tls certificates (not recommended!)"`
-	TestNet3       bool   `long:"testnet" description:"Connect to testnet"`
 	SigNet         bool   `long:"signet" description:"Connect to signet"`
-	SatsNet        bool   `long:"satsnet" description:"Use sats main network"`
-	SatsTestNet    bool   `long:"satstestnet" description:"Use sats test network"`
+	MainNet        bool   `long:"mainnet" description:"Use sats main network"`
+	TestNet        bool   `long:"testnet" description:"Use sats test network"`
 	ShowVersion    bool   `short:"V" long:"version" description:"Display version information and exit"`
 	Wallet         bool   `long:"wallet" description:"Connect to wallet"`
 }
@@ -124,54 +124,14 @@ type config struct {
 func normalizeAddress(addr string, chain *chaincfg.Params, useWallet bool) (string, error) {
 	_, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		var defaultPort string
-		switch chain {
-		case &chaincfg.TestNet3Params:
-			if useWallet {
-				defaultPort = "18332"
-			} else {
-				defaultPort = "18334"
-			}
-		case &chaincfg.SimNetParams:
-			if useWallet {
-				defaultPort = "18554"
-			} else {
-				defaultPort = "18556"
-			}
-		case &chaincfg.RegressionNetParams:
-			if useWallet {
-				// TODO: add port once regtest is supported in btcwallet
-				paramErr := fmt.Errorf("cannot use -wallet with -regtest, btcwallet not yet compatible with regtest")
-				return "", paramErr
-			} else {
-				defaultPort = "18334"
-			}
-		case &chaincfg.SigNetParams:
-			if useWallet {
-				defaultPort = "38332"
-			} else {
-				defaultPort = "38334"
-			}
-		case &chaincfg.SatsMainNetParams:
-			if useWallet {
-				defaultPort = "4828"
-			} else {
-				defaultPort = "4827"
-			}
-		case &chaincfg.SatsTestNetParams:
-			if useWallet {
-				defaultPort = "15828"
-			} else {
-				defaultPort = "15827"
-			}
-		default:
-			if useWallet {
-				defaultPort = "8332"
-			} else {
-				defaultPort = "8334"
-			}
-		}
 
+		port, err := strconv.Atoi(chain.DefaultPort)
+		if err != nil {
+			return "", err
+		}
+		port += 10000
+
+		defaultPort := strconv.Itoa(port)
 		return net.JoinHostPort(addr, defaultPort), nil
 	}
 	return addr, nil
@@ -311,10 +271,6 @@ func loadConfig() (*config, []string, error) {
 
 	// Multiple networks can't be selected simultaneously.
 	numNets := 0
-	if cfg.TestNet3 {
-		numNets++
-		network = &chaincfg.TestNet3Params
-	}
 	if cfg.SimNet {
 		numNets++
 		network = &chaincfg.SimNetParams
@@ -329,13 +285,13 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	// Sats networks
-	if cfg.SatsNet {
+	if cfg.MainNet {
 		numNets++
-		network = &chaincfg.SatsMainNetParams
+		network = &chaincfg.MainNetParams
 	}
-	if cfg.SatsTestNet {
+	if cfg.TestNet {
 		numNets++
-		network = &chaincfg.SatsTestNetParams
+		network = &chaincfg.TestNetParams
 	}
 
 	// Record current network

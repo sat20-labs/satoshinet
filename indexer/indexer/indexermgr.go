@@ -76,11 +76,11 @@ func NewIndexerMgr(
 		return instance
 	}
 
-	chainParam := &chaincfg.SatsMainNetParams
+	chainParam := &chaincfg.MainNetParams
 	if bTestNet {
-		chainParam = &chaincfg.SatsTestNetParams
+		chainParam = &chaincfg.TestNetParams
 	} else {
-		chainParam = &chaincfg.SatsMainNetParams
+		chainParam = &chaincfg.MainNetParams
 	}
 
 	mgr := &IndexerMgr{

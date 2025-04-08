@@ -445,7 +445,7 @@ func newRemotePeerBase(origCfg *RemotePeerConfig, inbound bool) *RemotePeer {
 
 	// Set the chain parameters to testnet if the caller did not specify any.
 	if cfg.ChainParams == nil {
-		cfg.ChainParams = &chaincfg.TestNet3Params
+		cfg.ChainParams = &chaincfg.TestNetParams
 	}
 
 	// Set the trickle interval if a non-positive value is specified.

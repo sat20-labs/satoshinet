@@ -29,7 +29,7 @@ const (
 
 var (
 	defaultHomeDir = btcutil.AppDataDir("satoshinet", false)
-	currentNetwork = &chaincfg.SatsMainNetParams
+	currentNetwork = &chaincfg.MainNetParams
 	currentCfg     = &config{}
 )
 

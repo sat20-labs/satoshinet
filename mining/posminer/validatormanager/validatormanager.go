@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,7 +22,6 @@ import (
 	"github.com/sat20-labs/satoshinet/mining/posminer/validatorcommand"
 	"github.com/sat20-labs/satoshinet/mining/posminer/validatorinfo"
 	"github.com/sat20-labs/satoshinet/mining/posminer/validatorrecord"
-	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -821,15 +821,14 @@ func (vm *ValidatorManager) OnValidatorPeerInactive(netAddr net.Addr) {
 // Get current generator info in record this peer
 func (vm *ValidatorManager) GetValidatorPort() int {
 
-	switch vm.Cfg.ChainParams.Net {
-	case wire.SatsNet:
+	port, err := strconv.Atoi(vm.Cfg.ChainParams.DefaultPort)
+	if err != nil {
+		utils.Log.Errorf("GetValidatorPort failed: %v", err)
 		return 9525
-
-	case wire.SatsTestNet:
-		return 19525
 	}
+	port -= 1
 
-	return 9525
+	return port
 }
 
 func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) error {

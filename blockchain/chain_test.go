@@ -1305,7 +1305,7 @@ func TestIsAncestor(t *testing.T) {
 	}
 
 	// Is a block from another chain an ancestor of 1b?
-	fakeChain := newFakeChain(&chaincfg.TestNet3Params)
+	fakeChain := newFakeChain(&chaincfg.TestNetParams)
 	shouldBeFalse = branch2Nodes[0].IsAncestor(fakeChain.bestChain.Genesis())
 	if shouldBeFalse {
 		t.Errorf("TestIsAncestor fail. Node %s is in a different chain than "+
