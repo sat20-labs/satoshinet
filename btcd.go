@@ -313,8 +313,8 @@ func btcdMain(serverChan chan<- *server) error {
 	}()
 
 	// Create server and start it.
-	server, err := newServer(cfg.Listeners, cfg.AgentBlacklist, cfg.AddPeers,
-		cfg.AgentWhitelist, db, activeNetParams.Params, cfg.DataDir, interrupt)
+	server, err := newServer(cfg.Listeners, cfg.AgentBlacklist,
+		cfg.AgentWhitelist, cfg.AddPeers, db, activeNetParams.Params, cfg.DataDir, interrupt)
 	if err != nil {
 		// TODO: this logging could do with some beautifying.
 		btcdLog.Errorf("Unable to start server on %v: %v",
