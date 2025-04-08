@@ -3220,9 +3220,15 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		miningAddr = cfg.miningAddrs[0]
 	}
 
+	hosts := make([]string, 0)
+	for _, peer := range peers {
+		// 去掉端口
+		hosts = append(hosts, strings.Split(peer, ":")[0])
+	}
+
 	s.posMiner = posminer.New(&posminer.Config{
 		ChainParams:            chainParams,
-		Peers:                  peers,
+		Peers:                  hosts,
 		Dial:                   btcdDial,
 		Lookup:                 cfg.lookup,
 		BlockTemplateGenerator: blockTemplateGenerator,
