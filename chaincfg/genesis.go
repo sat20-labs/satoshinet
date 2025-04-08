@@ -284,7 +284,7 @@ var genesisMerkleRoot = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet 
 	0x11, 0x7a, 0xfb, 0x5c, 0x75, 0xaa, 0x43, 0x4a,
 })
 
-// satsTestNetGenesisHash is the hash of the first block in the block chain for the
+// genesisHash is the hash of the first block in the block chain for the
 // sattestsnet network.
 var genesisHash = chainhash.Hash{
 	0x1f, 0x07, 0x25, 0x30, 0xa8, 0xbe, 0x90, 0xd2,
@@ -293,7 +293,7 @@ var genesisHash = chainhash.Hash{
 	0xae, 0x4f, 0x96, 0xa4, 0x6f, 0x5c, 0x48, 0x93,
 }
 
-// satsTestNetGenesisBlock defines the genesis block of the block chain which serves
+// genesisBlock defines the genesis block of the block chain which serves
 // as the public transaction ledger for the sattestsnet network.
 var genesisBlock = wire.MsgBlock{
 	Header: wire.BlockHeader{
@@ -307,8 +307,8 @@ var genesisBlock = wire.MsgBlock{
 	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
 }
 
-// genesisCoinbaseTxSatsnet is the coinbase transaction for the genesis blocks for
-// the satsnet network, and satstestnet has same genesis tx.
+// testNetGenesisCoinbaseTx is the coinbase transaction for the genesis blocks for
+// the mainnet network, and testnet has same genesis tx.
 var testNetGenesisCoinbaseTx = wire.MsgTx{
 	Version: 1,
 	TxIn: []*wire.TxIn{
@@ -344,7 +344,7 @@ var testNetGenesisCoinbaseTx = wire.MsgTx{
 	LockTime: 0,
 }
 
-// satsNetGenesisMerkleRoot is the hash of the first transaction in the genesis block
+// testNetGenesisMerkleRoot is the hash of the first transaction in the genesis block
 // for the main network.
 var testNetGenesisMerkleRoot = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
 	0xe8, 0xf5, 0x87, 0xe6, 0xd2, 0x00, 0xca, 0x9c,

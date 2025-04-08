@@ -1007,7 +1007,7 @@ var MainNetParams = Params{
 	HDCoinType: 0,
 }
 
-// SatsTestNetParams defines the sats network parameters for the test Sats network. It is linked to testnet4.
+// TestNetParams defines the sats network parameters for the test Sats network. It is linked to testnet4.
 var TestNetParams = Params{
 	Name:        "testnet",
 	Net:         wire.TestNet,

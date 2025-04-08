@@ -662,7 +662,7 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	if numNets > 1 {
-		str := "%s: The testnet, regtest, segnet, signet, simnet, satsnet and satstestnet" +
+		str := "%s: The mainnet, testnet, regtest, segnet, signet and simnet" +
 			"params can't be used together -- choose one of the " +
 			"five"
 		err := fmt.Errorf(str, funcName)

@@ -42,8 +42,8 @@ var sigNetParams = params{
 	rpcPort: "59527",
 }
 
-// mainSatsNetParams contains parameters specific to the main network
-// (wire.SatsMainNetParams).  NOTE: The RPC port is intentionally different than the
+// mainNetParams contains parameters specific to the main network
+// (wire.MainNetParams).  NOTE: The RPC port is intentionally different than the
 // reference implementation because btcd does not handle wallet requests.  The
 // separate wallet process listens on the well-known port and forwards requests
 // it does not handle on to btcd.  This approach allows the wallet process
@@ -61,8 +61,8 @@ var mainNetParams = params{
 // stp mgr:   9530
 
 
-// mainSatsNetParams contains parameters specific to the main network
-// (wire.SatsTestNetParams).  NOTE: The RPC port is intentionally different than the
+// testNetParams contains parameters specific to the main network
+// (wire.TestNetParams).  NOTE: The RPC port is intentionally different than the
 // reference implementation because btcd does not handle wallet requests.  The
 // separate wallet process listens on the well-known port and forwards requests
 // it does not handle on to btcd.  This approach allows the wallet process
