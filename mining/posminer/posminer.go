@@ -62,6 +62,7 @@ type Config struct {
 	// ChainParams identifies which chain parameters the cpu miner is
 	// associated with.
 	ChainParams *chaincfg.Params
+	Peers      []string
 
 	// Dial connects to the address on the named network. It cannot be nil.
 	Dial func(net.Addr) (net.Conn, error)
@@ -500,6 +501,7 @@ func (m *POSMiner) Start() {
 
 	cfg := &validatormanager.Config{
 		ChainParams: m.cfg.ChainParams,
+		Peers:       m.cfg.Peers,
 		Dial:        m.cfg.Dial,
 		Lookup:      m.cfg.Lookup,
 		ValidatorId: m.cfg.ValidatorId,

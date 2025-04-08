@@ -59,6 +59,7 @@ type Config struct {
 	ValidatorId uint64
 	ValidatorPubKey []byte
 	BtcdDir     string
+	Peers       []string
 
 	PosMiner PosMinerInterface
 }
@@ -267,6 +268,7 @@ func (vm *ValidatorManager) LoadValidatorRecordList() *validatorrecord.Validator
 	if vm.ValidatorRecordMgr.ValidatorRecordList == nil || len(vm.ValidatorRecordMgr.ValidatorRecordList) == 0 {
 		// if the saved validators file not exists, start from dns seed
 		hostList, _ := vm.getSeedHostList(vm.Cfg.ChainParams)
+		hostList = append(hostList, vm.Cfg.Peers...)
 		for _, host := range hostList {
 			utils.Log.Debugf("Try to connect validator: %s", hostList)
 			vm.ValidatorRecordMgr.UpdateValidatorRecord(0, host)

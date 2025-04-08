@@ -2978,7 +2978,7 @@ func setupRPCListeners() ([]net.Listener, error) {
 // newServer returns a new btcd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
-func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
+func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	db database.DB, chainParams *chaincfg.Params, homeDir string,
 	interrupt <-chan struct{}) (*server, error) {
 
@@ -3222,6 +3222,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist []string,
 
 	s.posMiner = posminer.New(&posminer.Config{
 		ChainParams:            chainParams,
+		Peers:                  peers,
 		Dial:                   btcdDial,
 		Lookup:                 cfg.lookup,
 		BlockTemplateGenerator: blockTemplateGenerator,
