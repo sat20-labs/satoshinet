@@ -1001,7 +1001,7 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 		// Check anchor input
 		_, err := anchortx.CheckAnchorTxValid(msgTx, isNew)
 		if err != nil {
-			str := fmt.Sprintf("invalid anchor tx with %s", tx.Hash())
+			str := fmt.Sprintf("invalid anchor tx with %s, %v", tx.Hash(), err)
 			return 0, nil, ruleError(ErrAnchorTXVerifyFailed, str)
 		}
 		return 0, nil, nil

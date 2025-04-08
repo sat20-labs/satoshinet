@@ -131,7 +131,7 @@ func testGetAccordingAnchorInfo(lockedUtxo string) {
 	// Get Anchor tx from sats net
 	txHash, err := chainhash.NewHashFromStr(result.AnchorTxid)
 	if err != nil {
-		log.Errorf("Invalid Anchor Txid : %s", result.AnchorTxid)
+		log.Errorf("Invalid Anchor Txid : %s, %v", result.AnchorTxid, err)
 		return
 	}
 
