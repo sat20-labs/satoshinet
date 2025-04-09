@@ -3285,6 +3285,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 				s.addrManager.Attempt(addr.NetAddress())
 
 				addrString := addrmgr.NetAddressKey(addr.NetAddress())
+				srvrLog.Debugf("GetNewAddress %s", addrString)
 				return addrStringToNetAddr(addrString)
 			}
 

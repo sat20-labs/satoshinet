@@ -602,8 +602,10 @@ func (a *AddrManager) Stop() error {
 func (a *AddrManager) AddAddresses(addrs []*wire.NetAddressV2, srcAddr *wire.NetAddressV2) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
+	
 
-	for _, na := range addrs {
+	for i, na := range addrs {
+		log.Debugf("AddAddresses %d %s", i, na.Addr.String())
 		a.updateAddress(na, srcAddr)
 	}
 }
@@ -614,6 +616,7 @@ func (a *AddrManager) AddAddresses(addrs []*wire.NetAddressV2, srcAddr *wire.Net
 func (a *AddrManager) AddAddress(addr, srcAddr *wire.NetAddressV2) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
+	log.Debugf("AddAddress %s", addr.Addr.String())
 
 	a.updateAddress(addr, srcAddr)
 }
@@ -626,6 +629,7 @@ func (a *AddrManager) AddAddressByIP(addrIP string) error {
 	if err != nil {
 		return err
 	}
+	log.Debugf("AddAddressByIP %s", addrIP)
 	// Put it in wire.Netaddress
 	ip := net.ParseIP(addr)
 	if ip == nil {
