@@ -1914,25 +1914,25 @@ func (vm *ValidatorManager) RequestNewEpoch(nextEpochIndex int64, reason uint32)
 	utils.Log.Debugf("[ValidatorManager]Will Req newepoch for next epoch [%d] with reason %d", nextEpochIndex, reason)
 
 	if vm.ConnectedList == nil || len(vm.ConnectedList) == 0 {
-		utils.Log.Debugf("No any validator connected")
-		if vm.myValidator.IsBootStrapNode() {
-			utils.Log.Debugf("Current validator is bootstap node, will new epoch only bootstap node")
-			currentBlockHeight := vm.Cfg.PosMiner.GetBlockHeight()
-			newEpoch := &epoch.Epoch{
-				EpochIndex:      nextEpochIndex,
-				CreateHeight:    currentBlockHeight,
-				CreateTime:      time.Now(),
-				ItemList:        make([]*epoch.EpochItem, 0),
-				CurGeneratorPos: epoch.Pos_Epoch_NotStarted,
-				Generator:       nil, // will be set by local validator
-			}
+		utils.Log.Debugf("No any validator connected, do nothing")
+		// if vm.myValidator.IsBootStrapNode() {
+		// 	utils.Log.Debugf("Current validator is bootstap node, will new epoch only bootstap node")
+		// 	currentBlockHeight := vm.Cfg.PosMiner.GetBlockHeight()
+		// 	newEpoch := &epoch.Epoch{
+		// 		EpochIndex:      nextEpochIndex,
+		// 		CreateHeight:    currentBlockHeight,
+		// 		CreateTime:      time.Now(),
+		// 		ItemList:        make([]*epoch.EpochItem, 0),
+		// 		CurGeneratorPos: epoch.Pos_Epoch_NotStarted,
+		// 		Generator:       nil, // will be set by local validator
+		// 	}
 
-			newEpoch.AddValidatorToEpoch(&vm.myValidator.ValidatorInfo)
-			vm.ConfirmNewEpoch(newEpoch, validatechain.NewEpochReason_BootStrapNode, nil)
+		// 	newEpoch.AddValidatorToEpoch(&vm.myValidator.ValidatorInfo)
+		// 	vm.ConfirmNewEpoch(newEpoch, validatechain.NewEpochReason_BootStrapNode, nil)
 
-			// Notify local peer for the confirmed epoch
-			vm.OnConfirmEpoch(newEpoch, nil)
-		}
+		// 	// Notify local peer for the confirmed epoch
+		// 	vm.OnConfirmEpoch(newEpoch, nil)
+		// }
 		return
 	}
 
