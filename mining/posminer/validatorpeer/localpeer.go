@@ -369,11 +369,6 @@ func newLocalPeerBase(origCfg *LocalPeerConfig, inbound bool) *LocalPeer {
 		cfg.ValidatorVersion = MaxValidatorVersion
 	}
 
-	// Set the chain parameters to testnet if the caller did not specify any.
-	if cfg.ChainParams == nil {
-		cfg.ChainParams = &chaincfg.TestNetParams
-	}
-
 	// Set the trickle interval if a non-positive value is specified.
 	if cfg.TrickleInterval <= 0 {
 		cfg.TrickleInterval = DefaultTrickleInterval
@@ -468,8 +463,14 @@ func (p *LocalPeer) Start() error {
 func (p *LocalPeer) initListeners() ([]net.Listener, error) {
 	// Listen for TCP connections at the configured addresses
 
+	port := utils.GetValidatorPort(p.cfg.ChainParams)
+	addr := &net.TCPAddr{
+		IP:   net.IP{0, 0, 0, 0},
+		Port: port,
+	}
+
 	listeners := make([]net.Listener, 0)
-	listener, err := net.Listen("tcp", "")
+	listener, err := net.Listen("tcp", addr.String())
 	if err != nil {
 		utils.Log.Errorf("initListeners Listen failed: %v", err)
 		return nil, err

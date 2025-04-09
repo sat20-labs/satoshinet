@@ -45,7 +45,7 @@ func (vm *ValidatorManager) getSeedHostList(chainParams *chaincfg.Params) ([]str
 func (vm *ValidatorManager) getLocalAddr() ([]net.Addr, error) {
 	localAddrsList := make([]net.Addr, 0)
 	addrs, _ := net.InterfaceAddrs()
-	port := vm.GetValidatorPort()
+	port := utils.GetValidatorPort(vm.Cfg.ChainParams)
 
 	if len(addrs) > 0 {
 		for _, addr := range addrs {
@@ -76,7 +76,7 @@ func (vm *ValidatorManager) getAddr(Host string) (net.Addr, error) {
 	if err != nil {
 		return nil, err
 	}
-	port := vm.GetValidatorPort()
+	port := utils.GetValidatorPort(vm.Cfg.ChainParams)
 	addr := &net.TCPAddr{
 		IP:   ips[0],
 		Port: port,

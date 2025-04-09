@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"net"
 	"slices"
-	"strconv"
 	"sync"
 	"time"
 
@@ -765,7 +764,7 @@ func (vm *ValidatorManager) OnNewValidatorPeerConnected(netAddr net.Addr, valida
 	}
 
 	// Will new an validator
-	port := vm.GetValidatorPort()
+	port := utils.GetValidatorPort(vm.Cfg.ChainParams)
 	addrPeer := &net.TCPAddr{
 		IP:   peerHost,
 		Port: port,
@@ -818,19 +817,6 @@ func (vm *ValidatorManager) OnValidatorPeerDisconnected(validator *validator.Val
 func (vm *ValidatorManager) OnValidatorPeerInactive(netAddr net.Addr) {
 	// Remote validator peer is inactive, it will be notify by local validator when it is long time to not received any command
 	utils.Log.Debugf("[ValidatorManager]validator peer in inactive: %s", netAddr.String())
-}
-
-// Get current generator info in record this peer
-func (vm *ValidatorManager) GetValidatorPort() int {
-
-	port, err := strconv.Atoi(vm.Cfg.ChainParams.DefaultPort)
-	if err != nil {
-		utils.Log.Errorf("GetValidatorPort failed: %v", err)
-		return 9525
-	}
-	port -= 1
-
-	return port
 }
 
 func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) error {
