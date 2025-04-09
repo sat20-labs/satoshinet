@@ -722,6 +722,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 					if b.IsCoreNodeAscend(ascend) {
 						b.coreNodeMap[hex.EncodeToString(ascend.PubB)] = ascend.Height
 						b.coreNodeMapUpdated = true
+						common.Log.Infof("BaseIndexer.processBlock-> add core node %s", coreNodeKey)
 					}
 				}
 
@@ -735,6 +736,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 						},
 						IsNew: true,
 					}
+					common.Log.Infof("BaseIndexer.processBlock-> add channel %s", ascend.Address)
 				}
 
 				continue
