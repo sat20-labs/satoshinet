@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,9 +87,6 @@ type LocalPeerInterface interface {
 
 // Config is the struct to hold configuration options useful to localpeer.
 type LocalPeerConfig struct {
-	// HostToNetAddress returns the netaddress for the given host. This can be
-	// nil in  which case the host will be parsed as an IP address.
-	HostToNetAddress HostToNetAddrFunc
 
 	// Proxy indicates a proxy is being used for connections.  The only
 	// effect this has is to prevent leaking the tor proxy address, so it
@@ -177,7 +173,6 @@ type LocalPeer struct {
 	inbound   bool
 
 	flagsMtx             sync.Mutex // protects the peer flags below
-	na                   *wire.NetAddressV2
 	id                   int32
 	userAgent            string
 	services             wire.ServiceFlag
@@ -223,17 +218,6 @@ func (p *LocalPeer) ID() int32 {
 	p.flagsMtx.Unlock()
 
 	return id
-}
-
-// NA returns the peer network address.
-//
-// This function is safe for concurrent access.
-func (p *LocalPeer) NA() *wire.NetAddressV2 {
-	p.flagsMtx.Lock()
-	na := p.na
-	p.flagsMtx.Unlock()
-
-	return na
 }
 
 // Addr returns the peer address.
@@ -484,55 +468,30 @@ func (p *LocalPeer) Start() error {
 func (p *LocalPeer) initListeners() ([]net.Listener, error) {
 	// Listen for TCP connections at the configured addresses
 
-	listeners := make([]net.Listener, 0, len(p.addrsList))
-	for _, addr := range p.addrsList {
-		network := addr.Network()
-		listenAddr := addr.String()
-		utils.Log.Debugf("----------Listen on %s : %s", network, listenAddr)
-		listener, err := net.Listen(network, listenAddr)
-		if err != nil {
-			utils.Log.Warnf("----------Can't listen on %s: %v", addr, err)
-			continue
-		}
-		listeners = append(listeners, listener)
-		if p.addr == "" {
-			// Set the default addr is first address can be used
-			//p.addr = listenAddr
-			p.setDefaultAddr(addr)
-		}
+	listeners := make([]net.Listener, 0)
+	listener, err := net.Listen("tcp", "")
+	if err != nil {
+		utils.Log.Errorf("initListeners Listen failed: %v", err)
+		return nil, err
 	}
+	utils.Log.Infof("initListeners Listen on %s", listener.Addr().String())
+	listeners = append(listeners, listener)
+
+	// 
+	// listeners := make([]net.Listener, 0, len(p.addrsList))
+	// for _, addr := range p.addrsList {
+	// 	network := addr.Network()
+	// 	listenAddr := addr.String()
+	// 	utils.Log.Debugf("----------Listen on %s : %s", network, listenAddr)
+	// 	listener, err := net.Listen(network, listenAddr)
+	// 	if err != nil {
+	// 		utils.Log.Warnf("----------Can't listen on %s: %v", addr, err)
+	// 		continue
+	// 	}
+	// 	listeners = append(listeners, listener)
+	// }
 
 	return listeners, nil
-}
-
-func (p *LocalPeer) setDefaultAddr(addr net.Addr) error {
-	p.addr = addr.String() // Default to the first address
-
-	host, portStr, err := net.SplitHostPort(p.addr)
-	if err != nil {
-		return err
-	}
-
-	port, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		return err
-	}
-
-	if p.cfg.HostToNetAddress != nil {
-		na, err := p.cfg.HostToNetAddress(host, uint16(port), 0)
-		if err != nil {
-			return err
-		}
-		p.na = na
-	} else {
-		// If host is an onion hidden service or a hostname, it is
-		// likely that a nil-pointer-dereference will occur. The caller
-		// should set HostToNetAddress if connecting to these.
-		p.na = wire.NetAddressV2FromBytes(
-			time.Now(), 0, net.ParseIP(host), uint16(port),
-		)
-	}
-	return nil
 }
 
 // listenHandler accepts incoming connections on a given listener.  It must be

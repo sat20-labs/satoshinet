@@ -47,7 +47,7 @@ func (vm *ValidatorManager) getLocalAddr() ([]net.Addr, error) {
 	addrs, _ := net.InterfaceAddrs()
 	port := vm.GetValidatorPort()
 
-	if addrs != nil && len(addrs) > 0 {
+	if len(addrs) > 0 {
 		for _, addr := range addrs {
 			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 				if ipnet.IP.To4() != nil {
@@ -64,11 +64,11 @@ func (vm *ValidatorManager) getLocalAddr() ([]net.Addr, error) {
 
 	addr := &net.TCPAddr{
 		IP: net.IP{
-			127, 0, 0, 1},
+			0, 0, 0, 0},
 		Port: port,
 	}
 	localAddrsList = append(localAddrsList, addr)
-	return addrs, nil
+	return localAddrsList, nil
 }
 
 func (vm *ValidatorManager) getAddr(Host string) (net.Addr, error) {
