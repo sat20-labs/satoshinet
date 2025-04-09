@@ -116,6 +116,48 @@ func btcdMain(serverChan chan<- *server) error {
 		return nil
 	}
 
+	if cfg.Generate {
+		err = stp.LoadSTP(cfg.HomeDir)
+		if err != nil {
+			btcdLog.Errorf("Unable to load STP: %v", err)
+			return err
+		}
+
+		// 只有在钱包解锁之后才能启动miner
+		if !stp.IsUnlocked() {
+			// 创建或者解锁钱包
+			err := walletInterAction(interrupt)
+			if err != nil {
+				btcdLog.Errorf("Unable to create/unlock wallet %v", err)
+				return err
+			}
+			err = stp.StartSTP()
+			if err != nil {
+				btcdLog.Errorf("Unable to start STP, %v", err)
+				return err
+			}
+		}
+		pubkey, err := stp.GetPubKey()
+		if err != nil {
+			btcdLog.Errorf("GetPubKey failed %v", err)
+			return err
+		}
+		if cfg.MiningPubKey != "" {
+			if hex.EncodeToString(pubkey) != cfg.MiningPubKey {
+				btcdLog.Errorf("mining pubkey must be consistent with wallet pubkey")
+				return fmt.Errorf("mining pubkey must be consistent with wallet pubkey")
+			}
+		} else {
+			cfg.MiningPubKey = hex.EncodeToString(pubkey)
+			addr, err := getP2TRAddress(pubkey, activeNetParams.Params)
+			if err != nil {
+				btcdLog.Errorf("getP2TRAddress failed, %v", err)
+				return err
+			}
+			cfg.miningAddrs = append(cfg.miningAddrs, addr)
+		}
+	}
+
 	// Load the block database.
 	db, err := loadBlockDB()
 	if err != nil {
@@ -253,48 +295,6 @@ func btcdMain(serverChan chan<- *server) error {
 
 	// drop unveil and tty
 	pledgex("stdio rpath wpath cpath flock dns inet")
-
-	if cfg.Generate {
-		err = stp.LoadSTP(cfg.HomeDir)
-		if err != nil {
-			btcdLog.Errorf("Unable to load STP: %v", err)
-			return err
-		}
-
-		// 只有在钱包解锁之后才能启动miner
-		if !stp.IsUnlocked() {
-			// 创建或者解锁钱包
-			err := walletInterAction(interrupt)
-			if err != nil {
-				btcdLog.Errorf("Unable to create/unlock wallet %v", err)
-				return err
-			}
-			err = stp.StartSTP()
-			if err != nil {
-				btcdLog.Errorf("Unable to start STP, %v", err)
-				return err
-			}
-		}
-		pubkey, err := stp.GetPubKey()
-		if err != nil {
-			btcdLog.Errorf("GetPubKey failed %v", err)
-			return err
-		}
-		if cfg.MiningPubKey != "" {
-			if hex.EncodeToString(pubkey) != cfg.MiningPubKey {
-				btcdLog.Errorf("mining pubkey must be consistent with wallet pubkey")
-				return fmt.Errorf("mining pubkey must be consistent with wallet pubkey")
-			}
-		} else {
-			cfg.MiningPubKey = hex.EncodeToString(pubkey)
-			addr, err := getP2TRAddress(pubkey, activeNetParams.Params)
-			if err != nil {
-				btcdLog.Errorf("getP2TRAddress failed, %v", err)
-				return err
-			}
-			cfg.miningAddrs = append(cfg.miningAddrs, addr)
-		}
-	}
 
 	// initialize anchor config
 	anchorCfg := &anchortx.AnchorConfig{
