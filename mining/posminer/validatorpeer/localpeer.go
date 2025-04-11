@@ -543,7 +543,16 @@ func (p *LocalPeer) listenHandler(listener net.Listener) {
 		}
 
 		// The remote peer is connected
-		p.SendGetInfoCommand(newConnReq)
+		cmd := p.SendGetInfoCommand(newConnReq)
+		// 是否需要等发送完成后再等待读数据？ 
+		// 否则后面读数据会出现错误：[LocalPeer]conn[3]: Read message err: ReadMessage:unable to read message header: EOF
+		// 从而导致连接被关闭：[LocalPeer]OnConnDisconnected conn[3]: xxxx
+		i := 0
+		for !newConnReq.IsCommandSended(cmd) && i < 100 {
+			time.Sleep(10 * time.Millisecond)
+			i++
+		}
+
 		p.addConn(newConnReq)
 
 		// Start to listen the command from this conn
@@ -779,13 +788,14 @@ func (p *LocalPeer) logCurrentConn() {
 
 }
 
-func (p *LocalPeer) SendGetInfoCommand(newConnReq *ConnReq) {
+func (p *LocalPeer) SendGetInfoCommand(newConnReq *ConnReq) *validatorcommand.MsgGetInfo {
 
 	validatorInfo := p.cfg.LocalValidator.GetLocalValidatorInfo(0)
 	getInfoCmd := validatorcommand.NewMsgGetInfo(validatorInfo)
 	//utils.Log.Debugf("----------[LocalPeer]Will Send GetInfoCommand")
 	//getInfoCmd.LogCommandInfo()
 	newConnReq.SendCommand(getInfoCmd)
+	return getInfoCmd
 }
 
 func (p *LocalPeer) HandleRemotePeerInfoConfirmed(peerInfo *validatorcommand.MsgPeerInfo, connReq *ConnReq) {

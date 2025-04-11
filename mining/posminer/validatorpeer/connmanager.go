@@ -202,6 +202,20 @@ func (connReq *ConnReq) PopNextCommand() validatorcommand.Message {
 	return item.Value.(validatorcommand.Message)
 }
 
+
+func (connReq *ConnReq) IsCommandSended(command validatorcommand.Message) bool {
+	connReq.CmdsLock.RLock()
+	defer connReq.CmdsLock.RUnlock()
+
+	for e := connReq.pendingCmds.Front(); e != nil; e = e.Next() {
+		if e.Value.(validatorcommand.Message) == command {
+			return false
+		}	
+	}
+	
+	return true
+}
+
 func (connReq *ConnReq) RemoveItem(item *list.Element) {
 	//	utils.Log.Debugf("----------[%s]Remove command [%s] from send queue", connReq.String(), item.Value.(validatorcommand.Message).Command())
 	connReq.CmdsLock.Lock()
