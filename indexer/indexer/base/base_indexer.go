@@ -191,34 +191,7 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 
 
 func (b *BaseIndexer) Repair() {
-	if !b.IsMainnet() {
-		tickerInfo := common.TickerInfo{
-			AssetName: *wire.NewAssetNameFromString("::"),
-			MaxSupply: "21000000000000000",
-			Precition: 0,
-			N: 		   1,
-		}
-		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
-		tickerInfo = common.TickerInfo{
-			AssetName: *wire.NewAssetNameFromString("ordx:f:rarepizza"),
-			MaxSupply: "210000000",
-			Precition: 0,
-			N: 		   1,
-		}
-		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
-		tickerInfo = common.TickerInfo{
-			AssetName: *wire.NewAssetNameFromString("runes:f:54507_1"),
-			MaxSupply: "2000000",
-			Precition: 1,
-		}
-		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
-		tickerInfo = common.TickerInfo{
-			AssetName: *wire.NewAssetNameFromString("runes:f:56455_317"),
-			MaxSupply: "2000000",
-			Precition: 1,
-		}
-		db.GobSetDB1(stp.GetTickerInfoDBKey(tickerInfo.String()), tickerInfo, b.db)
-	}
+	
 }
 
 // only call in compiling data
