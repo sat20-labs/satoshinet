@@ -208,11 +208,15 @@ func (cm *ConnManager) handleFailedConn(c *ConnReq) {
 	} else if cm.cfg.GetNewAddress != nil {
 		cm.failedAttempts++
 		if cm.failedAttempts >= maxFailedAttempts {
+			d := time.Duration(cm.failedAttempts) * cm.cfg.RetryDuration
+			if d > maxRetryDuration {
+				d = maxRetryDuration
+			}
 			log.Debugf("Max failed connection attempts reached: [%d] "+
 				"-- retrying connection in: %v [connect to: %v]", maxFailedAttempts,
-				cm.cfg.RetryDuration, c)
+				d, c)
 			theId := c.id
-			time.AfterFunc(cm.cfg.RetryDuration, func() {
+			time.AfterFunc(d, func() {
 				cm.Remove(theId)
 				cm.NewConnReq()
 			})
