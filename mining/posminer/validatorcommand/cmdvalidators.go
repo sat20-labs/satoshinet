@@ -177,7 +177,7 @@ func (msg *MsgValidators) LogCommandInfo() {
 	utils.Log.Debugf("Command MsgValidators:")
 	utils.Log.Debugf("Validator Count: %d", msg.ValidatorCount)
 	for index, validator := range msg.Validators {
-		utils.Log.Debugf("——————————————————————————————————")
+		utils.Log.Debugf("---------------------------------------------")
 		utils.Log.Debugf("No: %d", index)
 		utils.Log.Debugf("Validator Id: %d", validator.ValidatorId)
 		utils.Log.Debugf("Validator Host: %s", validator.Host)
@@ -190,7 +190,7 @@ func (msg *MsgValidators) LogCommandInfo() {
 		utils.Log.Debugf("Validator ValidatorScore: %d", validator.ValidatorScore)
 		utils.Log.Debugf("")
 	}
-	utils.Log.Debugf("——————————————————————————————————")
+	utils.Log.Debugf("---------------------------------------------")
 }
 
 // NewMsgValidators returns a new bitcoin version message that conforms to the

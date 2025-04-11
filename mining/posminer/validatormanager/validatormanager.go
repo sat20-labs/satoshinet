@@ -2890,6 +2890,7 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 		now := time.Now()
 		if now.Sub(record.LastConnectedTime) > time.Hour*24 {
 			// The validator is not connected for 1 day, not check connected
+			utils.Log.Debugf("[ValidatorManager]CheckValidatorConnected The validator %s is not connected for 1 day, not check connected again", record.Host)	
 			continue
 		}
 
@@ -2910,7 +2911,7 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 			//
 			isNewConnected = true
 		}
-		if validatorNode.IsConnected() == false {
+		if !validatorNode.IsConnected() {
 			// try Connect to the validator
 			err := validatorNode.Connect()
 			if err != nil {

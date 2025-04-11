@@ -77,7 +77,7 @@ func (msg *MsgUpdateEpoch) LogCommandInfo() {
 	utils.Log.Debugf("Command MsgUpdateEpoch:")
 	// utils.Log.Debugf("Validator Count: %d", msg.ValidatorCount)
 	// for index, validator := range msg.Validators {
-	// 	utils.Log.Debugf("——————————————————————————————————")
+	// 	utils.Log.Debugf("-------------------------------------")
 	// 	utils.Log.Debugf("No: %d", index)
 	// 	utils.Log.Debugf("Validator Id: %d", validator.ValidatorId)
 	// 	utils.Log.Debugf("Validator Host: %s", validator.Host)
@@ -86,7 +86,7 @@ func (msg *MsgUpdateEpoch) LogCommandInfo() {
 	// 	utils.Log.Debugf("")
 	// }
 	showEpoch("MsgUpdateEpoch: CurrentEpoch", msg.CurrentEpoch)
-	utils.Log.Debugf("——————————————————————————————————")
+	utils.Log.Debugf("-------------------------------------")
 }
 
 // NewMsgUpdateEpoch returns a new bitcoin version message that conforms to the

@@ -164,7 +164,7 @@ func (msg *MsgConfirmEpoch) LogCommandInfo() {
 	utils.Log.Debugf("Create Time: %s", msg.CreateTime.Format(time.DateTime))
 
 	for index, validator := range msg.ItemList {
-		utils.Log.Debugf("——————————————————————————————————")
+		utils.Log.Debugf("-------------------------------------")
 		utils.Log.Debugf("No: %d", index)
 		utils.Log.Debugf("Validator Id: %d", validator.ValidatorId)
 		utils.Log.Debugf("Validator Host: %s", validator.Host)
@@ -176,7 +176,7 @@ func (msg *MsgConfirmEpoch) LogCommandInfo() {
 	utils.Log.Debugf("Last Change Time: %s", msg.LastChangeTime.Format(time.DateTime))
 	utils.Log.Debugf("VC Block Height: %d", msg.VCBlockHeight)
 	utils.Log.Debugf("VC Block Hash: %s", msg.VCBlockHash.String())
-	utils.Log.Debugf("——————————————————————————————————")
+	utils.Log.Debugf("-------------------------------------")
 }
 
 // NewMsgConfirmEpoch returns a new bitcoin version message that conforms to the

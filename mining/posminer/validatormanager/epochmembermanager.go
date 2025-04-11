@@ -492,7 +492,7 @@ func (em *EpochMemberManager) ConfirmDelEpochMember(reqDelEpochMember *validator
 		return nil
 	}
 
-	utils.Log.Debugf("[ValidatorManager]ConfirmDelEpochMember Will confirm the [%s] is or not connected?", reqDelEpochMember.DelValidatorId)
+	utils.Log.Debugf("[ValidatorManager]ConfirmDelEpochMember Will confirm the [%d] is or not connected?", reqDelEpochMember.DelValidatorId)
 
 	switch reqDelEpochMember.Target {
 	case validatorcommand.CmdDelEpochMemberTarget_Consult:

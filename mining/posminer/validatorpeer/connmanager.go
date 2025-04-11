@@ -135,7 +135,7 @@ func (connReq *ConnReq) isInactive() bool {
 
 func (connReq *ConnReq) logConnInfo(desc string) {
 	if desc != "" {
-		utils.Log.Debugf("——————————————————Conn info: %s——————————————————", desc)
+		utils.Log.Debugf("------------------------Conn info: %s------------------------", desc)
 	}
 	utils.Log.Debugf("Conn id: %d", connReq.id)
 	utils.Log.Debugf("Conn LocalAddr: %s", connReq.LocalAddr)
@@ -156,7 +156,7 @@ func (connReq *ConnReq) logConnInfo(desc string) {
 	// 	utils.Log.Debugf("Pending Command: %s", command.Command())
 	// }
 	if desc != "" {
-		utils.Log.Debugf("——————————————————Conn info: %s End——————————————————", desc)
+		utils.Log.Debugf("------------------------Conn info: %s End------------------------", desc)
 	}
 }
 

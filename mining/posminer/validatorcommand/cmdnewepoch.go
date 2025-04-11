@@ -149,7 +149,7 @@ func (msg *MsgNewEpoch) LogCommandInfo() {
 	// utils.Log.Debugf("Create Time: %s", msg.CreateTime.Format(time.DateTime))
 
 	// for index, validator := range msg.ItemList {
-	// 	utils.Log.Debugf("——————————————————————————————————")
+	// 	utils.Log.Debugf("-------------------------------------")
 	// 	utils.Log.Debugf("No: %d", index)
 	// 	utils.Log.Debugf("Validator Id: %d", validator.ValidatorId)
 	// 	utils.Log.Debugf("Validator Host: %s", validator.Host)
@@ -157,7 +157,7 @@ func (msg *MsgNewEpoch) LogCommandInfo() {
 	// 	utils.Log.Debugf("Validator Index: %d", validator.Index)
 	// 	utils.Log.Debugf("")
 	// }
-	utils.Log.Debugf("——————————————————————————————————")
+	utils.Log.Debugf("-------------------------------------")
 }
 
 // NewMsgNewEpoch returns a new bitcoin version message that conforms to the

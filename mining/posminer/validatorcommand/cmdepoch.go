@@ -283,7 +283,7 @@ func (msg *MsgEpoch) LogCommandInfo() {
 	utils.Log.Debugf("Command MsgEpoch:")
 	showEpoch("MsgEpoch: CurrentEpoch", msg.CurrentEpoch)
 	showEpoch("MsgEpoch: NexEpoch", msg.NextEpoch)
-	utils.Log.Debugf("——————————————————————————————————")
+	utils.Log.Debugf("-------------------------------------")
 }
 
 // NewMsgEpoch returns a new bitcoin version message that conforms to the
