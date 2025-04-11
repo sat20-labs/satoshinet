@@ -26,11 +26,11 @@ var (
 	// connection is allowed to grow to.  This is necessary since the retry
 	// logic uses a backoff mechanism which increases the interval base times
 	// the number of retries that have been done.
-	maxRetryDuration = time.Minute * 10
+	maxRetryDuration = time.Minute * 5
 
 	// defaultRetryDuration is the default duration of time for retrying
 	// persistent connections.
-	defaultRetryDuration = time.Second * 30
+	defaultRetryDuration = time.Second * 5
 
 	// defaultTargetOutbound is the default number of outbound connections to
 	// maintain.
