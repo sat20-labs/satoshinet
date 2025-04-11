@@ -77,7 +77,7 @@ type ConnReq struct {
 	pendingCmds *list.List // Output commands
 
 	sendQueue     chan struct{}
-	sendDoneQueue chan *list.Element
+	sendDoneQueue chan validatorcommand.Message
 	quitQueue     chan struct{}
 }
 
@@ -86,7 +86,7 @@ func (connReq *ConnReq) Start() {
 	connReq.pendingCmds = list.New()
 
 	connReq.sendQueue = make(chan struct{}, 1)          // nonblocking sync
-	connReq.sendDoneQueue = make(chan *list.Element, 1) // nonblocking sync
+	connReq.sendDoneQueue = make(chan validatorcommand.Message, 1) // nonblocking sync
 	connReq.quitQueue = make(chan struct{}, 1)          // nonblocking sync
 
 	go connReq.sendQueueHandler()
@@ -203,17 +203,21 @@ func (connReq *ConnReq) PopNextCommand() validatorcommand.Message {
 }
 
 
-func (connReq *ConnReq) IsCommandSended(command validatorcommand.Message) bool {
-	connReq.CmdsLock.RLock()
-	defer connReq.CmdsLock.RUnlock()
+func (connReq *ConnReq) WaitCommandSended(command validatorcommand.Message) bool {
 
-	for e := connReq.pendingCmds.Front(); e != nil; e = e.Next() {
-		if e.Value.(validatorcommand.Message) == command {
-			return false
-		}	
+out:
+	for {
+		select {
+		case item := <-connReq.sendDoneQueue:
+			if item == command {
+				return true
+			}
+		case <-connReq.quitQueue:
+			break out
+		}
 	}
 	
-	return true
+	return false
 }
 
 func (connReq *ConnReq) RemoveItem(item *list.Element) {
@@ -260,7 +264,7 @@ out:
 
 			utils.Log.Debugf("----------[%s]command [%s] has sent.", connReq.String(), command.Command())
 
-		// 	connReq.sendDoneQueue <- item
+			connReq.sendDoneQueue <- command
 
 		// case item := <-connReq.sendDoneQueue:
 		// 	// The command was sent successfully, will removed it from the

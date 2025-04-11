@@ -547,11 +547,7 @@ func (p *LocalPeer) listenHandler(listener net.Listener) {
 		// 是否需要等发送完成后再等待读数据？ 
 		// 否则后面读数据会出现错误：[LocalPeer]conn[3]: Read message err: ReadMessage:unable to read message header: EOF
 		// 从而导致连接被关闭：[LocalPeer]OnConnDisconnected conn[3]: xxxx
-		i := 0
-		for !newConnReq.IsCommandSended(cmd) && i < 100 {
-			time.Sleep(10 * time.Millisecond)
-			i++
-		}
+		newConnReq.WaitCommandSended(cmd)
 
 		p.addConn(newConnReq)
 
