@@ -820,7 +820,8 @@ func (vm *ValidatorManager) OnValidatorPeerInactive(netAddr net.Addr) {
 }
 
 func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) error {
-	if validator.IsConnected() == false {
+	if !validator.IsConnected() {
+		utils.Log.Errorf("validator %d is not connected", validator.GetValidatorId())
 		return fmt.Errorf("validator is not connected")
 	}
 
@@ -1879,7 +1880,7 @@ func (vm *ValidatorManager) CheckEpoch() {
 
 	utils.Log.Debugf("[ValidatorManager]No Epoch now ...")
 	// 没有有效的Epoch， 就申请生成新的epoch
-	AcitvityValidatorCount := len(vm.ConnectedList) + 1
+	AcitvityValidatorCount := len(vm.ConnectedList) + 1 // 包括自己
 	if AcitvityValidatorCount >= MinValidatorsCountEachEpoch {
 		utils.Log.Debugf("Not valid epoch to miner, will req new epoch to miner new block")
 		nextEpochIndex := vm.getCurrentEpochIndex() + 1

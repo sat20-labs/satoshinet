@@ -280,9 +280,8 @@ func (v *Validator) Connect() error {
 		return err
 	}
 
-	utils.Log.Debugf("Will Connect to the validator: %v", v.peer.Addr())
-
-	if v.peer.Connected() == false {
+	if !v.peer.Connected() {
+		utils.Log.Debugf("Will Connect to the validator: %v", v.peer.Addr())
 		err := v.peer.Connect()
 		if err != nil {
 			utils.Log.Errorf("Connect failed: %v", err)
@@ -290,7 +289,7 @@ func (v *Validator) Connect() error {
 		}
 	}
 
-	if v.IsValidInfo() == false {
+	if !v.IsValidInfo() {
 		// Not get remote validator id
 		utils.Log.Debugf("The validator Id is invalid, will request validator info from the remote peer")
 		validatorInfo := v.GetLocalValidatorInfo(0)

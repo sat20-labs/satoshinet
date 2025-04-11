@@ -527,6 +527,11 @@ func (p *RemotePeer) Connected() bool {
 }
 
 func (p *RemotePeer) Connect() error {
+	// Check if the peer is already connected	
+	if p.Connected() {
+		utils.Log.Debugf("***********The validator peer is already connected: %s", p.addr)
+		return nil
+	}
 	conn, err := p.cfg.Dial(p.addr)
 	if err != nil {
 		utils.Log.Errorf("***********Unable to connect to %s: %v", p.addr, err)
