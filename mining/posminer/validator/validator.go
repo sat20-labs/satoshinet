@@ -451,7 +451,7 @@ func (v *Validator) SendCommand(command validatorcommand.Message) error {
 		return err
 	}
 
-	utils.Log.Debugf("Will send command to the validator: %s", v.peer.Addr())
+	utils.Log.Debugf("Will send command %s to the validator: %s", command.Command(), v.peer.Addr())
 	return v.peer.SendCommand(command)
 }
 

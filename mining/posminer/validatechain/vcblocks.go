@@ -27,9 +27,9 @@ const (
 	NewEpochReason_BootStrapNode = 4 // 这个用于有引导节点单独创建Epoch
 
 	// Update Epoch Reason
-	UpdateEpochReason_EpochHandOver     = 1 // Epoch 转正
-	UpdateEpochReason_GeneratorHandOver = 2 // Generator 轮换
-	UpdateEpochReason_MemberRemoved     = 3 // 成员删除
+	UpdateEpochReason_EpochHandOver     = 11 // Epoch 转正
+	UpdateEpochReason_GeneratorHandOver = 12 // Generator 轮换
+	UpdateEpochReason_MemberRemoved     = 13 // 成员删除
 )
 
 type VCBlockHeader struct {

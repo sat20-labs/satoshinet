@@ -8,6 +8,7 @@ package validatorpeer
 import (
 	"container/list"
 	"fmt"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -75,6 +76,7 @@ type ConnReq struct {
 
 	CmdsLock    sync.RWMutex
 	pendingCmds *list.List // Output commands
+	sended      map[validatorcommand.Message]int64
 
 	sendQueue     chan struct{}
 	sendDoneQueue chan validatorcommand.Message
@@ -98,6 +100,9 @@ func (connReq *ConnReq) String() string {
 }
 
 func (connReq *ConnReq) Close() {
+	if atomic.LoadInt32(&connReq.connClose) != 0 {
+		return
+	}
 	atomic.StoreInt32(&connReq.connClose, 1)
 	connReq.conn.Close()
 	// close the send queue
@@ -205,18 +210,16 @@ func (connReq *ConnReq) PopNextCommand() validatorcommand.Message {
 
 func (connReq *ConnReq) WaitCommandSended(command validatorcommand.Message) bool {
 
-out:
-	for {
-		select {
-		case item := <-connReq.sendDoneQueue:
-			if item == command {
-				return true
-			}
-		case <-connReq.quitQueue:
-			break out
+	for i := 0; i < 100; i++ {
+		connReq.CmdsLock.RLock()
+		_, ok := connReq.sended[command]
+		connReq.CmdsLock.RUnlock()
+		if ok {
+			return true
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	
+
 	return false
 }
 
@@ -263,8 +266,24 @@ out:
 			atomic.StoreInt64(&connReq.lastSend, time.Now().Unix())
 
 			utils.Log.Debugf("----------[%s]command [%s] has sent.", connReq.String(), command.Command())
+			connReq.CmdsLock.Lock()
+			connReq.sended[command] = time.Now().Unix()
+			if len(connReq.sended) > 16 {
+				min := int64(math.MaxInt64)
+				var cmd validatorcommand.Message
+				for k, v := range connReq.sended {
+					if v < min {
+						min = v
+						cmd = k
+					}
+				}
+				if cmd != nil {
+					delete(connReq.sended, cmd)
+				}
+			}
+			connReq.CmdsLock.Unlock()
 
-			connReq.sendDoneQueue <- command
+			// connReq.sendDoneQueue <- command 需要有线程读取数据，不然会卡住
 
 		// case item := <-connReq.sendDoneQueue:
 		// 	// The command was sent successfully, will removed it from the
