@@ -87,6 +87,7 @@ func (connReq *ConnReq) Start() {
 	// Start connReq
 	connReq.pendingCmds = list.New()
 
+	connReq.sended = make(map[validatorcommand.Message]int64)
 	connReq.sendQueue = make(chan struct{}, 1)          // nonblocking sync
 	connReq.sendDoneQueue = make(chan validatorcommand.Message, 1) // nonblocking sync
 	connReq.quitQueue = make(chan struct{}, 1)          // nonblocking sync
