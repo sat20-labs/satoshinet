@@ -1262,6 +1262,10 @@ func (b *BaseIndexer) GetSyncHeight() int {
 	return b.stats.SyncHeight
 }
 
+func (b *BaseIndexer) SetSyncHeight(height int) {
+	b.stats.SyncHeight = height
+}
+
 func (b *BaseIndexer) GetHeight() int {
 	return b.lastHeight
 }

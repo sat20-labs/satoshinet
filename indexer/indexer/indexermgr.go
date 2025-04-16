@@ -372,6 +372,7 @@ func (b *IndexerMgr) updateDB() {
 func (b *IndexerMgr) performUpdateDBInBuffer() {
 	b.cleanDBBuffer() // must before UpdateDB
 	b.compilingBackupDB.UpdateDB()
+	b.compiling.SetSyncHeight(b.compilingBackupDB.GetSyncHeight())
 }
 
 func (b *IndexerMgr) prepareDBBuffer() {
@@ -432,6 +433,10 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 		}
 	}
 	p.mutex.Unlock()
+
+	if height == 159 {
+		common.Log.Infof("")
+	}
 
 	if block != nil {
 		err := p.compiling.SyncBlock(block, height, tip)
