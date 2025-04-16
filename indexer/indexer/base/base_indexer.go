@@ -663,10 +663,10 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 		Timestamp: block.Timestamp.Unix(),
 		TxAmount:  len(block.Transactions),
 	}
-	firstblock := block.Height
-	if len(b.blockVector) > 0 {
-		firstblock = b.blockVector[0].Height
-	}
+	// firstblock := block.Height
+	// if len(b.blockVector) > 0 {
+	// 	firstblock = b.blockVector[0].Height
+	// }
 
 	addedUtxoCount := 0
 	deledUtxoCount := 0
@@ -726,11 +726,11 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			deledUtxoCount++
 			delete(b.utxoIndex.Index, utxoKey)
 			utxoid := common.GetUtxoId(inputUtxo)
-			if inputUtxo.Height < firstblock {
+			//if inputUtxo.Height < firstblock {
 				value := &UtxoValue{Utxo: utxoKey, Address: inputUtxo.Address,
 					UtxoId: utxoid, Value: inputUtxo.Value}
 				b.delUTXOs = append(b.delUTXOs, value)
-			}
+			//}
 			satsInput += inputUtxo.Value
 
 			input.Address = inputUtxo.Address

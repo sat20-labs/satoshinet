@@ -316,9 +316,9 @@ func (b *IndexerMgr) checkSelf() {
 }
 
 func (b *IndexerMgr) forceUpdateDB() {
-	startTime := time.Now()
+	//startTime := time.Now()
 
-	common.Log.Infof("IndexerMgr.forceUpdateDB: takes: %v", time.Since(startTime))
+	//common.Log.Infof("IndexerMgr.forceUpdateDB: takes: %v", time.Since(startTime))
 }
 
 func (b *IndexerMgr) handleReorg(height int) {
