@@ -55,7 +55,7 @@ func (nem *NewEpochManager) NewReqEpoch(validatorId uint64) {
 
 func (nem *NewEpochManager) AddReceivedEpoch(validatorId uint64, hash *chainhash.Hash) error {
 	if _, ok := nem.receivedEpoch[validatorId]; !ok {
-		err := errors.New("Isnot invited validatorId for received epoch")
+		err := errors.New("Is not invited validatorId for received epoch")
 		utils.Log.Errorf("AddReceivedEpoch failed: %v", err)
 		return err
 
@@ -251,6 +251,8 @@ func showVoteData(title string, voteData *validatechain.DataEpochVote) {
 	utils.Log.Debugf("CreateTime: %s", time.Unix(voteData.CreateTime, 0).Format(time.DateTime))
 	utils.Log.Debugf("Reason: %d", voteData.Reason)
 	utils.Log.Debugf("Token: %s", voteData.Token)
+	utils.Log.Debugf("Epoch Count: %d", len(voteData.EpochItemList))
+	utils.Log.Debugf("----------------------------------------")
 	for _, item := range voteData.EpochItemList {
 		utils.Log.Debugf("ValidatorId: %d", item.ValidatorId)
 		utils.Log.Debugf("PublicKey: %x", item.PublicKey)

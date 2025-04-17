@@ -839,6 +839,9 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 }
 
 func (vm *ValidatorManager) LookupValidator(pubkey []byte) *validator.Validator {
+	if vm.myValidator.Validator.IsValidatorPubKey(pubkey) {
+		return &vm.myValidator.Validator
+	}
 	for _, validator := range vm.ConnectedList {
 		if validator.IsValidatorPubKey(pubkey) {
 			return validator
@@ -1733,8 +1736,7 @@ func (vm *ValidatorManager) OnUpdateEpoch(currentEpoch *epoch.Epoch) {
 	}
 	// 如果epoch更新后，当前epoch的generator是本地validator，且是最后一个generator，就请求下一轮的epoch
 	if vm.CurrentEpoch.Generator != nil {
-		GeneratorId := vm.CurrentEpoch.Generator.GeneratorId
-		if vm.NextEpoch == nil && vm.isLocalValidatorById(GeneratorId) {
+		if vm.NextEpoch == nil && vm.isLocalValidator(vm.CurrentEpoch.Generator.Validatorinfo.PublicKey[:]) {
 			if vm.CurrentEpoch.IsLastGenerator() {
 				// Broadcast  for New Epoch
 				// Current epoch is last, request New Epoch
