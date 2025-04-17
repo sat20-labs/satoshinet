@@ -2673,17 +2673,16 @@ func (vm *ValidatorManager) ConfirmNewEpoch(confirmedEpoch *epoch.Epoch, reason 
 	}
 
 	// Append EpochVoteList
-	if receivedEpoch != nil {
-		for _, item := range receivedEpoch {
-			if item == nil || item.Hash == nil || item.VoteData == nil {
-				continue
-			}
-			dataBlock.EpochVoteList = append(dataBlock.EpochVoteList, validatechain.EpochVoteItem{
-				ValidatorId: item.VoteData.VotorId,
-				Hash:        *item.Hash,
-			})
+	for _, item := range receivedEpoch {
+		if item == nil || item.Hash == nil || item.VoteData == nil {
+			continue
 		}
+		dataBlock.EpochVoteList = append(dataBlock.EpochVoteList, validatechain.EpochVoteItem{
+			ValidatorId: item.VoteData.VotorId,
+			Hash:        *item.Hash,
+		})
 	}
+	
 	vcBlock.Data = dataBlock
 
 	err := vm.SaveVCBlock(vcBlock)
