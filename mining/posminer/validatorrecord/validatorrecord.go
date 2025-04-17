@@ -1,6 +1,7 @@
 package validatorrecord
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,7 +14,8 @@ const (
 )
 
 type ValidatorRecord struct {
-	ValidatorId       uint64    `json:"validatorId"`       // 验证者的ID
+	ValidatorId       uint64    `json:"validatorId"`       // 验证者的ID，非全局，最好去掉，只保留PubKey  TODO
+	PubKey            []byte    `json:"pubkey"`
 	Host              string    `json:"host"`              // 验证者的节点Host
 	LastConnectedTime time.Time `json:"lastConnectedTime"` // 上次连接的时间
 }
@@ -39,14 +41,14 @@ func loadValidatorRecordFile(filepath string) ([]*ValidatorRecord, error) {
 	data, err := loadValidatorKeyData(filepath)
 	if err != nil {
 		// Local key failed, will create a new key
-		err := fmt.Errorf("Open validator record file failed: %s", err.Error())
+		err := fmt.Errorf("open validator record file failed: %s", err.Error())
 		return nil, err
 	}
 
 	validatorRecordList := make([]*ValidatorRecord, 0)
 	err = json.Unmarshal(data, &validatorRecordList)
 	if err != nil {
-		err := fmt.Errorf("Unmarshal validatorRecordList failed: %s", err.Error())
+		err := fmt.Errorf("unmarshal validatorRecordList failed: %s", err.Error())
 		return nil, err
 	}
 
@@ -56,7 +58,7 @@ func loadValidatorRecordFile(filepath string) ([]*ValidatorRecord, error) {
 func UpdateValidatorRecordList(filepath string, validaterRecordList []*ValidatorRecord) error {
 	data, err := json.Marshal(validaterRecordList)
 	if err != nil {
-		err := fmt.Errorf("Marshal validatorRecordList failed: %s", err.Error())
+		err := fmt.Errorf("marshal validatorRecordList failed: %s", err.Error())
 		return err
 	}
 	err = saveValidatorRecordFile(filepath, data)
@@ -83,7 +85,7 @@ func saveValidatorRecordFile(path string, data []byte) error {
 	return nil
 }
 
-func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, host string) {
+func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, pubkey []byte, host string) {
 	// Update validator record when the validator is connected
 
 	if vrm.ValidatorRecordList == nil {
@@ -94,6 +96,7 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, host st
 		if record.ValidatorId != 0 && record.ValidatorId == validatorId {
 			// Update id and last connected time
 			record.ValidatorId = validatorId
+			record.PubKey = pubkey
 			record.Host = host
 			record.LastConnectedTime = time.Now()
 			UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordList)
@@ -102,6 +105,15 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, host st
 			if validatorId != 0 {
 				record.ValidatorId = validatorId
 			}
+			if pubkey != nil {
+				record.PubKey = pubkey
+			}
+			record.LastConnectedTime = time.Now()
+			UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordList)
+			return
+		} else if bytes.Equal(record.PubKey, pubkey) {
+			record.ValidatorId = validatorId
+			record.Host = host
 			record.LastConnectedTime = time.Now()
 			UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordList)
 			return
@@ -112,6 +124,7 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, host st
 
 	record := ValidatorRecord{
 		ValidatorId:       validatorId,
+		PubKey:            pubkey,
 		Host:              host,
 		LastConnectedTime: time.Now(),
 	}

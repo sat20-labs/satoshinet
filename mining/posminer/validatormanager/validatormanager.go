@@ -1,6 +1,8 @@
 package validatormanager
 
 import (
+	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -193,7 +195,7 @@ func (vm *ValidatorManager) Start() {
 		// New a validator with addr
 		//addrsList := make([]net.Addr, 0, 1)
 		//addrsList = append(addrsList, addr)
-		isLocalValidator := vm.isLocalValidator(record.Host)
+		isLocalValidator := vm.isLocalValidator(record.PubKey)
 		if isLocalValidator {
 			utils.Log.Debugf("Validator is local validator")
 			//validator.SetLocalValidator()
@@ -270,7 +272,7 @@ func (vm *ValidatorManager) LoadValidatorRecordList() *validatorrecord.Validator
 		hostList = append(hostList, vm.Cfg.Peers...)
 		for _, host := range hostList {
 			utils.Log.Debugf("Try to connect validator: %s", hostList)
-			vm.ValidatorRecordMgr.UpdateValidatorRecord(0, host)
+			vm.ValidatorRecordMgr.UpdateValidatorRecord(0, nil, host)
 		}
 	}
 
@@ -283,25 +285,8 @@ func (vm *ValidatorManager) Stop() {
 	close(vm.quit)
 }
 
-func (vm *ValidatorManager) isLocalValidator(host string) bool {
-	addrs := vm.myValidator.GetValidatorAddrsList()
-	if len(addrs) == 0 {
-		return false
-	}
-
-	// requestAddr := validator.GetValidatorAddr()
-	// if requestAddr == nil {
-	// 	return false
-	// }
-
-	for _, addr := range addrs {
-		hostAddr, _, _ := net.SplitHostPort(addr.String())
-
-		if hostAddr == host {
-			return true
-		}
-	}
-	return false
+func (vm *ValidatorManager) isLocalValidator(pubkey []byte) bool {
+	return bytes.Equal(vm.myValidator.ValidatorInfo.PublicKey[:], pubkey)
 }
 
 func (vm *ValidatorManager) isLocalValidatorById(validatorId uint64) bool {
@@ -336,7 +321,7 @@ func (vm *ValidatorManager) OnValidatorListUpdated(validatorList []validatorinfo
 		} else {
 			// Not found
 			// Is local validator
-			if vm.isLocalValidatorById(validatorInfo.ValidatorId) {
+			if vm.isLocalValidator(validatorInfo.PublicKey[:]) {
 				// Local validator
 				continue
 			}
@@ -754,8 +739,13 @@ func (vm *ValidatorManager) OnNewValidatorPeerConnected(netAddr net.Addr, valida
 	// 	return
 	// }
 
+	if vm.isLocalValidator(validatorInfo.PublicKey[:]) {
+		utils.Log.Infof("not allow same pubkey %s connected", hex.EncodeToString(validatorInfo.PublicKey[:]))
+		return
+	}
+
 	peerHost := validatorinfo.GetAddrHost(netAddr)
-	validatorPeer := vm.LookupValidator(peerHost)
+	validatorPeer := vm.LookupValidator(validatorInfo.PublicKey[:])
 	if validatorPeer != nil {
 		// The validator is already connected, will try to check connection again
 		utils.Log.Debugf("[ValidatorManager]New validator has added in connectedlist: %s", netAddr.String())
@@ -789,11 +779,6 @@ func (vm *ValidatorManager) OnNewValidatorPeerConnected(netAddr net.Addr, valida
 	utils.Log.Debugf("[ValidatorManager]New validator added to connectedlist: %s", netAddr.String())
 }
 
-func (vm *ValidatorManager) getRemoteValidator(remoteAddr net.Addr) *validator.Validator {
-	peerHost := validatorinfo.GetAddrHost(remoteAddr)
-	validatorPeer := vm.LookupValidator(peerHost)
-	return validatorPeer
-}
 
 func (vm *ValidatorManager) OnValidatorPeerDisconnected(validator *validator.Validator) {
 	// Remote validator peer disconnected, it will be notify by remote validator when it cannot connect or sent any command
@@ -831,16 +816,17 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 	addr := validator.GetValidatorAddr()
 
 	peerHost := validatorinfo.GetAddrHost(addr)
-	validatorPeer := vm.LookupValidator(peerHost)
+	validatorPeer := vm.LookupValidator(validator.ValidatorInfo.PublicKey[:])
 	if validatorPeer != nil {
 		// The validator is already in connectedlist
-		validator.Stop()
-		return fmt.Errorf("validator alreadly in connected list")
+		//validator.Stop()
+		//return fmt.Errorf("validator alreadly in connected list")
+		return nil
 	}
 	vm.ConnectedList = append(vm.ConnectedList, validator)
 
 	// update validator record
-	vm.ValidatorRecordMgr.UpdateValidatorRecord(validator.ValidatorInfo.ValidatorId, peerHost.String())
+	vm.ValidatorRecordMgr.UpdateValidatorRecord(validator.ValidatorInfo.ValidatorId, validator.ValidatorInfo.PublicKey[:], peerHost.String())
 
 	//sortsValidatorList(vm.ConnectedList)
 
@@ -852,9 +838,9 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 	return nil
 }
 
-func (vm *ValidatorManager) LookupValidator(host net.IP) *validator.Validator {
+func (vm *ValidatorManager) LookupValidator(pubkey []byte) *validator.Validator {
 	for _, validator := range vm.ConnectedList {
-		if validator.IsValidatorAddr(host) {
+		if validator.IsValidatorPubKey(pubkey) {
 			return validator
 		}
 	}
@@ -2878,7 +2864,7 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 		return
 	}
 	for _, record := range vm.ValidatorRecordMgr.ValidatorRecordList {
-		if vm.isLocalValidator(record.Host) { // Not local validator, skip it (Remote validator is not connected, so no need to check it here)
+		if vm.isLocalValidator(record.PubKey) { // Not local validator, skip it (Remote validator is not connected, so no need to check it here)
 			continue
 		}
 		hostIP := net.ParseIP(record.Host)
@@ -2894,7 +2880,7 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 		}
 
 		isNewConnected := false
-		validatorNode := vm.LookupValidator(hostIP)
+		validatorNode := vm.LookupValidator(record.PubKey)
 		if validatorNode == nil {
 			validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, vm.Cfg.ValidatorPubKey, nil) // vm.ValidatorId is Local validator, validatorId is Remote validator when new validator connected
 
@@ -2922,14 +2908,14 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 				validatorId = validatorNode.ValidatorInfo.ValidatorId
 			}
 			// Update the validator record
-			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorId, record.Host)
+			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorId, validatorNode.ValidatorInfo.PublicKey[:], record.Host)
 
 		}
 
 		// The validator is connected
 		if record.ValidatorId == 0 && validatorNode.ValidatorInfo.ValidatorId != 0 {
 			// Update the validator record
-			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorNode.ValidatorInfo.ValidatorId, record.Host)
+			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorNode.ValidatorInfo.ValidatorId, validatorNode.ValidatorInfo.PublicKey[:], record.Host)
 		}
 
 		if isNewConnected {
@@ -2947,7 +2933,7 @@ func (vm *ValidatorManager) GetCurrentEpochMember(includeLocalValidator bool) ([
 	memberList := make([]string, 0)
 
 	for _, item := range vm.CurrentEpoch.ItemList {
-		if includeLocalValidator == false && vm.isLocalValidator(item.Host) {
+		if !includeLocalValidator && vm.isLocalValidator(item.PublicKey[:]) {
 			utils.Log.Debugf("Validator is local validator")
 			continue
 		}

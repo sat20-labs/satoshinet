@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -212,25 +213,14 @@ func (v *Validator) GetValidatorAddr() net.Addr {
 	return v.peer.GetPeerAddr()
 }
 
-func (v *Validator) IsValidatorAddr(host net.IP) bool {
+func (v *Validator) IsValidatorPubKey(pubkey []byte) bool {
 	// The address doesn't change after initialization, therefore it is not
 	// protected by a mutex.
 	if v.peer == nil {
 		return false
 	}
 
-	addrPeer := v.peer.GetPeerAddr()
-	if addrPeer == nil {
-		return false
-	}
-
-	hostPeer := validatorinfo.GetAddrHost(addrPeer)
-
-	if hostPeer.Equal(host) {
-		return true
-	}
-
-	return false
+	return bytes.Equal(v.ValidatorInfo.PublicKey[:], pubkey)
 }
 
 func (v *Validator) RequestAllValidatorsInfo() error {
