@@ -135,24 +135,24 @@ func (nem *NewEpochManager) handleNewEpoch() {
 			continue
 		}
 
-		matched := 0
+		matched := false
 		// Find the epoch match with valid epoch
 		for _, validItem := range result.validEpoch {
 			isSame := isSameVote(voteItem, validItem.VoteItem)
 			if isSame {
-				matched++ 
+				matched = true
 				validItem.EpochCount++
 			}
 		}
-		if matched > 0 {
+		if !matched {
 			result.validEpoch = append(result.validEpoch, &ValidEpochItem{
-				EpochCount: matched,
+				EpochCount: 1,
 				VoteItem:   voteItem,
 			})
 		}
 	}
 
-	utils.Log.Debugf("Received Epochs: invaited count:%d", invitedCount)
+	utils.Log.Debugf("Received Epochs: invited count:%d, ", invitedCount)
 
 	// check the valid epoch result
 	minValidCount := (invitedCount * 2) / 3
@@ -163,8 +163,8 @@ func (nem *NewEpochManager) handleNewEpoch() {
 	utils.Log.Debugf("Received Epochs: min valid count:%d", minValidCount)
 	localValidatorId := nem.ValidatorMgr.GetMyValidatorId()
 
-	for _, validItem := range result.validEpoch {
-		utils.Log.Debugf("valid item: %v", validItem)
+	for i, validItem := range result.validEpoch {
+		utils.Log.Debugf("valid item %d: %v", i, validItem)
 		if validItem.EpochCount >= minValidCount {
 			utils.Log.Debugf("valid epoch vote count: %d", validItem.EpochCount)
 			showVoteData("confirmed epoch vote:", validItem.VoteItem.VoteData)
