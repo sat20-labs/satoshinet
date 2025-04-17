@@ -1736,7 +1736,7 @@ func (vm *ValidatorManager) OnUpdateEpoch(currentEpoch *epoch.Epoch) {
 	}
 	// 如果epoch更新后，当前epoch的generator是本地validator，且是最后一个generator，就请求下一轮的epoch
 	if vm.CurrentEpoch.Generator != nil {
-		if vm.NextEpoch == nil && vm.isLocalValidator(vm.CurrentEpoch.Generator.Validatorinfo.PublicKey[:]) {
+		if vm.NextEpoch == nil && vm.isLocalValidatorById(vm.CurrentEpoch.Generator.GeneratorId) {
 			if vm.CurrentEpoch.IsLastGenerator() {
 				// Broadcast  for New Epoch
 				// Current epoch is last, request New Epoch
