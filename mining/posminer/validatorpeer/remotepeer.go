@@ -318,10 +318,18 @@ func (p *RemotePeer) LastRecv() time.Time {
 // This function is safe for concurrent access.
 func (p *RemotePeer) LocalAddr() net.Addr {
 	var localAddr net.Addr
-	// if atomic.LoadInt32(&p.connected) != 0 {
-	// 	localAddr = p.conn.LocalAddr()
-	// }
+	if atomic.LoadInt32(&p.connected) != 0 {
+		localAddr = p.connReq.LocalAddr
+	}
 	return localAddr
+}
+
+func (p *RemotePeer) RemoteAddr() net.Addr {
+	var remoteAddr net.Addr
+	if atomic.LoadInt32(&p.connected) != 0 {
+		remoteAddr = p.connReq.RemoteAddr
+	}
+	return remoteAddr
 }
 
 // BytesSent returns the total number of bytes sent by the peer.

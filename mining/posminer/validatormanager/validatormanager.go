@@ -368,6 +368,20 @@ func (vm *ValidatorManager) OnValidatorInfoUpdated(validatorInfo *validatorinfo.
 	// 	}
 	// }
 	vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorInfo.ValidatorId, validatorInfo.PublicKey[:], remoteAddr.String())
+	vm.connectedListMtx.Lock()
+	defer vm.connectedListMtx.Unlock()
+	for _, v := range vm.ConnectedList {
+		if v.ValidatorInfo.ValidatorId == validatorInfo.ValidatorId {
+			v.ValidatorInfo.PublicKey = validatorInfo.PublicKey
+			v.ValidatorInfo.Host = remoteAddr.String()
+		} else if bytes.Equal(v.ValidatorInfo.PublicKey[:], vm.Cfg.ValidatorPubKey) {
+			v.ValidatorInfo.ValidatorId = validatorInfo.ValidatorId
+			v.ValidatorInfo.Host = remoteAddr.String()
+		} else if v.ValidatorInfo.Host == remoteAddr.String() {
+			v.ValidatorInfo.ValidatorId = validatorInfo.ValidatorId
+			v.ValidatorInfo.PublicKey = validatorInfo.PublicKey
+		}
+	}
 }
 
 // Get current validator list in record this peer

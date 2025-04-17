@@ -277,6 +277,7 @@ func (v *Validator) Connect() error {
 			utils.Log.Errorf("Connect failed: %v", err)
 			return err
 		}
+		v.ValidatorInfo.Host = v.peer.RemoteAddr().String()
 	}
 
 	if !v.IsValidInfo() {
