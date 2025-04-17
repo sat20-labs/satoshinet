@@ -367,6 +367,7 @@ func (vm *ValidatorManager) OnValidatorInfoUpdated(validatorInfo *validatorinfo.
 	// 		vm.CurrentEpoch.AddValidatorToEpoch(validatorInfo)
 	// 	}
 	// }
+	vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorInfo.ValidatorId, validatorInfo.PublicKey[:], remoteAddr.String())
 }
 
 // Get current validator list in record this peer
