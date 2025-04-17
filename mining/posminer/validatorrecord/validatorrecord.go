@@ -93,7 +93,7 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, pubkey 
 	}
 
 	for _, record := range vrm.ValidatorRecordList {
-		if record.ValidatorId != 0 && record.ValidatorId == validatorId {
+		if record.ValidatorId == validatorId {
 			// Update id and last connected time
 			record.ValidatorId = validatorId
 			record.PubKey = pubkey
@@ -101,7 +101,8 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, pubkey 
 			record.LastConnectedTime = time.Now()
 			UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordList)
 			return
-		} else if record.Host == host {
+		} 
+		if record.Host == host {
 			if validatorId != 0 {
 				record.ValidatorId = validatorId
 			}
@@ -111,7 +112,8 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, pubkey 
 			record.LastConnectedTime = time.Now()
 			UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordList)
 			return
-		} else if bytes.Equal(record.PubKey, pubkey) {
+		} 
+		if bytes.Equal(record.PubKey, pubkey) {
 			record.ValidatorId = validatorId
 			record.Host = host
 			record.LastConnectedTime = time.Now()
