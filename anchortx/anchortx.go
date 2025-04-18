@@ -415,7 +415,7 @@ func CheckAnchorPkScript(anchorPkScript []byte, bCheckUtxoAssets bool) (*AscendI
 		if err != nil {
 			return nil, err
 		}
-		if lockedInfoInBTC.Value != lockedTxInfo.Value {
+		if lockedInfoInBTC.Value < lockedTxInfo.Value {
 			log.Debugf("lockedInfoInBTC.Amount: %d, lockedTxInfo.Amount: %d", lockedInfoInBTC.Value, lockedTxInfo.Value)
 			return nil, fmt.Errorf("invalid value %d", lockedTxInfo.Value)
 		}
