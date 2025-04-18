@@ -247,7 +247,7 @@ func (vm *ValidatorManager) Start() {
 
 	vm.validateChain.Start()
 
-	//go vm.syncValidatorsHandler() // sync validators list
+	go vm.syncValidatorsHandler() // sync validators list
 
 	go vm.syncValidateChainHandler() // sync validate chain state
 
