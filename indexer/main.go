@@ -10,17 +10,20 @@ import (
 )
 
 
-func NewIndexerMgr(dbPath, port, user, ps string, enableTls, bTestNet bool, interrupt <-chan struct{}) (*indexer.IndexerMgr, error) {
+func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool, interrupt <-chan struct{}) (*indexer.IndexerMgr, error) {
 	
 	p, err := strconv.Atoi(port)
 	if err != nil {
 		return nil, err
 	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
 
 	cfg := indexer.Config{
 		DataPath: dbPath,
 		RPCCfg: &indexer.RPCConfig{
-			Host: "127.0.0.1",
+			Host: host,
 			Port: p,
 			User: user,
 			Password: ps,

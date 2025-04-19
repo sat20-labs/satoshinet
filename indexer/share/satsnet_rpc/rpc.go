@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/sat20-labs/satoshinet/btcjson"
 	"github.com/sat20-labs/satoshinet/btcutil"
@@ -39,6 +41,21 @@ func GetTxVerbose(txid string) (*btcjson.TxRawResult, error) {
 	}
 
 	return ret, nil
+}
+
+func IsUtxoSpent(utxo string, tip int) (bool, error) {
+	parts := strings.Split(utxo, ":")
+	hash, err := chainhash.NewHashFromStr(parts[0])
+	if err != nil {
+		return false, fmt.Errorf("invalid transaction ID: %v", err)
+	}
+	vout, _ := strconv.Atoi(parts[1])
+	txOut, err := _client.client.GetTxOut(hash, uint32(vout), true)
+	if err != nil {
+		return false, fmt.Errorf("error checking UTXO: %v", err)
+	}
+	// 如果 txOut 为 nil，说明 UTXO 已被花费
+	return txOut == nil, nil
 }
 
 func isUtxoSpentInMempool(txid string, vout int) (bool, error) {

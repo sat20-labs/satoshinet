@@ -47,6 +47,7 @@ type IndexerMgr struct {
 	maxIndexHeight  int
 	periodFlushToDB int
 
+	connectMutex sync.RWMutex
 	mutex sync.RWMutex
 	// 跑数据
 	lastCheckHeight int
@@ -419,7 +420,8 @@ func (p *IndexerMgr) dbStatistic() bool {
 }
 
 func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
-	p.mutex.Lock()
+	p.connectMutex.Lock()
+	defer p.connectMutex.Unlock()
 	common.Log.Infof("compiling height %d, block %d, tip %d", p.compiling.GetHeight(), height, tip)
 	if p.compiling.GetHeight() + 1 < height && height > 1 {
 		// 因为规避分叉问题，数据库数据高度不够，需要先同步到指定高度
@@ -431,11 +433,6 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 			common.Log.Errorf("sync to %d failed", height-1)
 			// then ?
 		}
-	}
-	p.mutex.Unlock()
-
-	if height == 159 {
-		common.Log.Infof("")
 	}
 
 	if block != nil {

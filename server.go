@@ -3015,7 +3015,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		srvrLog.Infof("User-agent whitelist %s", agentWhitelist)
 	}
 
-	assetIndexer, err := indexerEntry.NewIndexerMgr(cfg.HomeDir, 
+	assetIndexer, err := indexerEntry.NewIndexerMgr(cfg.HomeDir,  "",
 		activeNetParams.rpcPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
 		interrupt)
 	if err != nil {

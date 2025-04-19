@@ -774,6 +774,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	if sm.syncPeer != nil {
 		lastBlock = int(sm.syncPeer.LastBlock())
 	} 
+	if lastBlock < int(bmsg.block.Height()) {
+		lastBlock = int(bmsg.block.Height())
+	}
 	sm.chain.SetTipHeight(lastBlock)
 	_, isOrphan, err := sm.chain.ProcessBlock(bmsg.block, behaviorFlags)
 	if err != nil {
@@ -1434,6 +1437,9 @@ out:
 				if sm.syncPeer != nil {
 					lastBlock = int(sm.syncPeer.LastBlock())
 				} 
+				if lastBlock < int(msg.block.Height()) {
+					lastBlock = int(msg.block.Height())
+				}
 				sm.chain.SetTipHeight(lastBlock)
 				_, isOrphan, err := sm.chain.ProcessBlock(
 					msg.block, msg.flags)
