@@ -459,15 +459,13 @@ func includeAssets(utxoAssetInfo wire.TxAssets, txAssets wire.TxAssets) bool {
 	}
 
 	for _, assetLocked := range txAssets {
-		assetFound := false
-		for _, assetUtxo := range utxoAssetInfo {
-			if assetUtxo.Equal(&assetLocked) {
-				assetFound = true
-				break
-			}
-		}
-		if !assetFound {
+		info, err := utxoAssetInfo.Find(&assetLocked.Name)
+		if err != nil {
 			log.Errorf("includeAssets failed, locked Asset: %v not found in utxo", assetLocked)
+			return false
+		}
+		if info.Amount.Cmp(&assetLocked.Amount) < 0 {
+			log.Errorf("includeAssets failed, locked Asset: %v not enough amount in utxo", assetLocked)
 			return false
 		}
 	}
