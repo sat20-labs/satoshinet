@@ -48,6 +48,39 @@ func (s *Service) sendRawTx(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+
+func (s *Service) testRawTx(c *gin.Context) {
+	resp := &indexerwire.TestRawTxResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+	var req indexerwire.TestRawTxReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	result, err := satsnet_rpc.TestRawTransaction([]string{req.SignedTxHex})
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	
+	resp.Data = &indexerwire.TxTestResult{
+		TxId: result[0].Txid,
+		Allowed: result[0].Allowed,
+		RejectReason: result[0].RejectReason,
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+
 // @Summary get raw block with blockhash
 // @Description get raw block with blockhash
 // @Tags ordx.btc

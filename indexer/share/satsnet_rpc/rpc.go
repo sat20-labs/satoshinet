@@ -114,6 +114,32 @@ func EstimateSmartFee(confTarget int64, mode btcjson.EstimateSmartFeeMode) (*btc
 	return _client.client.EstimateSmartFee(confTarget, &mode)
 }
 
+
+func TestRawTransaction(signedTxHex []string) ([]*btcjson.TestMempoolAcceptResult, error) {
+	txs := make([]*wire.MsgTx, 0, len(signedTxHex))
+	for _, tx := range signedTxHex {
+		txBytes, err := hex.DecodeString(tx)
+		if err != nil {
+			return nil, err
+		}
+
+		msgTx := wire.NewMsgTx(wire.TxVersion)
+		err = msgTx.Deserialize(bytes.NewReader(txBytes))
+		if err != nil {
+			return nil, err
+		}
+		txs = append(txs, msgTx)
+	}
+	
+	resp, err := _client.client.TestMempoolAccept(txs, 0.1)
+	if err != nil {
+		return nil, err
+	}
+	
+	return resp, nil
+}
+
+
 func SendRawTransaction(txHex string, allowHighFees bool) (*chainhash.Hash, error) {
 	txBytes, err := hex.DecodeString(txHex)
 	if err != nil {
