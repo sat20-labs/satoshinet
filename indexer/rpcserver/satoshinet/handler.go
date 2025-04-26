@@ -64,7 +64,7 @@ func (s *Service) testRawTx(c *gin.Context) {
 		return
 	}
 
-	result, err := satsnet_rpc.TestRawTransaction([]string{req.SignedTxHex})
+	result, err := satsnet_rpc.TestRawTransaction(req.SignedTxs)
 	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
@@ -72,10 +72,12 @@ func (s *Service) testRawTx(c *gin.Context) {
 		return
 	}
 	
-	resp.Data = &indexerwire.TxTestResult{
-		TxId: result[0].Txid,
-		Allowed: result[0].Allowed,
-		RejectReason: result[0].RejectReason,
+	for _, r := range result {
+		resp.Data = append(resp.Data, &indexerwire.TxTestResult{
+			TxId: r.Txid,
+			Allowed: r.Allowed,
+			RejectReason: r.RejectReason,
+		})
 	}
 	c.JSON(http.StatusOK, resp)
 }
