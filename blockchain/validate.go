@@ -139,9 +139,11 @@ func IsAnchorTx(msgTx *wire.MsgTx) bool {
 // is a special transaction created by lnd that freeze some assets in op_return output
 func IsDeAnchorTx(msgTx *wire.MsgTx) bool {
 	// 目前限制deanchor的输出，最多三个输出
-	if len(msgTx.TxIn) > 3 {
+	if len(msgTx.TxOut) > 3 {
 		return false
 	}
+	// 第一个输出可能是正常输出
+	// 一定有一个 deAnchor 输出和一个附加信息输出
 
 	for _, txOut := range msgTx.TxOut {
 		tokenizer := txscript.MakeScriptTokenizer(0, txOut.PkScript)
