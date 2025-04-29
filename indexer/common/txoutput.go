@@ -117,7 +117,7 @@ func (p *TxOutput) Merge(another *TxOutput) error {
 		return fmt.Errorf("out of bounds")
 	}
 	p.OutValue.Value += another.OutValue.Value
-	err := p.OutValue.Assets.Merge(&another.OutValue.Assets)
+	err := p.OutValue.Assets.Merge(another.OutValue.Assets)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func (p *TxOutput) Subtract(another *TxOutput) error {
 	}
 
 	tmpAssets := p.OutValue.Assets.Clone()
-	err := tmpAssets.Split(&another.OutValue.Assets)
+	err := tmpAssets.Split(another.OutValue.Assets)
 	if err != nil {
 		return err
 	}

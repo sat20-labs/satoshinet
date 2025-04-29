@@ -1623,7 +1623,7 @@ func (wallet *BTCWallet) fundTx(paymentAddresses []string, tx *wire.MsgTx, amt b
 		logTxAssets("fundtx txin", utxo.txAssets)
 
 		//InputTxRanges = wire.TxRangesAppend(InputTxRanges, utxo.satsRanges)
-		inputTxAssets.Merge(&utxo.txAssets)
+		inputTxAssets.Merge(utxo.txAssets)
 
 		// Calculate the fee required for the txn at this point
 		// observing the specified fee rate. If we don't have enough

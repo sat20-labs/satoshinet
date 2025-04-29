@@ -121,14 +121,14 @@ func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AscendInfo, err
 	anchorValue := int64(0)
 	for _, out := range tx.TxOut {
 		anchorValue += out.Value
-		anchorAssets.Merge(&out.Assets)
+		anchorAssets.Merge(out.Assets)
 	}
 
 	if anchorValue != lockedInfo.Value {
 		err := fmt.Errorf("invalid Anchor tx, Anchor amount(%d) is exceed the locked amount (%d): %s", anchorValue, lockedInfo.Value, tx.TxHash().String())
 		return nil, err
 	}
-	if !anchorAssets.Equal(&lockedInfo.TxAssets) {
+	if !anchorAssets.Equal(lockedInfo.TxAssets) {
 		log.Errorf("anchor tx assets not equal %v %v", anchorAssets, lockedInfo.TxAssets)
 		return nil, fmt.Errorf("anchor tx assets not equal %v %v", anchorAssets, lockedInfo.TxAssets)
 	}

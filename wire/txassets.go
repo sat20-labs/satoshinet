@@ -44,22 +44,6 @@ type AssetInfo = common.AssetInfo
 //type TxAssets []AssetInfo
 type TxAssets = common.TxAssets
 
-// TxAssetsAppend 合并两个资产列表，返回新的列表
-func TxAssetsAppend(a, b *TxAssets) TxAssets {
-	if a == nil {
-		if b == nil {
-			return nil
-		}
-		return b.Clone()
-	}
-	result := a.Clone()
-	err := result.Merge(b)
-	if err != nil {
-		return nil
-	}
-	return result
-}
-
 
 func SerializeTxAssets(p *TxAssets) ([]byte, error) {
 	var w bytes.Buffer

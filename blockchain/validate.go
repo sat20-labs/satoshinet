@@ -1067,7 +1067,7 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 		totalSatoshiIn += originTxSatoshi
 		//totalInSatsRange = append(totalInSatsRange, utxoSatsRanges...)
 		//totalInSatsRange = wire.TxRangesAppend(totalInSatsRange, utxoSatsRanges)
-		totalInTxAssets.Merge(&utxoTxAssets)
+		totalInTxAssets.Merge(utxoTxAssets)
 		if totalSatoshiIn < lastSatoshiIn ||
 			totalSatoshiIn > btcutil.MaxSatoshi {
 			str := fmt.Sprintf("total value of all transaction "+
@@ -1093,7 +1093,7 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 		//	totalSatoshiOut, txOut.Value)
 		//logTxRanges("txOut.SatsRanges", txOut.SatsRanges)
 
-		err = totalInTxAssets.Split(&txOut.Assets)
+		err = totalInTxAssets.Split(txOut.Assets)
 
 		if err != nil {
 			str := fmt.Sprintf("invalid TxOut sats range with index %d, (%s)", index, err.Error())
@@ -1321,7 +1321,7 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 		// accumulator.
 		lastTotalFees := totalFees
 		totalFees += txFee
-		totalFeeAssets.Merge(&feeAssets)
+		totalFeeAssets.Merge(feeAssets)
 		if totalFees < lastTotalFees {
 			return ruleError(ErrBadFees, "total fees for block "+
 				"overflows accumulator")

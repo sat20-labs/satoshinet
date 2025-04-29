@@ -794,7 +794,7 @@ mempoolLoop:
 		blockSigOpCost += int64(sigOpCost)
 		totalFees += prioItem.fee
 		if len(prioItem.feeAssets) > 0 {
-			totalFeeAssets.Merge(&prioItem.feeAssets)
+			totalFeeAssets.Merge(prioItem.feeAssets)
 		}
 		txFees = append(txFees, prioItem.fee)
 		txSigOpCosts = append(txSigOpCosts, int64(sigOpCost))
