@@ -8,7 +8,7 @@ import (
 )
 
 func IsBootStrapNode(pubKey []byte) bool {
-	return hex.EncodeToString(pubKey) == common.BootstrapPubKey
+	return hex.EncodeToString(pubKey) == common.GetBootstrapPubKey()
 }
 
 // 包含bootstrap
@@ -17,7 +17,7 @@ func IsCoreNode(pubKey []byte) bool {
 		return true
 	}
 
-	if hex.EncodeToString(pubKey) == common.CoreNodePubKey {
+	if hex.EncodeToString(pubKey) == common.GetCoreNodePubKey() {
 		return true
 	}
 

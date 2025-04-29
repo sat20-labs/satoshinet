@@ -552,12 +552,12 @@ func GetP2TRAddressFromPubkey(pubKey []byte, chainParams *chaincfg.Params) (stri
 }
 
 func GetBootstrapPubKey() []byte {
-	pubkey, _ := hex.DecodeString(common.BootstrapPubKey)
+	pubkey, _ := hex.DecodeString(common.GetBootstrapPubKey())
 	return pubkey
 }
 
 func IsBootstrapPubKey(pubkey []byte) bool {
-	return hex.EncodeToString(pubkey) == common.BootstrapPubKey
+	return hex.EncodeToString(pubkey) == common.GetBootstrapPubKey()
 }
 
 func GetCoreNodeChannelAddress(pubkey []byte, chainParams *chaincfg.Params) (string, error) {
@@ -582,7 +582,7 @@ func IsCoreNode(pubKey []byte) bool {
 		return true
 	}
 
-	if hex.EncodeToString(pubKey) == common.CoreNodePubKey {
+	if hex.EncodeToString(pubKey) == common.GetCoreNodePubKey() {
 		return true
 	}
 

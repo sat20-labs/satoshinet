@@ -44,7 +44,7 @@ func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32)
 	if err == nil && anchorTxInfo != nil {
 		log.Errorf("The anchor is exist, anchor txInfo: %v\n", txInfo)
 		// The anchor tx is found in sats net
-		err = fmt.Errorf("the locked tx is anchored already in sats net")
+		err = fmt.Errorf("the locked tx is anchored already in sats net, anchorTx %s, utxo %s", anchorTxInfo.AnchorTxid, txInfo.Utxo)
 		return err
 	}
 
@@ -67,7 +67,7 @@ func (mp *TxPool) AddAnchorTx(tx *wire.MsgTx) error {
 	if err == nil && anchorTxInfo != nil {
 		log.Errorf("The anchor is exist, anchor txInfo: %v\n", txInfo)
 		// The anchor tx is found in sats net
-		err = fmt.Errorf("the locked tx is anchored already in sats net")
+		err = fmt.Errorf("the locked tx is anchored already in sats net, anchorTx %s, utxo %s", anchorTxInfo.AnchorTxid, txInfo.Utxo)
 		return err
 	}
 

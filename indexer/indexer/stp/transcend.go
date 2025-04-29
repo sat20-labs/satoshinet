@@ -166,8 +166,8 @@ func GetAllCoreNodeFromDB(ldb *badger.DB) map[string]int {
 	})
 
 	if len(result) == 0 {
-		result[indexer.BootstrapPubKey] = 0
-		result[indexer.CoreNodePubKey] = 0
+		result[indexer.GetBootstrapPubKey()] = 0
+		result[indexer.GetCoreNodePubKey()] = 0
 	}
 
 	return result
