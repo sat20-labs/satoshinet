@@ -133,10 +133,10 @@ func (entry *UtxoEntry) Clone() *UtxoEntry {
 
 	return &UtxoEntry{
 		amount:      entry.amount,
+		txAssets:    entry.txAssets.Clone(),
 		pkScript:    entry.pkScript,
 		blockHeight: entry.blockHeight,
 		packedFlags: entry.packedFlags,
-		txAssets:    entry.txAssets,
 	}
 }
 
@@ -150,6 +150,7 @@ func NewUtxoEntry(
 
 	return &UtxoEntry{
 		amount:      txOut.Value,
+		txAssets:    txOut.Assets.Clone(),
 		pkScript:    txOut.PkScript,
 		blockHeight: blockHeight,
 		packedFlags: cbFlag,
@@ -227,6 +228,7 @@ func (view *UtxoViewpoint) addTxOut(outpoint wire.OutPoint, txOut *wire.TxOut, i
 	}
 
 	entry.amount = txOut.Value
+	entry.txAssets = txOut.Assets.Clone()
 	entry.pkScript = txOut.PkScript
 	entry.blockHeight = blockHeight
 	entry.packedFlags = tfFresh | tfModified
@@ -422,6 +424,7 @@ func (view *UtxoViewpoint) disconnectTransactions(db database.DB, block *btcutil
 			if entry == nil {
 				entry = &UtxoEntry{
 					amount:      txOut.Value,
+					txAssets:    txOut.Assets,
 					pkScript:    txOut.PkScript,
 					blockHeight: block.Height(),
 					packedFlags: packedFlags,
@@ -492,6 +495,7 @@ func (view *UtxoViewpoint) disconnectTransactions(db database.DB, block *btcutil
 			// Restore the utxo using the stxo data from the spend
 			// journal and mark it as modified.
 			entry.amount = stxo.Amount
+			entry.txAssets = stxo.Assets.Clone()
 			entry.pkScript = stxo.PkScript
 			entry.blockHeight = stxo.Height
 			entry.packedFlags = tfModified

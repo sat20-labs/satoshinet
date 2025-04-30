@@ -1085,18 +1085,20 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 	var err error
 
 	//logTxRanges("totalInSatsRange", totalInSatsRange)
+	logTxAssets("input total assets", totalInTxAssets)
 
 	//totalOutSatsRange := make([]wire.SatsRange, 0)
 	for index, txOut := range tx.MsgTx().TxOut {
-		// Check output sats range
+		// Check output asset
 		//currnetOutputSatsRange, err := totalInSatsRange.Pickup(
 		//	totalSatoshiOut, txOut.Value)
 		//logTxRanges("txOut.SatsRanges", txOut.SatsRanges)
+		logTxAssets(fmt.Sprintf("output %d assets", index), totalInTxAssets)
 
 		err = totalInTxAssets.Split(txOut.Assets)
 
 		if err != nil {
-			str := fmt.Sprintf("invalid TxOut sats range with index %d, (%s)", index, err.Error())
+			str := fmt.Sprintf("invalid TxOut asset with index %d, (%s)", index, err.Error())
 			return 0, nil, ruleError(ErrBadFees, str)
 		}
 
