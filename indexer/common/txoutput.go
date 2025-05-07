@@ -157,6 +157,22 @@ func (p *TxOutput) Subtract(another *TxOutput) error {
 // 聪网utxo允许有多种资产，但没有offset属性
 func (p *TxOutput) Split(name *wire.AssetName, value int64, amt *common.Decimal) (*TxOutput, *TxOutput, error) {
 
+	if value == 0 {
+		// 按照资产数量确定value
+		if name == nil || *name == ASSET_PLAIN_SAT {
+			value = amt.Int64()
+		} else {
+			asset, err := p.OutValue.Assets.Find(name)
+			if err != nil {
+				return nil, nil, err
+			}
+			n := asset.BindingSat
+			if n != 0 {
+				value = common.GetBindingSatNum(amt, n)
+			}
+		}
+	}
+
 	if p.Value() < value {
 		return nil, nil, fmt.Errorf("output value too small")
 	}
