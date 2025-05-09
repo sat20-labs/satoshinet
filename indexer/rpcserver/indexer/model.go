@@ -3,10 +3,13 @@ package indexer
 import (
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
+	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 	swire "github.com/sat20-labs/satoshinet/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -252,13 +255,44 @@ func (s *Model) GetAssetSummaryV3(address string, start int, limit int) ([]*inde
 }
 
 func (s *Model) GetUtxoInfoV3(utxo string) (*indexer.AssetsInUtxo, error) {
-	if IsExistingInMemPool(utxo) {
-		return nil, fmt.Errorf("utxo %s is in mempool", utxo)
-	}
+
+	// if IsExistingInMemPool(utxo) {
+	// 	return nil, fmt.Errorf("utxo %s is in mempool", utxo)
+	// }
 	ret := s.indexer.GetTxOutputWithUtxoV3(utxo)
 	if ret == nil {
-		return nil, fmt.Errorf("can't find utxo %s", utxo)
+		// 直接从TX数据中读
+		parts := strings.Split(utxo, ":")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid utxo formate %s", utxo)
+		}
+		tx, err := satsnet_rpc.GetTx(parts[0])
+		if err != nil {
+			return nil, fmt.Errorf("GetTx failed, %v", err)
+		}
+		vout, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("atoi failed, %v", err)
+		}
+		txOut := tx.MsgTx().TxOut[vout]
+
+		var assetsInUtxo indexer.AssetsInUtxo
+		assetsInUtxo.UtxoId = indexer.INVALID_ID
+		assetsInUtxo.OutPoint = utxo
+		assetsInUtxo.Value = txOut.Value
+		assetsInUtxo.PkScript = txOut.PkScript
+		for _, asset := range txOut.Assets {
+			asset := indexer.DisplayAsset{
+				AssetName:  asset.Name,
+				Amount:     asset.Amount.String(),
+				Precision:  asset.Amount.Precision,
+				BindingSat: int(asset.BindingSat),
+			}
+			assetsInUtxo.Assets = append(assetsInUtxo.Assets, &asset)
+		}
+		ret = &assetsInUtxo
 	}
+
 	return ret, nil
 }
 
