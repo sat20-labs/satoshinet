@@ -277,7 +277,7 @@ func (s *Model) GetUtxoInfoV3(utxo string) (*indexer.AssetsInUtxo, error) {
 		txOut := tx.MsgTx().TxOut[vout]
 
 		var assetsInUtxo indexer.AssetsInUtxo
-		assetsInUtxo.UtxoId = indexer.INVALID_ID
+		assetsInUtxo.UtxoId = 0
 		assetsInUtxo.OutPoint = utxo
 		assetsInUtxo.Value = txOut.Value
 		assetsInUtxo.PkScript = txOut.PkScript
