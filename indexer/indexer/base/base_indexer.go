@@ -741,7 +741,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 
 		for i, output := range tx.Outputs {
 			if txIndex != 0 && common.IsOpReturn(output.Address.PkScript) {
-				ctype, data, err := ReadDataFromNullDataScript(output.Address.PkScript)
+				ctype, data, err := common.ReadDataFromNullDataScript(output.Address.PkScript)
 				if err == nil {
 					switch ctype {
 					case common.CONTENT_TYPE_DESCENDING:
@@ -763,7 +763,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 							common.Log.Errorf("GenDescend %s:%d failed, %v", tx.Txid, i, err)
 						}
 					case common.CONTENT_TYPE_ASCENDING:
-						tickerInfo, err := GenTickerInfo(data)
+						tickerInfo, err := common.GenTickerInfo(data)
 						if err == nil {
 							b.tickInfoMap[tickerInfo.AssetName.String()] = tickerInfo
 						} else {

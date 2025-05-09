@@ -16,18 +16,21 @@ const (
 
 
 const (
-	SAT20_MAGIC_NUMBER      = txscript.OP_16
-	CONTENT_TYPE_ASCENDING  = txscript.OP_1
-	CONTENT_TYPE_DESCENDING = txscript.OP_2
-	CONTENT_TYPE_PAYMENT    = txscript.OP_3
-	CONTENT_TYPE_DESTROY    = txscript.OP_4
-	CONTENT_TYPE_SWAP       = txscript.OP_5
-	CONTENT_TYPE_STAKE      = txscript.OP_6
-	CONTENT_TYPE_UNSTAKE    = txscript.OP_7
-	CONTENT_TYPE_DEPOSIT    = txscript.OP_8
-	CONTENT_TYPE_WITHDRAW   = txscript.OP_9
-	CONTENT_TYPE_CHANNELID  = txscript.OP_10
-	CONTENT_TYPE_LIQUIDPOOL = txscript.OP_11
+	SAT20_MAGIC_NUMBER           = txscript.OP_16
+	CONTENT_TYPE_ASCENDING       = txscript.OP_1
+	CONTENT_TYPE_DESCENDING      = txscript.OP_2
+	CONTENT_TYPE_PAYMENT         = txscript.OP_3
+	CONTENT_TYPE_DESTROY         = txscript.OP_4
+	CONTENT_TYPE_SWAP            = txscript.OP_5
+	CONTENT_TYPE_STAKE           = txscript.OP_6
+	CONTENT_TYPE_UNSTAKE         = txscript.OP_7
+	CONTENT_TYPE_DEPOSIT         = txscript.OP_8
+	CONTENT_TYPE_WITHDRAW        = txscript.OP_9
+	CONTENT_TYPE_CHANNELID       = txscript.OP_10
+	CONTENT_TYPE_LIQUIDPOOL      = txscript.OP_11
+	CONTENT_TYPE_PERFORMACTION   = txscript.OP_12
+	CONTENT_TYPE_DEPLOYCONTRACT  = txscript.OP_13
+	CONTENT_TYPE_PERFORMCONTRACT = txscript.OP_14
 
 	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 2
 )

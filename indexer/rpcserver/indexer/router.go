@@ -44,6 +44,4 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/utxo/info/:utxo", s.handle.getUtxoInfoV3)
 	r.POST(proxy+"/v3/utxos/info", s.handle.getUtxoInfoListV3)
 
-	// V2 和 V3 的区别： v2传递原始的Decimal数据，方便计算；v3传递string类型的amount，方便显示。其实没有区别，统一使用v2即可。
-
 }
