@@ -149,7 +149,7 @@ func TestHandleTestMempoolAcceptMixedResults(t *testing.T) {
 	// result saying the tx is missing inputs.
 	mm.On("CheckMempoolAcceptance", tx2).Return(
 		&mempool.MempoolAcceptResult{
-			MissingParents: []*chainhash.Hash{},
+			MissingParents: []string{},
 		}, nil,
 	).Once()
 
