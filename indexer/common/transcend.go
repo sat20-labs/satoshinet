@@ -38,6 +38,16 @@ const (
 	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 2
 )
 
+
+type ContractDeployData struct {
+	DeployTime   	int64
+	ChannelId    	string
+	ContractName 	string
+	ContractContent string
+	LocalSign       []byte
+	RemoteSign      []byte
+}
+
 type ContractInvokeData struct {
 	ResvId       int64
 	ChannelId    string
@@ -274,6 +284,49 @@ func GenTickerInfo(data []byte) (*TickerInfo, error) {
 	result.MaxSupply = parts[1]
 	result.Precition = precition
 	result.N = n
+
+	return &result, nil
+}
+
+
+func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error) {
+
+	tokenizer := txscript.MakeScriptTokenizer(0, script)
+	result := ContractDeployData{}
+
+	// deployTime
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("script is missing deploy time")
+	}
+	result.DeployTime = extractScriptInt64(tokenizer.Data())
+
+	// channelId
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("script is missing channel id")
+	}
+	result.ChannelId = string(tokenizer.Data())
+
+	// contractName
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("script is missing contract name")
+	}
+	result.ContractName = string(tokenizer.Data())
+
+	// contractParam
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("script is missing contract content")
+	}
+	result.ContractContent = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("script too short: missing local sig")
+	}
+	result.LocalSign = tokenizer.Data()
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("script too short: missing remote sig")
+	}
+	result.RemoteSign = tokenizer.Data()
 
 	return &result, nil
 }
