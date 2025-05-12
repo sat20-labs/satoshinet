@@ -17,7 +17,6 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-
 const (
 	SAT20_MAGIC_NUMBER           = txscript.OP_16
 	CONTENT_TYPE_ASCENDING       = txscript.OP_1
@@ -33,18 +32,18 @@ const (
 	CONTENT_TYPE_LIQUIDPOOL      = txscript.OP_11
 	CONTENT_TYPE_PERFORMACTION   = txscript.OP_12
 	CONTENT_TYPE_DEPLOYCONTRACT  = txscript.OP_13
-	CONTENT_TYPE_PERFORMCONTRACT = txscript.OP_14
+	CONTENT_TYPE_INVOKECONTRACT  = txscript.OP_14
 	CONTENT_TYPE_CONTRACTRESULT  = txscript.OP_15
 
 	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 2
 )
 
-type ContractPerformData struct {
-	ResvId		int64
-	ChannelId   string
+type ContractInvokeData struct {
+	ResvId       int64
+	ChannelId    string
 	ContractName string
 	AssetName    string
-	Amt 	     string
+	Amt          string
 	InitorPubKey []byte
 	Sig          []byte
 }
@@ -197,7 +196,6 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 	return signature.Verify(msgDigest, pubKey)
 }
 
-
 func NullDataScript(ctype uint8, data []byte) ([]byte, error) {
 	if len(data) > MAX_PAYLOAD_LEN {
 		return nil, fmt.Errorf("data size %d is larger than max "+
@@ -280,13 +278,10 @@ func GenTickerInfo(data []byte) (*TickerInfo, error) {
 	return &result, nil
 }
 
-
-func ParseSignedPerformContractInvoice(data []byte) (*ContractPerformData, error) {
+func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) {
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
 
-	result := &ContractPerformData{
-
-	}
+	result := &ContractInvokeData{}
 
 	// id
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -300,13 +295,13 @@ func ParseSignedPerformContractInvoice(data []byte) (*ContractPerformData, error
 	result.ChannelId = string(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil,  fmt.Errorf("script is missing contract name")
+		return nil, fmt.Errorf("script is missing contract name")
 	}
 	result.ContractName = string(tokenizer.Data())
 
 	// assetName
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil,  fmt.Errorf("script is missing asset name")
+		return nil, fmt.Errorf("script is missing asset name")
 	}
 	result.AssetName = string(tokenizer.Data())
 
