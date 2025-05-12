@@ -46,7 +46,7 @@ func (he *DelEpochMember) GetDelEpochMemTokenData() []byte {
 func (he *DelEpochMember) VerifyToken(pubKey []byte) bool {
 	signatureBytes, err := base64.StdEncoding.DecodeString(he.Token)
 	if err != nil {
-		utils.Log.Debugf("[DelEpochMember]VerifyToken: Invalid generator token, ignore it.")
+		utils.Log.Tracef("[DelEpochMember]VerifyToken: Invalid generator token, ignore it.")
 		return false
 	}
 
@@ -58,17 +58,17 @@ func (he *DelEpochMember) VerifyToken(pubKey []byte) bool {
 	// signature, err := btcec.ParseDERSignature(signatureBytes)
 	signature, err := ecdsa.ParseDERSignature(signatureBytes)
 	if err != nil {
-		utils.Log.Debugf("Failed to parse signature: %v", err)
+		utils.Log.Tracef("Failed to parse signature: %v", err)
 		return false
 	}
 
 	// 使用公钥验证签名
 	valid := signature.Verify(tokenData, publicKey)
 	if valid {
-		utils.Log.Debugf("[DelEpochMember]VerifyToken:Signature is valid.")
+		utils.Log.Tracef("[DelEpochMember]VerifyToken:Signature is valid.")
 		return true
 	} else {
-		utils.Log.Debugf("[DelEpochMember]VerifyToken:Signature is invalid.")
+		utils.Log.Tracef("[DelEpochMember]VerifyToken:Signature is invalid.")
 		return false
 	}
 

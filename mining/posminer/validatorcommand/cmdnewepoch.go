@@ -140,24 +140,24 @@ func (msg *MsgNewEpoch) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgNewEpoch) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgNewEpoch:")
-	utils.Log.Debugf("Validator Id: %d", msg.ValidatorId)
-	utils.Log.Debugf("Hash: %s", msg.Hash.String())
+	utils.Log.Tracef("Command MsgNewEpoch:")
+	utils.Log.Tracef("Validator Id: %d", msg.ValidatorId)
+	utils.Log.Tracef("Hash: %s", msg.Hash.String())
 
-	// utils.Log.Debugf("Epoch Index: %d", msg.EpochIndex)
-	// utils.Log.Debugf("Create Height: %d", msg.CreateHeight)
-	// utils.Log.Debugf("Create Time: %s", msg.CreateTime.Format(time.DateTime))
+	// utils.Log.Tracef("Epoch Index: %d", msg.EpochIndex)
+	// utils.Log.Tracef("Create Height: %d", msg.CreateHeight)
+	// utils.Log.Tracef("Create Time: %s", msg.CreateTime.Format(time.DateTime))
 
 	// for index, validator := range msg.ItemList {
-	// 	utils.Log.Debugf("-------------------------------------")
-	// 	utils.Log.Debugf("No: %d", index)
-	// 	utils.Log.Debugf("Validator Id: %d", validator.ValidatorId)
-	// 	utils.Log.Debugf("Validator Host: %s", validator.Host)
-	// 	utils.Log.Debugf("Validator PublicKey: %x", validator.PublicKey)
-	// 	utils.Log.Debugf("Validator Index: %d", validator.Index)
-	// 	utils.Log.Debugf("")
+	// 	utils.Log.Tracef("-------------------------------------")
+	// 	utils.Log.Tracef("No: %d", index)
+	// 	utils.Log.Tracef("Validator Id: %d", validator.ValidatorId)
+	// 	utils.Log.Tracef("Validator Host: %s", validator.Host)
+	// 	utils.Log.Tracef("Validator PublicKey: %x", validator.PublicKey)
+	// 	utils.Log.Tracef("Validator Index: %d", validator.Index)
+	// 	utils.Log.Tracef("")
 	// }
-	utils.Log.Debugf("-------------------------------------")
+	utils.Log.Tracef("-------------------------------------")
 }
 
 // NewMsgNewEpoch returns a new bitcoin version message that conforms to the

@@ -106,8 +106,8 @@ func (msg *MsgVoteReq) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgVoteReq) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgVoteReq:")
-	utils.Log.Debugf("ValidatorId: %d", msg.VoteReqInfo.ValidatorId)
+	utils.Log.Tracef("Command MsgVoteReq:")
+	utils.Log.Tracef("ValidatorId: %d", msg.VoteReqInfo.ValidatorId)
 	voteType := "Unknown type"
 	if msg.VoteReqInfo.VoteType == VoteType_NewGenerator {
 		voteType = "New Generator"
@@ -115,13 +115,13 @@ func (msg *MsgVoteReq) LogCommandInfo() {
 		voteType = "New Epoch"
 	}
 
-	utils.Log.Debugf("VoteType: %s", voteType)
-	utils.Log.Debugf("VoteId: %d", msg.VoteReqInfo.VoteId)
-	utils.Log.Debugf("EpochIndex: %d", msg.VoteReqInfo.EpochIndex)
-	utils.Log.Debugf("VoteCount: %d", msg.VoteReqInfo.VoteCount)
+	utils.Log.Tracef("VoteType: %s", voteType)
+	utils.Log.Tracef("VoteId: %d", msg.VoteReqInfo.VoteId)
+	utils.Log.Tracef("EpochIndex: %d", msg.VoteReqInfo.EpochIndex)
+	utils.Log.Tracef("VoteCount: %d", msg.VoteReqInfo.VoteCount)
 
-	utils.Log.Debugf("StartTime: %s", msg.VoteReqInfo.StartTime.Format(time.DateTime))
-	utils.Log.Debugf("EndTime: %d", msg.VoteReqInfo.EndTime.Format(time.DateTime))
+	utils.Log.Tracef("StartTime: %s", msg.VoteReqInfo.StartTime.Format(time.DateTime))
+	utils.Log.Tracef("EndTime: %d", msg.VoteReqInfo.EndTime.Format(time.DateTime))
 }
 
 // NewMsgVoteReq returns a new bitcoin version message that conforms to the

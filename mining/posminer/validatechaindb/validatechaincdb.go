@@ -141,7 +141,7 @@ func NewVCStore(dirPath string, opts ...VCStoreOption) (*ValidateChainStore, err
 	}
 
 	datafile := DbFilePath(dirPath)
-	utils.Log.Debugf("Opening Bolt DB:path = %s", datafile)
+	utils.Log.Tracef("Opening Bolt DB:path = %s", datafile)
 	boltDB, err := bolt.Open(
 		datafile,
 		DBIoConfig().ReadWritePermissions,

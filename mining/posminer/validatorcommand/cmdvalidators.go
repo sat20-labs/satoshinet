@@ -174,23 +174,23 @@ func (msg *MsgValidators) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgValidators) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgValidators:")
-	utils.Log.Debugf("Validator Count: %d", msg.ValidatorCount)
+	utils.Log.Tracef("Command MsgValidators:")
+	utils.Log.Tracef("Validator Count: %d", msg.ValidatorCount)
 	for index, validator := range msg.Validators {
-		utils.Log.Debugf("---------------------------------------------")
-		utils.Log.Debugf("No: %d", index)
-		utils.Log.Debugf("Validator Id: %d", validator.ValidatorId)
-		utils.Log.Debugf("Validator Host: %s", validator.Host)
-		utils.Log.Debugf("Validator PublicKey: %x", validator.PublicKey)
-		utils.Log.Debugf("Validator CreateTime: %s", validator.CreateTime.Format("2006-01-02 15:04:05"))
-		utils.Log.Debugf("Validator ActivitionCount: %d", validator.ActivitionCount)
-		utils.Log.Debugf("Validator GeneratorCount: %d", validator.GeneratorCount)
-		utils.Log.Debugf("Validator DiscountCount: %d", validator.DiscountCount)
-		utils.Log.Debugf("Validator FaultCount: %d", validator.FaultCount)
-		utils.Log.Debugf("Validator ValidatorScore: %d", validator.ValidatorScore)
-		utils.Log.Debugf("")
+		utils.Log.Tracef("---------------------------------------------")
+		utils.Log.Tracef("No: %d", index)
+		utils.Log.Tracef("Validator Id: %d", validator.ValidatorId)
+		utils.Log.Tracef("Validator Host: %s", validator.Host)
+		utils.Log.Tracef("Validator PublicKey: %x", validator.PublicKey)
+		utils.Log.Tracef("Validator CreateTime: %s", validator.CreateTime.Format("2006-01-02 15:04:05"))
+		utils.Log.Tracef("Validator ActivitionCount: %d", validator.ActivitionCount)
+		utils.Log.Tracef("Validator GeneratorCount: %d", validator.GeneratorCount)
+		utils.Log.Tracef("Validator DiscountCount: %d", validator.DiscountCount)
+		utils.Log.Tracef("Validator FaultCount: %d", validator.FaultCount)
+		utils.Log.Tracef("Validator ValidatorScore: %d", validator.ValidatorScore)
+		utils.Log.Tracef("")
 	}
-	utils.Log.Debugf("---------------------------------------------")
+	utils.Log.Tracef("---------------------------------------------")
 }
 
 // NewMsgValidators returns a new bitcoin version message that conforms to the

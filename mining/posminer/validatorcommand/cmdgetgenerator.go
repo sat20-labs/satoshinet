@@ -68,8 +68,8 @@ func (msg *MsgGetGenerator) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgGetGenerator) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgGetGenerator:")
-	utils.Log.Debugf("ValidatorId: %d", msg.ValidatorId)
+	utils.Log.Tracef("Command MsgGetGenerator:")
+	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
 }
 
 // NewMsgGetGenerator returns a new bitcoin version message that conforms to the

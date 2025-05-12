@@ -346,7 +346,7 @@ func ReadMessage(r io.Reader, pver uint32, btcnet wire.BitcoinNet) (int, Message
 		return totalBytes, nil, nil, err
 	}
 
-	utils.Log.Debugf("ReadMessage: message command: %s", hdr.command)
+	utils.Log.Tracef("ReadMessage: message command: %s", hdr.command)
 
 	// Enforce maximum message payload.
 	if hdr.length > MaxCommandPayload {

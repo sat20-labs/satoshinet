@@ -124,8 +124,8 @@ func (msg *MsgVoteResult) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgVoteResult) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgVoteResult:")
-	utils.Log.Debugf("ValidatorId: %d", msg.VoteResultInfo.ValidatorId)
+	utils.Log.Tracef("Command MsgVoteResult:")
+	utils.Log.Tracef("ValidatorId: %d", msg.VoteResultInfo.ValidatorId)
 	voteType := "Unknown type"
 	if msg.VoteResultInfo.VoteType == VoteType_NewGenerator {
 		voteType = "New Generator"
@@ -133,17 +133,17 @@ func (msg *MsgVoteResult) LogCommandInfo() {
 		voteType = "New Epoch"
 	}
 
-	utils.Log.Debugf("VoteType: %s", voteType)
-	utils.Log.Debugf("VoteId: %d", msg.VoteResultInfo.VoteId)
-	utils.Log.Debugf("EpochIndex: %d", msg.VoteResultInfo.EpochIndex)
-	utils.Log.Debugf("VoteCount: %d", msg.VoteResultInfo.VoteCount)
-	utils.Log.Debugf("Pass: %d", msg.VoteResultInfo.Pass)
+	utils.Log.Tracef("VoteType: %s", voteType)
+	utils.Log.Tracef("VoteId: %d", msg.VoteResultInfo.VoteId)
+	utils.Log.Tracef("EpochIndex: %d", msg.VoteResultInfo.EpochIndex)
+	utils.Log.Tracef("VoteCount: %d", msg.VoteResultInfo.VoteCount)
+	utils.Log.Tracef("Pass: %d", msg.VoteResultInfo.Pass)
 	for index, voteItem := range msg.VoteResultInfo.VoteList {
-		utils.Log.Debugf("------------------------------------")
-		utils.Log.Debugf("	Vote Index: %d", index)
-		utils.Log.Debugf("	GeneratorId: %d", voteItem.GeneratorId)
-		utils.Log.Debugf("	Pass: %d", voteItem.Pass)
-		utils.Log.Debugf("	Token: %s", voteItem.Token)
+		utils.Log.Tracef("------------------------------------")
+		utils.Log.Tracef("	Vote Index: %d", index)
+		utils.Log.Tracef("	GeneratorId: %d", voteItem.GeneratorId)
+		utils.Log.Tracef("	Pass: %d", voteItem.Pass)
+		utils.Log.Tracef("	Token: %s", voteItem.Token)
 	}
 }
 

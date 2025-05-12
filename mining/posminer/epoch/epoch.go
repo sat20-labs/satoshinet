@@ -94,7 +94,7 @@ func (e *Epoch) AddValidatorToEpoch(validatorInfo *validatorinfo.ValidatorInfo) 
 	}
 	e.ItemList = append(e.ItemList, epochItem)
 
-	utils.Log.Debugf("Add validator (%s:%d) to epoch", validatorInfo.Host, validatorInfo.ValidatorId)
+	utils.Log.Tracef("Add validator (%s:%d) to epoch", validatorInfo.Host, validatorInfo.ValidatorId)
 	return nil
 }
 func (e *Epoch) IsExist(validatorId uint64) bool {
@@ -142,7 +142,7 @@ func (e *Epoch) DelEpochMember(validatorId uint64) error {
 			} else if int32(i) < e.CurGeneratorPos {
 				e.CurGeneratorPos--
 			}
-			utils.Log.Debugf("Remove validator (%d) from epoch", validatorId)
+			utils.Log.Tracef("Remove validator (%d) from epoch", validatorId)
 			return nil
 		}
 	}
@@ -342,7 +342,7 @@ func (nev *NewEpochVote) Encode(w io.Writer) error {
 func (nev *NewEpochVote) VerifyToken(pubKey []byte) bool {
 	signatureBytes, err := base64.StdEncoding.DecodeString(nev.Token)
 	if err != nil {
-		utils.Log.Debugf("[NewEpochVote]VerifyToken: Invalid generator token, ignore it.")
+		utils.Log.Tracef("[NewEpochVote]VerifyToken: Invalid generator token, ignore it.")
 		return false
 	}
 
@@ -350,23 +350,23 @@ func (nev *NewEpochVote) VerifyToken(pubKey []byte) bool {
 
 	publicKey, err := secp256k1.ParsePubKey(pubKey[:])
 	if err != nil {
-		utils.Log.Debugf("[NewEpochVote]VerifyToken: Invalid public key.")
+		utils.Log.Tracef("[NewEpochVote]VerifyToken: Invalid public key.")
 		return false
 	}
 	// 解析签名
 	signature, err := ecdsa.ParseDERSignature(signatureBytes)
 	if err != nil {
-		utils.Log.Debugf("Failed to parse signature: %v", err)
+		utils.Log.Tracef("Failed to parse signature: %v", err)
 		return false
 	}
 
 	// 使用公钥验证签名
 	valid := signature.Verify(tokenData, publicKey)
 	if valid {
-		utils.Log.Debugf("[NewEpochVote]VerifyToken:Signature is valid.")
+		utils.Log.Tracef("[NewEpochVote]VerifyToken:Signature is valid.")
 		return true
 	} else {
-		utils.Log.Debugf("[NewEpochVote]VerifyToken:Signature is invalid.")
+		utils.Log.Tracef("[NewEpochVote]VerifyToken:Signature is invalid.")
 		return false
 	}
 

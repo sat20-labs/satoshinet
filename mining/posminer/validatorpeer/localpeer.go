@@ -347,7 +347,7 @@ func (p *LocalPeer) TimeConnected() time.Time {
 //
 // This function is safe for concurrent access.
 func (p *LocalPeer) OnConnDisconnected(connReq *ConnReq) {
-	utils.Log.Debugf("----------[LocalPeer]OnConnDisconnected conn[%d]: %s", connReq.id, connReq.RemoteAddr)
+	utils.Log.Tracef("----------[LocalPeer]OnConnDisconnected conn[%d]: %s", connReq.id, connReq.RemoteAddr)
 
 	p.connMapMtx.Lock()
 	delete(p.connMap, connReq.id)
@@ -355,7 +355,7 @@ func (p *LocalPeer) OnConnDisconnected(connReq *ConnReq) {
 
 	p.logCurrentConn()
 
-	utils.Log.Debugf("----------[LocalPeer]OnConnDisconnected End")
+	utils.Log.Tracef("----------[LocalPeer]OnConnDisconnected End")
 }
 
 // newPeerBase returns a new base bitcoin peer based on the inbound flag.  This
@@ -392,14 +392,14 @@ func newLocalPeerBase(origCfg *LocalPeerConfig, inbound bool) *LocalPeer {
 func NewLocalPeer(cfg *LocalPeerConfig, addrs []net.Addr) (*LocalPeer, error) {
 	p := newLocalPeerBase(cfg, false)
 
-	utils.Log.Debugf("NewLocalPeervalidator ID: %d", p.cfg.ValidatorId)
+	utils.Log.Tracef("NewLocalPeervalidator ID: %d", p.cfg.ValidatorId)
 
 	p.addrsList = make([]net.Addr, 0, len(addrs))
 	p.addrsList = append(p.addrsList, addrs...)
 
-	utils.Log.Debugf("NewLocalpeer IP:")
+	utils.Log.Tracef("NewLocalpeer IP:")
 	for _, addr := range p.addrsList {
-		utils.Log.Debugf("  %s", addr.String())
+		utils.Log.Tracef("  %s", addr.String())
 	}
 
 	//p.addr = addrs[0].String() // Default to the first address
@@ -478,12 +478,12 @@ func (p *LocalPeer) initListeners() ([]net.Listener, error) {
 	utils.Log.Infof("initListeners Listen on %s", listener.Addr().String())
 	listeners = append(listeners, listener)
 
-	// 
+	//
 	// listeners := make([]net.Listener, 0, len(p.addrsList))
 	// for _, addr := range p.addrsList {
 	// 	network := addr.Network()
 	// 	listenAddr := addr.String()
-	// 	utils.Log.Debugf("----------Listen on %s : %s", network, listenAddr)
+	// 	utils.Log.Tracef("----------Listen on %s : %s", network, listenAddr)
 	// 	listener, err := net.Listen(network, listenAddr)
 	// 	if err != nil {
 	// 		utils.Log.Warnf("----------Can't listen on %s: %v", addr, err)
@@ -501,7 +501,7 @@ func (p *LocalPeer) listenHandler(listener net.Listener) {
 	utils.Log.Infof("----------Validator peer listening on %s", listener.Addr())
 	for atomic.LoadInt32(&p.stop) == 0 {
 
-		utils.Log.Debugf("----------Will accept connection from %v", listener.Addr())
+		utils.Log.Tracef("----------Will accept connection from %v", listener.Addr())
 		conn, err := listener.Accept()
 		if err != nil {
 			// Only log the error if not forcibly shutting down.
@@ -512,7 +512,7 @@ func (p *LocalPeer) listenHandler(listener net.Listener) {
 		}
 
 		// The local peer is connected to the remote peer, will create a new conn to manage it
-		utils.Log.Debugf("----------New connected from %v", conn.RemoteAddr())
+		utils.Log.Tracef("----------New connected from %v", conn.RemoteAddr())
 
 		newConnReq := &ConnReq{
 			id:         atomic.LoadUint64(&p.connReqIndex),
@@ -534,7 +534,7 @@ func (p *LocalPeer) listenHandler(listener net.Listener) {
 		// Check the remote peer is in the connMap, if yes, it's reconnected, will remove the old connReq
 		connReq := p.lookupConn(newConnReq.RemoteAddr)
 		if connReq != nil {
-			utils.Log.Debugf("----------[LocalPeer]The remote peer is reconnected, will remove the old connReq [%d: %s]", connReq.id, connReq.RemoteAddr)
+			utils.Log.Tracef("----------[LocalPeer]The remote peer is reconnected, will remove the old connReq [%d: %s]", connReq.id, connReq.RemoteAddr)
 			// The remote peer has been connected to the local peer, the new connReq is reconnected, it will remove the old connReq
 			//p.closeConn(connReq)
 			p.connMapMtx.Lock()
@@ -544,7 +544,7 @@ func (p *LocalPeer) listenHandler(listener net.Listener) {
 
 		// The remote peer is connected
 		cmd := p.SendGetInfoCommand(newConnReq)
-		// 是否需要等发送完成后再等待读数据？ 
+		// 是否需要等发送完成后再等待读数据？
 		// 否则后面读数据会出现错误：[LocalPeer]conn[3]: Read message err: ReadMessage:unable to read message header: EOF
 		// 从而导致连接被关闭：[LocalPeer]OnConnDisconnected conn[3]: xxxx
 		newConnReq.WaitCommandSended(cmd)
@@ -555,21 +555,21 @@ func (p *LocalPeer) listenHandler(listener net.Listener) {
 		go p.listenCommand(newConnReq)
 	}
 
-	utils.Log.Debugf("----------listener %s has stopped ", listener.Addr())
+	utils.Log.Tracef("----------listener %s has stopped ", listener.Addr())
 	p.wg.Done()
-	utils.Log.Debugf("Listener handler done for %s", listener.Addr())
+	utils.Log.Tracef("Listener handler done for %s", listener.Addr())
 }
 
 func (p *LocalPeer) listenCommand(connReq *ConnReq) {
 	for atomic.LoadInt32(&connReq.connClose) == 0 {
-		utils.Log.Debugf("----------[LocalPeer]Will read command from conn[%d]: %s to %s", connReq.id, connReq.RemoteAddr, connReq.LocalAddr)
+		utils.Log.Tracef("----------[LocalPeer]Will read command from conn[%d]: %s to %s", connReq.id, connReq.RemoteAddr, connReq.LocalAddr)
 		_, command, _, err := validatorcommand.ReadMessage(connReq.conn, p.ValidatorVersion(), p.cfg.ChainParams.Net)
 		if err != nil {
 			utils.Log.Errorf("----------[LocalPeer]conn[%d]: Read message err: %v", connReq.id, err)
 			p.OnConnDisconnected(connReq)
 			return
 		}
-		utils.Log.Debugf("----------[LocalPeer]Received validator command [%v] from %d", command.Command(), connReq.id)
+		utils.Log.Tracef("----------[LocalPeer]Received validator command [%v] from %d", command.Command(), connReq.id)
 
 		connReq.setLastReceived()
 		// Handle the command
@@ -583,10 +583,10 @@ func (p *LocalPeer) listenCommand(connReq *ConnReq) {
 // the validator manager. Logs are generated for each command received and processed. If a command
 // is not recognized, an error log is generated.
 func (p *LocalPeer) handleCommand(connReq *ConnReq, command validatorcommand.Message) {
-	utils.Log.Debugf("----------[LocalPeer]handleCommand command [%v]:", command.Command())
+	utils.Log.Tracef("----------[LocalPeer]handleCommand command [%v]:", command.Command())
 	switch cmd := command.(type) {
 	case *validatorcommand.MsgGetInfo:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgGetInfo command, will response MsgPeerInfo command")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgGetInfo command, will response MsgPeerInfo command")
 		//cmd.LogCommandInfo()
 
 		validatorInfo := p.cfg.LocalValidator.GetLocalValidatorInfo(0)
@@ -595,96 +595,96 @@ func (p *LocalPeer) handleCommand(connReq *ConnReq, command validatorcommand.Mes
 		connReq.SendCommand(cmdPeerInfo)
 
 	case *validatorcommand.MsgPeerInfo:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgPeerInfo command")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgPeerInfo command")
 		//cmd.LogCommandInfo()
 		// Notify the validator that we have a new connection， And received peer info from the remote peer
 		p.HandleRemotePeerInfoConfirmed(cmd, connReq)
 
 	case *validatorcommand.MsgPing:
 
-		utils.Log.Debugf("----------[LocalPeer]Receive ping command, will response pong command")
+		utils.Log.Tracef("----------[LocalPeer]Receive ping command, will response pong command")
 		// cmd.LogCommandInfo()
 		// Handle command ping, it will response "pong" message
 		cmdPong := validatorcommand.NewMsgPong(cmd.Nonce)
 		connReq.SendCommand(cmdPong)
 
 	case *validatorcommand.MsgGetValidators:
-		utils.Log.Debugf("----------[LocalPeer]Receive GetValidators command, will response Validators command")
+		utils.Log.Tracef("----------[LocalPeer]Receive GetValidators command, will response Validators command")
 		// cmd.LogCommandInfo()
 		p.HandleGetValidators(cmd, connReq)
 
 	case *validatorcommand.MsgValidators:
 		// The command should be boardcast command to all peers when the validators are changed
-		utils.Log.Debugf("----------[LocalPeer]Receive Validators command, will notify validatorManager for sync validators")
+		utils.Log.Tracef("----------[LocalPeer]Receive Validators command, will notify validatorManager for sync validators")
 		// cmd.LogCommandInfo()
 
 	case *validatorcommand.MsgGetEpoch:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgGetEpoch command, will response local epoch list to remote peer with MsgEpoch command")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgGetEpoch command, will response local epoch list to remote peer with MsgEpoch command")
 		//cmd.LogCommandInfo()
 		p.HandleGetEpoch(cmd, connReq)
 
 	case *validatorcommand.MsgReqEpoch:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgReqEpoch command, will response new epoch info to remote peer with MsgNewEpoch command")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgReqEpoch command, will response new epoch info to remote peer with MsgNewEpoch command")
 		//cmd.LogCommandInfo()
 		p.HandleReqEpoch(cmd, connReq)
 
 	case *validatorcommand.MsgNextEpoch:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgNextEpoch command, will notify validatorManager for change to next epoch. ")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgNextEpoch command, will notify validatorManager for change to next epoch. ")
 		//cmd.LogCommandInfo()
 		p.HandleNextEpoch(cmd, connReq)
 
 	case *validatorcommand.MsgUpdateEpoch:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgUpdateEpoch command, will notify validatorManager for update epoch. ")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgUpdateEpoch command, will notify validatorManager for update epoch. ")
 		//cmd.LogCommandInfo()
 		p.HandleUpdateEpoch(cmd, connReq)
 
 	case *validatorcommand.MsgGetGenerator:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgGetGetGenerator command, will response local generator list to remote peer with MsgGenerator command")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgGetGetGenerator command, will response local generator list to remote peer with MsgGenerator command")
 		//cmd.LogCommandInfo()
 		p.HandleGetGenerator(cmd, connReq)
 
 	case *validatorcommand.MsgHandOver:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgHandOver command, will notify validatorManager for generator handovered. ")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgHandOver command, will notify validatorManager for generator handovered. ")
 		//cmd.LogCommandInfo()
 		p.HandleHandOverGenerator(cmd, connReq)
 
 	case *validatorcommand.MsgGenerator:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgGenerator command, will notify validatorManager for generator updated. ")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgGenerator command, will notify validatorManager for generator updated. ")
 		//cmd.LogCommandInfo()
 		p.HandleGeneratorResponse(cmd, connReq)
 
 	case *validatorcommand.MsgConfirmEpoch:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgConfirmEpoch command, will notify validatorManager for the confirm epoch. ")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgConfirmEpoch command, will notify validatorManager for the confirm epoch. ")
 		//cmd.LogCommandInfo()
 		p.HandleConfirmEpoch(cmd, connReq)
 
 	case *validatorcommand.MsgReqDelEpochMember:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgReqDelEpochMember command, will notify validatorManager for delete epoch member. ")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgReqDelEpochMember command, will notify validatorManager for delete epoch member. ")
 		//cmd.LogCommandInfo()
 		p.handleDelEpochMember(cmd, connReq)
 
 	case *validatorcommand.MsgNotifyHandover:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgNotifyHandover command, will notify validatorManager for handover. ")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgNotifyHandover command, will notify validatorManager for handover. ")
 		cmd.LogCommandInfo()
 		p.handleNotifyHandover(cmd, connReq)
 
 	case *validatorcommand.MsgGetVCState:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgGetVCState command, will response local vc state to remote peer with MsgVCState command")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgGetVCState command, will response local vc state to remote peer with MsgVCState command")
 		//cmd.LogCommandInfo()
 		p.HandleGetVCState(cmd, connReq)
 
 	case *validatorcommand.MsgGetVCList:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgGetVCList command, will response local vc list to remote peer with MsgVCList command")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgGetVCList command, will response local vc list to remote peer with MsgVCList command")
 		//cmd.LogCommandInfo()
 		p.HandleGetVCList(cmd, connReq)
 
 	case *validatorcommand.MsgGetVCBlock:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgGetVCBlock command, will response local vs block to remote peer with MsgVCBlock command")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgGetVCBlock command, will response local vs block to remote peer with MsgVCBlock command")
 		//cmd.LogCommandInfo()
 		p.HandleGetVCBlock(cmd, connReq)
 
 	case *validatorcommand.MsgVCBlock:
-		utils.Log.Debugf("----------[LocalPeer]Receive MsgVCBlock broadcast command, will notify validatormanager to process vc block. ")
+		utils.Log.Tracef("----------[LocalPeer]Receive MsgVCBlock broadcast command, will notify validatormanager to process vc block. ")
 		//cmd.LogCommandInfo()
 		p.HandleVCBlock(cmd, connReq)
 
@@ -713,14 +713,14 @@ func (p *LocalPeer) trickleHandler() {
 }
 
 func (p *LocalPeer) checkInactiveConn() {
-	utils.Log.Debugf("----------[LocalPeer]checkInactiveConn")
+	utils.Log.Tracef("----------[LocalPeer]checkInactiveConn")
 	p.connMapMtx.RLock()
 	defer p.connMapMtx.RUnlock()
 
 	for _, connReq := range p.connMap {
 		if connReq.isInactive() {
 			// The connection is inactive, will close it, and remove it from connMap
-			utils.Log.Debugf("----------[LocalPeer]The connection [%s] is inactive, will close it, and remove it from connMap", connReq.RemoteAddr)
+			utils.Log.Tracef("----------[LocalPeer]The connection [%s] is inactive, will close it, and remove it from connMap", connReq.RemoteAddr)
 			connReq.Close()
 			delete(p.connMap, connReq.id)
 		}
@@ -728,11 +728,11 @@ func (p *LocalPeer) checkInactiveConn() {
 
 	p.logCurrentConn()
 
-	utils.Log.Debugf("----------[LocalPeer]checkInactiveConn End")
+	utils.Log.Tracef("----------[LocalPeer]checkInactiveConn End")
 }
 
 func (p *LocalPeer) addConn(connReq *ConnReq) {
-	utils.Log.Debugf("----------[LocalPeer]addConn conn[%d]: %s", connReq.id, connReq.RemoteAddr)
+	utils.Log.Tracef("----------[LocalPeer]addConn conn[%d]: %s", connReq.id, connReq.RemoteAddr)
 	p.connMapMtx.Lock()
 	p.connMap[connReq.id] = connReq
 	p.connMapMtx.Unlock()
@@ -742,7 +742,7 @@ func (p *LocalPeer) addConn(connReq *ConnReq) {
 }
 
 func (p *LocalPeer) closeConn(connReq *ConnReq) {
-	utils.Log.Debugf("----------[LocalPeer]closeConn")
+	utils.Log.Tracef("----------[LocalPeer]closeConn")
 
 	connReq.Close()
 	p.connMapMtx.Lock()
@@ -751,11 +751,11 @@ func (p *LocalPeer) closeConn(connReq *ConnReq) {
 
 	p.logCurrentConn()
 
-	utils.Log.Debugf("----------[LocalPeer]checkInactiveConn End")
+	utils.Log.Tracef("----------[LocalPeer]checkInactiveConn End")
 }
 
 func (p *LocalPeer) lookupConn(addr net.Addr) *ConnReq {
-	utils.Log.Debugf("----------[LocalPeer]lookupConn")
+	utils.Log.Tracef("----------[LocalPeer]lookupConn")
 	addrHost := validatorinfo.GetAddrHost(addr)
 	p.connMapMtx.RLock()
 	defer p.connMapMtx.RUnlock()
@@ -776,7 +776,7 @@ func (p *LocalPeer) logCurrentConn() {
 	defer p.connMapMtx.RUnlock()
 
 	count := len(p.connMap)
-	utils.Log.Debugf("----------[LocalPeer]logCurrentConn: %d conn", count)
+	utils.Log.Tracef("----------[LocalPeer]logCurrentConn: %d conn", count)
 	for id, connReq := range p.connMap {
 		title := fmt.Sprintf("Conn id: %d", id)
 		connReq.logConnInfo(title)
@@ -788,7 +788,7 @@ func (p *LocalPeer) SendGetInfoCommand(newConnReq *ConnReq) *validatorcommand.Ms
 
 	validatorInfo := p.cfg.LocalValidator.GetLocalValidatorInfo(0)
 	getInfoCmd := validatorcommand.NewMsgGetInfo(validatorInfo)
-	//utils.Log.Debugf("----------[LocalPeer]Will Send GetInfoCommand")
+	//utils.Log.Tracef("----------[LocalPeer]Will Send GetInfoCommand")
 	//getInfoCmd.LogCommandInfo()
 	newConnReq.SendCommand(getInfoCmd)
 	return getInfoCmd
@@ -802,7 +802,7 @@ func (p *LocalPeer) HandleRemotePeerInfoConfirmed(peerInfo *validatorcommand.Msg
 		return
 	}
 
-	utils.Log.Debugf("----------[LocalPeer]The remote peer is comfirmed, will notify validator conn[%d]: %s", connReq.id, connReq.RemoteAddr)
+	utils.Log.Tracef("----------[LocalPeer]The remote peer is comfirmed, will notify validator conn[%d]: %s", connReq.id, connReq.RemoteAddr)
 	if p.cfg.LocalValidator != nil {
 		validatorInfo := &validatorinfo.ValidatorInfo{
 			ValidatorId: peerInfo.ValidatorId,
@@ -821,7 +821,7 @@ func (p *LocalPeer) HandleGetValidators(getValidatorsCmd *validatorcommand.MsgGe
 	}
 	respValidators := validatorcommand.NewMsgValidators(validators)
 
-	//utils.Log.Debugf("----------[LocalPeer]Send MsgValidators command")
+	//utils.Log.Tracef("----------[LocalPeer]Send MsgValidators command")
 	//respValidators.LogCommandInfo()
 	connReq.SendCommand(respValidators)
 }
@@ -829,14 +829,14 @@ func (p *LocalPeer) HandleGetValidators(getValidatorsCmd *validatorcommand.MsgGe
 func (p *LocalPeer) HandleAllValidatorsDeclare(validatorsCmd *validatorcommand.MsgValidators, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
 
-	utils.Log.Debugf("----------[LocalPeer]The remote peer is comfirmed, will notify validator conn[%d]: %s", connReq.id, connReq.RemoteAddr)
+	utils.Log.Tracef("----------[LocalPeer]The remote peer is comfirmed, will notify validator conn[%d]: %s", connReq.id, connReq.RemoteAddr)
 	if p.cfg.LocalValidator != nil {
 		p.cfg.LocalValidator.OnAllValidatorsDeclare(validatorsCmd.Validators, connReq.RemoteAddr)
 	}
 }
 
 func (p *LocalPeer) HandleGetEpoch(getEpochCmd *validatorcommand.MsgGetEpoch, connReq *ConnReq) {
-	utils.Log.Debugf("----------[LocalPeer]HandleGetEpoch...")
+	utils.Log.Tracef("----------[LocalPeer]HandleGetEpoch...")
 	currentEpoch, nextEpoch, err := p.cfg.LocalValidator.GetLocalEpoch(getEpochCmd.ValidatorId)
 	if err != nil {
 		//validators = []*epoch.EpochItem{}
@@ -845,7 +845,7 @@ func (p *LocalPeer) HandleGetEpoch(getEpochCmd *validatorcommand.MsgGetEpoch, co
 	}
 	epochCommand := validatorcommand.NewMsgEpoch(currentEpoch, nextEpoch)
 
-	//utils.Log.Debugf("----------[LocalPeer]Send MsgValidators command")
+	//utils.Log.Tracef("----------[LocalPeer]Send MsgValidators command")
 	epochCommand.LogCommandInfo()
 	connReq.SendCommand(epochCommand)
 }
@@ -856,11 +856,11 @@ func (p *LocalPeer) HandleReqEpoch(getEpochCmd *validatorcommand.MsgReqEpoch, co
 		utils.Log.Errorf("----------[LocalPeer]ReqNewEpoch error: %s", err.Error())
 		return
 	} else {
-		utils.Log.Debugf("----------[LocalPeer]ReqNewEpoch success: %s", epBlockHash.String())
+		utils.Log.Tracef("----------[LocalPeer]ReqNewEpoch success: %s", epBlockHash.String())
 	}
 	respNewEpoch := validatorcommand.NewMsgNewEpoch(p.cfg.ValidatorId, epBlockHash)
 
-	utils.Log.Debugf("----------[LocalPeer]Send MsgNewEpoch command")
+	utils.Log.Tracef("----------[LocalPeer]Send MsgNewEpoch command")
 	respNewEpoch.LogCommandInfo()
 	connReq.SendCommand(respNewEpoch)
 }
@@ -877,7 +877,7 @@ func (p *LocalPeer) HandleGetGenerator(getGeneratorCmd *validatorcommand.MsgGetG
 	generator := p.cfg.LocalValidator.GetGenerator(getGeneratorCmd.ValidatorId)
 	respGeneratorCmd := validatorcommand.NewMsgGenerator(generator)
 
-	utils.Log.Debugf("----------[LocalPeer]Send MsgGenerator command")
+	utils.Log.Tracef("----------[LocalPeer]Send MsgGenerator command")
 	respGeneratorCmd.LogCommandInfo()
 	connReq.SendCommand(respGeneratorCmd)
 }
@@ -888,7 +888,7 @@ func (p *LocalPeer) HandleHandOverGenerator(handOverGeneratorCmd *validatorcomma
 
 func (p *LocalPeer) HandleGeneratorResponse(generatorCmd *validatorcommand.MsgGenerator, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
-	utils.Log.Debugf("----------[LocalPeer]The generator info is response from  validatorvalidator ID: %s", connReq.RemoteAddr.String())
+	utils.Log.Tracef("----------[LocalPeer]The generator info is response from  validatorvalidator ID: %s", connReq.RemoteAddr.String())
 
 	// if generator.IsValid(generatorCmd.GeneratorInfo) == false {
 	// 	return
@@ -942,7 +942,7 @@ func (p *LocalPeer) HandleGetVCState(getVCState *validatorcommand.MsgGetVCState,
 		utils.Log.Errorf("----------[LocalPeer]GetVCState error: %s", err.Error())
 		return
 	}
-	utils.Log.Debugf("----------[LocalPeer]Send MsgVCState command")
+	utils.Log.Tracef("----------[LocalPeer]Send MsgVCState command")
 	//vcStateCmd.LogCommandInfo()
 	connReq.SendCommand(vcStateCmd)
 }
@@ -953,7 +953,7 @@ func (p *LocalPeer) HandleGetVCList(getVCList *validatorcommand.MsgGetVCList, co
 		utils.Log.Errorf("----------[LocalPeer]GetVCList error: %s", err.Error())
 		return
 	}
-	utils.Log.Debugf("----------[LocalPeer]Send MsgVCList command")
+	utils.Log.Tracef("----------[LocalPeer]Send MsgVCList command")
 	//vcListCmd.LogCommandInfo()
 	connReq.SendCommand(vcListCmd)
 }
@@ -964,7 +964,7 @@ func (p *LocalPeer) HandleGetVCBlock(getVCBlock *validatorcommand.MsgGetVCBlock,
 		utils.Log.Errorf("----------[LocalPeer]GetVCBlock error: %s", err.Error())
 		return
 	}
-	utils.Log.Debugf("----------[LocalPeer]Send MsgVCBlock command")
+	utils.Log.Tracef("----------[LocalPeer]Send MsgVCBlock command")
 	//vcBlockCmd.LogCommandInfo()
 	connReq.SendCommand(vcBlockCmd)
 }

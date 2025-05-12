@@ -60,7 +60,7 @@ func (msg *MsgPong) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgPong) LogCommandInfo() {
-	utils.Log.Debugf("Command Pong, Nonce: %d", msg.Nonce)
+	utils.Log.Tracef("Command Pong, Nonce: %d", msg.Nonce)
 }
 
 // NewMsgPong returns a new bitcoin pong message that conforms to the Message

@@ -72,10 +72,10 @@ func (msg *MsgVCState) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgVCState) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgVCState:")
-	utils.Log.Debugf("Height: %d", msg.Height)
-	utils.Log.Debugf("Hash: %s", msg.Hash.String())
-	utils.Log.Debugf("EpochIndex: %d", msg.EpochIndex)
+	utils.Log.Tracef("Command MsgVCState:")
+	utils.Log.Tracef("Height: %d", msg.Height)
+	utils.Log.Tracef("Hash: %s", msg.Hash.String())
+	utils.Log.Tracef("EpochIndex: %d", msg.EpochIndex)
 }
 
 // NewMsgVCState returns a new bitcoin version message that conforms to the

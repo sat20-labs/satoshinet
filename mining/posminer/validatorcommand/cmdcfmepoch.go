@@ -156,27 +156,27 @@ func (msg *MsgConfirmEpoch) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgConfirmEpoch) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgConfirmEpoch:")
-	utils.Log.Debugf("Validator Id: %d", msg.ValidatorId)
+	utils.Log.Tracef("Command MsgConfirmEpoch:")
+	utils.Log.Tracef("Validator Id: %d", msg.ValidatorId)
 
-	utils.Log.Debugf("Epoch Index: %d", msg.EpochIndex)
-	utils.Log.Debugf("Create Height: %d", msg.CreateHeight)
-	utils.Log.Debugf("Create Time: %s", msg.CreateTime.Format(time.DateTime))
+	utils.Log.Tracef("Epoch Index: %d", msg.EpochIndex)
+	utils.Log.Tracef("Create Height: %d", msg.CreateHeight)
+	utils.Log.Tracef("Create Time: %s", msg.CreateTime.Format(time.DateTime))
 
 	for index, validator := range msg.ItemList {
-		utils.Log.Debugf("-------------------------------------")
-		utils.Log.Debugf("No: %d", index)
-		utils.Log.Debugf("Validator Id: %d", validator.ValidatorId)
-		utils.Log.Debugf("Validator Host: %s", validator.Host)
-		utils.Log.Debugf("Validator PublicKey: %x", validator.PublicKey)
-		utils.Log.Debugf("Validator Index: %d", validator.Index)
-		utils.Log.Debugf("")
+		utils.Log.Tracef("-------------------------------------")
+		utils.Log.Tracef("No: %d", index)
+		utils.Log.Tracef("Validator Id: %d", validator.ValidatorId)
+		utils.Log.Tracef("Validator Host: %s", validator.Host)
+		utils.Log.Tracef("Validator PublicKey: %x", validator.PublicKey)
+		utils.Log.Tracef("Validator Index: %d", validator.Index)
+		utils.Log.Tracef("")
 	}
 
-	utils.Log.Debugf("Last Change Time: %s", msg.LastChangeTime.Format(time.DateTime))
-	utils.Log.Debugf("VC Block Height: %d", msg.VCBlockHeight)
-	utils.Log.Debugf("VC Block Hash: %s", msg.VCBlockHash.String())
-	utils.Log.Debugf("-------------------------------------")
+	utils.Log.Tracef("Last Change Time: %s", msg.LastChangeTime.Format(time.DateTime))
+	utils.Log.Tracef("VC Block Height: %d", msg.VCBlockHeight)
+	utils.Log.Tracef("VC Block Hash: %s", msg.VCBlockHash.String())
+	utils.Log.Tracef("-------------------------------------")
 }
 
 // NewMsgConfirmEpoch returns a new bitcoin version message that conforms to the

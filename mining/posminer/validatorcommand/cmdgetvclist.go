@@ -75,10 +75,10 @@ func (msg *MsgGetVCList) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgGetVCList) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgGetVCList:")
-	utils.Log.Debugf("ValidatorId: %d", msg.ValidatorId)
-	utils.Log.Debugf("Start: %d", msg.Start)
-	utils.Log.Debugf("End: %d", msg.End)
+	utils.Log.Tracef("Command MsgGetVCList:")
+	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
+	utils.Log.Tracef("Start: %d", msg.Start)
+	utils.Log.Tracef("End: %d", msg.End)
 }
 
 // NewMsgGetVCList returns a new bitcoin version message that conforms to the

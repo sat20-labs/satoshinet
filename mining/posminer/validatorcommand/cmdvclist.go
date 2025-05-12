@@ -107,14 +107,14 @@ func (msg *MsgVCList) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgVCList) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgVCList:")
+	utils.Log.Tracef("Command MsgVCList:")
 	if msg.VCList == nil {
 		return
 	}
-	utils.Log.Debugf("VCList count: %d", len(msg.VCList))
+	utils.Log.Tracef("VCList count: %d", len(msg.VCList))
 	for _, item := range msg.VCList {
-		utils.Log.Debugf("Height: %d", item.Height)
-		utils.Log.Debugf("Hash: %s", item.Hash.String())
+		utils.Log.Tracef("Height: %d", item.Height)
+		utils.Log.Tracef("Hash: %s", item.Hash.String())
 	}
 }
 

@@ -71,7 +71,7 @@ func (nem *NewEpochManager) AddReceivedEpoch(validatorId uint64, hash *chainhash
 // until the task is finished or the channel receives a signal, with an
 // interval of 5 seconds before executing the handleNewEpoch.
 func (nem *NewEpochManager) newEpochHandler() {
-	utils.Log.Debugf("[NewEpochManager]newEpochHandler ...")
+	utils.Log.Tracef("[NewEpochManager]newEpochHandler ...")
 
 	exitNewEpochHandler := make(chan struct{})
 	duration := time.Second * 5
@@ -83,7 +83,7 @@ func (nem *NewEpochManager) newEpochHandler() {
 	// 这里阻塞主 goroutine 等待任务执行（可根据需要改为其他逻辑）
 	select {
 	case exitNewEpochHandler <- struct{}{}:
-		utils.Log.Debugf("[NewEpochManager]newEpochHandler done .")
+		utils.Log.Tracef("[NewEpochManager]newEpochHandler done .")
 		return
 	}
 }
@@ -99,22 +99,22 @@ type NewEpochResult struct {
 }
 
 func (nem *NewEpochManager) handleNewEpoch() {
-	utils.Log.Debugf("[NewEpochManager]handleNewEpoch ...")
+	utils.Log.Tracef("[NewEpochManager]handleNewEpoch ...")
 
-	utils.Log.Debugf("****************************************************************************************")
-	utils.Log.Debugf("Received Epochs: summary:")
+	utils.Log.Tracef("****************************************************************************************")
+	utils.Log.Tracef("Received Epochs: summary:")
 
 	invitedCount := len(nem.receivedEpoch)
 
 	for validatorId, voteItem := range nem.receivedEpoch {
 		if voteItem == nil || voteItem.Hash == nil {
-			utils.Log.Debugf("Not received new epoch by validator [%d]", validatorId)
+			utils.Log.Tracef("Not received new epoch by validator [%d]", validatorId)
 			continue
 		}
 		//title := fmt.Sprintf("Received Epoch from %d", validatorId)
 		voteItemData, err := nem.ValidatorMgr.validateChain.GetEPBlock(voteItem.Hash)
 		if err != nil {
-			utils.Log.Debugf("Cannot get epblock by hash [%s] from validator [%d]", voteItem.Hash.String(), validatorId)
+			utils.Log.Tracef("Cannot get epblock by hash [%s] from validator [%d]", voteItem.Hash.String(), validatorId)
 			continue
 		}
 		voteItem.VoteData = voteItemData.Data
@@ -152,7 +152,7 @@ func (nem *NewEpochManager) handleNewEpoch() {
 		}
 	}
 
-	utils.Log.Debugf("Received Epochs: invited count:%d, ", invitedCount)
+	utils.Log.Tracef("Received Epochs: invited count:%d, ", invitedCount)
 
 	// check the valid epoch result
 	minValidCount := (invitedCount * 2) / 3
@@ -160,13 +160,13 @@ func (nem *NewEpochManager) handleNewEpoch() {
 		minValidCount = 2 // at least 2 validators
 	}
 
-	utils.Log.Debugf("Received Epochs: min valid count:%d", minValidCount)
+	utils.Log.Tracef("Received Epochs: min valid count:%d", minValidCount)
 	localValidatorId := nem.ValidatorMgr.GetMyValidatorId()
 
 	for i, validItem := range result.validEpoch {
-		utils.Log.Debugf("valid item %d: %v", i, validItem)
+		utils.Log.Tracef("valid item %d: %v", i, validItem)
 		if validItem.EpochCount >= minValidCount {
-			utils.Log.Debugf("valid epoch vote count: %d", validItem.EpochCount)
+			utils.Log.Tracef("valid epoch vote count: %d", validItem.EpochCount)
 			showVoteData("confirmed epoch vote:", validItem.VoteItem.VoteData)
 
 			// The new epoch is confirmed, the result will be sent to all validators
@@ -183,7 +183,7 @@ func (nem *NewEpochManager) handleNewEpoch() {
 			}
 			if len(epochConfirmed.ItemList) < 2 {
 				// not enough validators for epoch
-				utils.Log.Debugf("Not enough validators for epoch")
+				utils.Log.Tracef("Not enough validators for epoch")
 				return
 			}
 
@@ -233,32 +233,32 @@ func (nem *NewEpochManager) handleNewEpoch() {
 			break
 
 		} else {
-			utils.Log.Debugf("invalid epoch:")
-			utils.Log.Debugf("epoch count: %d", validItem.EpochCount)
+			utils.Log.Tracef("invalid epoch:")
+			utils.Log.Tracef("epoch count: %d", validItem.EpochCount)
 			//showEpoch("invalid epoch:", validItem.epoch)
 		}
 	}
 
-	utils.Log.Debugf("Received Epochs: summary end.")
-	utils.Log.Debugf("****************************************************************************************")
+	utils.Log.Tracef("Received Epochs: summary end.")
+	utils.Log.Tracef("****************************************************************************************")
 }
 
 func showVoteData(title string, voteData *validatechain.DataEpochVote) {
-	utils.Log.Debugf("--------------- %s -----------------", title)
-	utils.Log.Debugf("VotorId: %d", voteData.VotorId)
-	utils.Log.Debugf("PublicKey: %x", voteData.PublicKey)
-	utils.Log.Debugf("EpochIndex: %d", voteData.EpochIndex)
-	utils.Log.Debugf("CreateTime: %s", time.Unix(voteData.CreateTime, 0).Format(time.DateTime))
-	utils.Log.Debugf("Reason: %d", voteData.Reason)
-	utils.Log.Debugf("Token: %s", voteData.Token)
-	utils.Log.Debugf("Epoch Count: %d", len(voteData.EpochItemList))
-	utils.Log.Debugf("----------------------------------------")
+	utils.Log.Tracef("--------------- %s -----------------", title)
+	utils.Log.Tracef("VotorId: %d", voteData.VotorId)
+	utils.Log.Tracef("PublicKey: %x", voteData.PublicKey)
+	utils.Log.Tracef("EpochIndex: %d", voteData.EpochIndex)
+	utils.Log.Tracef("CreateTime: %s", time.Unix(voteData.CreateTime, 0).Format(time.DateTime))
+	utils.Log.Tracef("Reason: %d", voteData.Reason)
+	utils.Log.Tracef("Token: %s", voteData.Token)
+	utils.Log.Tracef("Epoch Count: %d", len(voteData.EpochItemList))
+	utils.Log.Tracef("----------------------------------------")
 	for _, item := range voteData.EpochItemList {
-		utils.Log.Debugf("ValidatorId: %d", item.ValidatorId)
-		utils.Log.Debugf("PublicKey: %x", item.PublicKey)
-		utils.Log.Debugf("Host: %s", item.Host)
-		utils.Log.Debugf("Index: %d", item.Index)
-		utils.Log.Debugf("----------------------------------------")
+		utils.Log.Tracef("ValidatorId: %d", item.ValidatorId)
+		utils.Log.Tracef("PublicKey: %x", item.PublicKey)
+		utils.Log.Tracef("Host: %s", item.Host)
+		utils.Log.Tracef("Index: %d", item.Index)
+		utils.Log.Tracef("----------------------------------------")
 	}
 }
 

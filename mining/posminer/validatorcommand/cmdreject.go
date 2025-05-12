@@ -165,10 +165,10 @@ func (msg *MsgReject) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgReject) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgReject:")
-	utils.Log.Debugf("Cmd: %s", msg.Cmd)
-	utils.Log.Debugf("RejectCode: %s", msg.Code.String())
-	utils.Log.Debugf("Reason: %s", msg.Reason)
+	utils.Log.Tracef("Command MsgReject:")
+	utils.Log.Tracef("Cmd: %s", msg.Cmd)
+	utils.Log.Tracef("RejectCode: %s", msg.Code.String())
+	utils.Log.Tracef("Reason: %s", msg.Reason)
 }
 
 // NewMsgReject returns a new bitcoin reject message that conforms to the

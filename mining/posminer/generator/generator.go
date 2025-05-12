@@ -80,7 +80,7 @@ func (g *Generator) SetToken(token string) {
 func (g *Generator) VerifyToken(pubKey []byte) bool {
 	signatureBytes, err := base64.StdEncoding.DecodeString(g.Token)
 	if err != nil {
-		utils.Log.Debugf("[Generator]VerifyToken: Invalid generator token, ignore it.")
+		utils.Log.Tracef("[Generator]VerifyToken: Invalid generator token, ignore it.")
 		return false
 	}
 
@@ -88,7 +88,7 @@ func (g *Generator) VerifyToken(pubKey []byte) bool {
 
 	publicKey, err := secp256k1.ParsePubKey(pubKey[:])
 	if err != nil {
-		utils.Log.Debugf("[Generator]VerifyToken: Invalid public key.")
+		utils.Log.Tracef("[Generator]VerifyToken: Invalid public key.")
 		return false
 	}
 
@@ -96,24 +96,24 @@ func (g *Generator) VerifyToken(pubKey []byte) bool {
 	// signature, err := btcec.ParseDERSignature(signatureBytes)
 	signature, err := ecdsa.ParseDERSignature(signatureBytes)
 	if err != nil {
-		utils.Log.Debugf("[Generator]VerifyToken:Failed to parse signature: %v", err)
+		utils.Log.Tracef("[Generator]VerifyToken:Failed to parse signature: %v", err)
 		return false
 	}
 
 	// 使用公钥验证签名
 	valid := signature.Verify(tokenData, publicKey)
 	if valid {
-		utils.Log.Debugf("[Generator]VerifyToken:Signature is valid.")
+		utils.Log.Tracef("[Generator]VerifyToken:Signature is valid.")
 		return true
 	} else {
-		utils.Log.Debugf("[Generator]VerifyToken:Signature is invalid.")
+		utils.Log.Tracef("[Generator]VerifyToken:Signature is invalid.")
 		return false
 	}
 
 }
 
 func (g *Generator) SetHandOverTime(handOverTime time.Time) error {
-	utils.Log.Debugf("[Generator]SetHandOverTime ...")
+	utils.Log.Tracef("[Generator]SetHandOverTime ...")
 	now := time.Now()
 	minerTime := handOverTime.Add(MinerInterval)
 	if minerTime.After(now) == false {
@@ -125,7 +125,7 @@ func (g *Generator) SetHandOverTime(handOverTime time.Time) error {
 	return nil
 }
 func (g *Generator) ContinueNextSlot() error {
-	utils.Log.Debugf("[Generator]ContinueNextSlot ...")
+	utils.Log.Tracef("[Generator]ContinueNextSlot ...")
 
 	now := time.Now()
 	newMinerTime := g.MinerTime.Add(MinerInterval)
@@ -142,22 +142,22 @@ func (g *Generator) SetLocalMiner(localMiner MinerInterface) {
 }
 
 func (g *Generator) MinerNewBlock() {
-	utils.Log.Debugf("##################################################################")
-	utils.Log.Debugf("[Generator]MinerNewBlock...")
-	utils.Log.Debugf("[Generator]Miner time: %v", time.Now().Format("2006-01-02 15:04:05"))
-	utils.Log.Debugf("[Generator]Miner height: %d", g.Height)
+	utils.Log.Tracef("##################################################################")
+	utils.Log.Tracef("[Generator]MinerNewBlock...")
+	utils.Log.Tracef("[Generator]Miner time: %v", time.Now().Format("2006-01-02 15:04:05"))
+	utils.Log.Tracef("[Generator]Miner height: %d", g.Height)
 	if g.LocalMiner != nil {
-		utils.Log.Debugf("[Generator]Call localMiner to generate a new block...")
+		utils.Log.Tracef("[Generator]Call localMiner to generate a new block...")
 		g.LocalMiner.OnTimeGenerateBlock()
 	}
-	utils.Log.Debugf("##################################################################")
+	utils.Log.Tracef("##################################################################")
 }
 
 func (g *Generator) minerHandler() {
-	utils.Log.Debugf("[Generator]minerHandler start...")
+	utils.Log.Tracef("[Generator]minerHandler start...")
 
 	exitMinerHandler := make(chan struct{})
-	utils.Log.Debugf("[Generator]Set Miner <height:%d> Timer at %s ", g.Height, g.MinerTime.Format("2006-01-02 15:04:05"))
+	utils.Log.Tracef("[Generator]Set Miner <height:%d> Timer at %s ", g.Height, g.MinerTime.Format("2006-01-02 15:04:05"))
 
 	minerDuration := time.Until(g.MinerTime)
 	time.AfterFunc(minerDuration, func() {
@@ -168,7 +168,7 @@ func (g *Generator) minerHandler() {
 	// 这里阻塞主 goroutine 等待任务执行（可根据需要改为其他逻辑）
 	select {
 	case exitMinerHandler <- struct{}{}:
-		utils.Log.Debugf("[Generator]minerHandler done .")
+		utils.Log.Tracef("[Generator]minerHandler done .")
 		return
 	}
 }
@@ -184,7 +184,7 @@ func (gho *GeneratorHandOver) GetTokenData() []byte {
 func (gho *GeneratorHandOver) VerifyToken(pubKey []byte) bool {
 	signatureBytes, err := base64.StdEncoding.DecodeString(gho.Token)
 	if err != nil {
-		utils.Log.Debugf("[GeneratorHandOver]VerifyToken: Invalid generator token, ignore it.")
+		utils.Log.Tracef("[GeneratorHandOver]VerifyToken: Invalid generator token, ignore it.")
 		return false
 	}
 
@@ -192,7 +192,7 @@ func (gho *GeneratorHandOver) VerifyToken(pubKey []byte) bool {
 
 	publicKey, err := secp256k1.ParsePubKey(pubKey[:])
 	if err != nil {
-		utils.Log.Debugf("[GeneratorHandOver]VerifyToken: Invalid public key.")
+		utils.Log.Tracef("[GeneratorHandOver]VerifyToken: Invalid public key.")
 		return false
 	}
 
@@ -200,17 +200,17 @@ func (gho *GeneratorHandOver) VerifyToken(pubKey []byte) bool {
 	// signature, err := btcec.ParseDERSignature(signatureBytes)
 	signature, err := ecdsa.ParseDERSignature(signatureBytes)
 	if err != nil {
-		utils.Log.Debugf("[GeneratorHandOver]VerifyToken:Failed to parse signature: %v", err)
+		utils.Log.Tracef("[GeneratorHandOver]VerifyToken:Failed to parse signature: %v", err)
 		return false
 	}
 
 	// 使用公钥验证签名
 	valid := signature.Verify(tokenData, publicKey)
 	if valid {
-		utils.Log.Debugf("[GeneratorHandOver]VerifyToken:Signature is valid.")
+		utils.Log.Tracef("[GeneratorHandOver]VerifyToken:Signature is valid.")
 		return true
 	} else {
-		utils.Log.Debugf("[GeneratorHandOver]VerifyToken:Signature is invalid.")
+		utils.Log.Tracef("[GeneratorHandOver]VerifyToken:Signature is invalid.")
 		return false
 	}
 
@@ -236,7 +236,7 @@ func (m *MinerNewBlock) GetTokenData() []byte {
 func (g *MinerNewBlock) VerifyToken(pubKey []byte) bool {
 	signatureBytes, err := base64.StdEncoding.DecodeString(g.Token)
 	if err != nil {
-		utils.Log.Debugf("[MinerNewBlock]VerifyToken: Invalid generator token, ignore it.")
+		utils.Log.Tracef("[MinerNewBlock]VerifyToken: Invalid generator token, ignore it.")
 		return false
 	}
 
@@ -244,7 +244,7 @@ func (g *MinerNewBlock) VerifyToken(pubKey []byte) bool {
 
 	publicKey, err := secp256k1.ParsePubKey(pubKey[:])
 	if err != nil {
-		utils.Log.Debugf("[MinerNewBlock]VerifyToken: Invalid public key.")
+		utils.Log.Tracef("[MinerNewBlock]VerifyToken: Invalid public key.")
 		return false
 	}
 
@@ -252,17 +252,17 @@ func (g *MinerNewBlock) VerifyToken(pubKey []byte) bool {
 	// signature, err := btcec.ParseDERSignature(signatureBytes)
 	signature, err := ecdsa.ParseDERSignature(signatureBytes)
 	if err != nil {
-		utils.Log.Debugf("[MinerNewBlock]VerifyToken:Failed to parse signature: %v", err)
+		utils.Log.Tracef("[MinerNewBlock]VerifyToken:Failed to parse signature: %v", err)
 		return false
 	}
 
 	// 使用公钥验证签名
 	valid := signature.Verify(tokenData, publicKey)
 	if valid {
-		utils.Log.Debugf("[MinerNewBlock]VerifyToken:Signature is valid.")
+		utils.Log.Tracef("[MinerNewBlock]VerifyToken:Signature is valid.")
 		return true
 	} else {
-		utils.Log.Debugf("[MinerNewBlock]VerifyToken:Signature is invalid.")
+		utils.Log.Tracef("[MinerNewBlock]VerifyToken:Signature is invalid.")
 		return false
 	}
 

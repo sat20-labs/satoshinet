@@ -74,19 +74,19 @@ func (msg *MsgUpdateEpoch) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgUpdateEpoch) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgUpdateEpoch:")
-	// utils.Log.Debugf("Validator Count: %d", msg.ValidatorCount)
+	utils.Log.Tracef("Command MsgUpdateEpoch:")
+	// utils.Log.Tracef("Validator Count: %d", msg.ValidatorCount)
 	// for index, validator := range msg.Validators {
-	// 	utils.Log.Debugf("-------------------------------------")
-	// 	utils.Log.Debugf("No: %d", index)
-	// 	utils.Log.Debugf("Validator Id: %d", validator.ValidatorId)
-	// 	utils.Log.Debugf("Validator Host: %s", validator.Host)
-	// 	utils.Log.Debugf("Validator PublicKey: %x", validator.PublicKey)
-	// 	utils.Log.Debugf("Validator Index: %d", validator.Index)
-	// 	utils.Log.Debugf("")
+	// 	utils.Log.Tracef("-------------------------------------")
+	// 	utils.Log.Tracef("No: %d", index)
+	// 	utils.Log.Tracef("Validator Id: %d", validator.ValidatorId)
+	// 	utils.Log.Tracef("Validator Host: %s", validator.Host)
+	// 	utils.Log.Tracef("Validator PublicKey: %x", validator.PublicKey)
+	// 	utils.Log.Tracef("Validator Index: %d", validator.Index)
+	// 	utils.Log.Tracef("")
 	// }
 	showEpoch("MsgUpdateEpoch: CurrentEpoch", msg.CurrentEpoch)
-	utils.Log.Debugf("-------------------------------------")
+	utils.Log.Tracef("-------------------------------------")
 }
 
 // NewMsgUpdateEpoch returns a new bitcoin version message that conforms to the

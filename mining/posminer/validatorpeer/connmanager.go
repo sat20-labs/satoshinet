@@ -88,9 +88,9 @@ func (connReq *ConnReq) Start() {
 	connReq.pendingCmds = list.New()
 
 	connReq.sended = make(map[validatorcommand.Message]int64)
-	connReq.sendQueue = make(chan struct{}, 1)          // nonblocking sync
+	connReq.sendQueue = make(chan struct{}, 1)                     // nonblocking sync
 	connReq.sendDoneQueue = make(chan validatorcommand.Message, 1) // nonblocking sync
-	connReq.quitQueue = make(chan struct{}, 1)          // nonblocking sync
+	connReq.quitQueue = make(chan struct{}, 1)                     // nonblocking sync
 
 	go connReq.sendQueueHandler()
 	return
@@ -141,28 +141,28 @@ func (connReq *ConnReq) isInactive() bool {
 
 func (connReq *ConnReq) logConnInfo(desc string) {
 	if desc != "" {
-		utils.Log.Debugf("------------------------Conn info: %s------------------------", desc)
+		utils.Log.Tracef("------------------------Conn info: %s------------------------", desc)
 	}
-	utils.Log.Debugf("Conn id: %d", connReq.id)
-	utils.Log.Debugf("Conn LocalAddr: %s", connReq.LocalAddr)
-	utils.Log.Debugf("Conn RemoteAddr: %s", connReq.RemoteAddr)
+	utils.Log.Tracef("Conn id: %d", connReq.id)
+	utils.Log.Tracef("Conn LocalAddr: %s", connReq.LocalAddr)
+	utils.Log.Tracef("Conn RemoteAddr: %s", connReq.RemoteAddr)
 
 	lastReceivedTime := time.Unix(atomic.LoadInt64(&connReq.lastReceived), 0)
-	utils.Log.Debugf("Conn Last received time: %s", lastReceivedTime.String())
+	utils.Log.Tracef("Conn Last received time: %s", lastReceivedTime.String())
 
 	lastSendTime := time.Unix(atomic.LoadInt64(&connReq.lastSend), 0)
-	utils.Log.Debugf("Conn Last sent time: %s", lastSendTime.String())
+	utils.Log.Tracef("Conn Last sent time: %s", lastSendTime.String())
 
 	if connReq.pendingCmds != nil {
-		utils.Log.Debugf("Pending Commands Count: %d", connReq.pendingCmds.Len())
+		utils.Log.Tracef("Pending Commands Count: %d", connReq.pendingCmds.Len())
 	}
 
 	// for e := connReq.pendingCmds.Front(); e != nil; e = e.Next() {
 	// 	command := e.Value.(*validatorcommand.Message)
-	// 	utils.Log.Debugf("Pending Command: %s", command.Command())
+	// 	utils.Log.Tracef("Pending Command: %s", command.Command())
 	// }
 	if desc != "" {
-		utils.Log.Debugf("------------------------Conn info: %s End------------------------", desc)
+		utils.Log.Tracef("------------------------Conn info: %s End------------------------", desc)
 	}
 }
 
@@ -176,19 +176,19 @@ func (connReq *ConnReq) SendCommand(command validatorcommand.Message) error {
 
 	connReq.AddCommand(command)
 
-	//utils.Log.Debugf("----------[%s]Send signal to send command", connReq.String())
+	//utils.Log.Tracef("----------[%s]Send signal to send command", connReq.String())
 	// Signal the send queue
 	connReq.sendQueue <- struct{}{}
 
-	//utils.Log.Debugf("----------[%s]Command [%s] has sent", connReq.String(), command.Command())
+	//utils.Log.Tracef("----------[%s]Command [%s] has sent", connReq.String(), command.Command())
 	return nil
 }
 
 func (connReq *ConnReq) AddCommand(command validatorcommand.Message) {
-	//utils.Log.Debugf("----------[%s]Add command [%s] to send queue", connReq.String(), command.Command())
+	//utils.Log.Tracef("----------[%s]Add command [%s] to send queue", connReq.String(), command.Command())
 	connReq.CmdsLock.Lock()
 	connReq.pendingCmds.PushBack(command)
-	//utils.Log.Debugf("----------[%s]Command count: %d", connReq.String(), connReq.pendingCmds.Len())
+	//utils.Log.Tracef("----------[%s]Command count: %d", connReq.String(), connReq.pendingCmds.Len())
 	connReq.CmdsLock.Unlock()
 
 	return
@@ -201,13 +201,12 @@ func (connReq *ConnReq) PopNextCommand() validatorcommand.Message {
 	connReq.CmdsLock.Unlock()
 
 	// if item != nil {
-	// 	utils.Log.Debugf("----------[%s]Next command [%s] in send queue", connReq.String(), item.Value.(validatorcommand.Message).Command())
+	// 	utils.Log.Tracef("----------[%s]Next command [%s] in send queue", connReq.String(), item.Value.(validatorcommand.Message).Command())
 	// } else {
-	// 	utils.Log.Debugf("----------[%s]No command in send queue", connReq.String())
+	// 	utils.Log.Tracef("----------[%s]No command in send queue", connReq.String())
 	// }
 	return item.Value.(validatorcommand.Message)
 }
-
 
 func (connReq *ConnReq) WaitCommandSended(command validatorcommand.Message) bool {
 
@@ -225,10 +224,10 @@ func (connReq *ConnReq) WaitCommandSended(command validatorcommand.Message) bool
 }
 
 func (connReq *ConnReq) RemoveItem(item *list.Element) {
-	//	utils.Log.Debugf("----------[%s]Remove command [%s] from send queue", connReq.String(), item.Value.(validatorcommand.Message).Command())
+	//	utils.Log.Tracef("----------[%s]Remove command [%s] from send queue", connReq.String(), item.Value.(validatorcommand.Message).Command())
 	connReq.CmdsLock.Lock()
 	connReq.pendingCmds.Remove(item)
-	//	utils.Log.Debugf("----------[%s]Command count: %d", connReq.String(), connReq.pendingCmds.Len())
+	//	utils.Log.Tracef("----------[%s]Command count: %d", connReq.String(), connReq.pendingCmds.Len())
 	connReq.CmdsLock.Unlock()
 }
 
@@ -240,16 +239,16 @@ out:
 	for {
 		select {
 		case <-connReq.sendQueue:
-			//utils.Log.Debugf("----------[%s]Received signal to send command.", connReq.String())
+			//utils.Log.Tracef("----------[%s]Received signal to send command.", connReq.String())
 			command := connReq.PopNextCommand()
 			if command == nil {
 				// No command in queue, wait for the next signal
-				//utils.Log.Debugf("----------[%s]No command to be sent.", connReq.String())
+				//utils.Log.Tracef("----------[%s]No command to be sent.", connReq.String())
 				continue
 			}
 
 			//command := item.Value.(validatorcommand.Message)
-			//utils.Log.Debugf("----------[%s]Will send command [%s].", connReq.String(), command.Command())
+			//utils.Log.Tracef("----------[%s]Will send command [%s].", connReq.String(), command.Command())
 
 			err := connReq.writeMessage(command)
 			if err != nil {
@@ -266,7 +265,7 @@ out:
 			// message.
 			atomic.StoreInt64(&connReq.lastSend, time.Now().Unix())
 
-			utils.Log.Debugf("----------[%s]command [%s] has sent.", connReq.String(), command.Command())
+			utils.Log.Tracef("----------[%s]command [%s] has sent.", connReq.String(), command.Command())
 			connReq.CmdsLock.Lock()
 			connReq.sended[command] = time.Now().Unix()
 			if len(connReq.sended) > 16 {
@@ -290,15 +289,15 @@ out:
 		// 	// The command was sent successfully, will removed it from the
 		// 	// pending command list, and will signal the send queue
 		// 	command := item.Value.(validatorcommand.Message)
-		// 	utils.Log.Debugf("----------[%s]command [%s] has done.", connReq.String(), command.Command())
+		// 	utils.Log.Tracef("----------[%s]command [%s] has done.", connReq.String(), command.Command())
 		// 	connReq.RemoveItem(item)
 
 		// 	if connReq.pendingCmds.Len() > 0 {
 		// 		// command queue not empty, Signal the send queue
-		// 		utils.Log.Debugf("----------[%s]Pending command isnot empty.", connReq.String())
+		// 		utils.Log.Tracef("----------[%s]Pending command isnot empty.", connReq.String())
 		// 		//connReq.sendQueue <- struct{}{}
 		// 	} else {
-		// 		utils.Log.Debugf("----------[%s]No any command to be send.", connReq.String())
+		// 		utils.Log.Tracef("----------[%s]No any command to be send.", connReq.String())
 		// 	}
 
 		case <-connReq.quitQueue:
@@ -306,7 +305,7 @@ out:
 		}
 	}
 
-	//utils.Log.Debugf("----------[%d] sendQueueHandler done for %s", connReq.id, connReq.String())
+	//utils.Log.Tracef("----------[%d] sendQueueHandler done for %s", connReq.id, connReq.String())
 }
 
 // writeMessage sends a bitcoin message to the peer with logging.
@@ -315,7 +314,7 @@ func (connReq *ConnReq) writeMessage(msg validatorcommand.Message) error {
 	if atomic.LoadInt32(&connReq.connClose) != 0 {
 		// The connection was closed
 		err := fmt.Errorf("connection %s closed", connReq.RemoteAddr)
-		//utils.Log.Debugf("[%s]**********WriteMessage (%s) to (%s) failed: %v", connReq.String(), msg.Command(), connReq.RemoteAddr, err)
+		//utils.Log.Tracef("[%s]**********WriteMessage (%s) to (%s) failed: %v", connReq.String(), msg.Command(), connReq.RemoteAddr, err)
 		return err
 	}
 
@@ -323,11 +322,11 @@ func (connReq *ConnReq) writeMessage(msg validatorcommand.Message) error {
 	_, err := validatorcommand.WriteMessageWithEncodingN(connReq.conn, msg,
 		connReq.version, connReq.btcnet)
 	if err != nil {
-		//utils.Log.Debugf("**********[%s]WriteMessage (%s) to (%s) failed: %v", connReq.String(), msg.Command(), connReq.RemoteAddr, err)
+		//utils.Log.Tracef("**********[%s]WriteMessage (%s) to (%s) failed: %v", connReq.String(), msg.Command(), connReq.RemoteAddr, err)
 		return err
 	}
 
-	//utils.Log.Debugf("**********[%s]WriteMessage (%s) to (%s): %d bytes written", connReq.String(), msg.Command(), connReq.RemoteAddr, n)
+	//utils.Log.Tracef("**********[%s]WriteMessage (%s) to (%s): %d bytes written", connReq.String(), msg.Command(), connReq.RemoteAddr, n)
 
 	return nil
 }

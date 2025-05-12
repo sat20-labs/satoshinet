@@ -20,10 +20,10 @@ func (vm *ValidatorManager) TestingVcState() {
 	testinghash, _ := chainhash.NewHashFromStr("5d2cffd29005647d364898a47ce26e2a1e6b7779d9e81b721ed078790f66d8f6")
 
 	currentState := vm.validateChain.GetCurrentState()
-	utils.Log.Debugf("Current State: %v", currentState)
+	utils.Log.Tracef("Current State: %v", currentState)
 
 	if currentState.LatestHeight == testingHeight && currentState.LatestHash.IsEqual(testinghash) {
-		utils.Log.Debugf("Testing successed: %v", currentState.LatestHash)
+		utils.Log.Tracef("Testing successed: %v", currentState.LatestHash)
 
 		return
 	}
@@ -31,7 +31,7 @@ func (vm *ValidatorManager) TestingVcState() {
 	currentState.LatestHash = *testinghash
 	vm.validateChain.UpdateCurrentState(currentState)
 
-	utils.Log.Debugf("Testing updated.")
+	utils.Log.Tracef("Testing updated.")
 }
 
 func (vm *ValidatorManager) TestingVcBlocks() {
@@ -90,7 +90,7 @@ func (vm *ValidatorManager) TestingVcBlocks() {
 		return
 	}
 
-	utils.Log.Debugf("Testing NewEpochBlock Hash: %x", blockHash)
+	utils.Log.Tracef("Testing NewEpochBlock Hash: %x", blockHash)
 
 	err = vm.validateChain.SaveVCBlock(newEpochBlock)
 	if err != nil {
@@ -106,39 +106,39 @@ func (vm *ValidatorManager) TestingVcBlocks() {
 
 	logBlock(newBlock)
 
-	utils.Log.Debugf("Testing TestingVcBlocks completed.")
+	utils.Log.Tracef("Testing TestingVcBlocks completed.")
 }
 
 func logBlock(block *validatechain.VCBlock) {
-	utils.Log.Debugf("-------------------------Block header-------------------------")
-	utils.Log.Debugf("Block Height: %d", block.Header.Height)
-	utils.Log.Debugf("Block Hash: %s", block.Header.Hash.String())
-	utils.Log.Debugf("Block Version: %d", block.Header.Version)
-	utils.Log.Debugf("Block DataType: %d", block.Header.DataType)
+	utils.Log.Tracef("-------------------------Block header-------------------------")
+	utils.Log.Tracef("Block Height: %d", block.Header.Height)
+	utils.Log.Tracef("Block Hash: %s", block.Header.Hash.String())
+	utils.Log.Tracef("Block Version: %d", block.Header.Version)
+	utils.Log.Tracef("Block DataType: %d", block.Header.DataType)
 	timeStr := time.Unix(block.Header.CreateTime, 0).Format("2006-01-02 15:04:05")
-	utils.Log.Debugf("Block CreateTime: %s", timeStr)
-	utils.Log.Debugf("Block PrevHash: %s", block.Header.PrevHash.String())
+	utils.Log.Tracef("Block CreateTime: %s", timeStr)
+	utils.Log.Tracef("Block PrevHash: %s", block.Header.PrevHash.String())
 
 	switch vcd := block.Data.(type) { //nolint:gocritice := vcd.Data.(type)
 	case *validatechain.DataNewEpoch:
-		utils.Log.Debugf("-------------------------Block Data-------------------------")
-		utils.Log.Debugf("CreatorId: %d", vcd.CreatorId)
-		utils.Log.Debugf("PublicKey: %x", vcd.PublicKey[:]) //PublicKey
-		utils.Log.Debugf("EpochIndex: %d", vcd.EpochIndex)
+		utils.Log.Tracef("-------------------------Block Data-------------------------")
+		utils.Log.Tracef("CreatorId: %d", vcd.CreatorId)
+		utils.Log.Tracef("PublicKey: %x", vcd.PublicKey[:]) //PublicKey
+		utils.Log.Tracef("EpochIndex: %d", vcd.EpochIndex)
 		timeStr = time.Unix(vcd.CreateTime, 0).Format("2006-01-02 15:04:05")
-		utils.Log.Debugf("CreateTime: %s", timeStr)
-		utils.Log.Debugf("Reason: %d", vcd.Reason)
-		utils.Log.Debugf("EpochItemList Count: %d", len(vcd.EpochItemList))
+		utils.Log.Tracef("CreateTime: %s", timeStr)
+		utils.Log.Tracef("Reason: %d", vcd.Reason)
+		utils.Log.Tracef("EpochItemList Count: %d", len(vcd.EpochItemList))
 		for _, item := range vcd.EpochItemList {
-			utils.Log.Debugf("	validator ID: %d", item.ValidatorId)
-			utils.Log.Debugf("	validator Public: %x", item.PublicKey[:])
-			utils.Log.Debugf("------------------------------------------------")
+			utils.Log.Tracef("	validator ID: %d", item.ValidatorId)
+			utils.Log.Tracef("	validator Public: %x", item.PublicKey[:])
+			utils.Log.Tracef("------------------------------------------------")
 		}
-		utils.Log.Debugf("EpochVoteList Count: %d", len(vcd.EpochVoteList))
+		utils.Log.Tracef("EpochVoteList Count: %d", len(vcd.EpochVoteList))
 		for _, item := range vcd.EpochVoteList {
-			utils.Log.Debugf("	validator ID: %d", item.ValidatorId)
-			utils.Log.Debugf("	vote hash: %s", item.Hash.String())
-			utils.Log.Debugf("------------------------------------------------")
+			utils.Log.Tracef("	validator ID: %d", item.ValidatorId)
+			utils.Log.Tracef("	vote hash: %s", item.Hash.String())
+			utils.Log.Tracef("------------------------------------------------")
 		}
 	case *validatechain.DataUpdateEpoch:
 	case *validatechain.DataGeneratorHandOver:

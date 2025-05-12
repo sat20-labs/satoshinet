@@ -70,13 +70,13 @@ func (msg *MsgConfirmDelEpoch) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgConfirmDelEpoch) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgConfirmDelEpoch:")
-	utils.Log.Debugf("ValidatorId: %d", msg.DelEpochMember.ValidatorId)
-	utils.Log.Debugf("DelValidatorId: %d", msg.DelEpochMember.DelValidatorId)
-	utils.Log.Debugf("DelCode: %d", msg.DelEpochMember.DelCode)
-	utils.Log.Debugf("EpochIndex: %d", msg.DelEpochMember.EpochIndex)
-	utils.Log.Debugf("Result: %d", msg.DelEpochMember.Result)
-	utils.Log.Debugf("Token: %s", msg.DelEpochMember.Token)
+	utils.Log.Tracef("Command MsgConfirmDelEpoch:")
+	utils.Log.Tracef("ValidatorId: %d", msg.DelEpochMember.ValidatorId)
+	utils.Log.Tracef("DelValidatorId: %d", msg.DelEpochMember.DelValidatorId)
+	utils.Log.Tracef("DelCode: %d", msg.DelEpochMember.DelCode)
+	utils.Log.Tracef("EpochIndex: %d", msg.DelEpochMember.EpochIndex)
+	utils.Log.Tracef("Result: %d", msg.DelEpochMember.Result)
+	utils.Log.Tracef("Token: %s", msg.DelEpochMember.Token)
 }
 
 // NewMsgConfirmDelEpoch returns a new bitcoin version message that conforms to the

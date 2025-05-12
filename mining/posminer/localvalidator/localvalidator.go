@@ -27,7 +27,7 @@ type LocalValidator struct {
 }
 
 func NewValidator(config *validator.Config, addrs []net.Addr) (*LocalValidator, error) {
-	utils.Log.Debugf("NewValidator")
+	utils.Log.Tracef("NewValidator")
 	localValidator := &LocalValidator{
 		Validator: validator.Validator{
 			Cfg: config,
@@ -53,8 +53,8 @@ func NewValidator(config *validator.Config, addrs []net.Addr) (*LocalValidator, 
 
 	localValidator.isBootStrapNode = bootstrapnode.IsBootStrapNode(validatorInfo.PublicKey[:])
 
-	utils.Log.Debugf("Local validator ID: %d", localValidator.Cfg.LocalValidatorId)
-	utils.Log.Debugf("Local validator PublicKey: %x", publicKey)
+	utils.Log.Tracef("Local validator ID: %d", localValidator.Cfg.LocalValidatorId)
+	utils.Log.Tracef("Local validator PublicKey: %x", publicKey)
 
 	// TODO Check local validator is valid or not
 	// As an avaliable validator, it should be obtained validator ID from the validator committee when the validator is Pledged assets to the validator committee
@@ -70,7 +70,7 @@ func NewValidator(config *validator.Config, addrs []net.Addr) (*LocalValidator, 
 		return nil, err
 	}
 	localValidator.localPeer = peer
-	utils.Log.Debugf("NewValidator success with peer: %v", peer.Addr())
+	utils.Log.Tracef("NewValidator success with peer: %v", peer.Addr())
 	return localValidator, nil
 }
 
@@ -106,17 +106,17 @@ func (v *LocalValidator) Start() {
 	validatorHost := validatorinfo.GetAddrStringHost(defaultConnectedAddr)
 	validatorInfo.Host = validatorHost
 
-	utils.Log.Debugf("LocalValidator Started. Will update CreateTime: %v, Host: %v", validatorInfo.CreateTime.Format(time.DateTime), validatorInfo.Host)
+	utils.Log.Tracef("LocalValidator Started. Will update CreateTime: %v, Host: %v", validatorInfo.CreateTime.Format(time.DateTime), validatorInfo.Host)
 
 	v.UpdateValidatorInfo(&validatorInfo, validatorinfo.MaskCreateTime|validatorinfo.MaskHost)
 
-	utils.Log.Debugf("LocalValidator Started. validatorInfo: %v", v.ValidatorInfo)
+	utils.Log.Tracef("LocalValidator Started. validatorInfo: %v", v.ValidatorInfo)
 }
 
 // OnPeerConnected is invoked when a remote peer connects to the local peer .
 func (v *LocalValidator) OnPeerConnected(addr net.Addr, validatorInfo *validatorinfo.ValidatorInfo) {
 	// It will nitify the validator manager, an new validator peer is connected
-	utils.Log.Debugf("[LocalValidator]Receive a new validator peer connected[%s]", addr.String())
+	utils.Log.Tracef("[LocalValidator]Receive a new validator peer connected[%s]", addr.String())
 	if v.Cfg == nil || v.Cfg.Listener == nil {
 		return
 	}
@@ -127,7 +127,7 @@ func (v *LocalValidator) OnPeerConnected(addr net.Addr, validatorInfo *validator
 // GetAllValidators invoke when the peer receiver GetValidators command.
 func (v *LocalValidator) GetAllValidators(validatorID uint64) []*validatorinfo.ValidatorInfo {
 	// Will invoke validator manager to get all validators in local
-	utils.Log.Debugf("[LocalValidator]Receive GetValidators command from validator [%d]", validatorID)
+	utils.Log.Tracef("[LocalValidator]Receive GetValidators command from validator [%d]", validatorID)
 	if v.Cfg == nil || v.Cfg.Listener == nil {
 		return nil
 	}
@@ -138,7 +138,7 @@ func (v *LocalValidator) GetAllValidators(validatorID uint64) []*validatorinfo.V
 // GetAllValidators invoke when the peer receiver GetValidators command.
 func (v *LocalValidator) GetLocalEpoch(validatorID uint64) (*epoch.Epoch, *epoch.Epoch, error) {
 	// Will invoke validator manager to get all validators in local
-	utils.Log.Debugf("[LocalValidator]Receive GetLocalEpoch command from validator [%d]", validatorID)
+	utils.Log.Tracef("[LocalValidator]Receive GetLocalEpoch command from validator [%d]", validatorID)
 	if v.Cfg == nil || v.Cfg.Listener == nil {
 		return nil, nil, errors.New("Not implement manager listener")
 	}
@@ -171,10 +171,10 @@ func (v *LocalValidator) OnAllValidatorsDeclare(validatorList []validatorinfo.Va
 
 // GetLocalValidatorInfo invoke when local validator info.
 func (v *LocalValidator) GetLocalValidatorInfo(uint64) *validatorinfo.ValidatorInfo {
-	utils.Log.Debugf("[LocalValidator]GetLocalValidatorInfo")
-	utils.Log.Debugf("ValidatorId: %d", v.ValidatorInfo.ValidatorId)
-	utils.Log.Debugf("PublicKey: %x", v.ValidatorInfo.PublicKey)
-	utils.Log.Debugf("CreateTime: %s", v.ValidatorInfo.CreateTime.Format(time.DateTime))
+	utils.Log.Tracef("[LocalValidator]GetLocalValidatorInfo")
+	utils.Log.Tracef("ValidatorId: %d", v.ValidatorInfo.ValidatorId)
+	utils.Log.Tracef("PublicKey: %x", v.ValidatorInfo.PublicKey)
+	utils.Log.Tracef("CreateTime: %s", v.ValidatorInfo.CreateTime.Format(time.DateTime))
 	return &v.ValidatorInfo
 }
 
@@ -183,25 +183,25 @@ func (v *LocalValidator) IsBootStrapNode() bool {
 }
 
 func (v *LocalValidator) BecomeGenerator(height int32, handOverTime time.Time) error {
-	utils.Log.Debugf("[LocalValidator]BecomeGenerator...")
+	utils.Log.Tracef("[LocalValidator]BecomeGenerator...")
 	myGenerator := generator.NewGenerator(&v.ValidatorInfo, height, handOverTime.Unix(), "")
 
 	err := myGenerator.SetHandOverTime(handOverTime)
 	if err != nil {
-		utils.Log.Debugf("Set miner time failed: %v", err)
+		utils.Log.Tracef("Set miner time failed: %v", err)
 		return err
 	}
 
 	tokenData := myGenerator.GetTokenData()
 
-	utils.Log.Debugf("tokenData = %x", tokenData)
+	utils.Log.Tracef("tokenData = %x", tokenData)
 
 	token, err := v.CreateToken(tokenData)
 	if err != nil {
 		return errors.New("create token failed")
 	}
 
-	utils.Log.Debugf("token = %s", token)
+	utils.Log.Tracef("token = %s", token)
 
 	myGenerator.SetToken(token)
 	v.myGenerator = myGenerator
@@ -233,13 +233,13 @@ func (v *LocalValidator) ClearMyGenerator() {
 
 // Get Generator info in local, it should be saved in manager
 func (v *LocalValidator) GetGenerator(validatorId uint64) *generator.Generator {
-	utils.Log.Debugf("[LocalValidator]GetGenerator from <%d>...", validatorId)
+	utils.Log.Tracef("[LocalValidator]GetGenerator from <%d>...", validatorId)
 	generator := v.Cfg.Listener.GetGenerator()
 	return generator
 }
 
 func (v *LocalValidator) OnTimeGenerateBlock() (*chainhash.Hash, int32, error) {
-	utils.Log.Debugf("[LocalValidator]OnTimeGenerateBlock")
+	utils.Log.Tracef("[LocalValidator]OnTimeGenerateBlock")
 
 	return v.Cfg.Listener.OnTimeGenerateBlock()
 }
@@ -286,7 +286,7 @@ func (v *LocalValidator) ConfirmDelEpochMember(reqDelEpochMember *validatorcomma
 
 // Received a notify handover command
 func (v *LocalValidator) OnNotifyHandover(validatorId uint64, remoteAddr net.Addr) {
-	utils.Log.Debugf("[LocalValidator]OnNotifyHandover from %d", validatorId)
+	utils.Log.Tracef("[LocalValidator]OnNotifyHandover from %d", validatorId)
 
 	v.Cfg.Listener.OnNotifyHandover(validatorId)
 }

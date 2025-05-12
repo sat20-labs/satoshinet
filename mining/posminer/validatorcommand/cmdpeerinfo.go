@@ -82,12 +82,12 @@ func (msg *MsgPeerInfo) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgPeerInfo) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgPeerInfo:")
-	utils.Log.Debugf("ProtocolVersion: %d", msg.ProtocolVersion)
-	utils.Log.Debugf("ValidatorId: %d", msg.ValidatorId)
-	utils.Log.Debugf("PublicKey: %x", msg.PublicKey)
-	utils.Log.Debugf("Host: %s", msg.Host)
-	utils.Log.Debugf("CreateTime: %s", msg.CreateTime.Format(time.DateTime))
+	utils.Log.Tracef("Command MsgPeerInfo:")
+	utils.Log.Tracef("ProtocolVersion: %d", msg.ProtocolVersion)
+	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
+	utils.Log.Tracef("PublicKey: %x", msg.PublicKey)
+	utils.Log.Tracef("Host: %s", msg.Host)
+	utils.Log.Tracef("CreateTime: %s", msg.CreateTime.Format(time.DateTime))
 }
 
 // NewMsgPeerInfo returns a new bitcoin verack message that conforms to the

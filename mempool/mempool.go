@@ -943,7 +943,7 @@ func (mp *TxPool) validateReplacement(tx *btcutil.Tx,
 //
 // This function MUST be called with the mempool lock held (for writes).
 func (mp *TxPool) maybeAcceptTransaction(tx *btcutil.Tx, isNew, rateLimit,
-	rejectDupOrphans bool) ([]*chainhash.Hash, *TxDesc, error) {
+	rejectDupOrphans bool) ([]string, *TxDesc, error) {
 
 	txHash := tx.Hash()
 
@@ -993,7 +993,7 @@ func (mp *TxPool) maybeAcceptTransaction(tx *btcutil.Tx, isNew, rateLimit,
 // be added to the orphan pool.
 //
 // This function is safe for concurrent access.
-func (mp *TxPool) MaybeAcceptTransaction(tx *btcutil.Tx, isNew, rateLimit bool) ([]*chainhash.Hash, *TxDesc, error) {
+func (mp *TxPool) MaybeAcceptTransaction(tx *btcutil.Tx, isNew, rateLimit bool) ([]string, *TxDesc, error) {
 	// Protect concurrent access.
 	mp.mtx.Lock()
 	hashes, txD, err := mp.maybeAcceptTransaction(tx, isNew, rateLimit, true)
@@ -1311,7 +1311,7 @@ type MempoolAcceptResult struct {
 	//
 	// NOTE: this field is mutually exclusive with other fields. If this
 	// field is not nil, then other fields must be empty.
-	MissingParents []*chainhash.Hash
+	MissingParents []string // utxo
 
 	// utxoView is a set of the unspent transaction outputs referenced by
 	// the inputs to this transaction.
@@ -1506,15 +1506,14 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 	// outputs don't exist or are already spent. Adding orphans to the
 	// orphan pool is not handled by this function, and the caller should
 	// use maybeAddOrphan if this behavior is desired.
-	var missingParents []*chainhash.Hash
+	var missingParents []string
 	for outpoint, entry := range utxoView.Entries() {
 		if entry == nil || entry.IsSpent() {
 			// Must make a copy of the hash here since the iterator
 			// is replaced and taking its address directly would
 			// result in all the entries pointing to the same
 			// memory location and thus all be the final hash.
-			hashCopy := outpoint.Hash
-			missingParents = append(missingParents, &hashCopy)
+			missingParents = append(missingParents, outpoint.String())
 		}
 	}
 

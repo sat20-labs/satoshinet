@@ -91,20 +91,20 @@ func (msg *MsgHandOver) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgHandOver) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgHandOver:")
-	utils.Log.Debugf("ValidatorId: %d", msg.HandOverInfo.ValidatorId)
+	utils.Log.Tracef("Command MsgHandOver:")
+	utils.Log.Tracef("ValidatorId: %d", msg.HandOverInfo.ValidatorId)
 	handoverType := "Unknown type"
 	if msg.HandOverInfo.HandOverType == generator.HandOverTypeByEpochOrder {
 		handoverType = "Order"
 	} else if msg.HandOverInfo.HandOverType == generator.HandOverTypeByVote {
 		handoverType = "Vote"
 	}
-	utils.Log.Debugf("HandOverType: %s", handoverType)
+	utils.Log.Tracef("HandOverType: %s", handoverType)
 	timeStamp := time.Unix(msg.HandOverInfo.Timestamp, 0)
-	utils.Log.Debugf("Timestamp: %s", timeStamp.Format(time.DateTime))
-	utils.Log.Debugf("GeneratorId: %d", msg.HandOverInfo.GeneratorId)
-	utils.Log.Debugf("Height: %d", msg.HandOverInfo.Height)
-	utils.Log.Debugf("Token: %s", msg.HandOverInfo.Token)
+	utils.Log.Tracef("Timestamp: %s", timeStamp.Format(time.DateTime))
+	utils.Log.Tracef("GeneratorId: %d", msg.HandOverInfo.GeneratorId)
+	utils.Log.Tracef("Height: %d", msg.HandOverInfo.Height)
+	utils.Log.Tracef("Token: %s", msg.HandOverInfo.Token)
 }
 
 // NewMsgHandOver returns a new bitcoin version message that conforms to the

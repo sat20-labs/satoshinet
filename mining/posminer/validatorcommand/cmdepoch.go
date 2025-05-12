@@ -280,10 +280,10 @@ func (msg *MsgEpoch) MaxPayloadLength(pver uint32) uint32 {
 }
 
 func (msg *MsgEpoch) LogCommandInfo() {
-	utils.Log.Debugf("Command MsgEpoch:")
+	utils.Log.Tracef("Command MsgEpoch:")
 	showEpoch("MsgEpoch: CurrentEpoch", msg.CurrentEpoch)
 	showEpoch("MsgEpoch: NexEpoch", msg.NextEpoch)
-	utils.Log.Debugf("-------------------------------------")
+	utils.Log.Tracef("-------------------------------------")
 }
 
 // NewMsgEpoch returns a new bitcoin version message that conforms to the
@@ -301,38 +301,38 @@ func NewMsgEpoch(currentEpoch, nextEpoch *epoch.Epoch) *MsgEpoch {
 }
 
 func showEpoch(title string, epoch *epoch.Epoch) {
-	utils.Log.Debugf("********************************* %s Summary ********************************", title)
+	utils.Log.Tracef("********************************* %s Summary ********************************", title)
 	if epoch == nil {
-		utils.Log.Debugf("Invalid epoch")
+		utils.Log.Tracef("Invalid epoch")
 	} else {
-		utils.Log.Debugf("EpochIndex: %d", epoch.EpochIndex)
-		utils.Log.Debugf("CreateHeight: %d", epoch.CreateHeight)
-		utils.Log.Debugf("CreateTime: %s", epoch.CreateTime.Format("2006-01-02 15:04:05"))
-		utils.Log.Debugf("EpochIndex: %d", epoch.EpochIndex)
-		utils.Log.Debugf("Validator Count in Epoch: %d", len(epoch.ItemList))
+		utils.Log.Tracef("EpochIndex: %d", epoch.EpochIndex)
+		utils.Log.Tracef("CreateHeight: %d", epoch.CreateHeight)
+		utils.Log.Tracef("CreateTime: %s", epoch.CreateTime.Format("2006-01-02 15:04:05"))
+		utils.Log.Tracef("EpochIndex: %d", epoch.EpochIndex)
+		utils.Log.Tracef("Validator Count in Epoch: %d", len(epoch.ItemList))
 		for _, epochItem := range epoch.ItemList {
-			utils.Log.Debugf("validator ID: %d", epochItem.ValidatorId)
-			utils.Log.Debugf("validator Public: %x", epochItem.PublicKey[:])
-			utils.Log.Debugf("validator Host: %s", epochItem.Host)
-			utils.Log.Debugf("validator Index: %d", epochItem.Index)
-			utils.Log.Debugf("------------------------------------------------")
+			utils.Log.Tracef("validator ID: %d", epochItem.ValidatorId)
+			utils.Log.Tracef("validator Public: %x", epochItem.PublicKey[:])
+			utils.Log.Tracef("validator Host: %s", epochItem.Host)
+			utils.Log.Tracef("validator Index: %d", epochItem.Index)
+			utils.Log.Tracef("------------------------------------------------")
 		}
 
-		utils.Log.Debugf("Epoch generator: ")
+		utils.Log.Tracef("Epoch generator: ")
 
 		generator := epoch.Generator
 		if generator == nil {
-			utils.Log.Debugf("	No generator")
+			utils.Log.Tracef("	No generator")
 		} else {
-			utils.Log.Debugf("	Generator ID: %d", generator.GeneratorId)
-			utils.Log.Debugf("	Generator TimeStamp: %s", time.Unix(generator.Timestamp, 0).Format("2006-01-02 15:04:05"))
-			utils.Log.Debugf("	Generator Token: %s", generator.Token)
-			utils.Log.Debugf("	Generator Block Height: %d", generator.Height)
+			utils.Log.Tracef("	Generator ID: %d", generator.GeneratorId)
+			utils.Log.Tracef("	Generator TimeStamp: %s", time.Unix(generator.Timestamp, 0).Format("2006-01-02 15:04:05"))
+			utils.Log.Tracef("	Generator Token: %s", generator.Token)
+			utils.Log.Tracef("	Generator Block Height: %d", generator.Height)
 		}
 
 		//Generator     *generator.Generator // 当前Generator
-		utils.Log.Debugf("CurGeneratorPos: %d", epoch.CurGeneratorPos)
+		utils.Log.Tracef("CurGeneratorPos: %d", epoch.CurGeneratorPos)
 
 	}
-	utils.Log.Debugf("*********************************        End        ********************************")
+	utils.Log.Tracef("*********************************        End        ********************************")
 }
