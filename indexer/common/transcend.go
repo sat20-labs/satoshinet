@@ -18,43 +18,41 @@ import (
 )
 
 const (
-	SAT20_MAGIC_NUMBER           = txscript.OP_16
-	CONTENT_TYPE_ASCENDING       = txscript.OP_1
-	CONTENT_TYPE_DESCENDING      = txscript.OP_2
-	CONTENT_TYPE_PAYMENT         = txscript.OP_3
-	CONTENT_TYPE_DESTROY         = txscript.OP_4
-	CONTENT_TYPE_SWAP            = txscript.OP_5
-	CONTENT_TYPE_STAKE           = txscript.OP_6
-	CONTENT_TYPE_UNSTAKE         = txscript.OP_7
-	CONTENT_TYPE_DEPOSIT         = txscript.OP_8
-	CONTENT_TYPE_WITHDRAW        = txscript.OP_9
-	CONTENT_TYPE_CHANNELID       = txscript.OP_10
-	CONTENT_TYPE_LIQUIDPOOL      = txscript.OP_11
-	CONTENT_TYPE_PERFORMACTION   = txscript.OP_12
-	CONTENT_TYPE_DEPLOYCONTRACT  = txscript.OP_13
-	CONTENT_TYPE_INVOKECONTRACT  = txscript.OP_14
-	CONTENT_TYPE_CONTRACTRESULT  = txscript.OP_15
+	SAT20_MAGIC_NUMBER          = txscript.OP_16
+	CONTENT_TYPE_ASCENDING      = txscript.OP_1
+	CONTENT_TYPE_DESCENDING     = txscript.OP_2
+	CONTENT_TYPE_PAYMENT        = txscript.OP_3
+	CONTENT_TYPE_DESTROY        = txscript.OP_4
+	CONTENT_TYPE_SWAP           = txscript.OP_5
+	CONTENT_TYPE_STAKE          = txscript.OP_6
+	CONTENT_TYPE_UNSTAKE        = txscript.OP_7
+	CONTENT_TYPE_DEPOSIT        = txscript.OP_8
+	CONTENT_TYPE_WITHDRAW       = txscript.OP_9
+	CONTENT_TYPE_CHANNELID      = txscript.OP_10
+	CONTENT_TYPE_LIQUIDPOOL     = txscript.OP_11
+	CONTENT_TYPE_PERFORMACTION  = txscript.OP_12
+	CONTENT_TYPE_DEPLOYCONTRACT = txscript.OP_13
+	CONTENT_TYPE_INVOKECONTRACT = txscript.OP_14
+	CONTENT_TYPE_CONTRACTRESULT = txscript.OP_15
 
 	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 2
 )
 
-
 type ContractDeployData struct {
-	DeployTime   	int64
-	ChannelId    	string
-	ContractName 	string
+	DeployTime      int64
+	ChannelId       string
+	ContractName    string
 	ContractContent string
 	LocalSign       []byte
 	RemoteSign      []byte
 }
 
 type ContractInvokeData struct {
-	ResvId       int64
 	ChannelId    string
 	ContractName string
 	AssetName    string
 	Amt          string
-	InitorPubKey []byte
+	PubKey       []byte
 	Sig          []byte
 }
 
@@ -288,7 +286,6 @@ func GenTickerInfo(data []byte) (*TickerInfo, error) {
 	return &result, nil
 }
 
-
 func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error) {
 
 	tokenizer := txscript.MakeScriptTokenizer(0, script)
@@ -336,12 +333,6 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 
 	result := &ContractInvokeData{}
 
-	// id
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script is not STP script")
-	}
-	result.ResvId = extractScriptInt64(tokenizer.Data())
-
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing channelId")
 	}
@@ -367,7 +358,7 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script too short: missing initor pubkey")
 	}
-	result.InitorPubKey = tokenizer.Data()
+	result.PubKey = tokenizer.Data()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script too short: missing sig")
