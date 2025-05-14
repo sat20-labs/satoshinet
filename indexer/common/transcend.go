@@ -39,19 +39,16 @@ const (
 )
 
 type ContractDeployData struct {
-	DeployTime      int64
-	ChannelId       string
-	ContractName    string
+	ContractPath    string
 	ContractContent string
+	DeployTime      int64
 	LocalSign       []byte
 	RemoteSign      []byte
 }
 
 type ContractInvokeData struct {
-	ChannelId    string
-	ContractName string
-	AssetName    string
-	Amt          string
+	ContractPath string
+	InvokeParam  string
 	PubKey       []byte
 	Sig          []byte
 }
@@ -291,29 +288,22 @@ func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error
 	tokenizer := txscript.MakeScriptTokenizer(0, script)
 	result := ContractDeployData{}
 
+	
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("script is missing contract path")
+	}
+	result.ContractPath = string(tokenizer.Data())
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return nil, fmt.Errorf("script is missing contract content")
+	}
+	result.ContractContent = string(tokenizer.Data())
+
 	// deployTime
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing deploy time")
 	}
 	result.DeployTime = extractScriptInt64(tokenizer.Data())
-
-	// channelId
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script is missing channel id")
-	}
-	result.ChannelId = string(tokenizer.Data())
-
-	// contractName
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script is missing contract name")
-	}
-	result.ContractName = string(tokenizer.Data())
-
-	// contractParam
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script is missing contract content")
-	}
-	result.ContractContent = string(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script too short: missing local sig")
@@ -334,26 +324,14 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 	result := &ContractInvokeData{}
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script is missing channelId")
+		return nil, fmt.Errorf("script is missing contract path")
 	}
-	result.ChannelId = string(tokenizer.Data())
+	result.ContractPath = string(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script is missing contract name")
+		return nil, fmt.Errorf("script is missing invoke parameter")
 	}
-	result.ContractName = string(tokenizer.Data())
-
-	// assetName
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script is missing asset name")
-	}
-	result.AssetName = string(tokenizer.Data())
-
-	// amt
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script is missing asset amt")
-	}
-	result.Amt = string(tokenizer.Data())
+	result.InvokeParam = string(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script too short: missing initor pubkey")
