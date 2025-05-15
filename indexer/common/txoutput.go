@@ -87,6 +87,10 @@ func (p *TxOutput) OutPoint() *wire.OutPoint {
 	return outpoint
 }
 
+func (p *TxOutput) TxOut() *wire.TxOut {
+	return &p.OutValue
+}
+
 func (p *TxOutput) TxID() string {
 	parts := strings.Split(p.OutPointStr, ":")
 	if len(parts) != 2 {
