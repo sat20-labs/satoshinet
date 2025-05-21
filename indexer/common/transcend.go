@@ -40,7 +40,7 @@ const (
 
 type ContractDeployData struct {
 	ContractPath    string
-	ContractContent string
+	ContractContent []byte
 	DeployTime      int64
 	LocalSign       []byte
 	RemoteSign      []byte
@@ -48,13 +48,13 @@ type ContractDeployData struct {
 
 type ContractInvokeData struct {
 	ContractPath string
-	InvokeParam  string
+	InvokeParam  []byte
 	PubKey       []byte
 	Sig          []byte
 }
 
 // 从比特币脚本中提取int64值
-func extractScriptInt64(data []byte) int64 {
+func ExtractScriptInt64(data []byte) int64 {
 	if len(data) == 0 {
 		return 0
 	}
@@ -100,7 +100,7 @@ func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 		err = fmt.Errorf("script too short: missing value")
 		return
 	}
-	value = extractScriptInt64(tokenizer.Data())
+	value = ExtractScriptInt64(tokenizer.Data())
 
 	// 读取assets
 	if !tokenizer.Next() {
@@ -297,13 +297,13 @@ func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing contract content")
 	}
-	result.ContractContent = string(tokenizer.Data())
+	result.ContractContent = (tokenizer.Data())
 
 	// deployTime
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing deploy time")
 	}
-	result.DeployTime = extractScriptInt64(tokenizer.Data())
+	result.DeployTime = ExtractScriptInt64(tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script too short: missing local sig")
@@ -331,7 +331,7 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing invoke parameter")
 	}
-	result.InvokeParam = string(tokenizer.Data())
+	result.InvokeParam = (tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script too short: missing initor pubkey")
