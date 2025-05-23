@@ -3,6 +3,7 @@ package validatormanager
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -27,6 +28,7 @@ type NewEpochManager struct {
 	started       bool
 	reason        uint32
 	receivedEpoch map[uint64]*NewEpochVoteItem
+	mutex 	      sync.Mutex
 }
 
 func CreateNewEpochManager(validatorMgr *ValidatorManager, reason uint32) *NewEpochManager {
@@ -50,10 +52,14 @@ func (nem *NewEpochManager) NewReqEpoch(validatorId uint64) {
 		utils.Log.Errorf("NewReqEpoch failed: %v", err)
 		return
 	}
+	nem.mutex.Lock()
+	defer nem.mutex.Unlock()
 	nem.receivedEpoch[validatorId] = &NewEpochVoteItem{}
 }
 
 func (nem *NewEpochManager) AddReceivedEpoch(validatorId uint64, hash *chainhash.Hash) error {
+	nem.mutex.Lock()
+	defer nem.mutex.Unlock()
 	if _, ok := nem.receivedEpoch[validatorId]; !ok {
 		err := errors.New("Is not invited validatorId for received epoch")
 		utils.Log.Errorf("AddReceivedEpoch failed: %v", err)
@@ -104,6 +110,8 @@ func (nem *NewEpochManager) handleNewEpoch() {
 	utils.Log.Tracef("****************************************************************************************")
 	utils.Log.Tracef("Received Epochs: summary:")
 
+	nem.mutex.Lock()
+	defer nem.mutex.Unlock()
 	invitedCount := len(nem.receivedEpoch)
 
 	for validatorId, voteItem := range nem.receivedEpoch {
