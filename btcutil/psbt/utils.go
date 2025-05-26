@@ -372,7 +372,7 @@ func readVarIntBuf(buf []byte) (uint64, int, error) {
 	var rv uint64
 	switch discriminant {
 	case 0xff:
-		rv := binary.LittleEndian.Uint64(buf[offset : offset+8])
+		rv = binary.LittleEndian.Uint64(buf[offset : offset+8])
 		offset += 8
 
 		// The encoding is not canonical if the value could have been
@@ -384,7 +384,7 @@ func readVarIntBuf(buf []byte) (uint64, int, error) {
 		}
 
 	case 0xfe:
-		rv := binary.LittleEndian.Uint64(buf[offset : offset+4])
+		rv = uint64(binary.LittleEndian.Uint32(buf[offset : offset+4]))
 		offset += 4
 
 		// The encoding is not canonical if the value could have been
@@ -396,7 +396,7 @@ func readVarIntBuf(buf []byte) (uint64, int, error) {
 		}
 
 	case 0xfd:
-		rv := binary.LittleEndian.Uint64(buf[offset : offset+2])
+		rv = uint64(binary.LittleEndian.Uint16(buf[offset : offset+2]))
 		offset += 2
 
 		// The encoding is not canonical if the value could have been
