@@ -317,7 +317,7 @@ func AsSmallInt(op byte) int {
 		return 0
 	}
 
-	return int(op - (OP_1 - 1))
+	return int(op) - int(OP_1 - 1)
 }
 
 // countSigOpsV0 returns the number of signature operations in the provided

@@ -207,3 +207,67 @@ func MakeScriptTokenizer(scriptVersion uint16, script []byte) ScriptTokenizer {
 		opcodePos: -1,
 	}
 }
+
+func (t *ScriptTokenizer) ExtractNextInt64() (int64, error) {
+	if !t.Next() {
+		return 0, fmt.Errorf("unexpected end of script")
+	}
+	if t.Err() != nil {
+		return 0, t.Err()
+	}
+
+	opcode := t.Opcode()
+	data := t.Data()
+
+	return ExtractInt64FromScript(opcode, data), nil
+}
+
+func (t *ScriptTokenizer) ExtractInt64() (int64) {
+	opcode := t.Opcode()
+	data := t.Data()
+
+	return ExtractInt64FromScript(opcode, data)
+}
+
+// 处理 ScriptTokenizer 中的小整数或正常 PushData 的情况
+func ExtractInt64FromScript(opcode byte, data []byte) (int64) {
+	if data == nil && opcode == OP_0 {
+		return 0
+	}
+
+	if data == nil && opcode == OP_1NEGATE {
+		return -1
+	}
+
+	if data == nil && opcode >= OP_1 && opcode <= OP_16 {
+		// 是小整数，用 Opcode 表示
+		return int64(AsSmallInt(opcode))
+	} 
+
+	return extractScriptInt64(data)
+	
+}
+
+// 从比特币脚本中提取int64值
+func extractScriptInt64(data []byte) int64 {
+	if len(data) == 0 {
+		return 0
+	}
+
+	// 比特币脚本中的整数是最小化编码的
+	isNegative := (data[len(data)-1] & 0x80) != 0
+
+	buf := make([]byte, 8)
+	copy(buf, data)
+
+	if isNegative {
+		buf[len(data)-1] &= 0x7f
+	}
+
+	val := int64(binary.LittleEndian.Uint64(buf))
+	if isNegative {
+		val = -val
+	}
+
+	return val
+}

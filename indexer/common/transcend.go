@@ -2,7 +2,6 @@ package common
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 	"strconv"
 	"strings"
@@ -53,29 +52,6 @@ type ContractInvokeData struct {
 	Sig          []byte
 }
 
-// 从比特币脚本中提取int64值
-func ExtractScriptInt64(data []byte) int64 {
-	if len(data) == 0 {
-		return 0
-	}
-
-	// 比特币脚本中的整数是最小化编码的
-	isNegative := (data[len(data)-1] & 0x80) != 0
-
-	buf := make([]byte, 8)
-	copy(buf, data)
-
-	if isNegative {
-		buf[len(data)-1] &= 0x7f
-	}
-
-	val := int64(binary.LittleEndian.Uint64(buf))
-	if isNegative {
-		val = -val
-	}
-
-	return val
-}
 
 func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	value int64, assets wire.TxAssets, sig []byte, err error) {
@@ -100,7 +76,7 @@ func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 		err = fmt.Errorf("script too short: missing value")
 		return
 	}
-	value = ExtractScriptInt64(tokenizer.Data())
+	value = tokenizer.ExtractInt64()
 
 	// 读取assets
 	if !tokenizer.Next() {
@@ -303,7 +279,7 @@ func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing deploy time")
 	}
-	result.DeployTime = ExtractScriptInt64(tokenizer.Data())
+	result.DeployTime = tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script too short: missing local sig")
