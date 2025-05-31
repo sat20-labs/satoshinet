@@ -310,12 +310,14 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 	result.InvokeParam = (tokenizer.Data())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script too short: missing initor pubkey")
+		// 简化的调用方案
+		return result, nil
 	}
 	result.PubKey = tokenizer.Data()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return nil, fmt.Errorf("script too short: missing sig")
+		// 简化的调用方案
+		return result, nil
 	}
 	result.Sig = tokenizer.Data()
 
