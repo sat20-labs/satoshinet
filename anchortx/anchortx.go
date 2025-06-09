@@ -5,7 +5,6 @@ package anchortx
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 
@@ -162,30 +161,6 @@ func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AnchorInfo, error)
 	return &lockedTxInfo.AnchorInfo, nil
 }
 
-// 从比特币脚本中提取int64值
-func extractScriptInt64(data []byte) int64 {
-	if len(data) == 0 {
-		return 0
-	}
-
-	// 比特币脚本中的整数是最小化编码的
-	isNegative := (data[len(data)-1] & 0x80) != 0
-
-	buf := make([]byte, 8)
-	copy(buf, data)
-
-	if isNegative {
-		buf[len(data)-1] &= 0x7f
-	}
-
-	val := int64(binary.LittleEndian.Uint64(buf))
-	if isNegative {
-		val = -val
-	}
-
-	return val
-}
-
 func ParseAnchorScript(AnchorScript []byte) (*AnchorInfo, error) {
 
 	const scriptVersion = 0
@@ -216,7 +191,7 @@ func ParseAnchorScript(AnchorScript []byte) (*AnchorInfo, error) {
 		err := fmt.Errorf("invalid Anchor tx script for amount")
 		return nil, err
 	}
-	value := extractScriptInt64(tokenizer.Data())
+	value := tokenizer.ExtractInt64()
 
 	// The Third opcode must be a canonical data push, The data is
 	// serialized as assets
