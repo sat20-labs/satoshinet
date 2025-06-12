@@ -384,7 +384,7 @@ out:
 			if err != nil {
 				errStr := fmt.Sprintf("Failed to create new block "+
 					"template: %v", err)
-				utils.Log.Errorf(errStr)
+				utils.Log.Warning(errStr)
 				continue
 			}
 
@@ -674,7 +674,7 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 		if err != nil {
 			errStr := fmt.Sprintf("Failed to create new block "+
 				"template: %v", err)
-			utils.Log.Errorf(errStr)
+			utils.Log.Warning(errStr)
 			continue
 		}
 
@@ -817,7 +817,7 @@ func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
 	if err != nil {
 		errStr := fmt.Sprintf("Failed to create new block "+
 			"template: %v", err)
-		utils.Log.Errorf(errStr)
+		utils.Log.Warning(errStr)
 		return nil, 0, err
 	}
 
