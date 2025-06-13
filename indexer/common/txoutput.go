@@ -234,7 +234,7 @@ func (p *TxOutput) Split(name *wire.AssetName, value int64, amt *common.Decimal)
 
 func (p *TxOutput) GetAsset(assetName *wire.AssetName) *common.Decimal {
 	if assetName == nil || *assetName == ASSET_PLAIN_SAT {
-		return common.NewDecimal(p.GetPlainSat(), 0)
+		return common.NewDefaultDecimal(p.GetPlainSat())
 	}
 	asset, err := p.OutValue.Assets.Find(assetName)
 	if err != nil {

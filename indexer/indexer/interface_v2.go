@@ -109,7 +109,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 		value += (v - assetAmt)
 	}
 	if value != 0 {
-		result[common.ASSET_PLAIN_SAT] = indexer.NewDecimal(value, 0)
+		result[common.ASSET_PLAIN_SAT] = indexer.NewDefaultDecimal(value)
 	}
 
 	return result
@@ -140,7 +140,7 @@ func (b *IndexerMgr) GetAssetsWithUtxoV3(utxo string) map[common.TickerName]*com
 	}
 	value := (info.Value - assetAmt)
 	if value != 0 {
-		result[common.ASSET_PLAIN_SAT] = indexer.NewDecimal(value, 0)
+		result[common.ASSET_PLAIN_SAT] = indexer.NewDefaultDecimal(value)
 	}
 	return result
 }

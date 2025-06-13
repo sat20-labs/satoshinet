@@ -103,7 +103,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddress(address string) map[wire.AssetName
 
 		value += (v - assetAmt)
 	}
-	result[common.ASSET_PLAIN_SAT] = indexer.NewDecimal(value, 0)
+	result[common.ASSET_PLAIN_SAT] = indexer.NewDefaultDecimal(value)
 
 	return result
 }
@@ -172,15 +172,6 @@ func (b *IndexerMgr) GetBindingSat(ticker *wire.AssetName) int {
 		return 0
 	}
 	return info.N
-}
-
-func (b *IndexerMgr) GetDecimalFromAmt(ticker *wire.AssetName, amt int64) *indexer.Decimal {
-	tickerInfo := b.GetTickerInfo(ticker)
-	maxSupply, err := indexer.NewDecimalFromString(tickerInfo.MaxSupply, tickerInfo.Precition)
-	if err != nil {
-		common.Log.Panic("")
-	}
-	return indexer.NewDecimalFromInt64WithMax(amt, maxSupply)
 }
 
 func (b *IndexerMgr) GetAllCoreNode() map[string]int {
