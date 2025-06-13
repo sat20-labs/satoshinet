@@ -33,13 +33,14 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
 	"github.com/sat20-labs/satoshinet/database"
-	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	indexerEntry "github.com/sat20-labs/satoshinet/indexer"
+	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/mempool"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/mining/posminer"
 	"github.com/sat20-labs/satoshinet/netsync"
 	"github.com/sat20-labs/satoshinet/peer"
+	"github.com/sat20-labs/satoshinet/stp"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -2693,6 +2694,8 @@ func (s *server) Stop() error {
 	if cfg.SaveMempool {
 		s.saveMempoolCache()
 	}
+
+	stp.ReleaseSTP()
 
 	s.assetIndexer.Stop()
 
