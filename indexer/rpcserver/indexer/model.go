@@ -121,7 +121,7 @@ func (s *Model) getAllUtxos(address string, start, limit int) ([]*indexerwire.Pl
 		}
 
 		// 效率很低，需要内部实现内存池
-		if IsExistingInMemPool(utxo) {
+		if IsSpent(utxo) {
 			continue
 		}
 
@@ -188,7 +188,7 @@ func (s *Model) GetExistingUtxos(req *indexerwire.UtxosReq) ([]string, error) {
 			continue
 		}
 
-		if IsExistingInMemPool(utxo) {
+		if IsSpent(utxo) {
 			continue
 		}
 
@@ -319,7 +319,7 @@ func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) 
 		return nil, 0, err
 	}
 	for _, txOut := range outputMap {
-		if IsExistingInMemPool(txOut.OutPoint) {
+		if IsSpent(txOut.OutPoint) {
 			continue
 		}
 		result = append(result, txOut)
