@@ -256,9 +256,9 @@ func (s *Model) GetAssetSummaryV3(address string, start int, limit int) ([]*inde
 
 func (s *Model) GetUtxoInfoV3(utxo string) (*indexer.AssetsInUtxo, error) {
 
-	// if IsExistingInMemPool(utxo) {
-	// 	return nil, fmt.Errorf("utxo %s is in mempool", utxo)
-	// }
+	if IsSpent(utxo) {
+		return nil, fmt.Errorf("utxo %s is spent", utxo)
+	}
 	ret := s.indexer.GetTxOutputWithUtxoV3(utxo)
 	if ret == nil {
 		// 直接从TX数据中读
