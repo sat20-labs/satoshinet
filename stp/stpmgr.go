@@ -1,3 +1,5 @@
+//go:build stp_plugin
+
 package stp
 
 import (
