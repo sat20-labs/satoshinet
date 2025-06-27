@@ -40,7 +40,7 @@ func GetAscendFromDB(ldb *badger.DB, fundingUtxo string) (*common.AscendData, er
 	err := ldb.View(func(txn *badger.Txn) error {
 		item, err := txn.Get(GetAscendDBKey(fundingUtxo))
 		if err != nil {
-			common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
+			//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
 			return err
 		}
 		return item.Value(func(v []byte) error {

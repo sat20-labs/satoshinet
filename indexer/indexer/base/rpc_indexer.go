@@ -401,7 +401,7 @@ func (b *RpcIndexer) GetAscendData(fundingUtxo string) *common.AscendData {
 
 	info, err := stp.GetAscendFromDB(b.db, fundingUtxo)
 	if err != nil {
-		common.Log.Errorf("GetAscendFromDB %s failed, %v", fundingUtxo, err)
+		//common.Log.Errorf("GetAscendFromDB %s failed, %v", fundingUtxo, err)
 		return nil
 	}
 	b.mutex.Lock()

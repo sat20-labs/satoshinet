@@ -304,13 +304,13 @@ func (b *BlockChain) OnNewBlockMined(blockHash *chainhash.Hash, blockHeight int3
 	log.Debugf("OnNewBlockMined: new block is mined by posminer(%d:%s)", blockHeight, blockHash.String())
 	newBestBlockNode := b.bestChain.nodeByHeight(blockHeight)
 	if newBestBlockNode == nil {
-		log.Errorf("OnNewBlockMined: can't find block(%d:%s) in best chain", blockHeight, blockHash.String())
+		log.Warningf("OnNewBlockMined: can't find block(%d:%s) in best chain", blockHeight, blockHash.String())
 		return
 	}
 
 	newBestBlockNodeParent := newBestBlockNode.parent
 	if newBestBlockNodeParent == nil {
-		log.Errorf("OnNewBlockMined: can't find parent of block(%d:%s) in best chain", blockHeight, blockHash.String())
+		log.Warningf("OnNewBlockMined: can't find parent of block(%d:%s) in best chain", blockHeight, blockHash.String())
 		return
 	}
 	log.Debugf("OnNewBlockMined: new best block parent is(%d:%s)", newBestBlockNodeParent.height, newBestBlockNodeParent.hash.String())
@@ -318,13 +318,13 @@ func (b *BlockChain) OnNewBlockMined(blockHash *chainhash.Hash, blockHeight int3
 	log.Debugf("Current best block is(%d:%s)", b.BestSnapshot().Height, b.BestSnapshot().Hash.String())
 	curBestBlockNode := b.bestChain.nodeByHeight(b.BestSnapshot().Height)
 	if curBestBlockNode == nil {
-		log.Errorf("OnNewBlockMined: can't find block(%d:%s) in best chain", blockHeight, blockHash.String())
+		log.Warningf("OnNewBlockMined: can't find block(%d:%s) in best chain", blockHeight, blockHash.String())
 		return
 	}
 
 	curBestBlockNodeParent := curBestBlockNode.parent
 	if newBestBlockNodeParent == nil {
-		log.Errorf("OnNewBlockMined: can't find parent of block(%d:%s) in best chain", blockHeight, blockHash.String())
+		log.Warningf("OnNewBlockMined: can't find parent of block(%d:%s) in best chain", blockHeight, blockHash.String())
 		return
 	}
 	log.Debugf("OnNewBlockMined: cur best block parent is(%d:%s)", curBestBlockNodeParent.height, curBestBlockNodeParent.hash.String())

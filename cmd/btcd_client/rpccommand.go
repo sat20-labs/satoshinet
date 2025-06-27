@@ -164,6 +164,6 @@ func testGetBlocksWithTx(txid string) {
 	}
 
 	log.Infof("Block Height: %d", block.Height)
-	log.Infof("Block Hash: %d", block.Hash)
+	log.Infof("Block Hash: %s", block.Hash)
 	log.Infof("Block Time: %s", time.Unix(block.Time, 0).Format(time.DateTime)) //time.Unix(block.Time.Format(time.DateTime))
 }
