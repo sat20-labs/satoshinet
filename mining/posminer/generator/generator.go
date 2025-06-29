@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -33,11 +32,6 @@ type Generator struct {
 	Token         string // The token for the generator, it signed by generate
 	Validatorinfo *validatorinfo.ValidatorInfo
 	MinerTime     time.Time
-
-	minerHandlerOnce sync.Once
-    minerHandlerMu   sync.Mutex
-    minerHandlerStop chan struct{}
-    minerHandlerWake chan struct{}
 
 	LocalMiner MinerInterface
 }
@@ -120,33 +114,26 @@ func (g *Generator) VerifyToken(pubKey []byte) bool {
 
 func (g *Generator) SetHandOverTime(handOverTime time.Time) error {
 	utils.Log.Tracef("[Generator]SetHandOverTime ...")
-	g.minerHandlerMu.Lock()
-    now := time.Now()
-    minerTime := handOverTime.Add(MinerInterval)
-    if minerTime.Before(now) {
-        minerTime = now.Add(MinerInterval)
-    }
-    g.MinerTime = minerTime
-    g.minerHandlerMu.Unlock()
-    g.StartMinerHandler()
-    g.WakeMinerHandler()
+	now := time.Now()
+	minerTime := handOverTime.Add(MinerInterval)
+	if minerTime.After(now) == false {
+		//		return fmt.Errorf("miner time is before now")
+		minerTime = now.Add(MinerInterval)
+	}
+	g.MinerTime = minerTime
+	go g.minerHandler()
 	return nil
 }
 func (g *Generator) ContinueNextSlot() error {
 	utils.Log.Tracef("[Generator]ContinueNextSlot ...")
 
-	g.minerHandlerMu.Lock()
-    now := time.Now()
-    newMinerTime := g.MinerTime.Add(MinerInterval)
-    if newMinerTime.Before(now) {
-        g.minerHandlerMu.Unlock()
-        return fmt.Errorf("new miner time is before now")
-    }
-    g.MinerTime = newMinerTime
-    g.minerHandlerMu.Unlock()
-
-    g.StartMinerHandler()
-    g.WakeMinerHandler()
+	now := time.Now()
+	newMinerTime := g.MinerTime.Add(MinerInterval)
+	if newMinerTime.After(now) == false {
+		return fmt.Errorf("new miner time is before now")
+	}
+	g.MinerTime = newMinerTime
+	go g.minerHandler()
 	return nil
 }
 
@@ -167,49 +154,25 @@ func (g *Generator) MinerNewBlock() {
 }
 
 
-// 启动唯一的 minerHandler
-func (g *Generator) StartMinerHandler() {
-    g.minerHandlerOnce.Do(func() {
-        g.minerHandlerStop = make(chan struct{})
-        g.minerHandlerWake = make(chan struct{}, 1)
-        go g.minerHandlerLoop()
-    })
+func (g *Generator) minerHandler() {
+	utils.Log.Tracef("[Generator]minerHandler start...")
+
+	exitMinerHandler := make(chan struct{})
+	utils.Log.Tracef("[Generator]Set Miner <height:%d> Timer at %s ", g.Height, g.MinerTime.Format("2006-01-02 15:04:05"))
+
+	minerDuration := time.Until(g.MinerTime)
+	time.AfterFunc(minerDuration, func() {
+		g.MinerNewBlock()
+		exitMinerHandler <- struct{}{}
+	})
+
+	// 这里阻塞主 goroutine 等待任务执行（可根据需要改为其他逻辑）
+	select {
+	case <-exitMinerHandler:
+		utils.Log.Tracef("[Generator]minerHandler done .")
+		return
+	}
 }
-
-
-// 通知 minerHandler 更新时间
-func (g *Generator) WakeMinerHandler() {
-    select {
-    case g.minerHandlerWake <- struct{}{}:
-    default:
-    }
-}
-
-func (g *Generator) minerHandlerLoop() {
-    for {
-        g.minerHandlerMu.Lock()
-        nextTime := g.MinerTime
-        g.minerHandlerMu.Unlock()
-
-        wait := time.Until(nextTime)
-        if wait < 0 {
-            wait = 0
-        }
-        timer := time.NewTimer(wait)
-
-        select {
-        case <-timer.C:
-            g.MinerNewBlock()
-        case <-g.minerHandlerWake:
-            timer.Stop()
-            continue // 重新计算时间
-        case <-g.minerHandlerStop:
-            timer.Stop()
-            return
-        }
-    }
-}
-
 
 func (gho *GeneratorHandOver) GetTokenData() []byte {
 

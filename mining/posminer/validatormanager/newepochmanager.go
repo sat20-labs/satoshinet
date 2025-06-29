@@ -41,14 +41,9 @@ func CreateNewEpochManager(validatorMgr *ValidatorManager, reason uint32) *NewEp
 }
 
 func (nem *NewEpochManager) Start() {
-	nem.mutex.Lock()
-    defer nem.mutex.Unlock()
-    if nem.started {
-        return
-    }
-    nem.started = true
 	// All commands are sent, will due to result in 5 seconds
 	go nem.newEpochHandler()
+	nem.started = true
 }
 
 func (nem *NewEpochManager) NewReqEpoch(validatorId uint64) {

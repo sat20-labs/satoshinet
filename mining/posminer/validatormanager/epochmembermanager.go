@@ -49,9 +49,6 @@ type EpochMemberManager struct {
 	disconnectedListMtx sync.RWMutex
 
 	receivedDelEpochMemberResult map[uint64]*DelEpochMemberCollection
-
-	reconnectMu     sync.Mutex
-    reconnectActive bool
 }
 
 func CreateEpochMemberManager(validatorMgr *ValidatorManager) *EpochMemberManager {
@@ -162,7 +159,7 @@ func (em *EpochMemberManager) updateValidatorsList() {
 
 	if len(em.DisconnectedList) > 0 {
 		// Disconnected list is not empty, try to reconnect
-		em.startReconnectEpochHandler()
+		go em.reconnectEpochHandler()
 	}
 	utils.Log.Tracef("[EpochMemberManager]Update validators list Done.")
 }
@@ -210,26 +207,10 @@ func (em *EpochMemberManager) OnValidatorDisconnected(validatorID uint64) {
 
 	if len(em.DisconnectedList) > 0 {
 		// Disconnected list is not empty, try to reconnect
-		em.startReconnectEpochHandler()
+		go em.reconnectEpochHandler()
 	}
 }
 
-func (em *EpochMemberManager) startReconnectEpochHandler() {
-    em.reconnectMu.Lock()
-    if em.reconnectActive {
-        em.reconnectMu.Unlock()
-        return
-    }
-    em.reconnectActive = true
-    em.reconnectMu.Unlock()
-
-    go func() {
-        em.reconnectEpochHandler()
-        em.reconnectMu.Lock()
-        em.reconnectActive = false
-        em.reconnectMu.Unlock()
-    }()
-}
 
 // reconnectEpochHandler for reconnect epoch member when a epoch member is disconnected on a timer
 func (em *EpochMemberManager) reconnectEpochHandler() {
