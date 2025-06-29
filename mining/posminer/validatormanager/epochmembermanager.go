@@ -49,6 +49,9 @@ type EpochMemberManager struct {
 	disconnectedListMtx sync.RWMutex
 
 	receivedDelEpochMemberResult map[uint64]*DelEpochMemberCollection
+
+	reconnectMu     sync.Mutex
+    reconnectActive bool
 }
 
 func CreateEpochMemberManager(validatorMgr *ValidatorManager) *EpochMemberManager {
@@ -159,7 +162,7 @@ func (em *EpochMemberManager) updateValidatorsList() {
 
 	if len(em.DisconnectedList) > 0 {
 		// Disconnected list is not empty, try to reconnect
-		go em.reconnectEpochHandler()
+		em.startReconnectEpochHandler()
 	}
 	utils.Log.Tracef("[EpochMemberManager]Update validators list Done.")
 }
@@ -207,8 +210,25 @@ func (em *EpochMemberManager) OnValidatorDisconnected(validatorID uint64) {
 
 	if len(em.DisconnectedList) > 0 {
 		// Disconnected list is not empty, try to reconnect
-		go em.reconnectEpochHandler()
+		em.startReconnectEpochHandler()
 	}
+}
+
+func (em *EpochMemberManager) startReconnectEpochHandler() {
+    em.reconnectMu.Lock()
+    if em.reconnectActive {
+        em.reconnectMu.Unlock()
+        return
+    }
+    em.reconnectActive = true
+    em.reconnectMu.Unlock()
+
+    go func() {
+        em.reconnectEpochHandler()
+        em.reconnectMu.Lock()
+        em.reconnectActive = false
+        em.reconnectMu.Unlock()
+    }()
 }
 
 // reconnectEpochHandler for reconnect epoch member when a epoch member is disconnected on a timer
@@ -417,11 +437,8 @@ func (em *EpochMemberManager) delEpochMemberHandler(delValidatorID uint64) {
 	})
 
 	// 这里阻塞主 goroutine 等待任务执行（可根据需要改为其他逻辑）
-	select {
-	case exitDelEpochHandler <- struct{}{}:
-		utils.Log.Tracef("[EpochMemberManager]delEpochMemberHandler done .")
-		return
-	}
+	<-exitDelEpochHandler
+    utils.Log.Tracef("[EpochMemberManager]delEpochMemberHandler done .")
 }
 
 func (em *EpochMemberManager) handleDelEpochMember(delValidatorID uint64) {
@@ -530,11 +547,9 @@ func (em *EpochMemberManager) checkMemberConnectedHandler(delValidator *validato
 	})
 
 	// 这里阻塞主 goroutine 等待任务执行（可根据需要改为其他逻辑）
-	select {
-	case exitCheckHandler <- struct{}{}:
-		utils.Log.Tracef("[NewEpochManager]newEpochHandler done .")
-		return cfmDelEpochMember
-	}
+	<-exitCheckHandler
+	utils.Log.Tracef("[NewEpochManager]newEpochHandler done .")
+	return cfmDelEpochMember
 }
 
 func (em *EpochMemberManager) handleCheckMemberConnected(delValidator *validator.Validator, reqDelEpochMember *validatorcommand.MsgReqDelEpochMember) *epoch.DelEpochMember {

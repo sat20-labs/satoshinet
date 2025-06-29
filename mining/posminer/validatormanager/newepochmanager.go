@@ -41,9 +41,14 @@ func CreateNewEpochManager(validatorMgr *ValidatorManager, reason uint32) *NewEp
 }
 
 func (nem *NewEpochManager) Start() {
+	nem.mutex.Lock()
+    defer nem.mutex.Unlock()
+    if nem.started {
+        return
+    }
+    nem.started = true
 	// All commands are sent, will due to result in 5 seconds
 	go nem.newEpochHandler()
-	nem.started = true
 }
 
 func (nem *NewEpochManager) NewReqEpoch(validatorId uint64) {
@@ -87,11 +92,8 @@ func (nem *NewEpochManager) newEpochHandler() {
 	})
 
 	// 这里阻塞主 goroutine 等待任务执行（可根据需要改为其他逻辑）
-	select {
-	case exitNewEpochHandler <- struct{}{}:
-		utils.Log.Tracef("[NewEpochManager]newEpochHandler done .")
-		return
-	}
+	 <-exitNewEpochHandler
+	utils.Log.Tracef("[NewEpochManager]newEpochHandler done .")
 }
 
 type ValidEpochItem struct {

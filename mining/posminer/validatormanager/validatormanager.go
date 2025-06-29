@@ -1089,7 +1089,7 @@ func (vm *ValidatorManager) getGeneratorHandler() {
 
 	// 这里阻塞主 goroutine 等待任务执行（可根据需要改为其他逻辑）
 	select {
-	case exitGeneraterHandler <- struct{}{}:
+	case <-exitGeneraterHandler:
 		utils.Log.Tracef("[ValidatorManager]getGeneratorHandler done .")
 		return
 	case <-vm.quit:
@@ -1863,7 +1863,7 @@ func (vm *ValidatorManager) getCheckEpochHandler() {
 
 	// 这里阻塞主 goroutine 等待任务执行（可根据需要改为其他逻辑）
 	select {
-	case exitGeneraterHandler <- struct{}{}:
+	case <-exitGeneraterHandler:
 		utils.Log.Tracef("[ValidatorManager]getCheckEpochHandler done .")
 		return
 	case <-vm.quit:
