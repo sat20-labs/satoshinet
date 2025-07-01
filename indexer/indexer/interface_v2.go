@@ -79,6 +79,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 		return nil
 	}
 
+	totalSats := int64(0)
 	value := int64(0)
 	result := make(map[wire.AssetName]*common.Decimal)
 	for utxoId, v := range utxos {
@@ -90,6 +91,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 		if err != nil {
 			continue
 		}
+		totalSats += info.Value
 
 		// 白聪资产去除绑定资产的聪
 		assetAmt := int64(0)
@@ -108,6 +110,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 		
 		value += (v - assetAmt)
 	}
+	result[common.ASSET_ALL_SAT] = common.NewDefaultDecimal(totalSats)
 	if value != 0 {
 		result[common.ASSET_PLAIN_SAT] = indexer.NewDefaultDecimal(value)
 	}
