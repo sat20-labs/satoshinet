@@ -211,9 +211,9 @@ func GetWalletInst() *BTCWalletManager {
 	return BtcWalletMgr
 }
 
-func InitWalletManager(workDir string) {
+func InitWalletManager(workDir string, params *chaincfg.Params) {
+	NetParams = params
 	if BtcWalletMgr == nil {
-		NetParams = &chaincfg.TestNetParams
 		BtcWalletMgr = &BTCWalletManager{}
 		BtcWalletMgr.BTCWalletList = make(map[string]*BTCWallet)
 		BtcWalletMgr.InitBTCWalletList(workDir)

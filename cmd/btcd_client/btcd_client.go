@@ -119,7 +119,7 @@ func main() {
 	}
 
 	//btcwallet.InitBTCWallet("BTCWallet", btcctlHomeDir)
-	btcwallet.InitWalletManager(btcctlHomeDir)
+	btcwallet.InitWalletManager(btcctlHomeDir, &chaincfg.TestNetParams)
 	connectRPC := RPC_BTCD
 	if cfg.Wallet {
 		connectRPC = RPC_WALLET

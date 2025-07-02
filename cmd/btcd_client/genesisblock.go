@@ -6,12 +6,17 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/sat20-labs/satoshinet/blockchain"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/cmd/btcd_client/btcwallet"
+	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
+
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 func showGenesisBlock(chainParams *chaincfg.Params) {
@@ -28,18 +33,18 @@ func parseAddress(address string, chainParams *chaincfg.Params) {
 		fmt.Println(err)
 		return
 	}
-	log.Debugf("    pkScript: %x", pkScript)
+	fmt.Printf("    pkScript: %x", pkScript)
 }
 
 func parsePkScript(pkscript string, chainParams *chaincfg.Params) {
 
 	pkBytes, _ := hex.DecodeString(pkscript)
 	address, err := btcwallet.PkScriptToAddr(pkBytes)
-	log.Debugf("pkScript: %x", pkBytes)
+	fmt.Printf("pkScript: %x", pkBytes)
 	if err != nil {
 		log.Errorf("PkScriptToAddr failed: %v ", err)
 	} else {
-		log.Debugf("address: %s", address)
+		fmt.Printf("address: %s", address)
 	}
 }
 
@@ -57,7 +62,7 @@ func GenerateGenesisBlock(chainParams *chaincfg.Params) {
 		Header: wire.BlockHeader{
 			Version:    1,
 			PrevBlock:  chainhash.Hash{},
-			MerkleRoot: chainhash.Hash{},
+			MerkleRoot: genesisTx.TxHash(),
 			Timestamp:  genesisTime,
 			Bits:       0,
 			Nonce:      nonce,
@@ -65,10 +70,8 @@ func GenerateGenesisBlock(chainParams *chaincfg.Params) {
 		Transactions: []*wire.MsgTx{genesisTx},
 	}
 
-	genesisBlock.Header.MerkleRoot = calcMerkleRoot(genesisBlock.Transactions)
-	genesisBlock.Header.MerkleRoot = genesisBlock.Transactions[0].TxHash()
-
 	showBlock(genesisBlock)
+	fmt.Printf("timestamp: %d %s\n", genesisTime.Unix(), genesisTime.String())
 	logHash("var genesisMerkleRoot = chainhash.Hash", genesisBlock.Header.MerkleRoot[:])
 	blockHash := genesisBlock.BlockHash()
 	logHash("var satsNetGenesisHash = chainhash.Hash", blockHash[:])
@@ -78,30 +81,30 @@ func GenerateGenesisBlock(chainParams *chaincfg.Params) {
 
 func showBlock(block *wire.MsgBlock) {
 	// Show Block info
-	log.Debugf("-------------------------  Block Header  --------------------------")
-	log.Debugf("    Block Hash: %s", block.BlockHash().String())
+	fmt.Printf("-------------------------  Block Header  --------------------------\n")
+	fmt.Printf("    Block Hash: %s\n", block.BlockHash().String())
 
-	log.Debugf("    Block Version: %d", block.Header.Version)
+	fmt.Printf("    Block Version: %d\n", block.Header.Version)
 
-	log.Debugf("    Prev Block Hash: %s", block.Header.PrevBlock.String())
+	fmt.Printf("    Prev Block Hash: %s\n", block.Header.PrevBlock.String())
 
-	log.Debugf("    Block MerkleRoot Hash: %s", block.Header.MerkleRoot.String())
+	fmt.Printf("    Block MerkleRoot Hash: %s\n", block.Header.MerkleRoot.String())
 
-	log.Debugf("    Block TimeStamp Unix: %d", block.Header.Timestamp.Unix())
-	log.Debugf("    Block TimeStamp: %s", block.Header.Timestamp.Format(time.DateTime))
+	fmt.Printf("    Block TimeStamp Unix: %d\n", block.Header.Timestamp.Unix())
+	fmt.Printf("    Block TimeStamp: %s\n", block.Header.Timestamp.Format(time.DateTime))
 
-	log.Debugf("    Block Bits: %d", block.Header.Bits)
+	fmt.Printf("    Block Bits: %d\n", block.Header.Bits)
 
-	log.Debugf("    Block Nonce: %d", block.Header.Nonce)
+	fmt.Printf("    Block Nonce: %d\n", block.Header.Nonce)
 
-	log.Debugf("-------------------------  End  --------------------------")
+	fmt.Printf("-------------------------  End  --------------------------\n")
 
-	log.Debugf("-------------------------  Block Transactions  --------------------------")
+	fmt.Printf("-------------------------  Block Transactions  --------------------------\n")
 	transactions := block.Transactions
 	for _, tx := range transactions {
 		btcwallet.LogMsgTx(tx)
 	}
-	log.Debugf("-------------------------  End  --------------------------")
+	fmt.Printf("-------------------------  End  --------------------------\n")
 }
 
 // createCoinbaseTx returns a coinbase transaction paying an appropriate subsidy
@@ -110,12 +113,28 @@ func showBlock(block *wire.MsgBlock) {
 //
 // See the comment for NewBlockTemplate for more information about why the nil
 // address handling is useful.
-func createGenesisTx(params *chaincfg.Params, timeStamp time.Time) (*wire.MsgTx, error) {
+func createGenesisTx(chainParams *chaincfg.Params, timeStamp time.Time) (*wire.MsgTx, error) {
 
-	pkScript, _ := hex.DecodeString("51201eca94fc175e45d42a907e97eabf3ec76a3237653537cc0f11faf4dfd8c0e100")
-	coinbaseScript, err := StandardGenesisScript(pkScript, timeStamp.Unix())
+	
+	coinbaseScript, err := StandardGenesisScript([]byte("Not your keys, not your coins. Don't trust. Verify."), timeStamp.Unix())
 	if err != nil {
 		panic(err)
+	}
+
+	pubkeyBytes, _ := hex.DecodeString(indexer.GetBootstrapPubKey())
+	pubKey, err := secp256k1.ParsePubKey(pubkeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %v", err)
+	}
+
+	taprootPubKey := txscript.ComputeTaprootKeyNoScript(pubKey)
+	taprootAddr, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(taprootPubKey), chainParams)
+	if err != nil {
+		return nil, err
+	}
+	pkScript, err := txscript.PayToAddrScript(taprootAddr)
+	if err != nil {
+		return nil, err
 	}
 
 	tx := wire.NewMsgTx(wire.TxVersion)
