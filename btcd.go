@@ -17,6 +17,7 @@ import (
 	"runtime/debug"
 	"runtime/pprof"
 	"strings"
+	"golang.org/x/term"
 
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain/indexers"
@@ -339,48 +340,51 @@ func btcdMain(serverChan chan<- *server) error {
 	<-interrupt
 	return nil
 }
+func getUserInput(scanner *bufio.Scanner, interrupt <-chan struct{}, echo bool) (string, error) {
+    inputChan := make(chan string)
+    defer close(inputChan)
 
-func getUserInput(scanner *bufio.Scanner, interrupt <-chan struct{}) (string, error) {
+    go func() {
+        if echo {
+            if scanner.Scan() {
+                inputChan <- scanner.Text()
+            }
+        } else {
+            fmt.Print("") // 保证提示已输出
+            // 关闭回显读取
+            bytePwd, _ := term.ReadPassword(int(os.Stdin.Fd()))
+            inputChan <- string(bytePwd)
+        }
+    }()
 
-	// 创建输入通道
-	inputChan := make(chan string)
-	defer close(inputChan) // 关闭通道，表示输入结束
-
-	// 使用 goroutine 读取用户输入
-	go func() {
-		if scanner.Scan() {
-			inputChan <- scanner.Text() // 发送输入到通道
-		}
-	}()
-
-	// 监听信号和输入
-	for {
-		select {
-		case <-interrupt:
-			fmt.Println("\nReceived Ctrl+C. Exiting gracefully...")
-			return "", fmt.Errorf("interrupted")
-		case input, ok := <-inputChan:
-			if !ok {
-				return "", fmt.Errorf("input closed")
-			}
-			return strings.TrimSpace(input), nil
-		}
-	}
+    for {
+        select {
+        case <-interrupt:
+            fmt.Println("\nReceived Ctrl+C. Exiting gracefully...")
+            return "", fmt.Errorf("interrupted")
+        case input, ok := <-inputChan:
+            if !ok {
+                return "", fmt.Errorf("input closed")
+            }
+            return strings.TrimSpace(input), nil
+        }
+    }
 }
 
 func userCreateWallet(scanner *bufio.Scanner, interrupt <-chan struct{}) error {
 	for {
-		fmt.Print("Input password to create your wallet:")
-		password, err := getUserInput(scanner, interrupt)
+		fmt.Print("\nInput password to create your wallet:")
+		password, err := getUserInput(scanner, interrupt, false)
 		if err != nil {
 			return err
 		}
 
-		fmt.Print("Input your password again to confirm:")
-		password2, err := getUserInput(scanner, interrupt)
+		fmt.Print("\nInput your password again to confirm:")
+		password2, err := getUserInput(scanner, interrupt, false)
 		if err != nil {
 			return err
 		}
+		fmt.Print("\n")
 		if password != password2 {
 			fmt.Print("password is inconsistent\n")
 			continue
@@ -395,7 +399,8 @@ func userCreateWallet(scanner *bufio.Scanner, interrupt <-chan struct{}) error {
 
 			fmt.Printf("Wallet created. Record your mnemonic and password carefully. Mnemonic:\n%s\nPubkey:\n%s\n", Mnemonic, hex.EncodeToString(pubkey))
 
-			return nil
+			fmt.Printf("Now app closed and please manually delete all log files to keep your mnemonic word safe.\n")
+			os.Exit(0)
 		}
 		fmt.Printf("CreateWallet failed. %v\n", err)
 		return err
@@ -404,17 +409,18 @@ func userCreateWallet(scanner *bufio.Scanner, interrupt <-chan struct{}) error {
 
 func userImportWallet(scanner *bufio.Scanner, interrupt <-chan struct{}) error {
 	for {
-		fmt.Print("Input mnemonic to import your wallet:")
-		mnemonic, err := getUserInput(scanner, interrupt)
+		fmt.Print("\nInput mnemonic to import your wallet:")
+		mnemonic, err := getUserInput(scanner, interrupt, true)
 		if err != nil {
 			return err
 		}
 
-		fmt.Print("Input password to unlock your wallet:")
-		password, err := getUserInput(scanner, interrupt)
+		fmt.Print("\nInput password to unlock your wallet:")
+		password, err := getUserInput(scanner, interrupt, true)
 		if err != nil {
 			return err
 		}
+		fmt.Print("\n")
 
 		err = stp.ImportWallet(mnemonic, password)
 		if err == nil {
@@ -424,7 +430,8 @@ func userImportWallet(scanner *bufio.Scanner, interrupt <-chan struct{}) error {
 			}
 
 			fmt.Printf("Wallet imported. Pubkey:\n%s\n", hex.EncodeToString(pubkey))
-			return nil
+			fmt.Printf("Now app closed and please manually delete all log files to keep your mnemonic word safe.\n")
+			os.Exit(0)
 		}
 		fmt.Printf("ImportWallet failed %v, try again\n", err)
 	}
@@ -436,11 +443,12 @@ func walletInterAction(interrupt <-chan struct{}) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	if stp.IsWalletExists() {
 		for {
-			fmt.Print("Input password to unlock your wallet:")
-			input, err := getUserInput(scanner, interrupt)
+			fmt.Print("\nInput password to unlock your wallet:")
+			input, err := getUserInput(scanner, interrupt, false)
 			if err != nil {
 				return err
 			}
+			fmt.Print("\n")
 			err = stp.UnlockWallet(input)
 			if err == nil {
 				fmt.Print("unlocked.\n")
@@ -450,7 +458,7 @@ func walletInterAction(interrupt <-chan struct{}) error {
 		}
 	} else {
 		fmt.Print("Choice how to create your wallet:\n1. Create new wallet\n2. Import wallet\nYour choice:")
-		choice, err := getUserInput(scanner, interrupt)
+		choice, err := getUserInput(scanner, interrupt, true)
 		if err != nil {
 			return err
 		}
