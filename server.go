@@ -25,6 +25,7 @@ import (
 
 	"github.com/decred/dcrd/lru"
 	"github.com/sat20-labs/satoshinet/addrmgr"
+	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/blockchain/indexers"
 	"github.com/sat20-labs/satoshinet/btcutil"
@@ -2667,8 +2668,34 @@ func (s *server) Start() {
 			srvrLog.Errorf("RPC server is not ready.")
 			return
 		}
-		srvrLog.Infof("Start pos miner.")
-		s.posMiner.Start()
+
+		// 需要等待索引器启动后，判断是否是核心节点，再启动posminer
+		go func() {
+			pubkey, err := hex.DecodeString(cfg.MiningPubKey)
+			if err != nil {
+				srvrLog.Errorf("invalid miner pubker %v", err)
+				return
+			}
+	
+			done := time.After(60*time.Second)
+			ticker := time.NewTicker(3*time.Second)
+			out:
+			for {
+				select {
+				case <-done:
+					ticker.Stop()
+					srvrLog.Infof("can't start pos miner.")
+					break out
+				case <-ticker.C:
+					if anchortx.IsCoreNode(pubkey) {
+						srvrLog.Infof("Start pos miner.")
+						s.posMiner.Start()
+						break out
+					}
+				}
+			}
+		}()
+		
 
 		s.rpcServer.SetVCStore(s.posMiner.GetVCStore())
 		go s.syncEpochMemberHandle()
