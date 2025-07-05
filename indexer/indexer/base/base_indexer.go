@@ -704,15 +704,16 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 						// 新增加一个core node
 						b.coreNodeMap[hex.EncodeToString(ascend.PubB)] = stp.NewCoreNodeInfo(ascend.Height)
 						b.coreNodeMapUpdated = true
-						common.Log.Infof("BaseIndexer.processBlock-> add core node %s", coreNodeKey)
+						common.Log.Infof("BaseIndexer.processBlock-> add core node %s at height %d", coreNodeKey, ascend.Height)
 					} else {
 						coreNode, ok := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
 						if ok && b.HasMinerEligibility(ascend.Assets) {
 							// 一个连接到corenode的普通miner
 							coreNode.ChildMiners[hex.EncodeToString(ascend.PubB)] = ascend.Height
+							common.Log.Infof("BaseIndexer.processBlock-> add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
 						} else {
 							// 无效的脚本
-							common.Log.Infof("invalid ascending script in %s input %d", tx.Txid, i)
+							common.Log.Infof("not miner ascending tx %s, utxo: %s, %v", tx.Txid, ascend.FundingUtxo, ascend.Assets)
 							continue
 						}
 					}
