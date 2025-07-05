@@ -37,6 +37,7 @@ import (
 	"github.com/sat20-labs/satoshinet/database"
 	indexerEntry "github.com/sat20-labs/satoshinet/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
+	indexerShare "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/mempool"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/mining/posminer"
@@ -2670,15 +2671,17 @@ func (s *server) Start() {
 			return
 		}
 
-		// 需要等待索引器启动后，判断是否是核心节点，再启动posminer
+		// 需要等待索引器启动后，并且同步到最高高度，再启动miner
 		go func() {
 			pubkey, err := hex.DecodeString(cfg.MiningPubKey)
 			if err != nil {
 				srvrLog.Errorf("invalid miner pubker %v", err)
 				return
 			}
+			// 等二层索引器工作
+			time.Sleep(3*time.Second)
 
-			done := time.After(12 * time.Second)
+			var done <-chan time.Time
 			ticker := time.NewTicker(3 * time.Second)
 		out:
 			for {
@@ -2688,10 +2691,18 @@ func (s *server) Start() {
 					srvrLog.Infof("can't start pos miner.")
 					os.Exit(-1)
 				case <-ticker.C:
-					if anchortx.IsMinerNode(pubkey) {
-						srvrLog.Infof("Start pos miner.")
-						s.posMiner.Start()
-						break out
+					if done == nil {
+						tip := s.chain.GetTipHeight()
+						height := indexerShare.ShareIndexer.GetSyncHeight()
+						if height == tip {
+							done = time.After(12 * time.Second)
+						}
+					} else {
+						if anchortx.IsMinerNode(pubkey) {
+							srvrLog.Infof("Start pos miner.")
+							s.posMiner.Start()
+							break out
+						}
 					}
 				}
 			}

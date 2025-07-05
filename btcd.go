@@ -120,6 +120,23 @@ func btcdMain(serverChan chan<- *server) error {
 		return nil
 	}
 
+	// initialize anchor config
+	anchorCfg := &anchortx.AnchorConfig{
+		IndexerAccessKey: cfg.IndexerAccessKey,
+		IndexerScheme: cfg.IndexerScheme,
+		IndexerHost:   cfg.IndexerHost,
+		IndexerProxy:  cfg.IndexerProxy,
+		ChainParams:   activeNetParams.Params,
+	}
+	if !anchortx.StartAnchorManager(anchorCfg) {
+		btcdLog.Errorf("Unable to start anchor manager")
+		return err
+	}
+	defer func() {
+		anchortx.Stop()
+		anchorLog.Infof("anchor manager shutdown complete")
+	}()
+
 	if cfg.Generate {
 		if cfg.EnableSTP {
 			// 提供stp服务，必然是core node，需要自主提供索引器， 其挖矿地址是核心通道地址
@@ -345,23 +362,6 @@ func btcdMain(serverChan chan<- *server) error {
 
 	// drop unveil and tty
 	pledgex("stdio rpath wpath cpath flock dns inet")
-
-	// initialize anchor config
-	anchorCfg := &anchortx.AnchorConfig{
-		IndexerAccessKey: cfg.IndexerAccessKey,
-		IndexerScheme: cfg.IndexerScheme,
-		IndexerHost:   cfg.IndexerHost,
-		IndexerProxy:  cfg.IndexerProxy,
-		ChainParams:   activeNetParams.Params,
-	}
-	if !anchortx.StartAnchorManager(anchorCfg) {
-		btcdLog.Errorf("Unable to start anchor manager")
-		return err
-	}
-	defer func() {
-		anchortx.Stop()
-		anchorLog.Infof("anchor manager shutdown complete")
-	}()
 
 	// Create server and start it.
 	server, err := newServer(cfg.Listeners, cfg.AgentBlacklist,

@@ -6,6 +6,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
+	
 
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/dgraph-io/badger/v4"
 
 	"github.com/sat20-labs/indexer/indexer/db"
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 type RPCConfig struct {
@@ -79,6 +81,7 @@ func NewIndexerMgr(
 
 	chainParam := &chaincfg.MainNetParams
 	if bTestNet {
+		indexer.CHAIN = "testnet"
 		chainParam = &chaincfg.TestNetParams
 	} else {
 		chainParam = &chaincfg.MainNetParams
