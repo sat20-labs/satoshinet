@@ -44,7 +44,7 @@ type BaseIndexer struct {
 
 	tickInfoMap        map[string]*common.TickerInfo
 	addressIdMap       map[string]*AddressStatus
-	coreNodeMap        map[string]int // pubkey->height, 不清空
+	coreNodeMap        map[string]*stp.CoreNodeInfo // pubkey, 不清空
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 不清空
 
@@ -87,7 +87,7 @@ func NewBaseIndexer(
 	indexer.tickInfoMap = make(map[string]*common.TickerInfo)
 	indexer.addressIdMap = make(map[string]*AddressStatus, 0)
 	indexer.prevBlockHashMap = make(map[int]string)
-	indexer.coreNodeMap = make(map[string]int)
+	indexer.coreNodeMap = make(map[string]*stp.CoreNodeInfo)
 	indexer.channelMap = make(map[string]*common.ChannelInfo)
 
 	return indexer
@@ -148,9 +148,17 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		newInst.tickInfoMap[k] = v
 	}
 
-	newInst.coreNodeMap = make(map[string]int)
+	newInst.coreNodeMap = make(map[string]*stp.CoreNodeInfo)
 	for k, v := range b.coreNodeMap {
-		newInst.coreNodeMap[k] = v
+		node := stp.CoreNodeInfo{
+			AscendHeight: v.AscendHeight,
+			DescendHeight: v.DescendHeight,
+			ChildMiners: make(map[string]int),
+		}
+		for k2, v2 := range v.ChildMiners {
+			node.ChildMiners[k2] = v2
+		}
+		newInst.coreNodeMap[k] = &node
 	}
 
 	newInst.channelMap = make(map[string]*common.ChannelInfo)
@@ -693,9 +701,20 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 				_, ok := b.coreNodeMap[coreNodeKey]
 				if !ok {
 					if b.IsCoreNodeAscend(ascend) {
-						b.coreNodeMap[hex.EncodeToString(ascend.PubB)] = ascend.Height
+						// 新增加一个core node
+						b.coreNodeMap[hex.EncodeToString(ascend.PubB)] = stp.NewCoreNodeInfo(ascend.Height)
 						b.coreNodeMapUpdated = true
 						common.Log.Infof("BaseIndexer.processBlock-> add core node %s", coreNodeKey)
+					} else {
+						coreNode, ok := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
+						if ok && b.HasMinerEligibility(ascend.Assets) {
+							// 一个连接到corenode的普通miner
+							coreNode.ChildMiners[hex.EncodeToString(ascend.PubB)] = ascend.Height
+						} else {
+							// 无效的脚本
+							common.Log.Infof("invalid ascending script in %s input %d", tx.Txid, i)
+							continue
+						}
 					}
 				}
 
@@ -1309,9 +1328,13 @@ func (p *BaseIndexer) getAddressId(address string) (uint64, int) {
 	return value.AddressId, value.Op
 }
 
-
+// 服务节点是引导节点，并且有足够资产才算是
 func (p *BaseIndexer) IsCoreNodeAscend(ascend *common.AscendData) bool {
-	return p.HasCoreNodeEligibility(ascend.Assets)
+	if hex.EncodeToString(ascend.PubA) == indexer.GetBootstrapPubKey() {
+		return p.HasCoreNodeEligibility(ascend.Assets)
+	}
+	return false
+	// 连接core node的都只是普通miner
 }
 
 func (p *BaseIndexer) IsCoreNodeDescend(descend *common.DescendData) bool {
@@ -1331,5 +1354,10 @@ func (p *BaseIndexer) HasCoreNodeEligibility(assets wire.TxAssets) bool {
 		}
 	}
 	return false
+}
+
+// 暂时等于corenode
+func (p *BaseIndexer) HasMinerEligibility(assets wire.TxAssets) bool {
+	return p.HasCoreNodeEligibility(assets)
 }
 

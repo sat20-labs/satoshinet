@@ -458,7 +458,7 @@ func (b *RpcIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 }
 
 // only for RPC interface
-func (b *RpcIndexer) GetAllCoreNode() map[string]int {
+func (b *RpcIndexer) GetAllCoreNode() map[string]*stp.CoreNodeInfo {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 	return b.coreNodeMap
@@ -471,4 +471,25 @@ func (b *RpcIndexer) IsCoreNode(pubkey string) bool {
 	_, ok := b.coreNodeMap[pubkey]
 	b.mutex.RUnlock()
 	return ok
+}
+
+
+// only for RPC interface
+// 与核心节点建立通道并且将资产质押到通道中
+func (b *RpcIndexer) IsMinerNode(pubkey string) bool {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	_, ok := b.coreNodeMap[pubkey]
+	if ok {
+		return true
+	}
+
+	for _, v := range b.coreNodeMap {
+		_, ok := v.ChildMiners[pubkey]
+		if ok {
+			return true
+		}
+	}
+	
+	return false
 }

@@ -820,7 +820,7 @@ func (p *RemotePeer) handlePongMsg(msg *validatorcommand.MsgPong, connReq *ConnR
 func (p *RemotePeer) HandleRemotePeerInfo(peerInfo *validatorcommand.MsgPeerInfo, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
 
-	if !bootstrapnode.CheckValidatorID(peerInfo.PublicKey[:]) {
+	if !bootstrapnode.CheckValidator(peerInfo.PublicKey[:]) {
 		utils.Log.Errorf("----------[RemotePeer]The remote peer is not valid")
 		return
 	}
@@ -839,7 +839,7 @@ func (p *RemotePeer) HandleRemotePeerInfo(peerInfo *validatorcommand.MsgPeerInfo
 func (p *RemotePeer) HandleRemoteGetInfo(getInfo *validatorcommand.MsgGetInfo, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
 
-	if !bootstrapnode.CheckValidatorID(getInfo.PublicKey[:]) {
+	if !bootstrapnode.CheckValidator(getInfo.PublicKey[:]) {
 		utils.Log.Errorf("----------[RemotePeer]The remote peer is not valid")
 		return
 	}

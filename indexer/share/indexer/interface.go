@@ -4,6 +4,7 @@ import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	"github.com/sat20-labs/satoshinet/indexer/indexer/stp"
 )
 
 type Indexer interface {
@@ -40,6 +41,7 @@ type Indexer interface {
 	GetTxOutputWithUtxoV3(utxo string) *indexer.AssetsInUtxo
 	GetAscendData(fundingUtxo string) *common.AscendData
 	GetDescendData(nullDataUtxo string) *common.DescendData
-	GetAllCoreNode() map[string]int
+	GetAllCoreNode() map[string]*stp.CoreNodeInfo
 	IsCoreNode(pubkey string) bool
+	IsMinerNode(pubkey string) bool
 }

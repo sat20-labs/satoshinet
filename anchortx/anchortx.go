@@ -15,7 +15,8 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/indexer/share/indexer"
+	"github.com/sat20-labs/satoshinet/httpclient"
+	"github.com/sat20-labs/satoshinet/mining/posminer/bootstrapnode"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 
@@ -38,15 +39,17 @@ const (
 )
 
 type AnchorConfig struct {
-	IndexerScheme string
-	IndexerHost   string
-	IndexerProxy  string
-	ChainParams   *chaincfg.Params
+	IndexerAccessKey string
+	IndexerPubKey    string
+	IndexerScheme    string
+	IndexerHost      string
+	IndexerProxy     string
+	ChainParams      *chaincfg.Params
 }
 type AnchorManager struct {
-	anchorConfig   *AnchorConfig
-	superNodeList  map[string][]byte // address > public key
-	quit           chan struct{}
+	anchorConfig  *AnchorConfig
+	superNodeList map[string][]byte // address > public key
+	quit          chan struct{}
 }
 
 // var anchorConfig *AnchorConfig
@@ -55,11 +58,11 @@ var anchorManager AnchorManager
 // txscript.NewScriptBuilder().AddData(txid).AddData(WitnessScript).
 // AddInt64(int64(amount)).AddInt64(int64(extraNonce)).Script()
 type AnchorInfo struct {
-	Utxo          string         `json:"utxo"`          // the utxo with locked in lnd
-	WitnessScript []byte         `json:"witnessScript"` // WitnessScript for locked in lnd
-	Value         int64          `json:"value"`         // the amount with locked in lnd
+	Utxo          string        `json:"utxo"`          // the utxo with locked in lnd
+	WitnessScript []byte        `json:"witnessScript"` // WitnessScript for locked in lnd
+	Value         int64         `json:"value"`         // the amount with locked in lnd
 	TxAssets      wire.TxAssets `json:"txAssets"`      // The assets locked
-	Sig           []byte         `json:"sig"`
+	Sig           []byte        `json:"sig"`
 }
 
 type AscendInfo struct {
@@ -408,7 +411,6 @@ func CheckAnchorPkScript(anchorPkScript []byte, bCheckUtxoAssets bool) (*AscendI
 			return nil, fmt.Errorf("invalid assets")
 		}
 	}
-	
 
 	return &AscendInfo{
 		AnchorInfo: *lockedTxInfo,
@@ -536,8 +538,12 @@ func IsBootstrapPubKey(pubkey []byte) bool {
 }
 
 func GetCoreNodeChannelAddress(pubkey []byte, chainParams *chaincfg.Params) (string, error) {
+	return GetChannelAddress(GetBootstrapPubKey(), pubkey, chainParams)
+}
+
+func GetChannelAddress(pk1, pk2 []byte, chainParams *chaincfg.Params) (string, error) {
 	// 生成P2WSH地址
-	_, pkScript, err := GetP2WSHscript(GetBootstrapPubKey(), pubkey)
+	_, pkScript, err := GetP2WSHscript(pk1, pk2)
 	if err != nil {
 		return "", err
 	}
@@ -551,16 +557,31 @@ func GetCoreNodeChannelAddress(pubkey []byte, chainParams *chaincfg.Params) (str
 	return address, nil
 }
 
-// 包含bootstrap
+// 只包含核心节点和引导节点
 func IsCoreNode(pubKey []byte) bool {
-	if IsBootstrapPubKey(pubKey) {
-		return true
+	return bootstrapnode.IsCoreNode(pubKey)
+}
+
+// 所有有资质挖矿的节点
+func IsMinerNode(pubKey []byte) bool {
+	return bootstrapnode.IsMinerNode(pubKey)
+}
+
+func GetIndexerPubkey(localPubkey string) (string, error) {
+	if anchorManager.anchorConfig.IndexerPubKey != "" {
+		return anchorManager.anchorConfig.IndexerPubKey, nil
 	}
 
-	if hex.EncodeToString(pubKey) == common.GetCoreNodePubKey() {
-		return true
-	}
+	scheme := anchorManager.anchorConfig.IndexerScheme
+	host := anchorManager.anchorConfig.IndexerHost
+	proxy := anchorManager.anchorConfig.IndexerProxy
 
-	// 从索引器查询结果：该节点已经与引导节点建立了通道，并且将资产质押到通道中（通过HasCoreNodeEligibility判断）
-	return indexer.ShareIndexer.IsCoreNode(hex.EncodeToString(pubKey))
+	// Get TxInfo from BTC chain (Layer 1 chain)
+	indexerClient := httpclient.NewIndexerClient(scheme, host, proxy)
+	indexerPubKey, err := indexerClient.GetIndexerPubkey(localPubkey)
+	if err != nil {
+		return "", err
+	}
+	anchorManager.anchorConfig.IndexerPubKey = indexerPubKey
+	return indexerPubKey, nil
 }

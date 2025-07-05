@@ -15,6 +15,20 @@ const (
 	DB_KEY_CORENODES = "cns-all"
 )
 
+type CoreNodeInfo struct {
+	AscendHeight int	//
+	DescendHeight int
+	ChildMiners map[string]int // pubkey
+}
+
+func NewCoreNodeInfo(h int) *CoreNodeInfo {
+	return &CoreNodeInfo{
+		AscendHeight: h,
+		DescendHeight: -1,
+		ChildMiners: make(map[string]int),
+	}
+}
+
 func GetAscendDBKey(fundingUtxo string) []byte {
 	return []byte(DB_KEY_ASCEND + fundingUtxo)
 }
@@ -151,8 +165,8 @@ func GetAllChannelFromDB(ldb *badger.DB) map[string]*common.ChannelInfo {
 	return result
 }
 
-func GetAllCoreNodeFromDB(ldb *badger.DB) map[string]int {
-	result := make(map[string]int)
+func GetAllCoreNodeFromDB(ldb *badger.DB) map[string]*CoreNodeInfo {
+	result := make(map[string]*CoreNodeInfo)
 	ldb.View(func(txn *badger.Txn) error {
 		key := GetAllCoreNodeDBKey()
 		item, err := txn.Get(key)
@@ -166,8 +180,8 @@ func GetAllCoreNodeFromDB(ldb *badger.DB) map[string]int {
 	})
 
 	if len(result) == 0 {
-		result[indexer.GetBootstrapPubKey()] = 0
-		result[indexer.GetCoreNodePubKey()] = 0
+		result[indexer.GetBootstrapPubKey()] = NewCoreNodeInfo(0)
+		result[indexer.GetCoreNodePubKey()] = NewCoreNodeInfo(0)
 	}
 
 	return result

@@ -80,3 +80,36 @@ func (p *IndexerClient) GetTxUtxoAssets(utxo string) (*indexer.AssetsInUtxo, err
 
 	return result.Data, nil
 }
+
+func (p *IndexerClient) GetIndexerPubkey(localPubkey string) (string, error) {
+	path := p.GetUrl("/kv/register")
+	req := indexerwire.RegisterPubKeyReq{
+		PubKey: localPubkey,
+	}
+	buff, err := json.Marshal(&req)
+	if err != nil {
+		return "", err
+	}
+	
+	rsp, err := p.Http.SendPostRequest(path, buff)
+	if err != nil {
+		//Log.Errorf("SendGetRequest %v failed. %v", url, err)
+		return "",  err
+	}
+
+	fmt.Printf("%v response: %s\n", path, string(rsp))
+
+	// Unmarshal the response.
+	var result indexerwire.RegisterPubKeyResp
+	if err := json.Unmarshal(rsp, &result); err != nil {
+		err := fmt.Errorf("%s response data format failed: %s", path, string(rsp))
+		return "", err
+	}
+
+	if result.Code != 0 {
+		err := fmt.Errorf("%s response failed: %s", path, result.Msg)
+		return "", err
+	}
+
+	return result.PubKey, nil
+}

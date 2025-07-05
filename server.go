@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"runtime"
 	"sort"
 	"strconv"
@@ -2676,18 +2677,18 @@ func (s *server) Start() {
 				srvrLog.Errorf("invalid miner pubker %v", err)
 				return
 			}
-	
-			done := time.After(60*time.Second)
-			ticker := time.NewTicker(3*time.Second)
-			out:
+
+			done := time.After(12 * time.Second)
+			ticker := time.NewTicker(3 * time.Second)
+		out:
 			for {
 				select {
 				case <-done:
 					ticker.Stop()
 					srvrLog.Infof("can't start pos miner.")
-					break out
+					os.Exit(-1)
 				case <-ticker.C:
-					if anchortx.IsCoreNode(pubkey) {
+					if anchortx.IsMinerNode(pubkey) {
 						srvrLog.Infof("Start pos miner.")
 						s.posMiner.Start()
 						break out
@@ -2695,7 +2696,6 @@ func (s *server) Start() {
 				}
 			}
 		}()
-		
 
 		s.rpcServer.SetVCStore(s.posMiner.GetVCStore())
 		go s.syncEpochMemberHandle()
@@ -3045,7 +3045,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		srvrLog.Infof("User-agent whitelist %s", agentWhitelist)
 	}
 
-	assetIndexer, err := indexerEntry.NewIndexerMgr(cfg.HomeDir,  "",
+	assetIndexer, err := indexerEntry.NewIndexerMgr(cfg.HomeDir, "",
 		activeNetParams.rpcPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
 		interrupt)
 	if err != nil {
