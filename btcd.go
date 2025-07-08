@@ -172,26 +172,27 @@ func btcdMain(serverChan chan<- *server) error {
 				}
 			} else {
 				cfg.MiningPubKey = hex.EncodeToString(pubkey)
-				bootstrapPubkey := anchortx.GetBootstrapPubKey()
-
-				var addr btcutil.Address
-				if cfg.MiningPubKey == indexer.GetBootstrapPubKey() {
-					// 引导节点本身
-					addr, err = getP2TRAddress(pubkey, activeNetParams.Params)
-					if err != nil {
-						btcdLog.Errorf("getP2TRAddress failed, %v", err)
-						return err
-					}
-				} else {
-					addr, err = getP2WSHAddress(bootstrapPubkey, pubkey, activeNetParams.Params)
-					if err != nil {
-						btcdLog.Errorf("getP2WSHAddress failed, %v", err)
-						return err
-					}
-					btcdLog.Infof("mining address %s", addr)
-				}
-				cfg.miningAddrs = append(cfg.miningAddrs, addr)
 			}
+
+			var addr btcutil.Address
+			bootstrapPubkey := indexer.GetBootstrapPubKey()
+			if cfg.MiningPubKey == bootstrapPubkey {
+				// 引导节点本身
+				addr, err = getP2TRAddress(pubkey, activeNetParams.Params)
+				if err != nil {
+					btcdLog.Errorf("getP2TRAddress failed, %v", err)
+					return err
+				}
+			} else {
+				bootstrapPubkeyBytes, _ := hex.DecodeString(bootstrapPubkey)
+				addr, err = getP2WSHAddress(bootstrapPubkeyBytes, pubkey, activeNetParams.Params)
+				if err != nil {
+					btcdLog.Errorf("getP2WSHAddress failed, %v", err)
+					return err
+				}
+			}
+			btcdLog.Infof("mining address %s", addr)
+			cfg.miningAddrs = append(cfg.miningAddrs, addr)
 		} else {
 			// 普通挖矿节点，没有L1索引器，需要某个索引器提供服务
 			if cfg.MiningPubKey == "" {
