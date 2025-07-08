@@ -167,6 +167,29 @@ func (b *IndexerMgr) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 	return b.rpcService.GetTickerInfo(ticker)
 }
 
+// return: ticker's name -> ticker info
+func (b *IndexerMgr) GetTickerMap(protocol string) map[string]*common.TickerInfo {
+	switch protocol {
+	case indexer.PROTOCOL_NAME_ORDX:
+		
+	case indexer.PROTOCOL_NAME_BRC20:
+		
+	case indexer.PROTOCOL_NAME_RUNES:
+
+	default:
+		
+	}
+	return nil
+}
+
+// return: addressId -> asset amount
+func (b *IndexerMgr) GetHoldersWithTick(tickerName *common.TickerName) map[uint64]*indexer.Decimal {
+	result := make(map[uint64]*indexer.Decimal)
+	
+
+	return result
+}
+
 func (b *IndexerMgr) GetBindingSat(ticker *wire.AssetName) int {
 	info := b.rpcService.GetTickerInfo(ticker)
 	if info == nil {

@@ -42,6 +42,8 @@ type BaseIndexer struct {
 	utxoIndex   *common.UTXOIndex
 	delUTXOs    []*UtxoValue // utxo->address,utxoid
 
+
+
 	tickInfoMap        map[string]*common.TickerInfo
 	addressIdMap       map[string]*AddressStatus
 	coreNodeMap        map[string]*stp.CoreNodeInfo // pubkey, 不清空
@@ -199,7 +201,65 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 
 
 func (b *BaseIndexer) Repair() {
-	
+	// update tick info 
+	// tickerMap := make(map[string]*common.TickerInfo, 0)
+	// b.db.View(func(txn *badger.Txn) error {
+	// 	// 设置前缀扫描选项
+	// 	prefixBytes := []byte(stp.DB_KEY_ASCEND)
+	// 	prefixOptions := badger.DefaultIteratorOptions
+	// 	prefixOptions.Prefix = prefixBytes
+
+	// 	// 使用前缀扫描选项创建迭代器
+	// 	it := txn.NewIterator(prefixOptions)
+	// 	defer it.Close()
+
+	// 	// 遍历匹配前缀的key
+	// 	for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
+	// 		item := it.Item()
+	// 		if item.IsDeletedOrExpired() {
+	// 			continue
+	// 		}
+	// 		key := string(item.Key())
+	// 		if strings.Count(key, ":") < 2 {
+	// 			continue
+	// 		}
+
+	// 		var info common.TickerInfo
+	// 		value, err := item.ValueCopy(nil)
+	// 		if err != nil {
+	// 			common.Log.Errorln("ValueCopy " + key + " " + err.Error())
+	// 		} else {
+	// 			err = db.DecodeBytes(value, &info)
+	// 			if err == nil {
+	// 				tickerMap[info.String()] = &info
+	// 			} else {
+	// 				common.Log.Errorln("DecodeBytes " + err.Error())
+	// 			}
+	// 		}
+	// 	}
+	// 	return nil
+	// })
+
+	// if len(tickerMap) == 0 {
+	// 	return
+	// }
+
+	// wb := b.db.NewWriteBatch()
+	// defer wb.Cancel()
+
+	// for k, v := range tickerMap {
+	// 	key := stp.GetTickerInfoDBKey(k)
+	// 	err := db.SetDB([]byte(key), v, wb)
+	// 	if err != nil {
+	// 		common.Log.Panicf("Error setting in db %v", err)
+	// 	}
+	// }
+	// err := wb.Flush()
+	// if err != nil {
+	// 	common.Log.Panicf("BaseIndexer.updateBasicDB-> Error satwb flushing writes to db %v", err)
+	// }
+
+
 }
 
 // only call in compiling data
@@ -664,6 +724,24 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int) int {
 	return 0
 }
 
+func (b *BaseIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
+
+	info, ok := b.tickInfoMap[ticker.String()]
+	if ok {
+		return info
+	}
+
+	info, err := stp.GetTickerInfoFromDB(b.db, ticker.String())
+	if err != nil {
+		common.Log.Errorf("GetTickerInfoFromDB %s failed, %v", ticker, err)
+		return nil
+	}
+
+	b.tickInfoMap[ticker.String()] = info
+
+	return info
+}
+
 // satoshinet 只需要保存utxo即可
 // 所有聪都来自锚定交易，也就是闪电网络通道
 func (b *BaseIndexer) processBlock(block *common.Block) {
@@ -682,13 +760,15 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 	satsInput := int64(0)
 	satsOutput := int64(0)
 	for txIndex, tx := range block.Transactions {
-		//ranges := make([]*common.Range, 0)
+		
+		var ascend *common.AscendData
 		for i, input := range tx.Inputs {
 			if uint32(input.Vout) == wire.MaxTxInSequenceNum { // coinbase
 				continue
 			}
 			if uint32(input.Vout) == wire.AnchorTxOutIndex { // transcend
-				ascend, err := GenAscendFromAnchorPkScript(input.SignatureScript, b.chaincfgParam)
+				var err error
+				ascend, err = GenAscendFromAnchorPkScript(input.SignatureScript, b.chaincfgParam)
 				if err != nil {
 					common.Log.Errorf("GenAscendFromAnchorPkScript %s input %d failed. %v", tx.Txid, i, err)
 					continue
@@ -719,6 +799,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 					}
 				}
 
+				// 仅仅是通道地址，有可能是合约控制
 				_, ok = b.channelMap[ascend.Address]
 				if !ok {
 					b.channelMap[ascend.Address] = &common.ChannelInfo{
@@ -770,6 +851,34 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 							descend.Height = block.Height
 							b.utxoIndex.DescendMap[descend.NullDataUtxo] = descend
 
+							var bindingSatNum int64
+							if len(descend.Assets) > 0 {
+								bindingSatNum = descend.Assets.GetBindingSatAmout()
+								for _, asset := range descend.Assets {
+									ticker := b.GetTickerInfo(&asset.Name)
+									if ticker == nil {
+										common.Log.Panicf("GetTickerInfo %s failed", asset.Name.String())
+									}
+									ticker.TotalDescendAmt = ticker.TotalDescendAmt.Add(&asset.Amount)
+									if ticker.TotalDescendAmt.Cmp(ticker.TotalAscendAmt) > 0 {
+										common.Log.Panicf("asset %s invalid amt: ascend %s, but descend %s", 
+											asset.Name.String(), ticker.TotalAscendAmt.String(), ticker.TotalDescendAmt.String())
+									}
+								}
+							} 
+							value := descend.Value - bindingSatNum
+							if value > 0 {
+								ticker := b.GetTickerInfo(&indexer.ASSET_PLAIN_SAT)
+								if ticker == nil {
+									common.Log.Panicf("GetTickerInfo %s failed", indexer.ASSET_PLAIN_SAT.String())
+								}
+								ticker.TotalDescendAmt = ticker.TotalDescendAmt.Add(indexer.NewDefaultDecimal(value))
+								if ticker.TotalDescendAmt.Cmp(ticker.TotalAscendAmt) > 0 {
+									common.Log.Panicf("sats invalid amt: ascend %s, but descend %s", 
+										ticker.TotalAscendAmt.String(), ticker.TotalDescendAmt.String())
+								}
+							}
+
 							// TODO
 							// 需要检查通道中是否还有足够的资产，才能确定是否是corenode退出，现在不支持corenode退出
 							// if b.IsCoreNodeDescend(descend) {
@@ -785,7 +894,19 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 					case common.CONTENT_TYPE_ASCENDING:
 						tickerInfo, err := common.GenTickerInfo(data)
 						if err == nil {
-							b.tickInfoMap[tickerInfo.AssetName.String()] = tickerInfo
+							if ascend != nil {
+								if len(ascend.Assets) != 0 {
+									tickerInfo.TotalAscendAmt = ascend.Assets[0].Amount.Clone()
+								} else {
+									tickerInfo.TotalAscendAmt = indexer.NewDecimal(ascend.Value, 0)
+								}
+							}
+							existingTicker := b.GetTickerInfo(&tickerInfo.AssetName)
+							if existingTicker != nil {
+								existingTicker.TotalAscendAmt = existingTicker.TotalAscendAmt.Add(tickerInfo.TotalAscendAmt)
+							} else {
+								b.tickInfoMap[tickerInfo.AssetName.String()] = tickerInfo
+							}
 						} else {
 							common.Log.Errorf("GenTickerInfo %s:%d failed, %v",tx.Txid, i, err)
 						}

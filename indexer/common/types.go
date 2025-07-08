@@ -2,6 +2,7 @@ package common
 
 import (
 	"github.com/sat20-labs/satoshinet/wire"
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 const (
@@ -53,11 +54,22 @@ type UtxoInfo struct {
 	Assets   wire.TxAssets
 }
 
-type TickerInfo struct {
+
+type TickerInfo_old struct {
 	wire.AssetName
 	MaxSupply string
 	Precition int
 	N         int
+}
+
+type TickerInfo struct {
+	wire.AssetName
+	N        	 int
+	Divisibility int
+	MaxSupply 	  	*indexer.Decimal
+	TotalAscendAmt 	*indexer.Decimal
+	TotalDescendAmt *indexer.Decimal
+	HolderCount int
 }
 
 
@@ -67,7 +79,7 @@ type AscendData struct {
 	FundingUtxo string        `json:"fundingUtxo"`
 	AnchorTxId  string        `json:"anchorTxId"`
 	Value       int64         `json:"value"`
-	Assets      wire.TxAssets `json:"assets"`
+	Assets      wire.TxAssets `json:"assets"`  // 最多一种资产
 	Sig         []byte        `json:"invoiceSig"`
 
 	Address string `json:"address"` // 通道地址
@@ -81,7 +93,7 @@ type DescendData struct {
 	DescendTxId  string        `json:"descendTxId"`
 	NullDataUtxo string        `json:"opReturn"`
 	Value        int64         `json:"value"`
-	Assets       wire.TxAssets `json:"assets"`
+	Assets       wire.TxAssets `json:"assets"`  // 支持很多种资产
 
 	Address      string        `json:"address"` // 通道地址
 }

@@ -34,11 +34,11 @@ func GetAscendDBKey(fundingUtxo string) []byte {
 }
 
 func GetDescendDBKey(nullDataUtxo string) []byte {
-	return []byte(DB_KEY_ASCEND + nullDataUtxo)
+	return []byte(DB_KEY_DESCEND + nullDataUtxo)
 }
 
 func GetTickerInfoDBKey(assetName string) []byte {
-	return []byte(DB_KEY_ASCEND + assetName)
+	return []byte(DB_KEY_TICKINFO + assetName)
 }
 
 func GetChannelDBKey(addr string) []byte {
@@ -101,6 +101,50 @@ func GetTickerInfoFromDB(ldb *badger.DB, assetName string) (*common.TickerInfo, 
 		return nil, err
 	}
 	return &result, err
+}
+
+
+func GetAllTickerInfoFromDB(ldb *badger.DB) map[string]*common.TickerInfo {
+	count := 0
+
+	result := make(map[string]*common.TickerInfo, 0)
+	ldb.View(func(txn *badger.Txn) error {
+		// 设置前缀扫描选项
+		prefixBytes := []byte(DB_KEY_TICKINFO)
+		prefixOptions := badger.DefaultIteratorOptions
+		prefixOptions.Prefix = prefixBytes
+
+		// 使用前缀扫描选项创建迭代器
+		it := txn.NewIterator(prefixOptions)
+		defer it.Close()
+
+		// 遍历匹配前缀的key
+		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
+			item := it.Item()
+			if item.IsDeletedOrExpired() {
+				continue
+			}
+			key := string(item.Key())
+
+			var info common.TickerInfo
+			value, err := item.ValueCopy(nil)
+			if err != nil {
+				common.Log.Errorln("ValueCopy " + key + " " + err.Error())
+			} else {
+				err = db.DecodeBytes(value, &info)
+				if err == nil {
+					result[info.String()] = &info
+				} else {
+					common.Log.Errorln("DecodeBytes " + err.Error())
+				}
+			}
+
+			count++
+		}
+		return nil
+	})
+
+	return result
 }
 
 func GetChannelInfoFromDB(ldb *badger.DB, address string) (*common.ChannelInfoInDB, error) {

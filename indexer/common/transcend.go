@@ -14,6 +14,8 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
+
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 const (
@@ -243,7 +245,7 @@ func GenTickerInfo(data []byte) (*TickerInfo, error) {
 	if len(parts) != 4 {
 		return nil, fmt.Errorf("invalid ascending payload %s", string(data))
 	}
-	precition, err := strconv.Atoi(parts[2])
+	divisibility, err := strconv.Atoi(parts[2])
 	if err != nil {
 		return nil, err
 	}
@@ -252,8 +254,11 @@ func GenTickerInfo(data []byte) (*TickerInfo, error) {
 		return nil, err
 	}
 	result.AssetName = *wire.NewAssetNameFromString(parts[0])
-	result.MaxSupply = parts[1]
-	result.Precition = precition
+	result.MaxSupply, err = indexer.NewDecimalFromString(parts[1], divisibility)
+	if err != nil {
+		return nil, err
+	}
+	result.Divisibility = divisibility
 	result.N = n
 
 	return &result, nil

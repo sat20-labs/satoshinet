@@ -442,12 +442,7 @@ func (b *RpcIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 	info, err := stp.GetTickerInfoFromDB(b.db, ticker.String())
 	if err != nil {
 		common.Log.Errorf("GetTickerInfoFromDB %s failed, %v", ticker, err)
-		return &common.TickerInfo{
-			AssetName: *ticker,
-			MaxSupply: "21000000000000000",
-			Precition: 0,
-			N:         1,
-		}
+		return nil
 	}
 
 	b.mutex.Lock()
