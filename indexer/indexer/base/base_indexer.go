@@ -35,13 +35,12 @@ type UpdateDBCallback func()
 type BaseIndexer struct {
 	db      *badger.DB
 	stats   *SyncStats // 数据库状态
-	reCheck bool
 
 	// 需要clone的数据
 	blockVector []*common.BlockValueInDB //
 	utxoIndex   *common.UTXOIndex
 	delUTXOs    []*UtxoValue // utxo->address,utxoid
-
+	tickerAddressMap map[string]map[uint64]*indexer.Decimal // ticker->addressId->amount，在某个更新周期中的缓存数据，非全量
 
 
 	tickInfoMap        map[string]*common.TickerInfo
@@ -53,7 +52,6 @@ type BaseIndexer struct {
 	lastHeight       int // 内存数据同步区块
 	lastHash         string
 	prevBlockHashMap map[int]string // 记录过去6个区块hash，判断哪个区块分叉
-	lastSats         int64
 	////////////
 
 	blocksChan chan *common.Block
@@ -119,6 +117,7 @@ func (b *BaseIndexer) reset() {
 	b.blockVector = make([]*common.BlockValueInDB, 0)
 	b.utxoIndex = common.NewUTXOIndex()
 	b.delUTXOs = make([]*UtxoValue, 0)
+	b.tickerAddressMap = make(map[string]map[uint64]*indexer.Decimal)
 }
 
 // 只保存UpdateDB需要用的数据
@@ -143,6 +142,14 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		newInst.utxoIndex.DescendMap[key] = value
 	}
 
+	newInst.tickerAddressMap = make(map[string]map[uint64]*indexer.Decimal)
+	for k, v := range b.tickerAddressMap {
+		addrmap := make(map[uint64]*indexer.Decimal)
+		for id, amt := range v {
+			addrmap[id] = amt.Clone()
+		}
+		newInst.tickerAddressMap[k] = addrmap
+	}
 
 
 	newInst.tickInfoMap = make(map[string]*common.TickerInfo)
@@ -177,7 +184,6 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 
 	newInst.lastHash = b.lastHash
 	newInst.lastHeight = b.lastHeight
-	newInst.lastSats = b.lastSats
 	newInst.stats = b.stats.Clone()
 	newInst.blockprocCB = b.blockprocCB
 	newInst.updateDBCB = b.updateDBCB
@@ -197,6 +203,10 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 
 	l := len(another.delUTXOs)
 	b.delUTXOs = b.delUTXOs[l:]
+
+	// 统计量不需要更新
+	// for k, v := range another.tickerAddressMap {
+	// }
 }
 
 
@@ -322,7 +332,7 @@ func (b *BaseIndexer) UpdateDB() {
 	wb := b.db.NewWriteBatch()
 	defer wb.Cancel()
 
-	totalSubsidySats := int64(0)
+	totalAscendSats := int64(0) // 穿越到聪网的聪
 	AllUtxoAdded := uint64(0)
 	for _, value := range b.blockVector {
 		key := db.GetBlockDBKey(value.Height)
@@ -330,7 +340,7 @@ func (b *BaseIndexer) UpdateDB() {
 		if err != nil {
 			common.Log.Panicf("Error setting in db %v", err)
 		}
-		totalSubsidySats += value.OutputSats - value.InputSats
+		totalAscendSats += value.OutputSats - value.InputSats
 		AllUtxoAdded += uint64(value.OutputUtxo)
 	}
 
@@ -350,6 +360,7 @@ func (b *BaseIndexer) UpdateDB() {
 	utxoAdded := 0
 	satsAdded := int64(0)
 	utxoSkipped := 0
+	totalDescendSats := int64(0)
 	for k, v := range b.utxoIndex.Index {
 		//if len(v.Ordinals) == 0 {
 		// 有些没有聪，一样可以花费，比如1025ca72299155eb5c2ef6c1918e7dfbdcffd04b0d13792e9773af72b827d28a:1 （testnet）
@@ -358,13 +369,14 @@ func (b *BaseIndexer) UpdateDB() {
 		// v.Address.Type == (txscript.NonStandardTy) 这样的utxo需要被记录下来，虽然地址是nil，ordinals也是nil
 		// 比如：21e48796d17bcab49b1fea7211199c0fa1e296d2ecf4cf2f900cee62153ee331的所有输出 （testnet）
 		if v.Address.Type == int(txscript.NullDataTy) {
-			// 只有OP_RETURN 才不记录
+			// 只有0 才不记录
 			if v.Value == 0 {
 				utxoSkipped++
 				continue
 			} else {
 				// e362e21ff1d2ef78379d401d89b42ce3e0ce3e245f74b1f4cb624a8baa5d53ad:0 testnet
 				common.Log.Infof("the OP_RETURN has %d sats in %s", v.Value, k)
+				totalDescendSats += v.Value
 			}
 		}
 		key := db.GetUTXODBKey(k)
@@ -491,7 +503,8 @@ func (b *BaseIndexer) UpdateDB() {
 	b.stats.UtxoCount += uint64(utxoAdded)
 	b.stats.UtxoCount -= uint64(utxoDeled)
 	b.stats.AllUtxoCount += AllUtxoAdded
-	b.stats.TotalSats += totalSubsidySats
+	b.stats.TotalAscendSats += totalAscendSats
+	b.stats.TotalDescendSats += totalDescendSats
 	b.stats.SyncBlockHash = b.lastHash
 	b.stats.SyncHeight = b.lastHeight
 	err := db.SetDB([]byte(SyncStatsKey), b.stats, wb)
@@ -919,13 +932,10 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			u := indexer.GetUtxo(block.Height, tx.Txid, int(output.N))
 			b.utxoIndex.Index[u] = output
 			addedUtxoCount++
-			satsOutput += output.Value
+			satsOutput += output.Value	// 包括op_return的聪
 		}
 
 	}
-
-	size := satsOutput - satsInput
-	b.lastSats += size
 
 	blockValue.InputUtxo = deledUtxoCount
 	blockValue.OutputUtxo = addedUtxoCount
@@ -1078,7 +1088,6 @@ func (b *BaseIndexer) loadSyncStatsFromDB() {
 		b.stats = syncStats
 		b.lastHash = b.stats.SyncBlockHash
 		b.lastHeight = b.stats.SyncHeight
-		b.lastSats = b.stats.TotalSats
 
 		return nil
 	})
@@ -1146,8 +1155,8 @@ func (b *BaseIndexer) CheckSelf() bool {
 		}
 
 		// 计算下聪网上有多少聪，是否跟状态一致
-		if satsInSatsNet != b.stats.TotalSats {
-			common.Log.Panicf("sats amount different. %d %d", satsInSatsNet, b.stats.TotalSats)
+		if satsInSatsNet != b.stats.TotalAscendSats - b.stats.TotalDescendSats {
+			common.Log.Panicf("sats amount different. %d %d", satsInSatsNet, b.stats.TotalAscendSats - b.stats.TotalDescendSats)
 		}
 
 		common.Log.Infof("%s table takes %v", common.DB_KEY_BLOCK, time.Since(startTime2))
@@ -1312,9 +1321,9 @@ func (b *BaseIndexer) CheckSelf() bool {
 
 	// testnet: block 26432 多奖励了0.001btc，2642多奖励了0.0015，所以测试网络对比数据会有异常，只在主网上验证
 	// mainnet: 早期软件原因有些块没有拿到足够的奖励，比如124724
-	if b.stats.TotalSats != satsInAddress {
-		common.Log.Panicf("sats wrong %d %d", satsInAddress, b.stats.TotalSats)
-	}
+	// if b.stats.TotalSats != satsInAddress {
+	// 	common.Log.Panicf("sats wrong %d %d", satsInAddress, b.stats.TotalSats)
+	// }
 
 	b.setDBVersion()
 

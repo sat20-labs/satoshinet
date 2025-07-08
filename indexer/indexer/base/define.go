@@ -11,7 +11,8 @@ type SyncStats struct {
 	AllUtxoCount   uint64
 	AddressCount   uint64
 	UtxoCount      uint64
-	TotalSats      int64
+	TotalAscendSats  int64 // 包含绑定资产的聪
+	TotalDescendSats int64
 	AscendCount    int
 	DescendCount   int
 }
@@ -29,7 +30,8 @@ func (p *SyncStats) Clone () *SyncStats {
 		AllUtxoCount: p.AllUtxoCount,
 		AddressCount: p.AddressCount,
 		UtxoCount: p.UtxoCount,
-		TotalSats: p.TotalSats,
+		TotalAscendSats: p.TotalAscendSats,
+		TotalDescendSats: p.TotalDescendSats,
 	}
 	c.ReorgsDetected = make([]int, len(p.ReorgsDetected))
 	copy(c.ReorgsDetected, p.ReorgsDetected)
