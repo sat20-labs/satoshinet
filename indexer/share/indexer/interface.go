@@ -43,5 +43,6 @@ type Indexer interface {
 	GetDescendData(nullDataUtxo string) *common.DescendData
 	GetAllCoreNode() map[string]*stp.CoreNodeInfo
 	IsCoreNode(pubkey string) bool
+	GetCoreNodeInfo(pubkey string) (bool, []string)
 	IsMinerNode(pubkey string) bool
 }

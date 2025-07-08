@@ -473,6 +473,19 @@ func (b *RpcIndexer) IsCoreNode(pubkey string) bool {
 	return ok
 }
 
+func (b *RpcIndexer) GetCoreNodeInfo(pubkey string) (bool, []string) {
+	b.mutex.RLock()
+	info, ok := b.coreNodeMap[pubkey]
+	b.mutex.RUnlock()
+	if ok {
+		childs := make([]string, 0)
+		for k := range info.ChildMiners {
+			childs = append(childs, k)
+		}
+		return true, childs
+	}
+	return false, nil
+}
 
 // only for RPC interface
 // 与核心节点建立通道并且将资产质押到通道中

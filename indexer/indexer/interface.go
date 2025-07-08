@@ -183,6 +183,10 @@ func (b *IndexerMgr) IsCoreNode(pubkey string) bool {
 	return b.rpcService.IsCoreNode(pubkey)
 }
 
+func (b *IndexerMgr) GetCoreNodeInfo(pubkey string) (bool, []string) {
+	return b.rpcService.GetCoreNodeInfo(pubkey)
+}
+
 func (b *IndexerMgr) IsMinerNode(pubkey string) bool {
 	return b.rpcService.IsMinerNode(pubkey)
 }

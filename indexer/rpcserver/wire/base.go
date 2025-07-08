@@ -29,3 +29,9 @@ type CheckCoreNodeResp struct {
 	indexerwire.BaseResp
 	Data bool `json:"data"`
 }
+
+type GetCoreNodeInfoResp struct {
+	indexerwire.BaseResp
+	IsCoreNdoe bool     `json:"data"`
+	Childs     []string `json:"childs"`
+}
