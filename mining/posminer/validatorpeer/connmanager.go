@@ -107,7 +107,11 @@ func (connReq *ConnReq) Close() {
 	atomic.StoreInt32(&connReq.connClose, 1)
 	connReq.conn.Close()
 	// close the send queue
-	connReq.quitQueue <- struct{}{}
+	// 非阻塞写入
+	select {
+    case connReq.quitQueue <- struct{}{}:
+    default:
+    }
 
 	if connReq.Listener != nil {
 		connReq.Listener.OnConnDisconnected(connReq)
@@ -178,7 +182,10 @@ func (connReq *ConnReq) SendCommand(command validatorcommand.Message) error {
 
 	//utils.Log.Tracef("----------[%s]Send signal to send command", connReq.String())
 	// Signal the send queue
-	connReq.sendQueue <- struct{}{}
+	select {
+	case connReq.sendQueue <- struct{}{}:
+	default:
+	}
 
 	//utils.Log.Tracef("----------[%s]Command [%s] has sent", connReq.String(), command.Command())
 	return nil
@@ -196,10 +203,13 @@ func (connReq *ConnReq) AddCommand(command validatorcommand.Message) {
 
 func (connReq *ConnReq) PopNextCommand() validatorcommand.Message {
 	connReq.CmdsLock.Lock()
-	item := connReq.pendingCmds.Front()
-	connReq.pendingCmds.Remove(item)
-	connReq.CmdsLock.Unlock()
+	defer connReq.CmdsLock.Unlock()
 
+	item := connReq.pendingCmds.Front()
+	if item == nil {
+		return nil
+	}
+	connReq.pendingCmds.Remove(item)
 	// if item != nil {
 	// 	utils.Log.Tracef("----------[%s]Next command [%s] in send queue", connReq.String(), item.Value.(validatorcommand.Message).Command())
 	// } else {
@@ -305,7 +315,7 @@ out:
 		}
 	}
 
-	//utils.Log.Tracef("----------[%d] sendQueueHandler done for %s", connReq.id, connReq.String())
+	utils.Log.Tracef("----------[%d] sendQueueHandler done for %s", connReq.id, connReq.String())
 }
 
 // writeMessage sends a bitcoin message to the peer with logging.
