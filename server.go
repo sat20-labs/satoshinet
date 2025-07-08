@@ -2693,6 +2693,8 @@ func (s *server) Start() {
 				case <-ticker.C:
 					if done == nil {
 						tip := s.chain.GetTipHeight()
+						tip2 := indexerShare.ShareIndexer.GetChainTip()
+						tip = max(tip, tip2)
 						height := indexerShare.ShareIndexer.GetSyncHeight()
 						if height == tip {
 							done = time.After(12 * time.Second)
