@@ -25,54 +25,100 @@ func NewModel(indexer shareIndexer.Indexer) *Model {
 	}
 }
 
+
+func (s *Model) GetTickerList(protocol string, start, limit int) ([]*common.TickerInfo, int) {
+	tickmap := s.indexer.GetTickerMap(protocol)
+	mid := make([]*common.TickerInfo, 0)
+	for _, v := range tickmap {
+		mid = append(mid, v)
+	}
+	sort.Slice(mid, func(i, j int) bool {
+		return mid[i].AssetName.String() < mid[j].AssetName.String()
+	})
+
+	total := len(mid)
+	if start >= total {
+		return nil, 0
+	}
+	limit += start
+	if limit >= total {
+		limit = total
+	}
+
+	return mid[start:limit], total
+}
+
+func (s *Model) GetTickerInfo(tickerName string) (*common.TickerInfo, error) {
+	ticker := s.indexer.GetTickerInfo(indexer.NewAssetNameFromString(tickerName))
+	if ticker == nil {
+		return nil, fmt.Errorf("can't find ticker %s", tickerName)
+	}
+
+	return ticker, nil
+}
+
+
+func (s *Model) GetHolderListV3(tickName string, start, limit uint64) ([]*indexerwire.HolderV3, uint64, error) {
+	
+	assetName := indexer.NewAssetNameFromString(tickName)
+	holders := s.indexer.GetHoldersWithTick(assetName)
+
+	result := make([]*indexerwire.HolderV3, 0, len(holders))
+	for address, amt := range holders {
+		ordxMintInfo := &indexerwire.HolderV3{
+			Wallet:       address,
+			TotalBalance: amt.String(),
+		}
+		result = append(result, ordxMintInfo)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		a, _ := indexer.NewDecimalFromString(result[i].TotalBalance, 20)
+		b, _ := indexer.NewDecimalFromString(result[j].TotalBalance, 20)
+		return a.Cmp(b) > 0
+	})
+
+	total := uint64(len(result))
+	end := total
+	if start >= end {
+		return nil, 0, nil
+	}
+	if start+limit < end {
+		end = start + limit
+	}
+	result = result[start:end]
+	return result, total, nil
+}
+
+
 func (s *Model) getPlainUtxos(address string, value int64, start, limit int) ([]*indexerwire.PlainUtxo, int, error) {
-	utxomap, err := s.indexer.GetUTXOsWithAddress(address)
+	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, &indexer.ASSET_PLAIN_SAT)
 	if err != nil {
 		return nil, 0, err
 	}
-	avaibableUtxoList := make([]*indexerwire.PlainUtxo, 0)
-	utxos := make([]*indexer.UtxoIdInDB, 0)
-	for key, value := range utxomap {
-		utxos = append(utxos, &indexer.UtxoIdInDB{UtxoId: key, Value: value})
+
+	utxos := make([]uint64, 0)
+	for key := range outputMap {
+		utxos = append(utxos, key)
 	}
 
-	// sort.Slice(utxos, func(i, j int) bool {
-	// 	return utxos[i].Value > utxos[j].Value
-	// })
+	sort.Slice(utxos, func(i, j int) bool {
+		return utxos[i] < utxos[j]
+	})
 
 	// // 分页显示
 	totalRecords := len(utxos)
-	// if totalRecords < start {
-	// 	return nil, totalRecords, fmt.Errorf("start exceeds the count of UTXO")
-	// }
-	// if totalRecords < start+limit {
-	// 	limit = totalRecords - start
-	// }
-	// end := start + limit
-	// utxos = utxos[start:end]
 
-	for _, utxoId := range utxos {
-		//Indicates that this utxo has been spent and cannot be used for indexing
-		utxo := s.indexer.GetUtxoById(utxoId.UtxoId)
-		if utxo == "" {
+	avaibableUtxoList := make([]*indexerwire.PlainUtxo, 0)
+	for _, txOut := range outputMap {
+		if IsSpent(txOut.OutPoint) {
 			continue
 		}
-
-		if !IsAvailableUtxo(utxo) {
-			continue
-		}
-
-		txid, vout, err := indexer.ParseUtxo(utxo)
-		if err != nil {
-			continue
-		}
-
-		//Find utxo with value
-		if utxoId.Value >= value {
+		if txOut.Value >= value {
+			txid, vout, _ := indexer.ParseUtxo(txOut.OutPoint)
 			avaibableUtxoList = append(avaibableUtxoList, &indexerwire.PlainUtxo{
 				Txid:  txid,
 				Vout:  vout,
-				Value: utxoId.Value,
+				Value: txOut.Value,
 			})
 		}
 	}
@@ -85,67 +131,54 @@ func (s *Model) getPlainUtxos(address string, value int64, start, limit int) ([]
 }
 
 func (s *Model) getAllUtxos(address string, start, limit int) ([]*indexerwire.PlainUtxo, []*indexerwire.PlainUtxo, int, error) {
-	utxomap, err := s.indexer.GetUTXOsWithAddress(address)
+	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, nil)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	utxos := make([]*indexer.UtxoIdInDB, 0)
-	for key, value := range utxomap {
-		utxos = append(utxos, &indexer.UtxoIdInDB{UtxoId: key, Value: value})
+	utxos := make([]uint64, 0)
+	for key := range outputMap {
+		utxos = append(utxos, key)
 	}
 
-	sort.Slice(utxos, func(i, j int) bool {
-		return utxos[i].Value > utxos[j].Value
-	})
+	// sort.Slice(utxos, func(i, j int) bool {
+	// 	return utxos[i] < utxos[j]
+	// })
 
 	// // 分页显示
 	totalRecords := len(utxos)
-	// if totalRecords < start {
-	// 	return nil, nil, totalRecords, fmt.Errorf("start exceeds the count of UTXO")
-	// }
-	// if totalRecords < start+limit {
-	// 	limit = totalRecords - start
-	// }
-	// end := start + limit
-	// utxos = utxos[start:end]
 
 	plainUtxos := make([]*indexerwire.PlainUtxo, 0)
 	otherUtxos := make([]*indexerwire.PlainUtxo, 0)
-
-	for _, utxoId := range utxos {
-		//Indicates that this utxo has been spent and cannot be used for indexing
-		utxo := s.indexer.GetUtxoById(utxoId.UtxoId)
-		if utxo == "" {
+	for _, txOut := range outputMap {
+		if IsSpent(txOut.OutPoint) {
 			continue
 		}
+		
+		txid, vout, _ := indexer.ParseUtxo(txOut.OutPoint)
 
-		// 效率很低，需要内部实现内存池
-		if IsSpent(utxo) {
-			continue
-		}
-
-		txid, vout, err := indexer.ParseUtxo(utxo)
-		if err != nil {
-			continue
-		}
-
-		//Find common utxo (that is, utxo with non-ordinal attributes)
-		if shareIndexer.ShareIndexer.HasAssetInUtxo(utxo) {
-			otherUtxos = append(otherUtxos, &indexerwire.PlainUtxo{
-				Txid:  txid,
-				Vout:  vout,
-				Value: utxoId.Value,
-			})
-		} else {
+		if len(txOut.Assets) == 0 {
 			plainUtxos = append(plainUtxos, &indexerwire.PlainUtxo{
 				Txid:  txid,
 				Vout:  vout,
-				Value: utxoId.Value,
+				Value: txOut.Value,
+			})
+		} else {
+			otherUtxos = append(otherUtxos, &indexerwire.PlainUtxo{
+				Txid:  txid,
+				Vout:  vout,
+				Value: txOut.Value,
 			})
 		}
-
 	}
+
+	sort.Slice(plainUtxos, func(i, j int) bool {
+		return plainUtxos[i].Value > plainUtxos[j].Value
+	})
+
+	sort.Slice(otherUtxos, func(i, j int) bool {
+		return otherUtxos[i].Value > otherUtxos[j].Value
+	})
 
 	return plainUtxos, otherUtxos, totalRecords, nil
 }

@@ -77,7 +77,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddress(address string) map[wire.AssetName
 
 	value := int64(0)
 	result := make(map[wire.AssetName]*indexer.Decimal)
-	for utxoId, v := range utxos {
+	for utxoId := range utxos {
 		utxo, err := b.rpcService.GetUtxoByID(utxoId)
 		if err != nil {
 			continue
@@ -102,7 +102,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddress(address string) map[wire.AssetName
 			assetAmt = info.Assets.GetBindingSatAmout()
 		}
 
-		value += (v - assetAmt)
+		value += (info.Value - assetAmt)
 	}
 	result[common.ASSET_PLAIN_SAT] = indexer.NewDefaultDecimal(value)
 
@@ -169,25 +169,27 @@ func (b *IndexerMgr) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 
 // return: ticker's name -> ticker info
 func (b *IndexerMgr) GetTickerMap(protocol string) map[string]*common.TickerInfo {
-	switch protocol {
-	case indexer.PROTOCOL_NAME_ORDX:
-		
-	case indexer.PROTOCOL_NAME_BRC20:
-		
-	case indexer.PROTOCOL_NAME_RUNES:
 
-	default:
+	result := make(map[string]*common.TickerInfo)
+	tickerMap := b.rpcService.GetTickerMap()
+	for k, v := range tickerMap {
 		
+		if protocol == "" || protocol == "*" {
+			result[k] = v
+		} else {
+			name := indexer.NewAssetNameFromString(k)
+			if name.Protocol == protocol {
+				result[k] = v
+			}
+		}
 	}
-	return nil
+
+	return result
 }
 
 // return: addressId -> asset amount
-func (b *IndexerMgr) GetHoldersWithTick(tickerName *common.TickerName) map[uint64]*indexer.Decimal {
-	result := make(map[uint64]*indexer.Decimal)
-	
-
-	return result
+func (b *IndexerMgr) GetHoldersWithTick(tickerName *common.TickerName) map[string]*indexer.Decimal {
+	return b.rpcService.GetHoldersWithTick(tickerName)
 }
 
 func (b *IndexerMgr) GetBindingSat(ticker *wire.AssetName) int {

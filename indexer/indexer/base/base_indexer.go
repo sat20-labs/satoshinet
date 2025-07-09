@@ -24,11 +24,6 @@ type UtxoValue struct {
 	Value   int64
 }
 
-type AddressStatus struct {
-	AddressId uint64
-	Op        int // 0 existed; 1 added
-}
-
 type BlockProcCallback func(*common.Block)
 type UpdateDBCallback func()
 
@@ -43,7 +38,7 @@ type BaseIndexer struct {
 	tickAddressMap map[string]map[string]*indexer.Decimal // ticker->addressId->amount，在某个更新周期中的缓存数据，非全量
 
 	tickInfoMap        map[string]*common.TickerInfo
-	addressIdMap       map[string]*indexer.AddressValueV2	// 每个区块处理之前填充所有需要的地址id
+	addressValueMap       map[string]*indexer.AddressValueV2	// 每个区块处理之前填充所有需要的地址id
 	coreNodeMap        map[string]*stp.CoreNodeInfo // pubkey, 不清空
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 不清空
@@ -113,7 +108,7 @@ func (b *BaseIndexer) reset() {
 
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
 	b.tickInfoMap = make(map[string]*common.TickerInfo)
-	b.addressIdMap = make(map[string]*indexer.AddressValueV2)
+	b.addressValueMap = make(map[string]*indexer.AddressValueV2)
 	b.coreNodeMap = make(map[string]*stp.CoreNodeInfo)
 	b.channelMap = make(map[string]*common.ChannelInfo)
 	b.prevBlockHashMap = make(map[int]string)
@@ -174,8 +169,8 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		newInst.channelMap[k] = v
 	}
 
-	newInst.addressIdMap = make(map[string]*indexer.AddressValueV2)
-	for key, value := range b.addressIdMap {
+	newInst.addressValueMap = make(map[string]*indexer.AddressValueV2)
+	for key, value := range b.addressValueMap {
 		n := indexer.AddressValueV2{
 			AddressType: value.AddressType,
 			AddressId: value.AddressId,
@@ -184,7 +179,7 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		for id, v := range value.Utxos {
 			n.Utxos[id] =v
 		}
-		newInst.addressIdMap[key] = &n
+		newInst.addressValueMap[key] = &n
 	}
 	newInst.blockVector = make([]*common.BlockValueInDB, len(b.blockVector))
 	copy(newInst.blockVector, b.blockVector)
@@ -405,7 +400,7 @@ func (b *BaseIndexer) UpdateDB() {
 			// 	}
 			// }
 
-			addrvalue := b.addressIdMap[address]
+			addrvalue := b.addressValueMap[address]
 			addressIds = append(addressIds, addrvalue.AddressId)
 		}
 
@@ -465,7 +460,7 @@ func (b *BaseIndexer) UpdateDB() {
 	//common.Log.Infof("BaseIndexer.updateBasicDB-> delete utxos %d, cost: %v", utxoDeled, time.Since(startTime))
 
 	// address -> utxo
-	for k, v := range b.addressIdMap {
+	for k, v := range b.addressValueMap {
 		if v.AddressType == uint32(txscript.NullDataTy) || v.AddressType == uint32(txscript.NonStandardTy) {
 			// 这两个地址的数据会越来越大，以后考虑分桶保存，再考虑保存这两个地址的utxo
 			continue
@@ -530,7 +525,7 @@ func (b *BaseIndexer) UpdateDB() {
 	// ticker -> holders (partially)
 	for ticker, addrmap := range b.tickAddressMap {
 		for k, v := range addrmap {
-			addrStatus, ok := b.addressIdMap[k]
+			addrStatus, ok := b.addressValueMap[k]
 			if !ok {
 				common.Log.Panicf("can't find id of address %s", k)
 			}
@@ -567,7 +562,7 @@ func (b *BaseIndexer) UpdateDB() {
 	b.blockVector = make([]*common.BlockValueInDB, 0)
 	b.utxoIndex = common.NewUTXOIndex()
 	b.delUTXOs = make([]*UtxoValue, 0)
-	b.addressIdMap = make(map[string]*indexer.AddressValueV2)
+	b.addressValueMap = make(map[string]*indexer.AddressValueV2)
 	b.tickInfoMap = make(map[string]*common.TickerInfo)
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
 }
@@ -1025,7 +1020,7 @@ func (b *BaseIndexer) inputUtxo(input *common.Output) {
 
 	utxoId := indexer.ToUtxoId(input.Height, input.TxId, int(input.N))
 	for _, address := range input.Address.Addresses {
-		utxomap, ok := b.addressIdMap[address]
+		utxomap, ok := b.addressValueMap[address]
 		if ok {
 			delete(utxomap.Utxos, utxoId)
 		} else {
@@ -1061,7 +1056,7 @@ func (b *BaseIndexer) outputUtxo(output *common.Output) {
 	}
 	utxoId := indexer.ToUtxoId(output.Height, output.TxId, int(output.N))
 	for _, address := range output.Address.Addresses {
-		utxomap, ok := b.addressIdMap[address]
+		utxomap, ok := b.addressValueMap[address]
 		if !ok {
 			common.Log.Panicf("%s should be loaded before", address)
 			// 前面应该加载过了
@@ -1141,7 +1136,7 @@ func (b *BaseIndexer) loadUtxoFromDB(txn *badger.Txn, utxostr string) error {
 			common.Log.Errorf("failed to get address data by address %s, utxo: %s, utxoId: %d, err: %v", address, utxostr, utxo.UtxoId, err)
 			return err
 		}
-		b.addressIdMap[address] = data.ToAddressValueV2()
+		b.addressValueMap[address] = data.ToAddressValueV2()
 		addresses.Addresses = append(addresses.Addresses, address)
 	}
 	addresses.Type = int(utxo.AddressType)
@@ -1166,7 +1161,7 @@ func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, ad
 	for _, addr := range addresses {
 		_, ok := addrmap[addr]
 		if !ok {
-			addrId := b.addressIdMap[addr]
+			addrId := b.addressValueMap[addr]
 			amt, err := stp.GetTickerHolderInfoFromDBTxn(txn, name, addrId.AddressId)
 			if err != nil {
 				amt = indexer.NewDecimal(0, divisibility)
@@ -1208,19 +1203,19 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 
 			for _, output := range tx.Outputs {
 				for _, address := range output.Address.Addresses {
-					_, ok := b.addressIdMap[address]
+					_, ok := b.addressValueMap[address]
 					if !ok {
 						data, err := db.GetAddressDataFromDBTxn(txn, address)
 						if err != nil {
 							addressId := b.generateAddressId()
-							b.addressIdMap[address] = &indexer.AddressValueV2{
+							b.addressValueMap[address] = &indexer.AddressValueV2{
 								AddressType: uint32(output.Address.Type),
 								AddressId: addressId,
 								Op: 1,
 								Utxos: make(map[uint64]bool),
 							}
 						} else {
-							b.addressIdMap[address] = data.ToAddressValueV2()
+							b.addressValueMap[address] = data.ToAddressValueV2()
 						}
 					}
 				}
@@ -1627,7 +1622,7 @@ func (p *BaseIndexer) GetBlockInBuffer(height int) *common.BlockValueInDB {
 }
 
 func (p *BaseIndexer) getAddressId(address string) (uint64, int) {
-	value, ok := p.addressIdMap[address]
+	value, ok := p.addressValueMap[address]
 	if !ok {
 		common.Log.Errorf("can't find addressId %s", address)
 		return indexer.INVALID_ID, -1

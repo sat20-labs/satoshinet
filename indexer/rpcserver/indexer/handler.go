@@ -47,6 +47,88 @@ func (s *Handle) getHealth(c *gin.Context) {
 	c.JSON(code, rsp)
 }
 
+
+func (s *Handle) getTickerList(c *gin.Context) {
+	resp := &localwire.TickersResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: nil,
+	}
+
+	protocol := c.Param("protocol")
+	start, err := strconv.Atoi(c.DefaultQuery("start", "0"))
+	if err != nil {
+		start = 0
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", QueryParamDefaultLimit))
+	if err != nil {
+		limit = 100
+	}
+	resp.Data, resp.Total = s.model.GetTickerList(protocol, start, limit)
+
+	c.JSON(http.StatusOK, resp)
+}
+
+
+func (s *Handle) getTickerInfo(c *gin.Context) {
+	resp := &localwire.TickerInfoResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: nil,
+	}
+
+	tickerName := c.Param("ticker")
+	tickerInfo, err := s.model.GetTickerInfo(tickerName)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = tickerInfo
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getHolderListV3(c *gin.Context) {
+	resp := &indexerwire.HolderListRespV3{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: nil,
+	}
+
+	tickerName := c.Param("ticker")
+	start, err := strconv.Atoi(c.DefaultQuery("start", "0"))
+	if err != nil {
+		start = 0
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", QueryParamDefaultLimit))
+	if err != nil {
+		limit = 100
+	}
+	holderlist, total, err := s.model.GetHolderListV3(tickerName, uint64(start), uint64(limit))
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = &indexerwire.HolderListDataV3{
+		ListResp: indexerwire.ListResp{
+			Total: total,
+			Start: int64(start),
+		},
+		Detail: holderlist,
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+
 // @Summary Retrieves available UTXOs
 // @Description Get UTXOs in a address and its value is greater than the specific value. If value=0, get all UTXOs
 // @Tags ordx

@@ -35,3 +35,14 @@ type GetCoreNodeInfoResp struct {
 	IsCoreNdoe bool     `json:"data"`
 	Childs     []string `json:"childs"`
 }
+
+type TickersResp struct {
+	indexerwire.BaseResp
+	Total int                  `json:"total"`
+	Data  []*common.TickerInfo `json:"data"`
+}
+
+type TickerInfoResp struct {
+	indexerwire.BaseResp
+	Data *common.TickerInfo `json:"data"`
+}

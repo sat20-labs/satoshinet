@@ -29,6 +29,10 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/bestheight", s.handle.getBestHeight)
 	r.GET(proxy+"/height/:height", s.handle.getBlockInfo)
 
+	r.GET(proxy+"/v3/tick/all/:protocol", s.handle.getTickerList)
+	r.GET(proxy+"/v3/tick/info/:ticker", s.handle.getTickerInfo)
+	r.GET(proxy+"/v3/tick/holders/:ticker", s.handle.getHolderListV3)
+
 	// address
 	// 获取某个地址上所有资产和数量的列表
 	r.POST(proxy+"/v3/utxos/existing", s.handle.getExistingUtxos)

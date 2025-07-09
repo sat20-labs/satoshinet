@@ -15,7 +15,7 @@ func (p *IndexerMgr) GetOrdinalsWithUtxoId(id uint64) (string, wire.TxAssets, er
 	return p.rpcService.GetOrdinalsWithUtxoId(id)
 }
 
-func (p *IndexerMgr) GetUTXOsWithAddress(address string) (map[uint64]int64, error) {
+func (p *IndexerMgr) GetUTXOsWithAddress(address string) (map[uint64]bool, error) {
 	return p.rpcService.GetUTXOs(address)
 }
 

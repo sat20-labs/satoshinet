@@ -25,9 +25,12 @@ type Indexer interface {
 	GetUtxoById(utxoId uint64) string
 	GetUtxoId(utxo string) uint64
 	// return: utxoId->value
-	GetUTXOsWithAddress(address string) (map[uint64]int64, error)
+	GetUTXOsWithAddress(address string) (map[uint64]bool, error)
 	// return: utxo, sat ranges
 
+	GetTickerMap(protocol string) map[string]*common.TickerInfo
+	GetTickerInfo(tickerName *common.TickerName) *common.TickerInfo
+	GetHoldersWithTick(tickerName *common.TickerName) map[string]*indexer.Decimal
 	GetBindingSat(ticker *common.TickerName) int
 	// Asset
 	// return: tick->amount

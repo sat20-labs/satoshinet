@@ -29,7 +29,7 @@ func (b *IndexerMgr) GetAssetUTXOsInAddressWithTickV3(address string, ticker *sw
 		if ticker == nil {
 			result[utxoId] = info
 		} else if common.IsPlainAsset(ticker) {
-			// 即使包含其他资产，只有有白聪存在，就可以放进来
+			// 即使包含其他资产，只要有白聪存在，就可以放进来
 			if info.HasPlainSat() {
 				result[utxoId] = info
 			}
@@ -82,7 +82,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 	totalSats := int64(0)
 	value := int64(0)
 	result := make(map[wire.AssetName]*common.Decimal)
-	for utxoId, v := range utxos {
+	for utxoId := range utxos {
 		utxo, err := b.rpcService.GetUtxoByID(utxoId)
 		if err != nil {
 			continue
@@ -108,7 +108,7 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 			assetAmt = info.Assets.GetBindingSatAmout()
 		}
 		
-		value += (v - assetAmt)
+		value += (info.Value - assetAmt)
 	}
 	result[common.ASSET_ALL_SAT] = common.NewDefaultDecimal(totalSats)
 	if value != 0 {

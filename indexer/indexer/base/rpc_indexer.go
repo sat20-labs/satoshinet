@@ -26,7 +26,6 @@ type RpcIndexer struct {
 
 	// 接收前端api访问的实例，隔离内存访问
 	mutex              sync.RWMutex
-	addressValueMap    map[string]*indexer.AddressValueInDB
 	addressIdMap       map[uint64]string
 	deletedUtxoMap     map[uint64]bool
 	bSearching         bool
@@ -36,7 +35,6 @@ type RpcIndexer struct {
 func NewRpcIndexer(base *BaseIndexer) *RpcIndexer {
 	indexer := &RpcIndexer{
 		BaseIndexer:        *base.Clone(),
-		addressValueMap:    make(map[string]*indexer.AddressValueInDB),
 		addressIdMap:       make(map[uint64]string),
 		deletedUtxoMap:     make(map[uint64]bool),
 		bSearching:         false,
@@ -48,7 +46,6 @@ func NewRpcIndexer(base *BaseIndexer) *RpcIndexer {
 
 // 仅用于前端RPC数据查询时，更新地址数据
 func (b *RpcIndexer) UpdateServiceInstance() {
-	b.addressValueMap = b.prefechAddress()
 	b.addressIdMap = make(map[uint64]string)
 	for k, v := range b.addressValueMap {
 		b.addressIdMap[v.AddressId] = k
@@ -174,67 +171,20 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 }
 
 // only for api access
-func (b *RpcIndexer) getAddressValue2(address string, txn *badger.Txn) *indexer.AddressValueInDB {
-	result := &indexer.AddressValueInDB{AddressId: indexer.INVALID_ID}
-	addressId, err := db.GetAddressIdFromDBTxn(txn, address)
-	if err == nil {
-		utxos := make(map[uint64]*indexer.UtxoValue)
-		prefix := []byte(fmt.Sprintf("%s%x-", indexer.DB_KEY_ADDRESSVALUE, addressId))
-		itr := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer itr.Close()
-
-		for itr.Seek(prefix); itr.ValidForPrefix(prefix); itr.Next() {
-			item := itr.Item()
-			if item.IsDeletedOrExpired() {
-				continue
-			}
-			value := int64(0)
-			item.Value(func(data []byte) error {
-				value = int64(indexer.BytesToUint64(data))
-				return nil
-			})
-
-			newAddressId, utxoId, typ, _, err := indexer.ParseAddressIdKey(string(item.Key()))
-			if err != nil {
-				indexer.Log.Panicf("ParseAddressIdKey %s failed: %v", string(item.Key()), err)
-			}
-			if newAddressId != addressId {
-				indexer.Log.Panicf("ParseAddressIdKey %s get different addressid %d, %d", string(item.Key()), newAddressId, addressId)
-			}
-			result.AddressType = uint32(typ)
-
-			utxos[utxoId] = &indexer.UtxoValue{Op: 0, Value: value}
-		}
-
-		result.AddressId = addressId
-		result.Op = 0
-		result.Utxos = utxos
-	}
-
+func (b *RpcIndexer) getAddressValue2(address string, txn *badger.Txn) *indexer.AddressValueV2 {
 	b.mutex.RLock()
 	value, ok := b.addressValueMap[address]
-	if ok {
-		result.AddressType = value.AddressType
-		result.AddressId = value.AddressId
-		if result.Utxos == nil {
-			result.Utxos = make(map[uint64]*indexer.UtxoValue)
-		}
-		// 过滤已经删除的utxo
-		for k, v := range value.Utxos {
-			if v.Op > 0 {
-				result.Utxos[k] = v
-			} else if v.Op < 0 {
-				delete(result.Utxos, k)
-			}
+	if !ok {
+		data, err := db.GetAddressDataFromDBTxn(txn, address)
+		if err == nil {
+			value = data.ToAddressValueV2()
+			b.addressValueMap[address] = value
+			ok = true
 		}
 	}
 	b.mutex.RUnlock()
 
-	if result.AddressId == indexer.INVALID_ID {
-		return nil
-	}
-
-	return result
+	return value
 }
 
 // only for RPC interface
@@ -300,7 +250,7 @@ func (b *RpcIndexer) GetOrdinalsWithUtxoId(id uint64) (string, wire.TxAssets, er
 }
 
 // key: utxoId, value: btc value
-func (b *RpcIndexer) GetUTXOs(address string) (map[uint64]int64, error) {
+func (b *RpcIndexer) GetUTXOs(address string) (map[uint64]bool, error) {
 	addrValue, err := b.getUtxosWithAddress(address)
 	if err != nil {
 		return nil, err
@@ -329,25 +279,19 @@ func (b *RpcIndexer) GetUTXOs2(address string) []string {
 	return utxos
 }
 
-func (b *RpcIndexer) getUtxosWithAddress(address string) (*indexer.AddressValue, error) {
-	var addressValueInDB *indexer.AddressValueInDB
+func (b *RpcIndexer) getUtxosWithAddress(address string) (*indexer.AddressValueV2, error) {
+	var addressValueInDB *indexer.AddressValueV2
 	b.db.View(func(txn *badger.Txn) error {
 		addressValueInDB = b.getAddressValue2(address, txn)
 		return nil
 	})
 
-	value := &indexer.AddressValue{}
-	value.Utxos = make(map[uint64]int64)
 	if addressValueInDB == nil {
 		indexer.Log.Infof("RpcIndexer.getUtxosWithAddress-> No address %s found in db", address)
-		return value, nil
+		return nil, fmt.Errorf("not found")
 	}
 
-	value.AddressId = addressValueInDB.AddressId
-	for utxoid, utxovalue := range addressValueInDB.Utxos {
-		value.Utxos[utxoid] = utxovalue.Value
-	}
-	return value, nil
+	return addressValueInDB, nil
 }
 
 func (b *RpcIndexer) GetBlockInfo(height int) (*common.BlockInfo, error) {
@@ -500,4 +444,49 @@ func (b *RpcIndexer) IsMinerNode(pubkey string) bool {
 	}
 	
 	return false
+}
+
+func (b *RpcIndexer) GetTickerMap() map[string]*common.TickerInfo {
+	tickInfoMap := make(map[string]*common.TickerInfo)
+	b.mutex.RLock()
+	for k, v := range b.tickInfoMap {
+		tickInfoMap[k] = v
+	}
+	b.mutex.RUnlock()
+
+	tickerInDB := stp.GetAllTickerInfoFromDB(b.db)
+	for k, v := range tickerInDB {
+		_, ok := tickInfoMap[k]
+		if !ok {
+			tickInfoMap[k] = v
+		}
+	}
+	return tickInfoMap
+}
+
+func (b *RpcIndexer) GetHoldersWithTick(tickerName *common.TickerName) map[string]*indexer.Decimal {
+	result := make(map[string]*indexer.Decimal)
+	
+	b.mutex.RLock()
+	addrmap, ok := b.tickAddressMap[tickerName.String()]
+	b.mutex.RUnlock()
+	if ok {
+		for k, v := range addrmap {
+			result[k] = v
+		}
+	}
+
+	holdersInDB := stp.GetTickerHoldersFromDB(b.db, tickerName.String())
+	for k, v := range holdersInDB {
+		address, err := b.GetAddressByID(k)
+		if err != nil {
+			continue
+		}
+		_, ok := result[address]
+		if !ok {
+			result[address] = v
+		}
+	}
+
+	return result
 }
