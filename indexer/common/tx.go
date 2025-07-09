@@ -14,6 +14,7 @@ type Input struct {
 	Address         *ScriptPubKey  `json:"scriptPubKey"`
 	Vout            uint32         `json:"vout"`
 	Assets          wire.TxAssets  `json:"assets"`
+	Value           int64          `json:"value"`
 	Witness         wire.TxWitness `json:"witness"`
 	SignatureScript []byte         `json:"sigScript"`
 }

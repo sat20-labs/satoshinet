@@ -892,6 +892,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			input.Address = inputUtxo.Address
 			input.Assets = inputUtxo.Assets
 			input.UtxoId = utxoid
+			input.Value = inputUtxo.Value
 			b.inputUtxo(inputUtxo)
 		}
 
@@ -991,14 +992,16 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 func (b *BaseIndexer) inputUtxo(input *common.Output) {	
 	for _, asset := range input.Assets {
 		for _, address := range input.Address.Addresses {
-			addrmap, ok := b.tickAddressMap[asset.Name.String()]
+			name := asset.Name.String()
+			addrmap, ok := b.tickAddressMap[name]
 			if !ok {
+				// 不可能走到这里
 				addrmap = make(map[string]*indexer.Decimal)
-				b.tickAddressMap[asset.Name.String()] = addrmap
+				b.tickAddressMap[name] = addrmap
 			}
 			addrmap[address] = indexer.DecimalSub(addrmap[address], &asset.Amount)
 			if addrmap[address].Sign() < 0 {
-				common.Log.Panicf("%s asset %s incorrect in %d:%d:%d", address, asset.Name.String(), input.Height, input.TxId, input.N)
+				common.Log.Panicf("%s asset %s incorrect in %d:%d:%d", address, name, input.Height, input.TxId, input.N)
 			}
 		}
 	}
@@ -1008,10 +1011,12 @@ func (b *BaseIndexer) inputUtxo(input *common.Output) {
 	}
 	if plainSats > 0 {
 		for _, address := range input.Address.Addresses {
-			addrmap, ok := b.tickAddressMap[indexer.ASSET_PLAIN_SAT.String()]
+			name := indexer.ASSET_PLAIN_SAT.String()
+			addrmap, ok := b.tickAddressMap[name]
 			if !ok {
+				// 不可能走到这里
 				addrmap = make(map[string]*indexer.Decimal)
-				b.tickAddressMap[indexer.ASSET_PLAIN_SAT.String()] = addrmap
+				b.tickAddressMap[name] = addrmap
 			}
 			addrmap[address] = indexer.DecimalSub(addrmap[address], indexer.NewDefaultDecimal(plainSats))
 			if addrmap[address].Sign() < 0 {
@@ -1073,20 +1078,6 @@ func (b *BaseIndexer) outputUtxo(output *common.Output) {
 	}
 }
 
-func (b *BaseIndexer) getAddressIdFromDB(address string, txn *badger.Txn, bGenerateNew bool) (uint64, bool) {
-	bExist := true
-	addressId, err := db.GetAddressIdFromDBTxn(txn, address)
-	if err == badger.ErrKeyNotFound {
-		bExist = false
-		if bGenerateNew {
-			addressId = b.generateAddressId()
-		}
-	} else if err != nil {
-		common.Log.Panicf("GetValueFromDBWithType-> Error loading address %s from db: %v", address, err)
-	}
-	return addressId, bExist
-}
-
 func (b *BaseIndexer) SyncToChainTip(stopChan chan struct{}) int {
 	count, err := getBlockCount()
 	if err != nil {
@@ -1109,7 +1100,7 @@ func (b *BaseIndexer) SyncBlock(block *wire.MsgBlock, height, tip int) error {
 	bk := ConvertBlock(block, height, b.chaincfgParam)
 	ret := b.syncBlock(bk, tip)
 	if ret != 0 {
-		return fmt.Errorf("syncBlock %d failed.", height)
+		return fmt.Errorf("syncBlock %d failed, %v", height, ret)
 	}
 	return nil
 }
@@ -1175,7 +1166,7 @@ func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, ad
 
 func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 	//startTime := time.Now()
-	err := b.db.View(func(txn *badger.Txn) error {
+	b.db.View(func(txn *badger.Txn) error {
 		for _, tx := range block.Transactions {
 			for _, input := range tx.Inputs {
 				if input.Vout >= wire.AnchorTxOutIndex {
@@ -1191,7 +1182,6 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 						continue
 					} else if err != nil {
 						common.Log.Panicf("failed to get value of utxo: %s, %v", utxo, err)
-						return err
 					}
 					output = b.utxoIndex.Index[utxo]
 				}
@@ -1204,6 +1194,7 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 			}
 
 			for _, output := range tx.Outputs {
+				// 包括op_return 和unknown这两种地址
 				for _, address := range output.Address.Addresses {
 					_, ok := b.addressValueMap[address]
 					if !ok {
@@ -1232,10 +1223,6 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 
 		return nil
 	})
-
-	if err != nil {
-		common.Log.Panicf("BaseIndexer.prefetchIndexesFromDB-> Error prefetching utxos from db: %v", err)
-	}
 
 	//common.Log.Infof("BaseIndexer.prefetchIndexesFromDB-> prefetched in %v\n", time.Since(startTime))
 }
