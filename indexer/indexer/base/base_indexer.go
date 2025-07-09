@@ -1100,26 +1100,26 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 					continue
 				}
 
-				for _, address := range input.Address.Addresses {
-					_, ok := b.addressData[address]
-					if !ok {
-						data := &indexer.AddressValue{
-							Utxos: make(map[uint64]int64),
-						}
-						d, err := db.GetAddressDataFromDBTxn(txn, address)
-						if err == nil {
-							for _, v := range d.Utxos {
-								data.Utxos[v] = 0
-							}
-							data.AddressId = d.AddressId
-							data.AddressType = d.AddressType
-						} else {
-							data.AddressId = b.generateAddressId()
-							data.AddressType = uint32(input.Address.Type)
-						}
-						b.addressData[address] = data
-					}
-				}
+				// for _, address := range input.Address.Addresses {
+				// 	_, ok := b.addressData[address]
+				// 	if !ok {
+				// 		data := &indexer.AddressValue{
+				// 			Utxos: make(map[uint64]int64),
+				// 		}
+				// 		d, err := db.GetAddressDataFromDBTxn(txn, address)
+				// 		if err == nil {
+				// 			for _, v := range d.Utxos {
+				// 				data.Utxos[v] = 0
+				// 			}
+				// 			data.AddressId = d.AddressId
+				// 			data.AddressType = d.AddressType
+				// 		} else {
+				// 			data.AddressId = b.generateAddressId()
+				// 			data.AddressType = uint32(input.Address.Type)
+				// 		}
+				// 		b.addressData[address] = data
+				// 	}
+				// }
 				
 
 				utxo := indexer.GetUtxo(block.Height, input.Txid, int(input.Vout))
@@ -1146,24 +1146,24 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 						b.addressIdMap[address] = &AddressStatus{addressId, op}
 					}
 
-					_, ok = b.addressData[address]
-					if !ok {
-						data := &indexer.AddressValue{
-							Utxos: make(map[uint64]int64),
-						}
-						d, err := db.GetAddressDataFromDBTxn(txn, address)
-						if err == nil {
-							for _, v := range d.Utxos {
-								data.Utxos[v] = 0
-							}
-							data.AddressId = d.AddressId
-							data.AddressType = d.AddressType
-						} else {
-							data.AddressId = b.generateAddressId()
-							data.AddressType = uint32(output.Address.Type)
-						}
-						b.addressData[address] = data
-					}
+					// _, ok = b.addressData[address]
+					// if !ok {
+					// 	data := &indexer.AddressValue{
+					// 		Utxos: make(map[uint64]int64),
+					// 	}
+					// 	d, err := db.GetAddressDataFromDBTxn(txn, address)
+					// 	if err == nil {
+					// 		for _, v := range d.Utxos {
+					// 			data.Utxos[v] = 0
+					// 		}
+					// 		data.AddressId = d.AddressId
+					// 		data.AddressType = d.AddressType
+					// 	} else {
+					// 		data.AddressId = b.generateAddressId()
+					// 		data.AddressType = uint32(output.Address.Type)
+					// 	}
+					// 	b.addressData[address] = data
+					// }
 				}
 			}
 		}
