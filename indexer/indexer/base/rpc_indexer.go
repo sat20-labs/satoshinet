@@ -226,14 +226,23 @@ func (b *RpcIndexer) GetAddressByID(id uint64) (string, error) {
 
 // only for RPC interface
 func (b *RpcIndexer) GetAddressId(address string) uint64 {
-
-	id, err := db.GetAddressIdFromDB(b.db, address)
-	if err != nil {
-		id, _ = b.BaseIndexer.getAddressId(address)
-		if id != indexer.INVALID_ID {
-			err = nil
-		} else {
-			indexer.Log.Infof("getAddressId %s failed.", address)
+	b.mutex.RLock()
+	id, _ := b.getAddressId(address)
+	b.mutex.RUnlock()
+	if id == indexer.INVALID_ID {
+		var data *indexer.AddressValueInDBV2
+		err := b.db.View(func(txn *badger.Txn) error {
+			var err error
+			data, err = db.GetAddressDataFromDBTxn(txn, address)
+			return err
+		})
+		
+		if err == nil {
+			b.mutex.Lock()
+			value := data.ToAddressValueV2()
+			b.addressValueMap[address] = value
+			id = value.AddressId
+			b.mutex.Unlock()
 		}
 	}
 

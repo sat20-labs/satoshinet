@@ -38,7 +38,7 @@ type BaseIndexer struct {
 	tickAddressMap map[string]map[string]*indexer.Decimal // ticker->addressId->amount，在某个更新周期中的缓存数据，非全量
 
 	tickInfoMap        map[string]*common.TickerInfo
-	addressValueMap       map[string]*indexer.AddressValueV2	// 每个区块处理之前填充所有需要的地址id
+	addressValueMap    map[string]*indexer.AddressValueV2	// 每个区块处理之前填充所有需要的地址id
 	coreNodeMap        map[string]*stp.CoreNodeInfo // pubkey, 不清空
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 不清空
@@ -174,6 +174,7 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		n := indexer.AddressValueV2{
 			AddressType: value.AddressType,
 			AddressId: value.AddressId,
+			Op: value.Op,
 			Utxos: make(map[uint64]bool),
 		}
 		for id, v := range value.Utxos {
@@ -461,7 +462,8 @@ func (b *BaseIndexer) UpdateDB() {
 
 	// address -> utxo
 	for k, v := range b.addressValueMap {
-		if v.AddressType == uint32(txscript.NullDataTy) || v.AddressType == uint32(txscript.NonStandardTy) {
+		if v.AddressType == uint32(txscript.NullDataTy) || 
+		v.AddressType == uint32(txscript.NonStandardTy) {
 			// 这两个地址的数据会越来越大，以后考虑分桶保存，再考虑保存这两个地址的utxo
 			continue
 		}
