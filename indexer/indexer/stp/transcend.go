@@ -227,7 +227,7 @@ func GetTickerHoldersFromDB(ldb *badger.DB, assetName string) map[uint64]*indexe
 					dAmt, err := indexer.NewDecimalFromFormatString(amt)
 					if err != nil {
 						common.Log.Errorf("NewDecimalFromFormatString %s failed, %v", amt, err)
-					} else {
+					} else if dAmt.Sign() > 0 {
 						result[id] = dAmt
 					}
 				} else {
