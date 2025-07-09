@@ -40,7 +40,7 @@ type BaseIndexer struct {
 	blockVector []*common.BlockValueInDB //
 	utxoIndex   *common.UTXOIndex
 	delUTXOs    []*UtxoValue // utxo->address,utxoid
-	tickerAddressMap map[string]map[string]*indexer.Decimal // ticker->address->amount，在某个更新周期中的缓存数据，非全量
+	tickAddressMap map[string]map[string]*indexer.Decimal // ticker->address->amount，在某个更新周期中的缓存数据，非全量
 	addressData map[string]*indexer.AddressValue 
 
 	tickInfoMap        map[string]*common.TickerInfo
@@ -117,7 +117,8 @@ func (b *BaseIndexer) reset() {
 	b.blockVector = make([]*common.BlockValueInDB, 0)
 	b.utxoIndex = common.NewUTXOIndex()
 	b.delUTXOs = make([]*UtxoValue, 0)
-	b.tickerAddressMap = make(map[string]map[string]*indexer.Decimal)
+	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
+	b.addressData = make(map[string]*indexer.AddressValue)
 }
 
 // 只保存UpdateDB需要用的数据
@@ -142,13 +143,25 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		newInst.utxoIndex.DescendMap[key] = value
 	}
 
-	newInst.tickerAddressMap = make(map[string]map[string]*indexer.Decimal)
-	for k, v := range b.tickerAddressMap {
+	newInst.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
+	for k, v := range b.tickAddressMap {
 		addrmap := make(map[string]*indexer.Decimal)
 		for id, amt := range v {
 			addrmap[id] = amt.Clone()
 		}
-		newInst.tickerAddressMap[k] = addrmap
+		newInst.tickAddressMap[k] = addrmap
+	}
+	newInst.addressData = make(map[string]*indexer.AddressValue)
+	for key, value := range b.addressData {
+		n := indexer.AddressValue{
+			AddressType: value.AddressType,
+			AddressId: value.AddressId,
+			Utxos: make(map[uint64]int64),
+		}
+		for id, v := range value.Utxos {
+			n.Utxos[id] =v
+		}
+		newInst.addressData[key] = &n
 	}
 
 
@@ -525,6 +538,8 @@ func (b *BaseIndexer) UpdateDB() {
 	b.delUTXOs = make([]*UtxoValue, 0)
 	b.addressIdMap = make(map[string]*AddressStatus)
 	b.tickInfoMap = make(map[string]*common.TickerInfo)
+	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
+	b.addressData = make(map[string]*indexer.AddressValue)
 }
 
 func (b *BaseIndexer) removeUtxo(addrmap *map[string]*indexer.AddressValueInDB, utxo *UtxoValue, txn *badger.Txn) {
@@ -949,10 +964,10 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 func (b *BaseIndexer) inputUtxo(input *common.Output) {	
 	for _, asset := range input.Assets {
 		for _, address := range input.Address.Addresses {
-			addrmap, ok := b.tickerAddressMap[asset.Name.String()]
+			addrmap, ok := b.tickAddressMap[asset.Name.String()]
 			if !ok {
 				addrmap = make(map[string]*indexer.Decimal)
-				b.tickerAddressMap[asset.Name.String()] = addrmap
+				b.tickAddressMap[asset.Name.String()] = addrmap
 			}
 			addrmap[address] = indexer.DecimalSub(addrmap[address], &asset.Amount)
 		}
@@ -963,10 +978,10 @@ func (b *BaseIndexer) inputUtxo(input *common.Output) {
 	}
 	if plainSats > 0 {
 		for _, address := range input.Address.Addresses {
-			addrmap, ok := b.tickerAddressMap[indexer.ASSET_PLAIN_SAT.String()]
+			addrmap, ok := b.tickAddressMap[indexer.ASSET_PLAIN_SAT.String()]
 			if !ok {
 				addrmap = make(map[string]*indexer.Decimal)
-				b.tickerAddressMap[indexer.ASSET_PLAIN_SAT.String()] = addrmap
+				b.tickAddressMap[indexer.ASSET_PLAIN_SAT.String()] = addrmap
 			}
 			addrmap[address] = indexer.DecimalSub(addrmap[address], indexer.NewDefaultDecimal(plainSats))
 		}
@@ -976,10 +991,10 @@ func (b *BaseIndexer) inputUtxo(input *common.Output) {
 func (b *BaseIndexer) outputUtxo(output *common.Output) {
 	for _, asset := range output.Assets {
 		for _, address := range output.Address.Addresses {
-			addrmap, ok := b.tickerAddressMap[asset.Name.String()]
+			addrmap, ok := b.tickAddressMap[asset.Name.String()]
 			if !ok {
 				addrmap = make(map[string]*indexer.Decimal)
-				b.tickerAddressMap[asset.Name.String()] = addrmap
+				b.tickAddressMap[asset.Name.String()] = addrmap
 			}
 			addrmap[address] = indexer.DecimalAdd(addrmap[address], &asset.Amount)
 		}
@@ -990,10 +1005,10 @@ func (b *BaseIndexer) outputUtxo(output *common.Output) {
 	}
 	if plainSats > 0 {
 		for _, address := range output.Address.Addresses {
-			addrmap, ok := b.tickerAddressMap[indexer.ASSET_PLAIN_SAT.String()]
+			addrmap, ok := b.tickAddressMap[indexer.ASSET_PLAIN_SAT.String()]
 			if !ok {
 				addrmap = make(map[string]*indexer.Decimal)
-				b.tickerAddressMap[indexer.ASSET_PLAIN_SAT.String()] = addrmap
+				b.tickAddressMap[indexer.ASSET_PLAIN_SAT.String()] = addrmap
 			}
 			addrmap[address] = indexer.DecimalAdd(addrmap[address], indexer.NewDefaultDecimal(plainSats))
 		}
