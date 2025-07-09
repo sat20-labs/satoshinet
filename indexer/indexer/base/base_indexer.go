@@ -40,11 +40,10 @@ type BaseIndexer struct {
 	blockVector []*common.BlockValueInDB //
 	utxoIndex   *common.UTXOIndex
 	delUTXOs    []*UtxoValue // utxo->address,utxoid
-	tickAddressMap map[string]map[string]*indexer.Decimal // ticker->address->amount，在某个更新周期中的缓存数据，非全量
-	addressData map[string]*indexer.AddressValue 
+	tickAddressMap map[string]map[string]*indexer.Decimal // ticker->addressId->amount，在某个更新周期中的缓存数据，非全量
 
 	tickInfoMap        map[string]*common.TickerInfo
-	addressIdMap       map[string]*AddressStatus
+	addressIdMap       map[string]*indexer.AddressValueV2	// 每个区块处理之前填充所有需要的地址id
 	coreNodeMap        map[string]*stp.CoreNodeInfo // pubkey, 不清空
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 不清空
@@ -84,12 +83,6 @@ func NewBaseIndexer(
 		maxIndexHeight:   maxIndexHeight,
 	}
 
-	indexer.tickInfoMap = make(map[string]*common.TickerInfo)
-	indexer.addressIdMap = make(map[string]*AddressStatus, 0)
-	indexer.prevBlockHashMap = make(map[int]string)
-	indexer.coreNodeMap = make(map[string]*stp.CoreNodeInfo)
-	indexer.channelMap = make(map[string]*common.ChannelInfo)
-
 	return indexer
 }
 
@@ -117,8 +110,13 @@ func (b *BaseIndexer) reset() {
 	b.blockVector = make([]*common.BlockValueInDB, 0)
 	b.utxoIndex = common.NewUTXOIndex()
 	b.delUTXOs = make([]*UtxoValue, 0)
+
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
-	b.addressData = make(map[string]*indexer.AddressValue)
+	b.tickInfoMap = make(map[string]*common.TickerInfo)
+	b.addressIdMap = make(map[string]*indexer.AddressValueV2)
+	b.coreNodeMap = make(map[string]*stp.CoreNodeInfo)
+	b.channelMap = make(map[string]*common.ChannelInfo)
+	b.prevBlockHashMap = make(map[int]string)
 }
 
 // 只保存UpdateDB需要用的数据
@@ -151,18 +149,6 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		}
 		newInst.tickAddressMap[k] = addrmap
 	}
-	newInst.addressData = make(map[string]*indexer.AddressValue)
-	for key, value := range b.addressData {
-		n := indexer.AddressValue{
-			AddressType: value.AddressType,
-			AddressId: value.AddressId,
-			Utxos: make(map[uint64]int64),
-		}
-		for id, v := range value.Utxos {
-			n.Utxos[id] =v
-		}
-		newInst.addressData[key] = &n
-	}
 
 
 	newInst.tickInfoMap = make(map[string]*common.TickerInfo)
@@ -188,9 +174,17 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		newInst.channelMap[k] = v
 	}
 
-	newInst.addressIdMap = make(map[string]*AddressStatus)
-	for k, v := range b.addressIdMap {
-		newInst.addressIdMap[k] = v
+	newInst.addressIdMap = make(map[string]*indexer.AddressValueV2)
+	for key, value := range b.addressIdMap {
+		n := indexer.AddressValueV2{
+			AddressType: value.AddressType,
+			AddressId: value.AddressId,
+			Utxos: make(map[uint64]bool),
+		}
+		for id, v := range value.Utxos {
+			n.Utxos[id] =v
+		}
+		newInst.addressIdMap[key] = &n
 	}
 	newInst.blockVector = make([]*common.BlockValueInDB, len(b.blockVector))
 	copy(newInst.blockVector, b.blockVector)
@@ -340,7 +334,7 @@ func (b *BaseIndexer) UpdateDB() {
 	common.Log.Infof("BaseIndexer->updateBasicDB %d start...", b.lastHeight)
 
 	// 拿到所有的addressId
-	addressValueMap := b.prefechAddress()
+	// addressValueMap := b.prefechAddress()
 
 	wb := b.db.NewWriteBatch()
 	defer wb.Cancel()
@@ -381,9 +375,9 @@ func (b *BaseIndexer) UpdateDB() {
 		//}
 		// v.Address.Type == (txscript.NonStandardTy) 这样的utxo需要被记录下来，虽然地址是nil，ordinals也是nil
 		// 比如：21e48796d17bcab49b1fea7211199c0fa1e296d2ecf4cf2f900cee62153ee331的所有输出 （testnet）
-		if v.Address.Type == int(txscript.NullDataTy) {
-			// 只有0 才不记录
-			if v.Value == 0 {
+		if v.Address.Type == int(txscript.NullDataTy) || v.Address.Type == int(txscript.NonStandardTy) {
+			// 只有无资产才不记录
+			if v.Value == 0 && len(v.Assets) == 0 {
 				utxoSkipped++
 				continue
 			} else {
@@ -396,20 +390,23 @@ func (b *BaseIndexer) UpdateDB() {
 		utxoId := common.GetUtxoId(v)
 
 		addressIds := make([]uint64, 0)
-		for i, address := range v.Address.Addresses {
-			addrvalue := addressValueMap[address]
+		for _, address := range v.Address.Addresses {
+			// addrvalue := addressValueMap[address]
+			// addressIds = append(addressIds, addrvalue.AddressId)
+			// addrkey := db.GetAddressValueDBKey(addrvalue.AddressId, utxoId, int(v.Address.Type), i)
+			// err := db.SetRawDB(addrkey, indexer.Uint64ToBytes(uint64(v.Value)), wb)
+			// if err != nil {
+			// 	common.Log.Panicf("Error setting in db %v", err)
+			// }
+			// if addrvalue.Op > 0 {
+			// 	err = db.BindAddressDBKeyToId(address, addrvalue.AddressId, wb)
+			// 	if err != nil {
+			// 		common.Log.Panicf("Error setting in db %v", err)
+			// 	}
+			// }
+
+			addrvalue := b.addressIdMap[address]
 			addressIds = append(addressIds, addrvalue.AddressId)
-			addrkey := db.GetAddressValueDBKey(addrvalue.AddressId, utxoId, int(v.Address.Type), i)
-			err := db.SetRawDB(addrkey, indexer.Uint64ToBytes(uint64(v.Value)), wb)
-			if err != nil {
-				common.Log.Panicf("Error setting in db %v", err)
-			}
-			if addrvalue.Op > 0 {
-				err = db.BindAddressDBKeyToId(address, addrvalue.AddressId, wb)
-				if err != nil {
-					common.Log.Panicf("Error setting in db %v", err)
-				}
-			}
 		}
 
 		saveUTXO := &common.UtxoValueInDB{
@@ -450,22 +447,42 @@ func (b *BaseIndexer) UpdateDB() {
 			common.Log.Errorf("BaseIndexer.updateBasicDB-> Error deleting db: %v\n", err)
 		}
 
-		for i, address := range value.Address.Addresses {
-			addrvalue, ok := addressValueMap[address]
-			if ok {
-				addrkey := db.GetAddressValueDBKey(addrvalue.AddressId, value.UtxoId, int(value.Address.Type), i)
-				err := wb.Delete(addrkey)
-				if err != nil {
-					common.Log.Errorf("BaseIndexer.updateBasicDB-> Error deleting db: %v\n", err)
-				}
-			} else {
-				// 不存在
-				//common.Log.Infof("address %s not exists", value.Address)
-			}
-		}
+		// for i, address := range value.Address.Addresses {
+		// 	addrvalue, ok := addressValueMap[address]
+		// 	if ok {
+		// 		addrkey := db.GetAddressValueDBKey(addrvalue.AddressId, value.UtxoId, int(value.Address.Type), i)
+		// 		err := wb.Delete(addrkey)
+		// 		if err != nil {
+		// 			common.Log.Errorf("BaseIndexer.updateBasicDB-> Error deleting db: %v\n", err)
+		// 		}
+		// 	} else {
+		// 		// 不存在
+		// 		//common.Log.Infof("address %s not exists", value.Address)
+		// 	}
+		// }
 
 	}
 	//common.Log.Infof("BaseIndexer.updateBasicDB-> delete utxos %d, cost: %v", utxoDeled, time.Since(startTime))
+
+	// address -> utxo
+	for k, v := range b.addressIdMap {
+		if v.AddressType == uint32(txscript.NullDataTy) || v.AddressType == uint32(txscript.NonStandardTy) {
+			// 这两个地址的数据会越来越大，以后考虑分桶保存，再考虑保存这两个地址的utxo
+			continue
+		}
+		key := db.GetAddressDBKeyV2(k)
+		value := v.ToAddressValueInDBV2()
+		err := db.SetDB(key, value, wb)
+		if err != nil {
+			common.Log.Panicf("Error setting in db %v", err)
+		}
+		if v.Op == 1 {
+			err = db.BindAddressDBKeyToId(k, v.AddressId, wb)
+			if err != nil {
+				common.Log.Panicf("Error setting in db %v", err)
+			}
+		}
+	}
 
 	for _, ascend := range b.utxoIndex.AscendMap {
 		key := stp.GetAscendDBKey(ascend.FundingUtxo)
@@ -510,6 +527,20 @@ func (b *BaseIndexer) UpdateDB() {
 			common.Log.Panicf("Error setting in db %v", err)
 		}
 	}
+	// ticker -> holders (partially)
+	for ticker, addrmap := range b.tickAddressMap {
+		for k, v := range addrmap {
+			addrStatus, ok := b.addressIdMap[k]
+			if !ok {
+				common.Log.Panicf("can't find id of address %s", k)
+			}
+			key := stp.GetHolderInfoDBKey(ticker, addrStatus.AddressId)
+			err := db.SetDB(key, v.ToFormatString(), wb)
+			if err != nil {
+				common.Log.Panicf("Error setting in db %v", err)
+			}
+		}
+	}
 
 	b.stats.AscendCount += len(b.utxoIndex.AscendMap)
 	b.stats.DescendCount += len(b.utxoIndex.DescendMap)
@@ -536,10 +567,9 @@ func (b *BaseIndexer) UpdateDB() {
 	b.blockVector = make([]*common.BlockValueInDB, 0)
 	b.utxoIndex = common.NewUTXOIndex()
 	b.delUTXOs = make([]*UtxoValue, 0)
-	b.addressIdMap = make(map[string]*AddressStatus)
+	b.addressIdMap = make(map[string]*indexer.AddressValueV2)
 	b.tickInfoMap = make(map[string]*common.TickerInfo)
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
-	b.addressData = make(map[string]*indexer.AddressValue)
 }
 
 func (b *BaseIndexer) removeUtxo(addrmap *map[string]*indexer.AddressValueInDB, utxo *UtxoValue, txn *badger.Txn) {
@@ -970,6 +1000,9 @@ func (b *BaseIndexer) inputUtxo(input *common.Output) {
 				b.tickAddressMap[asset.Name.String()] = addrmap
 			}
 			addrmap[address] = indexer.DecimalSub(addrmap[address], &asset.Amount)
+			if addrmap[address].Sign() < 0 {
+				common.Log.Panicf("%s asset %s incorrect in %d:%d:%d", address, asset.Name.String(), input.Height, input.TxId, input.N)
+			}
 		}
 	}
 	plainSats := input.Value
@@ -984,6 +1017,19 @@ func (b *BaseIndexer) inputUtxo(input *common.Output) {
 				b.tickAddressMap[indexer.ASSET_PLAIN_SAT.String()] = addrmap
 			}
 			addrmap[address] = indexer.DecimalSub(addrmap[address], indexer.NewDefaultDecimal(plainSats))
+			if addrmap[address].Sign() < 0 {
+				common.Log.Panicf("%s sats incorrect in %d:%d:%d", address, input.Height, input.TxId, input.N)
+			}
+		}
+	}
+
+	utxoId := indexer.ToUtxoId(input.Height, input.TxId, int(input.N))
+	for _, address := range input.Address.Addresses {
+		utxomap, ok := b.addressIdMap[address]
+		if ok {
+			delete(utxomap.Utxos, utxoId)
+		} else {
+			common.Log.Panicf("%s should be loaded before", address)
 		}
 	}
 }
@@ -1012,6 +1058,21 @@ func (b *BaseIndexer) outputUtxo(output *common.Output) {
 			}
 			addrmap[address] = indexer.DecimalAdd(addrmap[address], indexer.NewDefaultDecimal(plainSats))
 		}
+	}
+	utxoId := indexer.ToUtxoId(output.Height, output.TxId, int(output.N))
+	for _, address := range output.Address.Addresses {
+		utxomap, ok := b.addressIdMap[address]
+		if !ok {
+			common.Log.Panicf("%s should be loaded before", address)
+			// 前面应该加载过了
+			// utxomap = &indexer.AddressValueV2{
+			// 	AddressType: uint32(output.Address.Type),
+			// 	AddressId: 0,
+			// 	Utxos: make(map[uint64]bool),
+			// }
+			// b.addressIdMap[address] = utxomap
+		}
+		utxomap.Utxos[utxoId] = true
 	}
 }
 
@@ -1075,7 +1136,12 @@ func (b *BaseIndexer) loadUtxoFromDB(txn *badger.Txn, utxostr string) error {
 			common.Log.Errorf("failed to get address by id %d, utxo: %s, utxoId: %d, err: %v", addressId, utxostr, utxo.UtxoId, err)
 			return err
 		}
-		b.addressIdMap[address] = &AddressStatus{AddressId: addressId, Op: 0}
+		data, err := db.GetAddressDataFromDBTxn(txn, address)
+		if err != nil {
+			common.Log.Errorf("failed to get address data by address %s, utxo: %s, utxoId: %d, err: %v", address, utxostr, utxo.UtxoId, err)
+			return err
+		}
+		b.addressIdMap[address] = data.ToAddressValueV2()
 		addresses.Addresses = append(addresses.Addresses, address)
 	}
 	addresses.Type = int(utxo.AddressType)
@@ -1091,6 +1157,25 @@ func (b *BaseIndexer) loadUtxoFromDB(txn *badger.Txn, utxostr string) error {
 	return nil
 }
 
+func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, addresses []string, txn *badger.Txn) {
+	addrmap, ok := b.tickAddressMap[name]
+	if !ok {
+		addrmap = make(map[string]*indexer.Decimal)
+		b.tickAddressMap[name] = addrmap
+	}
+	for _, addr := range addresses {
+		_, ok := addrmap[addr]
+		if !ok {
+			addrId := b.addressIdMap[addr]
+			amt, err := stp.GetTickerHolderInfoFromDBTxn(txn, name, addrId.AddressId)
+			if err != nil {
+				amt = indexer.NewDecimal(0, divisibility)
+			}
+			addrmap[addr] = amt
+		}
+	}
+}
+
 func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 	//startTime := time.Now()
 	err := b.db.View(func(txn *badger.Txn) error {
@@ -1099,72 +1184,52 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 				if input.Vout >= wire.AnchorTxOutIndex {
 					continue
 				}
-
-				// for _, address := range input.Address.Addresses {
-				// 	_, ok := b.addressData[address]
-				// 	if !ok {
-				// 		data := &indexer.AddressValue{
-				// 			Utxos: make(map[uint64]int64),
-				// 		}
-				// 		d, err := db.GetAddressDataFromDBTxn(txn, address)
-				// 		if err == nil {
-				// 			for _, v := range d.Utxos {
-				// 				data.Utxos[v] = 0
-				// 			}
-				// 			data.AddressId = d.AddressId
-				// 			data.AddressType = d.AddressType
-				// 		} else {
-				// 			data.AddressId = b.generateAddressId()
-				// 			data.AddressType = uint32(input.Address.Type)
-				// 		}
-				// 		b.addressData[address] = data
-				// 	}
-				// }
 				
-
 				utxo := indexer.GetUtxo(block.Height, input.Txid, int(input.Vout))
-				if _, ok := b.utxoIndex.Index[utxo]; !ok {
+				output, ok := b.utxoIndex.Index[utxo]
+				if !ok {
 					err := b.loadUtxoFromDB(txn, utxo)
 					if err == badger.ErrKeyNotFound {
+						// 该区块生成的utxo，还没有进入b.utxoIndex.Index
 						continue
 					} else if err != nil {
-						common.Log.Errorf("failed to get value of utxo: %s, %v", utxo, err)
+						common.Log.Panicf("failed to get value of utxo: %s, %v", utxo, err)
 						return err
 					}
+					output = b.utxoIndex.Index[utxo]
 				}
+
+				for _, asset := range output.Assets {
+					name := asset.Name.String()
+					b.prefetchTickerInfoFromDB(name, asset.Amount.Precision, output.Address.Addresses, txn)
+				}
+				b.prefetchTickerInfoFromDB(indexer.ASSET_PLAIN_SAT.String(), 0, output.Address.Addresses, txn)
 			}
 
 			for _, output := range tx.Outputs {
 				for _, address := range output.Address.Addresses {
 					_, ok := b.addressIdMap[address]
 					if !ok {
-						addressId, bExist := b.getAddressIdFromDB(address, txn, true)
-						op := 1
-						if bExist {
-							op = 0
+						data, err := db.GetAddressDataFromDBTxn(txn, address)
+						if err != nil {
+							addressId := b.generateAddressId()
+							b.addressIdMap[address] = &indexer.AddressValueV2{
+								AddressType: uint32(output.Address.Type),
+								AddressId: addressId,
+								Op: 1,
+								Utxos: make(map[uint64]bool),
+							}
+						} else {
+							b.addressIdMap[address] = data.ToAddressValueV2()
 						}
-						b.addressIdMap[address] = &AddressStatus{addressId, op}
 					}
-
-					// _, ok = b.addressData[address]
-					// if !ok {
-					// 	data := &indexer.AddressValue{
-					// 		Utxos: make(map[uint64]int64),
-					// 	}
-					// 	d, err := db.GetAddressDataFromDBTxn(txn, address)
-					// 	if err == nil {
-					// 		for _, v := range d.Utxos {
-					// 			data.Utxos[v] = 0
-					// 		}
-					// 		data.AddressId = d.AddressId
-					// 		data.AddressType = d.AddressType
-					// 	} else {
-					// 		data.AddressId = b.generateAddressId()
-					// 		data.AddressType = uint32(output.Address.Type)
-					// 	}
-					// 	b.addressData[address] = data
-					// }
 				}
+
+				for _, asset := range output.Assets {
+					name := asset.Name.String()
+					b.prefetchTickerInfoFromDB(name, asset.Amount.Precision, output.Address.Addresses, txn)
+				}
+				b.prefetchTickerInfoFromDB(indexer.ASSET_PLAIN_SAT.String(), 0, output.Address.Addresses, txn)
 			}
 		}
 
