@@ -160,9 +160,10 @@ func GetAllTickerInfoFromDB(ldb *badger.DB) map[string]*common.TickerInfo {
 func GetTickerHolderInfoFromDBTxn(txn *badger.Txn, assetName string, addressId uint64) (*indexer.Decimal, error) {
 	var result string
 	
-	item, err := txn.Get(GetHolderInfoDBKey(assetName, addressId))
+	key := GetHolderInfoDBKey(assetName, addressId)
+	item, err := txn.Get(key)
 	if err != nil {
-		common.Log.Errorf("GetTickerHolderInfoFromDB %s error: %v", assetName, err)
+		//common.Log.Errorf("GetTickerHolderInfoFromDBTxn %s error: %v", string(key), err)
 		return nil, err
 	}
 	err = item.Value(func(v []byte) error {
