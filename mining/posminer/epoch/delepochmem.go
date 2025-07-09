@@ -53,12 +53,16 @@ func (he *DelEpochMember) VerifyToken(pubKey []byte) bool {
 	tokenData := he.GetDelEpochMemTokenData()
 
 	publicKey, err := secp256k1.ParsePubKey(pubKey[:])
+	if err != nil {
+		utils.Log.Tracef("ParsePubKey failed: %v", err)
+		return false
+	}
 
 	// 解析签名
 	// signature, err := btcec.ParseDERSignature(signatureBytes)
 	signature, err := ecdsa.ParseDERSignature(signatureBytes)
 	if err != nil {
-		utils.Log.Tracef("Failed to parse signature: %v", err)
+		utils.Log.Tracef("ParseDERSignature failed: %v", err)
 		return false
 	}
 
