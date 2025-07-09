@@ -91,10 +91,10 @@ func (b *BaseIndexer) Init(cb1 BlockProcCallback, cb2 UpdateDBCallback) {
 	b.blockprocCB = cb1
 	b.updateDBCB = cb2
 
+	b.reset()
+
 	b.coreNodeMap = stp.GetAllCoreNodeFromDB(b.db)
 	b.channelMap = stp.GetAllChannelFromDB(b.db)
-
-	b.reset()
 }
 
 func (b *BaseIndexer) reset() {
