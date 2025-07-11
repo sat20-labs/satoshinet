@@ -3,18 +3,23 @@ package base
 const SyncStatsKey = "syncStats"
 const BaseDBVerKey = "dbver"
 
-type SyncStats struct {
-	ChainTip       int    `json:"chainTip"`
+// 和SyncHeight同步的数据
+type SyncBase struct {
 	SyncHeight     int    `json:"syncHeight"`
 	SyncBlockHash  string `json:"syncBlockHash"`
-	ReorgsDetected []int  `json:"reorgsDetected"`
 	AllUtxoCount   uint64
-	AddressCount   uint64
 	UtxoCount      uint64
 	TotalAscendSats  int64 // 包含绑定资产的聪
 	TotalDescendSats int64
 	AscendCount    int
 	DescendCount   int
+}
+
+type SyncStats struct {
+	SyncBase
+	AddressCount   uint64
+	ChainTip       int    `json:"chainTip"`
+	ReorgsDetected []int  `json:"reorgsDetected"`
 }
 
 type IrregularSubsidy struct {
@@ -24,14 +29,8 @@ type IrregularSubsidy struct {
 
 func (p *SyncStats) Clone () *SyncStats {
 	c := &SyncStats{
+		SyncBase: p.SyncBase,
 		ChainTip: p.ChainTip,
-		SyncHeight: p.SyncHeight,
-		SyncBlockHash: p.SyncBlockHash,
-		AllUtxoCount: p.AllUtxoCount,
-		AddressCount: p.AddressCount,
-		UtxoCount: p.UtxoCount,
-		TotalAscendSats: p.TotalAscendSats,
-		TotalDescendSats: p.TotalDescendSats,
 	}
 	c.ReorgsDetected = make([]int, len(p.ReorgsDetected))
 	copy(c.ReorgsDetected, p.ReorgsDetected)

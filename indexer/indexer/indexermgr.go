@@ -376,7 +376,7 @@ func (b *IndexerMgr) updateDB() {
 func (b *IndexerMgr) performUpdateDBInBuffer() {
 	b.cleanDBBuffer() // must before UpdateDB
 	b.compilingBackupDB.UpdateDB()
-	b.compiling.SetSyncHeight(b.compilingBackupDB.GetSyncHeight())
+	b.compiling.SetSyncBase(b.compilingBackupDB.GetSyncBase())
 }
 
 func (b *IndexerMgr) prepareDBBuffer() {
@@ -439,7 +439,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	}
 
 	if block != nil {
-		err := p.compiling.SyncBlock(block, height, tip)
+		err := p.compiling.SyncBlock(block, height, tip, false)
 		if err != nil {
 			common.Log.Errorf("ConnectBlock failed, %v", err)
 			return 
