@@ -1165,6 +1165,11 @@ func (b *BlockChain) createChainState() error {
 		if err != nil {
 			return err
 		}
+		// Create the bucket that houses the anchor tx info.
+		_, err = meta.CreateBucket(anchorTxInfoBucketName)
+		if err != nil {
+			return err
+		}
 		err = dbPutVersion(dbTx, spendJournalVersionKeyName,
 			latestSpendJournalBucketVersion)
 		if err != nil {
@@ -1190,11 +1195,7 @@ func (b *BlockChain) createChainState() error {
 			return err
 		}
 
-		// Create the bucket that houses the anchor tx info.
-		_, err = meta.CreateBucket(anchorTxInfoBucketName)
-		if err != nil {
-			return err
-		}
+		
 
 		// Store the genesis block into the database.
 		return dbStoreBlock(dbTx, genesisBlock)
@@ -1633,6 +1634,26 @@ func dbPutAnchorTxInfo(dbTx database.Tx, anchorTxInfo *AnchorTxInfo) error {
 	}
 
 	return anchorTxInfoBucket.Put([]byte(anchorTxInfo.LockedUtxo), serializedData)
+}
+
+// dbFetchAnchorTxInfoByLockedUtxo uses an existing database transaction to retrieve
+// a single anchor tx info by LockedUtxo from the database.
+func dbFetchAnchorTxInfo(dbTx database.Tx, lockedUtxo string) (*AnchorTxInfo, error) {
+    anchorTxInfoBucket := dbTx.Metadata().Bucket(anchorTxInfoBucketName)
+    if anchorTxInfoBucket == nil {
+        return nil, fmt.Errorf("Bucket anchor tx info not found")
+    }
+
+    value := anchorTxInfoBucket.Get([]byte(lockedUtxo))
+    if value == nil {
+        return nil, fmt.Errorf("Anchor tx info not found for LockedUtxo: %s", lockedUtxo)
+    }
+
+    anchorTxInfo, err := deserializeAnchorTxInfo(value)
+    if err != nil {
+        return nil, fmt.Errorf("Failed to deserialize anchor tx info: %v", err)
+    }
+    return anchorTxInfo, nil
 }
 
 // func dbPutAnchorTxInfo(dbTx database.Tx, anchorTxid string, lockedTxid string, pkScript []byte, amount int64) error {

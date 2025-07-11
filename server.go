@@ -3210,7 +3210,6 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		ChainParams:    chainParams,
 		FetchUtxoView:  s.chain.FetchUtxoView,
 		FetchAnchorTx:  s.chain.FetchAnchorTx,
-		AddAnchorTx:    s.chain.AddAnchorTx,
 		BestHeight:     func() int32 { return s.chain.BestSnapshot().Height },
 		MedianTimePast: func() time.Time { return s.chain.BestSnapshot().MedianTime },
 		CalcSequenceLock: func(tx *btcutil.Tx, view *blockchain.UtxoViewpoint) (*blockchain.SequenceLock, error) {

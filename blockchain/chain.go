@@ -192,9 +192,6 @@ type BlockChain struct {
 	// certain blockchain events.
 	notificationsLock sync.RWMutex
 	notifications     []NotificationCallback
-
-	// Anchor tx cache field stores all anchor tx infos.
-	anchorTxCache *AnchorTxCache
 }
 
 // HaveBlock returns whether or not the chain instance has the block represented
@@ -688,9 +685,12 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 		}
 
 		// save all anchor info in this block to db
-		if anchorTxInfos != nil && len(anchorTxInfos) > 0 {
+		if len(anchorTxInfos) > 0 {
 			for _, info := range anchorTxInfos {
 				err = dbPutAnchorTxInfo(dbTx, &info)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -973,8 +973,6 @@ func (b *BlockChain) reorganizeChain(detachNodes, attachNodes *list.List) error 
 		if err != nil {
 			return err
 		}
-
-		b.anchorTxCache.addAnchorTxInfos(&anchorTxInfos)
 
 		newBest = n
 	}
@@ -1263,8 +1261,6 @@ func (b *BlockChain) connectBestChain(node *blockNode, block *btcutil.Block, fla
 
 			return false, err
 		}
-
-		b.anchorTxCache.addAnchorTxInfos(&anchorTxInfos)
 
 		// If this is fast add, or this block node isn't yet marked as
 		// valid, then we'll update its status and flush the state to
@@ -2235,12 +2231,6 @@ func New(config *Config) (*BlockChain, error) {
 		}
 	}
 
-	anchorTxCache := newAnchorTxCache(config.DB)
-	if anchorTxCache == nil {
-		return nil, AssertError("blockchain.New " +
-					"anchorTx cache not initiated")
-	}
-
 	params := config.ChainParams
 	targetTimespan := int64(params.TargetTimespan / time.Second)
 	targetTimePerBlock := int64(params.TargetTimePerBlock / time.Second)
@@ -2266,7 +2256,6 @@ func New(config *Config) (*BlockChain, error) {
 		warningCaches:       newThresholdCaches(vbNumBits),
 		deploymentCaches:    newThresholdCaches(chaincfg.DefinedDeployments),
 		pruneTarget:         config.Prune,
-		anchorTxCache:       anchorTxCache,
 	}
 
 	// Ensure all the deployments are synchronized with our clock if

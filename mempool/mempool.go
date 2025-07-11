@@ -80,9 +80,6 @@ type Config struct {
 	// transaction is in the blockchain.
 	FetchAnchorTx func(string) (*blockchain.AnchorTxInfo, error)
 
-	// AddAnchorTx defines the function to add an anchor to blockchain.
-	AddAnchorTx func(*blockchain.AnchorTxInfo) error
-
 	// BestHeight defines the function to use to access the block height of
 	// the current best chain.
 	BestHeight func() int32
@@ -1434,9 +1431,6 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 
 			return nil, err
 		}
-
-		// Add anchor tx to anchor tx cache
-		mp.AddAnchorTx(tx.MsgTx())
 
 		// Don't allow the transaction if it exists in the main chain and is
 		// already fully spent.
