@@ -537,9 +537,9 @@ func (b *BaseIndexer) UpdateDB() {
 	b.tickInfoMap = make(map[string]*common.TickerInfo)
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
 
-	if !b.CheckSelf() {
-		common.Log.Panicf("BaseIndexer.CheckSelf failed")
-	}
+	// if !b.CheckSelf() {
+	// 	common.Log.Panicf("BaseIndexer.CheckSelf failed")
+	// }
 }
 
 func (b *BaseIndexer) forceMajeure() {

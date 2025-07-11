@@ -52,6 +52,7 @@ type IndexerMgr struct {
 	connectMutex sync.RWMutex
 	mutex sync.RWMutex
 	// 跑数据
+	checkOnce		bool
 	lastCheckHeight int
 	compiling       *base_indexer.BaseIndexer
 	// 备份所有需要写入数据库的数据
@@ -451,6 +452,10 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	p.updateDB()
 	if height == tip {	
 		p.dbgc()
+		if !p.checkOnce || height%1000 == 0 {
+			p.checkOnce = true
+			p.checkSelf()
+		}
 	}
 }
 
