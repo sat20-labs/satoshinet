@@ -95,9 +95,6 @@ func (s *AnchorTxCache) AddAnchorTx(anchorTxInfo *AnchorTxInfo) error {
 // This function is safe for concurrent access however the returned view is NOT.
 func (b *BlockChain) FetchAnchorTx(lockedUtxo string) (*AnchorTxInfo, error) {
 	log.Infof("FetchAnchorTx: %s", lockedUtxo)
-	if b.anchorTxCache == nil {
-		return nil, fmt.Errorf("anchor tx cache is nil")
-	}
 	return b.anchorTxCache.FetchAnchorTxInfo(lockedUtxo)
 }
 
@@ -105,12 +102,6 @@ func (b *BlockChain) FetchAnchorTx(lockedUtxo string) (*AnchorTxInfo, error) {
 // This function is safe for concurrent access however the returned view is NOT.
 func (b *BlockChain) AddAnchorTx(anchorTxInfo *AnchorTxInfo) error {
 	log.Infof("AddAnchorTx: %v", anchorTxInfo)
-
-	if b.anchorTxCache == nil {
-		return fmt.Errorf("anchor tx cache is nil")
-	}
-
 	b.anchorTxCache.AddAnchorTx(anchorTxInfo)
-
 	return nil
 }

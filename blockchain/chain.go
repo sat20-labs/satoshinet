@@ -2235,6 +2235,12 @@ func New(config *Config) (*BlockChain, error) {
 		}
 	}
 
+	anchorTxCache := newAnchorTxCache(config.DB)
+	if anchorTxCache == nil {
+		return nil, AssertError("blockchain.New " +
+					"anchorTx cache not initiated")
+	}
+
 	params := config.ChainParams
 	targetTimespan := int64(params.TargetTimespan / time.Second)
 	targetTimePerBlock := int64(params.TargetTimePerBlock / time.Second)
@@ -2260,7 +2266,7 @@ func New(config *Config) (*BlockChain, error) {
 		warningCaches:       newThresholdCaches(vbNumBits),
 		deploymentCaches:    newThresholdCaches(chaincfg.DefinedDeployments),
 		pruneTarget:         config.Prune,
-		anchorTxCache:       newAnchorTxCache(config.DB),
+		anchorTxCache:       anchorTxCache,
 	}
 
 	// Ensure all the deployments are synchronized with our clock if
