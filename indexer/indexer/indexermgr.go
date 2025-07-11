@@ -423,6 +423,7 @@ func (p *IndexerMgr) dbStatistic() bool {
 	return false
 }
 
+// tip: 本地最长链； block，新接收到的区块，一般会比tip高1
 func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	p.connectMutex.Lock()
 	defer p.connectMutex.Unlock()
@@ -450,7 +451,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
 	// TODO 优化indexer的设计
 	p.updateDB()
-	if height == tip && height != 0 {	
+	if p.compiling.GetHeight() == height && height != 0 {	
 		p.dbgc()
 		if !p.checkOnce || height%1000 == 0 {
 			p.checkOnce = true
