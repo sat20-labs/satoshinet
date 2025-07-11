@@ -152,11 +152,12 @@ func btcdMain(serverChan chan<- *server) error {
 				btcdLog.Errorf("Unable to create/unlock wallet %v", err)
 				return err
 			}
-			err = stp.StartSTP()
-			if err != nil {
-				btcdLog.Errorf("Unable to start STP, %v", err)
-				return err
-			}
+			// 等索引器同步后在启动stp模块
+			// err = stp.StartSTP()
+			// if err != nil {
+			// 	btcdLog.Errorf("Unable to start STP, %v", err)
+			// 	return err
+			// }
 		}
 		pubkey, err := stp.GetPubKey()
 		if err != nil {
