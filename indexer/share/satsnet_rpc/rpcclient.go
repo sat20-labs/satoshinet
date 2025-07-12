@@ -33,10 +33,6 @@ func RpcClientReady() bool {
 
 func InitSatsNetClient(host string, port int, user, passwd, dataPath string, 
 	enableTls bool) (int, error) {
-	if _client.client != nil {
-		h, _ := _client.client.GetBlockCount()
-		return int(h), nil
-	}
 	ntfnHandlers := rpcclient.NotificationHandlers{
 		OnFilteredBlockConnected: func(height int32, header *wire.BlockHeader, txns []*btcutil.Tx) {
 			common.Log.Infof("Block connected: %v (%d) %v",

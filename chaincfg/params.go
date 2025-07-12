@@ -898,7 +898,7 @@ func CustomSignetParams(challenge []byte, dnsSeeds []DNSSeed) Params {
 
 // SatsMainNetParams defines the network parameters for the main Bitcoin network.It is linked to main net.
 var MainNetParams = Params{
-	Name:        "mainnet",
+	Name:        "satsnet",
 	Net:         wire.MainNet,
 	DefaultPort: "9526",
 	DNSSeeds: []DNSSeed{
