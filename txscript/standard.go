@@ -520,9 +520,11 @@ func isNullDataScript(scriptVersion uint16, script []byte) bool {
 
 	// OP_RETURN followed by data push up to MaxDataCarrierSize bytes.
 	tokenizer := MakeScriptTokenizer(scriptVersion, script[1:])
-	return tokenizer.Next() && tokenizer.Done() &&
-		(IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= OP_PUSHDATA4) &&
-		len(tokenizer.Data()) <= MaxDataCarrierSize
+	// return tokenizer.Next() && tokenizer.Done() &&
+	// 	(IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= OP_PUSHDATA4) &&
+	// 	len(tokenizer.Data()) <= MaxDataCarrierSize
+
+	return tokenizer.Next() && len(tokenizer.Data()) <= MaxDataCarrierSize
 }
 
 // scriptType returns the type of the script being inspected from the known

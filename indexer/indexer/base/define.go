@@ -30,6 +30,7 @@ type IrregularSubsidy struct {
 func (p *SyncStats) Clone () *SyncStats {
 	c := &SyncStats{
 		SyncBase: p.SyncBase,
+		AddressCount: p.AddressCount,
 		ChainTip: p.ChainTip,
 	}
 	c.ReorgsDetected = make([]int, len(p.ReorgsDetected))
