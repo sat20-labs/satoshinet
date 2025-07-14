@@ -1706,7 +1706,7 @@ func (vm *ValidatorManager) OnUpdateEpoch(currentEpoch *epoch.Epoch) {
 			return
 		}
 
-		if vm.CurrentEpoch.GetGenerator().MinerTime == currentEpoch.GetGenerator().MinerTime {
+		if vm.CurrentEpoch.GetGenerator().MinerTime.Equal(currentEpoch.GetGenerator().MinerTime) {
 			utils.Log.Tracef("[ValidatorManager]The epoch miner time isnot change, ignored.")
 			return
 		}

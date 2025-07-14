@@ -1,7 +1,6 @@
 package base
 
 import (
-	"encoding/hex"
 	"fmt"
 	"sync"
 
@@ -468,12 +467,7 @@ func (b *RpcIndexer) GetMinerInfo(pubkey string) (*common.MinerInfo) {
 		ascendUtxo, ok := v.ChildMiners[pubkey]
 		if ok {
 			data := b.getAscendData(ascendUtxo)
-			 return &common.MinerInfo{
-				AscendHeight: data.Height,
-				AscendUtxo: data.FundingUtxo,
-				ServerNode: hex.EncodeToString(data.PubA),
-				ChannelAddr: data.Address,
-			 }
+			return data.ToMinerInfo()
 		}
 	}
 	

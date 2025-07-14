@@ -90,6 +90,24 @@ type AscendData struct {
 	PubB    []byte `json:"puKeyB"`
 }
 
+func (p *AscendData) ToMinerInfo() *MinerInfo {
+	var amt string
+	if len(p.Assets) > 0 {
+		amt = p.Assets[0].Amount.String()
+	} else {
+		amt = fmt.Sprintf("%d", p.Value)
+	}
+	return &MinerInfo{
+			AscendHeight: p.Height,
+			AscendUtxo: p.FundingUtxo,
+			AnchorTxId: p.AnchorTxId,
+			AssetName: indexer.GetStakeAssetName(),
+			AssetAmt: amt,
+			ChannelAddr: p.Address,
+			ServerNode: hex.EncodeToString(p.PubA),
+		}
+}
+
 // UtxoL2 离开聪网，TxIdL1是回到主网
 type DescendData struct {
 	Height       int           `json:"height"`
@@ -131,22 +149,9 @@ func NewCoreNodeInfo(data *AscendData) *CoreNodeInfo {
 			ChildMiners: make(map[string]string),
 		}
 	}
-	var amt string
-	if len(data.Assets) > 0 {
-		amt = data.Assets[0].Amount.String()
-	} else {
-		amt = fmt.Sprintf("%d", data.Value)
-	}
+	
 	return &CoreNodeInfo{
-		MinerInfo: MinerInfo{
-			AscendHeight: data.Height,
-			AscendUtxo: data.FundingUtxo,
-			AnchorTxId: data.AnchorTxId,
-			AssetName: indexer.GetStakeAssetName(),
-			AssetAmt: amt,
-			ChannelAddr: data.Address,
-			ServerNode: hex.EncodeToString(data.PubA),
-		},
+		MinerInfo: *data.ToMinerInfo(),
 		ChildMiners: make(map[string]string),
 	}
 }
