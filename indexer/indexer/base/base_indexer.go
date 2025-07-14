@@ -764,6 +764,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 						coreNode, ok := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
 						if ok && b.HasMinerEligibility(ascend.Assets) {
 							// 一个连接到corenode的普通miner
+							b.coreNodeMapUpdated = true
 							coreNode.ChildMiners[hex.EncodeToString(ascend.PubB)] = ascend.FundingUtxo
 							common.Log.Infof("BaseIndexer.processBlock-> add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
 						} else {
