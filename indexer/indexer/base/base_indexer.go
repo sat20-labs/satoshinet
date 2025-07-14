@@ -38,7 +38,7 @@ type BaseIndexer struct {
 
 	tickInfoMap        map[string]*common.TickerInfo
 	addressValueMap    map[string]*indexer.AddressValueV2	// 每个区块处理之前填充所有需要的地址id
-	coreNodeMap        map[string]*stp.CoreNodeInfo // pubkey, 不清空
+	coreNodeMap        map[string]*common.CoreNodeInfo // pubkey, 不清空
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 不清空
 
@@ -92,7 +92,7 @@ func (b *BaseIndexer) Init(cb1 BlockProcCallback, cb2 UpdateDBCallback) {
 
 	b.reset()
 
-	b.coreNodeMap = stp.GetAllCoreNodeFromDB(b.db)
+	b.coreNodeMap = stp.GetAllCoreNodeFromDB(b.db, b.chaincfgParam)
 	b.channelMap = stp.GetAllChannelFromDB(b.db)
 }
 
@@ -108,7 +108,7 @@ func (b *BaseIndexer) reset() {
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
 	b.tickInfoMap = make(map[string]*common.TickerInfo)
 	b.addressValueMap = make(map[string]*indexer.AddressValueV2)
-	b.coreNodeMap = make(map[string]*stp.CoreNodeInfo)
+	b.coreNodeMap = make(map[string]*common.CoreNodeInfo)
 	b.channelMap = make(map[string]*common.ChannelInfo)
 	b.prevBlockHashMap = make(map[int]string)
 }
@@ -150,17 +150,9 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		newInst.tickInfoMap[k] = v
 	}
 
-	newInst.coreNodeMap = make(map[string]*stp.CoreNodeInfo)
+	newInst.coreNodeMap = make(map[string]*common.CoreNodeInfo)
 	for k, v := range b.coreNodeMap {
-		node := stp.CoreNodeInfo{
-			AscendHeight: v.AscendHeight,
-			DescendHeight: v.DescendHeight,
-			ChildMiners: make(map[string]int),
-		}
-		for k2, v2 := range v.ChildMiners {
-			node.ChildMiners[k2] = v2
-		}
-		newInst.coreNodeMap[k] = &node
+		newInst.coreNodeMap[k] = v.Clone()
 	}
 
 	newInst.channelMap = make(map[string]*common.ChannelInfo)
@@ -765,14 +757,14 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 				if !ok {
 					if b.IsCoreNodeAscend(ascend) {
 						// 新增加一个core node
-						b.coreNodeMap[hex.EncodeToString(ascend.PubB)] = stp.NewCoreNodeInfo(ascend.Height)
+						b.coreNodeMap[hex.EncodeToString(ascend.PubB)] = common.NewCoreNodeInfo(ascend)
 						b.coreNodeMapUpdated = true
 						common.Log.Infof("BaseIndexer.processBlock-> add core node %s at height %d", coreNodeKey, ascend.Height)
 					} else {
 						coreNode, ok := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
 						if ok && b.HasMinerEligibility(ascend.Assets) {
 							// 一个连接到corenode的普通miner
-							coreNode.ChildMiners[hex.EncodeToString(ascend.PubB)] = ascend.Height
+							coreNode.ChildMiners[hex.EncodeToString(ascend.PubB)] = ascend.FundingUtxo
 							common.Log.Infof("BaseIndexer.processBlock-> add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
 						} else {
 							// 无效的脚本

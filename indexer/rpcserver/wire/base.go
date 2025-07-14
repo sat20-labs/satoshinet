@@ -32,8 +32,12 @@ type CheckCoreNodeResp struct {
 
 type GetCoreNodeInfoResp struct {
 	indexerwire.BaseResp
-	IsCoreNdoe bool     `json:"data"`
-	Childs     []string `json:"childs"`
+	Data *common.CoreNodeInfo     `json:"data"`
+}
+
+type GetMinerInfoResp struct {
+	indexerwire.BaseResp
+	Data *common.MinerInfo     `json:"data"`
 }
 
 type TickersResp struct {

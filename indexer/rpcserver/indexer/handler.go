@@ -378,11 +378,10 @@ func (s *Handle) getCoreNodeInfo(c *gin.Context) {
 			Code: 0,
 			Msg:  "ok",
 		},
-		IsCoreNdoe: false,
 	}
 
 	pubkey := c.Param("pubkey")
-	resp.IsCoreNdoe, resp.Childs = s.model.GetCoreNodeInfo(pubkey)
+	resp.Data = s.model.GetCoreNodeInfo(pubkey)
 
 	c.JSON(http.StatusOK, resp)
 }
@@ -403,6 +402,19 @@ func (s *Handle) checkMiner(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (s *Handle) getMinerInfo(c *gin.Context) {
+	resp := &localwire.GetMinerInfoResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+
+	pubkey := c.Param("pubkey")
+	resp.Data = s.model.GetMinerInfo(pubkey)
+
+	c.JSON(http.StatusOK, resp)
+}
 
 // include plain sats
 func (s *Handle) getAssetSummaryV3(c *gin.Context) {

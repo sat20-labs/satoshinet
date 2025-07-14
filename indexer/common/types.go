@@ -1,8 +1,11 @@
 package common
 
 import (
-	"github.com/sat20-labs/satoshinet/wire"
+	"encoding/hex"
+	"fmt"
+
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -96,6 +99,67 @@ type DescendData struct {
 	Assets       wire.TxAssets `json:"assets"`  // 支持很多种资产
 
 	Address      string        `json:"address"` // 通道地址
+}
+
+type CoreNodeInfo struct {
+	MinerInfo
+	ChildMiners map[string]string // pubkey->ascend utxo
+}
+
+type MinerInfo struct {
+	AscendHeight int	//
+	AscendUtxo string
+	AnchorTxId string
+	AssetName  string
+	AssetAmt   string
+	ServerNode string
+	ChannelAddr string
+}
+
+func NewCoreNodeInfo(data *AscendData) *CoreNodeInfo {
+	if data == nil {
+		return &CoreNodeInfo{
+			MinerInfo: MinerInfo{
+				AscendHeight: 0,
+				AscendUtxo: "",
+				AnchorTxId: "",
+				AssetName: indexer.GetStakeAssetName(),
+				AssetAmt: "0",
+				ChannelAddr: "",
+				ServerNode: "",
+			},
+			ChildMiners: make(map[string]string),
+		}
+	}
+	var amt string
+	if len(data.Assets) > 0 {
+		amt = data.Assets[0].Amount.String()
+	} else {
+		amt = fmt.Sprintf("%d", data.Value)
+	}
+	return &CoreNodeInfo{
+		MinerInfo: MinerInfo{
+			AscendHeight: data.Height,
+			AscendUtxo: data.FundingUtxo,
+			AnchorTxId: data.AnchorTxId,
+			AssetName: indexer.GetStakeAssetName(),
+			AssetAmt: amt,
+			ChannelAddr: data.Address,
+			ServerNode: hex.EncodeToString(data.PubA),
+		},
+		ChildMiners: make(map[string]string),
+	}
+}
+
+func (p *CoreNodeInfo) Clone() *CoreNodeInfo {
+	n := &CoreNodeInfo{
+			MinerInfo: p.MinerInfo,
+			ChildMiners: make(map[string]string),
+		}
+	for k2, v2 := range p.ChildMiners {
+		n.ChildMiners[k2] = v2
+	}
+	return n
 }
 
 type TxdRecord struct {

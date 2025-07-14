@@ -268,12 +268,16 @@ func (s *Model) CheckCoreNode(pubkey string) bool {
 	return s.indexer.IsCoreNode(pubkey)
 }
 
-func (s *Model) GetCoreNodeInfo(pubkey string) (bool, []string) {
+func (s *Model) GetCoreNodeInfo(pubkey string) *common.CoreNodeInfo {
 	return s.indexer.GetCoreNodeInfo(pubkey)
 }
 
 func (s *Model) CheckMiner(pubkey string) bool {
 	return s.indexer.IsMinerNode(pubkey)
+}
+
+func (s *Model) GetMinerInfo(pubkey string) (*common.MinerInfo) {
+	return s.indexer.GetMinerInfo(pubkey)
 }
 
 func (s *Model) GetAssetSummaryV3(address string, start int, limit int) ([]*indexer.DisplayAsset, error) {

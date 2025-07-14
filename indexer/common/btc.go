@@ -2,12 +2,15 @@ package common
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
+
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 var (
@@ -98,4 +101,42 @@ func IsCoinbaseTx(tx *wire.MsgTx) bool {
 
 	// If the above conditions are met, it's a coinbase transaction.
 	return true
+}
+
+
+func GetBTCAddressFromPkScript(pkScript []byte, chainParams *chaincfg.Params) (string, error) {
+	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, chainParams)
+	if err != nil {
+		return "", err
+	}
+
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("can't generate BTC address")
+	}
+
+	return addresses[0].EncodeAddress(), nil
+}
+
+func GetChannelAddress(pubkeyA, pubkeyB []byte, chainParams *chaincfg.Params) (string, error) {
+	// 生成P2WSH地址
+	_, pkScript, err := indexer.GetP2WSHscript(pubkeyA, pubkeyB)
+	if err != nil {
+		return "", err
+	}
+
+	// 生成地址
+	address, err := GetBTCAddressFromPkScript(pkScript, chainParams)
+	if err != nil {
+		return "", err
+	}
+
+	return address, nil
+}
+
+
+func GetDefaultChannelAddress(chainParams *chaincfg.Params) (string, error) {
+	// 生成P2WSH地址
+	bootstrappubkey, _ := hex.DecodeString(indexer.GetBootstrapPubKey())
+	corenodepubkey, _ := hex.DecodeString(indexer.GetCoreNodePubKey())
+	return GetChannelAddress(bootstrappubkey, corenodepubkey, chainParams)
 }

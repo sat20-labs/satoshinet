@@ -6,7 +6,6 @@ import (
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/common"
-	"github.com/sat20-labs/satoshinet/indexer/indexer/stp"
 )
 
 // interface for RPC
@@ -200,7 +199,7 @@ func (b *IndexerMgr) GetBindingSat(ticker *wire.AssetName) int {
 	return info.N
 }
 
-func (b *IndexerMgr) GetAllCoreNode() map[string]*stp.CoreNodeInfo {
+func (b *IndexerMgr) GetAllCoreNode() map[string]*common.CoreNodeInfo {
 	return b.rpcService.GetAllCoreNode()
 }
 
@@ -208,10 +207,14 @@ func (b *IndexerMgr) IsCoreNode(pubkey string) bool {
 	return b.rpcService.IsCoreNode(pubkey)
 }
 
-func (b *IndexerMgr) GetCoreNodeInfo(pubkey string) (bool, []string) {
+func (b *IndexerMgr) GetCoreNodeInfo(pubkey string) (*common.CoreNodeInfo) {
 	return b.rpcService.GetCoreNodeInfo(pubkey)
 }
 
 func (b *IndexerMgr) IsMinerNode(pubkey string) bool {
 	return b.rpcService.IsMinerNode(pubkey)
+}
+
+func (b *IndexerMgr) GetMinerInfo(pubkey string) (*common.MinerInfo) {
+	return b.rpcService.GetMinerInfo(pubkey)
 }

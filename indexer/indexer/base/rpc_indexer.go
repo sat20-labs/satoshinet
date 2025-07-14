@@ -1,6 +1,7 @@
 package base
 
 import (
+	"encoding/hex"
 	"fmt"
 	"sync"
 
@@ -346,8 +347,14 @@ func (b *RpcIndexer) GetBlockInfo(height int) (*common.BlockInfo, error) {
 // only for RPC interface
 func (b *RpcIndexer) GetAscendData(fundingUtxo string) *common.AscendData {
 	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	
+	return b.getAscendData(fundingUtxo)
+}
+
+// only for RPC interface
+func (b *RpcIndexer) getAscendData(fundingUtxo string) *common.AscendData {
 	info, ok := b.utxoIndex.AscendMap[fundingUtxo]
-	b.mutex.RUnlock()
 	if ok {
 		return info
 	}
@@ -357,9 +364,6 @@ func (b *RpcIndexer) GetAscendData(fundingUtxo string) *common.AscendData {
 		//common.Log.Errorf("GetAscendFromDB %s failed, %v", fundingUtxo, err)
 		return nil
 	}
-	b.mutex.Lock()
-	b.utxoIndex.AscendMap[fundingUtxo] = info
-	b.mutex.Unlock()
 	return info
 }
 
@@ -406,7 +410,7 @@ func (b *RpcIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 }
 
 // only for RPC interface
-func (b *RpcIndexer) GetAllCoreNode() map[string]*stp.CoreNodeInfo {
+func (b *RpcIndexer) GetAllCoreNode() map[string]*common.CoreNodeInfo {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 	return b.coreNodeMap
@@ -421,18 +425,15 @@ func (b *RpcIndexer) IsCoreNode(pubkey string) bool {
 	return ok
 }
 
-func (b *RpcIndexer) GetCoreNodeInfo(pubkey string) (bool, []string) {
+func (b *RpcIndexer) GetCoreNodeInfo(pubkey string) (*common.CoreNodeInfo) {
 	b.mutex.RLock()
+	defer b.mutex.RUnlock()
 	info, ok := b.coreNodeMap[pubkey]
-	b.mutex.RUnlock()
 	if ok {
-		childs := make([]string, 0)
-		for k := range info.ChildMiners {
-			childs = append(childs, k)
-		}
-		return true, childs
+		return info.Clone()
 	}
-	return false, nil
+
+	return nil
 }
 
 // only for RPC interface
@@ -453,6 +454,30 @@ func (b *RpcIndexer) IsMinerNode(pubkey string) bool {
 	}
 	
 	return false
+}
+
+func (b *RpcIndexer) GetMinerInfo(pubkey string) (*common.MinerInfo) {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	info, ok := b.coreNodeMap[pubkey]
+	if ok {
+		return &info.MinerInfo
+	}
+
+	for _, v := range b.coreNodeMap {
+		ascendUtxo, ok := v.ChildMiners[pubkey]
+		if ok {
+			data := b.getAscendData(ascendUtxo)
+			 return &common.MinerInfo{
+				AscendHeight: data.Height,
+				AscendUtxo: data.FundingUtxo,
+				ServerNode: hex.EncodeToString(data.PubA),
+				ChannelAddr: data.Address,
+			 }
+		}
+	}
+	
+	return nil
 }
 
 func (b *RpcIndexer) GetTickerMap() map[string]*common.TickerInfo {
