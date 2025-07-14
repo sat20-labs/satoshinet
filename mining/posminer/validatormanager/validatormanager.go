@@ -1282,6 +1282,17 @@ func (vm *ValidatorManager) SetLocalAsCurrentGenerator(height int32, handoverTim
 func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error) {
 	utils.Log.Tracef("[ValidatorManager]OnTimeGenerateBlock...")
 
+	// 如果连接节点太少，就不要挖矿
+	if !vm.myValidator.IsBootStrapNode() {
+		vm.connectedListMtx.RLock()
+		count := len(vm.ConnectedList)
+		vm.connectedListMtx.RUnlock()
+		if count == 0 {
+			vm.myValidator.ContinueNextSlot()
+			return nil, 0, fmt.Errorf("no validator connected, step to next slot")
+		}
+	}
+
 	// Notify validator manager to generate new block
 	hash, height, err := vm.Cfg.PosMiner.OnTimeGenerateBlock()
 	if err != nil {
