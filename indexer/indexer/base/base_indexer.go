@@ -199,6 +199,9 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 	l := len(another.delUTXOs)
 	b.delUTXOs = b.delUTXOs[l:]
 
+	l = len(another.blockVector)
+	b.blockVector = b.blockVector[l:]
+
 	// 统计量不需要更新
 	// for k, v := range another.tickerAddressMap {
 	// }
@@ -1524,10 +1527,6 @@ func (b *BaseIndexer) SetReorgHeight(height int) {
 
 func (b *BaseIndexer) GetBlockHistory() int {
 	return b.keepBlockHistory
-}
-
-func (b *BaseIndexer) ResetBlockVector() {
-	b.blockVector = make([]*common.BlockValueInDB, 0)
 }
 
 func (p *BaseIndexer) GetBlockInBuffer(height int) *common.BlockValueInDB {

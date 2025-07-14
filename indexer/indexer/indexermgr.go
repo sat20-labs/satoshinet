@@ -382,8 +382,6 @@ func (b *IndexerMgr) performUpdateDBInBuffer() {
 
 func (b *IndexerMgr) prepareDBBuffer() {
 	b.compilingBackupDB = b.compiling.Clone()
-	b.compiling.ResetBlockVector()
-
 	common.Log.Infof("backup instance %d cloned", b.compilingBackupDB.GetHeight())
 }
 
