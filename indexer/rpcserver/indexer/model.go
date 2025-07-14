@@ -272,6 +272,10 @@ func (s *Model) GetCoreNodeInfo(pubkey string) (bool, []string) {
 	return s.indexer.GetCoreNodeInfo(pubkey)
 }
 
+func (s *Model) CheckMiner(pubkey string) bool {
+	return s.indexer.IsMinerNode(pubkey)
+}
+
 func (s *Model) GetAssetSummaryV3(address string, start int, limit int) ([]*indexer.DisplayAsset, error) {
 	tickerMap := s.indexer.GetAssetSummaryInAddressV3(address)
 

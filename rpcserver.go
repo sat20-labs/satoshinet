@@ -3568,7 +3568,7 @@ func handleSendRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan st
 		hexStr = "0" + hexStr
 	}
 
-	rpcsLog.Debugf("Tx Raw:%s", hexStr)
+	rpcsLog.Debugf("Tx Raw: %s", hexStr)
 	serializedTx, err := hex.DecodeString(hexStr)
 	if err != nil {
 		return nil, rpcDecodeHexError(hexStr)
@@ -3582,7 +3582,7 @@ func handleSendRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan st
 		}
 	}
 
-	LogMsgTx("Received a transaction raw:", &msgTx)
+	//LogMsgTx("Received a transaction raw:", &msgTx)
 
 	// if msgTx.TxHash().String() == "ca44d33e337cf413e5a932735e834af6db9db20a01454f4d3918fccec8f4dfe3" {
 

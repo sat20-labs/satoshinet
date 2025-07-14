@@ -626,8 +626,8 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 			msg.TxHash(), sp)
 		return
 	}
-
-	LogMsgTx("Synced TX by server peer:", msg)
+	peerLog.Tracef("Synced TX by server peer: %s", msg.TxID())
+	// LogMsgTx("Synced TX by server peer:", msg)
 
 	// Add the transaction to the known inventory for the peer.
 	// Convert the raw MsgTx to a btcutil.Tx which provides some convenience

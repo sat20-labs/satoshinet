@@ -387,6 +387,23 @@ func (s *Handle) getCoreNodeInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+
+func (s *Handle) checkMiner(c *gin.Context) {
+	resp := &localwire.CheckCoreNodeResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: false,
+	}
+
+	pubkey := c.Param("pubkey")
+	resp.Data = s.model.CheckMiner(pubkey)
+
+	c.JSON(http.StatusOK, resp)
+}
+
+
 // include plain sats
 func (s *Handle) getAssetSummaryV3(c *gin.Context) {
 	resp := &indexerwire.AssetSummaryRespV3{

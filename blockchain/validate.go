@@ -1085,7 +1085,7 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 	var err error
 
 	//logTxRanges("totalInSatsRange", totalInSatsRange)
-	logTxAssets("input total assets", totalInTxAssets)
+	//logTxAssets("input total assets", totalInTxAssets)
 
 	//totalOutSatsRange := make([]wire.SatsRange, 0)
 	for index, txOut := range tx.MsgTx().TxOut {
@@ -1093,7 +1093,7 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 		//currnetOutputSatsRange, err := totalInSatsRange.Pickup(
 		//	totalSatoshiOut, txOut.Value)
 		//logTxRanges("txOut.SatsRanges", txOut.SatsRanges)
-		logTxAssets(fmt.Sprintf("output %d assets", index), totalInTxAssets)
+		//logTxAssets(fmt.Sprintf("output %d assets", index), totalInTxAssets)
 
 		err = totalInTxAssets.Split(txOut.Assets)
 
