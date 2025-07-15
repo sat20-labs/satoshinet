@@ -20,21 +20,28 @@ import (
 
 const (
 	SAT20_MAGIC_NUMBER          = txscript.OP_16
-	CONTENT_TYPE_ASCENDING      = txscript.OP_1
-	CONTENT_TYPE_DESCENDING     = txscript.OP_2
-	CONTENT_TYPE_PAYMENT        = txscript.OP_3
-	CONTENT_TYPE_DESTROY        = txscript.OP_4
-	CONTENT_TYPE_SWAP           = txscript.OP_5
-	CONTENT_TYPE_STAKE          = txscript.OP_6
-	CONTENT_TYPE_UNSTAKE        = txscript.OP_7
-	CONTENT_TYPE_DEPOSIT        = txscript.OP_8
-	CONTENT_TYPE_WITHDRAW       = txscript.OP_9
-	CONTENT_TYPE_CHANNELID      = txscript.OP_10
-	CONTENT_TYPE_LIQUIDPOOL     = txscript.OP_11
-	CONTENT_TYPE_PERFORMACTION  = txscript.OP_12
-	CONTENT_TYPE_DEPLOYCONTRACT = txscript.OP_13
-	CONTENT_TYPE_INVOKECONTRACT = txscript.OP_14
-	CONTENT_TYPE_INVOKERESULT   = txscript.OP_15
+	// 通道
+	CONTENT_TYPE_CHANNELID      = txscript.OP_0
+	CONTENT_TYPE_ASCENDING      = txscript.OP_DATA_1
+	CONTENT_TYPE_DESCENDING     = txscript.OP_DATA_2
+	CONTENT_TYPE_PAYMENT        = txscript.OP_DATA_3
+	CONTENT_TYPE_STAKE          = txscript.OP_DATA_4
+	CONTENT_TYPE_UNSTAKE        = txscript.OP_DATA_5
+	CONTENT_TYPE_DEPOSIT        = txscript.OP_DATA_6
+	CONTENT_TYPE_WITHDRAW       = txscript.OP_DATA_7
+	CONTENT_TYPE_LIQUIDPOOL     = txscript.OP_DATA_8
+
+	// 合约
+	CONTENT_TYPE_PERFORMACTION  = txscript.OP_DATA_20
+	CONTENT_TYPE_DEPLOYCONTRACT = txscript.OP_DATA_21
+	CONTENT_TYPE_INVOKECONTRACT = txscript.OP_DATA_22
+	CONTENT_TYPE_INVOKERESULT   = txscript.OP_DATA_23
+
+	// ordx
+	CONTENT_TYPE_DESTROY        = txscript.OP_DATA_40
+	CONTENT_TYPE_SWAP           = txscript.OP_DATA_41
+	CONTENT_TYPE_BINDREFERRER   = txscript.OP_DATA_42
+	// -> OP_DATA_75
 
 	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 2
 )
