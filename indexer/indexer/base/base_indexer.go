@@ -890,6 +890,10 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 						} else {
 							common.Log.Errorf("GenTickerInfo %s:%d failed, %v",tx.Txid, i, err)
 						}
+					
+					case common.CONTENT_TYPE_CHANNELID:
+						// 如果是通道更新，data中包含通道承诺高度
+						// 更新通道的最新高度 TODO
 					}
 				} else {
 					common.Log.Errorf("ReadDataFromNullDataScript %s:%d failed, %v", tx.Txid, i, err)
