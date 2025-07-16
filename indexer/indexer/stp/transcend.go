@@ -306,11 +306,15 @@ func GetAllCoreNodeFromDB(ldb *badger.DB, chainParam *chaincfg.Params) map[strin
 	})
 
 	if len(result) == 0 {
-		result[indexer.GetBootstrapPubKey()] = common.NewCoreNodeInfo(nil)
+		bootstrapNode := common.NewCoreNodeInfo(nil)
+		result[indexer.GetBootstrapPubKey()] = bootstrapNode
+
 		corenode := common.NewCoreNodeInfo(nil)
 		corenode.ServerNode = indexer.GetBootstrapPubKey()
 		corenode.ChannelAddr, _ = common.GetDefaultChannelAddress(chainParam)
 		result[indexer.GetCoreNodePubKey()] = corenode
+
+		bootstrapNode.ChildMiners[indexer.GetCoreNodePubKey()] = ""
 	}
 
 	return result

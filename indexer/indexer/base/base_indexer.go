@@ -718,26 +718,24 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 	satsOutput := int64(0)
 	for txIndex, tx := range block.Transactions {
 
-		if !b.IsMainnet() {
-			// 聪网处理anchorTx的一个bug导致AnchorTx出现多次
-			if block.Height == 45 && tx.Txid == "a422e1009d59ea5b5c897e1671776a4a528935d40907411aa71173b255f3ae2e" {
-				continue
-			}
-			if block.Height == 426 && tx.Txid == "3808a55f28802bda98cd077c8c530a519919225fa9299ca378b7414552c82442" {
-				continue
-			}
-			if (block.Height == 1464 || block.Height == 1466) && tx.Txid == "95f057e23551d222736b30b34453481211d763c062631260fabe904394bef798" {
-				continue
-			}
-			u := indexer.GetUtxo(block.Height, tx.Txid, 0)
-			_, ok := b.utxoIndex.Index[u] 
-			if ok {
-				common.Log.Infof("DDDDDDD: %s", tx.Txid)
-				continue
-			}
-		}
-
-
+		// if !b.IsMainnet() {
+		// 	// 聪网处理anchorTx的一个bug导致AnchorTx出现多次
+		// 	if block.Height == 45 && tx.Txid == "a422e1009d59ea5b5c897e1671776a4a528935d40907411aa71173b255f3ae2e" {
+		// 		continue
+		// 	}
+		// 	if block.Height == 426 && tx.Txid == "3808a55f28802bda98cd077c8c530a519919225fa9299ca378b7414552c82442" {
+		// 		continue
+		// 	}
+		// 	if (block.Height == 1464 || block.Height == 1466) && tx.Txid == "95f057e23551d222736b30b34453481211d763c062631260fabe904394bef798" {
+		// 		continue
+		// 	}
+		// 	u := indexer.GetUtxo(block.Height, tx.Txid, 0)
+		// 	_, ok := b.utxoIndex.Index[u] 
+		// 	if ok {
+		// 		common.Log.Infof("DDDDDDD: %s", tx.Txid)
+		// 		continue
+		// 	}
+		// }
 		
 		var ascend *common.AscendData
 		for i, input := range tx.Inputs {
@@ -760,7 +758,13 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 				if !ok {
 					if b.IsCoreNodeAscend(ascend) {
 						// 新增加一个core node
-						b.coreNodeMap[hex.EncodeToString(ascend.PubB)] = common.NewCoreNodeInfo(ascend)
+						coreNode := common.NewCoreNodeInfo(ascend)
+						coreNodeKey = hex.EncodeToString(ascend.PubB)
+						b.coreNodeMap[coreNodeKey] = coreNode
+
+						serverNode := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
+						serverNode.ChildMiners[coreNodeKey] = coreNode.AscendUtxo
+
 						b.coreNodeMapUpdated = true
 						common.Log.Infof("BaseIndexer.processBlock-> add core node %s at height %d", coreNodeKey, ascend.Height)
 					} else {
