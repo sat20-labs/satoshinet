@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -264,7 +265,10 @@ out:
 			if err != nil {
 				// TODO: writeMessage error, maybe the connect is disconnect
 				utils.Log.Errorf("----------[%s]writeMessage failed, %v", connReq.String(), err)
-				//connReq.Close()
+				if strings.Contains(err.Error(), "closed network connection") {
+					connReq.Close()
+				}
+				
 				break out
 			}
 
