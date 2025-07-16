@@ -25,10 +25,7 @@ type MsgPeerInfo struct {
 	ProtocolVersion int32
 
 	// Current validator id
-	ValidatorId uint64
-
-	// validator public key
-	PublicKey [btcec.PubKeyBytesLenCompressed]byte
+	ValidatorId string
 
 	// validator Host
 	Host string
@@ -46,7 +43,7 @@ func (msg *MsgPeerInfo) BtcDecode(r io.Reader, pver uint32) error {
 			"*bytes.Buffer")
 	}
 
-	err := utils.ReadElements(buf, &msg.ProtocolVersion, &msg.ValidatorId, &msg.PublicKey, &msg.Host,
+	err := utils.ReadElements(buf, &msg.ProtocolVersion, &msg.ValidatorId, &msg.Host,
 		(*utils.Int64Time)(&msg.CreateTime))
 	if err != nil {
 		return err
@@ -58,7 +55,7 @@ func (msg *MsgPeerInfo) BtcDecode(r io.Reader, pver uint32) error {
 // BtcEncode encodes the receiver to w using the bitcoin protocol encoding.
 // This is part of the Message interface implementation.
 func (msg *MsgPeerInfo) BtcEncode(w io.Writer, pver uint32) error {
-	err := utils.WriteElements(w, msg.ProtocolVersion, msg.ValidatorId, msg.PublicKey, msg.Host,
+	err := utils.WriteElements(w, msg.ProtocolVersion, msg.ValidatorId, msg.Host,
 		msg.CreateTime.Unix())
 	if err != nil {
 		return err
@@ -84,8 +81,7 @@ func (msg *MsgPeerInfo) MaxPayloadLength(pver uint32) uint32 {
 func (msg *MsgPeerInfo) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgPeerInfo:")
 	utils.Log.Tracef("ProtocolVersion: %d", msg.ProtocolVersion)
-	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
-	utils.Log.Tracef("PublicKey: %x", msg.PublicKey)
+	utils.Log.Tracef("ValidatorId: %s", msg.ValidatorId)
 	utils.Log.Tracef("Host: %s", msg.Host)
 	utils.Log.Tracef("CreateTime: %s", msg.CreateTime.Format(time.DateTime))
 }
@@ -99,7 +95,6 @@ func NewMsgPeerInfo(validatorInfo *validatorinfo.ValidatorInfo) *MsgPeerInfo {
 	return &MsgPeerInfo{
 		ProtocolVersion: int32(VALIDATOR_VERION),
 		ValidatorId:     validatorInfo.ValidatorId,
-		PublicKey:       validatorInfo.PublicKey,
 		Host:            validatorInfo.Host,
 		CreateTime:      validatorInfo.CreateTime,
 	}

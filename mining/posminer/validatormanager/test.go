@@ -1,7 +1,6 @@
 package validatormanager
 
 import (
-	"encoding/hex"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -36,14 +35,11 @@ func (vm *ValidatorManager) TestingVcState() {
 
 func (vm *ValidatorManager) TestingVcBlocks() {
 
-	validatorId1 := uint64(10000020)
-	publicKey1, _ := hex.DecodeString("0319f86fa35ef9bcfdca01de56cf65833a2af81c299a40dff88fe7874cb1423d02")
+	validatorId1 := ("0319f86fa35ef9bcfdca01de56cf65833a2af81c299a40dff88fe7874cb1423d02")
 
-	validatorId2 := uint64(10000103)
-	publicKey2, _ := hex.DecodeString("020b7a4bab178b0534386a3cc0439a9e94dfe80270e7c907adb337d3a12d2ff2ca")
+	validatorId2 := ("020b7a4bab178b0534386a3cc0439a9e94dfe80270e7c907adb337d3a12d2ff2ca")
 
-	validatorId3 := uint64(10000104)
-	publicKey3, _ := hex.DecodeString("02a4e1fd1819b5d6e1b85c0e8959e15f1d532c0f8a087203fdaae81f6191475b18")
+	validatorId3 := ("02a4e1fd1819b5d6e1b85c0e8959e15f1d532c0f8a087203fdaae81f6191475b18")
 
 	// New Epoch block
 	newEpochBlock := &validatechain.VCBlock{}
@@ -55,18 +51,14 @@ func (vm *ValidatorManager) TestingVcBlocks() {
 
 	newEpochData := &validatechain.DataNewEpoch{}
 	newEpochData.CreatorId = validatorId1
-	copy(newEpochData.PublicKey[:], publicKey1)
 	newEpochData.EpochIndex = 0
 	newEpochData.CreateTime = time.Now().Unix()
 	newEpochData.Reason = validatechain.NewEpochReason_EpochCreate
 	newEpochData.EpochItemList = make([]epoch.EpochItem, 0)
 
 	item1 := epoch.EpochItem{ValidatorId: validatorId1}
-	copy(item1.PublicKey[:], publicKey1)
 	item2 := epoch.EpochItem{ValidatorId: validatorId2}
-	copy(item2.PublicKey[:], publicKey2)
 	item3 := epoch.EpochItem{ValidatorId: validatorId3}
-	copy(item3.PublicKey[:], publicKey3)
 	newEpochData.EpochItemList = append(newEpochData.EpochItemList, item1)
 	newEpochData.EpochItemList = append(newEpochData.EpochItemList, item2)
 	newEpochData.EpochItemList = append(newEpochData.EpochItemList, item3)
@@ -122,16 +114,14 @@ func logBlock(block *validatechain.VCBlock) {
 	switch vcd := block.Data.(type) { //nolint:gocritice := vcd.Data.(type)
 	case *validatechain.DataNewEpoch:
 		utils.Log.Tracef("-------------------------Block Data-------------------------")
-		utils.Log.Tracef("CreatorId: %d", vcd.CreatorId)
-		utils.Log.Tracef("PublicKey: %x", vcd.PublicKey[:]) //PublicKey
+		utils.Log.Tracef("CreatorId: %s", vcd.CreatorId)
 		utils.Log.Tracef("EpochIndex: %d", vcd.EpochIndex)
 		timeStr = time.Unix(vcd.CreateTime, 0).Format("2006-01-02 15:04:05")
 		utils.Log.Tracef("CreateTime: %s", timeStr)
 		utils.Log.Tracef("Reason: %d", vcd.Reason)
 		utils.Log.Tracef("EpochItemList Count: %d", len(vcd.EpochItemList))
 		for _, item := range vcd.EpochItemList {
-			utils.Log.Tracef("	validator ID: %d", item.ValidatorId)
-			utils.Log.Tracef("	validator Public: %x", item.PublicKey[:])
+			utils.Log.Tracef("	validator ID: %s", item.ValidatorId)
 			utils.Log.Tracef("------------------------------------------------")
 		}
 		utils.Log.Tracef("EpochVoteList Count: %d", len(vcd.EpochVoteList))

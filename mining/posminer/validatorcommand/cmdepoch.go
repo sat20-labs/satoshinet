@@ -99,10 +99,6 @@ func ReadEpoch(buf *bytes.Buffer) (*epoch.Epoch, error) {
 		if err != nil {
 			return nil, err
 		}
-		err = utils.ReadElements(buf, &epochItem.PublicKey)
-		if err != nil {
-			return nil, err
-		}
 		err = utils.ReadElements(buf, &epochItem.Index)
 		if err != nil {
 			return nil, err
@@ -212,10 +208,6 @@ func WriteEpoch(w io.Writer, epoch *epoch.Epoch) error {
 		if err != nil {
 			return err
 		}
-		err = utils.WriteElements(w, epochItem.PublicKey)
-		if err != nil {
-			return err
-		}
 		err = utils.WriteElements(w, epochItem.Index)
 		if err != nil {
 			return err
@@ -311,8 +303,7 @@ func showEpoch(title string, epoch *epoch.Epoch) {
 		utils.Log.Tracef("EpochIndex: %d", epoch.EpochIndex)
 		utils.Log.Tracef("Validator Count in Epoch: %d", len(epoch.ItemList))
 		for _, epochItem := range epoch.ItemList {
-			utils.Log.Tracef("validator ID: %d", epochItem.ValidatorId)
-			utils.Log.Tracef("validator Public: %x", epochItem.PublicKey[:])
+			utils.Log.Tracef("validator ID: %s", epochItem.ValidatorId)
 			utils.Log.Tracef("validator Host: %s", epochItem.Host)
 			utils.Log.Tracef("validator Index: %d", epochItem.Index)
 			utils.Log.Tracef("------------------------------------------------")
@@ -324,7 +315,7 @@ func showEpoch(title string, epoch *epoch.Epoch) {
 		if generator == nil {
 			utils.Log.Tracef("	No generator")
 		} else {
-			utils.Log.Tracef("	Generator ID: %d", generator.GeneratorId)
+			utils.Log.Tracef("	Generator ID: %s", generator.GeneratorId)
 			utils.Log.Tracef("	Generator TimeStamp: %s", time.Unix(generator.Timestamp, 0).Format("2006-01-02 15:04:05"))
 			utils.Log.Tracef("	Generator Token: %s", generator.Token)
 			utils.Log.Tracef("	Generator Block Height: %d", generator.Height)

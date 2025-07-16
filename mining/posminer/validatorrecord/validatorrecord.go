@@ -1,7 +1,6 @@
 package validatorrecord
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,8 +13,7 @@ const (
 )
 
 type ValidatorRecord struct {
-	ValidatorId       uint64    `json:"validatorId"`       // 验证者的ID，非全局，最好去掉，只保留PubKey  TODO
-	PubKey            []byte    `json:"pubkey"`
+	ValidatorId       string    `json:"validatorId"`       // 验证者的ID, pubkey
 	Host              string    `json:"host"`              // 验证者的节点Host
 	LastConnectedTime time.Time `json:"lastConnectedTime"` // 上次连接的时间
 }
@@ -85,7 +83,7 @@ func saveValidatorRecordFile(path string, data []byte) error {
 	return nil
 }
 
-func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, pubkey []byte, host string) {
+func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(pubkey string, host string) {
 	// Update validator record when the validator is connected
 
 	if vrm.ValidatorRecordList == nil {
@@ -93,28 +91,16 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, pubkey 
 	}
 
 	for _, record := range vrm.ValidatorRecordList {
-		if record.ValidatorId == validatorId {
-			// Update id and last connected time
-			record.ValidatorId = validatorId
-			record.PubKey = pubkey
-			record.Host = host
-			record.LastConnectedTime = time.Now()
-			UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordList)
-			return
-		} 
 		if record.Host == host {
-			if validatorId != 0 {
-				record.ValidatorId = validatorId
-			}
-			if pubkey != nil {
-				record.PubKey = pubkey
+			if pubkey != "" {
+				record.ValidatorId = pubkey
 			}
 			record.LastConnectedTime = time.Now()
 			UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordList)
 			return
 		} 
-		if bytes.Equal(record.PubKey, pubkey) {
-			record.ValidatorId = validatorId
+
+		if record.ValidatorId == pubkey {
 			record.Host = host
 			record.LastConnectedTime = time.Now()
 			UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordList)
@@ -122,11 +108,10 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(validatorId uint64, pubkey 
 		}
 	}
 
-	// The validator record is not exist, apped
+	// The validator record is not existing, append
 
 	record := ValidatorRecord{
-		ValidatorId:       validatorId,
-		PubKey:            pubkey,
+		ValidatorId:       pubkey,
 		Host:              host,
 		LastConnectedTime: time.Now(),
 	}

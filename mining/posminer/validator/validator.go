@@ -1,7 +1,6 @@
 package validator
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -35,16 +34,16 @@ type ValidatorListener interface {
 	OnValidatorListUpdated([]validatorinfo.ValidatorInfo, net.Addr)
 
 	// Get current validator list in record this peer
-	GetValidatorList(uint64) []*validatorinfo.ValidatorInfo
+	GetValidatorList() []*validatorinfo.ValidatorInfo
 
 	// Current Epoch is updated
 	OnEpochSynced(*epoch.Epoch, *epoch.Epoch, net.Addr)
 
 	// Get current epoch info in record this peer
-	GetLocalEpoch(uint64) (*epoch.Epoch, *epoch.Epoch, error)
+	GetLocalEpoch(string) (*epoch.Epoch, *epoch.Epoch, error)
 
 	// Req new epoch from remote peer
-	ReqNewEpoch(uint64, int64, uint32) (*chainhash.Hash, error)
+	ReqNewEpoch(string, int64, uint32) (*chainhash.Hash, error)
 
 	// OnNextEpoch from remote peer
 	OnNextEpoch(*epoch.HandOverEpoch)
@@ -53,10 +52,10 @@ type ValidatorListener interface {
 	OnUpdateEpoch(*epoch.Epoch)
 
 	// Current generator is updated
-	OnGeneratorUpdated(*generator.Generator, uint64)
+	OnGeneratorUpdated(*generator.Generator, string)
 
 	// New epoch command is received
-	OnNewEpoch(uint64, *chainhash.Hash)
+	OnNewEpoch(string, *chainhash.Hash)
 
 	// Current generator is updated
 	OnGeneratorHandOver(*generator.GeneratorHandOver, net.Addr)
@@ -80,22 +79,22 @@ type ValidatorListener interface {
 	OnConfirmedDelEpochMember(*epoch.DelEpochMember)
 
 	// Received a notify handover command
-	OnNotifyHandover(uint64)
+	OnNotifyHandover(string)
 
 	// Received get vc state command
-	GetVCState(uint64) (*validatorcommand.MsgVCState, error)
+	GetVCState(string) (*validatorcommand.MsgVCState, error)
 
 	// Received a vc state command
 	OnVCState(*validatorcommand.MsgVCState, *Validator)
 
 	// Received get vc list command
-	GetVCList(uint64, int64, int64) (*validatorcommand.MsgVCList, error)
+	GetVCList(string, int64, int64) (*validatorcommand.MsgVCList, error)
 
 	// Received a vc list command
 	OnVCList(*validatorcommand.MsgVCList, *Validator)
 
 	// Received get vc block command
-	GetVCBlock(uint64, uint32, chainhash.Hash) (*validatorcommand.MsgVCBlock, error)
+	GetVCBlock(string, uint32, chainhash.Hash) (*validatorcommand.MsgVCBlock, error)
 
 	// Received a vc block command
 	OnVCBlock(*validatorcommand.MsgVCBlock, *Validator)
@@ -103,8 +102,7 @@ type ValidatorListener interface {
 
 // Config is the struct to hold configuration options useful to Validator.
 type Config struct {
-	LocalValidatorId     uint64
-	LocalValidatorPubKey []byte
+	LocalValidatorId     string // pubkey
 	//RemoteValidatorId uint64 // Just remote validator id will be used
 	RemoteValidatorInfo *validatorinfo.ValidatorInfo
 	// The listener for process message from/to this validator peer
@@ -156,13 +154,11 @@ func NewValidator(config *Config, addr net.Addr) (*Validator, error) {
 	utils.Log.Tracef("NewValidator Host: %s", validator.ValidatorInfo.Host)
 	if config.RemoteValidatorInfo != nil {
 		validator.ValidatorInfo.ValidatorId = config.RemoteValidatorInfo.ValidatorId
-		validator.ValidatorInfo.PublicKey = config.RemoteValidatorInfo.PublicKey
 		validator.ValidatorInfo.CreateTime = config.RemoteValidatorInfo.CreateTime
 	}
 
 	utils.Log.Tracef("new validator info : ")
-	utils.Log.Tracef("ValidatorId: %d", validator.ValidatorInfo.ValidatorId)
-	utils.Log.Tracef("PublicKey: %x", validator.ValidatorInfo.PublicKey)
+	utils.Log.Tracef("ValidatorId: %s", validator.ValidatorInfo.ValidatorId)
 	utils.Log.Tracef("CreateTime: %s", validator.ValidatorInfo.CreateTime.Format(time.DateTime))
 	utils.Log.Tracef("Host: %s", validator.ValidatorInfo.Host)
 	utils.Log.Tracef("--------------------------------------------------")
@@ -213,14 +209,14 @@ func (v *Validator) GetValidatorAddr() net.Addr {
 	return v.peer.GetPeerAddr()
 }
 
-func (v *Validator) IsValidatorPubKey(pubkey []byte) bool {
+func (v *Validator) IsValidatorPubKey(pubkey string) bool {
 	// The address doesn't change after initialization, therefore it is not
 	// protected by a mutex.
 	if v.peer == nil {
 		return false
 	}
 
-	return bytes.Equal(v.ValidatorInfo.PublicKey[:], pubkey)
+	return v.ValidatorInfo.ValidatorId == pubkey
 }
 
 func (v *Validator) RequestAllValidatorsInfo() error {
@@ -283,7 +279,7 @@ func (v *Validator) Connect() error {
 	if !v.IsValidInfo() {
 		// Not get remote validator id
 		utils.Log.Tracef("The validator Id is invalid, will request validator info from the remote peer")
-		validatorInfo := v.GetLocalValidatorInfo(0)
+		validatorInfo := v.GetLocalValidatorInfo()
 		v.peer.RequestValidatorId(validatorInfo)
 
 		go v.checkValidatorValid()
@@ -301,7 +297,7 @@ func (v *Validator) Stop() {
 
 func (v *Validator) IsValidInfo() bool {
 
-	if v.ValidatorInfo.ValidatorId == 0 {
+	if v.ValidatorInfo.ValidatorId == "" {
 		return false
 	}
 	if v.ValidatorInfo.CreateTime.IsZero() {
@@ -331,7 +327,7 @@ exit:
 				v.Stop()
 				break exit
 			}
-			validatorInfo := v.GetLocalValidatorInfo(0)
+			validatorInfo := v.GetLocalValidatorInfo()
 			v.peer.RequestValidatorId(validatorInfo)
 		} else {
 			// Validator info is valid, will stop the check
@@ -415,7 +411,7 @@ func (v *Validator) SetLocalValidator() {
 }
 
 // This function is safe for concurrent access.
-func (v *Validator) GetValidatorId() uint64 {
+func (v *Validator) GetValidatorId() string {
 	return v.ValidatorInfo.ValidatorId
 }
 
@@ -480,18 +476,13 @@ func (v *Validator) UpdateValidatorInfo(validatorInfo *validatorinfo.ValidatorIn
 
 	utils.Log.Tracef("validator info will be updated: ")
 	utils.Log.Tracef("changeMask: %x", changeMask)
-	utils.Log.Tracef("ValidatorId: %d", validatorInfo.ValidatorId)
-	utils.Log.Tracef("PublicKey: %x", validatorInfo.PublicKey)
+	utils.Log.Tracef("ValidatorId: %s", validatorInfo.ValidatorId)
 	utils.Log.Tracef("CreateTime: %s", validatorInfo.CreateTime.Format(time.DateTime))
 	utils.Log.Tracef("Host: %s", validatorInfo.Host)
 	utils.Log.Tracef("--------------------------------------------------")
 
 	if changeMask&validatorinfo.MaskValidatorId != 0 {
 		v.ValidatorInfo.ValidatorId = validatorInfo.ValidatorId
-	}
-	if changeMask&validatorinfo.MaskPublicKey != 0 {
-		//v.ValidatorInfo.PublicKey = bytes.Clone(validatorInfo.PublicKey)
-		copy(v.ValidatorInfo.PublicKey[:], validatorInfo.PublicKey[:])
 	}
 	if changeMask&validatorinfo.MaskActivitionCount != 0 {
 		v.ValidatorInfo.ActivitionCount = validatorInfo.ActivitionCount
@@ -513,8 +504,7 @@ func (v *Validator) UpdateValidatorInfo(validatorInfo *validatorinfo.ValidatorIn
 	}
 
 	utils.Log.Tracef("validator info updated: ")
-	utils.Log.Tracef("ValidatorId: %d", v.ValidatorInfo.ValidatorId)
-	utils.Log.Tracef("PublicKey: %x", v.ValidatorInfo.PublicKey)
+	utils.Log.Tracef("ValidatorId: %s", v.ValidatorInfo.ValidatorId)
 	utils.Log.Tracef("CreateTime: %s", v.ValidatorInfo.CreateTime.Format(time.DateTime))
 	utils.Log.Tracef("Host: %s", v.ValidatorInfo.Host)
 	utils.Log.Tracef("--------------------------------------------------")
@@ -526,8 +516,7 @@ func (v *Validator) SyncVaildatorInfo(validatorInfo *validatorinfo.ValidatorInfo
 
 func (v *Validator) LogCurrentStats() {
 	// Log validator info
-	utils.Log.Tracef("validator ID: %d", v.ValidatorInfo.ValidatorId)
-	utils.Log.Tracef("validator Public: %x", v.ValidatorInfo.PublicKey[:])
+	utils.Log.Tracef("validator ID: %s", v.ValidatorInfo.ValidatorId)
 	utils.Log.Tracef("validator Host: %s", v.ValidatorInfo.Host)
 	utils.Log.Tracef("validator CreateTime: %s", v.ValidatorInfo.CreateTime.Format("2006-01-02 15:04:05"))
 
@@ -545,7 +534,7 @@ func (v *Validator) LogCurrentStats() {
 }
 
 // GetLocalValidatorInfo invoke when local validator info.
-func (v *Validator) GetLocalValidatorInfo(uint64) *validatorinfo.ValidatorInfo {
+func (v *Validator) GetLocalValidatorInfo() *validatorinfo.ValidatorInfo {
 	validatorInfo := v.Cfg.Listener.GetLocalValidatorInfo()
 
 	// utils.Log.Tracef("[Validator]GetLocalValidatorInfo")
@@ -572,7 +561,7 @@ func (v *Validator) OnGeneratorResponse(generatorInfo *generator.Generator) {
 	v.Cfg.Listener.OnGeneratorUpdated(generatorInfo, v.ValidatorInfo.ValidatorId)
 }
 
-func (v *Validator) OnNewEpoch(validatorId uint64, hash *chainhash.Hash) {
+func (v *Validator) OnNewEpoch(validatorId string, hash *chainhash.Hash) {
 	v.Cfg.Listener.OnNewEpoch(validatorId, hash)
 }
 

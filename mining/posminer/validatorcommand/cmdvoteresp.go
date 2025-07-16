@@ -19,11 +19,11 @@ const (
 )
 
 type Vote struct {
-	ValidatorId uint64 // The validator id of Vote
+	ValidatorId string // The validator id of Vote
 	VoteType    uint32 // Vote type
 	VoteId      uint32 // The vote id
 	Pass        uint32 // Pass or fail, 0 fail -- against this vote, 1 pass  -- agree this vote
-	GeneratorId uint64 // The generator id of Vote result for vote a new generator, if the vote is a new epoch, the generator id is 0
+	GeneratorId string // The generator id of Vote result for vote a new generator, if the vote is a new epoch, the generator id is 0
 	Token       string
 }
 
@@ -97,7 +97,7 @@ func (msg *MsgVoteResp) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgVoteResp) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgVoteResp:")
-	utils.Log.Tracef("ValidatorId: %d", msg.VoteInfo.ValidatorId)
+	utils.Log.Tracef("ValidatorId: %s", msg.VoteInfo.ValidatorId)
 	voteType := "Unknown type"
 	if msg.VoteInfo.VoteType == VoteType_NewGenerator {
 		voteType = "New Generator"
@@ -108,7 +108,7 @@ func (msg *MsgVoteResp) LogCommandInfo() {
 	utils.Log.Tracef("VoteType: %s", voteType)
 	utils.Log.Tracef("VoteId: %d", msg.VoteInfo.VoteId)
 	utils.Log.Tracef("Pass: %d", msg.VoteInfo.Pass)
-	utils.Log.Tracef("GeneratorId: %d", msg.VoteInfo.GeneratorId)
+	utils.Log.Tracef("GeneratorId: %s", msg.VoteInfo.GeneratorId)
 }
 
 // NewMsgVoteResp returns a new bitcoin version message that conforms to the

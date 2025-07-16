@@ -5,6 +5,7 @@
 package posminer
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -108,9 +109,6 @@ type Config struct {
 	// not current since any solved blocks would be on a side chain and and
 	// up orphaned anyways.
 	IsCurrent func() bool
-
-	// ValidatorId is the validator id for this node
-	ValidatorId uint64
 }
 
 // POSMiner provides facilities for solving blocks (mining) using the POS in
@@ -504,8 +502,7 @@ func (m *POSMiner) Start() {
 		Peers:           m.cfg.Peers,
 		Dial:            m.cfg.Dial,
 		Lookup:          m.cfg.Lookup,
-		ValidatorId:     m.cfg.ValidatorId,
-		ValidatorPubKey: m.cfg.MiningPubKey,
+		ValidatorId:     hex.EncodeToString(m.cfg.MiningPubKey),
 		BtcdDir:         m.cfg.BtcdDir,
 		PosMiner:        m,
 	}

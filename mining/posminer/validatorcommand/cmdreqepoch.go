@@ -18,7 +18,7 @@ import (
 // message (MsgGenerator).
 type MsgReqEpoch struct {
 	// Request validator id
-	ValidatorId uint64
+	ValidatorId string
 	EpochIndex  int64
 	Reason      uint32
 }
@@ -71,7 +71,7 @@ func (msg *MsgReqEpoch) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgReqEpoch) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgReqEpoch:")
-	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
+	utils.Log.Tracef("ValidatorId: %s", msg.ValidatorId)
 	utils.Log.Tracef("EpochIndex: %d", msg.EpochIndex)
 	utils.Log.Tracef("Reason: %d", msg.Reason)
 }
@@ -79,7 +79,7 @@ func (msg *MsgReqEpoch) LogCommandInfo() {
 // NewMsgReqEpoch returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgReqEpoch(validatorId uint64, epochIndex int64, reason uint32) *MsgReqEpoch {
+func NewMsgReqEpoch(validatorId string, epochIndex int64, reason uint32) *MsgReqEpoch {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.

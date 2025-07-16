@@ -18,7 +18,7 @@ import (
 // message (MsgGenerator).
 type MsgNotifyHandover struct {
 	// Request validator id
-	ValidatorId uint64
+	ValidatorId string
 }
 
 // BtcDecode decodes r using the bitcoin protocol encoding into the receiver.
@@ -75,7 +75,7 @@ func (msg *MsgNotifyHandover) LogCommandInfo() {
 // NewMsgNotifyHandover returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgNotifyHandover(validatorId uint64) *MsgNotifyHandover {
+func NewMsgNotifyHandover(validatorId string) *MsgNotifyHandover {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.

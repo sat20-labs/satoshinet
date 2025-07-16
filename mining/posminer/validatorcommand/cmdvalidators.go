@@ -64,10 +64,6 @@ func (msg *MsgValidators) BtcDecode(r io.Reader, pver uint32) error {
 		if err != nil {
 			return err
 		}
-		err = utils.ReadElements(buf, &validator.PublicKey)
-		if err != nil {
-			return err
-		}
 		err = utils.ReadElements(buf, (*utils.Int64Time)(&validator.CreateTime))
 		if err != nil {
 			return err
@@ -126,10 +122,6 @@ func (msg *MsgValidators) BtcEncode(w io.Writer, pver uint32) error {
 			return err
 		}
 
-		err = utils.WriteElements(w, validator.PublicKey)
-		if err != nil {
-			return err
-		}
 		err = utils.WriteElements(w, validator.CreateTime.Unix())
 		if err != nil {
 			return err
@@ -179,9 +171,8 @@ func (msg *MsgValidators) LogCommandInfo() {
 	for index, validator := range msg.Validators {
 		utils.Log.Tracef("---------------------------------------------")
 		utils.Log.Tracef("No: %d", index)
-		utils.Log.Tracef("Validator Id: %d", validator.ValidatorId)
+		utils.Log.Tracef("Validator Id: %s", validator.ValidatorId)
 		utils.Log.Tracef("Validator Host: %s", validator.Host)
-		utils.Log.Tracef("Validator PublicKey: %x", validator.PublicKey)
 		utils.Log.Tracef("Validator CreateTime: %s", validator.CreateTime.Format("2006-01-02 15:04:05"))
 		utils.Log.Tracef("Validator ActivitionCount: %d", validator.ActivitionCount)
 		utils.Log.Tracef("Validator GeneratorCount: %d", validator.GeneratorCount)
@@ -208,7 +199,6 @@ func NewMsgValidators(validatorList []*validatorinfo.ValidatorInfo) *MsgValidato
 		validatorItem := validatorinfo.ValidatorInfo{
 			ValidatorId:     validator.ValidatorId,
 			Host:            validator.Host,
-			PublicKey:       validator.PublicKey,
 			CreateTime:      validator.CreateTime,
 			ActivitionCount: validator.ActivitionCount,
 			GeneratorCount:  validator.GeneratorCount,

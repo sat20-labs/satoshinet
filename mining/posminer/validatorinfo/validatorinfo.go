@@ -4,13 +4,11 @@ import (
 	"net"
 	"time"
 
-	"github.com/sat20-labs/satoshinet/btcec"
 )
 
 type ValidatorInfo struct {
 	Host            string
-	ValidatorId     uint64
-	PublicKey       [btcec.PubKeyBytesLenCompressed]byte
+	ValidatorId     string // hex.EncodeToString
 	CreateTime      time.Time
 	ActivitionCount int32
 	GeneratorCount  int32
@@ -23,15 +21,14 @@ type ValidatorInfoMask uint64
 
 const (
 	MaskValidatorId     ValidatorInfoMask = 1 << 0
-	MaskPublicKey       ValidatorInfoMask = 1 << 1
-	MaskActivitionCount ValidatorInfoMask = 1 << 2
-	MaskGeneratorCount  ValidatorInfoMask = 1 << 3
-	MaskDiscountCount   ValidatorInfoMask = 1 << 4
-	MaskFaultCount      ValidatorInfoMask = 1 << 5
-	MaskCreateTime      ValidatorInfoMask = 1 << 6
-	MaskHost            ValidatorInfoMask = 1 << 7
+	MaskActivitionCount ValidatorInfoMask = 1 << 1
+	MaskGeneratorCount  ValidatorInfoMask = 1 << 2
+	MaskDiscountCount   ValidatorInfoMask = 1 << 3
+	MaskFaultCount      ValidatorInfoMask = 1 << 4
+	MaskCreateTime      ValidatorInfoMask = 1 << 5
+	MaskHost            ValidatorInfoMask = 1 << 6
 
-	MaskAll ValidatorInfoMask = MaskValidatorId | MaskPublicKey | MaskActivitionCount | MaskGeneratorCount | MaskDiscountCount | MaskFaultCount | MaskCreateTime
+	MaskAll ValidatorInfoMask = MaskValidatorId | MaskActivitionCount | MaskGeneratorCount | MaskDiscountCount | MaskFaultCount | MaskCreateTime
 )
 
 func GetAddrStringHost(addr string) string {

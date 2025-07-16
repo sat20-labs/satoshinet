@@ -31,6 +31,10 @@ func IsMinerNode(pubKey []byte) bool {
 	return indexer.ShareIndexer.IsMinerNode(hex.EncodeToString(pubKey))
 }
 
-func CheckValidator(pubKey []byte) bool {
-	return IsMinerNode(pubKey)
+func CheckValidator(pubKey string) bool {
+	pk, err := hex.DecodeString(pubKey)
+	if err != nil {
+		return false
+	}
+	return IsMinerNode(pk)
 }

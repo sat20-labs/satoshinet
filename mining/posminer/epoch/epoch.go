@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/mining/posminer/generator"
@@ -22,9 +21,8 @@ const (
 )
 
 type EpochItem struct {
-	ValidatorId uint64
+	ValidatorId string // == PublicKey
 	Host        string
-	PublicKey   [btcec.PubKeyBytesLenCompressed]byte
 	Index       uint32 // 第一次生成是确定的，后续不会改变， 当Epoch的Validators有改变（下线）时，保证EpochItem的Index不发生改变
 }
 
@@ -44,8 +42,7 @@ type Epoch struct {
 type NewEpochVote struct {
 	NewEpoch  *Epoch
 	Reason    uint32
-	VotorId   uint64
-	PublicKey [btcec.PubKeyBytesLenCompressed]byte
+	VotorId   string // pubkey
 	Token     string
 	Hash      *chainhash.Hash // epoch block hash
 }
@@ -80,7 +77,6 @@ func (e *Epoch) AddValidatorToEpoch(validatorInfo *validatorinfo.ValidatorInfo) 
 			e.ItemList[i] = &EpochItem{
 				ValidatorId: validatorInfo.ValidatorId,
 				Host:        validatorInfo.Host,
-				PublicKey:   validatorInfo.PublicKey,
 			}
 			return nil
 		}
@@ -90,14 +86,13 @@ func (e *Epoch) AddValidatorToEpoch(validatorInfo *validatorinfo.ValidatorInfo) 
 	epochItem := &EpochItem{
 		ValidatorId: validatorInfo.ValidatorId,
 		Host:        validatorInfo.Host,
-		PublicKey:   validatorInfo.PublicKey,
 	}
 	e.ItemList = append(e.ItemList, epochItem)
 
 	utils.Log.Tracef("Add validator (%s:%d) to epoch", validatorInfo.Host, validatorInfo.ValidatorId)
 	return nil
 }
-func (e *Epoch) IsExist(validatorId uint64) bool {
+func (e *Epoch) IsExist(validatorId string) bool {
 	for _, validatorInfo := range e.ItemList {
 		if validatorInfo.ValidatorId == validatorId {
 			// The validator is already in e.ValidatorList
@@ -108,18 +103,13 @@ func (e *Epoch) IsExist(validatorId uint64) bool {
 }
 
 func (e *Epoch) IsValidEpochValidator(validatorInfo *validatorinfo.ValidatorInfo) bool {
-	if validatorInfo.ValidatorId == 0 {
+	if validatorInfo.ValidatorId == "" {
 		// Should be a valid validator id
 		return false
 	}
 
 	if validatorInfo.CreateTime.IsZero() {
 		// Should be a valid create time
-		return false
-	}
-
-	if validatorInfo.PublicKey == [btcec.PubKeyBytesLenCompressed]byte{} {
-		// Should be a valid public key
 		return false
 	}
 
@@ -131,7 +121,7 @@ func (e *Epoch) IsValidEpochValidator(validatorInfo *validatorinfo.ValidatorInfo
 	return true
 }
 
-func (e *Epoch) DelEpochMember(validatorId uint64) error {
+func (e *Epoch) DelEpochMember(validatorId string) error {
 	for i := 0; i < len(e.ItemList); i++ {
 		if e.ItemList[i].ValidatorId == validatorId {
 			// The validator is found, remove it
@@ -165,9 +155,9 @@ func (e *Epoch) GetMemberCount() int32 {
 	return int32(len(e.ItemList))
 }
 
-func (e *Epoch) GetMemberValidatorId(pos int32) uint64 {
+func (e *Epoch) GetMemberValidatorId(pos int32) string {
 	if pos < 0 || pos >= int32(len(e.ItemList)) {
-		return uint64(0)
+		return ""
 	}
 	return e.ItemList[pos].ValidatorId
 }
@@ -275,7 +265,7 @@ func (e *Epoch) GetNextValidator() *EpochItem {
 	return e.ItemList[nextPos]
 }
 
-func (e *Epoch) GetValidatorPos(validatorId uint64) int32 {
+func (e *Epoch) GetValidatorPos(validatorId string) int32 {
 	for i := 0; i < len(e.ItemList); i++ {
 		if e.ItemList[i].ValidatorId == validatorId {
 			// The validator is found, remove it
@@ -285,9 +275,9 @@ func (e *Epoch) GetValidatorPos(validatorId uint64) int32 {
 
 	return -1
 }
-func (e *Epoch) GetLastEpochMemberId() uint64 {
+func (e *Epoch) GetLastEpochMemberId() string {
 	if len(e.ItemList) == 0 {
-		return 0
+		return ""
 	}
 	return e.ItemList[len(e.ItemList)-1].ValidatorId
 }
@@ -329,8 +319,7 @@ func (nev *NewEpochVote) Encode(w io.Writer) error {
 	}
 	for _, item := range nev.NewEpoch.ItemList {
 		err := utils.WriteElements(w,
-			item.ValidatorId,
-			item.PublicKey)
+			item.ValidatorId)
 		if err != nil {
 			return err
 		}

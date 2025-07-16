@@ -17,7 +17,7 @@ import (
 // The remote peer must then respond validators message.
 type MsgGetValidators struct {
 	// Current validator id
-	ValidatorId uint64
+	ValidatorId string
 }
 
 // BtcDecode decodes r using the bitcoin protocol encoding into the receiver.
@@ -68,13 +68,13 @@ func (msg *MsgGetValidators) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgGetValidators) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgGetValidators:")
-	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
+	utils.Log.Tracef("ValidatorId: %s", msg.ValidatorId)
 }
 
 // NewMsgGetValidators returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgGetValidators(validatorId uint64) *MsgGetValidators {
+func NewMsgGetValidators(validatorId string) *MsgGetValidators {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.

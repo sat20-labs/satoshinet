@@ -45,10 +45,10 @@ type RemotePeerInterface interface {
 	OnGeneratorResponse(generatorInfo *generator.Generator)
 
 	// New epoch command is received
-	OnNewEpoch(validatorId uint64, hash *chainhash.Hash)
+	OnNewEpoch(validatorId string, hash *chainhash.Hash)
 
 	// GetLocalValidatorInfo invoke when local validator info.
-	GetLocalValidatorInfo(uint64) *validatorinfo.ValidatorInfo
+	GetLocalValidatorInfo() *validatorinfo.ValidatorInfo
 
 	// Notify when del epoch member is confirmed
 	OnConfirmedDelEpochMember(delEpochMember *epoch.DelEpochMember)
@@ -104,8 +104,8 @@ type RemotePeerConfig struct {
 	Dial   func(net.Addr) (net.Conn, error)
 	Lookup func(string) ([]net.IP, error)
 
-	LocalValidatorId  uint64 // local validator id
-	RemoteValidatorId uint64 // remote validator id
+	LocalValidatorId  string // local validator id
+	RemoteValidatorId string // remote validator id
 
 }
 
@@ -718,7 +718,7 @@ func (p *RemotePeer) handleCommand(connReq *ConnReq, command validatorcommand.Me
 		utils.Log.Tracef("----------[RemotePeer]Receive MsgGetInfo command, will response MsgPeerInfo command")
 		//cmd.LogCommandInfo()
 		// Handle command ping, it will response "PeerInfo" message
-		validatorInfo := p.cfg.RemoteValidatorListener.GetLocalValidatorInfo(p.cfg.RemoteValidatorId)
+		validatorInfo := p.cfg.RemoteValidatorListener.GetLocalValidatorInfo()
 		cmdPeerInfo := validatorcommand.NewMsgPeerInfo(validatorInfo)
 		connReq.SendCommand(cmdPeerInfo)
 
@@ -820,7 +820,7 @@ func (p *RemotePeer) handlePongMsg(msg *validatorcommand.MsgPong, connReq *ConnR
 func (p *RemotePeer) HandleRemotePeerInfo(peerInfo *validatorcommand.MsgPeerInfo, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
 
-	if !bootstrapnode.CheckValidator(peerInfo.PublicKey[:]) {
+	if !bootstrapnode.CheckValidator(peerInfo.ValidatorId) {
 		utils.Log.Errorf("----------[RemotePeer]The remote peer is not valid")
 		return
 	}
@@ -830,16 +830,15 @@ func (p *RemotePeer) HandleRemotePeerInfo(peerInfo *validatorcommand.MsgPeerInfo
 
 	validatorInfo := validatorinfo.ValidatorInfo{
 		ValidatorId: peerInfo.ValidatorId,
-		PublicKey:   peerInfo.PublicKey,
 		CreateTime:  peerInfo.CreateTime,
 	}
-	p.cfg.RemoteValidatorListener.OnValidatorInfoUpdated(&validatorInfo, validatorinfo.MaskValidatorId|validatorinfo.MaskPublicKey|validatorinfo.MaskCreateTime)
+	p.cfg.RemoteValidatorListener.OnValidatorInfoUpdated(&validatorInfo, validatorinfo.MaskValidatorId|validatorinfo.MaskCreateTime)
 }
 
 func (p *RemotePeer) HandleRemoteGetInfo(getInfo *validatorcommand.MsgGetInfo, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
 
-	if !bootstrapnode.CheckValidator(getInfo.PublicKey[:]) {
+	if !bootstrapnode.CheckValidator(getInfo.ValidatorId) {
 		utils.Log.Errorf("----------[RemotePeer]The remote peer is not valid")
 		return
 	}
@@ -850,10 +849,9 @@ func (p *RemotePeer) HandleRemoteGetInfo(getInfo *validatorcommand.MsgGetInfo, c
 
 	validatorInfo := validatorinfo.ValidatorInfo{
 		ValidatorId: getInfo.ValidatorId,
-		PublicKey:   getInfo.PublicKey,
 		CreateTime:  getInfo.CreateTime,
 	}
-	p.cfg.RemoteValidatorListener.OnValidatorInfoUpdated(&validatorInfo, validatorinfo.MaskValidatorId|validatorinfo.MaskPublicKey|validatorinfo.MaskCreateTime)
+	p.cfg.RemoteValidatorListener.OnValidatorInfoUpdated(&validatorInfo, validatorinfo.MaskValidatorId|validatorinfo.MaskCreateTime)
 }
 
 func (p *RemotePeer) HandleValidatorsResponse(validatorsCmd *validatorcommand.MsgValidators, connReq *ConnReq) {

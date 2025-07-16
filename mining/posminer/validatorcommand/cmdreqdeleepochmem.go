@@ -23,9 +23,9 @@ const (
 // message (MsgGenerator).
 type MsgReqDelEpochMember struct {
 	// Request validator id
-	ValidatorId    uint64
+	ValidatorId    string
 	Target         uint32
-	DelValidatorId uint64 // The validator id to be deleted
+	DelValidatorId string // The validator id to be deleted
 	DelCode        uint32 // The reason code for delete epoch member
 	EpochIndex     int64  // The epoch index for confirm epoch member delete
 }
@@ -78,8 +78,8 @@ func (msg *MsgReqDelEpochMember) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgReqDelEpochMember) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgReqDelEpochMember:")
-	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
-	utils.Log.Tracef("DelValidatorId: %d", msg.DelValidatorId)
+	utils.Log.Tracef("ValidatorId: %s", msg.ValidatorId)
+	utils.Log.Tracef("DelValidatorId: %s", msg.DelValidatorId)
 	utils.Log.Tracef("DelCode: %d", msg.DelCode)
 	utils.Log.Tracef("EpochIndex: %d", msg.EpochIndex)
 }
@@ -87,7 +87,7 @@ func (msg *MsgReqDelEpochMember) LogCommandInfo() {
 // NewMsgReqDelEpochMember returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgReqDelEpochMember(validatorId uint64, target uint32, delValidatorId uint64, delCode uint32, epochIndex int64) *MsgReqDelEpochMember {
+func NewMsgReqDelEpochMember(validatorId string, target uint32, delValidatorId string, delCode uint32, epochIndex int64) *MsgReqDelEpochMember {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.

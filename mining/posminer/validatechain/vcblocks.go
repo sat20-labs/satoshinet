@@ -5,7 +5,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/mining/posminer/epoch"
 	"github.com/sat20-labs/satoshinet/mining/posminer/generator"
@@ -42,21 +41,19 @@ type VCBlockHeader struct {
 }
 
 type EpochVoteItem struct {
-	ValidatorId uint64         // 用户ID
+	ValidatorId string         // 用户ID
 	Hash        chainhash.Hash // 投票的块Hash epBlockHash
 }
 
 type EpochDelConfirmItem struct {
-	ValidatorId uint64                               // 用户ID
-	PublicKey   [btcec.PubKeyBytesLenCompressed]byte // 用户公钥
+	ValidatorId string                               // 用户ID
 	Result      uint32                               // 用户确认的结果
 	Token       string                               // 投票的Token
 }
 
 // Epoch创建：
 type DataNewEpoch struct {
-	CreatorId     uint64                               // 创建者ID
-	PublicKey     [btcec.PubKeyBytesLenCompressed]byte // 创建者公钥
+	CreatorId     string                               // 创建者ID
 	EpochIndex    int64                                // Epoch Index
 	CreateTime    int64                                // 创建时间
 	Reason        uint32                               // 发起原因（Epoch创立，Epoch轮换，当前Epoch停摆）
@@ -66,8 +63,7 @@ type DataNewEpoch struct {
 
 // Epoch删除成员：
 type DataEpochDelMember struct {
-	RequestId           uint64                               // 请求者ID
-	PublicKey           [btcec.PubKeyBytesLenCompressed]byte // 请求者公钥
+	RequestId           string                               // 请求者ID
 	EpochIndex          int64                                // Epoch Index
 	CreateTime          int64                                // 请求时间
 	Reason              uint32                               // Epoch 删除只有一个原因， 成员离线
@@ -77,8 +73,7 @@ type DataEpochDelMember struct {
 
 // Epoch更新：
 type DataUpdateEpoch struct {
-	UpdatedId     uint64                               // 更新者ID
-	PublicKey     [btcec.PubKeyBytesLenCompressed]byte // 更新者公钥
+	UpdatedId     string                               // 更新者ID
 	EpochIndex    int64                                // Epoch Index
 	CreateTime    int64                                // 创建时间
 	Reason        uint32                               // 更新原因（Epoch转正，成员删除，generator更新）
@@ -89,8 +84,7 @@ type DataUpdateEpoch struct {
 
 // Generator流转
 type DataGeneratorHandOver struct {
-	ValidatorId     uint64                               // 进行Generator流转的validator Id
-	PublicKey       [btcec.PubKeyBytesLenCompressed]byte // generator的公钥
+	ValidatorId     string                               // 进行Generator流转的validator Id
 	HandOverType    int32                                // HandOverType: 0: HandOver by current generator with Epoch member Order, 1: Vote by Epoch member
 	Timestamp       int64                                //  generator流转的时间
 	NextGeneratorId uint64                               // 下一个Generator的ID
@@ -100,8 +94,7 @@ type DataGeneratorHandOver struct {
 
 // Generator出块
 type DataMinerNewBlock struct {
-	GeneratorId   uint64                               // 当前Generator的Id
-	PublicKey     [btcec.PubKeyBytesLenCompressed]byte // generator的公钥
+	GeneratorId   string                               // 当前Generator的Id
 	Timestamp     int64                                // generator出块的时间
 	SatsnetHeight int32                                // Satsnet出块的高度
 	Hash          chainhash.Hash                       // 出块的Satsnet块Hash
@@ -336,7 +329,6 @@ func (ne *DataNewEpoch) Encode(w io.Writer) error {
 	// Encode New epoch data.
 	err := utils.WriteElements(w,
 		ne.CreatorId,
-		ne.PublicKey,
 		ne.EpochIndex,
 		ne.CreateTime,
 		ne.Reason)
@@ -351,8 +343,7 @@ func (ne *DataNewEpoch) Encode(w io.Writer) error {
 	}
 	for _, item := range ne.EpochItemList {
 		err := utils.WriteElements(w,
-			item.ValidatorId,
-			item.PublicKey)
+			item.ValidatorId)
 		if err != nil {
 			return err
 		}
@@ -379,7 +370,6 @@ func (ne *DataNewEpoch) Decode(r io.Reader) error {
 	// Encode New epoch data.
 	err := utils.ReadElements(r,
 		&ne.CreatorId,
-		&ne.PublicKey,
 		&ne.EpochIndex,
 		&ne.CreateTime,
 		&ne.Reason)
@@ -396,8 +386,7 @@ func (ne *DataNewEpoch) Decode(r io.Reader) error {
 	for i := 0; i < int(count); i++ {
 		item := epoch.EpochItem{}
 		err := utils.ReadElements(r,
-			&item.ValidatorId,
-			&item.PublicKey)
+			&item.ValidatorId)
 		if err != nil {
 			return err
 		}
@@ -438,7 +427,6 @@ func (ue *DataUpdateEpoch) Encode(w io.Writer) error {
 	// Encode update epoch data.
 	err := utils.WriteElements(w,
 		ue.UpdatedId,
-		ue.PublicKey,
 		ue.EpochIndex,
 		ue.CreateTime,
 		ue.Reason)
@@ -453,8 +441,7 @@ func (ue *DataUpdateEpoch) Encode(w io.Writer) error {
 	}
 	for _, item := range ue.EpochItemList {
 		err := utils.WriteElements(w,
-			item.ValidatorId,
-			item.PublicKey)
+			item.ValidatorId)
 		if err != nil {
 			return err
 		}
@@ -498,7 +485,6 @@ func (ue *DataUpdateEpoch) Decode(r io.Reader) error {
 	// Encode New epoch data.
 	err := utils.ReadElements(r,
 		&ue.UpdatedId,
-		&ue.PublicKey,
 		&ue.EpochIndex,
 		&ue.CreateTime,
 		&ue.Reason)
@@ -515,8 +501,7 @@ func (ue *DataUpdateEpoch) Decode(r io.Reader) error {
 	for i := 0; i < int(count); i++ {
 		item := epoch.EpochItem{}
 		err := utils.ReadElements(r,
-			&item.ValidatorId,
-			&item.PublicKey)
+			&item.ValidatorId)
 		if err != nil {
 			return err
 		}
@@ -563,7 +548,6 @@ func (edm *DataEpochDelMember) Encode(w io.Writer) error {
 	// Encode update epoch data.
 	err := utils.WriteElements(w,
 		edm.RequestId,
-		edm.PublicKey,
 		edm.EpochIndex,
 		edm.CreateTime,
 		edm.Reason)
@@ -578,8 +562,7 @@ func (edm *DataEpochDelMember) Encode(w io.Writer) error {
 	}
 	for _, item := range edm.EpochItemList {
 		err := utils.WriteElements(w,
-			item.ValidatorId,
-			item.PublicKey)
+			item.ValidatorId)
 		if err != nil {
 			return err
 		}
@@ -593,7 +576,6 @@ func (edm *DataEpochDelMember) Encode(w io.Writer) error {
 	for _, item := range edm.EpochDelConfirmList {
 		err := utils.WriteElements(w,
 			item.ValidatorId,
-			item.PublicKey,
 			item.Result,
 			item.Token)
 		if err != nil {
@@ -607,7 +589,6 @@ func (edm *DataEpochDelMember) Decode(r io.Reader) error {
 	// Encode New epoch data.
 	err := utils.ReadElements(r,
 		&edm.RequestId,
-		&edm.PublicKey,
 		&edm.EpochIndex,
 		&edm.CreateTime,
 		&edm.Reason)
@@ -624,8 +605,7 @@ func (edm *DataEpochDelMember) Decode(r io.Reader) error {
 	for i := 0; i < int(count); i++ {
 		item := epoch.EpochItem{}
 		err := utils.ReadElements(r,
-			&item.ValidatorId,
-			&item.PublicKey)
+			&item.ValidatorId)
 		if err != nil {
 			return err
 		}
@@ -642,7 +622,6 @@ func (edm *DataEpochDelMember) Decode(r io.Reader) error {
 		item := EpochDelConfirmItem{}
 		err := utils.ReadElements(r,
 			&item.ValidatorId,
-			&item.PublicKey,
 			&item.Result,
 			&item.Token)
 		if err != nil {
@@ -671,7 +650,6 @@ func (gh *DataGeneratorHandOver) Encode(w io.Writer) error {
 	// Encode New epoch data.
 	err := utils.WriteElements(w,
 		gh.ValidatorId,
-		gh.PublicKey,
 		gh.HandOverType,
 		gh.Timestamp,
 		gh.NextGeneratorId,
@@ -687,7 +665,6 @@ func (gh *DataGeneratorHandOver) Decode(r io.Reader) error {
 	// Encode New epoch data.
 	err := utils.ReadElements(r,
 		&gh.ValidatorId,
-		&gh.PublicKey,
 		&gh.HandOverType,
 		&gh.Timestamp,
 		&gh.NextGeneratorId,
@@ -714,7 +691,6 @@ func (nb *DataMinerNewBlock) Encode(w io.Writer) error {
 	// Encode New epoch data.
 	err := utils.WriteElements(w,
 		nb.GeneratorId,
-		nb.PublicKey,
 		nb.Timestamp,
 		nb.SatsnetHeight,
 		nb.Hash,
@@ -729,7 +705,6 @@ func (nb *DataMinerNewBlock) Decode(r io.Reader) error {
 	// Encode New epoch data.
 	err := utils.ReadElements(r,
 		&nb.GeneratorId,
-		&nb.PublicKey,
 		&nb.Timestamp,
 		&nb.SatsnetHeight,
 		&nb.Hash,

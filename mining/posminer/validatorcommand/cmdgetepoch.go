@@ -18,7 +18,7 @@ import (
 // message (MsgGenerator).
 type MsgGetEpoch struct {
 	// Request validator id
-	ValidatorId uint64
+	ValidatorId string
 }
 
 // BtcDecode decodes r using the bitcoin protocol encoding into the receiver.
@@ -69,13 +69,13 @@ func (msg *MsgGetEpoch) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgGetEpoch) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgGetEpoch:")
-	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
+	utils.Log.Tracef("ValidatorId: %s", msg.ValidatorId)
 }
 
 // NewMsgGetEpoch returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgGetEpoch(validatorId uint64) *MsgGetEpoch {
+func NewMsgGetEpoch(validatorId string) *MsgGetEpoch {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.

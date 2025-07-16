@@ -5,7 +5,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/mining/posminer/epoch"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
@@ -19,8 +18,7 @@ type EPBlockHeader struct {
 
 // EpochVote Data
 type DataEpochVote struct {
-	VotorId       uint64                               // 投票者ID
-	PublicKey     [btcec.PubKeyBytesLenCompressed]byte // 投票者公钥
+	VotorId       string                               // 投票者ID
 	EpochIndex    int64                                // 要投票Epoch Index
 	CreateTime    int64                                // 要投票的Epoch创建时间
 	Reason        uint32                               // 要投票的Epoch发起原因（Epoch创立，Epoch轮换，当前Epoch停摆）
@@ -168,7 +166,6 @@ func (ev *DataEpochVote) Encode(w io.Writer) error {
 	// Encode New epoch data.
 	err := utils.WriteElements(w,
 		ev.VotorId,
-		ev.PublicKey,
 		ev.EpochIndex,
 		ev.CreateTime,
 		ev.Reason)
@@ -184,7 +181,6 @@ func (ev *DataEpochVote) Encode(w io.Writer) error {
 	for _, item := range ev.EpochItemList {
 		err := utils.WriteElements(w,
 			item.ValidatorId,
-			item.PublicKey,
 			item.Host)
 		if err != nil {
 			return err
@@ -204,7 +200,6 @@ func (ev *DataEpochVote) Decode(r io.Reader) error {
 	// Encode New epoch data.
 	err := utils.ReadElements(r,
 		&ev.VotorId,
-		&ev.PublicKey,
 		&ev.EpochIndex,
 		&ev.CreateTime,
 		&ev.Reason)
@@ -222,7 +217,6 @@ func (ev *DataEpochVote) Decode(r io.Reader) error {
 		item := epoch.EpochItem{}
 		err := utils.ReadElements(r,
 			&item.ValidatorId,
-			&item.PublicKey,
 			&item.Host)
 		if err != nil {
 			return err

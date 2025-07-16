@@ -34,19 +34,19 @@ type LocalPeerInterface interface {
 	OnPeerConnected(net.Addr, *validatorinfo.ValidatorInfo)
 
 	// GetAllValidators invoke when get all validators.
-	GetAllValidators(uint64) []*validatorinfo.ValidatorInfo
+	GetAllValidators(string) []*validatorinfo.ValidatorInfo
 
 	// GetLocalValidatorInfo invoke when local validator info.
-	GetLocalValidatorInfo(uint64) *validatorinfo.ValidatorInfo
+	GetLocalValidatorInfo() *validatorinfo.ValidatorInfo
 
 	// received broadcast for validators declare
 	OnAllValidatorsDeclare([]validatorinfo.ValidatorInfo, net.Addr)
 
 	// GetEpoch from local peer
-	GetLocalEpoch(uint64) (*epoch.Epoch, *epoch.Epoch, error)
+	GetLocalEpoch(string) (*epoch.Epoch, *epoch.Epoch, error)
 
 	// Req new epoch from remote peer
-	ReqNewEpoch(uint64, int64, uint32) (*chainhash.Hash, error)
+	ReqNewEpoch(string, int64, uint32) (*chainhash.Hash, error)
 
 	// OnNextEpoch from local peer to manager to change epoch to next
 	OnNextEpoch(*epoch.HandOverEpoch)
@@ -55,7 +55,7 @@ type LocalPeerInterface interface {
 	OnUpdateEpoch(*epoch.Epoch)
 
 	// GetGenerator from local peer
-	GetGenerator(uint64) *generator.Generator
+	GetGenerator(string) *generator.Generator
 
 	// received broadcast for validators declare
 	OnHandOverGenerator(generator.GeneratorHandOver, net.Addr)
@@ -70,16 +70,16 @@ type LocalPeerInterface interface {
 	ConfirmDelEpochMember(*validatorcommand.MsgReqDelEpochMember, net.Addr) *epoch.DelEpochMember
 
 	// Received a notify handover command
-	OnNotifyHandover(uint64, net.Addr)
+	OnNotifyHandover(string, net.Addr)
 
 	// Received get vc state command
-	GetVCState(uint64) (*validatorcommand.MsgVCState, error)
+	GetVCState(string) (*validatorcommand.MsgVCState, error)
 
 	// Received get vc list command
-	GetVCList(uint64, int64, int64) (*validatorcommand.MsgVCList, error)
+	GetVCList(string, int64, int64) (*validatorcommand.MsgVCList, error)
 
 	// Received get vc block command
-	GetVCBlock(uint64, uint32, chainhash.Hash) (*validatorcommand.MsgVCBlock, error)
+	GetVCBlock(string, uint32, chainhash.Hash) (*validatorcommand.MsgVCBlock, error)
 
 	// Received a vc block command
 	OnVCBlock(*validatorcommand.MsgVCBlock, net.Addr)
@@ -123,7 +123,7 @@ type LocalPeerConfig struct {
 	Dial   func(net.Addr) (net.Conn, error)
 	Lookup func(string) ([]net.IP, error)
 
-	ValidatorId uint64 // local validator id
+	ValidatorId string // local validator id
 }
 
 // NOTE: The overall data flow of a peer is split into 3 goroutines.  Inbound
@@ -589,7 +589,7 @@ func (p *LocalPeer) handleCommand(connReq *ConnReq, command validatorcommand.Mes
 		utils.Log.Tracef("----------[LocalPeer]Receive MsgGetInfo command, will response MsgPeerInfo command")
 		//cmd.LogCommandInfo()
 
-		validatorInfo := p.cfg.LocalValidator.GetLocalValidatorInfo(0)
+		validatorInfo := p.cfg.LocalValidator.GetLocalValidatorInfo()
 		// Handle command ping, it will response "PeerInfo" message
 		cmdPeerInfo := validatorcommand.NewMsgPeerInfo(validatorInfo)
 		connReq.SendCommand(cmdPeerInfo)
@@ -786,7 +786,7 @@ func (p *LocalPeer) logCurrentConn() {
 
 func (p *LocalPeer) SendGetInfoCommand(newConnReq *ConnReq) *validatorcommand.MsgGetInfo {
 
-	validatorInfo := p.cfg.LocalValidator.GetLocalValidatorInfo(0)
+	validatorInfo := p.cfg.LocalValidator.GetLocalValidatorInfo()
 	getInfoCmd := validatorcommand.NewMsgGetInfo(validatorInfo)
 	//utils.Log.Tracef("----------[LocalPeer]Will Send GetInfoCommand")
 	//getInfoCmd.LogCommandInfo()
@@ -797,7 +797,7 @@ func (p *LocalPeer) SendGetInfoCommand(newConnReq *ConnReq) *validatorcommand.Ms
 func (p *LocalPeer) HandleRemotePeerInfoConfirmed(peerInfo *validatorcommand.MsgPeerInfo, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
 
-	if !bootstrapnode.CheckValidator(peerInfo.PublicKey[:]) {
+	if !bootstrapnode.CheckValidator(peerInfo.ValidatorId) {
 		utils.Log.Errorf("----------[LocalPeer]The remote peer is not valid")
 		return
 	}
@@ -806,7 +806,6 @@ func (p *LocalPeer) HandleRemotePeerInfoConfirmed(peerInfo *validatorcommand.Msg
 	if p.cfg.LocalValidator != nil {
 		validatorInfo := &validatorinfo.ValidatorInfo{
 			ValidatorId: peerInfo.ValidatorId,
-			PublicKey:   peerInfo.PublicKey,
 			Host:        peerInfo.Host,
 			CreateTime:  peerInfo.CreateTime,
 		}
@@ -910,7 +909,6 @@ func (p *LocalPeer) HandleConfirmEpoch(confirmEpochCmd *validatorcommand.MsgConf
 		validatorItem := &epoch.EpochItem{
 			ValidatorId: epochItem.ValidatorId,
 			Host:        epochItem.Host,
-			PublicKey:   epochItem.PublicKey,
 			Index:       epochItem.Index,
 		}
 		confirmEpoch.ItemList = append(confirmEpoch.ItemList, validatorItem)

@@ -3287,7 +3287,6 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		OnNewBlockMined:        s.syncManager.OnNewBlockMined,
 		ConnectedCount:         s.ConnectedCount,
 		IsCurrent:              s.syncManager.IsCurrent,
-		ValidatorId:            cfg.ValidatorId,
 		BtcdDir:                homeDir,
 	})
 

@@ -1,8 +1,6 @@
 package validatormanager
 
 import (
-	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -57,8 +55,7 @@ type Config struct {
 	ChainParams     *chaincfg.Params
 	Dial            func(net.Addr) (net.Conn, error)
 	Lookup          func(string) ([]net.IP, error)
-	ValidatorId     uint64
-	ValidatorPubKey []byte
+	ValidatorId     string // pubkey
 	BtcdDir         string
 	Peers           []string
 
@@ -134,7 +131,7 @@ func New(cfg *Config) *ValidatorManager {
 
 	localAddrs, _ := validatorMgr.getLocalAddr()
 	//utils.Log.Tracef("Get local address: %s", localAddr.String())
-	validatorCfg := validatorMgr.newValidatorConfig(validatorMgr.Cfg.ValidatorId, validatorMgr.Cfg.ValidatorPubKey, nil) // No remote validator
+	validatorCfg := validatorMgr.newValidatorConfig(validatorMgr.Cfg.ValidatorId, nil) // No remote validator
 
 	myValidator, err := localvalidator.NewValidator(validatorCfg, localAddrs)
 	if err != nil {
@@ -154,7 +151,7 @@ func New(cfg *Config) *ValidatorManager {
 	return validatorMgr
 }
 
-func (vm *ValidatorManager) newValidatorConfig(localValidatorID uint64, localValidatorPubKey []byte,
+func (vm *ValidatorManager) newValidatorConfig(localValidatorID string,
 	remoteValidatorInfo *validatorinfo.ValidatorInfo) *validator.Config {
 	return &validator.Config{
 		Listener:    vm,
@@ -164,7 +161,6 @@ func (vm *ValidatorManager) newValidatorConfig(localValidatorID uint64, localVal
 		BtcdDir:     vm.Cfg.BtcdDir,
 
 		LocalValidatorId:     localValidatorID,
-		LocalValidatorPubKey: localValidatorPubKey,
 		RemoteValidatorInfo:  remoteValidatorInfo,
 	}
 }
@@ -178,7 +174,7 @@ func (vm *ValidatorManager) Start() {
 	// Load saved validators peers
 	vm.LoadValidatorRecordList()
 
-	validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, vm.Cfg.ValidatorPubKey, nil) // Start , remote validator info is nil (unkown validator)
+	validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, nil) // Start , remote validator info is nil (unkown validator)
 
 	PreValidatorList := make([]*validator.Validator, 0)
 
@@ -195,7 +191,7 @@ func (vm *ValidatorManager) Start() {
 		// New a validator with addr
 		//addrsList := make([]net.Addr, 0, 1)
 		//addrsList = append(addrsList, addr)
-		isLocalValidator := vm.isLocalValidator(record.PubKey)
+		isLocalValidator := vm.isLocalValidator(record.ValidatorId)
 		if isLocalValidator {
 			utils.Log.Tracef("Validator is local validator")
 			//validator.SetLocalValidator()
@@ -272,7 +268,7 @@ func (vm *ValidatorManager) LoadValidatorRecordList() *validatorrecord.Validator
 		hostList = append(hostList, vm.Cfg.Peers...)
 		for _, host := range hostList {
 			utils.Log.Tracef("Try to connect validator: %s", hostList)
-			vm.ValidatorRecordMgr.UpdateValidatorRecord(0, nil, host)
+			vm.ValidatorRecordMgr.UpdateValidatorRecord("", host)
 		}
 	}
 
@@ -285,16 +281,8 @@ func (vm *ValidatorManager) Stop() {
 	close(vm.quit)
 }
 
-func (vm *ValidatorManager) isLocalValidator(pubkey []byte) bool {
-	return bytes.Equal(vm.myValidator.ValidatorInfo.PublicKey[:], pubkey)
-}
-
-func (vm *ValidatorManager) isLocalValidatorById(validatorId uint64) bool {
-	if vm.myValidator.ValidatorInfo.ValidatorId == validatorId {
-		return true
-	}
-
-	return false
+func (vm *ValidatorManager) isLocalValidator(pubkey string) bool {
+	return vm.myValidator.ValidatorInfo.ValidatorId == pubkey
 }
 
 // Current validator list is updated
@@ -303,8 +291,7 @@ func (vm *ValidatorManager) OnValidatorListUpdated(validatorList []validatorinfo
 	utils.Log.Tracef("********************************* New Validator List ********************************")
 	utils.Log.Tracef("Current Validator Count: %d", len(validatorList))
 	for _, validatorInfo := range validatorList {
-		utils.Log.Tracef("validator ID: %d", validatorInfo.ValidatorId)
-		utils.Log.Tracef("validator Public: %x", validatorInfo.PublicKey[:])
+		utils.Log.Tracef("validator ID: %s", validatorInfo.ValidatorId)
 		utils.Log.Tracef("validator Host: %s", validatorInfo.Host)
 		utils.Log.Tracef("validator CreateTime: %s", validatorInfo.CreateTime.Format("2006-01-02 15:04:05"))
 		utils.Log.Tracef("------------------------------------------------")
@@ -321,19 +308,19 @@ func (vm *ValidatorManager) OnValidatorListUpdated(validatorList []validatorinfo
 		} else {
 			// Not found
 			// Is local validator
-			if vm.isLocalValidator(validatorInfo.PublicKey[:]) {
+			if vm.isLocalValidator(validatorInfo.ValidatorId) {
 				// Local validator
 				continue
 			}
 
-			if validatorInfo.ValidatorId == 0 || validatorInfo.Host == "" {
+			if validatorInfo.ValidatorId == "" || validatorInfo.Host == "" {
 				// Invalid validator
 				continue
 			}
 
 			// Try to connect the validator
 			// Add the validator
-			validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, vm.Cfg.ValidatorPubKey, &validatorInfo) // vm.ValidatorId is Local validator, validatorId is Remote validator when new validator connected
+			validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, &validatorInfo) // vm.ValidatorId is Local validator, validatorId is Remote validator when new validator connected
 
 			addr, err := vm.getAddr(validatorInfo.Host)
 			if err != nil {
@@ -368,31 +355,25 @@ func (vm *ValidatorManager) OnValidatorInfoUpdated(validatorInfo *validatorinfo.
 	// 	}
 	// }
 	host := validatorinfo.GetAddrStringHost(remoteAddr.String())
-	vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorInfo.ValidatorId, validatorInfo.PublicKey[:], host)
+	vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorInfo.ValidatorId, host)
 	vm.connectedListMtx.Lock()
 	defer vm.connectedListMtx.Unlock()
 	for _, v := range vm.ConnectedList {
 		if v.ValidatorInfo.ValidatorId == validatorInfo.ValidatorId {
-			v.ValidatorInfo.PublicKey = validatorInfo.PublicKey
-			v.ValidatorInfo.Host = host
-		} else if bytes.Equal(v.ValidatorInfo.PublicKey[:], vm.Cfg.ValidatorPubKey) {
-			v.ValidatorInfo.ValidatorId = validatorInfo.ValidatorId
 			v.ValidatorInfo.Host = host
 		} else if v.ValidatorInfo.Host == host {
 			v.ValidatorInfo.ValidatorId = validatorInfo.ValidatorId
-			v.ValidatorInfo.PublicKey = validatorInfo.PublicKey
 		}
 	}
 }
 
 // Get current validator list in record this peer
-func (vm *ValidatorManager) GetValidatorList(validatorID uint64) []*validatorinfo.ValidatorInfo {
+func (vm *ValidatorManager) GetValidatorList() []*validatorinfo.ValidatorInfo {
 
-	utils.Log.Tracef("GetValidatorList from validator [%d]", validatorID)
 
 	validatorList := vm.getValidatorList()
 
-	utils.Log.Tracef("********************************* Get Validator Summary From [%d] ********************************", validatorID)
+	utils.Log.Tracef("********************************* Get Validator Summary ********************************",)
 	showValidatorList(validatorList)
 	utils.Log.Tracef("*********************************        End        ********************************")
 
@@ -406,7 +387,6 @@ func (vm *ValidatorManager) getValidatorList() []*validatorinfo.ValidatorInfo {
 	localValidatorItem := validatorinfo.ValidatorInfo{
 		ValidatorId:     vm.myValidator.ValidatorInfo.ValidatorId,
 		Host:            vm.myValidator.ValidatorInfo.Host,
-		PublicKey:       vm.myValidator.ValidatorInfo.PublicKey,
 		CreateTime:      vm.myValidator.ValidatorInfo.CreateTime,
 		ActivitionCount: vm.myValidator.ValidatorInfo.ActivitionCount,
 		GeneratorCount:  vm.myValidator.ValidatorInfo.GeneratorCount,
@@ -429,7 +409,6 @@ func (vm *ValidatorManager) getValidatorList() []*validatorinfo.ValidatorInfo {
 		validatorItem := validatorinfo.ValidatorInfo{
 			ValidatorId:     validator.ValidatorInfo.ValidatorId,
 			Host:            validator.ValidatorInfo.Host,
-			PublicKey:       validator.ValidatorInfo.PublicKey,
 			CreateTime:      validator.ValidatorInfo.CreateTime,
 			ActivitionCount: validator.ValidatorInfo.ActivitionCount,
 			GeneratorCount:  validator.ValidatorInfo.GeneratorCount,
@@ -443,7 +422,7 @@ func (vm *ValidatorManager) getValidatorList() []*validatorinfo.ValidatorInfo {
 	return validatorList
 }
 
-func (vm *ValidatorManager) FindRemoteValidator(validatorID uint64) *validator.Validator {
+func (vm *ValidatorManager) FindRemoteValidator(validatorID string) *validator.Validator {
 	// Find from all remote validators
 	for _, validator := range vm.ConnectedList {
 		if validator.ValidatorInfo.ValidatorId == validatorID {
@@ -543,8 +522,7 @@ func (vm *ValidatorManager) OnEpochSynced(currentEpoch *epoch.Epoch, nextEpoch *
 }
 
 // Get current epoch info in record this peer
-func (vm *ValidatorManager) GetLocalEpoch(validatorID uint64) (*epoch.Epoch, *epoch.Epoch, error) {
-	utils.Log.Tracef("GetLocalEpoch from validator [%d]", validatorID)
+func (vm *ValidatorManager) GetLocalEpoch(string) (*epoch.Epoch, *epoch.Epoch, error) {
 	// if vm.CurrentEpoch != nil {
 	// 	return vm.CurrentEpoch.GetValidatorList()
 	// }
@@ -552,8 +530,8 @@ func (vm *ValidatorManager) GetLocalEpoch(validatorID uint64) (*epoch.Epoch, *ep
 }
 
 // Current generator is updated
-func (vm *ValidatorManager) OnGeneratorUpdated(newGenerator *generator.Generator, validatorID uint64) {
-	utils.Log.Tracef("OnGeneratorUpdated from validator [%d]", validatorID)
+func (vm *ValidatorManager) OnGeneratorUpdated(newGenerator *generator.Generator, validatorID string) {
+	utils.Log.Tracef("OnGeneratorUpdated from validator [%s]", validatorID)
 
 	if newGenerator == nil {
 		utils.Log.Tracef("OnGeneratorUpdated: Invalid generator (nil generator)")
@@ -606,7 +584,7 @@ func (vm *ValidatorManager) OnGeneratorHandOver(handOverGenerator *generator.Gen
 	}
 
 	// Record the hand over generator info, it should be math with generator notified by new generator
-	if vm.isLocalValidatorById(handOverGenerator.GeneratorId) {
+	if vm.isLocalValidator(handOverGenerator.GeneratorId) {
 		if vm.CurrentEpoch == nil {
 			utils.Log.Errorf("OnGeneratorHandOver failed: Current epoch is nil")
 			return
@@ -630,7 +608,7 @@ func (vm *ValidatorManager) IsValidGenerator(generator *generator.Generator) boo
 		return false
 	}
 
-	if generator.GeneratorId == 0 {
+	if generator.GeneratorId == "" {
 		return false
 	}
 
@@ -671,7 +649,7 @@ func (vm *ValidatorManager) IsValidGenerator(generator *generator.Generator) boo
 	// }
 
 	// 使用公钥验证签名
-	valid := generator.VerifyToken(validatorConnected.ValidatorInfo.PublicKey[:])
+	valid := generator.VerifyToken(validatorConnected.ValidatorInfo.ValidatorId)
 	if valid {
 		utils.Log.Tracef("Signature is valid.")
 		generator.Validatorinfo = &validatorConnected.ValidatorInfo
@@ -755,13 +733,13 @@ func (vm *ValidatorManager) OnNewValidatorPeerConnected(netAddr net.Addr, valida
 	// 	return
 	// }
 
-	if vm.isLocalValidator(validatorInfo.PublicKey[:]) {
-		utils.Log.Infof("not allow same pubkey %s connected", hex.EncodeToString(validatorInfo.PublicKey[:]))
+	if vm.isLocalValidator(validatorInfo.ValidatorId) {
+		utils.Log.Infof("not allow same pubkey %s connected", validatorInfo.ValidatorId)
 		return
 	}
 
 	peerHost := validatorinfo.GetAddrHost(netAddr)
-	validatorPeer := vm.LookupValidator(validatorInfo.PublicKey[:])
+	validatorPeer := vm.LookupValidator(validatorInfo.ValidatorId)
 	if validatorPeer != nil {
 		// The validator is already connected, will try to check connection again
 		utils.Log.Tracef("[ValidatorManager]New validator has added in connectedlist: %s", netAddr.String())
@@ -776,7 +754,7 @@ func (vm *ValidatorManager) OnNewValidatorPeerConnected(netAddr net.Addr, valida
 		Port: port,
 	}
 
-	validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, vm.Cfg.ValidatorPubKey, validatorInfo) // vm.ValidatorId is Local validator, validatorId is Remote validator when new validator connected
+	validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, validatorInfo) // vm.ValidatorId is Local validator, validatorId is Remote validator when new validator connected
 	peerValidator, err := validator.NewValidator(validatorCfg, addrPeer)
 	if err != nil {
 		utils.Log.Errorf("New Validator failed: %v", err)
@@ -831,7 +809,7 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 	addr := validator.GetValidatorAddr()
 
 	peerHost := validatorinfo.GetAddrHost(addr)
-	validatorPeer := vm.LookupValidator(validator.ValidatorInfo.PublicKey[:])
+	validatorPeer := vm.LookupValidator(validator.ValidatorInfo.ValidatorId)
 	if validatorPeer != nil {
 		// The validator is already in connectedlist
 		//validator.Stop()
@@ -841,7 +819,7 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 	vm.ConnectedList = append(vm.ConnectedList, validator)
 
 	// update validator record
-	vm.ValidatorRecordMgr.UpdateValidatorRecord(validator.ValidatorInfo.ValidatorId, validator.ValidatorInfo.PublicKey[:], peerHost.String())
+	vm.ValidatorRecordMgr.UpdateValidatorRecord(validator.ValidatorInfo.ValidatorId, peerHost.String())
 
 	//sortsValidatorList(vm.ConnectedList)
 
@@ -853,7 +831,7 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 	return nil
 }
 
-func (vm *ValidatorManager) LookupValidator(pubkey []byte) *validator.Validator {
+func (vm *ValidatorManager) LookupValidator(pubkey string) *validator.Validator {
 	if vm.myValidator.Validator.IsValidatorPubKey(pubkey) {
 		return &vm.myValidator.Validator
 	}
@@ -902,9 +880,9 @@ func sortsValidatorList(validatorList []*validatorinfo.ValidatorInfo) {
 	})
 }
 
-func getValidatorPos(validators []*validatorinfo.ValidatorInfo, lastEpochMemberId uint64) int {
+func getValidatorPos(validators []*validatorinfo.ValidatorInfo, lastEpochMemberId string) int {
 
-	if lastEpochMemberId <= 0 {
+	if lastEpochMemberId == "" {
 		return -1
 	}
 
@@ -964,8 +942,7 @@ func (vm *ValidatorManager) showCurrentStats() {
 func showValidatorList(validatorList []*validatorinfo.ValidatorInfo) {
 	utils.Log.Tracef("Current Validator Count: %d", len(validatorList))
 	for _, validatorInfo := range validatorList {
-		utils.Log.Tracef("validator ID: %d", validatorInfo.ValidatorId)
-		utils.Log.Tracef("validator Public: %x", validatorInfo.PublicKey[:])
+		utils.Log.Tracef("validator ID: %s", validatorInfo.ValidatorId)
 		utils.Log.Tracef("validator Host: %s", validatorInfo.Host)
 		utils.Log.Tracef("validator CreateTime: %s", validatorInfo.CreateTime.Format("2006-01-02 15:04:05"))
 		utils.Log.Tracef("------------------------------------------------")
@@ -983,8 +960,7 @@ func showEpoch(title string, epoch *epoch.Epoch) {
 		utils.Log.Tracef("EpochIndex: %d", epoch.EpochIndex)
 		utils.Log.Tracef("Validator Count in Epoch: %d", len(epoch.ItemList))
 		for _, epochItem := range epoch.ItemList {
-			utils.Log.Tracef("validator ID: %d", epochItem.ValidatorId)
-			utils.Log.Tracef("validator Public: %x", epochItem.PublicKey[:])
+			utils.Log.Tracef("validator ID: %s", epochItem.ValidatorId)
 			utils.Log.Tracef("validator Host: %s", epochItem.Host)
 			utils.Log.Tracef("validator Index: %d", epochItem.Index)
 			utils.Log.Tracef("------------------------------------------------")
@@ -1010,9 +986,8 @@ func showGeneratorInfo(generator *generator.Generator) {
 	if generator == nil {
 		utils.Log.Tracef("	No generator")
 	} else {
-		utils.Log.Tracef("	Generator ID: %d", generator.GeneratorId)
+		utils.Log.Tracef("	Generator ID: %s", generator.GeneratorId)
 		if generator.Validatorinfo != nil {
-			utils.Log.Tracef("	Generator Public: %x", generator.Validatorinfo.PublicKey[:])
 			utils.Log.Tracef("	Generator Host: %s", generator.Validatorinfo.Host)
 			utils.Log.Tracef("	Generator ConnectTime: %s", generator.Validatorinfo.CreateTime.Format("2006-01-02 15:04:05"))
 		} else {
@@ -1115,12 +1090,7 @@ func (vm *ValidatorManager) CheckGenerator() {
 
 		epochList := currentEpoch.ItemList
 
-		testBecomeGenerate := false
-		if vm.Cfg.ValidatorId == 10000020 {
-			testBecomeGenerate = true
-		}
-
-		if testBecomeGenerate == true || (len(epochList) == 1 && epochList[0].ValidatorId == vm.Cfg.ValidatorId) {
+		if (len(epochList) == 1 && epochList[0].ValidatorId == vm.Cfg.ValidatorId) {
 			// Only local validator in epoch, become local validator a generator
 			utils.Log.Tracef("[ValidatorManager]Only local validator in epoch, become local validator a generator...")
 			height := vm.Cfg.PosMiner.GetBlockHeight()
@@ -1188,7 +1158,6 @@ func (vm *ValidatorManager) SetLocalAsNextGenerator(height int32, handoverTime t
 
 	dataBlock := &validatechain.DataUpdateEpoch{
 		UpdatedId:     vm.myValidator.ValidatorInfo.ValidatorId,
-		PublicKey:     vm.myValidator.ValidatorInfo.PublicKey,
 		EpochIndex:    vm.CurrentEpoch.EpochIndex,
 		CreateTime:    vm.CurrentEpoch.CreateTime.Unix(),
 		Reason:        validatechain.UpdateEpochReason_GeneratorHandOver,
@@ -1246,7 +1215,6 @@ func (vm *ValidatorManager) SetLocalAsCurrentGenerator(height int32, handoverTim
 
 	dataBlock := &validatechain.DataUpdateEpoch{
 		UpdatedId:     vm.myValidator.ValidatorInfo.ValidatorId,
-		PublicKey:     vm.myValidator.ValidatorInfo.PublicKey,
 		EpochIndex:    vm.CurrentEpoch.EpochIndex,
 		CreateTime:    vm.CurrentEpoch.CreateTime.Unix(),
 		Reason:        validatechain.UpdateEpochReason_GeneratorHandOver,
@@ -1332,7 +1300,6 @@ func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error
 	// Save vc block first and broadcast the block
 	newBlock := &generator.MinerNewBlock{
 		GeneratorId: vm.myValidator.ValidatorInfo.ValidatorId,
-		PublicKey:   vm.myValidator.ValidatorInfo.PublicKey,
 		Height:      height,
 		MinerTime:   time.Now().Unix(),
 		Hash:        hash,
@@ -1483,7 +1450,7 @@ func (vm *ValidatorManager) BroadcastCommand(command validatorcommand.Message) {
 }
 
 // Req new epoch from remote peer
-func (vm *ValidatorManager) ReqNewEpoch(validatorID uint64, epochIndex int64, reason uint32) (*chainhash.Hash, error) {
+func (vm *ValidatorManager) ReqNewEpoch(validatorID string, epochIndex int64, reason uint32) (*chainhash.Hash, error) {
 
 	currentValidatorCount := len(vm.ConnectedList) + 1
 	if currentValidatorCount < MinValidatorsCountEachEpoch {
@@ -1501,7 +1468,7 @@ func (vm *ValidatorManager) ReqNewEpoch(validatorID uint64, epochIndex int64, re
 		Generator:       nil, // will be set by local validator
 	}
 
-	lastEpochMemberId := uint64(0)
+	lastEpochMemberId := ""
 	if vm.CurrentEpoch != nil {
 		lastEpochMemberId = vm.CurrentEpoch.GetLastEpochMemberId()
 	}
@@ -1525,7 +1492,6 @@ func (vm *ValidatorManager) ReqNewEpoch(validatorID uint64, epochIndex int64, re
 		item := &epoch.EpochItem{
 			ValidatorId: validator.ValidatorId,
 			Host:        validator.Host,
-			PublicKey:   validator.PublicKey,
 			Index:       uint32(i)}
 
 		newEpoch.ItemList = append(newEpoch.ItemList, item)
@@ -1544,7 +1510,6 @@ func (vm *ValidatorManager) ReqNewEpoch(validatorID uint64, epochIndex int64, re
 			item := &epoch.EpochItem{
 				ValidatorId: validator.ValidatorId,
 				Host:        validator.Host,
-				PublicKey:   validator.PublicKey,
 				Index:       uint32(i)}
 
 			newEpoch.ItemList = append(newEpoch.ItemList, item)
@@ -1558,7 +1523,6 @@ func (vm *ValidatorManager) ReqNewEpoch(validatorID uint64, epochIndex int64, re
 
 	newEpochVote := epoch.NewEpochVote{
 		VotorId:   vm.myValidator.ValidatorInfo.ValidatorId,
-		PublicKey: vm.myValidator.ValidatorInfo.PublicKey,
 		NewEpoch:  newEpoch,
 		Reason:    reason,
 	}
@@ -1576,7 +1540,6 @@ func (vm *ValidatorManager) ReqNewEpoch(validatorID uint64, epochIndex int64, re
 	epBlock := validatechain.NewEPBlock()
 	epBlock.Data = &validatechain.DataEpochVote{
 		VotorId:       newEpochVote.VotorId,
-		PublicKey:     newEpochVote.PublicKey,
 		EpochIndex:    newEpochVote.NewEpoch.EpochIndex,
 		CreateTime:    newEpochVote.NewEpoch.CreateTime.Unix(),
 		Reason:        newEpochVote.Reason,
@@ -1762,7 +1725,7 @@ func (vm *ValidatorManager) OnUpdateEpoch(currentEpoch *epoch.Epoch) {
 	}
 	// 如果epoch更新后，当前epoch的generator是本地validator，且是最后一个generator，就请求下一轮的epoch
 	if vm.CurrentEpoch.Generator != nil {
-		if vm.NextEpoch == nil && vm.isLocalValidatorById(vm.CurrentEpoch.Generator.GeneratorId) {
+		if vm.NextEpoch == nil && vm.isLocalValidator(vm.CurrentEpoch.Generator.GeneratorId) {
 			if vm.CurrentEpoch.IsLastGenerator() {
 				// Broadcast  for New Epoch
 				// Current epoch is last, request New Epoch
@@ -1960,7 +1923,7 @@ func (vm *ValidatorManager) RequestNewEpoch(nextEpochIndex int64, reason uint32)
 	vm.newEpochMgr.AddReceivedEpoch(vm.Cfg.ValidatorId, hash)
 }
 
-func (vm *ValidatorManager) OnNewEpoch(validatorId uint64, hash *chainhash.Hash) {
+func (vm *ValidatorManager) OnNewEpoch(validatorId string, hash *chainhash.Hash) {
 	utils.Log.Tracef("[ValidatorManager]OnNewEpoch received from validator [%d]...", validatorId)
 	if hash == nil {
 		utils.Log.Tracef("[ValidatorManager]OnNewEpoch Hash is nil, nothing to do...")
@@ -1977,7 +1940,7 @@ func (vm *ValidatorManager) OnNewEpoch(validatorId uint64, hash *chainhash.Hash)
 	}
 }
 
-func (vm *ValidatorManager) GetMyValidatorId() uint64 {
+func (vm *ValidatorManager) GetMyValidatorId() string {
 	return vm.Cfg.ValidatorId
 }
 
@@ -1997,7 +1960,7 @@ func (vm *ValidatorManager) OnConfirmedDelEpochMember(delEpochMember *epoch.DelE
 }
 
 // Received a notify handover command
-func (vm *ValidatorManager) OnNotifyHandover(validatorId uint64) {
+func (vm *ValidatorManager) OnNotifyHandover(validatorId string) {
 	utils.Log.Tracef("[ValidatorManager]OnNotifyHandover from %d", validatorId)
 
 	if vm.CurrentEpoch == nil {
@@ -2425,7 +2388,7 @@ func (vm *ValidatorManager) syncVCBlock() {
 }
 
 // Received get vc state command
-func (vm *ValidatorManager) GetVCState(validatorId uint64) (*validatorcommand.MsgVCState, error) {
+func (vm *ValidatorManager) GetVCState(validatorId string) (*validatorcommand.MsgVCState, error) {
 	if vm.validateChain == nil {
 		err := errors.New("ValidateChain is invalid")
 		return nil, err
@@ -2490,7 +2453,7 @@ func (vm *ValidatorManager) OnVCState(vcStateCmd *validatorcommand.MsgVCState, v
 }
 
 // Received get vc list command
-func (vm *ValidatorManager) GetVCList(validatorId uint64, start int64, end int64) (*validatorcommand.MsgVCList, error) {
+func (vm *ValidatorManager) GetVCList(validatorId string, start int64, end int64) (*validatorcommand.MsgVCList, error) {
 	utils.Log.Infof("[ValidatorManager]GetVCList: Start [%d] End [%d]", start, end)
 	VCList := make([]*validatorcommand.VCItem, 0)
 	count := 0
@@ -2534,7 +2497,7 @@ func (vm *ValidatorManager) OnVCList(vclistCmd *validatorcommand.MsgVCList, vali
 }
 
 // Received get vc block command
-func (vm *ValidatorManager) GetVCBlock(validatorId uint64, blockType uint32, hash chainhash.Hash) (*validatorcommand.MsgVCBlock, error) {
+func (vm *ValidatorManager) GetVCBlock(validatorId string, blockType uint32, hash chainhash.Hash) (*validatorcommand.MsgVCBlock, error) {
 	utils.Log.Infof("[ValidatorManager]GetVCBlock: Block type [%d] Hash [%s] from %d", blockType, hash.String(), validatorId)
 	var blockData []byte
 	if blockType == validatorcommand.BlockType_VCBlock {
@@ -2660,7 +2623,7 @@ func (vm *ValidatorManager) OnVCBlock(vcblockCmd *validatorcommand.MsgVCBlock, v
 // 	}
 // }
 
-func (vm *ValidatorManager) ConfirmNewEpoch(confirmedEpoch *epoch.Epoch, reason uint32, receivedEpoch map[uint64]*NewEpochVoteItem) {
+func (vm *ValidatorManager) ConfirmNewEpoch(confirmedEpoch *epoch.Epoch, reason uint32, receivedEpoch map[string]*NewEpochVoteItem) {
 	// Confirm New epoch
 	// 1. save vcblock to vc store, and broadcast to vc
 	// 2. broadcast the result to all validators
@@ -2673,7 +2636,6 @@ func (vm *ValidatorManager) ConfirmNewEpoch(confirmedEpoch *epoch.Epoch, reason 
 	vcBlock.Header.DataType = validatechain.DataType_NewEpoch
 	dataBlock := &validatechain.DataNewEpoch{
 		CreatorId:     vm.myValidator.ValidatorInfo.ValidatorId,
-		PublicKey:     vm.myValidator.ValidatorInfo.PublicKey,
 		EpochIndex:    confirmedEpoch.EpochIndex,
 		CreateTime:    time.Now().Unix(),
 		Reason:        reason,
@@ -2724,7 +2686,6 @@ func (vm *ValidatorManager) ConfirmDelEpoch(confirmedEpoch *epoch.Epoch, receive
 	vcBlock.Header.DataType = validatechain.DataType_DelEpochMember
 	dataBlock := &validatechain.DataEpochDelMember{
 		RequestId:           vm.myValidator.ValidatorInfo.ValidatorId,
-		PublicKey:           vm.myValidator.ValidatorInfo.PublicKey,
 		EpochIndex:          confirmedEpoch.EpochIndex,
 		Reason:              validatechain.UpdateEpochReason_MemberRemoved,
 		CreateTime:          time.Now().Unix(),
@@ -2744,7 +2705,6 @@ func (vm *ValidatorManager) ConfirmDelEpoch(confirmedEpoch *epoch.Epoch, receive
 		}
 		dataBlock.EpochDelConfirmList = append(dataBlock.EpochDelConfirmList, validatechain.EpochDelConfirmItem{
 			ValidatorId: validatirId,
-			PublicKey:   item.PublicKey,
 			Result:      item.Result,
 			Token:       item.Token,
 		})
@@ -2777,7 +2737,6 @@ func (vm *ValidatorManager) VCBlock_MinerNewBlock(minerNewBlock *generator.Miner
 
 	dataBlock := &validatechain.DataMinerNewBlock{
 		GeneratorId:   minerNewBlock.GeneratorId,
-		PublicKey:     minerNewBlock.PublicKey,
 		Timestamp:     minerNewBlock.MinerTime,
 		SatsnetHeight: minerNewBlock.Height,
 		Hash:          *minerNewBlock.Hash,
@@ -2892,7 +2851,7 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 		return
 	}
 	for _, record := range vm.ValidatorRecordMgr.ValidatorRecordList {
-		if vm.isLocalValidator(record.PubKey) { // Not local validator, skip it (Remote validator is not connected, so no need to check it here)
+		if vm.isLocalValidator(record.ValidatorId) { // Not local validator, skip it (Remote validator is not connected, so no need to check it here)
 			continue
 		}
 		hostIP := net.ParseIP(record.Host)
@@ -2908,9 +2867,9 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 		}
 
 		isNewConnected := false
-		validatorNode := vm.LookupValidator(record.PubKey)
+		validatorNode := vm.LookupValidator(record.ValidatorId)
 		if validatorNode == nil {
-			validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, vm.Cfg.ValidatorPubKey, nil) // vm.ValidatorId is Local validator, validatorId is Remote validator when new validator connected
+			validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, nil) // vm.ValidatorId is Local validator, validatorId is Remote validator when new validator connected
 
 			addr, err := vm.getAddr(record.Host)
 			if err != nil {
@@ -2932,20 +2891,20 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 				continue
 			}
 			validatorId := record.ValidatorId
-			if validatorId == 0 && validatorNode.ValidatorInfo.ValidatorId != 0 {
+			if validatorId == "" && validatorNode.ValidatorInfo.ValidatorId != "" {
 				validatorId = validatorNode.ValidatorInfo.ValidatorId
 			}
 			// Update the validator record
-			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorId, validatorNode.ValidatorInfo.PublicKey[:], record.Host)
+			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorId, record.Host)
 
 		}
 
 		// The validator is connected
-		if record.ValidatorId == 0 && validatorNode.ValidatorInfo.ValidatorId != 0 {
-			// Update the validator record
-			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorNode.ValidatorInfo.ValidatorId, validatorNode.ValidatorInfo.PublicKey[:], record.Host)
+		if record.ValidatorId == "" && validatorNode.ValidatorInfo.ValidatorId != "" {
+		// Update the validator record
+			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorNode.ValidatorInfo.ValidatorId, record.Host)
 		}
-
+		
 		if isNewConnected {
 			// Add the validator to the connected list
 			vm.AddActivieValidator(validatorNode)
@@ -2961,7 +2920,7 @@ func (vm *ValidatorManager) GetCurrentEpochMember(includeLocalValidator bool) ([
 	memberList := make([]string, 0)
 
 	for _, item := range vm.CurrentEpoch.ItemList {
-		if !includeLocalValidator && vm.isLocalValidator(item.PublicKey[:]) {
+		if !includeLocalValidator && vm.isLocalValidator(item.ValidatorId) {
 			utils.Log.Tracef("Validator is local validator")
 			continue
 		}

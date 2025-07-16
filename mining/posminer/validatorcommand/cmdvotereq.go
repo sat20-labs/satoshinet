@@ -26,7 +26,7 @@ const (
 // 投票时间为2s， 超过时间没有投票者为无效投票，规定时间内投票人数不足为无效投票， 无效投票不计入选举结果
 
 type VoteRequest struct {
-	ValidatorId uint64    // The validator id of request vite
+	ValidatorId string    // The validator id of request vite
 	VoteType    uint32    // Vote type
 	VoteId      uint32    // The vote id
 	EpochIndex  int64     // The epoch index
@@ -107,7 +107,7 @@ func (msg *MsgVoteReq) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgVoteReq) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgVoteReq:")
-	utils.Log.Tracef("ValidatorId: %d", msg.VoteReqInfo.ValidatorId)
+	utils.Log.Tracef("ValidatorId: %s", msg.VoteReqInfo.ValidatorId)
 	voteType := "Unknown type"
 	if msg.VoteReqInfo.VoteType == VoteType_NewGenerator {
 		voteType = "New Generator"

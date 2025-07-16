@@ -376,8 +376,7 @@ var (
 func showNewEpochData(newEpochData *validatechain.DataNewEpoch) {
 	log.Debugf("-------------------     New Epoch Data   -------------------------")
 	log.Debugf("    EpochIndex: %d", newEpochData.EpochIndex)
-	log.Debugf("    Creator ID: %d", newEpochData.CreatorId)
-	log.Debugf("    PublicKey: %x", newEpochData.PublicKey)
+	log.Debugf("    Creator ID: %s", newEpochData.CreatorId)
 	log.Debugf("    CreateTime: %s", time.Unix(newEpochData.CreateTime, 0).Format(time.DateTime))
 	log.Debugf("    Create Reason: %s", NewEpochReason[newEpochData.Reason])
 
@@ -386,8 +385,7 @@ func showNewEpochData(newEpochData *validatechain.DataNewEpoch) {
 	log.Debugf("-------------------------------------------------")
 	for index, epochItem := range newEpochData.EpochItemList {
 		log.Debugf("    Index: %d", index)
-		log.Debugf("    Validator ID: %d", epochItem.ValidatorId)
-		log.Debugf("    PublicKey: %x", epochItem.PublicKey)
+		log.Debugf("    Validator ID: %s", epochItem.ValidatorId)
 		log.Debugf("-------------------------------------------------")
 	}
 
@@ -405,8 +403,7 @@ func showNewEpochData(newEpochData *validatechain.DataNewEpoch) {
 
 func showUpdateEpochData(updateEpochData *validatechain.DataUpdateEpoch) {
 	log.Debugf("-------------------     Update Epoch Data   -------------------------")
-	log.Debugf("    UpdatedId: %d", updateEpochData.UpdatedId)
-	log.Debugf("    PublicKey: %x", updateEpochData.PublicKey)
+	log.Debugf("    UpdatedId: %s", updateEpochData.UpdatedId)
 	log.Debugf("    EpochIndex: %d", updateEpochData.EpochIndex)
 	log.Debugf("    CreateTime: %s", time.Unix(updateEpochData.CreateTime, 0).Format(time.DateTime))
 	log.Debugf("    Reason: %s", UpdateEpochReason[updateEpochData.Reason])
@@ -415,8 +412,7 @@ func showUpdateEpochData(updateEpochData *validatechain.DataUpdateEpoch) {
 	log.Debugf("-------------------------------------------------")
 	for index, epochItem := range updateEpochData.EpochItemList {
 		log.Debugf("    Index: %d", index)
-		log.Debugf("    Validator ID: %d", epochItem.ValidatorId)
-		log.Debugf("    PublicKey: %x", epochItem.PublicKey)
+		log.Debugf("    Validator ID: %s", epochItem.ValidatorId)
 		log.Debugf("-------------------------------------------------")
 	}
 
@@ -434,8 +430,7 @@ func showUpdateEpochData(updateEpochData *validatechain.DataUpdateEpoch) {
 
 func showDelEpochMemberData(delEpochMemberData *validatechain.DataEpochDelMember) {
 	log.Debugf("-------------------     Del Epoch member Data   -------------------------")
-	log.Debugf("    RequestId: %d", delEpochMemberData.RequestId)
-	log.Debugf("    PublicKey: %x", delEpochMemberData.PublicKey)
+	log.Debugf("    RequestId: %s", delEpochMemberData.RequestId)
 	log.Debugf("    EpochIndex: %d", delEpochMemberData.EpochIndex)
 	log.Debugf("    CreateTime: %s", time.Unix(delEpochMemberData.CreateTime, 0).Format(time.DateTime))
 	log.Debugf("    Reason: %s", UpdateEpochReason[delEpochMemberData.Reason])
@@ -444,8 +439,7 @@ func showDelEpochMemberData(delEpochMemberData *validatechain.DataEpochDelMember
 	log.Debugf("-------------------------------------------------")
 	for index, epochItem := range delEpochMemberData.EpochItemList {
 		log.Debugf("    Index: %d", index)
-		log.Debugf("    Validator ID: %d", epochItem.ValidatorId)
-		log.Debugf("    PublicKey: %x", epochItem.PublicKey)
+		log.Debugf("    Validator ID: %s", epochItem.ValidatorId)
 		log.Debugf("-------------------------------------------------")
 	}
 
@@ -454,8 +448,7 @@ func showDelEpochMemberData(delEpochMemberData *validatechain.DataEpochDelMember
 	log.Debugf("-------------------------------------------------")
 	for index, confirmItem := range delEpochMemberData.EpochDelConfirmList {
 		log.Debugf("    Index: %d", index)
-		log.Debugf("    Validator ID: %d", confirmItem.ValidatorId)
-		log.Debugf("    PublicKey: %x", confirmItem.PublicKey)
+		log.Debugf("    Validator ID: %s", confirmItem.ValidatorId)
 		log.Debugf("    Result: %d", confirmItem.Result)
 		log.Debugf("    Token: %s", confirmItem.Token)
 		log.Debugf("-------------------------------------------------")
@@ -471,8 +464,7 @@ func showGeneratorHandOverData(generatorHandOverData *validatechain.DataGenerato
 
 func showMinerNewBlockData(newBlockData *validatechain.DataMinerNewBlock) {
 	log.Debugf("-------------------    Miner New Block Data   -------------------------")
-	log.Debugf("    GeneratorId: %d", newBlockData.GeneratorId)
-	log.Debugf("    PublicKey: %x", newBlockData.PublicKey)
+	log.Debugf("    GeneratorId: %s", newBlockData.GeneratorId)
 	log.Debugf("    Timestamp: %s", time.Unix(newBlockData.Timestamp, 0).Format(time.DateTime))
 	log.Debugf("    SatsnetHeight: %d", newBlockData.SatsnetHeight)
 	log.Debugf("    Hash: %s", newBlockData.Hash.String())

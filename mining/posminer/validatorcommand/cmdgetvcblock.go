@@ -24,7 +24,7 @@ const (
 // message (MsgGenerator).
 type MsgGetVCBlock struct {
 	// Request validator id
-	ValidatorId uint64
+	ValidatorId string
 	BlockType   uint32
 	BlockHash   chainhash.Hash
 }
@@ -79,7 +79,7 @@ func (msg *MsgGetVCBlock) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgGetVCBlock) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgGetVCBlock:")
-	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
+	utils.Log.Tracef("ValidatorId: %s", msg.ValidatorId)
 	utils.Log.Tracef("BlockType: %d", msg.BlockType)
 	utils.Log.Tracef("BlockHash: %s", msg.BlockHash.String())
 }
@@ -87,7 +87,7 @@ func (msg *MsgGetVCBlock) LogCommandInfo() {
 // NewMsgGetVCBlock returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgGetVCBlock(validatorId uint64, blockType uint32, hash chainhash.Hash) *MsgGetVCBlock {
+func NewMsgGetVCBlock(validatorId string, blockType uint32, hash chainhash.Hash) *MsgGetVCBlock {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.

@@ -27,14 +27,14 @@ type NewEpochManager struct {
 	ValidatorMgr  *ValidatorManager
 	started       bool
 	reason        uint32
-	receivedEpoch map[uint64]*NewEpochVoteItem
+	receivedEpoch map[string]*NewEpochVoteItem
 	mutex 	      sync.Mutex
 }
 
 func CreateNewEpochManager(validatorMgr *ValidatorManager, reason uint32) *NewEpochManager {
 	return &NewEpochManager{
 		ValidatorMgr:  validatorMgr,
-		receivedEpoch: make(map[uint64]*NewEpochVoteItem),
+		receivedEpoch: make(map[string]*NewEpochVoteItem),
 		started:       false,
 		reason:        reason,
 	}
@@ -46,7 +46,7 @@ func (nem *NewEpochManager) Start() {
 	nem.started = true
 }
 
-func (nem *NewEpochManager) NewReqEpoch(validatorId uint64) {
+func (nem *NewEpochManager) NewReqEpoch(validatorId string) {
 	if nem.started == true {
 		err := errors.New("NewEpochManager is started, cannot add validatorId as invited validator")
 		utils.Log.Errorf("NewReqEpoch failed: %v", err)
@@ -57,7 +57,7 @@ func (nem *NewEpochManager) NewReqEpoch(validatorId uint64) {
 	nem.receivedEpoch[validatorId] = &NewEpochVoteItem{}
 }
 
-func (nem *NewEpochManager) AddReceivedEpoch(validatorId uint64, hash *chainhash.Hash) error {
+func (nem *NewEpochManager) AddReceivedEpoch(validatorId string, hash *chainhash.Hash) error {
 	nem.mutex.Lock()
 	defer nem.mutex.Unlock()
 	if _, ok := nem.receivedEpoch[validatorId]; !ok {
@@ -250,8 +250,7 @@ func (nem *NewEpochManager) handleNewEpoch() {
 
 func showVoteData(title string, voteData *validatechain.DataEpochVote) {
 	utils.Log.Tracef("--------------- %s -----------------", title)
-	utils.Log.Tracef("VotorId: %d", voteData.VotorId)
-	utils.Log.Tracef("PublicKey: %x", voteData.PublicKey)
+	utils.Log.Tracef("VotorId: %s", voteData.VotorId)
 	utils.Log.Tracef("EpochIndex: %d", voteData.EpochIndex)
 	utils.Log.Tracef("CreateTime: %s", time.Unix(voteData.CreateTime, 0).Format(time.DateTime))
 	utils.Log.Tracef("Reason: %d", voteData.Reason)
@@ -260,7 +259,6 @@ func showVoteData(title string, voteData *validatechain.DataEpochVote) {
 	utils.Log.Tracef("----------------------------------------")
 	for _, item := range voteData.EpochItemList {
 		utils.Log.Tracef("ValidatorId: %d", item.ValidatorId)
-		utils.Log.Tracef("PublicKey: %x", item.PublicKey)
 		utils.Log.Tracef("Host: %s", item.Host)
 		utils.Log.Tracef("Index: %d", item.Index)
 		utils.Log.Tracef("----------------------------------------")

@@ -12,7 +12,7 @@ import (
 
 type HandOverEpoch struct {
 	// Request validator id
-	ValidatorId    uint64
+	ValidatorId    string
 	Timestamp      int64  // The time of generator hand over, it should be time of completed miner last block
 	Token          string // The token for epoch handover, it sign by current generator (HandOver), if the type is New Epoch, it is signed by Epoch Requester (Epoch member)
 	NextEpochIndex int64  // Next epoch index

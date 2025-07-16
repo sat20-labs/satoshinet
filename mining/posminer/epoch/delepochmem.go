@@ -3,6 +3,7 @@ package epoch
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -25,8 +26,8 @@ const (
 // Confirm to delete an epoch member from the current epoch list
 type DelEpochMember struct {
 	// validator id
-	ValidatorId    uint64 // The validator id for confirm epoch member delete
-	DelValidatorId uint64 // The validator id to be deleted
+	ValidatorId    string // The validator id for confirm epoch member delete
+	DelValidatorId string // The validator id to be deleted
 	DelCode        uint32 // The reason code for delete epoch member
 	EpochIndex     int64  // The epoch index for confirm epoch member delete
 	Result         uint32 // The result for confirm, DelEpochMemberResult_NotConfirm, DelEpochMemberResult_Agree, DelEpochMemberResult_Reject
@@ -36,25 +37,31 @@ type DelEpochMember struct {
 func (he *DelEpochMember) GetDelEpochMemTokenData() []byte {
 
 	// Next epoch Token Data format: "satsnet:delepochmem:validatorid:DelValidatorId:DelCode:EpochIndex:timestamp"
-	tokenData := fmt.Sprintf("satsnet:delepochmem:%d:%d:%d:%d:%d", he.ValidatorId, he.DelValidatorId, he.DelCode, he.EpochIndex, he.Result)
+	tokenData := fmt.Sprintf("satsnet:delepochmem:%s:%s:%d:%d:%d", he.ValidatorId, he.DelValidatorId, he.DelCode, he.EpochIndex, he.Result)
 	tokenSource := sha256.Sum256([]byte(tokenData))
 	//return hex.EncodeToString(tokenSource[:])
 
 	return tokenSource[:]
 }
 
-func (he *DelEpochMember) VerifyToken(pubKey []byte) bool {
+func (he *DelEpochMember) VerifyToken(pubKey string) bool {
 	signatureBytes, err := base64.StdEncoding.DecodeString(he.Token)
 	if err != nil {
-		utils.Log.Tracef("[DelEpochMember]VerifyToken: Invalid generator token, ignore it.")
+		utils.Log.Errorf("[DelEpochMember]VerifyToken: Invalid generator token, ignore it.")
 		return false
 	}
 
 	tokenData := he.GetDelEpochMemTokenData()
 
-	publicKey, err := secp256k1.ParsePubKey(pubKey[:])
+	pk, err := hex.DecodeString(pubKey)
 	if err != nil {
-		utils.Log.Tracef("ParsePubKey failed: %v", err)
+		utils.Log.Errorf("DecodeString failed: %v", err)
+		return false
+	}
+
+	publicKey, err := secp256k1.ParsePubKey(pk)
+	if err != nil {
+		utils.Log.Errorf("ParsePubKey failed: %v", err)
 		return false
 	}
 

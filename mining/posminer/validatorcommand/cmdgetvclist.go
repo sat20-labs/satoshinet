@@ -18,7 +18,7 @@ import (
 // message (MsgGenerator).
 type MsgGetVCList struct {
 	// Request validator id
-	ValidatorId uint64
+	ValidatorId string
 
 	// start and end height with validate chain, it begin from latest block height, so Start > End, and id end == -1,
 	// it means get all vc block list, Max size is 100, if size > 100, return 100 only
@@ -76,7 +76,7 @@ func (msg *MsgGetVCList) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgGetVCList) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgGetVCList:")
-	utils.Log.Tracef("ValidatorId: %d", msg.ValidatorId)
+	utils.Log.Tracef("ValidatorId: %s", msg.ValidatorId)
 	utils.Log.Tracef("Start: %d", msg.Start)
 	utils.Log.Tracef("End: %d", msg.End)
 }
@@ -84,7 +84,7 @@ func (msg *MsgGetVCList) LogCommandInfo() {
 // NewMsgGetVCList returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgGetVCList(validatorId uint64, start, end int64) *MsgGetVCList {
+func NewMsgGetVCList(validatorId string, start, end int64) *MsgGetVCList {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.

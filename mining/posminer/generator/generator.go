@@ -3,11 +3,11 @@ package generator
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
@@ -21,12 +21,12 @@ type MinerInterface interface {
 
 const (
 	// If the generator id is NoGeneratorId, it means the generator is not saved in the peer
-	NoGeneratorId = uint64(0xffffffffffffffff)
+	NoGeneratorId = ""
 	MinerInterval = 12 * time.Second
 )
 
 type Generator struct {
-	GeneratorId   uint64 // The validator id of generator
+	GeneratorId   string // The validator id of generator
 	Height        int32  // The block height for the generator
 	Timestamp     int64  // The time of generator created
 	Token         string // The token for the generator, it signed by generate
@@ -42,11 +42,11 @@ const (
 )
 
 type GeneratorHandOver struct {
-	ValidatorId  uint64 // The current validator id (current generator, or voter)
+	ValidatorId  string // The current validator id (current generator, or voter)
 	HandOverType int32  // HandOverType: 0: HandOver by current generator with Epoch member Order, 1: Vote by Epoch member
 	Timestamp    int64  // The time of generator hand over
 	Token        string // The token for generator handover, it sign by current generator (HandOver), if the type is vote, it is signed by voter
-	GeneratorId  uint64 // The next validator id (next generator)
+	GeneratorId  string // The next validator id (next generator)
 	Height       int32  // The next block height
 }
 
@@ -77,7 +77,7 @@ func (g *Generator) SetToken(token string) {
 	g.Token = token
 }
 
-func (g *Generator) VerifyToken(pubKey []byte) bool {
+func (g *Generator) VerifyToken(pubKey string) bool {
 	signatureBytes, err := base64.StdEncoding.DecodeString(g.Token)
 	if err != nil {
 		utils.Log.Tracef("[Generator]VerifyToken: Invalid generator token, ignore it.")
@@ -86,7 +86,12 @@ func (g *Generator) VerifyToken(pubKey []byte) bool {
 
 	tokenData := g.GetTokenData()
 
-	publicKey, err := secp256k1.ParsePubKey(pubKey[:])
+	pk, err := hex.DecodeString(pubKey)
+	if err != nil {
+		return false
+	}
+
+	publicKey, err := secp256k1.ParsePubKey(pk)
 	if err != nil {
 		utils.Log.Tracef("[Generator]VerifyToken: Invalid public key.")
 		return false
@@ -218,8 +223,7 @@ func (gho *GeneratorHandOver) VerifyToken(pubKey []byte) bool {
 }
 
 type MinerNewBlock struct {
-	GeneratorId uint64                               // The validator id of generator
-	PublicKey   [btcec.PubKeyBytesLenCompressed]byte // The public key of generator
+	GeneratorId string                               // The validator id of generator
 	Height      int32                                // The block height for the generator
 	MinerTime   int64                                // The time of generator created
 	Hash        *chainhash.Hash                      // Block hash

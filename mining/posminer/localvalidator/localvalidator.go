@@ -2,6 +2,7 @@ package localvalidator
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net"
 	"time"
@@ -34,7 +35,12 @@ func NewValidator(config *validator.Config, addrs []net.Addr) (*LocalValidator, 
 		},
 	}
 
-	validatorKey := NewValidatorKey(localValidator.Cfg.LocalValidatorPubKey, localValidator.Cfg.ChainParams)
+	pubkey, err := hex.DecodeString(localValidator.Cfg.LocalValidatorId)
+	if err != nil {
+		return nil, err
+	}
+
+	validatorKey := NewValidatorKey(pubkey, localValidator.Cfg.ChainParams)
 	localValidator.validatorKey = validatorKey
 
 	publicKey, err := localValidator.validatorKey.GetPublicKey()
@@ -47,11 +53,10 @@ func NewValidator(config *validator.Config, addrs []net.Addr) (*LocalValidator, 
 		ValidatorId: localValidator.Cfg.LocalValidatorId,
 		CreateTime:  time.Now(),
 	}
-	copy(validatorInfo.PublicKey[:], publicKey[:])
 
-	localValidator.UpdateValidatorInfo(&validatorInfo, validatorinfo.MaskValidatorId|validatorinfo.MaskPublicKey|validatorinfo.MaskCreateTime)
+	localValidator.UpdateValidatorInfo(&validatorInfo, validatorinfo.MaskValidatorId|validatorinfo.MaskCreateTime)
 
-	localValidator.isBootStrapNode = bootstrapnode.IsBootStrapNode(validatorInfo.PublicKey[:])
+	localValidator.isBootStrapNode = bootstrapnode.IsBootStrapNode(pubkey)
 
 	utils.Log.Tracef("Local validator ID: %d", localValidator.Cfg.LocalValidatorId)
 	utils.Log.Tracef("Local validator PublicKey: %x", publicKey)
@@ -125,18 +130,18 @@ func (v *LocalValidator) OnPeerConnected(addr net.Addr, validatorInfo *validator
 }
 
 // GetAllValidators invoke when the peer receiver GetValidators command.
-func (v *LocalValidator) GetAllValidators(validatorID uint64) []*validatorinfo.ValidatorInfo {
+func (v *LocalValidator) GetAllValidators(validatorID string) []*validatorinfo.ValidatorInfo {
 	// Will invoke validator manager to get all validators in local
-	utils.Log.Tracef("[LocalValidator]Receive GetValidators command from validator [%d]", validatorID)
+	utils.Log.Tracef("[LocalValidator]Receive GetValidators command from validator [%s]", validatorID)
 	if v.Cfg == nil || v.Cfg.Listener == nil {
 		return nil
 	}
-	validatorList := v.Cfg.Listener.GetValidatorList(validatorID)
+	validatorList := v.Cfg.Listener.GetValidatorList()
 	return validatorList
 }
 
-// GetAllValidators invoke when the peer receiver GetValidators command.
-func (v *LocalValidator) GetLocalEpoch(validatorID uint64) (*epoch.Epoch, *epoch.Epoch, error) {
+// GetLocalEpoch invoke when the peer receiver GetValidators command.
+func (v *LocalValidator) GetLocalEpoch(validatorID string) (*epoch.Epoch, *epoch.Epoch, error) {
 	// Will invoke validator manager to get all validators in local
 	utils.Log.Tracef("[LocalValidator]Receive GetLocalEpoch command from validator [%d]", validatorID)
 	if v.Cfg == nil || v.Cfg.Listener == nil {
@@ -156,7 +161,7 @@ func (v *LocalValidator) GetValidatorAddrsList() []net.Addr {
 }
 
 func (v *LocalValidator) isValidLocalValidator() bool {
-	if v.Cfg.LocalValidatorId == 0 {
+	if v.Cfg.LocalValidatorId == "" {
 		utils.Log.Errorf("Invalid validator ID")
 		return false
 	}
@@ -170,10 +175,9 @@ func (v *LocalValidator) OnAllValidatorsDeclare(validatorList []validatorinfo.Va
 }
 
 // GetLocalValidatorInfo invoke when local validator info.
-func (v *LocalValidator) GetLocalValidatorInfo(uint64) *validatorinfo.ValidatorInfo {
+func (v *LocalValidator) GetLocalValidatorInfo() *validatorinfo.ValidatorInfo {
 	utils.Log.Tracef("[LocalValidator]GetLocalValidatorInfo")
-	utils.Log.Tracef("ValidatorId: %d", v.ValidatorInfo.ValidatorId)
-	utils.Log.Tracef("PublicKey: %x", v.ValidatorInfo.PublicKey)
+	utils.Log.Tracef("ValidatorId: %s", v.ValidatorInfo.ValidatorId)
 	utils.Log.Tracef("CreateTime: %s", v.ValidatorInfo.CreateTime.Format(time.DateTime))
 	return &v.ValidatorInfo
 }
@@ -232,7 +236,7 @@ func (v *LocalValidator) ClearMyGenerator() {
 }
 
 // Get Generator info in local, it should be saved in manager
-func (v *LocalValidator) GetGenerator(validatorId uint64) *generator.Generator {
+func (v *LocalValidator) GetGenerator(validatorId string) *generator.Generator {
 	utils.Log.Tracef("[LocalValidator]GetGenerator from <%d>...", validatorId)
 	generator := v.Cfg.Listener.GetGenerator()
 	return generator
@@ -255,7 +259,7 @@ func (v *LocalValidator) OnHandOverGenerator(handOverInfo generator.GeneratorHan
 }
 
 // Req new epoch from remote peer
-func (v *LocalValidator) ReqNewEpoch(validatorID uint64, epochIndex int64, reason uint32) (*chainhash.Hash, error) {
+func (v *LocalValidator) ReqNewEpoch(validatorID string, epochIndex int64, reason uint32) (*chainhash.Hash, error) {
 
 	return v.Cfg.Listener.ReqNewEpoch(validatorID, epochIndex, reason)
 }
@@ -285,24 +289,24 @@ func (v *LocalValidator) ConfirmDelEpochMember(reqDelEpochMember *validatorcomma
 }
 
 // Received a notify handover command
-func (v *LocalValidator) OnNotifyHandover(validatorId uint64, remoteAddr net.Addr) {
+func (v *LocalValidator) OnNotifyHandover(validatorId string, remoteAddr net.Addr) {
 	utils.Log.Tracef("[LocalValidator]OnNotifyHandover from %d", validatorId)
 
 	v.Cfg.Listener.OnNotifyHandover(validatorId)
 }
 
 // Received get vc state command
-func (v *LocalValidator) GetVCState(validatorId uint64) (*validatorcommand.MsgVCState, error) {
+func (v *LocalValidator) GetVCState(validatorId string) (*validatorcommand.MsgVCState, error) {
 	return v.Cfg.Listener.GetVCState(validatorId)
 }
 
 // Received get vc list command
-func (v *LocalValidator) GetVCList(validatorId uint64, start int64, end int64) (*validatorcommand.MsgVCList, error) {
+func (v *LocalValidator) GetVCList(validatorId string, start int64, end int64) (*validatorcommand.MsgVCList, error) {
 	return v.Cfg.Listener.GetVCList(validatorId, start, end)
 }
 
 // Received get vc block command
-func (v *LocalValidator) GetVCBlock(validatorId uint64, blockType uint32, hash chainhash.Hash) (*validatorcommand.MsgVCBlock, error) {
+func (v *LocalValidator) GetVCBlock(validatorId string, blockType uint32, hash chainhash.Hash) (*validatorcommand.MsgVCBlock, error) {
 	return v.Cfg.Listener.GetVCBlock(validatorId, blockType, hash)
 }
 

@@ -22,7 +22,7 @@ const (
 // The remote peer must then respond validators message.
 type MsgNewEpoch struct {
 	// ValidatorId of the new epoch supported
-	ValidatorId uint64 // Validator Id
+	ValidatorId string // Validator Id
 
 	// epoch info for the new epoch
 	// EpochIndex   uint32            // Epoch Index, start from 0
@@ -141,7 +141,7 @@ func (msg *MsgNewEpoch) MaxPayloadLength(pver uint32) uint32 {
 
 func (msg *MsgNewEpoch) LogCommandInfo() {
 	utils.Log.Tracef("Command MsgNewEpoch:")
-	utils.Log.Tracef("Validator Id: %d", msg.ValidatorId)
+	utils.Log.Tracef("Validator Id: %s", msg.ValidatorId)
 	utils.Log.Tracef("Hash: %s", msg.Hash.String())
 
 	// utils.Log.Tracef("Epoch Index: %d", msg.EpochIndex)
@@ -163,7 +163,7 @@ func (msg *MsgNewEpoch) LogCommandInfo() {
 // NewMsgNewEpoch returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgNewEpoch(validatorId uint64, hash *chainhash.Hash) *MsgNewEpoch {
+func NewMsgNewEpoch(validatorId string, hash *chainhash.Hash) *MsgNewEpoch {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.

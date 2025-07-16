@@ -24,7 +24,7 @@ const (
 // The remote peer must then respond validators message.
 type MsgConfirmEpoch struct {
 	// ValidatorId of the epoch confirmed
-	ValidatorId uint64 // Validator Id
+	ValidatorId string // Validator Id
 
 	// epoch info for the confirmed epoch
 	EpochIndex   int64             // Epoch Index, start from 0
@@ -74,10 +74,6 @@ func (msg *MsgConfirmEpoch) BtcDecode(r io.Reader, pver uint32) error {
 		if err != nil {
 			return err
 		}
-		err = utils.ReadElements(buf, &epochItem.PublicKey)
-		if err != nil {
-			return err
-		}
 		err = utils.ReadElements(buf, &epochItem.Index)
 		if err != nil {
 			return err
@@ -117,11 +113,6 @@ func (msg *MsgConfirmEpoch) BtcEncode(w io.Writer, pver uint32) error {
 			return err
 		}
 		err = utils.WriteElements(w, validator.Host)
-		if err != nil {
-			return err
-		}
-
-		err = utils.WriteElements(w, validator.PublicKey)
 		if err != nil {
 			return err
 		}
@@ -166,9 +157,8 @@ func (msg *MsgConfirmEpoch) LogCommandInfo() {
 	for index, validator := range msg.ItemList {
 		utils.Log.Tracef("-------------------------------------")
 		utils.Log.Tracef("No: %d", index)
-		utils.Log.Tracef("Validator Id: %d", validator.ValidatorId)
+		utils.Log.Tracef("Validator Id: %s", validator.ValidatorId)
 		utils.Log.Tracef("Validator Host: %s", validator.Host)
-		utils.Log.Tracef("Validator PublicKey: %x", validator.PublicKey)
 		utils.Log.Tracef("Validator Index: %d", validator.Index)
 		utils.Log.Tracef("")
 	}
@@ -182,7 +172,7 @@ func (msg *MsgConfirmEpoch) LogCommandInfo() {
 // NewMsgConfirmEpoch returns a new bitcoin version message that conforms to the
 // Message interface using the passed parameters and defaults for the remaining
 // fields.
-func NewMsgConfirmEpoch(validatorId uint64, newEpoch *epoch.Epoch) *MsgConfirmEpoch {
+func NewMsgConfirmEpoch(validatorId string, newEpoch *epoch.Epoch) *MsgConfirmEpoch {
 
 	// Limit the timestamp to one second precision since the protocol
 	// doesn't support better.
@@ -201,7 +191,6 @@ func NewMsgConfirmEpoch(validatorId uint64, newEpoch *epoch.Epoch) *MsgConfirmEp
 		validatorItem := epoch.EpochItem{
 			ValidatorId: epochItem.ValidatorId,
 			Host:        epochItem.Host,
-			PublicKey:   epochItem.PublicKey,
 			Index:       epochItem.Index,
 		}
 		newEpochMsg.ItemList = append(newEpochMsg.ItemList, validatorItem)

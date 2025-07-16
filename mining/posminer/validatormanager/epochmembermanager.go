@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/mining/posminer/epoch"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
 	"github.com/sat20-labs/satoshinet/mining/posminer/validator"
@@ -29,26 +28,26 @@ type DisconnectEpochMember struct {
 }
 
 type DelEpochMemberResult struct {
-	PublicKey [btcec.PubKeyBytesLenCompressed]byte
+	ValidatorId string
 	Result    uint32
 	Token     string
 }
 
 type DelEpochMemberCollection struct {
-	ResultList map[uint64]*DelEpochMemberResult
+	ResultList map[string]*DelEpochMemberResult
 	StartTime  time.Time
 }
 
 type EpochMemberManager struct {
 	ValidatorMgr     *ValidatorManager
 	CurrentEpoch     *epoch.Epoch
-	ConnectedList    map[uint64]*validator.Validator
+	ConnectedList    map[string]*validator.Validator
 	connectedListMtx sync.RWMutex
 
-	DisconnectedList    map[uint64]*DisconnectEpochMember
+	DisconnectedList    map[string]*DisconnectEpochMember
 	disconnectedListMtx sync.RWMutex
 
-	receivedDelEpochMemberResult map[uint64]*DelEpochMemberCollection
+	receivedDelEpochMemberResult map[string]*DelEpochMemberCollection
 }
 
 func CreateEpochMemberManager(validatorMgr *ValidatorManager) *EpochMemberManager {
@@ -56,7 +55,7 @@ func CreateEpochMemberManager(validatorMgr *ValidatorManager) *EpochMemberManage
 		ValidatorMgr:                 validatorMgr,
 		disconnectedListMtx:          sync.RWMutex{},
 		connectedListMtx:             sync.RWMutex{},
-		receivedDelEpochMemberResult: make(map[uint64]*DelEpochMemberCollection),
+		receivedDelEpochMemberResult: make(map[string]*DelEpochMemberCollection),
 	}
 }
 
@@ -66,7 +65,7 @@ func (em *EpochMemberManager) UpdateCurrentEpoch(currentEpoch *epoch.Epoch) {
 	em.updateValidatorsList()
 }
 
-func (em *EpochMemberManager) GetEpochMember(validatorID uint64) (*validator.Validator, bool) {
+func (em *EpochMemberManager) GetEpochMember(validatorID string) (*validator.Validator, bool) {
 
 	utils.Log.Tracef("connectedListMtx4 Locked")
 	em.connectedListMtx.RLock()
@@ -117,8 +116,8 @@ func (em *EpochMemberManager) updateValidatorsList() {
 		utils.Log.Tracef("disconnectedListMtx2 Unocked")
 	}()
 
-	em.ConnectedList = make(map[uint64]*validator.Validator)
-	em.DisconnectedList = make(map[uint64]*DisconnectEpochMember)
+	em.ConnectedList = make(map[string]*validator.Validator)
+	em.DisconnectedList = make(map[string]*DisconnectEpochMember)
 
 	utils.Log.Tracef("[EpochMemberManager]Old validators list has cleared.")
 
@@ -137,7 +136,7 @@ func (em *EpochMemberManager) updateValidatorsList() {
 		if validatorItem == nil {
 			// 没有找到对应的validator, 需要将这个成员按照离线处理
 			// Add the validator
-			validatorCfg := em.ValidatorMgr.newValidatorConfig(em.ValidatorMgr.Cfg.ValidatorId, em.ValidatorMgr.Cfg.ValidatorPubKey, nil)
+			validatorCfg := em.ValidatorMgr.newValidatorConfig(em.ValidatorMgr.Cfg.ValidatorId, nil)
 
 			addr, err := em.ValidatorMgr.getAddr(epochItem.Host)
 			if err != nil {
@@ -164,7 +163,7 @@ func (em *EpochMemberManager) updateValidatorsList() {
 	utils.Log.Tracef("[EpochMemberManager]Update validators list Done.")
 }
 
-func (em *EpochMemberManager) OnValidatorDisconnected(validatorID uint64) {
+func (em *EpochMemberManager) OnValidatorDisconnected(validatorID string) {
 
 	utils.Log.Tracef("[EpochMemberManager]A epoch member is disconnected: %d", validatorID)
 
@@ -322,7 +321,7 @@ func (em *EpochMemberManager) reconnectEpochMember() bool {
 	return false
 }
 
-func (em *EpochMemberManager) ReqDelEpochMember(delValidatorID uint64) {
+func (em *EpochMemberManager) ReqDelEpochMember(delValidatorID string) {
 	CmdReqDelEpochMember := validatorcommand.NewMsgReqDelEpochMember(em.ValidatorMgr.Cfg.ValidatorId,
 		validatorcommand.CmdDelEpochMemberTarget_Consult,
 		delValidatorID,
@@ -332,7 +331,7 @@ func (em *EpochMemberManager) ReqDelEpochMember(delValidatorID uint64) {
 	//em.ValidatorMgr.BroadcastCommand(CmdReqDelEpochMember)
 
 	delMemberCollection := &DelEpochMemberCollection{
-		ResultList: make(map[uint64]*DelEpochMemberResult),
+		ResultList: make(map[string]*DelEpochMemberResult),
 		StartTime:  time.Now(),
 	}
 
@@ -347,7 +346,7 @@ func (em *EpochMemberManager) ReqDelEpochMember(delValidatorID uint64) {
 
 	utils.Log.Tracef("Will broadcast DelEpoch command from all connected validators...")
 	for validatorId, validator := range em.ConnectedList {
-		delMemberCollection.ResultList[validatorId] = &DelEpochMemberResult{PublicKey: validator.ValidatorInfo.PublicKey, Result: epoch.DelEpochMemberResult_NotConfirm, Token: ""}
+		delMemberCollection.ResultList[validatorId] = &DelEpochMemberResult{ValidatorId: validator.ValidatorInfo.ValidatorId, Result: epoch.DelEpochMemberResult_NotConfirm, Token: ""}
 		validator.SendCommand(CmdReqDelEpochMember)
 	}
 
@@ -364,7 +363,7 @@ func (em *EpochMemberManager) ReqDelEpochMember(delValidatorID uint64) {
 	// Sign the token by local validator private key
 	token, err := em.ValidatorMgr.SignToken(tokenData)
 	if err == nil {
-		resultLocal := &DelEpochMemberResult{PublicKey: em.ValidatorMgr.myValidator.ValidatorInfo.PublicKey, Result: epoch.DelEpochMemberResult_Agree, Token: token}
+		resultLocal := &DelEpochMemberResult{ValidatorId: em.ValidatorMgr.myValidator.ValidatorInfo.ValidatorId, Result: epoch.DelEpochMemberResult_Agree, Token: token}
 		delMemberCollection.ResultList[em.ValidatorMgr.myValidator.ValidatorInfo.ValidatorId] = resultLocal
 	}
 
@@ -389,7 +388,7 @@ func (em *EpochMemberManager) OnConfirmedDelEpochMember(delEpochMember *epoch.De
 	if confirmedValidator == nil {
 		return
 	}
-	verified := delEpochMember.VerifyToken(confirmedValidator.ValidatorInfo.PublicKey[:])
+	verified := delEpochMember.VerifyToken(confirmedValidator.ValidatorInfo.ValidatorId)
 	if !verified {
 		// The confirm command isnot verified
 		return
@@ -403,11 +402,11 @@ func (em *EpochMemberManager) OnConfirmedDelEpochMember(delEpochMember *epoch.De
 	}
 
 	// record validator confirm result
-	result := &DelEpochMemberResult{PublicKey: confirmedValidator.ValidatorInfo.PublicKey, Result: delEpochMember.Result, Token: delEpochMember.Token}
+	result := &DelEpochMemberResult{ValidatorId: confirmedValidator.ValidatorInfo.ValidatorId, Result: delEpochMember.Result, Token: delEpochMember.Token}
 	delValidatorCollection.ResultList[confirmedValidatorId] = result
 }
 
-func (em *EpochMemberManager) delEpochMemberHandler(delValidatorID uint64) {
+func (em *EpochMemberManager) delEpochMemberHandler(delValidatorID string) {
 	utils.Log.Tracef("[EpochMemberManager]delEpochMemberHandler ...")
 
 	exitDelEpochHandler := make(chan struct{})
@@ -422,7 +421,7 @@ func (em *EpochMemberManager) delEpochMemberHandler(delValidatorID uint64) {
     utils.Log.Tracef("[EpochMemberManager]delEpochMemberHandler done .")
 }
 
-func (em *EpochMemberManager) handleDelEpochMember(delValidatorID uint64) {
+func (em *EpochMemberManager) handleDelEpochMember(delValidatorID string) {
 
 	delValidatorCollection, ok := em.receivedDelEpochMemberResult[delValidatorID]
 	if !ok {
@@ -461,7 +460,7 @@ func (em *EpochMemberManager) handleDelEpochMember(delValidatorID uint64) {
 	}
 }
 
-func (em *EpochMemberManager) NotifyEpochMemberDeleted(delValidatorID uint64) {
+func (em *EpochMemberManager) NotifyEpochMemberDeleted(delValidatorID string) {
 	CmdConfirmDelEpochMember := validatorcommand.NewMsgReqDelEpochMember(em.ValidatorMgr.Cfg.ValidatorId,
 		validatorcommand.CmdDelEpochMemberTarget_Confirm,
 		delValidatorID,
@@ -557,7 +556,7 @@ func (em *EpochMemberManager) handleCheckMemberConnected(delValidator *validator
 	}
 }
 
-func (em *EpochMemberManager) NewConfirmDelMember(delValidatorId uint64, reqDelEpochMember *validatorcommand.MsgReqDelEpochMember, result uint32) *epoch.DelEpochMember {
+func (em *EpochMemberManager) NewConfirmDelMember(delValidatorId string, reqDelEpochMember *validatorcommand.MsgReqDelEpochMember, result uint32) *epoch.DelEpochMember {
 	delEpochMember := &epoch.DelEpochMember{
 		ValidatorId:    em.ValidatorMgr.Cfg.ValidatorId,
 		DelValidatorId: delValidatorId,
