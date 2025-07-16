@@ -70,7 +70,7 @@ const (
 	defaultSigCacheMaxSize       = 100000
 	defaultUtxoCacheMaxSizeMiB   = 250
 	sampleConfigFilename         = "sample-satsnet.conf"
-	defaultTxIndex               = false
+	defaultTxIndex               = true
 	defaultAddrIndex             = false
 	pruneMinSize                 = 1536
 )
