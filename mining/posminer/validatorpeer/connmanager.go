@@ -263,8 +263,8 @@ out:
 			err := connReq.writeMessage(command)
 			if err != nil {
 				// TODO: writeMessage error, maybe the connect is disconnect
-				utils.Log.Errorf("----------[%s]writeMessage failed, the conn is disconnect, close it.", connReq.String())
-				connReq.Close()
+				utils.Log.Errorf("----------[%s]writeMessage failed, %v", connReq.String(), err)
+				//connReq.Close()
 				break out
 			}
 

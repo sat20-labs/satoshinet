@@ -101,8 +101,9 @@ func (msg *MsgVoteReq) Command() string {
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgVoteReq) MaxPayloadLength(pver uint32) uint32 {
-	// ValidatorId 8 bytes + VoteType 4 bytes + VoteId 4 bytes  + EpochIndex 8 bytes + VoteCount 4 bytes + StartTime 8 bytes + EndTime 8 bytes
-	return 44
+	// ValidatorId 66 bytes + VoteType 4 bytes + VoteId 4 bytes  + EpochIndex 8 bytes 
+	// + VoteCount 4 bytes + StartTime 8 bytes + EndTime 8 bytes
+	return 102
 }
 
 func (msg *MsgVoteReq) LogCommandInfo() {

@@ -64,8 +64,8 @@ func (msg *MsgNextEpoch) Command() string {
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgNextEpoch) MaxPayloadLength(pver uint32) uint32 {
-	// validatorId 8 bytes + timestamp 8bytes + token 256 bytes + nextEpochIndex 4bytes + nextHeight 4bytes
-	return 280
+	// validatorId 66 bytes + timestamp 8bytes + token 256 bytes + nextEpochIndex 4bytes + nextHeight 4bytes
+	return 338
 }
 
 func (msg *MsgNextEpoch) LogCommandInfo() {

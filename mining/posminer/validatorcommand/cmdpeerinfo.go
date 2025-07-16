@@ -10,7 +10,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
 	"github.com/sat20-labs/satoshinet/mining/posminer/validatorinfo"
 )
@@ -74,8 +73,8 @@ func (msg *MsgPeerInfo) Command() string {
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgPeerInfo) MaxPayloadLength(pver uint32) uint32 {
 
-	// Protocol version 4 bytes + validatorId 8 bytes  + btcec.PubKeyBytesLenCompressed bytes + timestamp 8 bytes
-	return 20 + btcec.PubKeyBytesLenCompressed + MaxHostSize
+	// Protocol version 4 bytes + validatorId 66 bytes + timestamp 8 bytes
+	return 78 + MaxHostSize
 }
 
 func (msg *MsgPeerInfo) LogCommandInfo() {

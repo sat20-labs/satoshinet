@@ -482,7 +482,7 @@ func NewRemotePeer(cfg *RemotePeerConfig, addr net.Addr) (*RemotePeer, error) {
 	// p.addrsList = make([]net.Addr, 0, len(addrs))
 	// p.addrsList = append(p.addrsList, addrs...)
 
-	utils.Log.Tracef("NewRemotepeer (%s) with local validator ID: %d", addr.String(), p.cfg.LocalValidatorId)
+	utils.Log.Tracef("NewRemotepeer (%s) with local validator ID: %s", addr.String(), p.cfg.LocalValidatorId)
 
 	p.addr = addr
 
@@ -691,7 +691,7 @@ func (p *RemotePeer) listenCommand(connReq *ConnReq) {
 		_, command, _, err := validatorcommand.ReadMessage(connReq.conn, p.ValidatorVersion(), p.cfg.ChainParams.Net)
 		if err != nil {
 			if err == io.EOF {
-				utils.Log.Errorf("----------[RemotePeer]conn[%d]: Connection closed by peer。", connReq.id)
+				utils.Log.Errorf("----------[RemotePeer]conn[%d]: Connection closed by peer。%v", connReq.id, err)
 			} else {
 				utils.Log.Errorf("----------[RemotePeer]conn[%d]: Read message failed: %v", connReq.id, err)
 			}

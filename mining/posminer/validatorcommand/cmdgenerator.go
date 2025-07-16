@@ -80,8 +80,8 @@ func (msg *MsgGenerator) Command() string {
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgGenerator) MaxPayloadLength(pver uint32) uint32 {
-	// GeneratorId 8 bytes  +timestamp 8 bytes + token GeneratorTokenSize bytes
-	return 16 + MaxGeneratorTokenSize
+	// GeneratorId 66 bytes + Height 4  +timestamp 8 bytes + token GeneratorTokenSize bytes
+	return 78 + MaxGeneratorTokenSize
 }
 
 func (msg *MsgGenerator) LogCommandInfo() {

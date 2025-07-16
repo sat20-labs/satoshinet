@@ -194,7 +194,7 @@ func (v *Validator) String() string {
 	v.infoMtx.Lock()
 	validatorId := v.ValidatorInfo.ValidatorId
 	v.infoMtx.Unlock()
-	return fmt.Sprintf("Remote Validator ID: %d, Addr:%s", validatorId, addr)
+	return fmt.Sprintf("Remote Validator ID: %s, Addr:%s", validatorId, addr)
 }
 
 // Addr returns the peer address.
