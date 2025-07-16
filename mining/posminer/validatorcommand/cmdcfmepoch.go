@@ -140,9 +140,9 @@ func (msg *MsgConfirmEpoch) Command() string {
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgConfirmEpoch) MaxPayloadLength(pver uint32) uint32 {
-	//  ValidatorId 66 bytes + EpochIndex 8 bytes + CreateHeight 4 bytes + CreateTime 8 bytes + ValidatorCount 4 bytes
+	//  ValidatorId 66 + 4 bytes + EpochIndex 8 bytes + CreateHeight 4 bytes + CreateTime 8 bytes + ValidatorCount 4 bytes
 	//  Max validator count is 256 (Max Epoch Size) , EpochItem is 60 bytes + LastChangeTime 8 bytes + VCBlockHeight 8 bytes + VCBlockHash 32 bytes
-	return 90 + 256*60 + 48 // 69 len of validatorinfo.ValidatorInfo to be sent
+	return 94 + 256*60 + 48 // 69 len of validatorinfo.ValidatorInfo to be sent
 
 }
 

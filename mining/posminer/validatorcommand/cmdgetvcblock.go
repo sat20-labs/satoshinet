@@ -73,8 +73,8 @@ func (msg *MsgGetVCBlock) Command() string {
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgGetVCBlock) MaxPayloadLength(pver uint32) uint32 {
-	// validatorId 66 bytes + BlockType 4 bytes + Block Hash 32 bytes
-	return 102
+	// validatorId 66 + 4 bytes + BlockType 4 bytes + Block Hash 32 bytes
+	return 106
 }
 
 func (msg *MsgGetVCBlock) LogCommandInfo() {

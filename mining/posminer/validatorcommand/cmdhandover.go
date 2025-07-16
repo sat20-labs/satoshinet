@@ -86,9 +86,9 @@ func (msg *MsgHandOver) Command() string {
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgHandOver) MaxPayloadLength(pver uint32) uint32 {
-	// ValidatorId 66 bytes + HandOverType 4 bytes + GeneratorId 66 bytes  +
+	// ValidatorId 66 + 4 bytes + HandOverType 4 bytes + GeneratorId 66 + 4 bytes  +
 	// timestamp 8 bytes + block height 4 bytes + MaxHandOverTokenSize bytes
-	return 148 + MaxHandOverTokenSize
+	return 156 + MaxHandOverTokenSize
 }
 
 func (msg *MsgHandOver) LogCommandInfo() {

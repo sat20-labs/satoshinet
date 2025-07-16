@@ -85,8 +85,8 @@ func (msg *MsgGetInfo) Command() string {
 // receiver.  This is part of the Message interface implementation.
 func (msg *MsgGetInfo) MaxPayloadLength(pver uint32) uint32 {
 
-	// Protocol version 4 bytes + validatorId 66 bytes + timestamp 8 bytes
-	return 78 + MaxHostSize
+	// Protocol version 4 bytes + validatorId 66 + 4 bytes + timestamp 8 bytes
+	return 82 + MaxHostSize
 }
 
 func (msg *MsgGetInfo) LogCommandInfo() {
