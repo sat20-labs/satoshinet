@@ -21,6 +21,7 @@ import (
 const (
 	SAT20_MAGIC_NUMBER          = txscript.OP_16
 	// 通道
+	CONTENT_TYPE_MIN	        = txscript.OP_0
 	CONTENT_TYPE_CHANNELID      = txscript.OP_0
 	CONTENT_TYPE_ASCENDING      = txscript.OP_DATA_1
 	CONTENT_TYPE_DESCENDING     = txscript.OP_DATA_2
@@ -41,9 +42,10 @@ const (
 	CONTENT_TYPE_DESTROY        = txscript.OP_DATA_40
 	CONTENT_TYPE_SWAP           = txscript.OP_DATA_41
 	CONTENT_TYPE_BINDREFERRER   = txscript.OP_DATA_42
+	CONTENT_TYPE_MAX	        = txscript.OP_DATA_75
 	// -> OP_DATA_75
 
-	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 2
+	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 8
 )
 
 type ContractDeployData struct {
@@ -195,7 +197,7 @@ func NullDataScript(ctype uint8, data []byte) ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddOp(txscript.OP_RETURN).
 		AddOp(SAT20_MAGIC_NUMBER).
-		AddOp(ctype).
+		AddInt64(int64(ctype)).
 		AddData(data).Script()
 }
 
@@ -210,12 +212,16 @@ func IsSTPNullDataScript(script []byte) bool {
 		return false
 	}
 
-	if !tokenizer.Next() || tokenizer.Err() != nil {
+	// content type
+	if !tokenizer.Next() || tokenizer.Err() != nil  {
+		return false
+	}
+	ctype := tokenizer.ExtractInt64()
+	if ctype > CONTENT_TYPE_MAX || ctype < CONTENT_TYPE_MIN {
 		return false
 	}
 
-	return tokenizer.Next() && tokenizer.Done() &&
-		(txscript.IsSmallInt(tokenizer.Opcode()) || tokenizer.Opcode() <= txscript.OP_PUSHDATA4) &&
+	return tokenizer.Next() && tokenizer.Data() != nil &&
 		len(tokenizer.Data()) <= MAX_PAYLOAD_LEN
 }
 
@@ -233,13 +239,16 @@ func ReadDataFromNullDataScript(script []byte) (uint8, []byte, error) {
 
 	// content type
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return 0, nil, fmt.Errorf("script is not STP")
+		return 0, nil, fmt.Errorf("script is not STP script")
 	}
-	ctype := tokenizer.Opcode()
+	ctype := uint8(tokenizer.ExtractInt64())
+	if ctype > CONTENT_TYPE_MAX || ctype < CONTENT_TYPE_MIN {
+		return 0, nil, fmt.Errorf("invalid type code %d", ctype)
+	}
 
 	// 检查是否有数据部分
 	if !tokenizer.Next() || tokenizer.Data() == nil {
-		return 0, nil, fmt.Errorf("no data found after OP_RETURN")
+		return 0, nil, fmt.Errorf("no stp data found in OP_RETURN")
 	}
 
 	// 返回数据部分

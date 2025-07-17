@@ -146,19 +146,10 @@ func IsDeAnchorTx(msgTx *wire.MsgTx) bool {
 	// 一定有一个 deAnchor 输出和一个附加信息输出
 
 	for _, txOut := range msgTx.TxOut {
-		tokenizer := txscript.MakeScriptTokenizer(0, txOut.PkScript)
-		// 检查第一个操作码是否为 OP_RETURN
-		if !tokenizer.Next() || tokenizer.Opcode() != txscript.OP_RETURN {
+		ctype, _, err := common.ReadDataFromNullDataScript(txOut.PkScript)
+		if err != nil {
 			continue
 		}
-		if !tokenizer.Next() || tokenizer.Opcode() != common.SAT20_MAGIC_NUMBER {
-			continue
-		}
-		// content type
-		if !tokenizer.Next() || tokenizer.Err() != nil {
-			continue
-		}
-		ctype := tokenizer.Opcode()
 		if ctype == common.CONTENT_TYPE_DESCENDING {
 			if txOut.Value >= 330 || (len(txOut.Assets) > 0 && txOut.Assets[0].Amount.Sign() > 0) {
 				return true

@@ -72,3 +72,35 @@ func TestTxAssets2(t *testing.T) {
 	fmt.Printf("assetChange %v\n", assetChange)
 
 }
+
+func TestSTPScript(t *testing.T) {
+	{
+		script, err := NullDataScript(CONTENT_TYPE_MIN, []byte("new channel"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("script: %v\n", script)
+		fmt.Printf("is stp script: %v\n", IsSTPNullDataScript(script))
+
+		ctype, data, err := ReadDataFromNullDataScript(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("%d %s\n", ctype, string(data))
+	}
+
+	{
+		script, err := NullDataScript(CONTENT_TYPE_MAX, []byte("new channel"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("script: %v\n", script)
+		fmt.Printf("is stp script: %v\n", IsSTPNullDataScript(script))
+
+		ctype, data, err := ReadDataFromNullDataScript(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("%d %s\n", ctype, string(data))
+	}
+}
