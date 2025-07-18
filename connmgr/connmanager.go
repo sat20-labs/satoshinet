@@ -390,15 +390,20 @@ func (cm *ConnManager) NewConnReq() {
 		return
 	}
 
-	c := &ConnReq{}
+	// 在申请 connReq 前，先尝试获取地址
+	addr, err := cm.cfg.GetNewAddress()
+	if err != nil || addr == nil || addr.String() == "" {
+		log.Tracef("NewConnReq skipped: no address available now.")
+		return
+	}
+
+	// 有地址再生成 connReq
+	c := &ConnReq{Addr: addr}
 	atomic.StoreUint64(&c.id, atomic.AddUint64(&cm.connReqCount, 1))
 
-	log.Debugf("New connection request with id (%d) without addr", c.id)
+	log.Debugf("New connection request with id (%d) for addr (%s)", c.id, addr.String())
 
-	// Submit a request of a pending connection attempt to the connection
-	// manager. By registering the id before the connection is even
-	// established, we'll be able to later cancel the connection via the
-	// Remove method.
+	// 注册连接请求
 	done := make(chan struct{})
 	select {
 	case cm.requests <- registerPending{c, done}:
@@ -406,8 +411,6 @@ func (cm *ConnManager) NewConnReq() {
 		return
 	}
 
-	// Wait for the registration to successfully add the pending conn req to
-	// the conn manager's internal state.
 	select {
 	case <-done:
 	case <-cm.quit:
@@ -415,19 +418,7 @@ func (cm *ConnManager) NewConnReq() {
 	}
 
 	log.Debugf("Registered connection (%d) to pending list", c.id)
-
-	addr, err := cm.cfg.GetNewAddress()
-	if err != nil {
-		select {
-		case cm.requests <- handleFailed{c, err}:
-		case <-cm.quit:
-		}
-		log.Debugf("No new address for connection (%d)", c.id)
-		return
-	}
-
-	c.Addr = addr
-	log.Debugf("Set addr <%s> to conn (%d) and try to connect...", addr, c.id)
+	log.Debugf("Start to connect <%s> with conn (%d)", addr, c.id)
 
 	cm.Connect(c)
 }
