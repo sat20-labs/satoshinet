@@ -279,7 +279,7 @@ out:
 			// message.
 			atomic.StoreInt64(&connReq.lastSend, time.Now().Unix())
 
-			utils.Log.Tracef("----------[%s]command [%s] has sent.", connReq.String(), command.Command())
+			utils.Log.Debugf("----------[%s]command [%s] has sent.", connReq.String(), command.Command())
 			connReq.CmdsLock.Lock()
 			connReq.sended[command] = time.Now().Unix()
 			if len(connReq.sended) > 16 {

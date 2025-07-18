@@ -723,7 +723,7 @@ func (p *RemotePeer) handleCommand(connReq *ConnReq, command validatorcommand.Me
 
 	case *validatorcommand.MsgPing:
 
-		utils.Log.Tracef("----------[RemotePeer]Receive ping command, will response pong command")
+		utils.Log.Infof("----------[LocalPeer]Receive ping command %d from %s, will response pong command", cmd.Nonce, connReq.RemoteAddr.String())
 		//cmd.LogCommandInfo()
 		// Handle command ping, it will response "pong" message
 		cmdPong := validatorcommand.NewMsgPong(cmd.Nonce)
