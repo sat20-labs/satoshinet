@@ -622,7 +622,7 @@ out:
 				p.Connect()
 				continue
 			}
-			
+
 			nonce, err := wire.RandomUint64()
 			if err != nil {
 				utils.Log.Errorf("Not sending ping to %s: %v", p, err)
@@ -639,10 +639,10 @@ out:
 			p.SendCommand(validatorcommand.NewMsgPing(nonce))
 
 			go func() {
-				// Wait for check pong
+				// Wait for check pong，等待时间要小于 urgent_ping_interval 
 				nonce := p.LastPingNonce()
-				for i := 0; nonce != 0 && i < 5; i++ {
-					time.Sleep(1 * time.Second)
+				for i := 0; nonce != 0 && i < 10; i++ {
+					time.Sleep(time.Second)
 					nonce = p.LastPingNonce()
 				}
 
