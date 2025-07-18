@@ -40,7 +40,7 @@ const (
 	// pingInterval is the interval of time to wait in between sending ping
 	// messages.
 	pingInterval         = 120 * time.Second // 2 * time.Minute
-	urgent_ping_interval = 12 * time.Second   //
+	urgent_ping_interval = 10 * time.Second   //
 
 	peerInActiveInterval = 5 * pingInterval // 5 times pingInterval
 

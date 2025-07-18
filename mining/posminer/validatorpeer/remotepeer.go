@@ -641,7 +641,7 @@ out:
 			go func() {
 				// Wait for check pong，等待时间要小于 urgent_ping_interval 
 				nonce := p.LastPingNonce()
-				for i := 0; nonce != 0 && i < 10; i++ {
+				for i := 0; nonce != 0 && i < 8; i++ {
 					time.Sleep(time.Second)
 					nonce = p.LastPingNonce()
 				}
