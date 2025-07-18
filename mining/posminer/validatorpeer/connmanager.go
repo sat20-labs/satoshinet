@@ -250,52 +250,45 @@ out:
 	for {
 		select {
 		case <-connReq.sendQueue:
-			//utils.Log.Tracef("----------[%s]Received signal to send command.", connReq.String())
-			command := connReq.PopNextCommand()
-			if command == nil {
-				// No command in queue, wait for the next signal
-				//utils.Log.Tracef("----------[%s]No command to be sent.", connReq.String())
-				continue
-			}
-
-			//command := item.Value.(validatorcommand.Message)
-			//utils.Log.Tracef("----------[%s]Will send command [%s].", connReq.String(), command.Command())
-
-			err := connReq.writeMessage(command)
-			if err != nil {
-				// TODO: writeMessage error, maybe the connect is disconnect
-				utils.Log.Errorf("----------[%s]writeMessage failed, %v", connReq.String(), err)
-				if strings.Contains(err.Error(), "closed network connection") {
-					connReq.Close()
+			for {
+				command := connReq.PopNextCommand()
+				if command == nil {
+					break // backlog 全部发完，退出 inner loop 等待下次唤醒
 				}
 
-				break out
-			}
+				writeStart := time.Now()
+				err := connReq.writeMessage(command)
+				writeDur := time.Since(writeStart)
 
-			// At this point, the message was successfully sent, so
-			// update the last send time, signal the sender of the
-			// message that it has been sent (if requested), and
-			// signal the send queue to the deliver the next queued
-			// message.
-			atomic.StoreInt64(&connReq.lastSend, time.Now().Unix())
+				if err != nil {
+					utils.Log.Errorf("----------[%s]writeMessage failed, %v", connReq.String(), err)
+					if strings.Contains(err.Error(), "closed network connection") {
+						connReq.Close()
+					}
+					break out
+				}
 
-			utils.Log.Debugf("----------[%s]command [%s] has sent.", connReq.String(), command.Command())
-			connReq.CmdsLock.Lock()
-			connReq.sended[command] = time.Now().Unix()
-			if len(connReq.sended) > 16 {
-				min := int64(math.MaxInt64)
-				var cmd validatorcommand.Message
-				for k, v := range connReq.sended {
-					if v < min {
-						min = v
-						cmd = k
+				atomic.StoreInt64(&connReq.lastSend, time.Now().Unix())
+				utils.Log.Debugf("----------[%s]command [%s] has sent in %s.", connReq.String(), command.Command(), writeDur)
+
+				connReq.CmdsLock.Lock()
+				connReq.sended[command] = time.Now().Unix()
+				if len(connReq.sended) > 16 {
+					// 清理最早的一条已发送记录，防止 map 过大
+					min := int64(math.MaxInt64)
+					var cmd validatorcommand.Message
+					for k, v := range connReq.sended {
+						if v < min {
+							min = v
+							cmd = k
+						}
+					}
+					if cmd != nil {
+						delete(connReq.sended, cmd)
 					}
 				}
-				if cmd != nil {
-					delete(connReq.sended, cmd)
-				}
+				connReq.CmdsLock.Unlock()
 			}
-			connReq.CmdsLock.Unlock()
 
 			// connReq.sendDoneQueue <- command 需要有线程读取数据，不然会卡住
 

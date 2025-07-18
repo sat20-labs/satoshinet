@@ -422,10 +422,10 @@ func (p *RemotePeer) SendCommand(command validatorcommand.Message) error {
 	connReq := p.connReq
 	p.connLock.RUnlock()
 	if connReq == nil || connReq.isInactive() {
-		utils.Log.Tracef("----------[RemotePeer]The peer is inactive, try to connect to validator: %s", p.String())
+		utils.Log.Warningf("----------[RemotePeer]The peer is inactive, try to connect to validator: %s", p.String())
 		err := p.Connect()
 		if err != nil {
-			utils.Log.Tracef("----------[RemotePeer]Connect to validator peer failed: %v", err)
+			utils.Log.Errorf("----------[RemotePeer]Connect to validator peer failed: %v", err)
 			err = errors.New("validator peer is inactive")
 			return err
 		}
