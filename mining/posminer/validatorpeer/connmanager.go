@@ -40,11 +40,11 @@ const (
 	// pingInterval is the interval of time to wait in between sending ping
 	// messages.
 	pingInterval         = 120 * time.Second // 2 * time.Minute
-	urgent_ping_interval = 1 * time.Second   //
+	urgent_ping_interval = 2 * time.Second   //
 
 	peerInActiveInterval = 5 * pingInterval // 5 times pingInterval
 
-	peerReconnectMaxTimes = 3
+	peerTimeOutMaxTimes = 3
 )
 
 type ConnListener interface {
@@ -110,9 +110,9 @@ func (connReq *ConnReq) Close() {
 	// close the send queue
 	// 非阻塞写入
 	select {
-    case connReq.quitQueue <- struct{}{}:
-    default:
-    }
+	case connReq.quitQueue <- struct{}{}:
+	default:
+	}
 
 	if connReq.Listener != nil {
 		connReq.Listener.OnConnDisconnected(connReq)
@@ -268,7 +268,7 @@ out:
 				if strings.Contains(err.Error(), "closed network connection") {
 					connReq.Close()
 				}
-				
+
 				break out
 			}
 

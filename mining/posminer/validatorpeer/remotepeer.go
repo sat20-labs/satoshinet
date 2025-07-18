@@ -146,7 +146,7 @@ type RemotePeer struct {
 	connReq  *ConnReq // map of all connections, key is conn id, value is conn req
 	connLock sync.RWMutex
 
-	reconnectTimes int64 // if the peer is disconnected, will reconnect again, reconnectTimes is recoed the times of reconnect
+	timeoutTimes int64 // if the peer is disconnected, will reconnect again, reconnectTimes is recoed the times of reconnect
 	//conn net.Conn
 	//stop int32
 	//wg   sync.WaitGroup
@@ -568,7 +568,7 @@ func (p *RemotePeer) Connect() error {
 	p.connReq = newConnReq
 	p.connLock.Unlock()
 
-	p.reconnectTimes = 0
+	p.timeoutTimes = 0
 	go p.listenCommand(newConnReq)
 
 	// new pingHandler to send ping timer
@@ -608,56 +608,47 @@ out:
 	for {
 		select {
 		case <-pingTicker.C:
+
+			if p.timeoutTimes > peerTimeOutMaxTimes {
+				utils.Log.Infof("***********Reconnect times too much, will disconnect the validator peer. %d", p.timeoutTimes)
+				p.Disconnect()
+				p.cfg.RemoteValidatorListener.OnPeerDisconnected(p.addr)
+				// The peer is disconnected, will exit ping handler
+				break out
+			}
+
 			if !p.Connected() {
-				// Current conn is inactive, will try to reconnect
-				p.reconnectTimes++
-
-				if p.reconnectTimes > peerReconnectMaxTimes {
-					utils.Log.Errorf("***********Reconnect times too much, will disconnect the validator peer. %d", p.reconnectTimes)
-					p.Disconnect()
-					p.cfg.RemoteValidatorListener.OnPeerDisconnected(p.addr)
-					// The peer is disconnected, will exit ping handler
-					break out
-				}
-
-				utils.Log.Tracef("***********Reconnect to validator peer [%s]", p)
+				utils.Log.Infof("***********Reconnect to validator peer [%s]", p)
 				p.Connect()
 				continue
 			}
+			
 			nonce, err := wire.RandomUint64()
 			if err != nil {
 				utils.Log.Errorf("Not sending ping to %s: %v", p, err)
 				continue
 			}
-			utils.Log.Tracef("**********Sending \"ping\" to validator peer [%s] with nonce=%d", p, nonce)
+			utils.Log.Infof("**********Sending \"ping\" to validator peer [%s] with nonce=%d", p, nonce)
 			//p.QueueMessage(validatorcommand.NewMsgPing(nonce), nil)
-			p.SendCommand(validatorcommand.NewMsgPing(nonce))
 			p.statsMtx.Lock()
 			p.lastPingNonce = nonce
 			p.lastPingTime = time.Now()
 			p.lastPingMicros = -1 //  wait response with pong
 			p.statsMtx.Unlock()
 
-			go func() {
-				// Wait for check pong after 1 second
-				time.Sleep(1 * time.Second)
+			p.SendCommand(validatorcommand.NewMsgPing(nonce))
 
-				p.statsMtx.RLock()
-				//lastpingMicros := p.lastPingMicros
-				nonce := p.lastPingNonce
-				p.statsMtx.RUnlock()
+			go func() {
+				// Wait for check pong
+				nonce := p.LastPingNonce()
+				for i := 0; nonce != 0 && i < 5; i++ {
+					time.Sleep(1 * time.Second)
+					nonce = p.LastPingNonce()
+				}
 
 				if nonce != 0 {
-					p.reconnectTimes++
-
-					if p.reconnectTimes > peerReconnectMaxTimes {
-						utils.Log.Errorf("***********Reconnect times too much, will disconnect the validator peer. %d", p.reconnectTimes)
-						p.Disconnect()
-						p.cfg.RemoteValidatorListener.OnPeerDisconnected(p.addr)
-						// The peer is disconnected, will exit ping handler
-						return
-					}
-
+					// 超时还没有等到pong消息，启动一个快速ping过程
+					p.timeoutTimes++
 					utils.Log.Errorf("**********last ping to validator peer [%s] with nonce=%d isnot received.", p, nonce)
 					if currentInterval != urgent_ping_interval {
 						currentInterval = urgent_ping_interval
@@ -667,7 +658,7 @@ out:
 
 				} else {
 					utils.Log.Tracef("**********last ping to validator peer [%s] with nonce=%d has received.", p, nonce)
-					p.reconnectTimes = 0
+					p.timeoutTimes = 0
 					if currentInterval != pingInterval {
 						currentInterval = pingInterval
 						pingTicker.Reset(currentInterval)
@@ -807,7 +798,7 @@ func (p *RemotePeer) handlePongMsg(msg *validatorcommand.MsgPong, connReq *ConnR
 	// without large usage of the ping rpc call since we ping infrequently
 	// enough that if they overlap we would have timed out the peer.
 	p.statsMtx.Lock()
-	utils.Log.Tracef("----------[RemotePeer]The pong is response from %s, the nonce: %d, last ping nonce: %d", connReq.RemoteAddr.String(), msg.Nonce, p.lastPingNonce)
+	utils.Log.Infof("----------[RemotePeer]The pong is response from %s, the nonce: %d, last ping nonce: %d", connReq.RemoteAddr.String(), msg.Nonce, p.lastPingNonce)
 
 	if p.lastPingNonce != 0 && msg.Nonce == p.lastPingNonce {
 		p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
