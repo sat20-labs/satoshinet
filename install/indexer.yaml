@@ -1,0 +1,20 @@
+# mainnet
+chain: mainnet
+db:
+  path: ./db/mainnet
+share_rpc:
+  bitcoin:
+    host: 127.0.0.1
+    port: 8332
+    user: your_name
+    password: your_password
+log:
+  level: info # default info
+  path: ./log/mainnet # default log
+basic_index:
+  max_index_height: 0 # default 0, set not 0 to stop at this height
+  period_flush_to_db: 100 # default 100
+rpc_service:
+  addr: 0.0.0.0:8005
+  proxy: btc/mainnet
+  log_path: log/mainnet

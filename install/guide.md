@@ -15,6 +15,47 @@
 运行bitcoind同步数据可能需要几天时间。在同步数据的同时，可以开始聪网节点的编译工作。
 
 
+下面是一个简单的bitcoind配置文件，支持主网和testnet4，启动时可以指定其中一个配置。
+
+#假定文件名称为：bitcoin.conf
+daemon=1
+server=1
+maxmempool=1024
+txindex=1
+coinstatsindex=1
+
+[main]
+addnode=1.116.110.123:8333
+addnode=123.60.213.192:8333
+addnode=27.148.206.140:8333
+addnode=182.100.67.50:8333
+addnode=114.231.12.9:8333
+addnode=222.186.20.60:8333
+addnode=120.79.71.72:8333
+addnode=47.99.90.156:8333
+
+zmqpubrawblock=tcp://0.0.0.0:38332
+zmqpubrawtx=tcp://0.0.0.0:38333
+rpcuser=your_name
+rpcpassword=your_password
+rpcallowip=0.0.0.0/0
+rpcbind=0.0.0.0:8332
+
+[testnet4]
+zmqpubrawblock=tcp://0.0.0.0:58332
+zmqpubrawtx=tcp://0.0.0.0:58333
+rpcuser=your_name
+rpcpassword=your_password
+rpcallowip=0.0.0.0/0
+rpcbind=0.0.0.0:28332
+
+
+可以指定以某个配置运行bitcoind
+bitcoind -chain=main -conf=/data/bitcoin/bitcoin.conf -datadir=/data/bitcoin/main
+
+
+
+
 
 编译和运行聪网节点
 ----
@@ -25,6 +66,7 @@
 索引器：https://github.com/sat20-labs/indexer
 
 workspace
+ |- bitcoin 
  |- indexer    https://github.com/sat20-labs/indexer
  |- satoshinet  https://github.com/sat20-labs/satoshinet
  |- sat20wallet  https://github.com/sat20-labs/sat20wallet
@@ -35,6 +77,40 @@ workspace
 
 
 (等版本稳定，我们会提供适合Ubuntu 22.04.4 LTS运行的可执行文件供大家下载，这样避免编译代码的麻烦)
+
+索引器的配置文件（假定配置文件名字：indexer_mainnet.yaml）
+# mainnet
+chain: mainnet
+db:
+  path: ./db/mainnet
+share_rpc:
+  bitcoin:
+    host: 127.0.0.1
+    port: 8332
+    user: your_name
+    password: your_password
+log:
+  level: info # default info
+  path: ./log/mainnet # default log
+basic_index:
+  max_index_height: 0 # default 0, set not 0 to stop at this height
+  period_flush_to_db: 100 # default 100
+rpc_service:
+  addr: 0.0.0.0:8005
+  proxy: btc/mainnet
+  log_path: log/mainnet
+
+其中bitcoin的配置，是你在bitcoind中对应的配置。假定bitcoind运行在同一台机器上。
+
+然后执行命令，运行indexer开始跑数据：
+ ./indexer -env ./indexer_mainnet.yaml
+
+重点注意：indexer跑数据过程，如果异常中断，会导致数据不可用，只能从头跑。最好的方式，是先设定一个高度，比如ordinals协议启用的高度767430（通过设置max_index_height），作为第一个高度，跑到该高度，先备份数据库，然后继续跑。可以备份数据库，比如再备份一个900000高度的数据。
+
+备份数据时，需要先停止indexer（kill -2 indexer），将./db/mainnet 这个目录直接拷贝一份就可以了。
+
+至此，等待索引器同步到最新高度后，准备工作就基本完成了。
+
 
 
 非挖矿节点
