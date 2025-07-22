@@ -53,6 +53,7 @@ type UTXOIndex struct {
 	Index      map[string]*Output
 	AscendMap  map[string]*AscendData
 	DescendMap map[string]*DescendData
+	ReferrerMap map[string]string // 被推荐人地址-》推荐人名字
 }
 
 func NewUTXOIndex() *UTXOIndex {
@@ -60,6 +61,7 @@ func NewUTXOIndex() *UTXOIndex {
 		Index:      make(map[string]*Output),
 		AscendMap:  make(map[string]*AscendData),
 		DescendMap: make(map[string]*DescendData),
+		ReferrerMap: make(map[string]string),
 	}
 }
 

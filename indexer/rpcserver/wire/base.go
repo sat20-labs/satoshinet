@@ -20,6 +20,17 @@ type DescendResp struct {
 	Data *common.DescendData `json:"data"`
 }
 
+type ReferrerResp struct {
+	indexerwire.BaseResp
+	Data string `json:"referrer"`
+}
+
+type ReferreeResp struct {
+	indexerwire.BaseResp
+	Total int   `json:"total"`
+	Data  []string `json:"referrees"`
+}
+
 type AllCoreNodeResp struct {
 	indexerwire.BaseResp
 	Data []string `json:"data"`

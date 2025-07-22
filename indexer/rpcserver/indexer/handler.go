@@ -335,6 +335,51 @@ func (s *Handle) getDescendData(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (s *Handle) getReferrer(c *gin.Context) {
+	resp := &localwire.ReferrerResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: "",
+	}
+
+	addr := c.Param("address")
+	result, err := s.model.GetReferrer(addr)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	resp.Data = result
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getReferree(c *gin.Context) {
+	resp := &localwire.ReferreeResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: nil,
+	}
+
+	name := c.Param("name")
+	start, err := strconv.Atoi(c.DefaultQuery("start", "0"))
+	if err != nil {
+		start = 0
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", QueryParamDefaultLimit))
+	if err != nil {
+		limit = 100
+	}
+	resp.Data, resp.Total = s.model.GetReferree(name, start, limit)
+
+	c.JSON(http.StatusOK, resp)
+}
+
 func (s *Handle) getAllCoreNode(c *gin.Context) {
 	resp := &localwire.AllCoreNodeResp{
 		BaseResp: indexerwire.BaseResp{

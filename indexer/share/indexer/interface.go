@@ -43,6 +43,8 @@ type Indexer interface {
 	GetTxOutputWithUtxoV3(utxo string) *indexer.AssetsInUtxo
 	GetAscendData(fundingUtxo string) *common.AscendData
 	GetDescendData(nullDataUtxo string) *common.DescendData
+	GetReferrer(address string) (string, error)
+	GetReferree(name string) []string
 	GetAllCoreNode() map[string]*common.CoreNodeInfo
 	IsCoreNode(pubkey string) bool
 	GetCoreNodeInfo(pubkey string) *common.CoreNodeInfo

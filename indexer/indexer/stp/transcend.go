@@ -15,6 +15,8 @@ import (
 const (
 	DB_KEY_ASCEND    = "xa-"
 	DB_KEY_DESCEND   = "xd-"
+	DB_KEY_REFERRER  = "rer-"
+	DB_KEY_REFERREE  = "ree-"
 	DB_KEY_TICKINFO  = "t-"
 	DB_KEY_TICKER_HOLDER = "th-"
 	DB_KEY_CHANNEL   = "c-" // c-address
@@ -27,6 +29,14 @@ func GetAscendDBKey(fundingUtxo string) []byte {
 
 func GetDescendDBKey(nullDataUtxo string) []byte {
 	return []byte(DB_KEY_DESCEND + nullDataUtxo)
+}
+
+func GetReferrerDBKey(address string) []byte {
+	return []byte(DB_KEY_REFERRER + address)
+}
+
+func GetReferreeDBKey(name string) []byte {
+	return []byte(DB_KEY_REFERREE + name)
 }
 
 func GetTickerInfoDBKey(assetName string) []byte {
@@ -80,6 +90,70 @@ func GetDescendFromDB(ldb *badger.DB, nullDataUtxo string) (*common.DescendData,
 	}
 	return &result, err
 }
+
+
+func GetReferrerFromDB(ldb *badger.DB, address string) (string, error) {
+	var result string
+	err := ldb.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(GetReferrerDBKey(address))
+		if err != nil {
+			//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
+			return err
+		}
+		return item.Value(func(v []byte) error {
+			return db.DecodeBytes(v, &result)
+		})
+	})
+	if err != nil {
+		return "", err
+	}
+	return result, err
+}
+
+func GetReferreeFromDB(ldb *badger.DB, name string) ([]uint64, error) {
+	var result []uint64
+	err := ldb.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(GetReferreeDBKey(name))
+		if err != nil {
+			//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
+			return err
+		}
+		return item.Value(func(v []byte) error {
+			return db.DecodeBytes(v, &result)
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, err
+}
+
+func GetReferreesFromDB(ldb *badger.DB, referrers []string) (map[string][]uint64, error) {
+	result := make(map[string][]uint64)
+	err := ldb.View(func(txn *badger.Txn) error {
+		for _, name := range referrers {
+			item, err := txn.Get(GetReferreeDBKey(name))
+			if err != nil {
+				//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
+				continue
+			}
+			var referees []uint64
+			err = item.Value(func(v []byte) error {
+				return db.DecodeBytes(v, &referees)
+			})
+			if err != nil {
+				continue
+			}
+			result[name] = referees
+		}
+		return nil	
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, err
+}
+
 
 func GetTickerInfoFromDB(ldb *badger.DB, assetName string) (*common.TickerInfo, error) {
 	var result common.TickerInfo

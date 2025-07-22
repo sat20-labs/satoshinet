@@ -134,6 +134,9 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 	for key, value := range b.utxoIndex.DescendMap {
 		newInst.utxoIndex.DescendMap[key] = value
 	}
+	for key, value := range b.utxoIndex.ReferrerMap {
+		newInst.utxoIndex.ReferrerMap[key] = value
+	}
 
 	newInst.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
 	for k, v := range b.tickAddressMap {
@@ -295,6 +298,15 @@ func (b *BaseIndexer) UpdateDB() {
 
 	// 拿到所有的addressId
 	// addressValueMap := b.prefechAddress()
+
+	referrers := make([]string, 0)
+	for _, name := range b.utxoIndex.ReferrerMap {
+		referrers = append(referrers, name)
+	}
+	referreesMap, err := stp.GetReferreesFromDB(b.db, referrers)
+	if err != nil {
+		common.Log.Panicf("GetReferreesFromDB failed, %v", err)
+	}
 
 	wb := b.db.NewWriteBatch()
 	defer wb.Cancel()
@@ -461,6 +473,29 @@ func (b *BaseIndexer) UpdateDB() {
 		}
 	}
 
+	for addr, referrer := range b.utxoIndex.ReferrerMap {
+		key := stp.GetReferrerDBKey(addr)
+		err := db.SetDB([]byte(key), referrer, wb)
+		if err != nil {
+			common.Log.Panicf("Error setting in db %v", err)
+		}
+
+		addrvalue := b.addressValueMap[addr]
+		referrees, ok := referreesMap[referrer]
+		if !ok {
+			referrees = make([]uint64, 0)
+		}
+		referrees = append(referrees, addrvalue.AddressId)
+		referreesMap[referrer] = referrees
+	}
+	for referrer, referrees := range referreesMap {
+		key := stp.GetReferreeDBKey(referrer)
+		err = db.SetDB([]byte(key), referrees, wb)
+		if err != nil {
+			common.Log.Panicf("Error setting in db %v", err)
+		}
+	}
+
 	if b.coreNodeMapUpdated {
 		key := stp.GetAllCoreNodeDBKey()
 		err := db.SetDB([]byte(key), b.coreNodeMap, wb)
@@ -512,7 +547,7 @@ func (b *BaseIndexer) UpdateDB() {
 	b.stats.TotalDescendSats += totalDescendSats
 	b.stats.SyncBlockHash = b.lastHash
 	b.stats.SyncHeight = b.lastHeight
-	err := db.SetDB([]byte(SyncStatsKey), b.stats, wb)
+	err = db.SetDB([]byte(SyncStatsKey), b.stats, wb)
 	if err != nil {
 		common.Log.Panicf("BaseIndexer.updateBasicDB-> Error setting in db %v", err)
 	}
@@ -737,6 +772,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 		// 	}
 		// }
 		
+		var inputAddress string
 		var ascend *common.AscendData
 		for i, input := range tx.Inputs {
 			if uint32(input.Vout) == wire.MaxTxInSequenceNum { // coinbase
@@ -822,6 +858,10 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			input.UtxoId = utxoid
 			input.Value = inputUtxo.Value
 			b.inputUtxo(inputUtxo)
+
+			if inputAddress == "" {
+				inputAddress = inputUtxo.Address.Addresses[0]
+			}
 		}
 
 		for i, output := range tx.Outputs {
@@ -898,6 +938,19 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 					case common.CONTENT_TYPE_CHANNELID:
 						// 如果是通道更新，data中包含通道承诺高度
 						// 更新通道的最新高度 TODO
+					
+					case common.CONTENT_TYPE_BINDREFERRER:
+						// tx的输入和输出都是被推荐人地址，data是推荐人名字，每个地址只能绑定一个推荐人
+						_, ok := b.utxoIndex.ReferrerMap[inputAddress]
+						if !ok {
+							existing, err := b.loadReferrerFromDB(inputAddress)
+							if err != nil {
+								// 
+								b.utxoIndex.ReferrerMap[inputAddress] = string(data)
+							} else {
+								common.Log.Warningf("%s has binded to referrer %s", inputAddress, existing)
+							}
+						}
 					}
 				} else {
 					common.Log.Errorf("ReadDataFromNullDataScript %s:%d failed, %v", tx.Txid, i, err)
@@ -1077,6 +1130,21 @@ func (b *BaseIndexer) loadUtxoFromDB(txn *badger.Txn, utxostr string) error {
 		N:       uint32(vout),
 		Assets:  utxo.Assets}
 	return nil
+}
+
+
+func (b *BaseIndexer) loadReferrerFromDB(address string) (string, error) {
+	referrer, ok := b.utxoIndex.ReferrerMap[address]
+	if ok {
+		return referrer, nil
+	}
+	
+	referrer, err := stp.GetReferrerFromDB(b.db, address)
+	if err != nil {
+		return "", err
+	}
+	b.utxoIndex.ReferrerMap[address] = referrer
+	return referrer, nil
 }
 
 func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, addresses []string, txn *badger.Txn) {

@@ -386,6 +386,55 @@ func (b *RpcIndexer) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return info
 }
 
+
+// only for RPC interface
+func (b *RpcIndexer) GetReferrer(address string) (string, error) {
+	b.mutex.RLock()
+	referrer, ok := b.utxoIndex.ReferrerMap[address]
+	b.mutex.RUnlock()
+	if ok {
+		return referrer, nil
+	}
+
+	referrer, err := stp.GetReferrerFromDB(b.db, address)
+	if err != nil {
+		common.Log.Errorf("GetReferrerFromDB %s failed, %v", address, err)
+		return "", err
+	}
+	b.mutex.Lock()
+	b.utxoIndex.ReferrerMap[address] = referrer
+	b.mutex.Unlock()
+	return referrer, nil
+}
+
+
+// only for RPC interface
+func (b *RpcIndexer) GetReferree(name string) ([]string, error) {
+	
+	result := make([]string, 0)
+	referrees, err := stp.GetReferreeFromDB(b.db, name)
+	if err == nil {
+		for _, addrId := range referrees {
+			addr, err := b.GetAddressByID(addrId)
+			if err != nil {
+				common.Log.Errorf("can't find address by id %d", addrId)
+				continue
+			}
+			result = append(result, addr)
+		}
+	}
+	
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	for addr, referrer := range b.utxoIndex.ReferrerMap {
+		if referrer == name {
+			result = append(result, addr)
+		}
+	}
+	
+	return result, nil
+}
+
 // only for RPC interface
 func (b *RpcIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 	b.mutex.RLock()

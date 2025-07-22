@@ -38,6 +38,8 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.POST(proxy+"/v3/utxos/existing", s.handle.getExistingUtxos)
 	r.GET(proxy+"/v3/ascend/:utxo", s.handle.getAscendData)
 	r.GET(proxy+"/v3/descend/:utxo", s.handle.getDescendData)
+	r.GET(proxy+"/v3/referrer/:address", s.handle.getReferrer)
+	r.GET(proxy+"/v3/referree/:name", s.handle.getReferree)
 	r.GET(proxy+"/v3/corenode/all", s.handle.getAllCoreNode)
 	r.GET(proxy+"/v3/corenode/check/:pubkey", s.handle.checkCoreNode)
 	r.GET(proxy+"/v3/corenode/info/:pubkey", s.handle.getCoreNodeInfo)

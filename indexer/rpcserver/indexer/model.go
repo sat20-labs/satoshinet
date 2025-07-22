@@ -249,6 +249,31 @@ func (s *Model) GetDescend(utxo string) (*common.DescendData, error) {
 	return data, nil
 }
 
+func (s *Model) GetReferrer(address string) (string, error) {
+	return s.indexer.GetReferrer(address)
+}
+
+func (s *Model) GetReferree(name string, start, limit int) ([]string, int) {
+	result := make([]string, 0)
+	referrees := s.indexer.GetReferree(name)
+
+	total := len(referrees)
+	if start >= total {
+		return nil, 0
+	}
+	limit += start
+	if limit >= total {
+		limit = total
+	}
+
+	for i := start; i < limit; i++ {
+		address := referrees[int64(i)]
+		result = append(result, address)
+	}
+	return result, total
+}
+
+
 func (s *Model) GetAllCoreNode() ([]string, error) {
 	data := s.indexer.GetAllCoreNode()
 

@@ -162,6 +162,15 @@ func (b *IndexerMgr) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return b.rpcService.GetDescendData(nullDataUtxo)
 }
 
+func (b *IndexerMgr) GetReferrer(address string) (string, error) {
+	return b.rpcService.GetReferrer(address)
+}
+
+func (b *IndexerMgr) GetReferree(name string) ([]string) {
+	result, _ := b.rpcService.GetReferree(name)
+	return result
+}
+
 func (b *IndexerMgr) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 	return b.rpcService.GetTickerInfo(ticker)
 }
