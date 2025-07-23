@@ -547,6 +547,10 @@ func (cm *ConnManager) Connect(c *ConnReq) {
 	log.Debugf("[ConnManager]Connect success with addr: [%d]%s.", c.id, c.Addr.String())
 }
 
+func (cm *ConnManager) GetConnCount() uint64 {
+	return atomic.LoadUint64(&cm.connCount)
+}
+
 // Disconnect disconnects the connection corresponding to the given connection
 // id. If permanent, the connection will be retried with an increasing backoff
 // duration.

@@ -2696,7 +2696,7 @@ func (s *server) Start() {
 						tip2 := indexerShare.ShareIndexer.GetChainTip()
 						tip = max(tip, tip2)
 						height := indexerShare.ShareIndexer.GetSyncHeight()
-						if height == tip {
+						if height == tip && s.connManager.GetConnCount() != 0 {
 							done = time.After(12 * time.Second)
 						}
 					} else {
@@ -2706,7 +2706,7 @@ func (s *server) Start() {
 								btcdLog.Errorf("Unable to start STP, %v", err)
 								os.Exit(-1)
 							}
-							
+
 							srvrLog.Infof("Start pos miner.")
 							s.posMiner.Start()
 							break out
