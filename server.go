@@ -2698,15 +2698,15 @@ func (s *server) Start() {
 						height := indexerShare.ShareIndexer.GetSyncHeight()
 						if height == tip {
 							done = time.After(12 * time.Second)
-							
+						}
+					} else {
+						if anchortx.IsMinerNode(pubkey) {
 							err = stp.StartSTP()
 							if err != nil {
 								btcdLog.Errorf("Unable to start STP, %v", err)
 								os.Exit(-1)
 							}
-						}
-					} else {
-						if anchortx.IsMinerNode(pubkey) {
+							
 							srvrLog.Infof("Start pos miner.")
 							s.posMiner.Start()
 							break out
