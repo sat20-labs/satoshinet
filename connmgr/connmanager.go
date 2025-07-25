@@ -176,6 +176,7 @@ type ConnManager struct {
 	// The following variables must only be used atomically.
 	connReqCount uint64
 	connCount    uint64
+	acceptCount	 uint64
 	start        int32
 	stop         int32
 
@@ -551,6 +552,10 @@ func (cm *ConnManager) GetConnCount() uint64 {
 	return atomic.LoadUint64(&cm.connCount)
 }
 
+func (cm *ConnManager) GetAcceptCount() uint64 {
+	return atomic.LoadUint64(&cm.acceptCount)
+}
+
 // Disconnect disconnects the connection corresponding to the given connection
 // id. If permanent, the connection will be retried with an increasing backoff
 // duration.
@@ -594,7 +599,8 @@ func (cm *ConnManager) listenHandler(listener net.Listener) {
 			}
 			continue
 		}
-		log.Infof("Accepted listening on %s", listener.Addr())
+		log.Infof("Accepted %s listening on %s", conn.RemoteAddr(), listener.Addr())
+		atomic.AddUint64(&cm.acceptCount, 1)
 		go cm.cfg.OnAccept(conn)
 	}
 
