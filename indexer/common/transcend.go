@@ -42,6 +42,8 @@ const (
 	CONTENT_TYPE_DESTROY        = txscript.OP_DATA_40
 	CONTENT_TYPE_SWAP           = txscript.OP_DATA_41
 	CONTENT_TYPE_BINDREFERRER   = txscript.OP_DATA_42
+
+	CONTENT_TYPE_MEMO	        = txscript.OP_DATA_75
 	CONTENT_TYPE_MAX	        = txscript.OP_DATA_75
 	// -> OP_DATA_75
 
