@@ -85,6 +85,8 @@ func saveValidatorRecordFile(path string, data []byte) error {
 func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(pubkey string, host string) {
 	// Update validator record when the validator is connected
 
+	// 一个pubkey可能通过多个host传进来
+
 	if vrm.ValidatorRecordMap == nil {
 		vrm.ValidatorRecordMap = make(map[string]*ValidatorRecord, 0)
 	}

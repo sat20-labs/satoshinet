@@ -113,18 +113,18 @@ func (nem *NewEpochManager) handleNewEpoch() {
 
 	for validatorId, voteItem := range nem.receivedEpoch {
 		if voteItem == nil || voteItem.Hash == nil {
-			utils.Log.Tracef("Not received new epoch by validator [%d]", validatorId)
+			utils.Log.Tracef("Not received new epoch by validator [%s]", validatorId)
 			continue
 		}
 		//title := fmt.Sprintf("Received Epoch from %d", validatorId)
 		voteItemData, err := nem.ValidatorMgr.validateChain.GetEPBlock(voteItem.Hash)
 		if err != nil {
-			utils.Log.Tracef("Cannot get epblock by hash [%s] from validator [%d]", voteItem.Hash.String(), validatorId)
+			utils.Log.Tracef("Cannot get epblock by hash [%s] from validator [%s]", voteItem.Hash.String(), validatorId)
 			continue
 		}
 		voteItem.VoteData = voteItemData.Data
 
-		title := fmt.Sprintf("Received Epoch vote from %d", validatorId)
+		title := fmt.Sprintf("Received Epoch vote from %s", validatorId)
 		showVoteData(title, voteItem.VoteData)
 	}
 

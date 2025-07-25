@@ -58,7 +58,7 @@ func NewValidator(config *validator.Config, addrs []net.Addr) (*LocalValidator, 
 
 	localValidator.isBootStrapNode = bootstrapnode.IsBootStrapNode(pubkey)
 
-	utils.Log.Tracef("Local validator ID: %d", localValidator.Cfg.LocalValidatorId)
+	utils.Log.Tracef("Local validator ID: %s", localValidator.Cfg.LocalValidatorId)
 	utils.Log.Tracef("Local validator PublicKey: %x", publicKey)
 
 	// TODO Check local validator is valid or not

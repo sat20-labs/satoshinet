@@ -392,7 +392,7 @@ func newLocalPeerBase(origCfg *LocalPeerConfig, inbound bool) *LocalPeer {
 func NewLocalPeer(cfg *LocalPeerConfig, addrs []net.Addr) (*LocalPeer, error) {
 	p := newLocalPeerBase(cfg, false)
 
-	utils.Log.Tracef("NewLocalPeervalidator ID: %d", p.cfg.ValidatorId)
+	utils.Log.Tracef("NewLocalPeervalidator ID: %s", p.cfg.ValidatorId)
 
 	p.addrsList = make([]net.Addr, 0, len(addrs))
 	p.addrsList = append(p.addrsList, addrs...)

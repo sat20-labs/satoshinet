@@ -383,6 +383,10 @@ func (vm *ValidatorManager) GetValidatorList() []*validatorinfo.ValidatorInfo {
 func (vm *ValidatorManager) getValidatorList() []*validatorinfo.ValidatorInfo {
 	validatorList := make([]*validatorinfo.ValidatorInfo, 0)
 
+	// 过滤id重复的
+
+	validatorMap := make(map[string]bool)
+
 	// Add local validator
 	localValidatorItem := validatorinfo.ValidatorInfo{
 		ValidatorId:     vm.myValidator.ValidatorInfo.ValidatorId,
@@ -395,17 +399,23 @@ func (vm *ValidatorManager) getValidatorList() []*validatorinfo.ValidatorInfo {
 		ValidatorScore:  vm.myValidator.ValidatorInfo.ValidatorScore,
 	}
 	validatorList = append(validatorList, &localValidatorItem)
+	validatorMap[localValidatorItem.ValidatorId] = true
 
 	// Add all remote validators
 	for _, validator := range vm.ConnectedList {
 		if validator == nil {
 			continue
 		}
-		if validator.IsValidInfo() == false {
+		if !validator.IsValidInfo() {
 			// filter invalid validator
 			utils.Log.Errorf("Invalid validator: %s", validator.String())
 			continue
 		}
+		_, ok := validatorMap[validator.ValidatorInfo.ValidatorId]
+		if ok {
+			continue
+		}
+		
 		validatorItem := validatorinfo.ValidatorInfo{
 			ValidatorId:     validator.ValidatorInfo.ValidatorId,
 			Host:            validator.ValidatorInfo.Host,
@@ -417,6 +427,7 @@ func (vm *ValidatorManager) getValidatorList() []*validatorinfo.ValidatorInfo {
 			ValidatorScore:  validator.ValidatorInfo.ValidatorScore,
 		}
 		validatorList = append(validatorList, &validatorItem)
+		validatorMap[validatorItem.ValidatorId] = true
 	}
 
 	return validatorList

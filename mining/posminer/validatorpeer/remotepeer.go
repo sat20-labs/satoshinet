@@ -816,7 +816,7 @@ func (p *RemotePeer) HandleRemotePeerInfo(peerInfo *validatorcommand.MsgPeerInfo
 		return
 	}
 
-	utils.Log.Tracef("----------[RemotePeer]The remote peer info is response, the remote validatorvalidator ID: %d", peerInfo.ValidatorId)
+	utils.Log.Tracef("----------[RemotePeer]The remote peer info is response, the remote validatorvalidator ID: %s", peerInfo.ValidatorId)
 	p.cfg.RemoteValidatorId = peerInfo.ValidatorId
 
 	validatorInfo := validatorinfo.ValidatorInfo{
@@ -834,7 +834,7 @@ func (p *RemotePeer) HandleRemoteGetInfo(getInfo *validatorcommand.MsgGetInfo, c
 		return
 	}
 
-	utils.Log.Tracef("----------[RemotePeer]The remote peer info is response, the remote validatorvalidator ID: %d", getInfo.ValidatorId)
+	utils.Log.Tracef("----------[RemotePeer]The remote peer info is response, the remote validatorvalidator ID: %s", getInfo.ValidatorId)
 
 	p.cfg.RemoteValidatorId = getInfo.ValidatorId
 
@@ -847,21 +847,21 @@ func (p *RemotePeer) HandleRemoteGetInfo(getInfo *validatorcommand.MsgGetInfo, c
 
 func (p *RemotePeer) HandleValidatorsResponse(validatorsCmd *validatorcommand.MsgValidators, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
-	utils.Log.Tracef("----------[RemotePeer]The remote peer All Validators is response from  validatorvalidator ID: %d", p.cfg.RemoteValidatorId)
+	utils.Log.Tracef("----------[RemotePeer]The remote peer All Validators is response from  validatorvalidator ID: %s", p.cfg.RemoteValidatorId)
 
 	p.cfg.RemoteValidatorListener.OnAllValidatorsResponse(validatorsCmd.Validators)
 }
 
 func (p *RemotePeer) HandleEpochResponse(epochCmd *validatorcommand.MsgEpoch, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
-	utils.Log.Tracef("----------[RemotePeer]The epoch is response from  validator ID: %d", p.cfg.RemoteValidatorId)
+	utils.Log.Tracef("----------[RemotePeer]The epoch is response from  validator ID: %s", p.cfg.RemoteValidatorId)
 
 	p.cfg.RemoteValidatorListener.OnEpochResponse(epochCmd.CurrentEpoch, epochCmd.NextEpoch)
 }
 
 func (p *RemotePeer) HandleGeneratorResponse(generatorCmd *validatorcommand.MsgGenerator, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
-	utils.Log.Tracef("----------[RemotePeer]The generator info is response from  validatorvalidator ID: %d", p.cfg.RemoteValidatorId)
+	utils.Log.Tracef("----------[RemotePeer]The generator info is response from  validatorvalidator ID: %s", p.cfg.RemoteValidatorId)
 
 	// if generator.IsValid(generatorCmd.GeneratorInfo) == false {
 	// 	return
@@ -872,7 +872,7 @@ func (p *RemotePeer) HandleGeneratorResponse(generatorCmd *validatorcommand.MsgG
 
 func (p *RemotePeer) HandleNewEpoch(newEpochCmd *validatorcommand.MsgNewEpoch, connReq *ConnReq) {
 	// 	First check the remote validator is valid, then notify the validator
-	utils.Log.Tracef("----------[RemotePeer]The epoch list is response from  validatorvalidator ID: %d", p.cfg.RemoteValidatorId)
+	utils.Log.Tracef("----------[RemotePeer]The epoch list is response from  validatorvalidator ID: %s", p.cfg.RemoteValidatorId)
 	// newEpoch := &epoch.Epoch{
 	// 	EpochIndex:      newEpochCmd.EpochIndex,
 	// 	CreateHeight:    newEpochCmd.CreateHeight,
