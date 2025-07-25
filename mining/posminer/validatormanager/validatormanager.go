@@ -178,15 +178,15 @@ func (vm *ValidatorManager) Start() {
 
 	PreValidatorList := make([]*validator.Validator, 0)
 
-	for _, record := range vm.ValidatorRecordMgr.ValidatorRecordList {
+	for host, record := range vm.ValidatorRecordMgr.ValidatorRecordMap {
 
-		if record == nil || record.Host == "" {
+		if record == nil || host == "" {
 			// Invalid record
 			utils.Log.Tracef("Invalid record: %v", record)
 			continue
 		}
 
-		utils.Log.Tracef("Try to connect validator: %s", record.Host)
+		utils.Log.Tracef("Try to connect validator: %s", host)
 
 		// New a validator with addr
 		//addrsList := make([]net.Addr, 0, 1)
@@ -198,7 +198,7 @@ func (vm *ValidatorManager) Start() {
 			//vm.PreValidatorList = append(vm.PreValidatorList, validator)
 		} else {
 			utils.Log.Tracef("Validator is remote validator")
-			addr, err := vm.getAddr(record.Host)
+			addr, err := vm.getAddr(host)
 			if err != nil {
 				utils.Log.Errorf("Get addr failed: %v", err)
 				continue
@@ -262,7 +262,7 @@ func (vm *ValidatorManager) Start() {
 
 func (vm *ValidatorManager) LoadValidatorRecordList() *validatorrecord.ValidatorRecordMgr {
 	vm.ValidatorRecordMgr = validatorrecord.LoadValidatorRecordList(vm.Cfg.BtcdDir)
-	if vm.ValidatorRecordMgr.ValidatorRecordList == nil || len(vm.ValidatorRecordMgr.ValidatorRecordList) == 0 {
+	if vm.ValidatorRecordMgr.ValidatorRecordMap == nil || len(vm.ValidatorRecordMgr.ValidatorRecordMap) == 0 {
 		// if the saved validators file not exists, start from dns seed
 		hostList, _ := vm.getSeedHostList(vm.Cfg.ChainParams)
 		hostList = append(hostList, vm.Cfg.Peers...)
@@ -737,7 +737,11 @@ func (vm *ValidatorManager) OnNewValidatorPeerConnected(netAddr net.Addr, valida
 		utils.Log.Infof("not allow same pubkey %s connected", validatorInfo.ValidatorId)
 		return
 	}
-
+	if validatorInfo.Host == "127.0.0.1" {
+		utils.Log.Infof("not allow localhost connected")
+		return
+	}
+	
 	peerHost := validatorinfo.GetAddrHost(netAddr)
 	validatorPeer := vm.LookupValidator(validatorInfo.ValidatorId)
 	if validatorPeer != nil {
@@ -799,8 +803,12 @@ func (vm *ValidatorManager) OnValidatorPeerInactive(netAddr net.Addr) {
 
 func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) error {
 	if !validator.IsConnected() {
-		utils.Log.Errorf("validator %d is not connected", validator.GetValidatorId())
+		utils.Log.Errorf("validator %s is not connected", validator.GetValidatorId())
 		return fmt.Errorf("validator is not connected")
+	}
+
+	if validator.ValidatorInfo.Host == "127.0.0.1" {
+		return nil
 	}
 
 	vm.connectedListMtx.Lock()
@@ -2850,11 +2858,11 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 	if vm.ValidatorRecordMgr == nil {
 		return
 	}
-	for _, record := range vm.ValidatorRecordMgr.ValidatorRecordList {
+	for host, record := range vm.ValidatorRecordMgr.ValidatorRecordMap {
 		if vm.isLocalValidator(record.ValidatorId) { // Not local validator, skip it (Remote validator is not connected, so no need to check it here)
 			continue
 		}
-		hostIP := net.ParseIP(record.Host)
+		hostIP := net.ParseIP(host)
 		if hostIP == nil {
 			continue
 		}
@@ -2862,7 +2870,7 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 		now := time.Now()
 		if now.Sub(record.LastConnectedTime) > time.Hour*24 {
 			// The validator is not connected for 1 day, not check connected
-			utils.Log.Tracef("[ValidatorManager]CheckValidatorConnected The validator %s is not connected for 1 day, not check connected again", record.Host)
+			utils.Log.Tracef("[ValidatorManager]CheckValidatorConnected The validator %s is not connected for 1 day, not check connected again", host)
 			continue
 		}
 
@@ -2871,7 +2879,7 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 		if validatorNode == nil {
 			validatorCfg := vm.newValidatorConfig(vm.Cfg.ValidatorId, nil) // vm.ValidatorId is Local validator, validatorId is Remote validator when new validator connected
 
-			addr, err := vm.getAddr(record.Host)
+			addr, err := vm.getAddr(host)
 			if err != nil {
 				continue
 			}
@@ -2895,14 +2903,14 @@ func (vm *ValidatorManager) CheckValidatorConnected() {
 				validatorId = validatorNode.ValidatorInfo.ValidatorId
 			}
 			// Update the validator record
-			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorId, record.Host)
+			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorId, host)
 
 		}
 
 		// The validator is connected
 		if record.ValidatorId == "" && validatorNode.ValidatorInfo.ValidatorId != "" {
 		// Update the validator record
-			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorNode.ValidatorInfo.ValidatorId, record.Host)
+			vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorNode.ValidatorInfo.ValidatorId, host)
 		}
 		
 		if isNewConnected {
