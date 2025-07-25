@@ -355,9 +355,7 @@ func (vm *ValidatorManager) OnValidatorInfoUpdated(validatorInfo *validatorinfo.
 	// 	}
 	// }
 	host := validatorinfo.GetAddrStringHost(remoteAddr.String())
-	if !vm.isLocalValidator(validatorInfo.ValidatorId) {
-		vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorInfo.ValidatorId, host)
-	}
+	vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorInfo.ValidatorId, host)
 	vm.connectedListMtx.Lock()
 	defer vm.connectedListMtx.Unlock()
 	for _, v := range vm.ConnectedList {
@@ -807,13 +805,6 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 	if !validator.IsConnected() {
 		utils.Log.Errorf("validator %s is not connected", validator.GetValidatorId())
 		return fmt.Errorf("validator is not connected")
-	}
-
-	if validator.ValidatorInfo.Host == "127.0.0.1" {
-		return nil
-	}
-	if vm.isLocalValidator(validator.ValidatorInfo.ValidatorId) {
-		return nil
 	}
 
 	vm.connectedListMtx.Lock()
