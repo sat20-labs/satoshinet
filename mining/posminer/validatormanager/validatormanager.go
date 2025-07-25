@@ -262,7 +262,7 @@ func (vm *ValidatorManager) Start() {
 
 func (vm *ValidatorManager) LoadValidatorRecordList() *validatorrecord.ValidatorRecordMgr {
 	vm.ValidatorRecordMgr = validatorrecord.LoadValidatorRecordList(vm.Cfg.BtcdDir)
-	if vm.ValidatorRecordMgr.ValidatorRecordMap == nil || len(vm.ValidatorRecordMgr.ValidatorRecordMap) == 0 {
+	if len(vm.ValidatorRecordMgr.ValidatorRecordMap) == 0 {
 		// if the saved validators file not exists, start from dns seed
 		hostList, _ := vm.getSeedHostList(vm.Cfg.ChainParams)
 		hostList = append(hostList, vm.Cfg.Peers...)
@@ -355,7 +355,9 @@ func (vm *ValidatorManager) OnValidatorInfoUpdated(validatorInfo *validatorinfo.
 	// 	}
 	// }
 	host := validatorinfo.GetAddrStringHost(remoteAddr.String())
-	vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorInfo.ValidatorId, host)
+	if !vm.isLocalValidator(validatorInfo.ValidatorId) {
+		vm.ValidatorRecordMgr.UpdateValidatorRecord(validatorInfo.ValidatorId, host)
+	}
 	vm.connectedListMtx.Lock()
 	defer vm.connectedListMtx.Unlock()
 	for _, v := range vm.ConnectedList {
@@ -808,6 +810,9 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 	}
 
 	if validator.ValidatorInfo.Host == "127.0.0.1" {
+		return nil
+	}
+	if vm.isLocalValidator(validator.ValidatorInfo.ValidatorId) {
 		return nil
 	}
 

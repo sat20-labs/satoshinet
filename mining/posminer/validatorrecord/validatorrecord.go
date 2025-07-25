@@ -52,7 +52,7 @@ func loadValidatorRecordFile(filepath string) (map[string]*ValidatorRecord, erro
 	return validatorRecordList, nil
 }
 
-func UpdateValidatorRecordList(filepath string, validaterRecordList map[string]*ValidatorRecord) error {
+func updateValidatorRecordList(filepath string, validaterRecordList map[string]*ValidatorRecord) error {
 	data, err := json.Marshal(validaterRecordList)
 	if err != nil {
 		err := fmt.Errorf("marshal validatorRecordList failed: %s", err.Error())
@@ -105,5 +105,5 @@ func (vrm *ValidatorRecordMgr) UpdateValidatorRecord(pubkey string, host string)
 		vrm.ValidatorRecordMap[host] = record
 	}
 
-	UpdateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordMap)
+	updateValidatorRecordList(vrm.filepath, vrm.ValidatorRecordMap)
 }
