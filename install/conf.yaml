@@ -1,0 +1,28 @@
+# server node configuration
+
+env: test
+chain: testnet
+peers:
+  - b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529
+  - s@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@seed.sat20.org:19529
+mode: server
+rpc:
+  scheme: http
+  host: 0.0.0.0:19529
+  proxy: testnet
+
+indexer_layer1:
+  scheme: http
+  host: 127.0.0.1:8009
+  proxy: btc/testnet
+
+indexer_layer2:
+  scheme: http
+  host: 127.0.0.1:19528
+  proxy: testnet
+
+log: debug
+
+wallet:
+  stake: true
+  psfile: wallet.password

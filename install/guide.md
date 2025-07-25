@@ -79,7 +79,7 @@ workspace
 (等版本稳定，我们会提供适合Ubuntu 22.04.4 LTS运行的可执行文件供大家下载，这样避免编译代码的麻烦)
 
 索引器的配置文件（假定配置文件名字：indexer_mainnet.yaml）
-# mainnet
+#mainnet
 chain: mainnet
 db:
   path: ./db/mainnet
@@ -112,6 +112,9 @@ rpc_service:
 至此，等待索引器同步到最新高度后，准备工作就基本完成了。
 
 
+聪网节点
+====
+下载satoshinet的源代码，并且编译后，得到可执行文件satoshinet。节点一般以四种形态运行，一种是引导节点，目前由协议开发团队负责维护；一种是核心节点，由各个服务提供商提供；一种是普通挖矿节点，除了挖矿，不提供任何服务；还有一种是普通节点，只同步和验证交易数据，没有任何的收入激励，但为本地应用开发提供了全网的数据索引接口。下面我们分别简单说明不同节点的配置和运行。
 
 非挖矿节点
 ----
@@ -124,14 +127,43 @@ rpc_service:
 
 挖矿节点
 ----
-挖矿节点需要stp模块的支持，需要一个特别的 satoshinet 版本，该版本集成了stp模块。（因为stp模块还没有开源）
+我们提供了  Ubuntu 22.04.4 LTS 的可执行文件，不需要自己下载代码和编译就可以直接在Ubuntu 22.04 上使用。下载链接：
+https://github.com/sat20-labs/satoshinet/tree/main/install/ubuntu_22.04
 
-1. 将satsnet_miner_testnet.conf拷贝到可执行文件 satoshinet 的同目录下
-2. 改名为 satsnet.confg
-3. 修改satsnet.confg中的validatorid，改成一个随机的int64值，比如节点的公网ip地址的int64格式
-4. 将conf.yaml拷贝到可执行文件 satoshinet 的同目录下
-5. 运行 ./satoshinet 根据提示创建钱包，备份助记词和密码
-6. 
+在这里我们先提供在测试网络上质押挖矿的教程。
+
+质押：
+在测试网络质押，需要将1000枚ordx:f:dogcoin质押到你和服务节点的通道地址上。你可以选择引导节点作为服务节点，这种时候你本身会成为核心节点，需要提供全功能服务；你也可以选择其他核心节点作为服务节点，这个时候你就是一个普通的挖矿节点，不需要提供其他服务。
+插件钱包提供了质押入口，你只需要 配置->节点配置，选择节点类型，确认你的钱包中有足够的质押资产，然后发起质押。该质押过程会将你钱包中足够数量的质押资产，转移到通道地址中。在等待交易完成的时间，可以继续做下一步，准备启动挖矿服务。
+
+挖矿：
+1. 将可执行文件satoshinet,stpd.so下载到本地，比如 /data/satoshinet 目录下
+2. 将satsnet_testnet.conf拷贝到 /data/satoshinet 目录下
+3. 改名为 satsnet.confg
+4. 将以下几个配置项打开，并且修改你的bitcoind的rpc用户名和密码：
+
+; 本地节点rpc接口用户名和密码
+rpcuser=your_name
+rpcpass=your_password
+
+; 激活挖矿
+generate=true
+
+; 激活STP服务，普通节点设置为false
+enableSTP=true
+
+; 质押了资产的钱包的公钥，请修改
+miningpubkey=your_wallet_pubkey
+
+5. 将conf.yaml拷贝到 /data/satoshinet 目录下，修改 indexer_layer1 的 host为你自建的索引器服务地址
+6. 输入命令行 ./satoshinet ， 按照提示创建钱包，或者导入钱包，并且设定一个钱包密码。该密码会自动保存在 /data/satoshinet/wallet.password 中，方便调试阶段不用重复输入密码。等调试完成后，启动服务之后，可以删除这个文件，防止密码泄漏。
+7. 设定密码之后，app会自动退出，现在继续输入命令行 ./satoshinet 观察挖矿服务是否顺利启动。(需要在上面的质押交易确认后再启动)
+8. 如果交易已经确认，启动satoshinet后，将自动将该节点提升为挖矿节点，这个过程可能需要几分钟，在这之前，app可能会因为还不符合挖矿条件自动退出，需要多启动几次。
+9. 最后，如果一切顺利，日志会打印 “Start pos miner.”，节点正式进入挖矿状态。
+10. 按 ctrl-c （或者kill -2 pi）退出app，重新用下面命令行启动节点，进入服务状态：
+nohup ./satoshinet > ./nohup.log 2>&1 &
+11. 这个时候可以删除wallet.password文件 （下次重启，需要先将创建一个同样的文件，并且将密码输入其中）
+
 
 
 区块浏览器
