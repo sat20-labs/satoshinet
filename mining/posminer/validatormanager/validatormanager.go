@@ -542,7 +542,7 @@ func (vm *ValidatorManager) GetLocalEpoch(string) (*epoch.Epoch, *epoch.Epoch, e
 
 // Current generator is updated
 func (vm *ValidatorManager) OnGeneratorUpdated(newGenerator *generator.Generator, validatorID string) {
-	utils.Log.Tracef("OnGeneratorUpdated from validator [%s]", validatorID)
+	utils.Log.Debugf("OnGeneratorUpdated from validator [%s]", validatorID)
 
 	if newGenerator == nil {
 		utils.Log.Tracef("OnGeneratorUpdated: Invalid generator (nil generator)")
@@ -1263,7 +1263,7 @@ func (vm *ValidatorManager) SetLocalAsCurrentGenerator(height int32, handoverTim
 }
 
 func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error) {
-	utils.Log.Tracef("[ValidatorManager]OnTimeGenerateBlock...")
+	utils.Log.Debugf("[ValidatorManager]OnTimeGenerateBlock...")
 
 	// 如果连接节点太少，就不要挖矿
 	if !vm.myValidator.IsBootStrapNode() {
@@ -1279,7 +1279,7 @@ func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error
 	// Notify validator manager to generate new block
 	hash, height, err := vm.Cfg.PosMiner.OnTimeGenerateBlock()
 	if err != nil {
-		utils.Log.Tracef("[ValidatorManager]OnTimeGenerateBlock failed: %v", err)
+		utils.Log.Debugf("[ValidatorManager]OnTimeGenerateBlock failed: %v", err)
 		// Generate block failed, it should be no tx to be mined, wait for next time
 		if err.Error() == "no any new tx in mempool" || err.Error() == "no any new tx need to be mining" {
 			if vm.CurrentEpoch.Generator != nil && vm.CurrentEpoch.Generator.GeneratorId == vm.Cfg.ValidatorId {
@@ -1299,7 +1299,7 @@ func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error
 		}
 
 		// Miner 错误， 直接流转到下一个validator
-		utils.Log.Tracef("[ValidatorManager]OnTimeGenerateBlock failed. The error is: %v", err)
+		utils.Log.Debugf("[ValidatorManager]OnTimeGenerateBlock failed. The error is: %v", err)
 
 		// Will handover to next validator, clear my generator
 		vm.myValidator.ClearMyGenerator()
@@ -1310,7 +1310,7 @@ func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error
 
 		return nil, 0, err
 	}
-	utils.Log.Tracef("[ValidatorManager]OnTimeGenerateBlock succeed, Hash: %s", hash.String())
+	utils.Log.Debugf("[ValidatorManager]OnTimeGenerateBlock succeed, Hash: %s", hash.String())
 
 	// Save vc block first and broadcast the block
 	newBlock := &generator.MinerNewBlock{
@@ -1366,12 +1366,12 @@ func (vm *ValidatorManager) HandoverToNextGenerator() {
 	// 	return hash, nil
 	// }
 	if nextGenerator == nil {
-		utils.Log.Tracef("[ValidatorManager]No any next generator in current epoch, Will hand over to next epoch")
+		utils.Log.Debugf("[ValidatorManager]No any next generator in current epoch, Will hand over to next epoch")
 		// No any generator or next generator is local validator, continue miner by local validator
 		// Current epoch is not valid, will req new epoch to miner new block
 		nextEpoch := vm.GetNextEpoch()
 		if nextEpoch != nil {
-			utils.Log.Tracef("[ValidatorManager]Has exist next epoch, will hand over to next epoch")
+			utils.Log.Debugf("[ValidatorManager]Has exist next epoch, will hand over to next epoch")
 			nextBlockHight := heightGenerator
 			timeStamp := time.Now().Unix()
 			handoverEpoch := &epoch.HandOverEpoch{
@@ -1394,13 +1394,13 @@ func (vm *ValidatorManager) HandoverToNextGenerator() {
 			vm.OnNextEpoch(handoverEpoch)
 			vm.needHandOver = false // HandOver completed.
 
-			utils.Log.Tracef("[ValidatorManager]hand over to next epoch completed")
+			utils.Log.Debugf("[ValidatorManager]hand over to next epoch completed")
 			// Save handover new epoch into db and broadcast the block to validatechain
 			// NNN
 
 		} else {
 			// No Next epoch, will req new epoch to miner new block
-			utils.Log.Tracef("[ValidatorManager]No next epoch, will Req newepoch for next epoch, and handover to next epoch")
+			utils.Log.Debugf("[ValidatorManager]No next epoch, will Req newepoch for next epoch, and handover to next epoch")
 			nextEpochIndex := vm.getCurrentEpochIndex() + 1
 			if nextEpochIndex == 1 {
 				// Start the first epoch
@@ -1414,7 +1414,7 @@ func (vm *ValidatorManager) HandoverToNextGenerator() {
 		return
 	}
 
-	utils.Log.Tracef("[ValidatorManager] Will hand over to next generator:%d", nextGenerator.ValidatorId)
+	utils.Log.Debugf("[ValidatorManager] Will hand over to next generator:%d", nextGenerator.ValidatorId)
 
 	nextGeneratorConnected := true // For default, the next generator is connected
 	// Check the next generator is connected
@@ -1442,13 +1442,13 @@ func (vm *ValidatorManager) HandoverToNextGenerator() {
 		}
 		handOver.Token = token
 
-		utils.Log.Tracef("[ValidatorManager]HandOver: %+v", handOver)
+		utils.Log.Debugf("[ValidatorManager]HandOver: %+v", handOver)
 		// Will Send HandOver to all Connected Validators
 		cmdHandOver := validatorcommand.NewMsgHandOver(&handOver)
 		vm.BroadcastCommand(cmdHandOver)
 		vm.needHandOver = false // HandOver completed.
 	} else {
-		utils.Log.Tracef("[ValidatorManager] The next generator is not connected, Will remove the next generator:%d", nextGenerator.ValidatorId)
+		utils.Log.Debugf("[ValidatorManager] The next generator is not connected, Will remove the next generator:%d", nextGenerator.ValidatorId)
 		// The next generator is disconnected
 		// Remove the next generator from epoch, and will req new epoch to miner new block
 		// 在多次尝试重连失败后，需要剔除成员
@@ -1779,7 +1779,7 @@ func (vm *ValidatorManager) setCurrentEpoch(currentEpoch *epoch.Epoch) {
 }
 
 func (vm *ValidatorManager) resetGeneratorMoniter() {
-	utils.Log.Tracef("resetGeneratorMoniter...")
+	utils.Log.Debugf("resetGeneratorMoniter...")
 	if vm.moniterGeneratorTicker == nil {
 		// Not start monitor
 		utils.Log.Tracef("GeneratorTicker is not start or stopped.")
@@ -1798,22 +1798,22 @@ func (vm *ValidatorManager) resetGeneratorMoniter() {
 		memCount := vm.CurrentEpoch.GetMemberCount()
 		if posGenerator == pos {
 			monitorInterval := GeneratorMonitorInterval_EpochMember + MaxExpiration
-			utils.Log.Tracef("local generator: Next check generator after %f seconds.", monitorInterval.Seconds())
+			utils.Log.Debugf("local generator: Next check generator after %f seconds.", monitorInterval.Seconds())
 			vm.moniterGeneratorTicker.Reset(monitorInterval)
 		} else if pos < posGenerator {
 			// 已经完成了出块，只需要监控后面member出块的情况
 			monitorInterval := GeneratorMonitorInterval_EpochMember + MaxExpiration + time.Duration(memCount-posGenerator)*time.Second
-			utils.Log.Tracef("mined epoch member: Next check generator after %f seconds.", monitorInterval.Seconds())
+			utils.Log.Debugf("mined epoch member: Next check generator after %f seconds.", monitorInterval.Seconds())
 			vm.moniterGeneratorTicker.Reset(monitorInterval)
 		} else { // pos > posGenerator
 			// 还没有完成了出块，需要监控前面member出块的情况
 			monitorInterval := GeneratorMonitorInterval_EpochMember + MaxExpiration + time.Duration(pos-posGenerator)*time.Second
-			utils.Log.Tracef("waiting epoch member: Next check generator after %f seconds.", monitorInterval.Seconds())
+			utils.Log.Debugf("waiting epoch member: Next check generator after %f seconds.", monitorInterval.Seconds())
 			vm.moniterGeneratorTicker.Reset(monitorInterval)
 		}
 	} else {
 		monitorInterval := GeneratorMonitorInterval_UonMember
-		utils.Log.Tracef("Not epoch member :Next check generator after %f seconds.", monitorInterval.Seconds())
+		utils.Log.Debugf("Not epoch member :Next check generator after %f seconds.", monitorInterval.Seconds())
 		vm.moniterGeneratorTicker.Reset(monitorInterval)
 	}
 }

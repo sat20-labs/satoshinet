@@ -788,14 +788,14 @@ func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
 	// submission, since the current block will be changing and
 	// this would otherwise end up building a new block template on
 	// a block that is in the process of becoming stale.
-	utils.Log.Tracef("GenerateNewBlock by VC ...")
+	utils.Log.Debugf("GenerateNewBlock by VC ...")
 	m.submitBlockLock.Lock()
 	utils.Log.Tracef("Lock block ...")
 	curHeight := m.g.BestSnapshot().Height
 	if curHeight != 0 && !m.cfg.IsCurrent() {
 		m.submitBlockLock.Unlock()
 		time.Sleep(time.Second)
-		utils.Log.Tracef("curHeight = %d and not current.", curHeight)
+		utils.Log.Warning("curHeight = %d and not current.", curHeight)
 		err := fmt.Errorf("The blockchain is not best chain.")
 		return nil, 0, err
 	}
@@ -825,10 +825,11 @@ func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
 	// a new block template can be generated.  When the return is
 	// true a solution was found, so submit the solved block.
 	if m.solveBlock(template.Block, curHeight+1) {
-		utils.Log.Tracef("solveBlock ...")
+		utils.Log.Debugf("submitBlock ...")
 		block := btcutil.NewBlock(template.Block)
 		m.submitBlock(block)
 		blockHash := block.Hash()
+		utils.Log.Debugf("submitBlock %d", curHeight + 1)
 		return blockHash, curHeight + 1, nil
 	}
 

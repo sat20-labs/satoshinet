@@ -118,7 +118,7 @@ func (g *Generator) VerifyToken(pubKey string) bool {
 }
 
 func (g *Generator) SetHandOverTime(handOverTime time.Time) error {
-	utils.Log.Tracef("[Generator]SetHandOverTime ...")
+	utils.Log.Debugf("[Generator]SetHandOverTime ...")
 	now := time.Now()
 	minerTime := handOverTime.Add(MinerInterval)
 	if minerTime.After(now) == false {
@@ -130,7 +130,7 @@ func (g *Generator) SetHandOverTime(handOverTime time.Time) error {
 	return nil
 }
 func (g *Generator) ContinueNextSlot() error {
-	utils.Log.Tracef("[Generator]ContinueNextSlot ...")
+	utils.Log.Debugf("[Generator]ContinueNextSlot ...")
 
 	now := time.Now()
 	newMinerTime := g.MinerTime.Add(MinerInterval)
@@ -148,11 +148,11 @@ func (g *Generator) SetLocalMiner(localMiner MinerInterface) {
 
 func (g *Generator) MinerNewBlock() {
 	utils.Log.Tracef("##################################################################")
-	utils.Log.Tracef("[Generator]MinerNewBlock...")
-	utils.Log.Tracef("[Generator]Miner time: %v", time.Now().Format("2006-01-02 15:04:05"))
-	utils.Log.Tracef("[Generator]Miner height: %d", g.Height)
+	utils.Log.Debugf("[Generator]MinerNewBlock...")
+	utils.Log.Debugf("[Generator]Miner time: %v", time.Now().Format("2006-01-02 15:04:05"))
+	utils.Log.Debugf("[Generator]Miner height: %d", g.Height)
 	if g.LocalMiner != nil {
-		utils.Log.Tracef("[Generator]Call localMiner to generate a new block...")
+		utils.Log.Debugf("[Generator]Call localMiner to generate a new block...")
 		g.LocalMiner.OnTimeGenerateBlock()
 	}
 	utils.Log.Tracef("##################################################################")
@@ -160,7 +160,7 @@ func (g *Generator) MinerNewBlock() {
 
 
 func (g *Generator) minerHandler() {
-	utils.Log.Tracef("[Generator]minerHandler start...")
+	utils.Log.Debugf("[Generator]minerHandler start...")
 
 	exitMinerHandler := make(chan struct{})
 	utils.Log.Tracef("[Generator]Set Miner <height:%d> Timer at %s ", g.Height, g.MinerTime.Format("2006-01-02 15:04:05"))

@@ -187,7 +187,7 @@ func (v *LocalValidator) IsBootStrapNode() bool {
 }
 
 func (v *LocalValidator) BecomeGenerator(height int32, handOverTime time.Time) error {
-	utils.Log.Tracef("[LocalValidator]BecomeGenerator...")
+	utils.Log.Debugf("[LocalValidator]BecomeGenerator...")
 	myGenerator := generator.NewGenerator(&v.ValidatorInfo, height, handOverTime.Unix(), "")
 
 	err := myGenerator.SetHandOverTime(handOverTime)
@@ -243,7 +243,7 @@ func (v *LocalValidator) GetGenerator(validatorId string) *generator.Generator {
 }
 
 func (v *LocalValidator) OnTimeGenerateBlock() (*chainhash.Hash, int32, error) {
-	utils.Log.Tracef("[LocalValidator]OnTimeGenerateBlock")
+	utils.Log.Debugf("[LocalValidator]OnTimeGenerateBlock")
 
 	return v.Cfg.Listener.OnTimeGenerateBlock()
 }
