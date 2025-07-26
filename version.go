@@ -20,8 +20,8 @@ const (
 
 	// satoshinet version
 	appMajor uint = 0
-	appMinor uint = 0
-	appPatch uint = 1
+	appMinor uint = 24
+	appPatch uint = 2
 
 	// appPreRelease MUST only contain characters from semanticAlphabet
 	// per the semantic versioning spec.
