@@ -812,7 +812,7 @@ func (p *RemotePeer) HandleRemotePeerInfo(peerInfo *validatorcommand.MsgPeerInfo
 	// 	First check the remote validator is valid, then notify the validator
 
 	if !bootstrapnode.CheckValidator(peerInfo.ValidatorId) {
-		utils.Log.Errorf("----------[RemotePeer]The remote peer is not valid")
+		utils.Log.Errorf("----------[RemotePeer]The remote peer is not valid, %s", peerInfo.ValidatorId)
 		return
 	}
 
@@ -830,7 +830,7 @@ func (p *RemotePeer) HandleRemoteGetInfo(getInfo *validatorcommand.MsgGetInfo, c
 	// 	First check the remote validator is valid, then notify the validator
 
 	if !bootstrapnode.CheckValidator(getInfo.ValidatorId) {
-		utils.Log.Errorf("----------[RemotePeer]The remote peer is not valid")
+		utils.Log.Errorf("----------[RemotePeer]The remote peer is not valid, %s", getInfo.ValidatorId)
 		return
 	}
 

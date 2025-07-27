@@ -798,7 +798,7 @@ func (p *LocalPeer) HandleRemotePeerInfoConfirmed(peerInfo *validatorcommand.Msg
 	// 	First check the remote validator is valid, then notify the validator
 
 	if !bootstrapnode.CheckValidator(peerInfo.ValidatorId) {
-		utils.Log.Errorf("----------[LocalPeer]The remote peer is not valid")
+		utils.Log.Errorf("----------[LocalPeer]The remote peer is not valid, %s", peerInfo.ValidatorId)
 		return
 	}
 
