@@ -338,7 +338,7 @@ func (m *POSMiner) generateBlocks(quit chan struct{}) {
 	defer ticker.Stop()
 out:
 	for {
-		utils.Log.Tracef("generateBlocks ......")
+		utils.Log.Debugf("generateBlocks ......")
 		// Quit when the miner is stopped.
 		select {
 		case <-quit:
@@ -666,6 +666,7 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 		// Create a new block template using the available transactions
 		// in the memory pool as a source of transactions to potentially
 		// include in the block.
+		utils.Log.Tracef("Generating %d blocks", n)
 		template, err := m.g.NewBlockTemplate(payToAddr)
 		m.submitBlockLock.Unlock()
 		if err != nil {
