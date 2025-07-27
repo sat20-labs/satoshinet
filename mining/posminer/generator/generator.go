@@ -22,7 +22,7 @@ type MinerInterface interface {
 const (
 	// If the generator id is NoGeneratorId, it means the generator is not saved in the peer
 	NoGeneratorId = ""
-	MinerInterval = 12 * time.Second
+	MinerInterval = 10 * time.Second  // 出块时间间隔12S，但留2S给出块节点与引导节点同步数据
 )
 
 type Generator struct {

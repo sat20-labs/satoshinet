@@ -38,3 +38,11 @@ func CheckValidator(pubKey string) bool {
 	}
 	return IsMinerNode(pk)
 }
+
+func GetBootstrapValidator() string {
+	return common.GetBootstrapPubKey()
+}
+
+func GetDefaultCoreValidator() string {
+	return common.GetCoreNodePubKey()
+}

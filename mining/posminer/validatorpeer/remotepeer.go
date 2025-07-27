@@ -440,6 +440,16 @@ func (p *RemotePeer) SendCommand(command validatorcommand.Message) error {
 	return nil
 }
 
+func (p *RemotePeer) WaitCommandSended(cmd validatorcommand.Message) bool {
+	p.connLock.RLock()
+	connReq := p.connReq
+	p.connLock.RUnlock()
+	if connReq == nil || connReq.isInactive() {
+		return false
+	}
+	return connReq.WaitCommandSended(cmd)
+}
+
 // newPeerBase returns a new base bitcoin peer based on the inbound flag.  This
 // is used by the NewInboundPeer and NewOutboundPeer functions to perform base
 // setup needed by both types of peers.

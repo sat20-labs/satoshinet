@@ -8,8 +8,8 @@ package validatorpeer
 import (
 	"container/list"
 	"fmt"
-	"math"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,6 +77,8 @@ type ConnReq struct {
 
 	CmdsLock    sync.RWMutex
 	pendingCmds *list.List // Output commands
+
+	sendedLock  sync.RWMutex
 	sended      map[validatorcommand.Message]int64
 
 	sendQueue     chan struct{}
@@ -219,12 +221,13 @@ func (connReq *ConnReq) PopNextCommand() validatorcommand.Message {
 	return item.Value.(validatorcommand.Message)
 }
 
+// 最多等2s，挖矿时间控制的需要
 func (connReq *ConnReq) WaitCommandSended(command validatorcommand.Message) bool {
 
-	for i := 0; i < 100; i++ {
-		connReq.CmdsLock.RLock()
+	for i := 0; i < 20; i++ {
+		connReq.sendedLock.RLock()
 		_, ok := connReq.sended[command]
-		connReq.CmdsLock.RUnlock()
+		connReq.sendedLock.RUnlock()
 		if ok {
 			return true
 		}
@@ -268,27 +271,40 @@ out:
 					break out
 				}
 
-				atomic.StoreInt64(&connReq.lastSend, time.Now().Unix())
+				t := time.Now().Unix()
+				atomic.StoreInt64(&connReq.lastSend, t)
 				utils.Log.Debugf("----------[%s]command [%s] has sent in %s.", connReq.String(), command.Command(), writeDur)
 
-				connReq.CmdsLock.Lock()
-				connReq.sended[command] = time.Now().Unix()
-				if len(connReq.sended) > 16 {
-					// 清理最早的一条已发送记录，防止 map 过大
-					min := int64(math.MaxInt64)
-					var cmd validatorcommand.Message
-					for k, v := range connReq.sended {
-						if v < min {
-							min = v
-							cmd = k
-						}
-					}
-					if cmd != nil {
-						delete(connReq.sended, cmd)
-					}
-				}
-				connReq.CmdsLock.Unlock()
+				connReq.sendedLock.Lock()
+				connReq.sended[command] = t
+				connReq.sendedLock.Unlock()
 			}
+			connReq.sendedLock.Lock()
+			MaxSendedSize := 64
+			if len(connReq.sended) > MaxSendedSize {
+				// 清理最早的已发送记录，防止 map 过大
+				type cmdTime struct {
+					cmd validatorcommand.Message
+					sendedTime int64
+				}
+
+				tmp := make([]*cmdTime, len(connReq.sended))
+				i := 0
+				for k, v := range connReq.sended {
+					tmp[i] = &cmdTime{
+						cmd: k,
+						sendedTime: v,
+					}
+					i++
+				}
+				sort.Slice(tmp, func(i, j int) bool {
+					return tmp[i].sendedTime < tmp[j].sendedTime
+				})
+				for i := 0; i < len(tmp) - MaxSendedSize; i++ {
+					delete(connReq.sended, tmp[i].cmd)
+				}
+			}
+			connReq.sendedLock.Unlock()
 
 			// connReq.sendDoneQueue <- command 需要有线程读取数据，不然会卡住
 

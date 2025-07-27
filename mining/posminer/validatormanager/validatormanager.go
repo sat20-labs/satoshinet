@@ -11,6 +11,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/mining/posminer/bootstrapnode"
 	"github.com/sat20-labs/satoshinet/mining/posminer/epoch"
 	"github.com/sat20-labs/satoshinet/mining/posminer/generator"
 	"github.com/sat20-labs/satoshinet/mining/posminer/localvalidator"
@@ -21,6 +22,7 @@ import (
 	"github.com/sat20-labs/satoshinet/mining/posminer/validatorcommand"
 	"github.com/sat20-labs/satoshinet/mining/posminer/validatorinfo"
 	"github.com/sat20-labs/satoshinet/mining/posminer/validatorrecord"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -846,6 +848,28 @@ func (vm *ValidatorManager) AddActivieValidator(validator *validator.Validator) 
 	return nil
 }
 
+// 列表中有pubkey不同的validator
+func (vm *ValidatorManager) HasRemoteValidator() bool {
+	vm.connectedListMtx.Lock()
+	defer vm.connectedListMtx.Unlock()
+
+	pubkey := vm.myValidator.ValidatorInfo.ValidatorId
+	for _, validator := range vm.ConnectedList {
+		if !validator.IsValidatorPubKey(pubkey) {
+			return true
+		}
+	}
+	return false
+}
+
+func (vm *ValidatorManager) GetBootstrapValidator() *validator.Validator {
+	return vm.LookupValidator(bootstrapnode.GetBootstrapValidator())
+}
+
+func (vm *ValidatorManager) GetDefaultCoreValidator() *validator.Validator {
+	return vm.LookupValidator(bootstrapnode.GetDefaultCoreValidator())
+}
+
 func (vm *ValidatorManager) LookupValidator(pubkey string) *validator.Validator {
 	if vm.myValidator.Validator.IsValidatorPubKey(pubkey) {
 		return &vm.myValidator.Validator
@@ -1266,15 +1290,56 @@ func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error
 	utils.Log.Debugf("[ValidatorManager]OnTimeGenerateBlock...")
 
 	// 如果连接节点太少，就不要挖矿
-	if !vm.myValidator.IsBootStrapNode() {
-		vm.connectedListMtx.RLock()
-		count := len(vm.ConnectedList)
-		vm.connectedListMtx.RUnlock()
-		if count == 0 {
+	if !vm.HasRemoteValidator() {
+		utils.Log.Infof("[ValidatorManager]OnTimeGenerateBlock no validator connected, step to next slot")
+		vm.myValidator.ContinueNextSlot()
+		vm.resetGeneratorMoniter()
+
+		return nil, 0, fmt.Errorf("no validator connected, step to next slot")
+	}
+
+	var defaultValidator *validator.Validator
+	if vm.myValidator.IsBootStrapNode() {
+		defaultValidator = vm.GetDefaultCoreValidator()
+	} else {
+		defaultValidator = vm.GetBootstrapValidator()
+	}
+	// 为了杜绝分叉，对于非引导节点，需要在挖矿之前，再ping一下引导节点，确保引导节点知道本节点要开始出块了
+	// 如果是引导节点，那就ping一下内置的核心节点，确保核心节点能连接到
+	if defaultValidator != nil {
+		utils.Log.Errorf("[ValidatorManager]OnTimeGenerateBlock not connect to default validator")
+		vm.myValidator.ContinueNextSlot()
+		vm.resetGeneratorMoniter()
+		return nil, 0, fmt.Errorf("not connect to default validator")
+	}
+
+	if !defaultValidator.IsConnected() {
+		err := defaultValidator.Connect()
+		if err != nil {
+			utils.Log.Errorf("[ValidatorManager]OnTimeGenerateBlock Connect default validator failed: %v", err)
 			vm.myValidator.ContinueNextSlot()
-			return nil, 0, fmt.Errorf("no validator connected, step to next slot")
+			vm.resetGeneratorMoniter()
+			return nil, 0, err
 		}
 	}
+
+	nonce, _ := wire.RandomUint64()
+	ping := validatorcommand.NewMsgPing(nonce)
+	err := defaultValidator.SendCommand(ping)
+	if err != nil {
+		utils.Log.Errorf("[ValidatorManager]OnTimeGenerateBlock send ping to default validator failed: %v", err)
+		vm.myValidator.ContinueNextSlot()
+		vm.resetGeneratorMoniter()
+		return nil, 0, err
+	}
+	// 发送成功就认为是连接上的，这里最多等2S （ generator.MinerInterval ）
+	if !defaultValidator.WaitCommandSended(ping) {
+		utils.Log.Errorf("[ValidatorManager]OnTimeGenerateBlock send ping to default validator failed")
+		vm.myValidator.ContinueNextSlot()
+		vm.resetGeneratorMoniter()
+		return nil, 0, err
+	}
+	utils.Log.Debugf("[ValidatorManager]OnTimeGenerateBlock check completed, start to mine blokc")
 
 	// Notify validator manager to generate new block
 	hash, height, err := vm.Cfg.PosMiner.OnTimeGenerateBlock()
@@ -1458,7 +1523,11 @@ func (vm *ValidatorManager) HandoverToNextGenerator() {
 
 func (vm *ValidatorManager) BroadcastCommand(command validatorcommand.Message) {
 	utils.Log.Tracef("[ValidatorManager]Will broadcast command to all connected validators...")
+	localPubKey := vm.myValidator.GetValidatorId()
 	for _, validator := range vm.ConnectedList {
+		if validator.ValidatorInfo.ValidatorId == localPubKey {
+			continue
+		}
 		utils.Log.Tracef("[ValidatorManager]Send command <%s> to %s...", command.Command(), validator.String())
 		validator.SendCommand(command)
 	}

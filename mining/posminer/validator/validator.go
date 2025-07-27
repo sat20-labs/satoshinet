@@ -442,6 +442,13 @@ func (v *Validator) SendCommand(command validatorcommand.Message) error {
 	return v.peer.SendCommand(command)
 }
 
+func (v *Validator) WaitCommandSended(command validatorcommand.Message) bool {
+	if v.peer == nil {
+		return false
+	}
+	return v.peer.WaitCommandSended(command)
+}
+
 func (v *Validator) GetLastReceived() time.Time {
 	if v.peer == nil {
 		return time.Time{}

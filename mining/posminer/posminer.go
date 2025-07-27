@@ -380,8 +380,7 @@ out:
 			template, err := m.g.NewBlockTemplate(payToAddr)
 			m.submitBlockLock.Unlock()
 			if err != nil {
-				errStr := fmt.Sprintf("Failed to create new block "+
-					"template: %v", err)
+				errStr := fmt.Sprintf("Failed to create new block template: %v", err)
 				utils.Log.Warning(errStr)
 				continue
 			}
@@ -491,11 +490,11 @@ func (m *POSMiner) Start() {
 	}
 
 	m.quit = make(chan struct{})
-	if m.cfg.TimerGenerate {
-		utils.Log.Infof("POS miner started with timerGenerate")
-		m.wg.Add(1)
-		go m.miningWorkerController()
-	}
+	// if m.cfg.TimerGenerate {
+	// 	utils.Log.Infof("POS miner started with timerGenerate")
+	// 	m.wg.Add(1)
+	// 	go m.miningWorkerController()
+	// }
 
 	cfg := &validatormanager.Config{
 		ChainParams:     m.cfg.ChainParams,
@@ -609,6 +608,7 @@ func (m *POSMiner) NumWorkers() int32 {
 	return int32(m.numWorkers)
 }
 
+// 处理RPC消息
 // GenerateNBlocks generates the requested number of blocks. It is self
 // contained in that it creates block templates and attempts to solve them while
 // detecting when it is performing stale work and reacting accordingly by
@@ -670,8 +670,7 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 		template, err := m.g.NewBlockTemplate(payToAddr)
 		m.submitBlockLock.Unlock()
 		if err != nil {
-			errStr := fmt.Sprintf("Failed to create new block "+
-				"template: %v", err)
+			errStr := fmt.Sprintf("Failed to create new block template: %v", err)
 			utils.Log.Warning(errStr)
 			continue
 		}
@@ -720,7 +719,7 @@ func New(cfg *Config) *POSMiner {
 
 // OnTimeGenerateBlock is invoke when time to generate block.
 func (m *POSMiner) OnTimeGenerateBlock() (*chainhash.Hash, int32, error) {
-	utils.Log.Tracef("Timeup for OnTimeGenerateBlock ......")
+	utils.Log.Debugf("Timeup for OnTimeGenerateBlock ......")
 
 	//return m.GenerateNewTestBlock()
 
@@ -813,8 +812,7 @@ func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
 	template, err := m.g.NewBlockTemplate(payToAddr)
 	m.submitBlockLock.Unlock()
 	if err != nil {
-		errStr := fmt.Sprintf("Failed to create new block "+
-			"template: %v", err)
+		errStr := fmt.Sprintf("Failed to create new block template: %v", err)
 		utils.Log.Warning(errStr)
 		return nil, 0, err
 	}
