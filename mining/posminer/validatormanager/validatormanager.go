@@ -1306,7 +1306,7 @@ func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error
 	}
 	// 为了杜绝分叉，对于非引导节点，需要在挖矿之前，再ping一下引导节点，确保引导节点知道本节点要开始出块了
 	// 如果是引导节点，那就ping一下内置的核心节点，确保核心节点能连接到
-	if defaultValidator != nil {
+	if defaultValidator == nil {
 		utils.Log.Errorf("[ValidatorManager]OnTimeGenerateBlock not connect to default validator")
 		vm.myValidator.ContinueNextSlot()
 		vm.resetGeneratorMoniter()
