@@ -197,7 +197,7 @@ func btcdMain(serverChan chan<- *server) error {
 			btcdLog.Infof("mining address %s", addr)
 			cfg.miningAddrs = append(cfg.miningAddrs, addr)
 		} else {
-			// 普通挖矿节点，没有L1索引器，需要某个索引器提供服务
+			// 普通挖矿节点，没有L1索引器，需要某个索引器提供服务，同时挖矿所得直接进入两者的通道地址
 			if cfg.MiningPubKey == "" {
 				btcdLog.Errorf("mining pubkey must be set when enable Generate")
 				return fmt.Errorf("mining pubkey must be set when enable Generate")

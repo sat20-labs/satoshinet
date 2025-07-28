@@ -2701,17 +2701,25 @@ func (s *server) Start() {
 							done = time.After(12 * time.Second)
 						}
 					} else {
-						if anchortx.IsMinerNode(pubkey) {
-							err = stp.StartSTP()
-							if err != nil {
-								btcdLog.Errorf("Unable to start STP, %v", err)
-								os.Exit(-1)
-							}
-
-							srvrLog.Infof("Start pos miner.")
-							s.posMiner.Start()
-							break out
+						
+						// 先启动stp模块，可能需要自动质押并成为miner
+						err = stp.StartSTP()
+						if err != nil {
+							btcdLog.Errorf("Unable to start STP, %v", err)
+							os.Exit(-1)
 						}
+
+						for i := 0; i < 10; i++ {
+							if anchortx.IsMinerNode(pubkey) {
+								srvrLog.Infof("Start pos miner.")
+								s.posMiner.Start()
+								break out
+							}
+							time.Sleep(time.Second)
+						}
+						
+						btcdLog.Errorf("not a miner, exit")
+						os.Exit(-1)
 					}
 				}
 			}
