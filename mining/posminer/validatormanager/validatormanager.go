@@ -2113,7 +2113,10 @@ exit:
 }
 
 func (vm *ValidatorManager) monitorGeneratorHandOver() {
-	utils.Log.Tracef("[ValidatorManager]monitorGeneratorHandOver...")
+	utils.Log.Debugf("[ValidatorManager]monitorGeneratorHandOver...")
+	defer func() {
+		utils.Log.Debugf("[ValidatorManager]monitorGeneratorHandOver finished.")
+	}()
 	// 运行到这里，则在监控周期内， generator没有被轮转， 需要重新轮转
 	// 检查当前的generator没有轮转的原因
 	// 检查项目：
@@ -2169,7 +2172,7 @@ func (vm *ValidatorManager) monitorGeneratorHandOver() {
 		}
 
 		generatorId := vm.CurrentEpoch.GetMemberValidatorId(posGenerator)
-		utils.Log.Tracef("[ValidatorManager]The New generatorid is %d in pos [%d]", generatorId, posGenerator)
+		utils.Log.Tracef("[ValidatorManager]The New generatorid is %s in pos [%d]", generatorId, posGenerator)
 		if generatorId == vm.Cfg.ValidatorId {
 			utils.Log.Tracef("[ValidatorManager]The new generator is local node, Set local as generator.")
 			nextHeight := vm.Cfg.PosMiner.GetBlockHeight() + 1
@@ -2190,14 +2193,14 @@ func (vm *ValidatorManager) monitorGeneratorHandOver() {
 		} else {
 			generator := vm.FindRemoteValidator(generatorId)
 			if generator == nil || generator.IsConnected() == false {
-				utils.Log.Tracef("[ValidatorManager]The new generator %d has disconnected.", generatorId)
+				utils.Log.Tracef("[ValidatorManager]The new generator %s has disconnected.", generatorId)
 				if vm.myValidator.IsBootStrapNode() {
-					utils.Log.Tracef("[ValidatorManager] Will del generator %d by bootstrap node...", generatorId)
+					utils.Log.Tracef("[ValidatorManager] Will del generator %s by bootstrap node...", generatorId)
 					// Generator is not connected, del generatorId
 					vm.epochMemberMgr.ReqDelEpochMember(generatorId)
 				}
 			} else {
-				utils.Log.Tracef("[ValidatorManager]The new generator %d is connected.", generatorId)
+				utils.Log.Tracef("[ValidatorManager]The new generator %s is connected.", generatorId)
 				pastChangeDuation := vm.getPastTimeFromLastChange()
 				if pastChangeDuation < UnexceptionInterval {
 					// The change time is not unexpected, ignore
@@ -2224,17 +2227,8 @@ func (vm *ValidatorManager) monitorGeneratorHandOver() {
 	if pastMinerDuation > UnexceptionInterval {
 		// The miner is exceed unexception time, will reset epoch by bootstrap node
 		utils.Log.Tracef("[ValidatorManager]The miner is exceeded the unexpected time %f, UnexceptionInterval = %f", pastMinerDuation.Seconds(), UnexceptionInterval.Seconds())
-		// if vm.myValidator.IsBootStrapNode() {
-		// 	vm.handoverToNextEpoch()
-		// }
-
-		// need to miner new block directly by IsBootStrapNode if exist tx in mempool
-		txSizeInMempool := vm.Cfg.PosMiner.GetMempoolTxSize()
-		if txSizeInMempool > 0 {
-			if vm.myValidator.IsBootStrapNode() {
-				utils.Log.Tracef("[ValidatorManager]Directly miner by bootstrap node, txSizeInMempool = %d.", txSizeInMempool)
-				vm.OnTimeGenerateBlock()
-			}
+		if vm.myValidator.IsBootStrapNode() {
+			vm.handoverToNextEpoch()
 		}
 		return
 	}
@@ -2277,7 +2271,7 @@ func (vm *ValidatorManager) monitorGeneratorHandOver() {
 
 		validator, isConnected := vm.epochMemberMgr.GetEpochMember(generatorId)
 		if isConnected {
-			utils.Log.Tracef("[ValidatorManager]Notify %d to handover...", generatorId)
+			utils.Log.Tracef("[ValidatorManager]Notify %s to handover...", generatorId)
 			// 当前的Generator is online， 通知Generator进行handover
 			CmdNotifyHandOver := validatorcommand.NewMsgNotifyHandover(vm.Cfg.ValidatorId)
 			err := validator.SendCommand(CmdNotifyHandOver)
@@ -2287,9 +2281,9 @@ func (vm *ValidatorManager) monitorGeneratorHandOver() {
 			}
 			isConnected = false
 		}
-		utils.Log.Tracef("[ValidatorManager]The generator %d has disconnected.", generatorId)
+		utils.Log.Tracef("[ValidatorManager]The generator %s has disconnected.", generatorId)
 		if vm.myValidator.IsBootStrapNode() {
-			utils.Log.Tracef("[ValidatorManager] Will del generator %d by bootstrap node...", generatorId)
+			utils.Log.Tracef("[ValidatorManager] Will del generator %s by bootstrap node...", generatorId)
 			// Generator is not connected, del generatorId
 			vm.epochMemberMgr.ReqDelEpochMember(generatorId)
 		}
@@ -2307,7 +2301,7 @@ func (vm *ValidatorManager) monitorGeneratorHandOver() {
 			return
 		}
 
-		utils.Log.Tracef("Start new epoch with validator : %d", nextEpochValidator.ValidatorId)
+		utils.Log.Tracef("Start new epoch with validator : %s", nextEpochValidator.ValidatorId)
 		if nextEpochValidator.ValidatorId == vm.GetMyValidatorId() {
 			// The first validator of new current epoch is local validator
 			utils.Log.Tracef("Start validator is local validator, start generator as epoch start.")
@@ -2328,7 +2322,7 @@ func (vm *ValidatorManager) monitorGeneratorHandOver() {
 			return
 		}
 
-		utils.Log.Tracef("[ValidatorManager] The next generator %d is not connected, Will del it...", nextEpochValidator.ValidatorId)
+		utils.Log.Tracef("[ValidatorManager] The next generator %s is not connected, Will del it...", nextEpochValidator.ValidatorId)
 		if vm.myValidator.IsBootStrapNode() {
 			// Generator is not connected, del generatorId
 			vm.epochMemberMgr.ReqDelEpochMember(nextEpochValidator.ValidatorId)
@@ -2357,7 +2351,6 @@ func (vm *ValidatorManager) monitorGeneratorHandOver() {
 	// 		}
 	// 	}
 	// }
-
 }
 
 func (vm *ValidatorManager) handoverToNextEpoch() {
