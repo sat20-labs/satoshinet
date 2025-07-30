@@ -2696,6 +2696,8 @@ func (s *server) Start() {
 						tip2 := indexerShare.ShareIndexer.GetChainTip()
 						tip = max(tip, tip2)
 						height := indexerShare.ShareIndexer.GetSyncHeight()
+						srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d", 
+							height, tip, s.connManager.GetConnCount(), s.connManager.GetAcceptCount())
 						if height == tip && (s.connManager.GetConnCount() != 0 || 
 							s.connManager.GetAcceptCount() != 0) {
 							done = time.After(12 * time.Second)
