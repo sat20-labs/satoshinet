@@ -1851,3 +1851,37 @@ func TestRBF(t *testing.T) {
 		}
 	}
 }
+
+
+func TestSaveAndLoadMemPool(t *testing.T) {
+	t.Parallel()
+
+	harness, outputs, err := newPoolHarness(&chaincfg.MainNetParams)
+	if err != nil {
+		t.Fatalf("unable to create test pool: %v", err)
+	}
+	
+	chainedTxns, err := harness.CreateTxChain(outputs[0], 5)
+	if err != nil {
+		t.Fatalf("unable to create transaction chain: %v", err)
+	}
+	for _, tx := range chainedTxns {
+		_, err := harness.txPool.ProcessTransaction(tx, true,
+			false, 0)
+		if err != nil {
+			t.Fatalf("ProcessTransaction: failed to accept "+
+				"tx: %v", err)
+		}
+	}
+
+	err = harness.txPool.Save("./")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = harness.txPool.Load("./")
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+}

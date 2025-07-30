@@ -167,14 +167,14 @@ func btcdMain(serverChan chan<- *server) error {
 
 		if cfg.EnableSTP {
 			// 提供stp服务，必然是core node，需要自主提供索引器， 其挖矿地址是核心通道地址
-			
+			localPubkeyStr := hex.EncodeToString(pubkey)
 			if cfg.MiningPubKey != "" {
-				if hex.EncodeToString(pubkey) != cfg.MiningPubKey {
+				if localPubkeyStr != cfg.MiningPubKey {
 					btcdLog.Errorf("mining pubkey must be consistent with wallet pubkey")
 					return fmt.Errorf("mining pubkey must be consistent with wallet pubkey")
 				}
 			} else {
-				cfg.MiningPubKey = hex.EncodeToString(pubkey)
+				cfg.MiningPubKey = localPubkeyStr
 			}
 
 			var addr btcutil.Address
@@ -192,6 +192,17 @@ func btcdMain(serverChan chan<- *server) error {
 				if err != nil {
 					btcdLog.Errorf("getP2WSHAddress failed, %v", err)
 					return err
+				}
+
+				// 核心节点，一般自建索引器，或者使用引导节点的索引器
+				indexerPubkey, err := anchortx.GetIndexerPubkey(cfg.MiningPubKey)
+				if err != nil {
+					btcdLog.Errorf("GetIndexerPubkey %s failed, %v", cfg.MiningPubKey, err)
+					return err
+				}
+				if indexerPubkey != bootstrapPubkey && indexerPubkey != localPubkeyStr {
+					btcdLog.Errorf("core node should use local indexer or bootstrap indexer")
+					return fmt.Errorf("core node should use local indexer or bootstrap indexer")
 				}
 			}
 			btcdLog.Infof("mining address %s", addr)
