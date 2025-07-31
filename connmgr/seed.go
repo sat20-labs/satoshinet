@@ -41,7 +41,7 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 			host = fmt.Sprintf("x%x.%s", uint64(reqServices), dnsseed.Host)
 		}
 
-		go func(host string) {
+		//go func(host string) {
 			randSource := mrand.New(mrand.NewSource(time.Now().UnixNano()))
 
 			seedpeers, err := lookupFn(host)
@@ -70,6 +70,6 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 			}
 
 			seedFn(addresses)
-		}(host)
+		//}(host)
 	}
 }
