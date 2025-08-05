@@ -41,6 +41,10 @@ func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32)
 	// Check the locked tx is is not anchor in sats net
 	if info, _ := mp.cfg.FetchAnchorTx(txInfo.Utxo); info != nil {
 		log.Errorf("The anchor is exist, anchorTx %s, utxo %s", info.AnchorTxid, txInfo.Utxo)
+		if info.AnchorTxid == tx.TxID() {
+			log.Infof("The anchor tx %s is valid and accepted before", tx.TxID())
+			return nil
+		}
 		// The anchor tx is found in sats net
 		err = fmt.Errorf("the locked tx is anchored already in sats net, anchorTx %s, utxo %s", info.AnchorTxid, txInfo.Utxo)
 		return err
