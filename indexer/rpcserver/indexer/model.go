@@ -109,13 +109,16 @@ func (s *Model) getPlainUtxos(address string, value int64, start, limit int) ([]
 	totalRecords := len(utxos)
 
 	avaibableUtxoList := make([]*indexerwire.PlainUtxo, 0)
-	for _, txOut := range outputMap {
+	for utxoId, txOut := range outputMap {
 		if IsSpent(txOut.OutPoint) {
 			continue
 		}
+		height, index, _ := indexer.FromUtxoId(utxoId)
 		if txOut.Value >= value {
 			txid, vout, _ := indexer.ParseUtxo(txOut.OutPoint)
 			avaibableUtxoList = append(avaibableUtxoList, &indexerwire.PlainUtxo{
+				Height: height,
+				Index: index,
 				Txid:  txid,
 				Vout:  vout,
 				Value: txOut.Value,
@@ -150,21 +153,26 @@ func (s *Model) getAllUtxos(address string, start, limit int) ([]*indexerwire.Pl
 
 	plainUtxos := make([]*indexerwire.PlainUtxo, 0)
 	otherUtxos := make([]*indexerwire.PlainUtxo, 0)
-	for _, txOut := range outputMap {
+	for utxoId, txOut := range outputMap {
 		if IsSpent(txOut.OutPoint) {
 			continue
 		}
 		
 		txid, vout, _ := indexer.ParseUtxo(txOut.OutPoint)
 
+		height, index, _ := indexer.FromUtxoId(utxoId)
 		if len(txOut.Assets) == 0 {
 			plainUtxos = append(plainUtxos, &indexerwire.PlainUtxo{
+				Height: height,
+				Index: index,
 				Txid:  txid,
 				Vout:  vout,
 				Value: txOut.Value,
 			})
 		} else {
 			otherUtxos = append(otherUtxos, &indexerwire.PlainUtxo{
+				Height: height,
+				Index: index,
 				Txid:  txid,
 				Vout:  vout,
 				Value: txOut.Value,
