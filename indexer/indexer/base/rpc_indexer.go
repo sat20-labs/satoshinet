@@ -175,7 +175,7 @@ func (b *RpcIndexer) getAddressValue2(address string, txn *badger.Txn) *indexer.
 	b.mutex.RLock()
 	value, ok := b.addressValueMap[address]
 	if !ok {
-		data, err := db.GetAddressDataFromDBTxn(txn, address)
+		data, err := db.GetAddressDataFromDBTxnV2(txn, address)
 		if err == nil {
 			value = data.ToAddressValueV2()
 			b.addressValueMap[address] = value
@@ -233,7 +233,7 @@ func (b *RpcIndexer) GetAddressId(address string) uint64 {
 		var data *indexer.AddressValueInDBV2
 		err := b.db.View(func(txn *badger.Txn) error {
 			var err error
-			data, err = db.GetAddressDataFromDBTxn(txn, address)
+			data, err = db.GetAddressDataFromDBTxnV2(txn, address)
 			return err
 		})
 		

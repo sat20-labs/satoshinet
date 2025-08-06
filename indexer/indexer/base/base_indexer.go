@@ -1103,14 +1103,14 @@ func (b *BaseIndexer) loadUtxoFromDB(txn *badger.Txn, utxostr string) error {
 
 	var addresses common.ScriptPubKey
 	for _, addressId := range utxo.AddressIds {
-		address, err := db.GetAddressByIDFromDBTxn(txn, addressId)
+		address, err := db.GetAddressByIDFromDBTxnV2(txn, addressId)
 		if err != nil {
 			common.Log.Errorf("failed to get address by id %d, utxo: %s, utxoId: %d, err: %v", addressId, utxostr, utxo.UtxoId, err)
 			return err
 		}
 		_, ok := b.addressValueMap[address]
 		if !ok {
-			data, err := db.GetAddressDataFromDBTxn(txn, address)
+			data, err := db.GetAddressDataFromDBTxnV2(txn, address)
 			if err != nil {
 				common.Log.Errorf("failed to get address data by address %s, utxo: %s, utxoId: %d, err: %v", address, utxostr, utxo.UtxoId, err)
 				return err
@@ -1200,7 +1200,7 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 				for _, address := range output.Address.Addresses {
 					_, ok := b.addressValueMap[address]
 					if !ok {
-						data, err := db.GetAddressDataFromDBTxn(txn, address)
+						data, err := db.GetAddressDataFromDBTxnV2(txn, address)
 						if err != nil {
 							addressId := b.generateAddressId()
 							b.addressValueMap[address] = &indexer.AddressValueV2{
@@ -1496,6 +1496,7 @@ func (b *BaseIndexer) CheckSelf() bool {
 	return true
 }
 
+// map1不存在map2的key
 func findDifferentItems(map1, map2 map[uint64]bool) map[uint64]bool {
 	differentItems := make(map[uint64]bool)
 	for key := range map1 {
