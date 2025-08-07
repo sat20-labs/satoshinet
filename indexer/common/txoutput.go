@@ -73,7 +73,7 @@ func (p *TxOutput) HasPlainSat() bool {
 	return p.OutValue.Value > assetAmt
 }
 
-// 去掉已经绑定了资产的聪
+// 去掉已经绑定了资产的聪. 与主网不同，聪网上每一个聪，都只能代表一种资产。如果一个聪有多种资产，只能选择一种到聪网流通。
 func (p *TxOutput) GetPlainSat() int64 {
 	if len(p.OutValue.Assets) == 0 {
 		return p.OutValue.Value
