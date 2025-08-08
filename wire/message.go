@@ -302,8 +302,8 @@ func WriteMessageWithEncodingN(w io.Writer, msg Message, pver uint32,
 	// Enforce maximum overall message payload.
 	if lenp > MaxMessagePayload {
 		str := fmt.Sprintf("message payload is too large - encoded "+
-			"%d bytes, but maximum message payload is %d bytes",
-			lenp, MaxMessagePayload)
+			"%d bytes, but maximum message payload is %d bytes, %s",
+			lenp, MaxMessagePayload, cmd)
 		return totalBytes, messageError("WriteMessage", str)
 	}
 
@@ -366,7 +366,7 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, btcnet BitcoinNet,
 	if hdr.length > MaxMessagePayload {
 		str := fmt.Sprintf("message payload is too large - header "+
 			"indicates %d bytes, but max message payload is %d "+
-			"bytes.", hdr.length, MaxMessagePayload)
+			"bytes. %s", hdr.length, MaxMessagePayload, hdr.command)
 		return totalBytes, nil, nil, messageError("ReadMessage", str)
 
 	}

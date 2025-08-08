@@ -153,6 +153,22 @@ type registerPending struct {
 	done chan struct{}
 }
 
+// ConnOption is a functional option type for various connection operations.
+type ConnOption func(*connOptions)
+
+// connOptions holds the options for a connection operation.
+type connOptions struct {
+	triggerReconnect bool
+}
+
+// WithTriggerReconnect is a functional option that forces a reconnect attempt
+// after disconnection, even for non-permanent peers.
+func WithTriggerReconnect() ConnOption {
+	return func(opts *connOptions) {
+		opts.triggerReconnect = true
+	}
+}
+
 // handleConnected is used to queue a successful connection.
 type handleConnected struct {
 	c    *ConnReq
@@ -161,8 +177,9 @@ type handleConnected struct {
 
 // handleDisconnected is used to remove a connection.
 type handleDisconnected struct {
-	id    uint64
-	retry bool
+	id               uint64
+	retry            bool
+	triggerReconnect bool
 }
 
 // handleFailed is used to remove a pending connection.
@@ -192,11 +209,11 @@ type ConnManager struct {
 // retry duration. Otherwise, if required, it makes a new connection request.
 // After maxFailedConnectionAttempts new connections will be retried after the
 // configured retry duration.
-func (cm *ConnManager) handleFailedConn(c *ConnReq) {
+func (cm *ConnManager) handleFailedConn(c *ConnReq, triggerReconnect bool) {
 	if atomic.LoadInt32(&cm.stop) != 0 {
 		return
 	}
-	if c.Permanent {
+	if c.Permanent || triggerReconnect {
 		c.retryCount++
 		d := time.Duration(c.retryCount) * cm.cfg.RetryDuration
 		if d > maxRetryDuration {
@@ -209,15 +226,11 @@ func (cm *ConnManager) handleFailedConn(c *ConnReq) {
 	} else if cm.cfg.GetNewAddress != nil {
 		cm.failedAttempts++
 		if cm.failedAttempts >= maxFailedAttempts {
-			d := time.Duration(cm.failedAttempts) * cm.cfg.RetryDuration
-			if d > maxRetryDuration {
-				d = maxRetryDuration
-			}
 			log.Debugf("Max failed connection attempts reached: [%d] "+
-				"-- retrying connection in: %v [connect to: %v]", maxFailedAttempts,
-				d, c)
+				"-- retrying connection in: %v", maxFailedAttempts,
+				cm.cfg.RetryDuration)
 			theId := c.id
-			time.AfterFunc(d, func() {
+			time.AfterFunc(cm.cfg.RetryDuration, func() {
 				cm.Remove(theId)
 				cm.NewConnReq()
 			})
@@ -345,10 +358,10 @@ out:
 					connReq.Permanent {
 
 					connReq.updateState(ConnPending)
-					log.Debugf("Reconnecting to %v with id %d <Append to pending>",
-						connReq, msg.id)
+					log.Debugf("Reconnecting to %v",
+						connReq)
 					pending[msg.id] = connReq
-					cm.handleFailedConn(connReq)
+					cm.handleFailedConn(connReq, msg.triggerReconnect)
 				}
 
 			case handleFailed:
@@ -363,7 +376,7 @@ out:
 				connReq.updateState(ConnFailing)
 				log.Debugf("Failed to connect to %v: %v",
 					connReq, msg.err)
-				cm.handleFailedConn(connReq)
+				cm.handleFailedConn(connReq, false)
 			}
 
 		case <-cm.quit:
@@ -385,33 +398,13 @@ func (cm *ConnManager) NewConnReq() {
 		return
 	}
 
-	connCount := atomic.LoadUint64(&cm.connCount)
-	if connCount >= uint64(cm.cfg.TargetOutbound) {
-		log.Errorf("NewConnReq: Already have %d connections, target is %d", connCount, cm.cfg.TargetOutbound)
-		return
-	}
-
-	// 创建一个连接请求对象，先不设置地址
 	c := &ConnReq{}
 	atomic.StoreUint64(&c.id, atomic.AddUint64(&cm.connReqCount, 1))
 
-	// 优先获取地址
-	addr, err := cm.cfg.GetNewAddress()
-	if err != nil || addr == nil || addr.String() == "" {
-		log.Debugf("NewConnReq: No new address for connection (%d)", c.id)
-
-		// 保留原始失败处理机制：让 handleFailedConn() 负责重试
-		select {
-		case cm.requests <- handleFailed{c, errors.New("no valid connect address")}:
-		case <-cm.quit:
-		}
-		return
-	}
-
-	c.Addr = addr
-	log.Infof("NewConnReq: New connection request with id (%d) for addr %s", c.id, addr.String())
-
-	// 发出 registerPending 请求（标准流程）
+	// Submit a request of a pending connection attempt to the connection
+	// manager. By registering the id before the connection is even
+	// established, we'll be able to later cancel the connection via the
+	// Remove method.
 	done := make(chan struct{})
 	select {
 	case cm.requests <- registerPending{c, done}:
@@ -427,11 +420,20 @@ func (cm *ConnManager) NewConnReq() {
 		return
 	}
 
-	log.Debugf("NewConnReq: Registered connection (%d) to pending list", c.id)
-	log.Infof("NewConnReq: Start to connect <%s> with conn (%d)", addr, c.id)
+	addr, err := cm.cfg.GetNewAddress()
+	if err != nil {
+		select {
+		case cm.requests <- handleFailed{c, err}:
+		case <-cm.quit:
+		}
+		return
+	}
+
+	c.Addr = addr
 
 	cm.Connect(c)
 }
+
 
 // NewConnReq creates a new connection request and connects to the
 // corresponding address.
@@ -491,9 +493,7 @@ func (cm *ConnManager) ConnectSpecificAddress(addr net.Addr) {
 // Connect assigns an id and dials a connection to the address of the
 // connection request.
 func (cm *ConnManager) Connect(c *ConnReq) {
-	log.Debugf("[ConnManager]Connect...")
 	if atomic.LoadInt32(&cm.stop) != 0 {
-		log.Debugf("[ConnManager]CM has stopped...")
 		return
 	}
 
@@ -531,8 +531,6 @@ func (cm *ConnManager) Connect(c *ConnReq) {
 
 	conn, err := cm.cfg.Dial(c.Addr)
 	if err != nil {
-		log.Debugf("[ConnManager]dail failed with addr: %s.", c.Addr.String())
-
 		select {
 		case cm.requests <- handleFailed{c, err}:
 		case <-cm.quit:
@@ -558,14 +556,21 @@ func (cm *ConnManager) GetAcceptCount() uint64 {
 
 // Disconnect disconnects the connection corresponding to the given connection
 // id. If permanent, the connection will be retried with an increasing backoff
-// duration.
-func (cm *ConnManager) Disconnect(id uint64) {
+// duration. Functional options can be used to modify behavior, such as forcing
+// a reconnect attempt via WithTriggerReconnect.
+func (cm *ConnManager) Disconnect(id uint64, options ...ConnOption) {
 	if atomic.LoadInt32(&cm.stop) != 0 {
 		return
 	}
+	opts := connOptions{}
+	for _, option := range options {
+		option(&opts)
+	}
 
 	select {
-	case cm.requests <- handleDisconnected{id, true}:
+	case cm.requests <- handleDisconnected{
+		id: id, retry: true, triggerReconnect: opts.triggerReconnect,
+	}:
 	case <-cm.quit:
 	}
 }
@@ -581,7 +586,7 @@ func (cm *ConnManager) Remove(id uint64) {
 	}
 
 	select {
-	case cm.requests <- handleDisconnected{id, false}:
+	case cm.requests <- handleDisconnected{id: id, retry: false}:
 	case <-cm.quit:
 	}
 }
@@ -628,7 +633,7 @@ func (cm *ConnManager) Start() {
 		}
 	}
 
-	for i := atomic.LoadUint64(&cm.connCount); i < uint64(cm.cfg.TargetOutbound); i++ {
+	for i := atomic.LoadUint64(&cm.connReqCount); i < uint64(cm.cfg.TargetOutbound); i++ {
 		go cm.NewConnReq()
 	}
 }
