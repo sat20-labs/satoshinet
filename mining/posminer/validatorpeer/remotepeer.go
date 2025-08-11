@@ -713,7 +713,7 @@ func (p *RemotePeer) handleCommand(connReq *ConnReq, command validatorcommand.Me
 		// The connection is inactive, will exit listen handler
 		return
 	}
-	utils.Log.Tracef("----------[RemotePeer]handleCommand command [%v] from %s", command.Command(), connReq.RemoteAddr.String())
+	utils.Log.Debugf("----------[RemotePeer]handleCommand command [%v] from %s", command.Command(), connReq.RemoteAddr.String())
 	switch cmd := command.(type) {
 	case *validatorcommand.MsgGetInfo:
 		utils.Log.Tracef("----------[RemotePeer]Receive MsgGetInfo command, will response MsgPeerInfo command")

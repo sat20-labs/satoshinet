@@ -583,7 +583,7 @@ func (p *LocalPeer) listenCommand(connReq *ConnReq) {
 // the validator manager. Logs are generated for each command received and processed. If a command
 // is not recognized, an error log is generated.
 func (p *LocalPeer) handleCommand(connReq *ConnReq, command validatorcommand.Message) {
-	utils.Log.Tracef("----------[LocalPeer]handleCommand command [%v]:", command.Command())
+	utils.Log.Debugf("----------[LocalPeer]handleCommand command [%v]:", command.Command())
 	switch cmd := command.(type) {
 	case *validatorcommand.MsgGetInfo:
 		utils.Log.Tracef("----------[LocalPeer]Receive MsgGetInfo command, will response MsgPeerInfo command")
