@@ -368,12 +368,13 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 		}
 	}
 
+	// satoshinet permit
 	// A standard transaction must not have more than one output script that
 	// only carries data.
-	if numNullDataOutputs > 1 {
-		str := "more than one transaction output in a nulldata script"
-		return txRuleError(wire.RejectNonstandard, str)
-	}
+	// if numNullDataOutputs > 1 {
+	// 	str := "more than one transaction output in a nulldata script"
+	// 	return txRuleError(wire.RejectNonstandard, str)
+	// }
 
 	return nil
 }
