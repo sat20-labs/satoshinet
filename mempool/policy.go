@@ -340,7 +340,7 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 
 	// None of the output public key scripts can be a non-standard script or
 	// be "dust" (except when the script is a null data script).
-	numNullDataOutputs := 0
+	// numNullDataOutputs := 0
 	for i, txOut := range msgTx.TxOut {
 		scriptClass := txscript.GetScriptClass(txOut.PkScript)
 		err := checkPkScriptStandard(txOut.PkScript, scriptClass)
@@ -356,19 +356,20 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 			return txRuleError(rejectCode, str)
 		}
 
+		// satoshinet permission
 		// Accumulate the number of outputs which only carry data.  For
 		// all other script types, ensure the output value is not
 		// "dust".
-		if scriptClass == txscript.NullDataTy {
-			numNullDataOutputs++
-		} else if IsDust(txOut, minRelayTxFee) {
-			str := fmt.Sprintf("transaction output %d: payment is "+
-				"dust: %v", i, txOut.Value)
-			return txRuleError(wire.RejectDust, str)
-		}
+		// if scriptClass == txscript.NullDataTy {
+		// 	numNullDataOutputs++
+		// } else if IsDust(txOut, minRelayTxFee) {
+		// 	str := fmt.Sprintf("transaction output %d: payment is "+
+		// 		"dust: %v", i, txOut.Value)
+		// 	return txRuleError(wire.RejectDust, str)
+		// }
 	}
 
-	// satoshinet permit
+	// satoshinet permission
 	// A standard transaction must not have more than one output script that
 	// only carries data.
 	// if numNullDataOutputs > 1 {
