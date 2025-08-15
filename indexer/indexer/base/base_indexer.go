@@ -80,20 +80,25 @@ func NewBaseIndexer(
 	return indexer
 }
 
-func (b *BaseIndexer) Init(cb1 BlockProcCallback, cb2 UpdateDBCallback) {
+func (b *BaseIndexer) Init() {
 	dbver := b.GetBaseDBVer()
 	common.Log.Infof("base db version: %s", b.GetBaseDBVer())
 	if dbver != "" && dbver != common.BASE_DB_VERSION {
 		common.Log.Panicf("DB version inconsistent. DB ver %s, but code base %s", dbver, common.BASE_DB_VERSION)
 	}
 
-	b.blockprocCB = cb1
-	b.updateDBCB = cb2
-
 	b.reset()
 
 	b.coreNodeMap = stp.GetAllCoreNodeFromDB(b.db, b.chaincfgParam)
 	b.channelMap = stp.GetAllChannelFromDB(b.db)
+}
+
+func (b *BaseIndexer) SetUpdateDBCallback(cb2 UpdateDBCallback) {
+	b.updateDBCB = cb2
+}
+
+func (b *BaseIndexer) SetBlockCallback(cb1 BlockProcCallback) {
+	b.blockprocCB = cb1
 }
 
 func (b *BaseIndexer) reset() {
@@ -121,9 +126,6 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 	newInst.utxoIndex = common.NewUTXOIndex()
 	for key, value := range b.utxoIndex.Index {
 		newInst.utxoIndex.Index[key] = value
-	}
-	for _, value := range b.delUTXOs {
-		delete(newInst.utxoIndex.Index, value.Utxo)
 	}
 	newInst.delUTXOs = make([]*UtxoValue, len(b.delUTXOs))
 	copy(newInst.delUTXOs, b.delUTXOs)
@@ -190,6 +192,7 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 	return newInst
 }
 
+// 在 UpdateDB 用到的数据，这里需要先剪去，这些剪去的数据，当作已经备份到数据库
 func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 	// 将已经备份到数据库的数据删除，防止内存中数据增长过快
 	for key := range another.utxoIndex.Index {
@@ -199,15 +202,23 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 		delete(b.utxoIndex.Index, del.Utxo)
 	}
 
+	for k := range another.addressValueMap {
+		delete(b.addressValueMap, k)
+	}
+	for k := range b.tickInfoMap {
+		delete(b.tickInfoMap, k)
+	}
+	for k := range b.tickAddressMap {
+		delete(b.tickAddressMap, k)
+	}
+
 	l := len(another.delUTXOs)
-	b.delUTXOs = b.delUTXOs[l:]
+	//b.delUTXOs = b.delUTXOs[l:] 不会释放前面的内存
+	b.delUTXOs = append([]*UtxoValue(nil), b.delUTXOs[l:]...) // 释放前面删除的切片
 
 	l = len(another.blockVector)
-	b.blockVector = b.blockVector[l:]
-
-	// 统计量不需要更新
-	// for k, v := range another.tickerAddressMap {
-	// }
+	// b.blockVector = b.blockVector[l:]
+	b.blockVector = append([]*common.BlockValueInDB(nil), b.blockVector[l:]...)
 }
 
 
@@ -275,15 +286,19 @@ func (b *BaseIndexer) Repair() {
 
 // only call in compiling data
 func (b *BaseIndexer) forceUpdateDB() {
-	startTime := time.Now()
-	b.UpdateDB()
-	common.Log.Infof("BaseIndexer.updateBasicDB: cost: %v", time.Since(startTime))
+	if b.updateDBCB != nil {
+		startTime := time.Now()
+		b.UpdateDB()
+		common.Log.Infof("BaseIndexer.updateBasicDB: cost: %v", time.Since(startTime))
 
-	// startTime = time.Now()
-	b.updateDBCB()
-	// common.Log.Infof("BaseIndexer.updateOrdxDB: cost: %v", time.Since(startTime))
+		// startTime = time.Now()
+		b.updateDBCB()
+		// common.Log.Infof("BaseIndexer.updateOrdxDB: cost: %v", time.Since(startTime))
 
-	common.Log.Infof("forceUpdateDB sync to height %d", b.stats.SyncHeight)
+		common.Log.Infof("forceUpdateDB sync to height %d", b.stats.SyncHeight)
+	} //else {
+	// 	common.Log.Infof("don't run forceUpdateDB after entering service mode")
+	// }
 }
 
 func (b *BaseIndexer) closeDB() {

@@ -110,7 +110,9 @@ func (b *IndexerMgr) Init() {
 		common.Log.Panicf("initDB failed. %v", err)
 	}
 	b.compiling = base_indexer.NewBaseIndexer(b.baseDB, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
-	b.compiling.Init(b.processBlock, b.forceUpdateDB)
+	b.compiling.Init()
+	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
+	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
 	
 
@@ -223,20 +225,13 @@ func (b *IndexerMgr) StartDaemon(stopChan <-chan struct{}) {
 							common.Log.Infof("reach expected height, set exit flag")
 							bWantExit = true
 						}
-					} else {
+					} 
+
+					if !bWantExit && b.compiling.GetHeight() == b.compiling.GetChainTip() {
+						// IndexerMgr.updateDB 被调用后，已经进入实际运行状态，
+						// 这个时候，BaseIndexer.SyncToChainTip 不能再进行数据库的内部更新，会破坏内存中的数据
+						b.compiling.SetUpdateDBCallback(nil)
 						b.updateDB()
-						b.dbgc()
-						// 每周定期检查数据 （目前主网一次检查需要半个小时-1个小时，需要考虑这个影响）
-						// if b.lastCheckHeight != b.compiling.GetSyncHeight() {
-						// 	period := 1000
-						// 	if b.compiling.GetSyncHeight()%period == 0 {
-						// 		b.lastCheckHeight = b.compiling.GetSyncHeight()
-						// 		b.checkSelf()
-						// 	}
-						// }
-						if b.dbStatistic() {
-							bWantExit = true
-						}
 					}
 				} else if ret > 0 {
 					// handle reorg
