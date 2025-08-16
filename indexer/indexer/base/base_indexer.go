@@ -1083,6 +1083,19 @@ func (b *BaseIndexer) SyncToChainTip(stopChan chan struct{}) int {
 	return b.SyncToBlock(int(count), stopChan)
 }
 
+
+func (b *BaseIndexer) SyncBlockWithHeight(height, tip int, updateDB bool) error {
+	block := b.fetchBlock(height)
+	if block == nil {
+		return fmt.Errorf("can't fetch block %d", height)
+	}
+	ret := b.syncBlock(block, tip, updateDB)
+	if ret != 0 {
+		return fmt.Errorf("syncBlock %d failed, %v", height, ret)
+	}
+	return nil
+}
+
 func (b *BaseIndexer) SyncBlock(block *wire.MsgBlock, height, tip int, updateDB bool) error {
 	bk := ConvertBlock(block, height, b.chaincfgParam)
 	ret := b.syncBlock(bk, tip, updateDB)
@@ -1159,7 +1172,15 @@ func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, ad
 	for _, addr := range addresses {
 		_, ok := addrmap[addr]
 		if !ok {
-			addrId := b.addressValueMap[addr]
+			addrId, ok := b.addressValueMap[addr]
+			if !ok {
+				data, err := db.GetAddressDataFromDBTxnV2(txn, addr)
+				if err != nil {
+					common.Log.Errorf("failed to get address data by address %s: %v", addr, err)
+					continue
+				}
+				b.addressValueMap[addr] = data.ToAddressValueV2()
+			}
 			amt, err := stp.GetTickerHolderInfoFromDBTxn(txn, name, addrId.AddressId)
 			if err != nil {
 				amt = indexer.NewDecimal(0, divisibility)
