@@ -308,11 +308,39 @@ func (b *BaseIndexer) closeDB() {
 	}
 }
 
+
+func (b *BaseIndexer) prefechAddress() {
+	
+	b.db.View(func(txn *badger.Txn) error {
+		for _, v := range b.utxoIndex.Index {
+			if v.Address.Type == int(txscript.NullDataTy) {
+				// 只有OP_RETURN 才不记录
+				if v.Value == 0 && len(v.Assets) == 0 {
+					continue
+				}
+			}
+			for _, addr := range v.Address.Addresses {
+				_, ok := b.addressValueMap[addr]
+				if !ok {
+					data, err := db.GetAddressDataFromDBTxnV2(txn, addr)
+					if err != nil {
+						common.Log.Errorf("failed to get address data by address %s: %v", addr, err)
+						continue
+					}
+					b.addressValueMap[addr] = data.ToAddressValueV2()
+				}
+			}
+		}
+
+		return nil
+	})
+}
+
 func (b *BaseIndexer) UpdateDB() {
 	common.Log.Infof("BaseIndexer->updateBasicDB %d start...", b.lastHeight)
 
 	// 拿到所有的addressId
-	// addressValueMap := b.prefechAddress()
+	b.prefechAddress()
 
 	referrers := make([]string, 0)
 	for _, name := range b.utxoIndex.ReferrerMap {

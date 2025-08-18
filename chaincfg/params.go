@@ -1013,8 +1013,8 @@ var TestNetParams = Params{
 	Net:         wire.TestNet,
 	DefaultPort: "19526",
 	DNSSeeds:    []DNSSeed{
-		// {"seed_testnet.sat20.org", true},
-		// {"seed_testnet.ordx.market", true},
+		{"seed.sat20.org", true},
+		{"seed.ordx.market", true},
 	},
 
 	// Chain parameters
