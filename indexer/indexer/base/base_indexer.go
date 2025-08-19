@@ -159,6 +159,7 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 	for k, v := range b.coreNodeMap {
 		newInst.coreNodeMap[k] = v.Clone()
 	}
+	newInst.coreNodeMapUpdated = b.coreNodeMapUpdated
 
 	newInst.channelMap = make(map[string]*common.ChannelInfo)
 	for k, v := range b.channelMap {
