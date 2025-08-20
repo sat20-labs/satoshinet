@@ -203,15 +203,16 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 		delete(b.utxoIndex.Index, del.Utxo)
 	}
 
-	for k := range another.addressValueMap {
-		delete(b.addressValueMap, k)
-	}
-	for k := range b.tickInfoMap {
-		delete(b.tickInfoMap, k)
-	}
-	for k := range b.tickAddressMap {
-		delete(b.tickAddressMap, k)
-	}
+	// TODO 需要增加一个重新加载机制，以便释放老的不需要的数据
+	// for k := range another.addressValueMap {
+	// 	delete(b.addressValueMap, k)
+	// }
+	// for k := range b.tickInfoMap {
+	// 	delete(b.tickInfoMap, k)
+	// }
+	// for k := range b.tickAddressMap {
+	// 	delete(b.tickAddressMap, k)
+	// }
 
 	l := len(another.delUTXOs)
 	//b.delUTXOs = b.delUTXOs[l:] 不会释放前面的内存
