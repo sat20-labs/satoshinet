@@ -6,7 +6,6 @@ import (
 
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
-	
 
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 
@@ -14,16 +13,15 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/wire"
 
-
-	"github.com/sat20-labs/indexer/indexer/db"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/indexer/indexer/db"
 )
 
 type RPCConfig struct {
-	Host     string 
-	Port     int    
-	User     string 
-	Password string
+	Host      string
+	Port      int
+	User      string
+	Password  string
 	EnableTls bool
 }
 
@@ -33,15 +31,14 @@ type Config struct {
 }
 
 type IndexerMgr struct {
-	
-	cfg *Config
+	cfg   *Config
 	dbDir string
 
 	// data from blockchain
-	baseDB db.KVDB
+	baseDB indexer.KVDB
 
 	// data from market
-	localDB db.KVDB
+	localDB indexer.KVDB
 
 	// 配置参数
 	chaincfgParam   *chaincfg.Params
@@ -49,9 +46,9 @@ type IndexerMgr struct {
 	periodFlushToDB int
 
 	connectMutex sync.RWMutex
-	mutex sync.RWMutex
+	mutex        sync.RWMutex
 	// 跑数据
-	checkOnce		bool
+	checkOnce       bool
 	lastCheckHeight int
 	compiling       *base_indexer.BaseIndexer
 	// 备份所有需要写入数据库的数据
@@ -89,7 +86,7 @@ func NewIndexerMgr(
 
 	mgr := &IndexerMgr{
 		cfg:               cfg,
-		dbDir:             cfg.DataPath+"/db/indexer/"+chainParam.Name+"/",
+		dbDir:             cfg.DataPath + "/db/indexer/" + chainParam.Name + "/",
 		chaincfgParam:     chainParam,
 		maxIndexHeight:    0,
 		periodFlushToDB:   12,
@@ -113,7 +110,6 @@ func (b *IndexerMgr) Init() {
 	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
 	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
-	
 
 	dbver := b.GetBaseDBVer()
 	common.Log.Infof("base db version: %s", dbver)
@@ -131,10 +127,9 @@ func (b *IndexerMgr) Init() {
 
 }
 
-func (b *IndexerMgr) GetBaseDB() db.KVDB {
+func (b *IndexerMgr) GetBaseDB() indexer.KVDB {
 	return b.baseDB
 }
-
 
 func (b *IndexerMgr) initRpcClient(dbPath string, cfg *RPCConfig) error {
 	tip, err := satsnet_rpc.InitSatsNetClient(
@@ -168,7 +163,6 @@ func (b *IndexerMgr) initRpcClient(dbPath string, cfg *RPCConfig) error {
 		}
 	}
 
-	
 	return nil
 }
 
@@ -185,7 +179,7 @@ func (b *IndexerMgr) Start() error {
 		//go b.StartDaemon(b.interrupt)
 		b.repair()
 	}
-	
+
 	return nil
 }
 
@@ -224,7 +218,7 @@ func (b *IndexerMgr) StartDaemon(stopChan <-chan struct{}) {
 							common.Log.Infof("reach expected height, set exit flag")
 							bWantExit = true
 						}
-					} 
+					}
 
 					if !bWantExit && b.compiling.GetHeight() == b.compiling.GetChainTip() {
 						// IndexerMgr.updateDB 被调用后，已经进入实际运行状态，
@@ -254,7 +248,7 @@ func (b *IndexerMgr) StartDaemon(stopChan <-chan struct{}) {
 	for !satsnet_rpc.RpcClientReady() {
 		time.Sleep(time.Second)
 	}
-	
+
 	tick()
 	satsnet_rpc.RegisterOnConnected(onConneted) // 主要靠这个
 
@@ -420,7 +414,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	p.connectMutex.Lock()
 	defer p.connectMutex.Unlock()
 	common.Log.Infof("compiling height %d, block %d, tip %d", p.compiling.GetHeight(), height, tip)
-	if p.compiling.GetHeight() + 1 < height && height > 1 {
+	if p.compiling.GetHeight()+1 < height && height > 1 {
 		// 因为规避分叉问题，数据库数据高度不够，需要先同步到指定高度
 		// stopIndexerChan := make(chan struct{}, 1) // 非阻塞
 		// ret := p.compiling.SyncToBlock(height - 1, stopIndexerChan)
@@ -447,14 +441,14 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 		err := p.compiling.SyncBlock(block, height, tip, false)
 		if err != nil {
 			common.Log.Errorf("ConnectBlock failed, %v", err)
-			return 
+			return
 		}
 	}
-	
+
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
 	// TODO 优化indexer的设计
 	p.updateDB()
-	if p.compiling.GetHeight() == height && height > tip {	
+	if p.compiling.GetHeight() == height && height > tip {
 		p.dbgc()
 		if !p.checkOnce || height%1000 == 0 {
 			p.checkOnce = true
@@ -466,4 +460,3 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 func (p *IndexerMgr) DisconnectBlock(height, tip int) {
 	p.handleReorg(height)
 }
-

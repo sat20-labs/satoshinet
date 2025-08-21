@@ -12,14 +12,14 @@ import (
 )
 
 const (
-	DB_KEY_ASCEND    = "xa-"
-	DB_KEY_DESCEND   = "xd-"
-	DB_KEY_REFERRER  = "rer-"
-	DB_KEY_REFERREE  = "ree-"
-	DB_KEY_TICKINFO  = "t-"
+	DB_KEY_ASCEND        = "xa-"
+	DB_KEY_DESCEND       = "xd-"
+	DB_KEY_REFERRER      = "rer-"
+	DB_KEY_REFERREE      = "ree-"
+	DB_KEY_TICKINFO      = "t-"
 	DB_KEY_TICKER_HOLDER = "th-"
-	DB_KEY_CHANNEL   = "c-" // c-address
-	DB_KEY_CORENODES = "cns-all"
+	DB_KEY_CHANNEL       = "c-" // c-address
+	DB_KEY_CORENODES     = "cns-all"
 )
 
 func GetAscendDBKey(fundingUtxo string) []byte {
@@ -54,15 +54,15 @@ func GetAllCoreNodeDBKey() []byte {
 	return []byte(DB_KEY_CORENODES)
 }
 
-func GetAscendFromDB(ldb db.KVDB, fundingUtxo string) (*common.AscendData, error) {
+func GetAscendFromDB(ldb indexer.KVDB, fundingUtxo string) (*common.AscendData, error) {
 	var result common.AscendData
-	
+
 	v, err := ldb.Read(GetAscendDBKey(fundingUtxo))
 	if err != nil {
 		//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
 		return nil, err
 	}
-	
+
 	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
@@ -70,15 +70,15 @@ func GetAscendFromDB(ldb db.KVDB, fundingUtxo string) (*common.AscendData, error
 	return &result, err
 }
 
-func GetDescendFromDB(ldb db.KVDB, nullDataUtxo string) (*common.DescendData, error) {
+func GetDescendFromDB(ldb indexer.KVDB, nullDataUtxo string) (*common.DescendData, error) {
 	var result common.DescendData
-	
+
 	v, err := ldb.Read(GetDescendDBKey(nullDataUtxo))
 	if err != nil {
 		common.Log.Errorf("GetDescendFromDB %s error: %v", nullDataUtxo, err)
 		return nil, err
 	}
-	
+
 	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
@@ -86,16 +86,15 @@ func GetDescendFromDB(ldb db.KVDB, nullDataUtxo string) (*common.DescendData, er
 	return &result, err
 }
 
-
-func GetReferrerFromDB(ldb db.KVDB, address string) (string, error) {
+func GetReferrerFromDB(ldb indexer.KVDB, address string) (string, error) {
 	var result string
-	
+
 	v, err := ldb.Read(GetReferrerDBKey(address))
 	if err != nil {
 		//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
 		return "", err
 	}
-	
+
 	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return "", err
@@ -103,15 +102,15 @@ func GetReferrerFromDB(ldb db.KVDB, address string) (string, error) {
 	return result, err
 }
 
-func GetReferreeFromDB(ldb db.KVDB, name string) ([]uint64, error) {
+func GetReferreeFromDB(ldb indexer.KVDB, name string) ([]uint64, error) {
 	var result []uint64
-	
+
 	v, err := ldb.Read(GetReferreeDBKey(name))
 	if err != nil {
 		//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
 		return nil, err
 	}
-	
+
 	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
@@ -119,10 +118,10 @@ func GetReferreeFromDB(ldb db.KVDB, name string) ([]uint64, error) {
 	return result, err
 }
 
-func GetReferreesFromDB(ldb db.KVDB, referrers []string) (map[string][]uint64, error) {
+func GetReferreesFromDB(ldb indexer.KVDB, referrers []string) (map[string][]uint64, error) {
 	result := make(map[string][]uint64)
-	
-	ldb.View(func(txn db.ReadBatch) error {
+
+	ldb.View(func(txn indexer.ReadBatch) error {
 		for _, name := range referrers {
 			v, err := txn.Get(GetReferreeDBKey(name))
 			if err != nil {
@@ -130,7 +129,7 @@ func GetReferreesFromDB(ldb db.KVDB, referrers []string) (map[string][]uint64, e
 				continue
 			}
 			var referees []uint64
-			
+
 			err = db.DecodeBytes(v, &referees)
 			if err != nil {
 				continue
@@ -139,20 +138,19 @@ func GetReferreesFromDB(ldb db.KVDB, referrers []string) (map[string][]uint64, e
 		}
 		return nil
 	})
-	
+
 	return result, nil
 }
 
-
-func GetTickerInfoFromDB(ldb db.KVDB, assetName string) (*common.TickerInfo, error) {
+func GetTickerInfoFromDB(ldb indexer.KVDB, assetName string) (*common.TickerInfo, error) {
 	var result common.TickerInfo
-	
+
 	v, err := ldb.Read(GetTickerInfoDBKey(assetName))
 	if err != nil {
 		common.Log.Errorf("GetTickerInfoFromDB %s error: %v", assetName, err)
 		return nil, err
 	}
-	
+
 	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
@@ -160,9 +158,7 @@ func GetTickerInfoFromDB(ldb db.KVDB, assetName string) (*common.TickerInfo, err
 	return &result, err
 }
 
-
-func GetAllTickerInfoFromDB(ldb db.KVDB) map[string]*common.TickerInfo {
-	
+func GetAllTickerInfoFromDB(ldb indexer.KVDB) map[string]*common.TickerInfo {
 
 	result := make(map[string]*common.TickerInfo, 0)
 	ldb.BatchRead([]byte(DB_KEY_TICKINFO), false, func(k, v []byte) error {
@@ -175,24 +171,23 @@ func GetAllTickerInfoFromDB(ldb db.KVDB) map[string]*common.TickerInfo {
 		} else {
 			common.Log.Errorln("DecodeBytes " + err.Error())
 		}
-		
+
 		return nil
 	})
 
 	return result
 }
 
-
-func GetTickerHolderInfoFromDBTxn(txn db.ReadBatch, assetName string, addressId uint64) (*indexer.Decimal, error) {
+func GetTickerHolderInfoFromDBTxn(txn indexer.ReadBatch, assetName string, addressId uint64) (*indexer.Decimal, error) {
 	var result string
-	
+
 	key := GetHolderInfoDBKey(assetName, addressId)
 	v, err := txn.Get(key)
 	if err != nil {
 		//common.Log.Errorf("GetTickerHolderInfoFromDBTxn %s error: %v", string(key), err)
 		return nil, err
 	}
-	
+
 	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
@@ -200,9 +195,9 @@ func GetTickerHolderInfoFromDBTxn(txn db.ReadBatch, assetName string, addressId 
 	return indexer.NewDecimalFromFormatString(result)
 }
 
-func GetTickerHolderInfoFromDB(ldb db.KVDB, assetName string, addressId uint64) (*indexer.Decimal, error) {
+func GetTickerHolderInfoFromDB(ldb indexer.KVDB, assetName string, addressId uint64) (*indexer.Decimal, error) {
 	var result string
-	
+
 	key := GetHolderInfoDBKey(assetName, addressId)
 	v, err := ldb.Read(key)
 	if err != nil {
@@ -217,10 +212,10 @@ func GetTickerHolderInfoFromDB(ldb db.KVDB, assetName string, addressId uint64) 
 	return indexer.NewDecimalFromFormatString(result)
 }
 
-func GetTickerHoldersFromDB(ldb db.KVDB, assetName string) map[uint64]*indexer.Decimal {
+func GetTickerHoldersFromDB(ldb indexer.KVDB, assetName string) map[uint64]*indexer.Decimal {
 	result := make(map[uint64]*indexer.Decimal, 0)
 	ldb.BatchRead([]byte(DB_KEY_TICKER_HOLDER+assetName), false, func(k, v []byte) error {
-		
+
 		key := string(k)
 		parts := strings.Split(key, "-")
 		if len(parts) != 3 {
@@ -244,23 +239,23 @@ func GetTickerHoldersFromDB(ldb db.KVDB, assetName string) map[uint64]*indexer.D
 		} else {
 			common.Log.Errorln("DecodeBytes " + err.Error())
 		}
-			
+
 		return nil
 	})
 
 	return result
 }
 
-func GetChannelInfoFromDB(ldb db.KVDB, address string) (*common.ChannelInfoInDB, error) {
+func GetChannelInfoFromDB(ldb indexer.KVDB, address string) (*common.ChannelInfoInDB, error) {
 	var result common.ChannelInfoInDB
-	
+
 	key := GetChannelDBKey(address)
 	v, err := ldb.Read(key)
 	if err != nil {
 		common.Log.Errorf("GetChannelInfoFromDB %s error: %v", string(key), err)
 		return nil, err
 	}
-	
+
 	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
@@ -268,8 +263,8 @@ func GetChannelInfoFromDB(ldb db.KVDB, address string) (*common.ChannelInfoInDB,
 	return &result, err
 }
 
-func GetAllChannelFromDB(ldb db.KVDB) map[string]*common.ChannelInfo {
-	
+func GetAllChannelFromDB(ldb indexer.KVDB) map[string]*common.ChannelInfo {
+
 	result := make(map[string]*common.ChannelInfo, 0)
 	ldb.BatchRead([]byte(DB_KEY_CHANNEL), false, func(k, v []byte) error {
 		var info common.ChannelInfo
@@ -279,29 +274,24 @@ func GetAllChannelFromDB(ldb db.KVDB) map[string]*common.ChannelInfo {
 		} else {
 			common.Log.Errorln("DecodeBytes " + err.Error())
 		}
-		
+
 		return nil
 	})
 
 	return result
 }
 
-func GetAllCoreNodeFromDB(ldb db.KVDB, chainParam *chaincfg.Params) map[string]*common.CoreNodeInfo {
+func GetAllCoreNodeFromDB(ldb indexer.KVDB, chainParam *chaincfg.Params) map[string]*common.CoreNodeInfo {
 	result := make(map[string]*common.CoreNodeInfo)
-	
+
 	key := GetAllCoreNodeDBKey()
 	v, err := ldb.Read(key)
-	if err != nil {
-		common.Log.Errorf("GetAllCoreNodeFromDB error: %v", err)
-		return nil
+	if err == nil {
+		err = db.DecodeBytes(v, &result)
+		if err != nil {
+			common.Log.Errorf("DecodeBytes error: %v", err)
+		}
 	}
-	
-	err = db.DecodeBytes(v, &result)
-	if err != nil {
-		common.Log.Errorf("DecodeBytes error: %v", err)
-		return nil
-	}
-	
 
 	if len(result) == 0 {
 		bootstrapNode := common.NewCoreNodeInfo(nil)

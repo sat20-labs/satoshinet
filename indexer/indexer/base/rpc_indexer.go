@@ -68,7 +68,7 @@ func (b *RpcIndexer) GetOrdinalsWithUtxo(utxo string) (uint64, wire.TxAssets, er
 	}
 
 	output := &common.UtxoValueInDB{}
-	
+
 	key := db.GetUTXODBKey(utxo)
 	//err := db.GetValueFromDB(key, txn, output)
 	err := db.GetValueFromDB(key, output, b.db)
@@ -108,7 +108,7 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 	}
 
 	output := &common.UtxoValueInDB{}
-	
+
 	key := db.GetUTXODBKey(utxo)
 	//err := db.GetValueFromDB(key, txn, output)
 	err := db.GetValueFromDB(key, output, b.db)
@@ -116,7 +116,6 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 		indexer.Log.Warningf("GetOrdinalsForUTXO %s failed, %v", utxo, err)
 		return nil, err
 	}
-	
 
 	if err != nil {
 		return nil, err
@@ -166,7 +165,7 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 }
 
 // only for api access
-func (b *RpcIndexer) getAddressValue2(address string, ldb db.KVDB) *indexer.AddressValueV2 {
+func (b *RpcIndexer) getAddressValue2(address string, ldb indexer.KVDB) *indexer.AddressValueV2 {
 	b.mutex.RLock()
 	value, ok := b.addressValueMap[address]
 	if !ok {
@@ -329,7 +328,7 @@ func (b *RpcIndexer) GetBlockInfo(height int) (*common.BlockInfo, error) {
 func (b *RpcIndexer) GetAscendData(fundingUtxo string) *common.AscendData {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
-	
+
 	return b.getAscendData(fundingUtxo)
 }
 
@@ -368,7 +367,6 @@ func (b *RpcIndexer) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return info
 }
 
-
 // only for RPC interface
 func (b *RpcIndexer) GetReferrer(address string) (string, error) {
 	b.mutex.RLock()
@@ -389,10 +387,9 @@ func (b *RpcIndexer) GetReferrer(address string) (string, error) {
 	return referrer, nil
 }
 
-
 // only for RPC interface
 func (b *RpcIndexer) GetReferree(name string) ([]string, error) {
-	
+
 	result := make([]string, 0)
 	referrees, err := stp.GetReferreeFromDB(b.db, name)
 	if err == nil {
@@ -405,7 +402,7 @@ func (b *RpcIndexer) GetReferree(name string) ([]string, error) {
 			result = append(result, addr)
 		}
 	}
-	
+
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 	for addr, referrer := range b.utxoIndex.ReferrerMap {
@@ -413,7 +410,7 @@ func (b *RpcIndexer) GetReferree(name string) ([]string, error) {
 			result = append(result, addr)
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -455,7 +452,7 @@ func (b *RpcIndexer) IsCoreNode(pubkey string) bool {
 	return ok
 }
 
-func (b *RpcIndexer) GetCoreNodeInfo(pubkey string) (*common.CoreNodeInfo) {
+func (b *RpcIndexer) GetCoreNodeInfo(pubkey string) *common.CoreNodeInfo {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 	info, ok := b.coreNodeMap[pubkey]
@@ -482,11 +479,11 @@ func (b *RpcIndexer) IsMinerNode(pubkey string) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
-func (b *RpcIndexer) GetMinerInfo(pubkey string) (*common.MinerInfo) {
+func (b *RpcIndexer) GetMinerInfo(pubkey string) *common.MinerInfo {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 	info, ok := b.coreNodeMap[pubkey]
@@ -501,7 +498,7 @@ func (b *RpcIndexer) GetMinerInfo(pubkey string) (*common.MinerInfo) {
 			return data.ToMinerInfo()
 		}
 	}
-	
+
 	return nil
 }
 
@@ -525,7 +522,7 @@ func (b *RpcIndexer) GetTickerMap() map[string]*common.TickerInfo {
 
 func (b *RpcIndexer) GetHoldersWithTick(tickerName *common.TickerName) map[string]*indexer.Decimal {
 	result := make(map[string]*indexer.Decimal)
-	
+
 	b.mutex.RLock()
 	addrmap, ok := b.tickAddressMap[tickerName.String()]
 	b.mutex.RUnlock()

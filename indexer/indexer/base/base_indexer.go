@@ -26,18 +26,18 @@ type BlockProcCallback func(*common.Block)
 type UpdateDBCallback func()
 
 type BaseIndexer struct {
-	db      db.KVDB
-	stats   *SyncStats // 数据库状态
+	db    indexer.KVDB
+	stats *SyncStats // 数据库状态
 
 	// 需要clone的数据
-	blockVector []*common.BlockValueInDB //
-	utxoIndex   *common.UTXOIndex
-	delUTXOs    []*UtxoValue // utxo->address,utxoid
+	blockVector    []*common.BlockValueInDB //
+	utxoIndex      *common.UTXOIndex
+	delUTXOs       []*UtxoValue                           // utxo->address,utxoid
 	tickAddressMap map[string]map[string]*indexer.Decimal // ticker->addressId->amount，在某个更新周期中的缓存数据，非全量
 
 	tickInfoMap        map[string]*common.TickerInfo
-	addressValueMap    map[string]*indexer.AddressValueV2	// 每个区块处理之前填充所有需要的地址id
-	coreNodeMap        map[string]*common.CoreNodeInfo // pubkey, 不清空
+	addressValueMap    map[string]*indexer.AddressValueV2 // 每个区块处理之前填充所有需要的地址id
+	coreNodeMap        map[string]*common.CoreNodeInfo    // pubkey, 不清空
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 不清空
 
@@ -61,7 +61,7 @@ type BaseIndexer struct {
 const BLOCK_PREFETCH = 12
 
 func NewBaseIndexer(
-	basicDB db.KVDB,
+	basicDB indexer.KVDB,
 	chaincfgParam *chaincfg.Params,
 	maxIndexHeight int,
 	periodFlushToDB int,
@@ -128,7 +128,7 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 	}
 	newInst.delUTXOs = make([]*UtxoValue, len(b.delUTXOs))
 	copy(newInst.delUTXOs, b.delUTXOs)
-	
+
 	for key, value := range b.utxoIndex.AscendMap {
 		newInst.utxoIndex.AscendMap[key] = value
 	}
@@ -147,7 +147,6 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		}
 		newInst.tickAddressMap[k] = addrmap
 	}
-
 
 	newInst.tickInfoMap = make(map[string]*common.TickerInfo)
 	for k, v := range b.tickInfoMap {
@@ -169,12 +168,12 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 	for key, value := range b.addressValueMap {
 		n := indexer.AddressValueV2{
 			AddressType: value.AddressType,
-			AddressId: value.AddressId,
-			Op: value.Op,
-			Utxos: make(map[uint64]bool),
+			AddressId:   value.AddressId,
+			Op:          value.Op,
+			Utxos:       make(map[uint64]bool),
 		}
 		for id, v := range value.Utxos {
-			n.Utxos[id] =v
+			n.Utxos[id] = v
 		}
 		newInst.addressValueMap[key] = &n
 	}
@@ -222,9 +221,8 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 	b.blockVector = append([]*common.BlockValueInDB(nil), b.blockVector[l:]...)
 }
 
-
 func (b *BaseIndexer) Repair() {
-	
+
 }
 
 // only call in compiling data
@@ -245,8 +243,8 @@ func (b *BaseIndexer) forceUpdateDB() {
 }
 
 func (b *BaseIndexer) prefechAddress() {
-	
-	b.db.View(func(txn db.ReadBatch) error {
+
+	b.db.View(func(txn indexer.ReadBatch) error {
 		for _, v := range b.utxoIndex.Index {
 			if v.Address.Type == int(txscript.NullDataTy) {
 				// 只有OP_RETURN 才不记录
@@ -416,8 +414,8 @@ func (b *BaseIndexer) UpdateDB() {
 
 	// address -> utxo
 	for k, v := range b.addressValueMap {
-		if v.AddressType == uint32(txscript.NullDataTy) || 
-		v.AddressType == uint32(txscript.NonStandardTy) {
+		if v.AddressType == uint32(txscript.NullDataTy) ||
+			v.AddressType == uint32(txscript.NonStandardTy) {
 			// 这两个地址的数据会越来越大，以后考虑分桶保存，再考虑保存这两个地址的utxo
 			continue
 		}
@@ -640,13 +638,12 @@ func (b *BaseIndexer) SyncToBlock(height int, stopChan chan struct{}) int {
 	return 0
 }
 
-
 // sync
 func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int {
 	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, blockHeight %d", b.lastHeight, block.Height)
 
-	if block.Height != b.lastHeight + 1 {
-		common.Log.Warningf("BaseIndexer.syncBlock-> expected block height %d, got %d", b.lastHeight + 1, block.Height)
+	if block.Height != b.lastHeight+1 {
+		common.Log.Warningf("BaseIndexer.syncBlock-> expected block height %d, got %d", b.lastHeight+1, block.Height)
 		return -1
 	}
 
@@ -678,7 +675,7 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 
 	if updateDB {
 		if (block.Height%b.periodFlushToDB == 0 && tip-block.Height > b.keepBlockHistory) ||
-		tip-block.Height == b.keepBlockHistory {
+			tip-block.Height == b.keepBlockHistory {
 			//localStartTime = time.Now()
 			b.forceUpdateDB()
 			//common.Log.Infof("BaseIndexer.syncBlock-> forceUpdateDB: cost: %v", time.Since(localStartTime))
@@ -731,7 +728,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 				continue
 			}
 		}
-		
+
 		var inputAddress string
 		var ascend *common.AscendData
 		for i, input := range tx.Inputs {
@@ -807,9 +804,9 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			delete(b.utxoIndex.Index, utxoKey)
 			utxoid := common.GetUtxoId(inputUtxo)
 			//if inputUtxo.Height < firstblock {
-				value := &UtxoValue{Utxo: utxoKey, Address: inputUtxo.Address,
-					UtxoId: utxoid, Value: inputUtxo.Value}
-				b.delUTXOs = append(b.delUTXOs, value)
+			value := &UtxoValue{Utxo: utxoKey, Address: inputUtxo.Address,
+				UtxoId: utxoid, Value: inputUtxo.Value}
+			b.delUTXOs = append(b.delUTXOs, value)
 			//}
 			satsInput += inputUtxo.Value
 
@@ -845,11 +842,11 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 									}
 									ticker.TotalDescendAmt = ticker.TotalDescendAmt.Add(&asset.Amount)
 									if ticker.TotalDescendAmt.Cmp(ticker.TotalAscendAmt) > 0 {
-										common.Log.Panicf("asset %s invalid amt: ascend %s, but descend %s", 
+										common.Log.Panicf("asset %s invalid amt: ascend %s, but descend %s",
 											asset.Name.String(), ticker.TotalAscendAmt.String(), ticker.TotalDescendAmt.String())
 									}
 								}
-							} 
+							}
 							value := descend.Value - bindingSatNum
 							if value > 0 {
 								ticker := b.GetTickerInfo(&indexer.ASSET_PLAIN_SAT)
@@ -858,7 +855,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 								}
 								ticker.TotalDescendAmt = ticker.TotalDescendAmt.Add(indexer.NewDefaultDecimal(value))
 								if ticker.TotalDescendAmt.Cmp(ticker.TotalAscendAmt) > 0 {
-									common.Log.Panicf("sats invalid amt: ascend %s, but descend %s", 
+									common.Log.Panicf("sats invalid amt: ascend %s, but descend %s",
 										ticker.TotalAscendAmt.String(), ticker.TotalDescendAmt.String())
 								}
 							}
@@ -892,20 +889,20 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 								b.tickInfoMap[tickerInfo.AssetName.String()] = tickerInfo
 							}
 						} else {
-							common.Log.Errorf("GenTickerInfo %s:%d failed, %v",tx.Txid, i, err)
+							common.Log.Errorf("GenTickerInfo %s:%d failed, %v", tx.Txid, i, err)
 						}
-					
+
 					case common.CONTENT_TYPE_CHANNELID:
 						// 如果是通道更新，data中包含通道承诺高度
 						// 更新通道的最新高度 TODO
-					
+
 					case common.CONTENT_TYPE_BINDREFERRER:
 						// tx的输入和输出都是被推荐人地址，data是推荐人名字，每个地址只能绑定一个推荐人
 						_, ok := b.utxoIndex.ReferrerMap[inputAddress]
 						if !ok {
 							existing, err := b.loadReferrerFromDB(inputAddress)
 							if err != nil {
-								// 
+								//
 								b.utxoIndex.ReferrerMap[inputAddress] = string(data)
 							} else {
 								common.Log.Warningf("%s has binded to referrer %s", inputAddress, existing)
@@ -920,7 +917,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			u := indexer.GetUtxo(block.Height, tx.Txid, int(output.N))
 			b.utxoIndex.Index[u] = output
 			addedUtxoCount++
-			satsOutput += output.Value	// 包括op_return的聪
+			satsOutput += output.Value // 包括op_return的聪
 			b.outputUtxo(output)
 		}
 	}
@@ -933,7 +930,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 	b.blockVector = append(b.blockVector, blockValue)
 }
 
-func (b *BaseIndexer) inputUtxo(input *common.Output) {	
+func (b *BaseIndexer) inputUtxo(input *common.Output) {
 	for _, asset := range input.Assets {
 		for _, address := range input.Address.Addresses {
 			name := asset.Name.String()
@@ -1040,7 +1037,6 @@ func (b *BaseIndexer) SyncToChainTip(stopChan chan struct{}) int {
 	return b.SyncToBlock(int(count), stopChan)
 }
 
-
 func (b *BaseIndexer) SyncBlockWithHeight(height, tip int, updateDB bool) error {
 	block := b.fetchBlock(height)
 	if block == nil {
@@ -1062,18 +1058,17 @@ func (b *BaseIndexer) SyncBlock(block *wire.MsgBlock, height, tip int, updateDB 
 	return nil
 }
 
-
 func (b *BaseIndexer) loadUtxoFromDB(utxostr string) error {
-	return b.db.View(func(txn db.ReadBatch) error {
+	return b.db.View(func(txn indexer.ReadBatch) error {
 		return b.loadUtxoFromTxn(utxostr, txn)
 	})
 }
 
-func (b *BaseIndexer) loadUtxoFromTxn(utxostr string, txn db.ReadBatch) error {
+func (b *BaseIndexer) loadUtxoFromTxn(utxostr string, txn indexer.ReadBatch) error {
 	utxo := &common.UtxoValueInDB{}
 	dbKey := db.GetUTXODBKey(utxostr)
 	err := db.GetValueFromTxn(dbKey, utxo, txn)
-	if err == db.ErrKeyNotFound {
+	if err == indexer.ErrKeyNotFound {
 		return err
 	}
 	if err != nil {
@@ -1112,13 +1107,12 @@ func (b *BaseIndexer) loadUtxoFromTxn(utxostr string, txn db.ReadBatch) error {
 	return nil
 }
 
-
 func (b *BaseIndexer) loadReferrerFromDB(address string) (string, error) {
 	referrer, ok := b.utxoIndex.ReferrerMap[address]
 	if ok {
 		return referrer, nil
 	}
-	
+
 	referrer, err := stp.GetReferrerFromDB(b.db, address)
 	if err != nil {
 		return "", err
@@ -1127,7 +1121,7 @@ func (b *BaseIndexer) loadReferrerFromDB(address string) (string, error) {
 	return referrer, nil
 }
 
-func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, addresses []string, txn db.ReadBatch) {
+func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, addresses []string, txn indexer.ReadBatch) {
 	addrmap, ok := b.tickAddressMap[name]
 	if !ok {
 		addrmap = make(map[string]*indexer.Decimal)
@@ -1158,18 +1152,18 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 	//startTime := time.Now()
 
 	// TODO 跑数据性能下降时，需要优化这个函数。参考indexer的同名函数。
-	b.db.View(func(txn db.ReadBatch) error {
+	b.db.View(func(txn indexer.ReadBatch) error {
 		for _, tx := range block.Transactions {
 			for _, input := range tx.Inputs {
 				if input.Vout >= wire.AnchorTxOutIndex {
 					continue
 				}
-				
+
 				utxo := indexer.GetUtxo(block.Height, input.Txid, int(input.Vout))
 				output, ok := b.utxoIndex.Index[utxo]
 				if !ok {
 					err := b.loadUtxoFromTxn(utxo, txn)
-					if err == db.ErrKeyNotFound {
+					if err == indexer.ErrKeyNotFound {
 						// 该区块生成的utxo，还没有进入b.utxoIndex.Index
 						continue
 					} else if err != nil {
@@ -1195,9 +1189,9 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 							addressId := b.generateAddressId()
 							b.addressValueMap[address] = &indexer.AddressValueV2{
 								AddressType: uint32(output.Address.Type),
-								AddressId: addressId,
-								Op: 1,
-								Utxos: make(map[uint64]bool),
+								AddressId:   addressId,
+								Op:          1,
+								Utxos:       make(map[uint64]bool),
 							}
 						} else {
 							b.addressValueMap[address] = data.ToAddressValueV2()
@@ -1220,10 +1214,10 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 }
 
 func (b *BaseIndexer) loadSyncStatsFromDB() {
-	
+
 	syncStats := &SyncStats{}
 	err := db.GetValueFromDB([]byte(SyncStatsKey), syncStats, b.db)
-	if err == db.ErrKeyNotFound {
+	if err == indexer.ErrKeyNotFound {
 		common.Log.Info("BaseIndexer.LoadSyncStatsFromDB-> No sync stats found in db")
 		syncStats.SyncHeight = -1
 	} else if err != nil {
@@ -1273,14 +1267,11 @@ func (b *BaseIndexer) CheckSelf() bool {
 	// common.Log.Infof("expected total sats %d", totalSats)
 	// common.Log.Infof("total leak sats %d", totalSats-b.stats.TotalSats)
 
-
 	ascendSats1 := int64(0)
-	
-
 
 	startTime2 := time.Now()
 	common.Log.Infof("calculating in %s table ...", common.DB_KEY_BLOCK)
-	
+
 	for i := 0; i <= b.stats.SyncHeight; i++ {
 		key := db.GetBlockDBKey(i)
 		value := common.BlockValueInDB{}
@@ -1301,8 +1292,6 @@ func (b *BaseIndexer) CheckSelf() bool {
 	}
 
 	common.Log.Infof("%s table takes %v", common.DB_KEY_BLOCK, time.Since(startTime2))
-	
-	
 
 	descendSats := int64(0)
 	satsInUtxo := int64(0)
@@ -1316,16 +1305,13 @@ func (b *BaseIndexer) CheckSelf() bool {
 
 	b.db.BatchRead([]byte(common.DB_KEY_UTXO), false, func(k, v []byte) error {
 
-
-		
-		
 		var value common.UtxoValueInDB
-		
+
 		err := db.DecodeBytes(v, &value)
 		if err != nil {
 			common.Log.Panicf("item.Value error: %v", err)
 		}
-		if value.AddressType == uint16(txscript.NullDataTy) || 
+		if value.AddressType == uint16(txscript.NullDataTy) ||
 			value.AddressType == uint16(txscript.NonStandardTy) {
 			descendSats += value.Value
 			return nil
@@ -1350,7 +1336,6 @@ func (b *BaseIndexer) CheckSelf() bool {
 			addressesInT1[addressId] = true
 		}
 		utxosInT1[value.UtxoId] = true
-	
 
 		addressInUtxo = len(addressesInT1)
 		return nil
@@ -1358,7 +1343,6 @@ func (b *BaseIndexer) CheckSelf() bool {
 
 	common.Log.Infof("%s table takes %v", common.DB_KEY_UTXO, time.Since(startTime2))
 	common.Log.Infof("1. utxo: %d(%d), sats %d, descend %d, address %d", utxoCount, nonZeroUtxo, satsInUtxo, descendSats, addressInUtxo)
-	
 
 	satsInAddress := int64(0)
 	allAddressCount := 0
@@ -1378,9 +1362,9 @@ func (b *BaseIndexer) CheckSelf() bool {
 
 		for _, utxoId := range value.Utxos {
 			allutxoInAddress++
-			
-			if value.AddressType == uint32(txscript.NullDataTy) || 
-			value.AddressType == uint32(txscript.NonStandardTy) {
+
+			if value.AddressType == uint32(txscript.NullDataTy) ||
+				value.AddressType == uint32(txscript.NonStandardTy) {
 				continue
 			}
 			utxosInT2[utxoId] = true
@@ -1389,14 +1373,13 @@ func (b *BaseIndexer) CheckSelf() bool {
 		if len(value.Utxos) > 0 {
 			addressesInT2[value.AddressId] = true
 		}
-		
+
 		allAddressCount = len(addressesInT2)
 
 		return nil
 	})
 	common.Log.Infof("%s table takes %v", common.DB_KEY_ADDRESSVALUE, time.Since(startTime2))
 	common.Log.Infof("2. utxo: %d(%d), sats %d, address %d", allutxoInAddress, nonZeroUtxoInAddress, satsInAddress, allAddressCount)
-
 
 	common.Log.Infof("utxos not in table %s", common.DB_KEY_ADDRESSVALUE)
 	utxos1 := findDifferentItems(utxosInT1, utxosInT2)
@@ -1466,28 +1449,27 @@ func findDifferentItems(map1, map2 map[uint64]bool) map[uint64]bool {
 func (b *BaseIndexer) printfUtxos(utxos map[uint64]bool) map[uint64]string {
 	result := make(map[uint64]string)
 	b.db.BatchRead([]byte(common.DB_KEY_UTXO), false, func(k, v []byte) error {
-		
-			var value common.UtxoValueInDB
-			err := db.DecodeBytes(v, &value)
-			if err != nil {
-				common.Log.Errorf("item.Value error: %v", err)
-				return err
+
+		var value common.UtxoValueInDB
+		err := db.DecodeBytes(v, &value)
+		if err != nil {
+			common.Log.Errorf("item.Value error: %v", err)
+			return err
+		}
+
+		// 用于打印不存在table2中的utxo
+		if _, ok := utxos[value.UtxoId]; ok {
+			str, err := db.GetUtxoByDBKey(k)
+			if err == nil {
+				common.Log.Infof("%x %s %d", value.UtxoId, str, value.Value)
+				result[value.UtxoId] = str
 			}
 
-			// 用于打印不存在table2中的utxo
-			if _, ok := utxos[value.UtxoId]; ok {
-				str, err := db.GetUtxoByDBKey(k)
-				if err == nil {
-					common.Log.Infof("%x %s %d", value.UtxoId, str, value.Value)
-					result[value.UtxoId] = str
-				}
-
-				delete(utxos, value.UtxoId)
-				if len(utxos) == 0 {
-					return nil
-				}
+			delete(utxos, value.UtxoId)
+			if len(utxos) == 0 {
+				return nil
 			}
-		
+		}
 
 		return nil
 	})
@@ -1512,7 +1494,7 @@ func (b *BaseIndexer) GetBaseDBVer() string {
 	return string(value)
 }
 
-func (b *BaseIndexer) GetBaseDB() db.KVDB {
+func (b *BaseIndexer) GetBaseDB() indexer.KVDB {
 	return b.db
 }
 
@@ -1599,4 +1581,3 @@ func (p *BaseIndexer) HasCoreNodeEligibility(assets wire.TxAssets) bool {
 func (p *BaseIndexer) HasMinerEligibility(assets wire.TxAssets) bool {
 	return p.HasCoreNodeEligibility(assets)
 }
-
