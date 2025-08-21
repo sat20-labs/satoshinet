@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dgraph-io/badger/v4"
 	indexer "github.com/sat20-labs/indexer/common"
 	db "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -55,36 +54,32 @@ func GetAllCoreNodeDBKey() []byte {
 	return []byte(DB_KEY_CORENODES)
 }
 
-func GetAscendFromDB(ldb *badger.DB, fundingUtxo string) (*common.AscendData, error) {
+func GetAscendFromDB(ldb db.KVDB, fundingUtxo string) (*common.AscendData, error) {
 	var result common.AscendData
-	err := ldb.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(GetAscendDBKey(fundingUtxo))
-		if err != nil {
-			//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
-			return err
-		}
-		return item.Value(func(v []byte) error {
-			return db.DecodeBytes(v, &result)
-		})
-	})
+	
+	v, err := ldb.Read(GetAscendDBKey(fundingUtxo))
+	if err != nil {
+		//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
+		return nil, err
+	}
+	
+	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
 	}
 	return &result, err
 }
 
-func GetDescendFromDB(ldb *badger.DB, nullDataUtxo string) (*common.DescendData, error) {
+func GetDescendFromDB(ldb db.KVDB, nullDataUtxo string) (*common.DescendData, error) {
 	var result common.DescendData
-	err := ldb.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(GetDescendDBKey(nullDataUtxo))
-		if err != nil {
-			common.Log.Errorf("GetDescendFromDB %s error: %v", nullDataUtxo, err)
-			return err
-		}
-		return item.Value(func(v []byte) error {
-			return db.DecodeBytes(v, &result)
-		})
-	})
+	
+	v, err := ldb.Read(GetDescendDBKey(nullDataUtxo))
+	if err != nil {
+		common.Log.Errorf("GetDescendFromDB %s error: %v", nullDataUtxo, err)
+		return nil, err
+	}
+	
+	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
 	}
@@ -92,81 +87,73 @@ func GetDescendFromDB(ldb *badger.DB, nullDataUtxo string) (*common.DescendData,
 }
 
 
-func GetReferrerFromDB(ldb *badger.DB, address string) (string, error) {
+func GetReferrerFromDB(ldb db.KVDB, address string) (string, error) {
 	var result string
-	err := ldb.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(GetReferrerDBKey(address))
-		if err != nil {
-			//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
-			return err
-		}
-		return item.Value(func(v []byte) error {
-			return db.DecodeBytes(v, &result)
-		})
-	})
+	
+	v, err := ldb.Read(GetReferrerDBKey(address))
+	if err != nil {
+		//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
+		return "", err
+	}
+	
+	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return "", err
 	}
 	return result, err
 }
 
-func GetReferreeFromDB(ldb *badger.DB, name string) ([]uint64, error) {
+func GetReferreeFromDB(ldb db.KVDB, name string) ([]uint64, error) {
 	var result []uint64
-	err := ldb.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(GetReferreeDBKey(name))
-		if err != nil {
-			//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
-			return err
-		}
-		return item.Value(func(v []byte) error {
-			return db.DecodeBytes(v, &result)
-		})
-	})
+	
+	v, err := ldb.Read(GetReferreeDBKey(name))
+	if err != nil {
+		//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
+		return nil, err
+	}
+	
+	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
 	}
 	return result, err
 }
 
-func GetReferreesFromDB(ldb *badger.DB, referrers []string) (map[string][]uint64, error) {
+func GetReferreesFromDB(ldb db.KVDB, referrers []string) (map[string][]uint64, error) {
 	result := make(map[string][]uint64)
-	err := ldb.View(func(txn *badger.Txn) error {
+	
+	ldb.View(func(txn db.ReadBatch) error {
 		for _, name := range referrers {
-			item, err := txn.Get(GetReferreeDBKey(name))
+			v, err := txn.Get(GetReferreeDBKey(name))
 			if err != nil {
 				//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
 				continue
 			}
 			var referees []uint64
-			err = item.Value(func(v []byte) error {
-				return db.DecodeBytes(v, &referees)
-			})
+			
+			err = db.DecodeBytes(v, &referees)
 			if err != nil {
 				continue
 			}
 			result[name] = referees
 		}
-		return nil	
+		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return result, err
+	
+	return result, nil
 }
 
 
-func GetTickerInfoFromDB(ldb *badger.DB, assetName string) (*common.TickerInfo, error) {
+func GetTickerInfoFromDB(ldb db.KVDB, assetName string) (*common.TickerInfo, error) {
 	var result common.TickerInfo
-	err := ldb.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(GetTickerInfoDBKey(assetName))
-		if err != nil {
-			common.Log.Errorf("GetTickerInfoFromDB %s error: %v", assetName, err)
-			return err
-		}
-		return item.Value(func(v []byte) error {
-			return db.DecodeBytes(v, &result)
-		})
-	})
+	
+	v, err := ldb.Read(GetTickerInfoDBKey(assetName))
+	if err != nil {
+		common.Log.Errorf("GetTickerInfoFromDB %s error: %v", assetName, err)
+		return nil, err
+	}
+	
+	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
 	}
@@ -174,43 +161,21 @@ func GetTickerInfoFromDB(ldb *badger.DB, assetName string) (*common.TickerInfo, 
 }
 
 
-func GetAllTickerInfoFromDB(ldb *badger.DB) map[string]*common.TickerInfo {
-	count := 0
+func GetAllTickerInfoFromDB(ldb db.KVDB) map[string]*common.TickerInfo {
+	
 
 	result := make(map[string]*common.TickerInfo, 0)
-	ldb.View(func(txn *badger.Txn) error {
+	ldb.BatchRead([]byte(DB_KEY_TICKINFO), false, func(k, v []byte) error {
 		// 设置前缀扫描选项
-		prefixBytes := []byte(DB_KEY_TICKINFO)
-		prefixOptions := badger.DefaultIteratorOptions
-		prefixOptions.Prefix = prefixBytes
 
-		// 使用前缀扫描选项创建迭代器
-		it := txn.NewIterator(prefixOptions)
-		defer it.Close()
-
-		// 遍历匹配前缀的key
-		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
-			item := it.Item()
-			if item.IsDeletedOrExpired() {
-				continue
-			}
-			key := string(item.Key())
-
-			var info common.TickerInfo
-			value, err := item.ValueCopy(nil)
-			if err != nil {
-				common.Log.Errorln("ValueCopy " + key + " " + err.Error())
-			} else {
-				err = db.DecodeBytes(value, &info)
-				if err == nil {
-					result[info.String()] = &info
-				} else {
-					common.Log.Errorln("DecodeBytes " + err.Error())
-				}
-			}
-
-			count++
+		var info common.TickerInfo
+		err := db.DecodeBytes(v, &info)
+		if err == nil {
+			result[info.String()] = &info
+		} else {
+			common.Log.Errorln("DecodeBytes " + err.Error())
 		}
+		
 		return nil
 	})
 
@@ -218,166 +183,125 @@ func GetAllTickerInfoFromDB(ldb *badger.DB) map[string]*common.TickerInfo {
 }
 
 
-func GetTickerHolderInfoFromDBTxn(txn *badger.Txn, assetName string, addressId uint64) (*indexer.Decimal, error) {
+func GetTickerHolderInfoFromDBTxn(txn db.ReadBatch, assetName string, addressId uint64) (*indexer.Decimal, error) {
 	var result string
 	
 	key := GetHolderInfoDBKey(assetName, addressId)
-	item, err := txn.Get(key)
+	v, err := txn.Get(key)
 	if err != nil {
 		//common.Log.Errorf("GetTickerHolderInfoFromDBTxn %s error: %v", string(key), err)
 		return nil, err
 	}
-	err = item.Value(func(v []byte) error {
-		return db.DecodeBytes(v, &result)
-	})
+	
+	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
 	}
 	return indexer.NewDecimalFromFormatString(result)
 }
 
-func GetTickerHolderInfoFromDB(ldb *badger.DB, assetName string, addressId uint64) (*indexer.Decimal, error) {
-	var result *indexer.Decimal
-	err := ldb.View(func(txn *badger.Txn) error {
-		var err error
-		result, err = GetTickerHolderInfoFromDBTxn(txn, assetName, addressId)
-		return err
-	})
+func GetTickerHolderInfoFromDB(ldb db.KVDB, assetName string, addressId uint64) (*indexer.Decimal, error) {
+	var result string
+	
+	key := GetHolderInfoDBKey(assetName, addressId)
+	v, err := ldb.Read(key)
+	if err != nil {
+		//common.Log.Errorf("GetTickerHolderInfoFromDBTxn %s error: %v", string(key), err)
+		return nil, err
+	}
+
+	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
 	}
-	return result, nil
+	return indexer.NewDecimalFromFormatString(result)
 }
 
-func GetTickerHoldersFromDB(ldb *badger.DB, assetName string) map[uint64]*indexer.Decimal {
+func GetTickerHoldersFromDB(ldb db.KVDB, assetName string) map[uint64]*indexer.Decimal {
 	result := make(map[uint64]*indexer.Decimal, 0)
-	ldb.View(func(txn *badger.Txn) error {
-		// 设置前缀扫描选项
-		prefixBytes := []byte(DB_KEY_TICKER_HOLDER+assetName)
-		prefixOptions := badger.DefaultIteratorOptions
-		prefixOptions.Prefix = prefixBytes
-
-		// 使用前缀扫描选项创建迭代器
-		it := txn.NewIterator(prefixOptions)
-		defer it.Close()
-
-		// 遍历匹配前缀的key
-		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
-			item := it.Item()
-			if item.IsDeletedOrExpired() {
-				continue
-			}
-			key := string(item.Key())
-			parts := strings.Split(key, "-")
-			if len(parts) != 3 {
-				continue
-			}
-			id, err := strconv.ParseUint(parts[2], 16, 64)
-			if err != nil {
-				common.Log.Errorf("ParseUint %s failed, %v", parts[2], err)
-				continue
-			}
-
-			var amt string
-			value, err := item.ValueCopy(nil)
-			if err != nil {
-				common.Log.Errorln("ValueCopy " + key + " " + err.Error())
-			} else {
-				err = db.DecodeBytes(value, &amt)
-				if err == nil {
-					dAmt, err := indexer.NewDecimalFromFormatString(amt)
-					if err != nil {
-						common.Log.Errorf("NewDecimalFromFormatString %s failed, %v", amt, err)
-					} else if dAmt.Sign() > 0 {
-						result[id] = dAmt
-					}
-				} else {
-					common.Log.Errorln("DecodeBytes " + err.Error())
-				}
-			}
+	ldb.BatchRead([]byte(DB_KEY_TICKER_HOLDER+assetName), false, func(k, v []byte) error {
+		
+		key := string(k)
+		parts := strings.Split(key, "-")
+		if len(parts) != 3 {
+			return nil
 		}
+		id, err := strconv.ParseUint(parts[2], 16, 64)
+		if err != nil {
+			common.Log.Errorf("ParseUint %s failed, %v", parts[2], err)
+			return nil
+		}
+
+		var amt string
+		err = db.DecodeBytes(v, &amt)
+		if err == nil {
+			dAmt, err := indexer.NewDecimalFromFormatString(amt)
+			if err != nil {
+				common.Log.Errorf("NewDecimalFromFormatString %s failed, %v", amt, err)
+			} else if dAmt.Sign() > 0 {
+				result[id] = dAmt
+			}
+		} else {
+			common.Log.Errorln("DecodeBytes " + err.Error())
+		}
+			
 		return nil
 	})
 
 	return result
 }
 
-
-func GetChannelInfoFromDB(ldb *badger.DB, address string) (*common.ChannelInfoInDB, error) {
+func GetChannelInfoFromDB(ldb db.KVDB, address string) (*common.ChannelInfoInDB, error) {
 	var result common.ChannelInfoInDB
-	err := ldb.View(func(txn *badger.Txn) error {
-		key := GetChannelDBKey(address)
-		item, err := txn.Get(key)
-		if err != nil {
-			common.Log.Errorf("GetChannelInfoFromDB %s error: %v", string(key), err)
-			return err
-		}
-		return item.Value(func(v []byte) error {
-			return db.DecodeBytes(v, &result)
-		})
-	})
+	
+	key := GetChannelDBKey(address)
+	v, err := ldb.Read(key)
+	if err != nil {
+		common.Log.Errorf("GetChannelInfoFromDB %s error: %v", string(key), err)
+		return nil, err
+	}
+	
+	err = db.DecodeBytes(v, &result)
 	if err != nil {
 		return nil, err
 	}
 	return &result, err
 }
 
-func GetAllChannelFromDB(ldb *badger.DB) map[string]*common.ChannelInfo {
-	count := 0
-
+func GetAllChannelFromDB(ldb db.KVDB) map[string]*common.ChannelInfo {
+	
 	result := make(map[string]*common.ChannelInfo, 0)
-	ldb.View(func(txn *badger.Txn) error {
-		// 设置前缀扫描选项
-		prefixBytes := []byte(DB_KEY_CHANNEL)
-		prefixOptions := badger.DefaultIteratorOptions
-		prefixOptions.Prefix = prefixBytes
-
-		// 使用前缀扫描选项创建迭代器
-		it := txn.NewIterator(prefixOptions)
-		defer it.Close()
-
-		// 遍历匹配前缀的key
-		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
-			item := it.Item()
-			if item.IsDeletedOrExpired() {
-				continue
-			}
-			key := string(item.Key())
-
-			var info common.ChannelInfo
-			value, err := item.ValueCopy(nil)
-			if err != nil {
-				common.Log.Errorln("ValueCopy " + key + " " + err.Error())
-			} else {
-				err = db.DecodeBytes(value, &info.ChannelInfoInDB)
-				if err == nil {
-					result[info.Address] = &info
-				} else {
-					common.Log.Errorln("DecodeBytes " + err.Error())
-				}
-			}
-
-			count++
+	ldb.BatchRead([]byte(DB_KEY_CHANNEL), false, func(k, v []byte) error {
+		var info common.ChannelInfo
+		err := db.DecodeBytes(v, &info.ChannelInfoInDB)
+		if err == nil {
+			result[info.Address] = &info
+		} else {
+			common.Log.Errorln("DecodeBytes " + err.Error())
 		}
+		
 		return nil
 	})
 
 	return result
 }
 
-func GetAllCoreNodeFromDB(ldb *badger.DB, chainParam *chaincfg.Params) map[string]*common.CoreNodeInfo {
+func GetAllCoreNodeFromDB(ldb db.KVDB, chainParam *chaincfg.Params) map[string]*common.CoreNodeInfo {
 	result := make(map[string]*common.CoreNodeInfo)
-	ldb.View(func(txn *badger.Txn) error {
-		key := GetAllCoreNodeDBKey()
-		item, err := txn.Get(key)
-		if err != nil {
-			common.Log.Errorf("GetAllCoreNodeFromDB error: %v", err)
-			return err
-		}
-		return item.Value(func(v []byte) error {
-			return db.DecodeBytes(v, &result)
-		})
-	})
+	
+	key := GetAllCoreNodeDBKey()
+	v, err := ldb.Read(key)
+	if err != nil {
+		common.Log.Errorf("GetAllCoreNodeFromDB error: %v", err)
+		return nil
+	}
+	
+	err = db.DecodeBytes(v, &result)
+	if err != nil {
+		common.Log.Errorf("DecodeBytes error: %v", err)
+		return nil
+	}
+	
 
 	if len(result) == 0 {
 		bootstrapNode := common.NewCoreNodeInfo(nil)

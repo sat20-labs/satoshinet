@@ -58,13 +58,6 @@ type UtxoInfo struct {
 }
 
 
-type TickerInfo_old struct {
-	wire.AssetName
-	MaxSupply string
-	Precition int
-	N         int
-}
-
 type TickerInfo struct {
 	wire.AssetName
 	N        	 int

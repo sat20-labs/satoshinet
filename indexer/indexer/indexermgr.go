@@ -14,7 +14,6 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/wire"
 
-	"github.com/dgraph-io/badger/v4"
 
 	"github.com/sat20-labs/indexer/indexer/db"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -39,10 +38,10 @@ type IndexerMgr struct {
 	dbDir string
 
 	// data from blockchain
-	baseDB *badger.DB
+	baseDB db.KVDB
 
 	// data from market
-	localDB *badger.DB
+	localDB db.KVDB
 
 	// 配置参数
 	chaincfgParam   *chaincfg.Params
@@ -132,7 +131,7 @@ func (b *IndexerMgr) Init() {
 
 }
 
-func (b *IndexerMgr) GetBaseDB() *badger.DB {
+func (b *IndexerMgr) GetBaseDB() db.KVDB {
 	return b.baseDB
 }
 
@@ -296,8 +295,8 @@ func (b *IndexerMgr) StartDaemon(stopChan <-chan struct{}) {
 }
 
 func (b *IndexerMgr) dbgc() {
-	db.RunBadgerGC(b.localDB)
-	db.RunBadgerGC(b.baseDB)
+	db.RunDBGC(b.localDB)
+	db.RunDBGC(b.baseDB)
 	common.Log.Infof("dbgc completed")
 }
 

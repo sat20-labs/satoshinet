@@ -9,7 +9,6 @@ import (
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 
-	"github.com/dgraph-io/badger/v4"
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/indexer/indexer/db"
 )
@@ -69,17 +68,14 @@ func (b *RpcIndexer) GetOrdinalsWithUtxo(utxo string) (uint64, wire.TxAssets, er
 	}
 
 	output := &common.UtxoValueInDB{}
-	err := b.db.View(func(txn *badger.Txn) error {
-		key := db.GetUTXODBKey(utxo)
-		//err := db.GetValueFromDB(key, txn, output)
-		err := db.GetValueFromDB(key, txn, output)
-		if err != nil {
-			indexer.Log.Warningf("GetOrdinalsForUTXO %s failed, %v", utxo, err)
-			return err
-		}
-
-		return nil
-	})
+	
+	key := db.GetUTXODBKey(utxo)
+	//err := db.GetValueFromDB(key, txn, output)
+	err := db.GetValueFromDB(key, output, b.db)
+	if err != nil {
+		indexer.Log.Warningf("GetOrdinalsForUTXO %s failed, %v", utxo, err)
+		return 0, nil, err
+	}
 
 	if err != nil {
 		return indexer.INVALID_ID, nil, err
@@ -112,16 +108,15 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 	}
 
 	output := &common.UtxoValueInDB{}
-	err := b.db.View(func(txn *badger.Txn) error {
-		key := db.GetUTXODBKey(utxo)
-		//err := db.GetValueFromDB(key, txn, output)
-		err := db.GetValueFromDB(key, txn, output)
-		if err != nil {
-			indexer.Log.Warningf("GetOrdinalsForUTXO %s failed, %v", utxo, err)
-			return err
-		}
-		return nil
-	})
+	
+	key := db.GetUTXODBKey(utxo)
+	//err := db.GetValueFromDB(key, txn, output)
+	err := db.GetValueFromDB(key, output, b.db)
+	if err != nil {
+		indexer.Log.Warningf("GetOrdinalsForUTXO %s failed, %v", utxo, err)
+		return nil, err
+	}
+	
 
 	if err != nil {
 		return nil, err
@@ -171,11 +166,11 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 }
 
 // only for api access
-func (b *RpcIndexer) getAddressValue2(address string, txn *badger.Txn) *indexer.AddressValueV2 {
+func (b *RpcIndexer) getAddressValue2(address string, ldb db.KVDB) *indexer.AddressValueV2 {
 	b.mutex.RLock()
 	value, ok := b.addressValueMap[address]
 	if !ok {
-		data, err := db.GetAddressDataFromDBTxnV2(txn, address)
+		data, err := db.GetAddressDataFromDBV2(ldb, address)
 		if err == nil {
 			value = data.ToAddressValueV2()
 			b.addressValueMap[address] = value
@@ -211,7 +206,7 @@ func (b *RpcIndexer) GetAddressByID(id uint64) (string, error) {
 		return addrStr, nil
 	}
 
-	address, err := db.GetAddressByID(b.db, id)
+	address, err := db.GetAddressByIDFromDB(b.db, id)
 	if err != nil {
 		common.Log.Errorf("RpcIndexer->GetAddressByID %d failed, err: %v", id, err)
 		return "", err
@@ -230,13 +225,7 @@ func (b *RpcIndexer) GetAddressId(address string) uint64 {
 	id, _ := b.getAddressId(address)
 	b.mutex.RUnlock()
 	if id == indexer.INVALID_ID {
-		var data *indexer.AddressValueInDBV2
-		err := b.db.View(func(txn *badger.Txn) error {
-			var err error
-			data, err = db.GetAddressDataFromDBTxnV2(txn, address)
-			return err
-		})
-		
+		data, err := db.GetAddressDataFromDBV2(b.db, address)
 		if err == nil {
 			b.mutex.Lock()
 			value := data.ToAddressValueV2()
@@ -289,12 +278,7 @@ func (b *RpcIndexer) GetUTXOs2(address string) []string {
 }
 
 func (b *RpcIndexer) getUtxosWithAddress(address string) (*indexer.AddressValueV2, error) {
-	var addressValueInDB *indexer.AddressValueV2
-	b.db.View(func(txn *badger.Txn) error {
-		addressValueInDB = b.getAddressValue2(address, txn)
-		return nil
-	})
-
+	addressValueInDB := b.getAddressValue2(address, b.db)
 	if addressValueInDB == nil {
 		indexer.Log.Infof("RpcIndexer.getUtxosWithAddress-> No address %s found in db", address)
 		return nil, fmt.Errorf("not found")
@@ -323,9 +307,7 @@ func (b *RpcIndexer) GetBlockInfo(height int) (*common.BlockInfo, error) {
 
 	key := db.GetBlockDBKey(height)
 	block := indexer.BlockValueInDB{}
-	err := b.db.View(func(txn *badger.Txn) error {
-		return db.GetValueFromDB(key, txn, &block)
-	})
+	err := db.GetValueFromDB(key, &block, b.db)
 	if err != nil {
 		return nil, err
 	}

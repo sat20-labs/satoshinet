@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/indexer/stp"
@@ -27,7 +26,7 @@ type BlockProcCallback func(*common.Block)
 type UpdateDBCallback func()
 
 type BaseIndexer struct {
-	db      *badger.DB
+	db      db.KVDB
 	stats   *SyncStats // 数据库状态
 
 	// 需要clone的数据
@@ -62,7 +61,7 @@ type BaseIndexer struct {
 const BLOCK_PREFETCH = 12
 
 func NewBaseIndexer(
-	basicDB *badger.DB,
+	basicDB db.KVDB,
 	chaincfgParam *chaincfg.Params,
 	maxIndexHeight int,
 	periodFlushToDB int,
@@ -225,65 +224,7 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 
 
 func (b *BaseIndexer) Repair() {
-	// update tick info 
-	// tickerMap := make(map[string]*common.TickerInfo, 0)
-	// b.db.View(func(txn *badger.Txn) error {
-	// 	// 设置前缀扫描选项
-	// 	prefixBytes := []byte(stp.DB_KEY_ASCEND)
-	// 	prefixOptions := badger.DefaultIteratorOptions
-	// 	prefixOptions.Prefix = prefixBytes
-
-	// 	// 使用前缀扫描选项创建迭代器
-	// 	it := txn.NewIterator(prefixOptions)
-	// 	defer it.Close()
-
-	// 	// 遍历匹配前缀的key
-	// 	for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
-	// 		item := it.Item()
-	// 		if item.IsDeletedOrExpired() {
-	// 			continue
-	// 		}
-	// 		key := string(item.Key())
-	// 		if strings.Count(key, ":") < 2 {
-	// 			continue
-	// 		}
-
-	// 		var info common.TickerInfo
-	// 		value, err := item.ValueCopy(nil)
-	// 		if err != nil {
-	// 			common.Log.Errorln("ValueCopy " + key + " " + err.Error())
-	// 		} else {
-	// 			err = db.DecodeBytes(value, &info)
-	// 			if err == nil {
-	// 				tickerMap[info.String()] = &info
-	// 			} else {
-	// 				common.Log.Errorln("DecodeBytes " + err.Error())
-	// 			}
-	// 		}
-	// 	}
-	// 	return nil
-	// })
-
-	// if len(tickerMap) == 0 {
-	// 	return
-	// }
-
-	// wb := b.db.NewWriteBatch()
-	// defer wb.Cancel()
-
-	// for k, v := range tickerMap {
-	// 	key := stp.GetTickerInfoDBKey(k)
-	// 	err := db.SetDB([]byte(key), v, wb)
-	// 	if err != nil {
-	// 		common.Log.Panicf("Error setting in db %v", err)
-	// 	}
-	// }
-	// err := wb.Flush()
-	// if err != nil {
-	// 	common.Log.Panicf("BaseIndexer.updateBasicDB-> Error satwb flushing writes to db %v", err)
-	// }
-
-
+	
 }
 
 // only call in compiling data
@@ -303,17 +244,9 @@ func (b *BaseIndexer) forceUpdateDB() {
 	// }
 }
 
-func (b *BaseIndexer) closeDB() {
-	err := b.db.Close()
-	if err != nil {
-		common.Log.Errorf("BaseIndexer.closeDB-> Error closing sat db %v", err)
-	}
-}
-
-
 func (b *BaseIndexer) prefechAddress() {
 	
-	b.db.View(func(txn *badger.Txn) error {
+	b.db.View(func(txn db.ReadBatch) error {
 		for _, v := range b.utxoIndex.Index {
 			if v.Address.Type == int(txscript.NullDataTy) {
 				// 只有OP_RETURN 才不记录
@@ -354,7 +287,7 @@ func (b *BaseIndexer) UpdateDB() {
 	}
 
 	wb := b.db.NewWriteBatch()
-	defer wb.Cancel()
+	defer wb.Close()
 
 	totalAscendSats := int64(0) // 穿越到聪网的聪
 	AllUtxoAdded := uint64(0)
@@ -617,12 +550,6 @@ func (b *BaseIndexer) UpdateDB() {
 	// }
 }
 
-func (b *BaseIndexer) forceMajeure() {
-	common.Log.Info("Graceful shutdown received, flushing db...")
-
-	b.closeDB()
-}
-
 func (b *BaseIndexer) handleReorg(currentBlock *common.Block) int {
 	common.Log.Warnf("BaseIndexer.handleReorg-> reorg detected at heigh %d", currentBlock.Height)
 
@@ -677,7 +604,7 @@ func (b *BaseIndexer) SyncToBlock(height int, stopChan chan struct{}) int {
 
 		select {
 		case <-stopChan:
-			b.forceMajeure()
+			common.Log.Errorf("BaseIndexer.SyncToBlock-> Graceful shutdown received")
 			return -1
 		default:
 			block := <-b.blocksChan
@@ -1135,11 +1062,18 @@ func (b *BaseIndexer) SyncBlock(block *wire.MsgBlock, height, tip int, updateDB 
 	return nil
 }
 
-func (b *BaseIndexer) loadUtxoFromDB(txn *badger.Txn, utxostr string) error {
+
+func (b *BaseIndexer) loadUtxoFromDB(utxostr string) error {
+	return b.db.View(func(txn db.ReadBatch) error {
+		return b.loadUtxoFromTxn(utxostr, txn)
+	})
+}
+
+func (b *BaseIndexer) loadUtxoFromTxn(utxostr string, txn db.ReadBatch) error {
 	utxo := &common.UtxoValueInDB{}
 	dbKey := db.GetUTXODBKey(utxostr)
-	err := db.GetValueFromDB(dbKey, txn, utxo)
-	if err == badger.ErrKeyNotFound {
+	err := db.GetValueFromTxn(dbKey, utxo, txn)
+	if err == db.ErrKeyNotFound {
 		return err
 	}
 	if err != nil {
@@ -1149,7 +1083,7 @@ func (b *BaseIndexer) loadUtxoFromDB(txn *badger.Txn, utxostr string) error {
 
 	var addresses common.ScriptPubKey
 	for _, addressId := range utxo.AddressIds {
-		address, err := db.GetAddressByIDFromDBTxnV2(txn, addressId)
+		address, err := db.GetAddressByIDFromTxn(txn, addressId)
 		if err != nil {
 			common.Log.Errorf("failed to get address by id %d, utxo: %s, utxoId: %d, err: %v", addressId, utxostr, utxo.UtxoId, err)
 			return err
@@ -1193,7 +1127,7 @@ func (b *BaseIndexer) loadReferrerFromDB(address string) (string, error) {
 	return referrer, nil
 }
 
-func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, addresses []string, txn *badger.Txn) {
+func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, addresses []string, txn db.ReadBatch) {
 	addrmap, ok := b.tickAddressMap[name]
 	if !ok {
 		addrmap = make(map[string]*indexer.Decimal)
@@ -1202,7 +1136,7 @@ func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, ad
 	for _, addr := range addresses {
 		_, ok := addrmap[addr]
 		if !ok {
-			addrId, ok := b.addressValueMap[addr]
+			addrValue, ok := b.addressValueMap[addr]
 			if !ok {
 				data, err := db.GetAddressDataFromDBTxnV2(txn, addr)
 				if err != nil {
@@ -1211,7 +1145,7 @@ func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, ad
 				}
 				b.addressValueMap[addr] = data.ToAddressValueV2()
 			}
-			amt, err := stp.GetTickerHolderInfoFromDBTxn(txn, name, addrId.AddressId)
+			amt, err := stp.GetTickerHolderInfoFromDBTxn(txn, name, addrValue.AddressId)
 			if err != nil {
 				amt = indexer.NewDecimal(0, divisibility)
 			}
@@ -1222,7 +1156,9 @@ func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, ad
 
 func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 	//startTime := time.Now()
-	b.db.View(func(txn *badger.Txn) error {
+
+	// TODO 跑数据性能下降时，需要优化这个函数。参考indexer的同名函数。
+	b.db.View(func(txn db.ReadBatch) error {
 		for _, tx := range block.Transactions {
 			for _, input := range tx.Inputs {
 				if input.Vout >= wire.AnchorTxOutIndex {
@@ -1232,8 +1168,8 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 				utxo := indexer.GetUtxo(block.Height, input.Txid, int(input.Vout))
 				output, ok := b.utxoIndex.Index[utxo]
 				if !ok {
-					err := b.loadUtxoFromDB(txn, utxo)
-					if err == badger.ErrKeyNotFound {
+					err := b.loadUtxoFromTxn(utxo, txn)
+					if err == db.ErrKeyNotFound {
 						// 该区块生成的utxo，还没有进入b.utxoIndex.Index
 						continue
 					} else if err != nil {
@@ -1284,33 +1220,26 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 }
 
 func (b *BaseIndexer) loadSyncStatsFromDB() {
-	err := b.db.View(func(txn *badger.Txn) error {
-		syncStats := &SyncStats{}
-		err := db.GetValueFromDB([]byte(SyncStatsKey), txn, syncStats)
-		if err == badger.ErrKeyNotFound {
-			common.Log.Info("BaseIndexer.LoadSyncStatsFromDB-> No sync stats found in db")
-			syncStats.SyncHeight = -1
-		} else if err != nil {
-			return err
-		}
-		common.Log.Infof("stats: %v", syncStats)
-		common.Log.Infof("Code Ver: %s", common.SATOSHINET_INDEXER_VERSION)
-		common.Log.Infof("DB Ver: %s", b.GetBaseDBVer())
-
-		if syncStats.ReorgsDetected == nil {
-			syncStats.ReorgsDetected = make([]int, 0)
-		}
-
-		b.stats = syncStats
-		b.lastHash = b.stats.SyncBlockHash
-		b.lastHeight = b.stats.SyncHeight
-
-		return nil
-	})
-
-	if err != nil {
-		common.Log.Panicf("BaseIndexer.LoadSyncStatsFromDB-> Error loading sync stats from db: %v", err)
+	
+	syncStats := &SyncStats{}
+	err := db.GetValueFromDB([]byte(SyncStatsKey), syncStats, b.db)
+	if err == db.ErrKeyNotFound {
+		common.Log.Info("BaseIndexer.LoadSyncStatsFromDB-> No sync stats found in db")
+		syncStats.SyncHeight = -1
+	} else if err != nil {
+		common.Log.Panicf("BaseIndexer.LoadSyncStatsFromDB failed, %v", err)
 	}
+	common.Log.Infof("stats: %v", syncStats)
+	common.Log.Infof("Code Ver: %s", common.SATOSHINET_INDEXER_VERSION)
+	common.Log.Infof("DB Ver: %s", b.GetBaseDBVer())
+
+	if syncStats.ReorgsDetected == nil {
+		syncStats.ReorgsDetected = make([]int, 0)
+	}
+
+	b.stats = syncStats
+	b.lastHash = b.stats.SyncBlockHash
+	b.lastHeight = b.stats.SyncHeight
 }
 
 // triggerReorg is meant to be used for debugging and tests only
@@ -1337,9 +1266,6 @@ func (b *BaseIndexer) CheckSelf() bool {
 
 	startTime := time.Now()
 
-	lsm, vlog := b.db.Size()
-	common.Log.Infof("DB lsm: %0.2f, vlog: %0.2f", float64(lsm)/(1024*1024), float64(vlog)/(1024*1024))
-
 	common.Log.Infof("stats: %v", b.stats)
 	common.Log.Infof("Code Ver: %s", common.SATOSHINET_INDEXER_VERSION)
 	common.Log.Infof("DB Ver: %s", b.GetBaseDBVer())
@@ -1347,37 +1273,36 @@ func (b *BaseIndexer) CheckSelf() bool {
 	// common.Log.Infof("expected total sats %d", totalSats)
 	// common.Log.Infof("total leak sats %d", totalSats-b.stats.TotalSats)
 
-	// var wg sync.WaitGroup
-	// wg.Add(3)
+
 	ascendSats1 := int64(0)
-	b.db.View(func(txn *badger.Txn) error {
-		//defer wg.Done()
+	
 
-		startTime2 := time.Now()
-		common.Log.Infof("calculating in %s table ...", common.DB_KEY_BLOCK)
-		
-		for i := 0; i <= b.stats.SyncHeight; i++ {
-			key := db.GetBlockDBKey(i)
-			value := common.BlockValueInDB{}
-			err := db.GetValueFromDB(key, txn, &value)
-			if err != nil {
-				common.Log.Panicf("GetValueFromDB %s error: %v", key, err)
-			}
-			if value.Height != i {
-				common.Log.Panicf("block %d invalid value %d", i, value.Height)
-			}
 
-			ascendSats1 += value.OutputSats - value.InputSats
+	startTime2 := time.Now()
+	common.Log.Infof("calculating in %s table ...", common.DB_KEY_BLOCK)
+	
+	for i := 0; i <= b.stats.SyncHeight; i++ {
+		key := db.GetBlockDBKey(i)
+		value := common.BlockValueInDB{}
+		err := db.GetValueFromDB(key, &value, b.db)
+		if err != nil {
+			common.Log.Panicf("GetValueFromDB %s error: %v", key, err)
+		}
+		if value.Height != i {
+			common.Log.Panicf("block %d invalid value %d", i, value.Height)
 		}
 
-		// 计算下聪网上有多少聪，是否跟状态一致
-		if ascendSats1 != b.stats.TotalAscendSats {
-			common.Log.Panicf("sats amount different. %d %d", ascendSats1, b.stats.TotalAscendSats)
-		}
+		ascendSats1 += value.OutputSats - value.InputSats
+	}
 
-		common.Log.Infof("%s table takes %v", common.DB_KEY_BLOCK, time.Since(startTime2))
-		return nil
-	})
+	// 计算下聪网上有多少聪，是否跟状态一致
+	if ascendSats1 != b.stats.TotalAscendSats {
+		common.Log.Panicf("sats amount different. %d %d", ascendSats1, b.stats.TotalAscendSats)
+	}
+
+	common.Log.Infof("%s table takes %v", common.DB_KEY_BLOCK, time.Since(startTime2))
+	
+	
 
 	descendSats := int64(0)
 	satsInUtxo := int64(0)
@@ -1386,64 +1311,54 @@ func (b *BaseIndexer) CheckSelf() bool {
 	addressInUtxo := 0
 	addressesInT1 := make(map[uint64]bool, 0)
 	utxosInT1 := make(map[uint64]bool, 0)
-	b.db.View(func(txn *badger.Txn) error {
-		//defer wg.Done()
+	startTime2 = time.Now()
+	common.Log.Infof("calculating in %s table ...", common.DB_KEY_UTXO)
 
-		var err error
-		prefix := []byte(common.DB_KEY_UTXO)
-		itr := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer itr.Close()
+	b.db.BatchRead([]byte(common.DB_KEY_UTXO), false, func(k, v []byte) error {
 
-		startTime2 := time.Now()
-		common.Log.Infof("calculating in %s table ...", common.DB_KEY_UTXO)
 
-		for itr.Seek([]byte(prefix)); itr.ValidForPrefix([]byte(prefix)); itr.Next() {
-			item := itr.Item()
-			if item.IsDeletedOrExpired() {
-				continue
-			}
-			var value common.UtxoValueInDB
-			err = item.Value(func(data []byte) error {
-				//return common.DecodeBytes(data, &value)
-				return db.DecodeBytes(data, &value)
-			})
-			if err != nil {
-				common.Log.Panicf("item.Value error: %v", err)
-			}
-			if value.AddressType == uint16(txscript.NullDataTy) || 
-				value.AddressType == uint16(txscript.NonStandardTy) {
-				descendSats += value.Value
-				continue
-			}
-
-			// 用于打印不存在table2中的utxo
-			// if value.UtxoId == 0x17453400960000 {
-			// 	key := item.Key()
-			// 	str, _ := db.GetUtxoByDBKey(key)
-			// 	common.Log.Infof("%x %s", value.UtxoId, str)
-			// }
-
-			sats := value.Value
-			if sats > 0 {
-				nonZeroUtxo++
-			}
-
-			satsInUtxo += sats
-			utxoCount++
-
-			for _, addressId := range value.AddressIds {
-				addressesInT1[addressId] = true
-			}
-			utxosInT1[value.UtxoId] = true
+		
+		
+		var value common.UtxoValueInDB
+		
+		err := db.DecodeBytes(v, &value)
+		if err != nil {
+			common.Log.Panicf("item.Value error: %v", err)
+		}
+		if value.AddressType == uint16(txscript.NullDataTy) || 
+			value.AddressType == uint16(txscript.NonStandardTy) {
+			descendSats += value.Value
+			return nil
 		}
 
+		// 用于打印不存在table2中的utxo
+		// if value.UtxoId == 0x17453400960000 {
+		// 	key := item.Key()
+		// 	str, _ := db.GetUtxoByDBKey(key)
+		// 	common.Log.Infof("%x %s", value.UtxoId, str)
+		// }
+
+		sats := value.Value
+		if sats > 0 {
+			nonZeroUtxo++
+		}
+
+		satsInUtxo += sats
+		utxoCount++
+
+		for _, addressId := range value.AddressIds {
+			addressesInT1[addressId] = true
+		}
+		utxosInT1[value.UtxoId] = true
+	
+
 		addressInUtxo = len(addressesInT1)
-
-		common.Log.Infof("%s table takes %v", common.DB_KEY_UTXO, time.Since(startTime2))
-		common.Log.Infof("1. utxo: %d(%d), sats %d, descend %d, address %d", utxoCount, nonZeroUtxo, satsInUtxo, descendSats, addressInUtxo)
-
 		return nil
 	})
+
+	common.Log.Infof("%s table takes %v", common.DB_KEY_UTXO, time.Since(startTime2))
+	common.Log.Infof("1. utxo: %d(%d), sats %d, descend %d, address %d", utxoCount, nonZeroUtxo, satsInUtxo, descendSats, addressInUtxo)
+	
 
 	satsInAddress := int64(0)
 	allAddressCount := 0
@@ -1451,52 +1366,37 @@ func (b *BaseIndexer) CheckSelf() bool {
 	nonZeroUtxoInAddress := 0
 	addressesInT2 := make(map[uint64]bool, 0)
 	utxosInT2 := make(map[uint64]bool, 0)
-	b.db.View(func(txn *badger.Txn) error {
-		//defer wg.Done()
+	startTime2 = time.Now()
+	common.Log.Infof("calculating in %s table ...", indexer.DB_KEY_ADDRESSV2)
+	b.db.BatchRead([]byte(indexer.DB_KEY_ADDRESSV2), false, func(k, v []byte) error {
 
-		startTime2 := time.Now()
-		common.Log.Infof("calculating in %s table ...", indexer.DB_KEY_ADDRESSV2)
+		var value indexer.AddressValueInDBV2
+		err := db.DecodeBytes(v, &value)
+		if err != nil {
+			common.Log.Panicf("item.Value error: %v", err)
+		}
 
-		prefix := []byte(indexer.DB_KEY_ADDRESSV2)
-		itr := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer itr.Close()
-		for itr.Seek(prefix); itr.ValidForPrefix(prefix); itr.Next() {
-			item := itr.Item()
-			if item.IsDeletedOrExpired() {
+		for _, utxoId := range value.Utxos {
+			allutxoInAddress++
+			
+			if value.AddressType == uint32(txscript.NullDataTy) || 
+			value.AddressType == uint32(txscript.NonStandardTy) {
 				continue
 			}
-			var value indexer.AddressValueInDBV2
-			err := item.Value(func(data []byte) error {
-				return db.DecodeBytes(data, &value)
-			})
-			if err != nil {
-				common.Log.Panicf("item.Value error: %v", err)
-			}
-
-			for _, utxoId := range value.Utxos {
-				allutxoInAddress++
-				
-				if value.AddressType == uint32(txscript.NullDataTy) || 
-				value.AddressType == uint32(txscript.NonStandardTy) {
-					continue
-				}
-				utxosInT2[utxoId] = true
-				nonZeroUtxoInAddress++
-			}
-			if len(value.Utxos) > 0 {
-				addressesInT2[value.AddressId] = true
-			}
-			
+			utxosInT2[utxoId] = true
+			nonZeroUtxoInAddress++
 		}
+		if len(value.Utxos) > 0 {
+			addressesInT2[value.AddressId] = true
+		}
+		
 		allAddressCount = len(addressesInT2)
-
-		common.Log.Infof("%s table takes %v", common.DB_KEY_ADDRESSVALUE, time.Since(startTime2))
-		common.Log.Infof("2. utxo: %d(%d), sats %d, address %d", allutxoInAddress, nonZeroUtxoInAddress, satsInAddress, allAddressCount)
 
 		return nil
 	})
+	common.Log.Infof("%s table takes %v", common.DB_KEY_ADDRESSVALUE, time.Since(startTime2))
+	common.Log.Infof("2. utxo: %d(%d), sats %d, address %d", allutxoInAddress, nonZeroUtxoInAddress, satsInAddress, allAddressCount)
 
-	//wg.Wait()
 
 	common.Log.Infof("utxos not in table %s", common.DB_KEY_ADDRESSVALUE)
 	utxos1 := findDifferentItems(utxosInT1, utxosInT2)
@@ -1515,14 +1415,14 @@ func (b *BaseIndexer) CheckSelf() bool {
 	common.Log.Infof("address not in table %s", common.DB_KEY_ADDRESSVALUE)
 	utxos3 := findDifferentItems(addressesInT1, addressesInT2)
 	for uid := range utxos3 {
-		str, _ := db.GetAddressByID(b.db, uid)
+		str, _ := db.GetAddressByIDFromDB(b.db, uid)
 		common.Log.Infof("%s", str)
 	}
 
 	common.Log.Infof("address not in table %s", common.DB_KEY_UTXO)
 	utxos4 := findDifferentItems(addressesInT2, addressesInT1)
 	for uid := range utxos4 {
-		str, _ := db.GetAddressByID(b.db, uid)
+		str, _ := db.GetAddressByIDFromDB(b.db, uid)
 		common.Log.Infof("%s", str)
 	}
 
@@ -1565,30 +1465,18 @@ func findDifferentItems(map1, map2 map[uint64]bool) map[uint64]bool {
 // only for test
 func (b *BaseIndexer) printfUtxos(utxos map[uint64]bool) map[uint64]string {
 	result := make(map[uint64]string)
-	b.db.View(func(txn *badger.Txn) error {
-		var err error
-		prefix := []byte(common.DB_KEY_UTXO)
-		itr := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer itr.Close()
-
-		for itr.Seek([]byte(prefix)); itr.ValidForPrefix([]byte(prefix)); itr.Next() {
-			item := itr.Item()
-			if item.IsDeletedOrExpired() {
-				continue
-			}
+	b.db.BatchRead([]byte(common.DB_KEY_UTXO), false, func(k, v []byte) error {
+		
 			var value common.UtxoValueInDB
-			err = item.Value(func(data []byte) error {
-				return db.DecodeBytes(data, &value)
-			})
+			err := db.DecodeBytes(v, &value)
 			if err != nil {
 				common.Log.Errorf("item.Value error: %v", err)
-				continue
+				return err
 			}
 
 			// 用于打印不存在table2中的utxo
 			if _, ok := utxos[value.UtxoId]; ok {
-				key := item.Key()
-				str, err := db.GetUtxoByDBKey(key)
+				str, err := db.GetUtxoByDBKey(k)
 				if err == nil {
 					common.Log.Infof("%x %s %d", value.UtxoId, str, value.Value)
 					result[value.UtxoId] = str
@@ -1599,7 +1487,7 @@ func (b *BaseIndexer) printfUtxos(utxos map[uint64]bool) map[uint64]string {
 					return nil
 				}
 			}
-		}
+		
 
 		return nil
 	})
@@ -1624,7 +1512,7 @@ func (b *BaseIndexer) GetBaseDBVer() string {
 	return string(value)
 }
 
-func (b *BaseIndexer) GetBaseDB() *badger.DB {
+func (b *BaseIndexer) GetBaseDB() db.KVDB {
 	return b.db
 }
 
@@ -1650,7 +1538,7 @@ func (b *BaseIndexer) GetChainTip() int {
 
 func (b *BaseIndexer) SetReorgHeight(height int) {
 	b.stats.ReorgsDetected = append(b.stats.ReorgsDetected, height)
-	err := db.GobSetDB1([]byte(SyncStatsKey), b.stats, b.db)
+	err := db.GobSetDB([]byte(SyncStatsKey), b.stats, b.db)
 	if err != nil {
 		common.Log.Panicf("Error setting in db %v", err)
 	}
