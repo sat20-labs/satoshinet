@@ -427,7 +427,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 
 		// 因为同步过程需要实时的corenode数据，所以一边同步一边clone
 		for i := p.compiling.GetHeight() + 1; i < height; i++ {
-			err := p.compiling.SyncBlockWithHeight(i, tip, false)
+			err := p.compiling.SyncBlockWithHeight(i, tip, true)
 			if err != nil {
 				common.Log.Errorf("SyncBlockWithHeight %d failed, %v", i, err)
 				return
@@ -448,12 +448,8 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
 	// TODO 优化indexer的设计
 	p.updateDB()
-	if p.compiling.GetHeight() == height && height > tip {
-		p.dbgc()
-		if !p.checkOnce || height%1000 == 0 {
-			p.checkOnce = true
-			p.checkSelf()
-		}
+	if height%1000 == 0 {
+		p.checkSelf()
 	}
 }
 
