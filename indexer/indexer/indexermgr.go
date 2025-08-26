@@ -448,9 +448,9 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
 	// TODO 优化indexer的设计
 	p.updateDB()
-	if height%1000 == 0 {
+	//if height%1000 == 0 {  // TODO 先多检查，以后稳定了再降低检查频率
 		p.checkSelf()
-	}
+	//}
 }
 
 func (p *IndexerMgr) DisconnectBlock(height, tip int) {

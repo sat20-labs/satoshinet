@@ -197,9 +197,6 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 	for key := range another.utxoIndex.Index {
 		delete(b.utxoIndex.Index, key)
 	}
-	for _, del := range another.delUTXOs {
-		delete(b.utxoIndex.Index, del.Utxo)
-	}
 
 	// TODO 需要增加一个重新加载机制，以便释放老的不需要的数据
 	// for k := range another.addressValueMap {
@@ -603,12 +600,14 @@ func (b *BaseIndexer) SyncToBlock(height int, stopChan chan struct{}) int {
 		select {
 		case <-stopChan:
 			common.Log.Errorf("BaseIndexer.SyncToBlock-> Graceful shutdown received")
+			stopBlockFetcherChan <- struct{}{}
 			return -1
 		default:
 			block := <-b.blocksChan
 
 			if block == nil {
 				common.Log.Errorf("BaseIndexer.SyncToBlock-> fetch block failed %d", i)
+				stopBlockFetcherChan <- struct{}{}
 				return -2
 			}
 			//common.Log.Infof("BaseIndexer.SyncToBlock-> get block: cost: %v", time.Since(startTime))
@@ -634,6 +633,7 @@ func (b *BaseIndexer) SyncToBlock(height int, stopChan chan struct{}) int {
 
 	//b.forceUpdateDB()
 
+	stopBlockFetcherChan <- struct{}{}
 	common.Log.Infof("BaseIndexer.SyncToBlock-> already synced to block %d-%d\n", b.lastHeight, b.stats.SyncHeight)
 	return 0
 }
@@ -710,10 +710,6 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 		Timestamp: block.Timestamp.Unix(),
 		TxAmount:  len(block.Transactions),
 	}
-	// firstblock := block.Height
-	// if len(b.blockVector) > 0 {
-	// 	firstblock = b.blockVector[0].Height
-	// }
 
 	addedUtxoCount := 0
 	deledUtxoCount := 0
@@ -1026,11 +1022,12 @@ func (b *BaseIndexer) SyncToChainTip(stopChan chan struct{}) int {
 		return -2
 	}
 
+	if count == int64(b.lastHeight) {
+		return 0
+	}
+
 	bRunInStepMode := false
 	if bRunInStepMode {
-		if count == int64(b.lastHeight) {
-			return 0
-		}
 		count = int64(b.lastHeight) + 1
 	}
 
