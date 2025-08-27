@@ -9,7 +9,6 @@ import (
 
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 
-	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/wire"
 
@@ -185,107 +184,6 @@ func (b *IndexerMgr) Start() error {
 
 func (b *IndexerMgr) Stop() {
 	b.bRunning = false
-}
-
-func (b *IndexerMgr) StartDaemon(stopChan <-chan struct{}) {
-	n := 10
-	ticker := time.NewTicker(time.Duration(n) * time.Second)
-
-	stopIndexerChan := make(chan struct{}, 1) // 非阻塞
-
-	if b.repair() {
-		common.Log.Infof("repaired, check again.")
-		return
-	}
-
-	common.Log.Info("IndexerMgr running...")
-
-	bWantExit := false
-	isRunning := false
-	disableSync := false
-	tick := func() {
-		if disableSync {
-			return
-		}
-		if !isRunning {
-			isRunning = true
-			go func() {
-				ret := b.compiling.SyncToChainTip(stopIndexerChan)
-				if ret == 0 {
-					if b.maxIndexHeight > 0 {
-						if b.maxIndexHeight <= b.compiling.GetHeight() {
-							b.checkSelf()
-							common.Log.Infof("reach expected height, set exit flag")
-							bWantExit = true
-						}
-					}
-
-					if !bWantExit && b.compiling.GetHeight() == b.compiling.GetChainTip() {
-						// IndexerMgr.updateDB 被调用后，已经进入实际运行状态，
-						// 这个时候，BaseIndexer.SyncToChainTip 不能再进行数据库的内部更新，会破坏内存中的数据
-						b.compiling.SetUpdateDBCallback(nil)
-						b.updateDB()
-					}
-				} else if ret > 0 {
-					// handle reorg
-					b.handleReorg(ret)
-				} else {
-					if ret == -1 {
-						common.Log.Infof("IndexerMgr inner thread exit by SIGINT signal")
-						bWantExit = true
-					}
-				}
-
-				isRunning = false
-			}()
-		}
-	}
-
-	onConneted := func(height int32, header *wire.BlockHeader, txns []*btcutil.Tx) {
-		tick()
-	}
-
-	for !satsnet_rpc.RpcClientReady() {
-		time.Sleep(time.Second)
-	}
-
-	tick()
-	satsnet_rpc.RegisterOnConnected(onConneted) // 主要靠这个
-
-	for !bWantExit && b.bRunning {
-		select {
-		case <-ticker.C:
-			if bWantExit {
-				break
-			}
-			//tick()
-		case <-stopChan:
-			common.Log.Info("IndexerMgr got SIGINT")
-			if bWantExit {
-				break
-			}
-			if isRunning {
-				select {
-				case stopIndexerChan <- struct{}{}:
-					// 成功发送
-				default:
-					// 通道已满或没有接收者，执行其他操作
-				}
-				for isRunning {
-					time.Sleep(time.Second / 10)
-				}
-				common.Log.Info("IndexerMgr inner thread exited")
-			}
-			bWantExit = true
-		}
-	}
-
-	ticker.Stop()
-
-	// close all
-	b.closeDB()
-
-	common.Log.Info("IndexerMgr exited.")
 }
 
 func (b *IndexerMgr) dbgc() {

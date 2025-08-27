@@ -570,74 +570,6 @@ func (b *BaseIndexer) handleReorg(currentBlock *common.Block) int {
 	return reorgHeight
 }
 
-// SyncToBlock continues from the sync height to the current height
-func (b *BaseIndexer) SyncToBlock(height int, stopChan chan struct{}) int {
-	if b.lastHeight == height {
-		//common.Log.Infof("BaseIndexer.SyncToBlock-> already synced to block %d", height)
-		return 0
-	}
-
-	common.Log.Infof("BaseIndexer.SyncToBlock-> currentHeight %d, targetHeight %d", b.lastHeight, height)
-
-	// if we don't start from precisely this heigh the UTXO index is worthless
-	// we need to start from exactly where we left off
-	start := b.lastHeight + 1
-
-	periodProcessedTxs := 0
-	startTime := time.Now() // Record the start time
-
-	logProgressPeriod := 1
-
-	stopBlockFetcherChan := make(chan struct{})
-	go b.spawnBlockFetcher(start, height, stopBlockFetcherChan)
-
-	for i := start; i <= height; i++ {
-		if b.maxIndexHeight > 0 && b.lastHeight >= b.maxIndexHeight {
-			b.forceUpdateDB()
-			break
-		}
-
-		select {
-		case <-stopChan:
-			common.Log.Errorf("BaseIndexer.SyncToBlock-> Graceful shutdown received")
-			stopBlockFetcherChan <- struct{}{}
-			return -1
-		default:
-			block := <-b.blocksChan
-
-			if block == nil {
-				common.Log.Errorf("BaseIndexer.SyncToBlock-> fetch block failed %d", i)
-				stopBlockFetcherChan <- struct{}{}
-				return -2
-			}
-			//common.Log.Infof("BaseIndexer.SyncToBlock-> get block: cost: %v", time.Since(startTime))
-
-			ret := b.syncBlock(block, height, true)
-			if ret != 0 {
-				stopBlockFetcherChan <- struct{}{}
-				return ret
-			}
-
-			if i%logProgressPeriod == 0 {
-				periodProcessedTxs += len(block.Transactions)
-				elapsedTime := time.Since(startTime)
-				timePerTx := elapsedTime / time.Duration(periodProcessedTxs)
-				readableTime := block.Timestamp.Format("2006-01-02 15:04:05")
-				common.Log.Infof("processed block %d (%s) with %d transactions took %v (%v per tx)\n", block.Height, readableTime, periodProcessedTxs, elapsedTime, timePerTx)
-				startTime = time.Now()
-				periodProcessedTxs = 0
-			}
-			//common.Log.Info("")
-		}
-	}
-
-	//b.forceUpdateDB()
-
-	stopBlockFetcherChan <- struct{}{}
-	common.Log.Infof("BaseIndexer.SyncToBlock-> already synced to block %d-%d\n", b.lastHeight, b.stats.SyncHeight)
-	return 0
-}
-
 // sync
 func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int {
 	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, blockHeight %d", b.lastHeight, block.Height)
@@ -1013,25 +945,6 @@ func (b *BaseIndexer) outputUtxo(output *common.Output) {
 		}
 		utxomap.Utxos[utxoId] = true
 	}
-}
-
-func (b *BaseIndexer) SyncToChainTip(stopChan chan struct{}) int {
-	count, err := getBlockCount()
-	if err != nil {
-		common.Log.Errorf("failed to get block count %v", err)
-		return -2
-	}
-
-	if count == int64(b.lastHeight) {
-		return 0
-	}
-
-	bRunInStepMode := false
-	if bRunInStepMode {
-		count = int64(b.lastHeight) + 1
-	}
-
-	return b.SyncToBlock(int(count), stopChan)
 }
 
 func (b *BaseIndexer) SyncBlockWithHeight(height, tip int, updateDB bool) error {
