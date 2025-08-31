@@ -340,7 +340,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	// TODO 优化indexer的设计
 	p.updateDB()
 	//if height%1000 == 0 {  // TODO 先多检查，以后稳定了再降低检查频率
-		p.checkSelf()
+		//p.checkSelf()
 	//}
 }
 

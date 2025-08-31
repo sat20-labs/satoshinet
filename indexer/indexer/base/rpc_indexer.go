@@ -45,6 +45,8 @@ func NewRpcIndexer(base *BaseIndexer) *RpcIndexer {
 
 // 仅用于前端RPC数据查询时，更新地址数据
 func (b *RpcIndexer) UpdateServiceInstance() {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
 	b.addressIdMap = make(map[uint64]string)
 	for k, v := range b.addressValueMap {
 		b.addressIdMap[v.AddressId] = k
