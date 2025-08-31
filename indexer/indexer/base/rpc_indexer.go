@@ -168,7 +168,7 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 
 // only for api access
 func (b *RpcIndexer) getAddressValue2(address string, ldb indexer.KVDB) *indexer.AddressValueV2 {
-	b.mutex.RLock()
+	b.mutex.Lock()
 	value, ok := b.addressValueMap[address]
 	if !ok {
 		data, err := db.GetAddressDataFromDBV2(ldb, address)
@@ -178,7 +178,7 @@ func (b *RpcIndexer) getAddressValue2(address string, ldb indexer.KVDB) *indexer
 			ok = true
 		}
 	}
-	b.mutex.RUnlock()
+	b.mutex.Unlock()
 
 	return value
 }
@@ -222,17 +222,15 @@ func (b *RpcIndexer) GetAddressByID(id uint64) (string, error) {
 
 // only for RPC interface
 func (b *RpcIndexer) GetAddressId(address string) uint64 {
-	b.mutex.RLock()
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
 	id, _ := b.getAddressId(address)
-	b.mutex.RUnlock()
 	if id == indexer.INVALID_ID {
 		data, err := db.GetAddressDataFromDBV2(b.db, address)
 		if err == nil {
-			b.mutex.Lock()
 			value := data.ToAddressValueV2()
 			b.addressValueMap[address] = value
 			id = value.AddressId
-			b.mutex.Unlock()
 		}
 	}
 
