@@ -279,7 +279,7 @@ func (b *RpcIndexer) GetUTXOs2(address string) []string {
 func (b *RpcIndexer) getUtxosWithAddress(address string) (*indexer.AddressValueV2, error) {
 	addressValueInDB := b.getAddressValue2(address, b.db)
 	if addressValueInDB == nil {
-		indexer.Log.Infof("RpcIndexer.getUtxosWithAddress-> No address %s found in db", address)
+		//indexer.Log.Infof("RpcIndexer.getUtxosWithAddress-> No address %s found in db", address)
 		return nil, fmt.Errorf("not found")
 	}
 
