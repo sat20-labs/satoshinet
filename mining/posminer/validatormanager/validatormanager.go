@@ -867,7 +867,12 @@ func (vm *ValidatorManager) GetBootstrapValidator() *validator.Validator {
 }
 
 func (vm *ValidatorManager) GetDefaultCoreValidator() *validator.Validator {
-	return vm.LookupValidator(bootstrapnode.GetDefaultCoreValidator())
+	//return vm.LookupValidator(bootstrapnode.GetDefaultCoreValidator())
+	// 随便给个核心节点
+	if len(vm.ConnectedList) > 0 {
+		return vm.ConnectedList[0]
+	}
+	return nil
 }
 
 func (vm *ValidatorManager) LookupValidator(pubkey string) *validator.Validator {

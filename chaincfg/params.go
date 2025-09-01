@@ -902,8 +902,8 @@ var MainNetParams = Params{
 	Net:         wire.MainNet,
 	DefaultPort: "9526",
 	DNSSeeds: []DNSSeed{
-		{"seed.sat20.org", true},
-		{"seed.ordx.market", true},
+		// {"seed.sat20.org", true},
+		// {"seed.ordx.market", true},
 	},
 
 	// Chain parameters
