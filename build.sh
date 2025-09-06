@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 
-rm -f stpd.so
+# ./sync.sh
 
-cd ../transcend/plugin
-go build -buildmode=plugin -o ../../satoshinet/stpd.so main.go
-cd ../../satoshinet
 
-rm -f satoshinet
-go build -o satoshinet
+# rm -f stpd.so
 
-echo build completed.
+# cd ../transcend/plugin
+# go build -buildmode=plugin -o ../../satoshinet/stpd.so main.go
+# cd ../../satoshinet
+
+# GOOS=linux GOARCH=amd64 go build -tags=stp_plugin -o satoshinet-linux
+go build -tags=stp_plugin -o satoshinet
+
