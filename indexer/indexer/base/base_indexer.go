@@ -458,7 +458,8 @@ func (b *BaseIndexer) UpdateDB() {
 		if !ok {
 			referrees = make([]uint64, 0)
 		}
-		referrees = append(referrees, addrvalue.AddressId)
+		// 有序插入，避免重复
+		referrees = indexer.InsertVector_uint64(referrees, addrvalue.AddressId)
 		referreesMap[referrer] = referrees
 	}
 	for referrer, referrees := range referreesMap {
