@@ -280,6 +280,18 @@ func (b *BaseIndexer) UpdateDB() {
 	if err != nil {
 		common.Log.Panicf("GetReferreesFromDB failed, %v", err)
 	}
+	// TODO 删除这些调整代码：老版本没有排序，导致有很多重复数据
+	newMap := make(map[string][]uint64)
+	for k, v := range referreesMap {
+		newVect := make([]uint64, 0)
+		for _, id := range v {
+			newVect = indexer.InsertVector_uint64(newVect, id)
+		}
+		newMap[k] = newVect
+	}
+	referreesMap = newMap
+	//////////////////////
+
 
 	wb := b.db.NewWriteBatch()
 	defer wb.Close()
