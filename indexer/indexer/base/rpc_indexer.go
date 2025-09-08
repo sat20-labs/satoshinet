@@ -2,6 +2,7 @@ package base
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -390,7 +391,10 @@ func (b *RpcIndexer) GetReferrer(address string) (string, error) {
 // only for RPC interface
 func (b *RpcIndexer) GetReferree(name string) ([]string, error) {
 
+	// TODO 老版本会有重复数据，先做过滤，以后再删除
+
 	result := make([]string, 0)
+	addrmap := make(map[string]bool)
 	referrees, err := stp.GetReferreeFromDB(b.db, name)
 	if err == nil {
 		for _, addrId := range referrees {
@@ -399,7 +403,8 @@ func (b *RpcIndexer) GetReferree(name string) ([]string, error) {
 				common.Log.Errorf("can't find address by id %d", addrId)
 				continue
 			}
-			result = append(result, addr)
+			//result = append(result, addr)
+			addrmap[addr] = true
 		}
 	}
 
@@ -407,9 +412,17 @@ func (b *RpcIndexer) GetReferree(name string) ([]string, error) {
 	defer b.mutex.RUnlock()
 	for addr, referrer := range b.utxoIndex.ReferrerMap {
 		if referrer == name {
-			result = append(result, addr)
+			//result = append(result, addr)
+			addrmap[addr] = true
 		}
 	}
+
+	for k := range addrmap {
+		result = append(result, k)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i] < result[j]
+	})
 
 	return result, nil
 }
