@@ -49,11 +49,16 @@ type Block struct {
 	Transactions  []*Transaction `json:"transactions"`
 }
 
+type ReferrerInfo struct {
+	Name		string
+	BindBlock	int
+}
+
 type UTXOIndex struct {
 	Index      map[string]*Output
 	AscendMap  map[string]*AscendData
 	DescendMap map[string]*DescendData
-	ReferrerMap map[string]string // 被推荐人地址-》推荐人名字
+	ReferrerMap map[string]*ReferrerInfo // 被推荐人地址-》推荐人名字
 }
 
 func NewUTXOIndex() *UTXOIndex {
@@ -61,7 +66,7 @@ func NewUTXOIndex() *UTXOIndex {
 		Index:      make(map[string]*Output),
 		AscendMap:  make(map[string]*AscendData),
 		DescendMap: make(map[string]*DescendData),
-		ReferrerMap: make(map[string]string),
+		ReferrerMap: make(map[string]*ReferrerInfo),
 	}
 }
 

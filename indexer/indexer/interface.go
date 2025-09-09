@@ -162,11 +162,11 @@ func (b *IndexerMgr) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return b.rpcService.GetDescendData(nullDataUtxo)
 }
 
-func (b *IndexerMgr) GetReferrer(address string) (string, error) {
+func (b *IndexerMgr) GetReferrer(address string) (*common.ReferrerInfo, error) {
 	return b.rpcService.GetReferrer(address)
 }
 
-func (b *IndexerMgr) GetReferree(name string) ([]string) {
+func (b *IndexerMgr) GetReferree(name string) map[string]int {
 	result, _ := b.rpcService.GetReferree(name)
 	return result
 }

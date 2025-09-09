@@ -22,13 +22,18 @@ type DescendResp struct {
 
 type ReferrerResp struct {
 	indexerwire.BaseResp
-	Data string `json:"referrer"`
+	Data *common.ReferrerInfo `json:"referrer"`
+}
+
+type ReferreeInfo struct {
+	Name      string `json:"name"`
+	BindBlock int    `json:"bindBlock"`
 }
 
 type ReferreeResp struct {
 	indexerwire.BaseResp
 	Total int   `json:"total"`
-	Data  []string `json:"referrees"`
+	Data  []*ReferreeInfo `json:"referrees"`
 }
 
 type AllCoreNodeResp struct {
