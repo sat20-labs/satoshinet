@@ -361,6 +361,19 @@ func CheckTransactionSanity(tx *btcutil.Tx) error {
 		}
 	}
 
+	for _, txIn := range msgTx.TxIn {
+		if txscript.IsEnvelope(txIn.SignatureScript) {
+			return ruleError(ErrOrdinalsNotAllowed, "inscription detected in input script")
+		}
+		// Witness 也要检查
+		for _, wit := range txIn.Witness {
+			if txscript.IsEnvelope(wit) {
+				return ruleError(ErrOrdinalsNotAllowed, "inscription detected in witness")
+			}
+		}
+	}
+
+
 	return nil
 }
 

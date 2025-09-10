@@ -559,3 +559,54 @@ func ScriptHasOpSuccess(witnessScript []byte) bool {
 
 	return false
 }
+
+
+// IsEnvelope 检查脚本中是否包含 "信封" 结构：
+//   OP_FALSE OP_IF ... OP_ENDIF
+// 只要找到一处匹配就返回 true，否则返回 false。
+// 不考虑嵌套，也不验证 IF 块内的数据内容。
+func IsEnvelope(script []byte) bool {
+	ops, _ := parseScript(script)
+	n := len(ops)
+
+	for i := 0; i < n-2; i++ {
+		// 匹配 OP_FALSE OP_IF
+		if ops[i].Opcode == OP_FALSE && ops[i+1].Opcode == OP_IF {
+			// 向后找第一个 OP_ENDIF
+			for j := i + 2; j < n; j++ {
+				if ops[j].Opcode == OP_ENDIF {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// ParsedOpcode 表示脚本中的一个操作符及其附带数据。
+type ParsedOpcode struct {
+	Opcode byte   // 操作码值，比如 OP_FALSE, OP_IF
+	Data   []byte // 若是 pushdata，则包含被推送的数据
+}
+
+// parseScript 将原始字节脚本解析为操作码序列。
+func parseScript(script []byte) ([]ParsedOpcode, error) {
+	token := MakeScriptTokenizer(0, script)
+
+	var ops []ParsedOpcode
+	for token.Next() {
+		op := token.Opcode()
+		data := token.Data()
+
+		ops = append(ops, ParsedOpcode{
+			Opcode: op,
+			Data:   data,
+		})
+	}
+
+	if err := token.Err(); err != nil {
+		return nil, fmt.Errorf("script parse error: %w", err)
+	}
+
+	return ops, nil
+}

@@ -223,6 +223,8 @@ const (
 
 	// ErrAnchorTXVerifyFailed indicates that the anchor transaction verify failed
 	ErrAnchorTXVerifyFailed
+
+	ErrOrdinalsNotAllowed
 )
 
 // Map of ErrorCode values back to their constant names for pretty printing.

@@ -841,7 +841,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 									BindBlock: block.Height,
 								}
 							} else {
-								common.Log.Warningf("%s has binded to referrer %s", inputAddress, existing)
+								common.Log.Warningf("%s has binded to referrer %s", inputAddress, existing.Name)
 							}
 						}
 					}
