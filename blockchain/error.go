@@ -221,6 +221,10 @@ const (
 	// for block proposals submitted via getblocktemplate RPC.
 	ErrPrevBlockNotBest
 
+		// ErrTimewarpAttack indicates a timewarp attack i.e.
+	// when block's timestamp is too early on diff adjustment block.
+	ErrTimewarpAttack
+
 	// ErrAnchorTXVerifyFailed indicates that the anchor transaction verify failed
 	ErrAnchorTXVerifyFailed
 )

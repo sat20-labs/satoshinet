@@ -764,13 +764,6 @@ func dbFetchUtxoEntry(dbTx database.Tx, utxoBucket database.Bucket,
 	// transaction output.  Return now when there is no entry.
 	key := outpointKey(outpoint)
 	serializedUtxo := utxoBucket.Get(*key)
-
-	log.Debug("***********************************************")
-	log.Debugf("outpoint Hash: %s", outpoint.Hash.String())
-	log.Debugf("outpoint Index: %d", outpoint.Index)
-	log.Debugf("utxoBucket Get: %x, %x", key, serializedUtxo)
-	log.Debug("***********************************************")
-
 	recycleOutpointKey(key)
 	if serializedUtxo == nil {
 		return nil, nil
@@ -840,11 +833,6 @@ func dbPutUtxoView(dbTx database.Tx, view *UtxoViewpoint) error {
 // entry from the database.
 func dbDeleteUtxoEntry(utxoBucket database.Bucket, outpoint wire.OutPoint) error {
 	key := outpointKey(outpoint)
-	log.Debug("***********************************************")
-	log.Debugf("outpoint Hash: %s", outpoint.Hash.String())
-	log.Debugf("outpoint Index: %d", outpoint.Index)
-	log.Debugf("utxoBucket Delete: %x", key)
-	log.Debug("***********************************************")
 	err := utxoBucket.Delete(*key)
 	recycleOutpointKey(key)
 	return err
@@ -865,14 +853,6 @@ func dbPutUtxoEntry(utxoBucket database.Bucket, outpoint wire.OutPoint,
 		return err
 	}
 	key := outpointKey(outpoint)
-	log.Debug("***********************************************")
-	log.Debugf("outpoint Hash: %s", outpoint.Hash.String())
-	log.Debugf("outpoint Index: %d", outpoint.Index)
-	log.Debugf("utxoBucket Put: %x, %x", key, serialized)
-	log.Debugf("utxoBucket pkScript: %x", entry.pkScript)
-	log.Debugf("utxoBucket Amount: %d", entry.amount)
-	log.Debugf("utxoBucket TxAssets: %x", entry.txAssets)
-	log.Debug("***********************************************")
 	err = utxoBucket.Put(*key, serialized)
 	if err != nil {
 		return err

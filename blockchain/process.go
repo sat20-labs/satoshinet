@@ -182,7 +182,6 @@ func (b *BlockChain) ProcessBlock(block *btcutil.Block, flags BehaviorFlags) (bo
 	b.chainLock.Lock()
 	defer b.chainLock.Unlock()
 
-
 	fastAdd := flags&BFFastAdd == BFFastAdd
 
 	blockHash := block.Hash()

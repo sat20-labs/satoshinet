@@ -419,13 +419,6 @@ func (bi *blockIndex) DeleteNode(node *blockNode) {
 //
 // This function is NOT safe for concurrent access.
 func (bi *blockIndex) addNode(node *blockNode) {
-
-	// Just for testing
-	// testHash := newHashFromStr("f0ca3c6a59c5741623e64e2d4939d65e5a8d1d9b1b34b40d417d2b30e5545f46")
-	// if node.hash.IsEqual(testHash) {
-	// 	return
-	// }
-
 	bi.index[node.hash] = node
 }
 

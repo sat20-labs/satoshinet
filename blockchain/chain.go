@@ -1723,7 +1723,6 @@ func (b *BlockChain) IntervalBlockHashes(endHash *chainhash.Hash, interval int,
 func (b *BlockChain) locateInventory(locator BlockLocator, hashStop *chainhash.Hash, maxEntries uint32) (*blockNode, uint32) {
 	// There are no block locators so a specific block is being requested
 	// as identified by the stop hash.
-	log.Debugf("locateInventory")
 	stopNode := b.index.LookupNode(hashStop)
 	if len(locator) == 0 {
 		if stopNode == nil {
@@ -1740,19 +1739,10 @@ func (b *BlockChain) locateInventory(locator BlockLocator, hashStop *chainhash.H
 	startNode := b.bestChain.Genesis()
 	for _, hash := range locator {
 		node := b.index.LookupNode(hash)
-		if node != nil {
-			log.Debugf("Locate node: %s, Height:%d", node.hash.String(), node.height)
-		} else {
-			log.Debugf("Locate node not found with hash: %s", hash.String())
-		}
 		if node != nil && b.bestChain.Contains(node) {
 			startNode = node
 			break
 		}
-	}
-
-	if startNode != nil {
-		log.Debugf("Initial startNode: %s, Height: %d", startNode.hash.String(), startNode.height)
 	}
 
 	// Start at the block after the most recently known block.  When there
