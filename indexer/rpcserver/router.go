@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/gin-contrib/cors"
-	"github.com/gin-contrib/logger"
+	//"github.com/gin-contrib/logger"
 	"github.com/gin-gonic/gin"
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
-	"github.com/rs/zerolog"
+	//"github.com/rs/zerolog"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 
 	// indexerrpc "github.com/sat20-labs/indexer/rpcserver"
@@ -75,16 +75,18 @@ func (s *Rpc) Start(rpcUrl, rpcProxy, rpcLogFile string) error {
 	}
 	writers = append(writers, os.Stdout)
 	gin.DefaultWriter = io.MultiWriter(writers...)
-	r.Use(logger.SetLogger(
-		logger.WithLogger(logger.Fn(func(c *gin.Context, l zerolog.Logger) zerolog.Logger {
-			if c.Request.Header["Authorization"] == nil {
-				return l
-			}
-			return l.With().
-				Str("Authorization", c.Request.Header["Authorization"][0]).
-				Logger()
-		})),
-	))
+	// 记录每一个请求，数据太多
+	// r.Use(logger.SetLogger(
+	// 	logger.WithLogger(logger.Fn(func(c *gin.Context, l zerolog.Logger) zerolog.Logger {
+	// 		if c.Request.Header["Authorization"] == nil {
+	// 			return l
+	// 		}
+	// 		return l.With().
+	// 			Str("Authorization", c.Request.Header["Authorization"][0]).
+	// 			Logger()
+	// 	})),
+	// ))
+	r.Use(gin.Recovery())
 
 	config := cors.Config{
 		AllowOrigins: []string{"*", "sat20.org", "ordx.market", "localhost"},

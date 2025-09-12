@@ -86,24 +86,24 @@ func GetDescendFromDB(ldb indexer.KVDB, nullDataUtxo string) (*common.DescendDat
 	return &result, err
 }
 
-func GetReferrerFromDB(ldb indexer.KVDB, address string) (string, error) {
-	var result string
+func GetReferrerFromDB(ldb indexer.KVDB, address string) (*common.ReferrerInfo, error) {
+	var result common.ReferrerInfo
 
 	v, err := ldb.Read(GetReferrerDBKey(address))
 	if err != nil {
 		//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
-		return "", err
+		return nil, err
 	}
 
 	err = db.DecodeBytes(v, &result)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return result, err
+	return &result, err
 }
 
-func GetReferreeFromDB(ldb indexer.KVDB, name string) ([]uint64, error) {
-	var result []uint64
+func GetReferreeFromDB(ldb indexer.KVDB, name string) (map[uint64]int, error) {
+	var result map[uint64]int
 
 	v, err := ldb.Read(GetReferreeDBKey(name))
 	if err != nil {
@@ -118,8 +118,8 @@ func GetReferreeFromDB(ldb indexer.KVDB, name string) ([]uint64, error) {
 	return result, err
 }
 
-func GetReferreesFromDB(ldb indexer.KVDB, referrers []string) (map[string][]uint64, error) {
-	result := make(map[string][]uint64)
+func GetReferreesFromDB(ldb indexer.KVDB, referrers []string) (map[string]map[uint64]int, error) {
+	result := make(map[string]map[uint64]int)
 
 	ldb.View(func(txn indexer.ReadBatch) error {
 		for _, name := range referrers {
@@ -128,7 +128,7 @@ func GetReferreesFromDB(ldb indexer.KVDB, referrers []string) (map[string][]uint
 				//common.Log.Errorf("GetAscendFromDB %s error: %v", fundingUtxo, err)
 				continue
 			}
-			var referees []uint64
+			var referees map[uint64]int
 
 			err = db.DecodeBytes(v, &referees)
 			if err != nil {

@@ -11,6 +11,7 @@ import (
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 	swire "github.com/sat20-labs/satoshinet/wire"
+	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
 )
@@ -257,28 +258,33 @@ func (s *Model) GetDescend(utxo string) (*common.DescendData, error) {
 	return data, nil
 }
 
-func (s *Model) GetReferrer(address string) (string, error) {
+func (s *Model) GetReferrer(address string) (*common.ReferrerInfo, error) {
 	return s.indexer.GetReferrer(address)
 }
 
-func (s *Model) GetReferree(name string, start, limit int) ([]string, int) {
-	result := make([]string, 0)
+func (s *Model) GetReferree(name string, start, limit int) ([]*localwire.ReferreeInfo, int) {
+	result := make([]*localwire.ReferreeInfo, 0)
 	referrees := s.indexer.GetReferree(name)
+	for k, v := range referrees {
+		result = append(result, &localwire.ReferreeInfo{
+			Name: k,
+			BindBlock: v,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
 
-	total := len(referrees)
+	total := len(result)
 	if start >= total {
-		return nil, 0
+		return nil, total
 	}
 	limit += start
 	if limit >= total {
 		limit = total
 	}
 
-	for i := start; i < limit; i++ {
-		address := referrees[int64(i)]
-		result = append(result, address)
-	}
-	return result, total
+	return result[start:limit], total
 }
 
 

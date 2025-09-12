@@ -2,7 +2,6 @@ package base
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -369,7 +368,7 @@ func (b *RpcIndexer) GetDescendData(nullDataUtxo string) *common.DescendData {
 }
 
 // only for RPC interface
-func (b *RpcIndexer) GetReferrer(address string) (string, error) {
+func (b *RpcIndexer) GetReferrer(address string) (*common.ReferrerInfo, error) {
 	b.mutex.RLock()
 	referrer, ok := b.utxoIndex.ReferrerMap[address]
 	b.mutex.RUnlock()
@@ -380,7 +379,7 @@ func (b *RpcIndexer) GetReferrer(address string) (string, error) {
 	referrer, err := stp.GetReferrerFromDB(b.db, address)
 	if err != nil {
 		common.Log.Errorf("GetReferrerFromDB %s failed, %v", address, err)
-		return "", err
+		return nil, err
 	}
 	b.mutex.Lock()
 	b.utxoIndex.ReferrerMap[address] = referrer
@@ -389,42 +388,30 @@ func (b *RpcIndexer) GetReferrer(address string) (string, error) {
 }
 
 // only for RPC interface
-func (b *RpcIndexer) GetReferree(name string) ([]string, error) {
+func (b *RpcIndexer) GetReferree(name string) (map[string]int, error) {
 
-	// TODO 老版本会有重复数据，先做过滤，以后再删除
-
-	result := make([]string, 0)
-	addrmap := make(map[string]bool)
+	addrmap := make(map[string]int)
 	referrees, err := stp.GetReferreeFromDB(b.db, name)
 	if err == nil {
-		for _, addrId := range referrees {
+		for addrId, height := range referrees {
 			addr, err := b.GetAddressByID(addrId)
 			if err != nil {
 				common.Log.Errorf("can't find address by id %d", addrId)
 				continue
 			}
-			//result = append(result, addr)
-			addrmap[addr] = true
+			addrmap[addr] = height
 		}
 	}
 
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 	for addr, referrer := range b.utxoIndex.ReferrerMap {
-		if referrer == name {
-			//result = append(result, addr)
-			addrmap[addr] = true
+		if referrer.Name == name {
+			addrmap[addr] = referrer.BindBlock
 		}
 	}
 
-	for k := range addrmap {
-		result = append(result, k)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i] < result[j]
-	})
-
-	return result, nil
+	return addrmap, nil
 }
 
 // only for RPC interface

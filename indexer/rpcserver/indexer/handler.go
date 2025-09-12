@@ -341,7 +341,7 @@ func (s *Handle) getReferrer(c *gin.Context) {
 			Code: 0,
 			Msg:  "ok",
 		},
-		Data: "",
+		Data: nil,
 	}
 
 	addr := c.Param("address")

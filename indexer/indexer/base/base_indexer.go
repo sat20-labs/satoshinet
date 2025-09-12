@@ -139,7 +139,10 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 		newInst.utxoIndex.DescendMap[key] = value
 	}
 	for key, value := range b.utxoIndex.ReferrerMap {
-		newInst.utxoIndex.ReferrerMap[key] = value
+		newInst.utxoIndex.ReferrerMap[key] = &common.ReferrerInfo{
+			Name: value.Name,
+			BindBlock: value.BindBlock,
+		}
 	}
 
 	newInst.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
@@ -277,23 +280,12 @@ func (b *BaseIndexer) UpdateDB() {
 
 	referrers := make([]string, 0)
 	for _, name := range b.utxoIndex.ReferrerMap {
-		referrers = append(referrers, name)
+		referrers = append(referrers, name.Name)
 	}
 	referreesMap, err := stp.GetReferreesFromDB(b.db, referrers)
 	if err != nil {
 		common.Log.Panicf("GetReferreesFromDB failed, %v", err)
 	}
-	// TODO 删除这些调整代码：老版本没有排序，导致有很多重复数据
-	newMap := make(map[string][]uint64)
-	for k, v := range referreesMap {
-		newVect := make([]uint64, 0)
-		for _, id := range v {
-			newVect = indexer.InsertVector_uint64(newVect, id)
-		}
-		newMap[k] = newVect
-	}
-	referreesMap = newMap
-	//////////////////////
 
 
 	wb := b.db.NewWriteBatch()
@@ -469,13 +461,13 @@ func (b *BaseIndexer) UpdateDB() {
 		}
 
 		addrvalue := b.addressValueMap[addr]
-		referrees, ok := referreesMap[referrer]
+		referrees, ok := referreesMap[referrer.Name]
 		if !ok {
-			referrees = make([]uint64, 0)
+			referrees = make(map[uint64]int)
 		}
 		// 有序插入，避免重复
-		referrees = indexer.InsertVector_uint64(referrees, addrvalue.AddressId)
-		referreesMap[referrer] = referrees
+		referrees[addrvalue.AddressId] = referrer.BindBlock
+		referreesMap[referrer.Name] = referrees
 	}
 	for referrer, referrees := range referreesMap {
 		key := stp.GetReferreeDBKey(referrer)
@@ -852,9 +844,12 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 							existing, err := b.loadReferrerFromDB(inputAddress)
 							if err != nil {
 								//
-								b.utxoIndex.ReferrerMap[inputAddress] = string(data)
+								b.utxoIndex.ReferrerMap[inputAddress] = &common.ReferrerInfo{
+									Name: string(data),
+									BindBlock: block.Height,
+								}
 							} else {
-								common.Log.Warningf("%s has binded to referrer %s", inputAddress, existing)
+								common.Log.Warningf("%s has binded to referrer %s", inputAddress, existing.Name)
 							}
 						}
 					}
@@ -1038,7 +1033,7 @@ func (b *BaseIndexer) loadUtxoFromTxn(utxostr string, txn indexer.ReadBatch) err
 	return nil
 }
 
-func (b *BaseIndexer) loadReferrerFromDB(address string) (string, error) {
+func (b *BaseIndexer) loadReferrerFromDB(address string) (*common.ReferrerInfo, error) {
 	referrer, ok := b.utxoIndex.ReferrerMap[address]
 	if ok {
 		return referrer, nil
@@ -1046,7 +1041,7 @@ func (b *BaseIndexer) loadReferrerFromDB(address string) (string, error) {
 
 	referrer, err := stp.GetReferrerFromDB(b.db, address)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	b.utxoIndex.ReferrerMap[address] = referrer
 	return referrer, nil
