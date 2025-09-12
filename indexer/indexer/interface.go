@@ -212,16 +212,20 @@ func (b *IndexerMgr) GetAllCoreNode() map[string]*common.CoreNodeInfo {
 	return b.rpcService.GetAllCoreNode()
 }
 
+// 为了在重跑聪网索引器数据时，不用每个区块clone一次compiling的数据
 func (b *IndexerMgr) IsCoreNode(pubkey string) bool {
-	return b.rpcService.IsCoreNode(pubkey)
+	//return b.rpcService.IsCoreNode(pubkey)
+	return b.compiling.IsCoreNode(pubkey)
 }
 
 func (b *IndexerMgr) GetCoreNodeInfo(pubkey string) (*common.CoreNodeInfo) {
 	return b.rpcService.GetCoreNodeInfo(pubkey)
 }
 
+// 为了在重跑聪网索引器数据时，不用每个区块clone一次compiling的数据
 func (b *IndexerMgr) IsMinerNode(pubkey string) bool {
-	return b.rpcService.IsMinerNode(pubkey)
+	//return b.rpcService.IsMinerNode(pubkey)
+	return b.compiling.IsMinerNode(pubkey)
 }
 
 func (b *IndexerMgr) GetMinerInfo(pubkey string) (*common.MinerInfo) {

@@ -987,6 +987,16 @@ var MainNetParams = Params{
 				time.Time{}, // Never expires
 			),
 		},
+		DeploymentTestDummyAlwaysActive: {
+			BitNumber: 30,
+			DeploymentStarter: NewMedianTimeDeploymentStarter(
+				time.Time{}, // Always available for vote
+			),
+			DeploymentEnder: NewMedianTimeDeploymentEnder(
+				time.Time{}, // Never expires
+			),
+			AlwaysActiveHeight: 1,
+		},
 		DeploymentCSV: {
 			BitNumber: 0,
 			DeploymentStarter: NewMedianTimeDeploymentStarter(
@@ -1097,6 +1107,16 @@ var TestNetParams = Params{
 			DeploymentEnder: NewMedianTimeDeploymentEnder(
 				time.Time{}, // Never expires
 			),
+		},
+		DeploymentTestDummyAlwaysActive: {
+			BitNumber: 30,
+			DeploymentStarter: NewMedianTimeDeploymentStarter(
+				time.Time{}, // Always available for vote
+			),
+			DeploymentEnder: NewMedianTimeDeploymentEnder(
+				time.Time{}, // Never expires
+			),
+			AlwaysActiveHeight: 1,
 		},
 		DeploymentCSV: {
 			BitNumber: 0,

@@ -222,8 +222,10 @@ func (b *IndexerMgr) handleReorg(height int) {
 // 为了回滚数据，我们采用这样的策略：
 // 假设当前最新高度是h，那么数据库记录，最多只到（h-6），这样确保即使回滚，只需要从数据库回滚即可
 // 为了保证数据库记录最高到（h-6），我们做一次数据备份，到合适实际再写入数据库
-func (b *IndexerMgr) updateDB() {
-	b.updateServiceInstance()
+func (b *IndexerMgr) updateDB(height, tip int) {
+	if height == tip {
+		b.updateServiceInstance()
+	}
 
 	complingHeight := b.compiling.GetHeight()
 	syncHeight := b.compiling.GetSyncHeight()
@@ -322,7 +324,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 				return
 			}
 			// 只更新
-			p.updateServiceInstance()
+			// p.updateServiceInstance()
 		}
 		// 重新设置buffer
 		p.prepareDBBuffer()
@@ -338,7 +340,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
 	// TODO 优化indexer的设计
-	p.updateDB()
+	p.updateDB(height, tip)
 	//if height%1000 == 0 {  // TODO 先多检查，以后稳定了再降低检查频率
 		//p.checkSelf()
 	//}

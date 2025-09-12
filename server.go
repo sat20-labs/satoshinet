@@ -2789,12 +2789,15 @@ func (s *server) Start() {
 					} else {
 						
 						// 先启动stp模块，可能需要自动质押并成为miner
-						err = stp.StartSTP()
-						if err != nil {
-							btcdLog.Errorf("Unable to start STP, %v", err)
-							os.Exit(-1)
-						}
+						go func() {
+							err = stp.StartSTP()
+							if err != nil {
+								btcdLog.Errorf("Unable to start STP, %v", err)
+								os.Exit(-1)
+							}
+						}()
 
+						// 如果失败退出，就重新启动节点，再试一次
 						for i := 0; i < 10; i++ {
 							if anchortx.IsMinerNode(pubkey) {
 								srvrLog.Infof("Start pos miner.")

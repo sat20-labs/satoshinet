@@ -3,6 +3,7 @@ package base
 import (
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -56,6 +57,8 @@ type BaseIndexer struct {
 
 	blockprocCB BlockProcCallback
 	updateDBCB  UpdateDBCallback
+
+	mutex sync.RWMutex // 仅对需要提供给节点实时访问的数据加锁
 }
 
 const BLOCK_PREFETCH = 12
@@ -694,21 +697,26 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 						// 新增加一个core node
 						coreNode := common.NewCoreNodeInfo(ascend)
 						coreNodeKey = hex.EncodeToString(ascend.PubB)
-						b.coreNodeMap[coreNodeKey] = coreNode
 
+						b.mutex.Lock()
+						b.coreNodeMap[coreNodeKey] = coreNode
 						serverNode := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
 						serverNode.ChildMiners[coreNodeKey] = coreNode.AscendUtxo
-
 						b.coreNodeMapUpdated = true
+						b.mutex.Unlock()
+
 						common.Log.Infof("BaseIndexer.processBlock-> add core node %s at height %d", coreNodeKey, ascend.Height)
 					} else {
+						b.mutex.Lock()
 						coreNode, ok := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
 						if ok && b.HasMinerEligibility(ascend.Assets) {
 							// 一个连接到corenode的普通miner
 							b.coreNodeMapUpdated = true
 							coreNode.ChildMiners[hex.EncodeToString(ascend.PubB)] = ascend.FundingUtxo
+							b.mutex.Unlock()
 							common.Log.Infof("BaseIndexer.processBlock-> add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
 						} else {
+							b.mutex.Unlock()
 							// 无效的脚本
 							common.Log.Infof("not miner ascending tx %s, utxo: %s, %v", tx.Txid, ascend.FundingUtxo, ascend.Assets)
 							continue
