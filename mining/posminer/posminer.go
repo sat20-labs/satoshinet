@@ -5,7 +5,6 @@
 package posminer
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -70,7 +69,7 @@ type Config struct {
 
 	// MiningAddrs is the payment addresses to use for the generated blocks.
 	MiningAddr   btcutil.Address
-	MiningPubKey []byte
+	MiningPubKey string
 
 	TimerGenerate bool
 
@@ -486,10 +485,8 @@ func (m *POSMiner) Start() {
 	// }
 
 	cfg := &ValidatorManagerConfig{
-		ChainParams:     m.cfg.ChainParams,
-		ValidatorId:     hex.EncodeToString(m.cfg.MiningPubKey),
-		BtcdDir:         m.cfg.BtcdDir,
-		PosMiner:        m,
+		Config:   &m.cfg,
+		PosMiner: m,
 	}
 	// Start ValidatorManager
 	m.validatorMgr = NewValidatorManager(cfg)

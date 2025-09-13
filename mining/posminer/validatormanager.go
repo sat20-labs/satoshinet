@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
 	"github.com/sat20-labs/satoshinet/mining/posminer/validatechaindb"
@@ -17,7 +16,7 @@ import (
 const (
 	MinerInterval       = 10 * time.Second  // 出块时间间隔12S，但留2S给出块节点与引导节点同步数据
 
-	MaxExpiration       = 3 * time.Second   // 最大的Miner过期时间
+	CheckingInterval       = 2 * time.Second  // 检查出块顺序
 
 	UnexceptionInterval = 2 * MinerInterval //  超过2个Miner的时间， 就认为出块异常， bootstrap node 会重启Epoch, 目前直接出块以防出块卡死
 )
@@ -37,10 +36,7 @@ type PosMinerInterface interface {
 }
 
 type ValidatorManagerConfig struct {
-	ChainParams *chaincfg.Params
-	ValidatorId string // pubkey
-	BtcdDir     string
-
+	*Config
 	PosMiner PosMinerInterface
 }
 
@@ -60,7 +56,7 @@ type ValidatorManager struct {
 
 	quit chan struct{}
 
-	moniterGeneratorTicker *time.Ticker
+	generatorTicker *time.Ticker
 
 	// NewVCStore
 	vcStore         *validatechaindb.ValidateChainStore // VC Store
@@ -74,6 +70,7 @@ func NewValidatorManager(cfg *ValidatorManagerConfig) *ValidatorManager {
 	utils.Log.Tracef("New ValidatorManager")
 	validatorMgr := &ValidatorManager{
 		cfg: cfg,
+		localValidatorId: cfg.MiningPubKey,
 		quit: make(chan struct{}),
 	}
 
@@ -89,9 +86,6 @@ func NewValidatorManager(cfg *ValidatorManagerConfig) *ValidatorManager {
 	return validatorMgr
 }
 
-// Start starts the validator manager. It loads saved validators peers and if the
-// saved validators file not exists, it starts from dns seed. It connects to the
-// validators and gets current all validators info.
 func (vm *ValidatorManager) Start() {
 	utils.Log.Tracef("StartValidatorManager")
 
@@ -102,7 +96,7 @@ func (vm *ValidatorManager) Start() {
 	3. 
 	*/
 	
-	go vm.monitorGeneratorHandOverHandler()
+	go vm.generatorTimer()
 
 	go vm.observeHandler()
 }
@@ -399,9 +393,7 @@ func (vm *ValidatorManager) OnTimeGenerateBlock() (*chainhash.Hash, int32, error
 
 		return nil, 0, err
 	}
-	utils.Log.Debugf("[ValidatorManager]OnTimeGenerateBlock succeed, Hash: %s", hash.String())
-
-	
+	utils.Log.Infof("[ValidatorManager]OnTimeGenerateBlock succeed, height %d, Hash: %s", height, hash.String())
 
 	return hash, height, nil
 }
@@ -421,7 +413,7 @@ func (vm *ValidatorManager) BroadcastCommand(command wire.Message) {
 
 func (vm *ValidatorManager) resetGeneratorMoniter() {
 	utils.Log.Debugf("resetGeneratorMoniter...")
-	if vm.moniterGeneratorTicker == nil {
+	if vm.generatorTicker == nil {
 		// Not start monitor
 		utils.Log.Tracef("GeneratorTicker is not start or stopped.")
 		return
@@ -429,46 +421,148 @@ func (vm *ValidatorManager) resetGeneratorMoniter() {
 
 	monitorInterval := MinerInterval
 	utils.Log.Debugf("local generator: Next check generator after %f seconds.", monitorInterval.Seconds())
-	vm.moniterGeneratorTicker.Reset(monitorInterval)
+	vm.generatorTicker.Reset(monitorInterval)
 }
 
 
 func (vm *ValidatorManager) GetMyValidatorId() string {
-	return vm.cfg.ValidatorId
+	return vm.cfg.MiningPubKey
 }
 
-// monitor generator handover, if the generator is stoped, try to revote a new generator or recreate a new epoch
-func (vm *ValidatorManager) monitorGeneratorHandOverHandler() {
-	monitorInterval := MinerInterval
-	vm.moniterGeneratorTicker = time.NewTicker(monitorInterval)
+// 在轮到自己出块时，reset interval
+func (vm *ValidatorManager) generatorTimer() {
+	vm.generatorTicker = time.NewTicker(CheckingInterval)
 
 exit:
 	for {
 		select {
-		case <-vm.moniterGeneratorTicker.C:
-			vm.monitorGeneratorHandOver()
+		case <-vm.generatorTicker.C:
+			vm.checkAndGenerateNewBlock()
 		case <-vm.quit:
 			break exit
 		}
 	}
 
-	vm.moniterGeneratorTicker.Stop()
-	vm.moniterGeneratorTicker = nil
+	vm.generatorTicker.Stop()
+	vm.generatorTicker = nil
 
-	utils.Log.Tracef("[ValidatorManager]monitorGeneratorHandOverHandler done.")
+	utils.Log.Tracef("[ValidatorManager]generatorTimer done.")
 
 }
 
-func (vm *ValidatorManager) monitorGeneratorHandOver() {
-	utils.Log.Debugf("[ValidatorManager]monitorGeneratorHandOver...")
+func (vm *ValidatorManager) checkAndGenerateNewBlock() {
+	utils.Log.Debugf("[ValidatorManager]checkAndGenerateNewBlock...")
 	defer func() {
-		utils.Log.Debugf("[ValidatorManager]monitorGeneratorHandOver finished.")
+		utils.Log.Debugf("[ValidatorManager]checkAndGenerateNewBlock finished.")
 	}()
 	
-	// TODO 处理出块异常
+	// TODO
+	if !vm.cfg.IsCurrent() {
+		utils.Log.Infof("not reach the tip of block yet")
+		return
+	}
 
+	if !vm.isMyTurn() {
+		utils.Log.Debugf("not my turn")
+		return
+	}
+	pastMinerDuation := vm.getPastTimeFromLastMiner()
+	if pastMinerDuation < MinerInterval {
+		// The miner time is not past, ignore
+		utils.Log.Infof("not in time")
+		return
+	}
+
+	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
+	if txSizeInMempool == 0 {
+		utils.Log.Tracef("[ValidatorManager]Current mempool is empty")
+		return
+	}
+
+	// 向fatherPeer发起ping请求，如果得到响应，就开始出块，否则就继续等
+	var peer *peerpkg.Peer
+	var wg sync.WaitGroup
+	failed := false
+	if vm.IsBootstrapNode() {
+		wg.Add(1)
+		peer = vm.GetDefaultCoreValidator()
+	} else if vm.IsCoreNode() {
+		wg.Add(1)
+		peer = vm.bootstrapPeer
+	} else {
+		// 需要同时向引导节点和核心节点发送ping
+		peer = vm.fatherPeer
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			err := sendPingAndWait(vm.bootstrapPeer)
+			if err != nil {
+				failed = true
+				utils.Log.Errorf("can't get pong from %s in time, %v", peer.String(), err) 
+			}
+		}()
+	}
+	go func() {
+		defer wg.Done()
+		err := sendPingAndWait(peer)
+		if err != nil {
+			failed = true
+			utils.Log.Errorf("can't get pong from %s in time, %v", peer.String(), err) 
+		}
+	}()
+	wg.Wait()
+	if failed {
+		utils.Log.Errorf("some error occur when ping peer")
+		return
+	}
+	
+	// 出块后不要直接上链，而是给father节点去做进一步的审核，杜绝分叉
+	vm.OnTimeGenerateBlock()
 }
 
+func sendPingAndWait(peer *peerpkg.Peer) error {
+	if peer == nil {
+		utils.Log.Errorf("peer is nil")
+		return fmt.Errorf("peer is nil")
+	}
+	if !peer.Connected() {
+		utils.Log.Errorf("%s not connetcted", peer.String())
+		return fmt.Errorf("%s not connetcted", peer.String())
+	}
+
+	duration, err := peer.WaitForPong(2 * time.Second)
+	if err != nil {
+		utils.Log.Errorf("Peer %v did not respond in time: %v\n", peer.String(), err)
+    	return err
+	} 
+    utils.Log.Debugf("Peer %v responded in %v\n", peer.String(), duration)
+	return nil
+}
+
+func (vm *ValidatorManager) IsBootstrapNode() bool {
+	// 查询索引器当前轮到出块的pubkey
+	return false
+}
+
+
+func (vm *ValidatorManager) IsCoreNode() bool {
+	// 查询索引器当前轮到出块的pubkey
+	return false
+}
+
+func (vm *ValidatorManager) isMyTurn() bool {
+	// 查询索引器当前轮到出块的pubkey
+	return false
+}
+
+func (vm *ValidatorManager) getLastBlockTime() time.Time {
+	// 查询索引器当前轮到出块的pubkey
+	return time.Now()
+}
+
+func (vm *ValidatorManager) getPastTimeFromLastMiner() time.Duration {
+	return time.Since(vm.getLastBlockTime())
+}
 
 // syncValidateChain for sync validate chain list from remote peer on a timer
 func (vm *ValidatorManager) syncValidateChain() {
