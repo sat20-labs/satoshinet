@@ -379,6 +379,7 @@ type stallControlMsg struct {
 // StatsSnap is a snapshot of peer stats at a point in time.
 type StatsSnap struct {
 	ID             int32
+	ValidatorId    string
 	Addr           string
 	Services       wire.ServiceFlag
 	LastSend       time.Time
@@ -456,6 +457,7 @@ type Peer struct {
 	flagsMtx             sync.Mutex // protects the peer flags below
 	na                   *wire.NetAddressV2
 	id                   int32
+	validatorId          string // 从 MsgVersion 获得，可能为“”
 	userAgent            string
 	services             wire.ServiceFlag
 	versionKnown         bool
@@ -506,7 +508,7 @@ type Peer struct {
 //
 // This function is safe for concurrent access.
 func (p *Peer) String() string {
-	return fmt.Sprintf("%s (%s)", p.addr, directionString(p.inbound))
+	return fmt.Sprintf("%s (%s) %s", p.addr, directionString(p.inbound), p.validatorId)
 }
 
 // UpdateLastBlockHeight updates the last known block for the peer.
@@ -552,6 +554,7 @@ func (p *Peer) StatsSnapshot() *StatsSnap {
 
 	p.flagsMtx.Lock()
 	id := p.id
+	validatorId := p.validatorId
 	addr := p.addr
 	userAgent := p.userAgent
 	services := p.services
@@ -561,6 +564,7 @@ func (p *Peer) StatsSnapshot() *StatsSnap {
 	// Get a copy of all relevant flags and stats.
 	statsSnap := &StatsSnap{
 		ID:             id,
+		ValidatorId:    validatorId,
 		Addr:           addr,
 		UserAgent:      userAgent,
 		Services:       services,
@@ -590,6 +594,14 @@ func (p *Peer) StatsSnapshot() *StatsSnap {
 func (p *Peer) ID() int32 {
 	p.flagsMtx.Lock()
 	id := p.id
+	p.flagsMtx.Unlock()
+
+	return id
+}
+
+func (p *Peer) ValidatorId() string {
+	p.flagsMtx.Lock()
+	id := p.validatorId
 	p.flagsMtx.Unlock()
 
 	return id
@@ -2044,6 +2056,7 @@ func (p *Peer) readRemoteVersionMsg(readPartial bool) error {
 	p.protocolVersion = minUint32(p.protocolVersion, p.advertisedProtoVer)
 	p.versionKnown = true
 	p.services = msg.Services
+	p.validatorId = msg.ValidatorId
 	p.flagsMtx.Unlock()
 	log.Debugf("Negotiated protocol version %d for peer %s",
 		p.protocolVersion, p)
@@ -2185,6 +2198,8 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 
 	// Advertise if inv messages for transactions are desired.
 	msg.DisableRelayTx = p.cfg.DisableRelayTx
+
+	msg.ValidatorId = p.validatorId
 
 	return msg, nil
 }

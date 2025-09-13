@@ -42,6 +42,7 @@ type BaseIndexer struct {
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 不清空
 
+	miningAddress    string
 	lastHeight       int // 内存数据同步区块
 	lastHash         string
 	prevBlockHashMap map[int]string // 记录过去6个区块hash，判断哪个区块分叉
@@ -528,6 +529,7 @@ func (b *BaseIndexer) UpdateDB() {
 	b.stats.TotalDescendSats += totalDescendSats
 	b.stats.SyncBlockHash = b.lastHash
 	b.stats.SyncHeight = b.lastHeight
+	b.stats.MiningAddr = b.miningAddress
 	err = db.SetDB([]byte(SyncStatsKey), b.stats, wb)
 	if err != nil {
 		common.Log.Panicf("BaseIndexer.updateBasicDB-> Error setting in db %v", err)
@@ -578,6 +580,22 @@ func (b *BaseIndexer) handleReorg(currentBlock *common.Block) int {
 	return reorgHeight
 }
 
+func getMiningAddress(block *common.Block) string {
+	if block == nil || len(block.Transactions) == 0 {
+		return ""
+	}
+
+	coinbaseTx := block.Transactions[0]
+	// 聪网的coinbase输出只有一个有效地址
+	for _, txOut := range coinbaseTx.Outputs {
+		if common.IsOpReturn(txOut.Address.PkScript) {
+			continue
+		}
+		return txOut.Address.Addresses[0]
+	}
+	return ""
+}
+
 // sync
 func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int {
 	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, blockHeight %d", b.lastHeight, block.Height)
@@ -602,6 +620,7 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 
 	// Update the sync stats
 	b.stats.ChainTip = tip
+	b.miningAddress = getMiningAddress(block)
 	b.lastHeight = block.Height
 	b.lastHash = block.Hash
 	b.prevBlockHashMap[b.lastHeight] = b.lastHash

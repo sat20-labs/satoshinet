@@ -13,6 +13,7 @@ type SyncBase struct {
 	TotalDescendSats int64
 	AscendCount    int
 	DescendCount   int
+	MiningAddr     string // syncHeight的挖矿地址
 }
 
 type SyncStats struct {

@@ -15,6 +15,7 @@ import (
 // MaxUserAgentLen is the maximum allowed length for the user agent field in a
 // version message (MsgVersion).
 const MaxUserAgentLen = 256
+const MaxValidatorLen = 256
 
 // DefaultUserAgent for wire in the stack
 const DefaultUserAgent = "/btcwire:0.5.0/"
@@ -55,6 +56,8 @@ type MsgVersion struct {
 
 	// Don't announce transactions to peer.
 	DisableRelayTx bool
+
+	ValidatorId string // miner需要设置
 }
 
 // HasService returns whether the specified service is supported by the peer
@@ -144,6 +147,18 @@ func (msg *MsgVersion) BtcDecode(r io.Reader, pver uint32, enc MessageEncoding) 
 		msg.DisableRelayTx = !relayTx
 	}
 
+	if buf.Len() > 0 {
+		validatorId, err := ReadVarString(buf, pver)
+		if err != nil {
+			return err
+		}
+		err = validateValidatorId(validatorId)
+		if err != nil {
+			return err
+		}
+		msg.ValidatorId = validatorId
+	}
+
 	return nil
 }
 
@@ -195,6 +210,12 @@ func (msg *MsgVersion) BtcEncode(w io.Writer, pver uint32, enc MessageEncoding) 
 			return err
 		}
 	}
+
+	err = WriteVarString(w, pver, msg.ValidatorId)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -243,6 +264,15 @@ func validateUserAgent(userAgent string) error {
 	if len(userAgent) > MaxUserAgentLen {
 		str := fmt.Sprintf("user agent too long [len %v, max %v]",
 			len(userAgent), MaxUserAgentLen)
+		return messageError("MsgVersion", str)
+	}
+	return nil
+}
+
+func validateValidatorId(validatorId string) error {
+	if len(validatorId) > MaxValidatorLen {
+		str := fmt.Sprintf("validator too long [len %v, max %v]",
+			len(validatorId), MaxValidatorLen)
 		return messageError("MsgVersion", str)
 	}
 	return nil

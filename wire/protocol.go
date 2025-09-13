@@ -107,6 +107,10 @@ const (
 	// SFNodeP2PV2 is a flag used to indicate a peer supports BIP324 v2
 	// connections.
 	SFNodeP2PV2 = 1 << 11
+
+	SFNodeBootstrap = 1 << 33
+	SFNodeCore = 1 << 34
+	SFNodeMiner = 1 << 35
 )
 
 // Map of service flags back to their constant names for pretty printing.

@@ -177,3 +177,15 @@ type ChannelInfo struct {
 	ChannelInfoInDB
 	IsNew    bool
 }
+
+type MinerNodeInfo struct {
+	PubKey []byte
+	Address string
+	ChannelAddr string
+	ChildNodes []*MinerNodeInfo
+}
+
+type MinningSequence struct {
+	BootstrapNode *MinerNodeInfo
+	CodeNodes []*MinerNodeInfo
+}

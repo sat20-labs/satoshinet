@@ -2,12 +2,13 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-package posminer
+package posminer_deprecated
 
 import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -16,7 +17,9 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/mining"
-	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
+	"github.com/sat20-labs/satoshinet/mining/posminer_deprecated/utils"
+	"github.com/sat20-labs/satoshinet/mining/posminer_deprecated/validatechaindb"
+	"github.com/sat20-labs/satoshinet/mining/posminer_deprecated/validatormanager"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -60,6 +63,14 @@ type Config struct {
 	// ChainParams identifies which chain parameters the cpu miner is
 	// associated with.
 	ChainParams *chaincfg.Params
+	Peers       []string
+
+	// Dial connects to the address on the named network. It cannot be nil.
+	Dial func(net.Addr) (net.Conn, error)
+
+	// Lookup returns the DNS host lookup function to use when
+	// connecting to servers.
+	Lookup func(string) ([]net.IP, error)
 
 	// Btcd Dir
 	BtcdDir string
@@ -122,7 +133,7 @@ type POSMiner struct {
 	speedMonitorQuit  chan struct{}
 	quit              chan struct{}
 
-	validatorMgr *ValidatorManager
+	ValidatorMgr *validatormanager.ValidatorManager
 }
 
 // speedMonitor handles tracking the number of hashes per second the mining
@@ -485,16 +496,19 @@ func (m *POSMiner) Start() {
 	// 	go m.miningWorkerController()
 	// }
 
-	cfg := &ValidatorManagerConfig{
-		ChainParams:     m.cfg.ChainParams,
-		ValidatorId:     hex.EncodeToString(m.cfg.MiningPubKey),
-		BtcdDir:         m.cfg.BtcdDir,
-		PosMiner:        m,
+	cfg := &validatormanager.Config{
+		ChainParams: m.cfg.ChainParams,
+		Peers:       m.cfg.Peers,
+		Dial:        m.cfg.Dial,
+		Lookup:      m.cfg.Lookup,
+		ValidatorId: hex.EncodeToString(m.cfg.MiningPubKey),
+		BtcdDir:     m.cfg.BtcdDir,
+		PosMiner:    m,
 	}
 	// Start ValidatorManager
-	m.validatorMgr = NewValidatorManager(cfg)
-	if m.validatorMgr != nil {
-		m.validatorMgr.Start()
+	m.ValidatorMgr = validatormanager.New(cfg)
+	if m.ValidatorMgr != nil {
+		m.ValidatorMgr.Start()
 	}
 
 	m.started = true
@@ -516,8 +530,8 @@ func (m *POSMiner) Stop() {
 		return
 	}
 
-	if m.validatorMgr != nil {
-		m.validatorMgr.Stop()
+	if m.ValidatorMgr != nil {
+		m.ValidatorMgr.Stop()
 	}
 
 	close(m.quit)
@@ -814,7 +828,7 @@ func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
 		block := btcutil.NewBlock(template.Block)
 		m.submitBlock(block)
 		blockHash := block.Hash()
-		utils.Log.Debugf("submitBlock %d", curHeight + 1)
+		utils.Log.Debugf("submitBlock %d", curHeight+1)
 		return blockHash, curHeight + 1, nil
 	}
 
@@ -827,6 +841,19 @@ func (m *POSMiner) GetBlockHeight() int32 {
 	return m.g.BestSnapshot().Height
 }
 
+func (m *POSMiner) GetVCStore() *validatechaindb.ValidateChainStore {
+	if m.ValidatorMgr == nil {
+		return nil
+	}
+	return m.ValidatorMgr.GetVCStore()
+}
+
+func (m *POSMiner) GetCurrentEpochMember(includeSelf bool) ([]string, error) {
+	if m.ValidatorMgr == nil {
+		return nil, errors.New("Validator Manager is nil")
+	}
+	return m.ValidatorMgr.GetCurrentEpochMember(includeSelf)
+}
 
 func (m *POSMiner) GetMempoolTxSize() int32 {
 
