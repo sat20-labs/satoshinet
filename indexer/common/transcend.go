@@ -176,6 +176,18 @@ func PublicKeyToTaprootAddress(pubKey *secp256k1.PublicKey, netParams *chaincfg.
 	return btcutil.NewAddressTaproot(schnorr.SerializePubKey(taprootPubKey), netParams)
 }
 
+func PubKeyBytesToP2TRAddress(pubkey []byte, netParams *chaincfg.Params) (string, error) {
+	pbkey, err := BytesToPublicKey(pubkey)
+	if err != nil {
+		return "", err
+	}
+	addr, err := PublicKeyToTaprootAddress(pbkey, netParams)
+	if err != nil {
+		return "", err
+	}
+	return addr.EncodeAddress(), nil
+}
+
 func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Signature) bool {
 	// Compute the hash of the message.
 	var msgDigest []byte
