@@ -491,6 +491,8 @@ type Peer struct {
 	lastPingNonce      uint64    // Set to nonce if we have a pending ping.
 	lastPingTime       time.Time // Time we sent last ping.
 	lastPingMicros     int64     // Time for last ping to return.
+	lastPingResult     wire.RejectCode
+	lastPingReason      string
 
 	 // 新增：用于等待 Pong 的 map，从 nonce 到 channel
     pongWaiters       map[uint64]chan struct{}
@@ -1081,6 +1083,8 @@ func (p *Peer) handlePongMsg(msg *wire.MsgPong) {
 			p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
 			p.lastPingMicros /= 1000 // convert to usec.
 			p.lastPingNonce = 0
+			p.lastPingResult = msg.Code
+			p.lastPingReason = msg.Reason
 
 			if ch, ok := p.pongWaiters[msg.Nonce]; ok {
 	            // 非阻塞发送
@@ -1098,11 +1102,12 @@ func (p *Peer) handlePongMsg(msg *wire.MsgPong) {
 
 // WaitForPongIn sends a ping to peer p, and waits up to timeout for the pong.
 // Returns measured round-trip time (duration), or error if timeout or failed to send.
-func (p *Peer) WaitForPong(timeout time.Duration) (time.Duration, error) {
+func (p *Peer) WaitForPong(timeout time.Duration, subCmd string, payload []byte) (
+	time.Duration, wire.RejectCode, string, error) {
     // 生成 nonce
     nonce, err := wire.RandomUint64()
     if err != nil {
-       	return 0, err
+       	return 0, 0, "", err
     }
 
     // 记录 lastPingTime & lastPingNonce
@@ -1119,21 +1124,28 @@ func (p *Peer) WaitForPong(timeout time.Duration) (time.Duration, error) {
     p.statsMtx.Unlock()
 
     // 发送 ping
-    p.QueueMessage(&wire.MsgPing{Nonce: nonce}, nil)
+    p.QueueMessage(&wire.MsgPing{
+		Nonce: nonce, 
+		SubCmd: subCmd, 
+		Payload: payload}, nil)
 
     // 等待
     select {
     case <-waiter:
         // 收到 pong
+		p.statsMtx.RLock()
         duration := time.Since(p.lastPingTime)
-        return duration, nil
+		code := p.lastPingResult
+		reason := p.lastPingReason
+		p.statsMtx.RUnlock()
+        return duration, code, reason, nil
     case <-time.After(timeout):
         // 超时
         // 清理
         p.statsMtx.Lock()
         delete(p.pongWaiters, nonce)
         p.statsMtx.Unlock()
-        return 0, fmt.Errorf("pong timeout: no response within %s", timeout)
+        return 0, 0, "", fmt.Errorf("pong timeout: no response within %s", timeout)
     }
  }
 

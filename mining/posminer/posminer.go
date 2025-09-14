@@ -181,7 +181,7 @@ func (m *POSMiner) submitBlock(block *btcutil.Block) bool {
 	// possible a block was found and submitted in between.
 	msgBlock := block.MsgBlock()
 	if !msgBlock.Header.PrevBlock.IsEqual(&m.g.BestSnapshot().Hash) {
-		utils.Log.Tracef("Block submitted via POS miner with previous "+
+		utils.Log.Errorf("Block submitted via POS miner with previous "+
 			"block %s is stale", msgBlock.Header.PrevBlock)
 		return false
 	}
@@ -198,11 +198,11 @@ func (m *POSMiner) submitBlock(block *btcutil.Block) bool {
 			return false
 		}
 
-		utils.Log.Tracef("Block submitted via POS miner rejected: %v", err)
+		utils.Log.Errorf("Block submitted via POS miner rejected: %v", err)
 		return false
 	}
 	if isOrphan {
-		utils.Log.Tracef("Block submitted via POS miner is an orphan")
+		utils.Log.Errorf("Block submitted via POS miner is an orphan")
 		return false
 	}
 
@@ -701,7 +701,7 @@ func New(cfg *Config) *POSMiner {
 }
 
 // OnTimeGenerateBlock is invoke when time to generate block.
-func (m *POSMiner) OnTimeGenerateBlock() (*chainhash.Hash, int32, error) {
+func (m *POSMiner) OnTimeGenerateBlock() (*wire.MsgBlock, error) {
 	utils.Log.Debugf("Timeup for OnTimeGenerateBlock ......")
 
 	//return m.GenerateNewTestBlock()
@@ -757,7 +757,7 @@ func (m *POSMiner) GenerateNewTestBlock() (*chainhash.Hash, int32, error) {
 	// return &blockHash, curHeight + 1, nil
 }
 
-func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
+func (m *POSMiner) GenerateNewBlock() (*wire.MsgBlock, error) {
 	// Wait until there is a connection to at least one other peer
 	// since there is no way to relay a found block or receive
 	// transactions to work on when there are no connected peers.
@@ -771,16 +771,13 @@ func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
 	// submission, since the current block will be changing and
 	// this would otherwise end up building a new block template on
 	// a block that is in the process of becoming stale.
-	utils.Log.Debugf("GenerateNewBlock by VC ...")
+	utils.Log.Debugf("GenerateNewBlock ...")
 	m.submitBlockLock.Lock()
-	utils.Log.Tracef("Lock block ...")
 	curHeight := m.g.BestSnapshot().Height
 	if curHeight != 0 && !m.cfg.IsCurrent() {
 		m.submitBlockLock.Unlock()
-		time.Sleep(time.Second)
-		utils.Log.Warning("curHeight = %d and not current.", curHeight)
-		err := fmt.Errorf("The blockchain is not best chain.")
-		return nil, 0, err
+		utils.Log.Warningf("curHeight %d is not current.", curHeight)
+		return nil, fmt.Errorf("the blockchain is not best chain")
 	}
 
 	// Choose a payment address at random.
@@ -797,7 +794,7 @@ func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
 	if err != nil {
 		errStr := fmt.Sprintf("Failed to create new block template: %v", err)
 		utils.Log.Warning(errStr)
-		return nil, 0, err
+		return nil, err
 	}
 
 	utils.Log.Tracef("NewBlockTemplate done.")
@@ -807,16 +804,25 @@ func (m *POSMiner) GenerateNewBlock() (*chainhash.Hash, int32, error) {
 	// a new block template can be generated.  When the return is
 	// true a solution was found, so submit the solved block.
 	if m.solveBlock(template.Block, curHeight+1) {
-		utils.Log.Debugf("submitBlock ...")
-		block := btcutil.NewBlock(template.Block)
-		m.submitBlock(block)
-		blockHash := block.Hash()
-		utils.Log.Debugf("submitBlock %d", curHeight + 1)
-		return blockHash, curHeight + 1, nil
+		// 暂时不提交
+		// utils.Log.Debugf("submitBlock ...")
+		// block := btcutil.NewBlock(template.Block)
+		// m.submitBlock(block)
+		// blockHash := block.Hash()
+		// utils.Log.Debugf("submitBlock %d", curHeight + 1)
+		return template.Block, nil
 	}
 
-	err = fmt.Errorf("Failed to solve block")
-	return nil, 0, err
+	return nil, fmt.Errorf("failed to solve block")
+}
+
+// submit a new block
+func (m *POSMiner) SubmitNewBlock(block *wire.MsgBlock) (*chainhash.Hash, int32, error) {
+	utils.Log.Debugf("SubmitNewBlock ...")
+	newblock := btcutil.NewBlock(block)
+	m.submitBlock(newblock)
+	utils.Log.Infof("SubmitNewBlock %d %s", newblock.Height(), newblock.Hash().String())
+	return newblock.Hash(), newblock.Height(), nil
 }
 
 // GetBlockHeight invoke when get block height from pos miner.
