@@ -124,50 +124,6 @@ type POSMiner struct {
 	validatorMgr *ValidatorManager
 }
 
-// speedMonitor handles tracking the number of hashes per second the mining
-// process is performing.  It must be run as a goroutine.
-func (m *POSMiner) speedMonitor() {
-	utils.Log.Tracef("POS miner speed monitor started")
-
-	var hashesPerSec float64
-	var totalHashes uint64
-	ticker := time.NewTicker(time.Second * hpsUpdateSecs)
-	defer ticker.Stop()
-
-out:
-	for {
-		select {
-		// Periodic updates from the workers with how many hashes they
-		// have performed.
-		case numHashes := <-m.updateHashes:
-			totalHashes += numHashes
-
-		// Time to update the hashes per second.
-		case <-ticker.C:
-			curHashesPerSec := float64(totalHashes) / hpsUpdateSecs
-			if hashesPerSec == 0 {
-				hashesPerSec = curHashesPerSec
-			}
-			hashesPerSec = (hashesPerSec + curHashesPerSec) / 2
-			totalHashes = 0
-			if hashesPerSec != 0 {
-				utils.Log.Tracef("Hash speed: %6.0f kilohashes/s",
-					hashesPerSec/1000)
-			}
-
-		// Request for the number of hashes per second.
-		case m.queryHashesPerSec <- hashesPerSec:
-			// Nothing to do.
-
-		case <-m.speedMonitorQuit:
-			break out
-		}
-	}
-
-	m.wg.Done()
-	utils.Log.Tracef("POS miner speed monitor done")
-}
-
 // submitBlock submits the passed block to network after ensuring it passes all
 // of the consensus validation rules.
 func (m *POSMiner) submitBlock(block *btcutil.Block) bool {
@@ -308,158 +264,6 @@ func (m *POSMiner) solveBlock(msgBlock *wire.MsgBlock, blockHeight int32) bool {
 
 	utils.Log.Tracef("solveBlock done.")
 	return true
-}
-
-// generateBlocks is a worker that is controlled by the miningWorkerController.
-// It is self contained in that it creates block templates and attempts to solve
-// them while detecting when it is performing stale work and reacting
-// accordingly by generating a new block template.  When a block is solved, it
-// is submitted.
-//
-// It must be run as a goroutine.
-func (m *POSMiner) generateBlocks(quit chan struct{}) {
-	utils.Log.Tracef("Starting generate blocks worker")
-
-	// Start a ticker which is used to signal checks for stale work and
-	// updates to the speed monitor.
-	ticker := time.NewTicker(time.Second * blockGenerateSecs)
-	defer ticker.Stop()
-out:
-	for {
-		utils.Log.Debugf("generateBlocks ......")
-		// Quit when the miner is stopped.
-		select {
-		case <-quit:
-			break out
-		case <-ticker.C:
-			utils.Log.Tracef("Timeup for generate new Block ......")
-			// Wait until there is a connection to at least one other peer
-			// since there is no way to relay a found block or receive
-			// transactions to work on when there are no connected peers.
-			// if m.cfg.ConnectedCount() == 0 {
-			// 	time.Sleep(time.Second)
-			// 	continue
-			// }
-
-			// No point in searching for a solution before the chain is
-			// synced.  Also, grab the same lock as used for block
-			// submission, since the current block will be changing and
-			// this would otherwise end up building a new block template on
-			// a block that is in the process of becoming stale.
-			m.submitBlockLock.Lock()
-			utils.Log.Tracef("Lock block ...")
-			curHeight := m.g.BestSnapshot().Height
-			if curHeight != 0 && !m.cfg.IsCurrent() {
-				m.submitBlockLock.Unlock()
-				time.Sleep(time.Second)
-				utils.Log.Tracef("curHeight = %d and not current.", curHeight)
-				continue
-			}
-
-			// Choose a payment address at random.
-			// rand.Seed(time.Now().UnixNano())
-			// payToAddr := m.cfg.MiningAddrs[rand.Intn(len(m.cfg.MiningAddrs))]
-			payToAddr := m.cfg.MiningAddr
-
-			// Create a new block template using the available transactions
-			// in the memory pool as a source of transactions to potentially
-			// include in the block.
-			utils.Log.Tracef("NewBlockTemplate...")
-			template, err := m.g.NewBlockTemplate(payToAddr)
-			m.submitBlockLock.Unlock()
-			if err != nil {
-				errStr := fmt.Sprintf("Failed to create new block template: %v", err)
-				utils.Log.Warning(errStr)
-				continue
-			}
-
-			utils.Log.Tracef("NewBlockTemplate done.")
-
-			// Attempt to solve the block.  The function will exit early
-			// with false when conditions that trigger a stale block, so
-			// a new block template can be generated.  When the return is
-			// true a solution was found, so submit the solved block.
-			if m.solveBlock(template.Block, curHeight+1) {
-				utils.Log.Tracef("solveBlock ...")
-				utils.Log.Tracef("Block Header MerkleRoot is %s。", template.Block.Header.MerkleRoot.String())
-				block := btcutil.NewBlock(template.Block)
-				m.submitBlock(block)
-			}
-			//default:
-			// Non-blocking select to fall through
-		}
-	}
-
-	m.workerWg.Done()
-	utils.Log.Tracef("Generate blocks worker done")
-}
-
-// miningWorkerController launches the worker goroutines that are used to
-// generate block templates and solve them.  It also provides the ability to
-// dynamically adjust the number of running worker goroutines.
-//
-// It must be run as a goroutine.
-func (m *POSMiner) miningWorkerController() {
-	// launchWorkers groups common code to launch a specified number of
-	// workers for generating blocks.
-	var runningWorkers []chan struct{}
-	launchWorkers := func(numWorkers uint32) {
-		for i := uint32(0); i < numWorkers; i++ {
-			quit := make(chan struct{})
-			runningWorkers = append(runningWorkers, quit)
-
-			m.workerWg.Add(1)
-			go m.generateBlocks(quit)
-		}
-	}
-
-	// Launch the current number of workers by default.
-	runningWorkers = make([]chan struct{}, 0, m.numWorkers)
-	launchWorkers(m.numWorkers)
-
-out:
-	for {
-		select {
-		// Update the number of running workers.
-		case <-m.updateNumWorkers:
-			// No change.
-			numRunning := uint32(len(runningWorkers))
-			if m.numWorkers == numRunning {
-				continue
-			}
-
-			// Add new workers.
-			if m.numWorkers > numRunning {
-				launchWorkers(m.numWorkers - numRunning)
-				continue
-			}
-
-			// Signal the most recently created goroutines to exit.
-			for i := numRunning - 1; i >= m.numWorkers; i-- {
-				close(runningWorkers[i])
-				runningWorkers[i] = nil
-				runningWorkers = runningWorkers[:i]
-			}
-
-		case <-m.quit:
-			utils.Log.Tracef("miningWorkerController quit: %d", len(runningWorkers))
-			for index, quit := range runningWorkers {
-				close(quit)
-				utils.Log.Tracef("miningWorkerController quit: %d done", index)
-			}
-			break out
-		}
-	}
-
-	// Wait until all workers shut down to stop the speed monitor since
-	// they rely on being able to send updates to it.
-	utils.Log.Tracef("Wait workerWg done...")
-
-	m.workerWg.Wait()
-	//close(m.speedMonitorQuit)
-	m.wg.Done()
-
-	utils.Log.Tracef("miningWorkerController done")
 }
 
 // Start begins the POS mining process as well as the speed monitor used to
@@ -603,7 +407,7 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 	// Respond with an error if server is already mining.
 	if m.started || m.discreteMining {
 		m.Unlock()
-		return nil, errors.New("Server is already POS mining. Please call " +
+		return nil, errors.New("Server is already in POS mining. Please call " +
 			"`setgenerate 0` before calling discrete `generate` commands.")
 	}
 
