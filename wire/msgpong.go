@@ -123,10 +123,10 @@ func (msg *MsgPong) MaxPayloadLength(pver uint32) uint32 {
 	// The pong message did not exist for BIP0031Version and earlier.
 	// NOTE: > is not a mistake here.  The BIP0031 was defined as AFTER
 	// the version unlike most others.
-	if pver > BIP0031Version {
+	//if pver > BIP0031Version {
 		// Nonce 8 bytes.
 		plen += 8 + 1 + MAX_REJECT_REASON
-	}
+	//}
 
 	return plen
 }
@@ -136,5 +136,15 @@ func (msg *MsgPong) MaxPayloadLength(pver uint32) uint32 {
 func NewMsgPong(nonce uint64) *MsgPong {
 	return &MsgPong{
 		Nonce: nonce,
+		Code: 0,
+		Reason: "",
+	}
+}
+
+func NewMsgPongWithCode(nonce uint64, code RejectCode, reason string) *MsgPong {
+	return &MsgPong{
+		Nonce: nonce,
+		Code: code,
+		Reason: reason,
 	}
 }

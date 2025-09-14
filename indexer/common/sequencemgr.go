@@ -258,13 +258,9 @@ func (b *MiningSequenceMgr) rebuildSequence() {
 }
 
 // 检查当前挖矿地址是否有效
-func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string, height int) error {
+func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string) error {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
-
-	if b.currHeight != height {
-		return fmt.Errorf("not current block height")
-	}
 
 	if addr == b.currMiningNode.MiningAddress {
 		return nil
@@ -284,6 +280,30 @@ func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string, height int) erro
 	return fmt.Errorf("invalid mining address %s", addr)
 }
 
+
+// 检查当前挖矿地址是否有效
+func (b *MiningSequenceMgr) CheckCurrentMiningPubKey(pubkey string) error {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
+	if pubkey == b.currMiningNode.PubKey {
+		return nil
+	}
+	if b.currMiningNode.Father != nil {
+		father := b.currMiningNode.Father
+		if father.PubKey == pubkey {
+			return nil
+		}
+		if father.Father != nil {
+			if father.Father.PubKey == pubkey {
+				return nil
+			}
+		}
+	}
+	
+	return fmt.Errorf("invalid mining pubkey %s", pubkey)
+}
+
 // 不能修改返回对象
 func (b *MiningSequenceMgr) GetMiningInfoWithAddr(addr string) *MiningInfo {
 	b.mutex.RLock()
@@ -298,7 +318,6 @@ func (b *MiningSequenceMgr) GetMiningInfo(pubkey string) *MiningInfo {
 	return b.nodes[pubkey]
 }
 
-// 不能修改返回对象
 func (b *MiningSequenceMgr) GetNodeType(pubkey string) int {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
@@ -311,9 +330,9 @@ func (b *MiningSequenceMgr) GetNodeType(pubkey string) int {
 
 
 // 设置当前挖矿地址，每个区块处理完成后调用一次
-func (b *MiningSequenceMgr) MoveMiningAddr(addr string, height int) error {
+func (b *MiningSequenceMgr) MoveMiningAddr(addr string) error {
 
-	err := b.CheckCurrentMiningAddr(addr, height)
+	err := b.CheckCurrentMiningAddr(addr)
 	if err != nil {
 		return err
 	}

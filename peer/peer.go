@@ -26,6 +26,9 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/sat20-labs/satoshinet/v2transport"
+	"github.com/sat20-labs/satoshinet/indexer/common"
+	shareindexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 const (
@@ -496,6 +499,7 @@ type Peer struct {
 
 	 // 新增：用于等待 Pong 的 map，从 nonce 到 channel
     pongWaiters       map[uint64]chan struct{}
+	miningSeqMgr      *common.MiningSequenceMgr
 
 	stallControl  chan stallControlMsg
 	outputQueue   chan outMsg
@@ -1059,10 +1063,43 @@ func (p *Peer) PushRejectMsg(command string, code wire.RejectCode, reason string
 // is considered a successful ping.
 func (p *Peer) handlePingMsg(msg *wire.MsgPing) {
 	// Only reply with pong if the message is from a new enough client.
-	if p.ProtocolVersion() > wire.BIP0031Version {
+	//if p.ProtocolVersion() > wire.BIP0031Version {
 		// Include nonce from ping so pong can be identified.
-		p.QueueMessage(wire.NewMsgPong(msg.Nonce), nil)
+		//p.QueueMessage(wire.NewMsgPong(msg.Nonce), nil)
+	//}
+
+
+	var code wire.RejectCode
+	var reason string
+	if msg.SubCmd != "" && len(msg.Payload) != 0 {
+		// 检查
+		for true {
+			if msg.SubCmd != wire.CmdBlock {
+				code = wire.RejectInvalid
+				reason = "payload is not block"
+				break
+			}
+			if p.miningSeqMgr.GetNodeType(p.validatorId) == indexer.NODE_TYPE_NORMAL {
+				code = wire.RejectInvalid
+				reason = "not a miner"
+				break
+			}
+
+			err := p.miningSeqMgr.CheckCurrentMiningPubKey(p.validatorId)
+			if err != nil {
+				code = wire.RejectInvalid
+				reason = "not your turn"
+				break
+			}
+
+			// 检查block，是否可以被接受
+			
+		}
+		
+
 	}
+
+	p.QueueMessage(wire.NewMsgPongWithCode(msg.Nonce, code, reason), nil)
 }
 
 // handlePongMsg is invoked when a peer receives a pong bitcoin message.  It
@@ -1077,7 +1114,7 @@ func (p *Peer) handlePongMsg(msg *wire.MsgPong) {
 	// and overlapping pings will be ignored. It is unlikely to occur
 	// without large usage of the ping rpc call since we ping infrequently
 	// enough that if they overlap we would have timed out the peer.
-	if p.ProtocolVersion() > wire.BIP0031Version {
+	//if p.ProtocolVersion() > wire.BIP0031Version {
 		p.statsMtx.Lock()
 		if p.lastPingNonce != 0 && msg.Nonce == p.lastPingNonce {
 			p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
@@ -1097,7 +1134,7 @@ func (p *Peer) handlePongMsg(msg *wire.MsgPong) {
 	        }
 		}
 		p.statsMtx.Unlock()
-	}
+	//}
 }
 
 // WaitForPongIn sends a ping to peer p, and waits up to timeout for the pong.
@@ -1117,9 +1154,6 @@ func (p *Peer) WaitForPong(timeout time.Duration, subCmd string, payload []byte)
 	
     // 创建等待 chan
     waiter := make(chan struct{}, 1)
-    if p.pongWaiters == nil {
-        p.pongWaiters = make(map[uint64]chan struct{})
-    }
     p.pongWaiters[nonce] = waiter
     p.statsMtx.Unlock()
 
@@ -1925,12 +1959,12 @@ out:
 			case *wire.MsgPing:
 				// Only expects a pong message in later protocol
 				// versions.  Also set up statistics.
-				if p.ProtocolVersion() > wire.BIP0031Version {
+				//if p.ProtocolVersion() > wire.BIP0031Version {
 					p.statsMtx.Lock()
 					p.lastPingNonce = m.Nonce
 					p.lastPingTime = time.Now()
 					p.statsMtx.Unlock()
-				}
+				//}
 			}
 
 			p.stallControl <- stallControlMsg{sccSendMessage, msg.msg}
@@ -2611,6 +2645,12 @@ func newPeerBase(origCfg *Config, inbound bool) *Peer {
 		cfg:             cfg, // Copy so caller can't mutate.
 		services:        cfg.Services,
 		protocolVersion: cfg.ProtocolVersion,
+		pongWaiters:     make(map[uint64]chan struct{}),
+		miningSeqMgr:    shareindexer.ShareIndexer.GetSeqMgr(),
+	}
+
+	if p.miningSeqMgr == nil {
+		log.Panic("miningSeqMgr is nil")
 	}
 
 	if p.cfg.UsingV2Conn && p.Services()&wire.SFNodeP2PV2 == wire.SFNodeP2PV2 {
