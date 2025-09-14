@@ -40,7 +40,8 @@ type BaseIndexer struct {
 	addressValueMap    map[string]*indexer.AddressValueV2 // 每个区块处理之前填充所有需要的地址id
 	coreNodeMap        map[string]*common.CoreNodeInfo    // pubkey, 不清空
 	coreNodeMapUpdated bool
-	channelMap         map[string]*common.ChannelInfo // address, 不清空
+	channelMap         map[string]*common.ChannelInfo // address, 
+	seqMgr             *common.MiningSequenceMgr // 不需要复制到rpc实例
 
 	miningAddress    string
 	lastHeight       int // 内存数据同步区块
@@ -94,6 +95,11 @@ func (b *BaseIndexer) Init() {
 
 	b.coreNodeMap = stp.GetAllCoreNodeFromDB(b.db, b.chaincfgParam)
 	b.channelMap = stp.GetAllChannelFromDB(b.db)
+	b.seqMgr = common.NewMiningSequenceMgr(b.chaincfgParam)
+	err := b.seqMgr.Init(b.coreNodeMap, b.stats.SyncHeight, b.stats.MiningAddr)
+	if err != nil {
+		common.Log.Panicf("seqMgr init failed, %v", err)
+	}
 }
 
 func (b *BaseIndexer) SetUpdateDBCallback(cb2 UpdateDBCallback) {
@@ -711,19 +717,24 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 
 						b.mutex.Lock()
 						b.coreNodeMap[coreNodeKey] = coreNode
-						serverNode := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
+						serverNodeKey := hex.EncodeToString(ascend.PubA)
+						serverNode := b.coreNodeMap[serverNodeKey]
 						serverNode.ChildMiners[coreNodeKey] = coreNode.AscendUtxo
+						b.seqMgr.AddNode(coreNodeKey, serverNodeKey)
 						b.coreNodeMapUpdated = true
 						b.mutex.Unlock()
 
 						common.Log.Infof("BaseIndexer.processBlock-> add core node %s at height %d", coreNodeKey, ascend.Height)
 					} else {
 						b.mutex.Lock()
-						coreNode, ok := b.coreNodeMap[hex.EncodeToString(ascend.PubA)]
+						coreNodeKey := hex.EncodeToString(ascend.PubA)
+						coreNode, ok := b.coreNodeMap[coreNodeKey]
 						if ok && b.HasMinerEligibility(ascend.Assets) {
 							// 一个连接到corenode的普通miner
 							b.coreNodeMapUpdated = true
-							coreNode.ChildMiners[hex.EncodeToString(ascend.PubB)] = ascend.FundingUtxo
+							childKey := hex.EncodeToString(ascend.PubB)
+							coreNode.ChildMiners[childKey] = ascend.FundingUtxo
+							b.seqMgr.AddNode(childKey, coreNodeKey)
 							b.mutex.Unlock()
 							common.Log.Infof("BaseIndexer.processBlock-> add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
 						} else {

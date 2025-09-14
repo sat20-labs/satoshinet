@@ -50,4 +50,5 @@ type Indexer interface {
 	GetCoreNodeInfo(pubkey string) *common.CoreNodeInfo
 	IsMinerNode(pubkey string) bool
 	GetMinerInfo(pubkey string) *common.MinerInfo
+	GetSeqMgr() *common.MiningSequenceMgr
 }

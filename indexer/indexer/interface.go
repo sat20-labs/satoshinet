@@ -228,6 +228,11 @@ func (b *IndexerMgr) IsMinerNode(pubkey string) bool {
 	return b.compiling.IsMinerNode(pubkey)
 }
 
+// 为了在重跑聪网索引器数据时，不用每个区块clone一次compiling的数据
+func (b *IndexerMgr) GetSeqMgr() *common.MiningSequenceMgr {
+	return b.compiling.GetSequenceMgr()
+}
+
 func (b *IndexerMgr) GetMinerInfo(pubkey string) (*common.MinerInfo) {
 	return b.rpcService.GetMinerInfo(pubkey)
 }
