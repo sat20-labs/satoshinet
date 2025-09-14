@@ -1,6 +1,8 @@
 package base
 
-import "github.com/sat20-labs/satoshinet/indexer/common"
+import (
+	"github.com/sat20-labs/satoshinet/indexer/common"
+)
 
 /*
  提供一些数据接口，供聪网节点实时查询数据。
@@ -30,6 +32,12 @@ func (b *BaseIndexer) IsMinerNode(pubkey string) bool {
 	}
 
 	return false
+}
+
+func (b *BaseIndexer) GetNodeType(pubkey string) int {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	return b.seqMgr.GetNodeType(pubkey)
 }
 
 func (b *BaseIndexer) GetSequenceMgr() *common.MiningSequenceMgr {

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	indexer "github.com/sat20-labs/indexer/common"
 )
 
 
@@ -35,6 +36,7 @@ import (
 type MiningInfo struct {
 	PubKey        string
 	MiningAddress string
+	NodeType      int
 	Father        *MiningInfo
 	Children      []*MiningInfo
 	Next          *MiningInfo
@@ -72,25 +74,28 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 	// 先加最顶级的节点
 	for father, v := range coreNodeMap {
 		if v.ServerNode == "" {
-			_, err := b.addNode(father, "") // 先加父节点
+			node, err := b.addNode(father, "") // 先加引导节点
 			if err != nil {
 				return err
 			}
+			node.NodeType = indexer.NODE_TYPE_BOOTSTRAP
 		}
 	}
 
 	for father, v := range coreNodeMap {
-		_, err := b.addNode(father, "") // 先加父节点
+		node, err := b.addNode(father, "") // 先加父节点
 		if err != nil {
 			return err
 		}
+		node.NodeType = indexer.NODE_TYPE_CORE
 
 		// 再加子节点
 		for child := range v.ChildMiners {
-			_, err := b.addNode(child, father)
+			node, err := b.addNode(child, father)
 			if err != nil {
 				return err
 			}
+			node.NodeType = indexer.NODE_TYPE_MINER
 		}
 	}
 
@@ -166,7 +171,16 @@ func (b *MiningSequenceMgr) AddNode(pubkey, father string) (*MiningInfo, error) 
 	if err != nil {
 		return nil, err
 	}
-
+	if father == "" {
+		node.NodeType = indexer.NODE_TYPE_BOOTSTRAP
+	} else {
+		if father == indexer.GetBootstrapPubKey() {
+			node.NodeType = indexer.NODE_TYPE_CORE
+		} else {
+			node.NodeType = indexer.NODE_TYPE_MINER
+		}
+	}
+	
 	b.rebuildSequence()
 	return node, nil
 }
@@ -270,6 +284,31 @@ func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string, height int) erro
 	return fmt.Errorf("invalid mining address %s", addr)
 }
 
+// 不能修改返回对象
+func (b *MiningSequenceMgr) GetMiningInfoWithAddr(addr string) *MiningInfo {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	return b.addressMap[addr]
+}
+
+// 不能修改返回对象
+func (b *MiningSequenceMgr) GetMiningInfo(pubkey string) *MiningInfo {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	return b.nodes[pubkey]
+}
+
+// 不能修改返回对象
+func (b *MiningSequenceMgr) GetNodeType(pubkey string) int {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	node, ok := b.nodes[pubkey]
+	if !ok {
+		return indexer.NODE_TYPE_NORMAL
+	}
+	return node.NodeType
+}
+
 
 // 设置当前挖矿地址，每个区块处理完成后调用一次
 func (b *MiningSequenceMgr) MoveMiningAddr(addr string, height int) error {
@@ -316,4 +355,29 @@ func (b *MiningSequenceMgr) GetNextMiningAddr() string {
 		return ""
 	}
 	return b.currMiningNode.Next.MiningAddress
+}
+
+// 下一次挖矿高度
+func (b *MiningSequenceMgr) GetMiningHeightWithAddr(addr string) int {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	if b.currMiningNode == nil {
+		return -1
+	}
+
+	if b.currMiningNode.MiningAddress == addr {
+		return b.currHeight
+	}
+
+	node := b.currMiningNode.Next
+	i := 0
+	for node.MiningAddress != addr && node != b.currMiningNode {
+		node = node.Next
+		i++
+	}
+	if node.MiningAddress != addr {
+		return -1
+	}
+
+	return b.currHeight + i
 }
