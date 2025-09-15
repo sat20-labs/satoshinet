@@ -66,6 +66,7 @@ type ValidatorManager struct {
 	quit chan struct{}
 
 	generatorTicker *time.Ticker
+	pingTicker *time.Ticker
 
 	// NewVCStore
 	vcStore         *validatechaindb.ValidateChainStore // VC Store
@@ -176,6 +177,32 @@ func (vm *ValidatorManager) resetGeneratorMoniter() {
 
 func (vm *ValidatorManager) GetMyValidatorId() string {
 	return vm.cfg.MiningPubKey
+}
+
+
+// 一些有上下前后关系的miner相互ping，保持连接
+func (vm *ValidatorManager) pingTimer() {
+	vm.pingTicker = time.NewTicker(time.Duration(MinerInterval * 2) * time.Second)
+
+exit:
+	for {
+		select {
+		case <-vm.pingTicker.C:
+			vm.onPingTimer()
+		case <-vm.quit:
+			break exit
+		}
+	}
+
+	vm.pingTicker.Stop()
+	vm.pingTicker = nil
+
+	utils.Log.Tracef("[ValidatorManager]pingTimer done.")
+}
+
+func (vm *ValidatorManager) onPingTimer() {
+	// 向父节点，next节点，发送ping消息
+	// 如果是core节点，向随机的其他core节点发送消息
 }
 
 // 在轮到自己出块时，reset interval
