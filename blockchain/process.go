@@ -153,21 +153,6 @@ func (b *BlockChain) showCurrentOrphans() {
 	log.Debugf("---------------------------------------------------------------------------------------")
 }
 
-func (b *BlockChain) SetTipHeight(tip int) {
-	if tip == 0 {
-		tip = int(b.bestChain.Height())
-	}
-	b.chainLock.Lock()
-	defer b.chainLock.Unlock()
-	b.tipHeight = tip
-}
-
-func (b *BlockChain) GetTipHeight() int {
-	b.chainLock.RLock()
-	defer b.chainLock.RUnlock()
-	return b.tipHeight
-}
-
 // ProcessBlock is the main workhorse for handling insertion of new blocks into
 // the block chain.  It includes functionality such as rejecting duplicate
 // blocks, ensuring blocks follow all rules, orphan handling, and insertion into
@@ -266,28 +251,7 @@ func (b *BlockChain) ProcessBlock(block *btcutil.Block, flags BehaviorFlags) (bo
 	// enough to potentially accept it into the block chain.
 	isMainChain, err := b.maybeAcceptBlock(block, flags)
 	if err != nil {
-		ruleErr, ok := err.(RuleError)
-		if !ok {
-			return false, false, err
-		}
-
-		errCode := ruleErr.ErrorCode
-		if errCode == ErrInvalidAncestorBlock {
-			// process orphans from current best block
-			bestChainState := b.BestSnapshot()
-			bestHash := bestChainState.Hash
-			orpErr := b.processOrphans(&bestHash, flags)
-			if orpErr == nil {
-				// Retry to accept the block after processing orphans.
-				isMainChain, err = b.maybeAcceptBlock(block, flags)
-				if err != nil {
-					return false, false, err
-				}
-			}
-		} else {
-			return false, false, err
-		}
-
+		return false, false, err
 	}
 
 	// Accept any orphan blocks that depend on this block (they are
@@ -301,36 +265,4 @@ func (b *BlockChain) ProcessBlock(block *btcutil.Block, flags BehaviorFlags) (bo
 	log.Debugf("Accepted block %v", blockHash)
 
 	return isMainChain, false, nil
-}
-
-// OnNewBlockMined is a notify message from posminer for notifying the satsnet
-// when a new block mined and record it in validatechain.
-func (b *BlockChain) OnNewBlockMined(blockHash *chainhash.Hash, blockHeight int32) {
-	log.Debugf("OnNewBlockMined: new block is mined by posminer(%d:%s)", blockHeight, blockHash.String())
-	newBestBlockNode := b.bestChain.nodeByHeight(blockHeight)
-	if newBestBlockNode == nil {
-		log.Warningf("OnNewBlockMined: can't find block(%d:%s) in best chain", blockHeight, blockHash.String())
-		return
-	}
-
-	newBestBlockNodeParent := newBestBlockNode.parent
-	if newBestBlockNodeParent == nil {
-		log.Warningf("OnNewBlockMined: can't find parent of block(%d:%s) in best chain", blockHeight, blockHash.String())
-		return
-	}
-	log.Debugf("OnNewBlockMined: new best block parent is(%d:%s)", newBestBlockNodeParent.height, newBestBlockNodeParent.hash.String())
-
-	log.Debugf("Current best block is(%d:%s)", b.BestSnapshot().Height, b.BestSnapshot().Hash.String())
-	curBestBlockNode := b.bestChain.nodeByHeight(b.BestSnapshot().Height)
-	if curBestBlockNode == nil {
-		log.Warningf("OnNewBlockMined: can't find block(%d:%s) in best chain", blockHeight, blockHash.String())
-		return
-	}
-
-	curBestBlockNodeParent := curBestBlockNode.parent
-	if newBestBlockNodeParent == nil {
-		log.Warningf("OnNewBlockMined: can't find parent of block(%d:%s) in best chain", blockHeight, blockHash.String())
-		return
-	}
-	log.Debugf("OnNewBlockMined: cur best block parent is(%d:%s)", curBestBlockNodeParent.height, curBestBlockNodeParent.hash.String())
 }

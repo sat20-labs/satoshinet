@@ -46,6 +46,7 @@ import (
 	"github.com/sat20-labs/satoshinet/stp"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
+	"github.com/sat20-labs/indexer/common"
 )
 
 const (
@@ -675,6 +676,109 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	// the bitcoin block has been fully processed.
 	sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
 	<-sp.blockProcessed
+}
+
+// OnPing is invoked when a peer receives a ping message.  It
+// blocks until the ping has been fully processed.
+func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
+
+	if msg.SubCmd == "" {
+		sp.Peer.QueueMessage(wire.NewMsgPong(msg.Nonce), nil)
+		return
+	}
+	
+	// 特殊的ping消息，变成同步消息
+	var code wire.RejectCode
+	var reason string
+	validatorId := sp.Peer.ValidatorId()
+	var block *btcutil.Block
+	for true {
+		code = wire.RejectInvalid
+		miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
+		if miningSeqMgr == nil {
+			reason = "miningSeqMgr is nil"
+			break
+		}
+	
+		if msg.SubCmd != wire.CmdBlock {
+			reason = "payload is not block"
+			break
+		}
+		if miningSeqMgr.GetNodeType(validatorId) == common.NODE_TYPE_NORMAL {
+			reason = "not a miner"
+			break
+		}
+
+		err := miningSeqMgr.CheckCurrentMiningPubKey(validatorId)
+		if err != nil {
+			reason = fmt.Sprintf("not %s's turn", validatorId)
+			break
+		}
+
+		node := miningSeqMgr.GetMiningInfo(validatorId)
+		if node == nil {
+			reason = fmt.Sprintf("GetMiningInfo %s failed", validatorId)
+			break
+		}
+
+		// 检查block，是否可以被接受
+		var msgBlock wire.MsgBlock
+		rbuf := bytes.NewReader(msg.Payload)
+		if err := msgBlock.BtcDecode(rbuf, wire.ProtocolVersion, wire.WitnessEncoding); err != nil {
+			reason = "block BtcDecode failed, " + err.Error()
+			break
+		}
+		block = btcutil.NewBlock(&msgBlock)
+		// Ensure the block is building from the expected previous block.
+		expectedPrevHash := sp.server.chain.BestSnapshot().Hash
+		prevHash := &block.MsgBlock().Header.PrevBlock
+		if !expectedPrevHash.IsEqual(prevHash) {
+			reason = "not build from tip block"
+			break
+		}
+		if err := sp.server.chain.CheckConnectBlockTemplate(block); err != nil {
+			if _, ok := err.(blockchain.RuleError); !ok {
+				reason = fmt.Sprintf("Failed to process block proposal: %v", err)
+			} else {
+				reason = fmt.Sprintf("Rejected block proposal: %v", err)
+			}
+			break
+		}
+
+		// 本地检查通过，如果还有上级节点，需要继续发给上级节点，让上级节点进一步检查 （最多2级）
+		if node.Father != nil {
+			father := sp.server.GetPeerByValidatorId(node.Father.PubKey)
+			if father == nil {
+				reason = fmt.Sprintf("can't find father peer %s", node.Father.PubKey)
+				break
+			}
+			err := father.SendPingAndWait(2 * time.Second, msg.Payload)
+			if err != nil {
+				reason = fmt.Sprintf("SendPingAndWait %s failed, %v", father.String(), err)
+				break
+			}
+		}
+
+		// 检查通过，该block可以被接受，尝试加入区块链 (POSMiner的submitBlock也是调用这个)
+		_, err = sp.server.syncManager.ProcessBlock(block, blockchain.BFFastAdd)
+		if err != nil {
+			reason = fmt.Sprintf("ProcessBlock failed, %v", err)
+			break
+		}
+
+		code = 0
+		break
+	}
+
+	// 响应ping消息
+	sp.Peer.QueueMessage(wire.NewMsgPongWithCode(msg.Nonce, code, reason), nil)
+
+}
+
+// OnPong is invoked when a peer receives a pong message.  It
+// blocks until the pong has been fully processed.
+func (sp *serverPeer) OnPong(_ *peer.Peer, msg *wire.MsgPong) {
+	sp.Peer.HandlePongMsg(msg)
 }
 
 // OnInv is invoked when a peer receives an inv bitcoin message and is
@@ -2070,6 +2174,11 @@ type getPeersMsg struct {
 	reply chan []*serverPeer
 }
 
+type getPeerByValidatorIdMsg struct {
+	validatorId string
+	reply chan *peer.Peer
+}
+
 type getOutboundGroup struct {
 	key   string
 	reply chan int
@@ -2117,6 +2226,32 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			peers = append(peers, sp)
 		})
 		msg.reply <- peers
+
+	case getPeerByValidatorIdMsg:
+		var result *peer.Peer
+		for _, peer := range state.persistentPeers {
+			if peer.ValidatorId() == msg.validatorId {
+				result = peer.Peer
+				break
+			}
+		}
+		if result == nil {
+			for _, peer := range state.outboundPeers {
+				if peer.ValidatorId() == msg.validatorId {
+					result = peer.Peer
+					break
+				}
+			}
+		}
+		if result == nil {
+			for _, peer := range state.inboundPeers {
+				if peer.ValidatorId() == msg.validatorId {
+					result = peer.Peer
+					break
+				}
+			}
+		}
+		msg.reply <- result
 
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
@@ -2240,6 +2375,8 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 			OnMemPool:      sp.OnMemPool,
 			OnTx:           sp.OnTx,
 			OnBlock:        sp.OnBlock,
+			OnPing:         sp.OnPing,
+			OnPong:         sp.OnPong,
 			OnInv:          sp.OnInv,
 			OnHeaders:      sp.OnHeaders,
 			OnGetData:      sp.OnGetData,
@@ -2496,6 +2633,12 @@ func (s *server) ConnectedCount() int32 {
 	return <-replyChan
 }
 
+func (s *server) GetPeerByValidatorId(validatorId string) *peer.Peer {
+	replyChan := make(chan *peer.Peer)
+	s.query <- getPeerByValidatorIdMsg{validatorId: validatorId, reply: replyChan}
+	return <-replyChan
+}
+
 // OutboundGroupCount returns the number of peers connected to the given
 // outbound group key.
 func (s *server) OutboundGroupCount(key string) int {
@@ -2655,7 +2798,7 @@ func (s *server) Start() {
 					os.Exit(-1)
 				case <-ticker.C:
 					if done == nil {
-						tip := s.chain.GetTipHeight()
+						tip := int(s.chain.BestSnapshot().Height)
 						tip2 := indexerShare.ShareIndexer.GetChainTip()
 						tip = max(tip, tip2)
 						height := indexerShare.ShareIndexer.GetSyncHeight()
@@ -3200,7 +3343,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		MiningPubKey:           hex.EncodeToString(miningPubKey),
 		TimerGenerate:          cfg.TimerGenerate,
 		ProcessBlock:           s.syncManager.ProcessBlock,
-		OnNewBlockMined:        s.syncManager.OnNewBlockMined,
+		GetPeerByValidatorId:   s.GetPeerByValidatorId,
 		ConnectedCount:         s.ConnectedCount,
 		IsCurrent:              s.syncManager.IsCurrent,
 		BtcdDir:                homeDir,

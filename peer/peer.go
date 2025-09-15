@@ -24,11 +24,8 @@ import (
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/sat20-labs/satoshinet/v2transport"
-	"github.com/sat20-labs/satoshinet/indexer/common"
-	shareindexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
-	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -499,7 +496,6 @@ type Peer struct {
 
 	 // 新增：用于等待 Pong 的 map，从 nonce 到 channel
     pongWaiters       map[uint64]chan struct{}
-	miningSeqMgr      *common.MiningSequenceMgr
 
 	stallControl  chan stallControlMsg
 	outputQueue   chan outMsg
@@ -1057,56 +1053,11 @@ func (p *Peer) PushRejectMsg(command string, code wire.RejectCode, reason string
 	<-doneChan
 }
 
-// handlePingMsg is invoked when a peer receives a ping bitcoin message.  For
-// recent clients (protocol version > BIP0031Version), it replies with a pong
-// message.  For older clients, it does nothing and anything other than failure
-// is considered a successful ping.
-func (p *Peer) handlePingMsg(msg *wire.MsgPing) {
-	// Only reply with pong if the message is from a new enough client.
-	//if p.ProtocolVersion() > wire.BIP0031Version {
-		// Include nonce from ping so pong can be identified.
-		//p.QueueMessage(wire.NewMsgPong(msg.Nonce), nil)
-	//}
-
-
-	var code wire.RejectCode
-	var reason string
-	if msg.SubCmd != "" && len(msg.Payload) != 0 {
-		// 检查
-		for true {
-			if msg.SubCmd != wire.CmdBlock {
-				code = wire.RejectInvalid
-				reason = "payload is not block"
-				break
-			}
-			if p.miningSeqMgr.GetNodeType(p.validatorId) == indexer.NODE_TYPE_NORMAL {
-				code = wire.RejectInvalid
-				reason = "not a miner"
-				break
-			}
-
-			err := p.miningSeqMgr.CheckCurrentMiningPubKey(p.validatorId)
-			if err != nil {
-				code = wire.RejectInvalid
-				reason = "not your turn"
-				break
-			}
-
-			// 检查block，是否可以被接受
-			
-		}
-		
-
-	}
-
-	p.QueueMessage(wire.NewMsgPongWithCode(msg.Nonce, code, reason), nil)
-}
-
 // handlePongMsg is invoked when a peer receives a pong bitcoin message.  It
 // updates the ping statistics as required for recent clients (protocol
 // version > BIP0031Version).  There is no effect for older clients or when a
 // ping was not previously sent.
-func (p *Peer) handlePongMsg(msg *wire.MsgPong) {
+func (p *Peer) HandlePongMsg(msg *wire.MsgPong) {
 	// Arguably we could use a buffered channel here sending data
 	// in a fifo manner whenever we send a ping, or a list keeping track of
 	// the times of each ping. For now we just make a best effort and
@@ -1137,9 +1088,48 @@ func (p *Peer) handlePongMsg(msg *wire.MsgPong) {
 	//}
 }
 
+func (p *Peer) SendPing() error {
+    // 生成 nonce
+    nonce, err := wire.RandomUint64()
+    if err != nil {
+       	return err
+    }
+
+    // 记录 lastPingTime & lastPingNonce
+	p.statsMtx.Lock()
+    p.lastPingTime = time.Now()
+    p.lastPingNonce = nonce
+    p.statsMtx.Unlock()
+
+    // 发送 ping
+    p.QueueMessage(&wire.MsgPing{Nonce: nonce}, nil)
+	return nil
+}
+
+func (p *Peer) SendPingAndWait(timeout time.Duration, payload []byte) error {
+	if !p.Connected() {
+		log.Errorf("%s not connetcted", p.String())
+		return fmt.Errorf("%s not connetcted", p.String())
+	}
+
+	duration, rejectCode, reason, err := p.waitForPong(timeout, wire.CmdBlock, payload)
+	if err != nil {
+		log.Errorf("Peer %s did not respond in time: %v\n", p.String(), err)
+    	return err
+	} 
+
+	if rejectCode != 0 {
+		log.Errorf("peer %s reject this block, reason %s", p.String(), reason)
+		return fmt.Errorf("peer reject block, %d %s", rejectCode, reason)
+	}
+
+    log.Debugf("Peer %v responded in %v\n", p.String(), duration)
+	return nil
+}
+
 // WaitForPongIn sends a ping to peer p, and waits up to timeout for the pong.
 // Returns measured round-trip time (duration), or error if timeout or failed to send.
-func (p *Peer) WaitForPong(timeout time.Duration, subCmd string, payload []byte) (
+func (p *Peer) waitForPong(timeout time.Duration, subCmd string, payload []byte) (
 	time.Duration, wire.RejectCode, string, error) {
     // 生成 nonce
     nonce, err := wire.RandomUint64()
@@ -1181,7 +1171,7 @@ func (p *Peer) WaitForPong(timeout time.Duration, subCmd string, payload []byte)
         p.statsMtx.Unlock()
         return 0, 0, "", fmt.Errorf("pong timeout: no response within %s", timeout)
     }
- }
+}
 
 // readMessage reads the next bitcoin message from the peer with logging. The
 // partial bool indicates that we've partially read a message already. In this
@@ -1648,13 +1638,11 @@ out:
 			}
 
 		case *wire.MsgPing:
-			p.handlePingMsg(msg)
 			if p.cfg.Listeners.OnPing != nil {
 				p.cfg.Listeners.OnPing(p, msg)
 			}
 
 		case *wire.MsgPong:
-			p.handlePongMsg(msg)
 			if p.cfg.Listeners.OnPong != nil {
 				p.cfg.Listeners.OnPong(p, msg)
 			}
@@ -2646,11 +2634,6 @@ func newPeerBase(origCfg *Config, inbound bool) *Peer {
 		services:        cfg.Services,
 		protocolVersion: cfg.ProtocolVersion,
 		pongWaiters:     make(map[uint64]chan struct{}),
-		miningSeqMgr:    shareindexer.ShareIndexer.GetSeqMgr(),
-	}
-
-	if p.miningSeqMgr == nil {
-		log.Panic("miningSeqMgr is nil")
 	}
 
 	if p.cfg.UsingV2Conn && p.Services()&wire.SFNodeP2PV2 == wire.SFNodeP2PV2 {

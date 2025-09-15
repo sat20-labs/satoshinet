@@ -17,6 +17,7 @@ import (
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
 	"github.com/sat20-labs/satoshinet/wire"
+	peerpkg "github.com/sat20-labs/satoshinet/peer"
 )
 
 const (
@@ -78,9 +79,7 @@ type Config struct {
 	// rules and handling as any other block coming from the network.
 	ProcessBlock func(*btcutil.Block, blockchain.BehaviorFlags) (bool, error)
 
-	// OnNewBlockMined is a notify message from posminer for notifying the satsnet
-	// when a new block mined and record it in validatechain.
-	OnNewBlockMined func(blockHash *chainhash.Hash, blockHeight int32)
+	GetPeerByValidatorId func(validatorId string) *peerpkg.Peer
 
 	// ConnectedCount defines the function to use to obtain how many other
 	// peers the server is connected to.  This is used by the automatic
@@ -510,17 +509,21 @@ func (m *POSMiner) OnTimeGenerateBlock() (*wire.MsgBlock, error) {
 
 	//return m.GenerateNewTestBlock()
 
-	return m.GenerateNewBlock()
-}
-
-// OnTimeGenerateBlock is invoke when time to generate block.
-func (m *POSMiner) OnNewBlockMined(blockHash *chainhash.Hash, blockHeight int32) {
-	utils.Log.Tracef("[POSMiner]OnNewBlockMined ......")
-
-	m.cfg.OnNewBlockMined(blockHash, blockHeight)
-
-	//	lastValidBlockHash = m.cfg.BlockTemplateGenerator.BestSnapshot().Hash // For test
-	lastValidBlockHash = *blockHash // For test
+	msgblock, err := m.GenerateNewBlock()
+	if err != nil {
+		return nil, err
+	}
+	block := btcutil.NewBlock(msgblock)
+	// Ensure the block is building from the expected previous block.
+	expectedPrevHash := m.GetBlockHash()
+	prevHash := &block.MsgBlock().Header.PrevBlock
+	if !expectedPrevHash.IsEqual(prevHash) {
+		return nil, fmt.Errorf("not build from tip block")
+	}
+	if err := m.g.BlockChain().CheckConnectBlockTemplate(block); err != nil {
+		return nil, fmt.Errorf("CheckConnectBlockTemplate failed: %v", err)
+	}
+	return msgblock, nil
 }
 
 func (m *POSMiner) GenerateNewTestBlock() (*chainhash.Hash, int32, error) {
@@ -634,6 +637,16 @@ func (m *POSMiner) GetBlockHeight() int32 {
 	return m.g.BestSnapshot().Height
 }
 
+// GetBlockHeight invoke when get block height from pos miner.
+func (m *POSMiner) GetBlockHash() chainhash.Hash {
+	return m.g.BestSnapshot().Hash
+}
+
+// GetBlockHeight invoke when get block height from pos miner.
+func (m *POSMiner) GetBlockRecvTime() int64 {
+	return m.g.BestSnapshot().RecvTime
+}
+
 
 func (m *POSMiner) GetMempoolTxSize() int32 {
 
@@ -653,4 +666,8 @@ func (m *POSMiner) GetMempoolTxSize() int32 {
 	utils.Log.Tracef("[PosMiner] Current mempool tx size = %d", txSize)
 
 	return int32(txSize)
+}
+
+func (m *POSMiner) GetPeerByValidatorId(validatorId string) *peerpkg.Peer {
+	return m.cfg.GetPeerByValidatorId(validatorId)
 }

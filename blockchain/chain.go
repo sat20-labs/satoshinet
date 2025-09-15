@@ -63,6 +63,7 @@ type orphanBlock struct {
 type BestState struct {
 	Hash        chainhash.Hash // The hash of the block.
 	Height      int32          // The height of the block.
+	RecvTime    int64          // 本地接收到该区块时的时间，内存数据，不持久
 	Bits        uint32         // The difficulty bits of the block.
 	BlockSize   uint64         // The size of the block.
 	BlockWeight uint64         // The weight of the block.
@@ -78,6 +79,7 @@ func newBestState(node *blockNode, blockSize, blockWeight, numTxns,
 	return &BestState{
 		Hash:        node.hash,
 		Height:      node.height,
+		RecvTime:    time.Now().Unix(),
 		Bits:        node.bits,
 		BlockSize:   blockSize,
 		BlockWeight: blockWeight,
@@ -162,7 +164,6 @@ type BlockChain struct {
 	// chain state can be quickly reconstructed on load.
 	stateLock     sync.RWMutex
 	stateSnapshot *BestState
-	tipHeight     int
 
 	// The following caches are used to efficiently keep track of the
 	// current deployment threshold state of each rule change deployment.
@@ -721,7 +722,7 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 		b.sendNotification(NTBlockConnected, block)
 	}()
 
-	b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), b.tipHeight)
+	b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), int(node.height))
 
 	// Since we may have changed the UTXO cache, we make sure it didn't exceed its
 	// maximum size.  If we're pruned and have flushed already, this will be a no-op.
@@ -947,7 +948,7 @@ func (b *BlockChain) reorganizeChain(detachNodes, attachNodes *list.List) error 
 		forkNode = newBest
 	}
 
-	b.assetIndexerMgr.DisconnectBlock(int(forkNode.height), b.tipHeight)
+	b.assetIndexerMgr.DisconnectBlock(int(forkNode.height), int(tip.height))
 
 	// Connect the new best chain blocks using the utxocache directly.  It's more
 	// efficient and since we already checked that the blocks are correct and that

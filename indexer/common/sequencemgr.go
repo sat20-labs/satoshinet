@@ -281,7 +281,7 @@ func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string) error {
 }
 
 
-// 检查当前挖矿地址是否有效
+// 检查当前挖矿地址是否有效，miner或者其father都是有效节点
 func (b *MiningSequenceMgr) CheckCurrentMiningPubKey(pubkey string) error {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
@@ -374,6 +374,17 @@ func (b *MiningSequenceMgr) GetNextMiningAddr() string {
 		return ""
 	}
 	return b.currMiningNode.Next.MiningAddress
+}
+
+// 
+func (b *MiningSequenceMgr) GetFatherMiningInfo(pubkey string) *MiningInfo {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	node, ok := b.nodes[pubkey]
+	if !ok {
+		return nil
+	}
+	return node.Father
 }
 
 // 下一次挖矿高度

@@ -1002,6 +1002,10 @@ func (g *BlkTmplGenerator) BestSnapshot() *blockchain.BestState {
 	return g.chain.BestSnapshot()
 }
 
+func (g *BlkTmplGenerator) BlockChain() *blockchain.BlockChain {
+	return g.chain
+}
+
 // TxSource returns the associated transaction source.
 //
 // This function is safe for concurrent access.
