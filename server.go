@@ -180,6 +180,7 @@ type peerState struct {
 	persistentPeers map[int32]*serverPeer
 	banned          map[string]time.Time
 	outboundGroups  map[string]int
+	allPeers        map[string]*serverPeer // validatorId->peer
 }
 
 // Count returns the count of all known peers.
@@ -1979,6 +1980,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 			state.outboundPeers[sp.ID()] = sp
 		}
 	}
+	state.allPeers[sp.ValidatorId()] = sp
 
 	// Update the address' last seen time if the peer has acknowledged
 	// our version and has sent us its version as well.
@@ -2062,6 +2064,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
 		}
 		delete(list, sp.ID())
+		delete(state.allPeers, sp.ValidatorId())
 		srvrLog.Debugf("Removed peer %s", sp)
 		return
 	}
@@ -2228,30 +2231,12 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		msg.reply <- peers
 
 	case getPeerByValidatorIdMsg:
-		var result *peer.Peer
-		for _, peer := range state.persistentPeers {
-			if peer.ValidatorId() == msg.validatorId {
-				result = peer.Peer
-				break
-			}
+		result, ok := state.allPeers[msg.validatorId]
+		if ok {
+			msg.reply <- result.Peer
+		} else {
+			msg.reply <- nil
 		}
-		if result == nil {
-			for _, peer := range state.outboundPeers {
-				if peer.ValidatorId() == msg.validatorId {
-					result = peer.Peer
-					break
-				}
-			}
-		}
-		if result == nil {
-			for _, peer := range state.inboundPeers {
-				if peer.ValidatorId() == msg.validatorId {
-					result = peer.Peer
-					break
-				}
-			}
-		}
-		msg.reply <- result
 
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
@@ -2284,7 +2269,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		})
 		msg.reply <- nil
 	case removeNodeMsg:
-		found := disconnectPeer(state.persistentPeers, msg.cmp, func(sp *serverPeer) {
+		found := disconnectPeer(state.persistentPeers, state.allPeers, msg.cmp, func(sp *serverPeer) {
 			// Keep group counts ok since we remove from
 			// the list now.
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
@@ -2313,14 +2298,14 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	case disconnectNodeMsg:
 		// Check inbound peers. We pass a nil callback since we don't
 		// require any additional actions on disconnect for inbound peers.
-		found := disconnectPeer(state.inboundPeers, msg.cmp, nil)
+		found := disconnectPeer(state.inboundPeers, state.allPeers, msg.cmp, nil)
 		if found {
 			msg.reply <- nil
 			return
 		}
 
 		// Check outbound peers.
-		found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
+		found = disconnectPeer(state.outboundPeers, state.allPeers, msg.cmp, func(sp *serverPeer) {
 			// Keep group counts ok since we remove from
 			// the list now.
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
@@ -2330,7 +2315,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			// ip:port, continue disconnecting them all until no such
 			// peers are found.
 			for found {
-				found = disconnectPeer(state.outboundPeers, msg.cmp, func(sp *serverPeer) {
+				found = disconnectPeer(state.outboundPeers, state.allPeers, msg.cmp, func(sp *serverPeer) {
 					state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
 				})
 			}
@@ -2349,7 +2334,8 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 // to be located. If the peer is found, and the passed callback: `whenFound'
 // isn't nil, we call it with the peer as the argument before it is removed
 // from the peerList, and is disconnected from the server.
-func disconnectPeer(peerList map[int32]*serverPeer, compareFunc func(*serverPeer) bool, whenFound func(*serverPeer)) bool {
+func disconnectPeer(peerList map[int32]*serverPeer, allPeers map[string]*serverPeer,
+	compareFunc func(*serverPeer) bool, whenFound func(*serverPeer)) bool {
 	for addr, peer := range peerList {
 		if compareFunc(peer) {
 			if whenFound != nil {
@@ -2359,6 +2345,7 @@ func disconnectPeer(peerList map[int32]*serverPeer, compareFunc func(*serverPeer
 			// This is ok because we are not continuing
 			// to iterate so won't corrupt the loop.
 			delete(peerList, addr)
+			delete(allPeers, peer.ValidatorId())
 			peer.Disconnect()
 			return true
 		}
@@ -2519,6 +2506,7 @@ func (s *server) peerHandler() {
 		outboundPeers:   make(map[int32]*serverPeer),
 		banned:          make(map[string]time.Time),
 		outboundGroups:  make(map[string]int),
+		allPeers:        make(map[string]*serverPeer),
 	}
 
 	if !cfg.DisableDNSSeed {
