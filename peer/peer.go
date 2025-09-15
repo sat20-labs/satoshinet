@@ -1088,7 +1088,7 @@ func (p *Peer) HandlePongMsg(msg *wire.MsgPong) {
 	//}
 }
 
-func (p *Peer) SendPing() error {
+func (p *Peer) SendPing(cmd string, payload []byte) error {
     // 生成 nonce
     nonce, err := wire.RandomUint64()
     if err != nil {
@@ -1102,17 +1102,20 @@ func (p *Peer) SendPing() error {
     p.statsMtx.Unlock()
 
     // 发送 ping
-    p.QueueMessage(&wire.MsgPing{Nonce: nonce}, nil)
+    p.QueueMessage(&wire.MsgPing{
+		Nonce: nonce, 
+		SubCmd: cmd, 
+		Payload: payload}, nil)
 	return nil
 }
 
-func (p *Peer) SendPingAndWait(timeout time.Duration, payload []byte) error {
+func (p *Peer) SendPingAndWait(timeout time.Duration, cmd string, payload []byte) error {
 	if !p.Connected() {
 		log.Errorf("%s not connetcted", p.String())
 		return fmt.Errorf("%s not connetcted", p.String())
 	}
 
-	duration, rejectCode, reason, err := p.waitForPong(timeout, wire.CmdBlock, payload)
+	duration, rejectCode, reason, err := p.waitForPong(timeout, cmd, payload)
 	if err != nil {
 		log.Errorf("Peer %s did not respond in time: %v\n", p.String(), err)
     	return err

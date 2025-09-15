@@ -180,7 +180,7 @@ type peerState struct {
 	persistentPeers map[int32]*serverPeer
 	banned          map[string]time.Time
 	outboundGroups  map[string]int
-	allPeers        map[string]*serverPeer // validatorId->peer
+	minerPeers      map[string]*serverPeer // validatorId->peer
 }
 
 // Count returns the count of all known peers.
@@ -688,7 +688,9 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 		return
 	}
 	
-	// 特殊的ping消息，变成同步消息
+	// 特殊的ping消息：
+	// 如果是outbound的peer发过来的消息，不需要再往上发送，因为peer就是上级
+	// 如果是inbound的peer发过来的消息，需要往上一级发送
 	var code wire.RejectCode
 	var reason string
 	validatorId := sp.Peer.ValidatorId()
@@ -746,17 +748,19 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 			break
 		}
 
-		// 本地检查通过，如果还有上级节点，需要继续发给上级节点，让上级节点进一步检查 （最多2级）
-		if node.Father != nil {
-			father := sp.server.GetPeerByValidatorId(node.Father.PubKey)
-			if father == nil {
-				reason = fmt.Sprintf("can't find father peer %s", node.Father.PubKey)
-				break
-			}
-			err := father.SendPingAndWait(2 * time.Second, msg.Payload)
-			if err != nil {
-				reason = fmt.Sprintf("SendPingAndWait %s failed, %v", father.String(), err)
-				break
+		if sp.Peer.Inbound() {
+			// 本地检查通过，如果还有上级节点，需要继续发给上级节点，让上级节点进一步检查 （最多2级）
+			if node.Father != nil {
+				father := sp.server.GetPeerByValidatorId(node.Father.PubKey)
+				if father == nil {
+					reason = fmt.Sprintf("can't find father peer %s", node.Father.PubKey)
+					break
+				}
+				err := father.SendPingAndWait(2 * time.Second, wire.CmdBlock, msg.Payload)
+				if err != nil {
+					reason = fmt.Sprintf("SendPingAndWait %s failed, %v", father.String(), err)
+					break
+				}
 			}
 		}
 
@@ -1980,7 +1984,9 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 			state.outboundPeers[sp.ID()] = sp
 		}
 	}
-	state.allPeers[sp.ValidatorId()] = sp
+	if sp.ValidatorId() != "" {
+		state.minerPeers[sp.ValidatorId()] = sp
+	}
 
 	// Update the address' last seen time if the peer has acknowledged
 	// our version and has sent us its version as well.
@@ -2064,7 +2070,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
 		}
 		delete(list, sp.ID())
-		delete(state.allPeers, sp.ValidatorId())
+		delete(state.minerPeers, sp.ValidatorId())
 		srvrLog.Debugf("Removed peer %s", sp)
 		return
 	}
@@ -2231,12 +2237,23 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		msg.reply <- peers
 
 	case getPeerByValidatorIdMsg:
-		result, ok := state.allPeers[msg.validatorId]
-		if ok {
-			msg.reply <- result.Peer
+		var result *peer.Peer
+		if msg.validatorId != "" {
+			p, ok := state.minerPeers[msg.validatorId]
+			if ok {
+				result = p.Peer
+			}
 		} else {
-			msg.reply <- nil
+			miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
+			for k, v := range state.minerPeers {
+				if miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_CORE {
+					result = v.Peer
+					break
+				}
+			}
 		}
+		
+		msg.reply <- result
 
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
@@ -2269,7 +2286,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		})
 		msg.reply <- nil
 	case removeNodeMsg:
-		found := disconnectPeer(state.persistentPeers, state.allPeers, msg.cmp, func(sp *serverPeer) {
+		found := disconnectPeer(state.persistentPeers, state.minerPeers, msg.cmp, func(sp *serverPeer) {
 			// Keep group counts ok since we remove from
 			// the list now.
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
@@ -2298,14 +2315,14 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	case disconnectNodeMsg:
 		// Check inbound peers. We pass a nil callback since we don't
 		// require any additional actions on disconnect for inbound peers.
-		found := disconnectPeer(state.inboundPeers, state.allPeers, msg.cmp, nil)
+		found := disconnectPeer(state.inboundPeers, state.minerPeers, msg.cmp, nil)
 		if found {
 			msg.reply <- nil
 			return
 		}
 
 		// Check outbound peers.
-		found = disconnectPeer(state.outboundPeers, state.allPeers, msg.cmp, func(sp *serverPeer) {
+		found = disconnectPeer(state.outboundPeers, state.minerPeers, msg.cmp, func(sp *serverPeer) {
 			// Keep group counts ok since we remove from
 			// the list now.
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
@@ -2315,7 +2332,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			// ip:port, continue disconnecting them all until no such
 			// peers are found.
 			for found {
-				found = disconnectPeer(state.outboundPeers, state.allPeers, msg.cmp, func(sp *serverPeer) {
+				found = disconnectPeer(state.outboundPeers, state.minerPeers, msg.cmp, func(sp *serverPeer) {
 					state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
 				})
 			}
@@ -2506,7 +2523,7 @@ func (s *server) peerHandler() {
 		outboundPeers:   make(map[int32]*serverPeer),
 		banned:          make(map[string]time.Time),
 		outboundGroups:  make(map[string]int),
-		allPeers:        make(map[string]*serverPeer),
+		minerPeers:        make(map[string]*serverPeer),
 	}
 
 	if !cfg.DisableDNSSeed {
@@ -2624,6 +2641,12 @@ func (s *server) ConnectedCount() int32 {
 func (s *server) GetPeerByValidatorId(validatorId string) *peer.Peer {
 	replyChan := make(chan *peer.Peer)
 	s.query <- getPeerByValidatorIdMsg{validatorId: validatorId, reply: replyChan}
+	return <-replyChan
+}
+
+func (s *server) GetRandomCorePeer() *peer.Peer {
+	replyChan := make(chan *peer.Peer)
+	s.query <- getPeerByValidatorIdMsg{validatorId: "", reply: replyChan}
 	return <-replyChan
 }
 

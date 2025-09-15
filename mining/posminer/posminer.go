@@ -80,6 +80,7 @@ type Config struct {
 	ProcessBlock func(*btcutil.Block, blockchain.BehaviorFlags) (bool, error)
 
 	GetPeerByValidatorId func(validatorId string) *peerpkg.Peer
+	GetRandomCorePeer func () *peerpkg.Peer
 
 	// ConnectedCount defines the function to use to obtain how many other
 	// peers the server is connected to.  This is used by the automatic
@@ -670,4 +671,8 @@ func (m *POSMiner) GetMempoolTxSize() int32 {
 
 func (m *POSMiner) GetPeerByValidatorId(validatorId string) *peerpkg.Peer {
 	return m.cfg.GetPeerByValidatorId(validatorId)
+}
+
+func (m *POSMiner) GetRandomCorePeer() *peerpkg.Peer {
+	return m.cfg.GetRandomCorePeer()
 }
