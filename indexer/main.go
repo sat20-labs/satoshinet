@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -35,7 +36,7 @@ func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool
 	shareIndexer.InitIndexer(indexerMgr)
 	indexerMgr.Init()
 
-	_, err = initRpcService(dbPath, bTestNet, indexerMgr)
+	_, err = initRpcService(dbPath, host, p, bTestNet, indexerMgr)
 	if err != nil {
 		common.Log.Error(err)
 		return nil, err
@@ -43,12 +44,11 @@ func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool
 	return indexerMgr, nil
 }
 
-func initRpcService(dbPath string, bTestNet bool, indexerMgr *indexer.IndexerMgr) (*rpcserver.Rpc, error) {
+func initRpcService(dbPath string, host string, port int, bTestNet bool, indexerMgr *indexer.IndexerMgr) (*rpcserver.Rpc, error) {
 	
-	addr := "0.0.0.0:9528"
+	addr := fmt.Sprintf("%s:%d", host, port)
 	proxy := "mainnet"
 	if bTestNet {
-		addr = "0.0.0.0:19528"
 		proxy = "testnet"
 	} 
 	
