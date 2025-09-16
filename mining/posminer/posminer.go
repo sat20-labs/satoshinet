@@ -114,11 +114,9 @@ type POSMiner struct {
 	discreteMining    bool
 	submitBlockLock   sync.Mutex
 	wg                sync.WaitGroup
-	workerWg          sync.WaitGroup
 	updateNumWorkers  chan struct{}
 	queryHashesPerSec chan float64
 	updateHashes      chan uint64
-	speedMonitorQuit  chan struct{}
 	quit              chan struct{}
 
 	validatorMgr *ValidatorManager
@@ -294,9 +292,11 @@ func (m *POSMiner) Start() {
 	}
 	// Start ValidatorManager
 	m.validatorMgr = NewValidatorManager(cfg)
-	if m.validatorMgr != nil {
-		m.validatorMgr.Start()
+	if m.validatorMgr == nil {
+		utils.Log.Panic("NewValidatorManager failed")
 	}
+	
+	m.validatorMgr.Start()
 
 	m.started = true
 	utils.Log.Infof("POS miner started")
