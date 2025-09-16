@@ -148,18 +148,6 @@ type relayMsg struct {
 	data    interface{}
 }
 
-// displayMsg used to display of peer state.
-type displayMsg struct {
-	inlist         bool
-	outlist        bool
-	banlist        bool
-	persistentList bool
-}
-
-type syncEpochMemberMsg struct {
-	memberHostList []string
-}
-
 // updatePeerHeightsMsg is a message sent from the blockmanager to the server
 // after a new block has been accepted. The purpose of the message is to update
 // the heights of peers that were known to announce the block before we
