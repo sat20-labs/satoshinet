@@ -289,7 +289,7 @@ out:
 				connReq.updateState(ConnEstablished)
 				connReq.conn = msg.conn
 				conns[connReq.id] = connReq
-				log.Debugf("Connected to %v with id %d", connReq.Addr, connReq.id)
+				log.Debugf("Connected to %v with id %d (%s)", connReq.Addr, connReq.id, connReq.conn.LocalAddr().String())
 				connReq.retryCount = 0
 				cm.failedAttempts = 0
 
@@ -324,7 +324,7 @@ out:
 				// An existing connection was located, mark as
 				// disconnected and execute disconnection
 				// callback.
-				log.Debugf("Disconnected [%d] %s", connReq.id, connReq.Addr.String())
+				log.Debugf("Disconnected [%d] %s <-> %s", connReq.id, connReq.conn.LocalAddr().String(), connReq.Addr.String())
 				delete(conns, msg.id)
 				connCount := atomic.LoadUint64(&cm.connCount)
 				if connCount > 1 {
