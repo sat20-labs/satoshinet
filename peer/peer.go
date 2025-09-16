@@ -55,6 +55,8 @@ const (
 	// messages.
 	pingInterval = 2 * time.Minute
 
+	minerPingInterval = 30 * time.Second
+
 	// negotiateTimeout is the duration of inactivity before we timeout a
 	// peer that hasn't completed the initial version negotiation.
 	negotiateTimeout = 30 * time.Second
@@ -2013,7 +2015,16 @@ cleanup:
 
 // pingHandler periodically pings the peer.  It must be run as a goroutine.
 func (p *Peer) pingHandler() {
-	pingTicker := time.NewTicker(pingInterval)
+
+	// 如果本地是一个miner，而且对方也是一个miner，提高下ping的频率
+	d := pingInterval
+	remoteServices := p.Services()
+	if p.cfg.Services&wire.SFNodeMiner == wire.SFNodeMiner && 
+	remoteServices&wire.SFNodeMiner == wire.SFNodeMiner {
+		d = minerPingInterval
+	}
+
+	pingTicker := time.NewTicker(d)
 	defer pingTicker.Stop()
 
 out:

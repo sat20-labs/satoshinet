@@ -5053,3 +5053,8 @@ func (s *rpcServer) handleBlockchainNotification(notification *blockchain.Notifi
 		s.ntfnMgr.NotifyBlockDisconnected(block)
 	}
 }
+
+func init() {
+	rpcHandlers = rpcHandlersBeforeInit
+	rand.Seed(time.Now().UnixNano())
+}

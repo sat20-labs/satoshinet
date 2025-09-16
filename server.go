@@ -3116,6 +3116,9 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	if !cfg.V2Transport {
 		services &^= wire.SFNodeP2PV2
 	}
+	if cfg.Generate && cfg.MiningPubKey != "" {
+		services &^= wire.SFNodeMiner
+	}
 
 	amgr := addrmgr.New(cfg.DataDir, btcdLookup)
 

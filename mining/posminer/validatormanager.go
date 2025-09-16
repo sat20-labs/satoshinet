@@ -115,6 +115,9 @@ exit:
 func (vm *ValidatorManager) onPingTimer() {
 	// 向父节点，next节点，发送ping消息
 	// 如果是core节点，向随机的其他core节点发送消息
+
+	
+
 }
 
 // 在轮到自己出块时，reset interval

@@ -53,7 +53,6 @@ var mainNetParams = params{
 	rpcPort: "9527",
 }
 
-// validator: 9525
 // p2p port:  9526
 // rpc:       9527
 // index   :  9528
@@ -69,7 +68,7 @@ var mainNetParams = params{
 // to emulate the full reference implementation RPC API.
 var testNetParams = params{
 	Params:  &chaincfg.TestNetParams,
-	rpcPort: "19527",
+	rpcPort: "29527", // TODO 测试临时修改，后面改回19527
 }
 
 // netName returns the name used when referring to a bitcoin network.  At the

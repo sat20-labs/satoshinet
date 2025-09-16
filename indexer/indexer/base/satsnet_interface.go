@@ -1,6 +1,7 @@
 package base
 
 import (
+	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 
@@ -44,4 +45,9 @@ func (b *BaseIndexer) GetSequenceMgr() *common.MiningSequenceMgr {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 	return b.seqMgr
+}
+
+func (b *BaseIndexer) CheckBlockMiningInfo(block *btcutil.Block) error {
+	miningAddr := getMiningAddressV2(block.MsgBlock(), b.chaincfgParam)
+	return b.seqMgr.CheckCurrentMiningAddr(miningAddr)
 }

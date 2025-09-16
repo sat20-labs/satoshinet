@@ -72,9 +72,9 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 	defer b.mutex.Unlock()
 
 	// 先加最顶级的节点
-	for father, v := range coreNodeMap {
+	for bootstrap, v := range coreNodeMap {
 		if v.ServerNode == "" {
-			node, err := b.addNode(father, "") // 先加引导节点
+			node, err := b.addNode(bootstrap, "") // 先加引导节点
 			if err != nil {
 				return err
 			}
@@ -82,16 +82,18 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 		}
 	}
 
-	for father, v := range coreNodeMap {
-		node, err := b.addNode(father, "") // 先加父节点
-		if err != nil {
-			return err
+	for core, v := range coreNodeMap {
+		if v.ServerNode != "" {
+			node, err := b.addNode(core, v.ServerNode) // 先加父节点
+			if err != nil {
+				return err
+			}
+			node.NodeType = indexer.NODE_TYPE_CORE
 		}
-		node.NodeType = indexer.NODE_TYPE_CORE
 
 		// 再加子节点
 		for child := range v.ChildMiners {
-			node, err := b.addNode(child, father)
+			node, err := b.addNode(child, core)
 			if err != nil {
 				return err
 			}
@@ -101,13 +103,17 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 
 	b.rebuildSequence()
 
-	node, ok := b.addressMap[miningAddr]
-	if !ok {
-		return fmt.Errorf("invalid mining address %s", miningAddr)
+	if height >= 0 {
+		node, ok := b.addressMap[miningAddr]
+		if !ok {
+			return fmt.Errorf("invalid mining address %s", miningAddr)
+		}
+		b.currMiningNode = node.Next
+		b.currHeight = height+1
+	} else {
+		b.currMiningNode = b.sequence[0]
+		b.currHeight = 1
 	}
-
-	b.currHeight = height
-	b.currMiningNode = node
 
 	return nil
 }
@@ -150,12 +156,17 @@ func (b *MiningSequenceMgr) addNode(pubkey, father string) (*MiningInfo, error) 
 
 	if father != "" {
 		if f, ok := b.nodes[father]; ok {
+			if f.NodeType < indexer.NODE_TYPE_CORE {
+				return nil, fmt.Errorf("father node should be core node or bootstrap node")
+			}
 			node.Father = f
 			f.Children = append(f.Children, node)
 			// 保持孩子按公钥排序
 			sort.Slice(f.Children, func(i, j int) bool {
 				return f.Children[i].PubKey < f.Children[j].PubKey
 			})
+		} else {
+			return nil, fmt.Errorf("can't find father node %s", father)
 		}
 	}
 
@@ -174,10 +185,14 @@ func (b *MiningSequenceMgr) AddNode(pubkey, father string) (*MiningInfo, error) 
 	if father == "" {
 		node.NodeType = indexer.NODE_TYPE_BOOTSTRAP
 	} else {
-		if father == indexer.GetBootstrapPubKey() {
+		fatherNode := b.nodes[father]
+		switch fatherNode.NodeType {
+		case indexer.NODE_TYPE_BOOTSTRAP:
 			node.NodeType = indexer.NODE_TYPE_CORE
-		} else {
+		case indexer.NODE_TYPE_CORE:
 			node.NodeType = indexer.NODE_TYPE_MINER
+		default:
+			return nil, fmt.Errorf("")
 		}
 	}
 	
@@ -252,15 +267,29 @@ func (b *MiningSequenceMgr) rebuildSequence() {
 	}
 
 	b.sequence = seq
-	if b.currMiningNode == nil && len(seq) > 0 {
-		b.currMiningNode = seq[0]
-	}
 }
 
 // 检查当前挖矿地址是否有效
 func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string) error {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
+
+	// 第一个checkpoint，是pos版本升级时，老版本最后一个块
+	// 这个高度以下，只需要确认是有效的miner出的块就行，没有顺序
+	if b.currHeight <= int(b.chainParam.Checkpoints[0].Height) {
+		_, ok := b.addressMap[addr]
+		if ok {
+			return nil
+		}
+		if b.chainParam.Name == "testnet" {
+			// 测试网络因为普通挖矿节点依赖索引器生成挖矿地址，索引器没有正确配置公钥，导致挖矿地址异常
+			if addr == "tb1qgx496h0szk6wtpgpmczu25gmnpnfg2lfp8hc5pedfxr7y50ws3eqt07mqy" {
+				return nil
+			}
+		}
+		
+		return fmt.Errorf("invalid mining address %s", addr)
+	}
 
 	if addr == b.currMiningNode.MiningAddress {
 		return nil
@@ -330,7 +359,11 @@ func (b *MiningSequenceMgr) GetNodeType(pubkey string) int {
 
 
 // 设置当前挖矿地址，每个区块处理完成后调用一次
-func (b *MiningSequenceMgr) MoveMiningAddr(addr string) error {
+func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
+	if height == 0 {
+		b.currHeight = 1
+		return nil
+	}
 
 	err := b.CheckCurrentMiningAddr(addr)
 	if err != nil {

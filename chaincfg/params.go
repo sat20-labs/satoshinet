@@ -465,7 +465,7 @@ type Params struct {
 var RegressionNetParams = Params{
 	Name:        "regtest",
 	Net:         wire.TestNet,
-	DefaultPort: "18444",
+	DefaultPort: "39526",
 	DNSSeeds:    []DNSSeed{},
 
 	// Chain parameters
@@ -699,7 +699,7 @@ var RegressionNetParams = Params{
 var SimNetParams = Params{
 	Name:        "simnet",
 	Net:         wire.SimNet,
-	DefaultPort: "18555",
+	DefaultPort: "49526",
 	DNSSeeds:    []DNSSeed{}, // NOTE: There must NOT be any seeds.
 
 	// Chain parameters
@@ -827,7 +827,7 @@ func CustomSignetParams(challenge []byte, dnsSeeds []DNSSeed) Params {
 	return Params{
 		Name:        "signet",
 		Net:         wire.BitcoinNet(net),
-		DefaultPort: "38333",
+		DefaultPort: "59526",
 		DNSSeeds:    dnsSeeds,
 
 		// Chain parameters
@@ -958,7 +958,9 @@ var MainNetParams = Params{
 	GenerateSupported:        true,
 
 	// Checkpoints ordered from oldest to newest.
-	Checkpoints: []Checkpoint{},
+	Checkpoints: []Checkpoint{
+		{30000, newHashFromStr("")},
+	},
 
 	// Consensus rule change deployments.
 	//
@@ -1055,7 +1057,7 @@ var MainNetParams = Params{
 var TestNetParams = Params{
 	Name:        "testnet",
 	Net:         wire.TestNet,
-	DefaultPort: "19526",
+	DefaultPort: "29526",
 	DNSSeeds:    []DNSSeed{
 		{"seed.sat20.org", true},
 		{"seed.ordx.market", true},
@@ -1079,7 +1081,9 @@ var TestNetParams = Params{
 	GenerateSupported:        true,
 
 	// Checkpoints ordered from oldest to newest.
-	Checkpoints: []Checkpoint{},
+	Checkpoints: []Checkpoint{
+		{3000, newHashFromStr("")},
+	},
 
 	// Consensus rule change deployments.
 	//

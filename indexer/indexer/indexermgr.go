@@ -304,20 +304,11 @@ func (p *IndexerMgr) dbStatistic() bool {
 func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	p.connectMutex.Lock()
 	defer p.connectMutex.Unlock()
-	common.Log.Infof("compiling height %d, block %d, tip %d", p.compiling.GetHeight(), height, tip)
-	if p.compiling.GetHeight()+1 < height && height > 1 {
-		// 因为规避分叉问题，数据库数据高度不够，需要先同步到指定高度
-		// stopIndexerChan := make(chan struct{}, 1) // 非阻塞
-		// ret := p.compiling.SyncToBlock(height - 1, stopIndexerChan)
-		// if ret  == 0 {
-		// 	common.Log.Infof("sync to %d succeed", height-1)
-		// } else {
-		// 	common.Log.Errorf("sync to %d failed", height-1)
-		// 	// then ?
-		// }
-
-		// 因为同步过程需要实时的corenode数据，所以一边同步一边clone
-		for i := p.compiling.GetHeight() + 1; i < height; i++ {
+	lastHeight := p.compiling.GetHeight()
+	common.Log.Infof("compiling height %d, block %d, tip %d", lastHeight, height, tip)
+	if lastHeight+1 < height && height > 1 {
+		// 节点区块数据已经同步，但是索引器重建，走这个流程
+		for i := lastHeight + 1; i < height; i++ {
 			err := p.compiling.SyncBlockWithHeight(i, tip, true)
 			if err != nil {
 				common.Log.Errorf("SyncBlockWithHeight %d failed, %v", i, err)

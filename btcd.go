@@ -208,7 +208,7 @@ func btcdMain(serverChan chan<- *server) error {
 			btcdLog.Infof("mining address %s", addr)
 			cfg.miningAddrs = append(cfg.miningAddrs, addr)
 		} else {
-			// 普通挖矿节点，没有L1索引器，需要某个索引器提供服务，同时挖矿所得直接进入两者的通道地址
+			// 普通挖矿节点，没有L1索引器，需要由提供接入的核心节点提供索引器服务，同时挖矿所得直接进入两者的通道地址
 			if cfg.MiningPubKey == "" {
 				btcdLog.Errorf("mining pubkey must be set when enable Generate")
 				return fmt.Errorf("mining pubkey must be set when enable Generate")
@@ -219,6 +219,7 @@ func btcdMain(serverChan chan<- *server) error {
 				return err
 			}
 			
+			// 这里可能索引器没有配置，最好是从配置文件（conf.yaml）中读取
 			indexerPubkey, err := anchortx.GetIndexerPubkey(cfg.MiningPubKey)
 			if err != nil {
 				btcdLog.Errorf("GetIndexerPubkey %s failed, %v", cfg.MiningPubKey, err)

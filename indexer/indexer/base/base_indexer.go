@@ -602,6 +602,26 @@ func getMiningAddress(block *common.Block) string {
 	return ""
 }
 
+func getMiningAddressV2(block *wire.MsgBlock, chaincfgParam *chaincfg.Params) string {
+	if block == nil || len(block.Transactions) == 0 {
+		return ""
+	}
+
+	coinbaseTx := block.Transactions[0]
+	// 聪网的coinbase输出只有一个有效地址
+	for _, txOut := range coinbaseTx.TxOut {
+		if common.IsOpReturn(txOut.PkScript) {
+			continue
+		}
+		_, addrs, _, err := txscript.ExtractPkScriptAddrs(txOut.PkScript, chaincfgParam)
+		if err != nil || len(addrs) == 0 {
+			continue
+		}
+		return addrs[0].EncodeAddress()
+	}
+	return ""
+}
+
 // sync
 func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int {
 	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, blockHeight %d", b.lastHeight, block.Height)
@@ -627,6 +647,7 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 	// Update the sync stats
 	b.stats.ChainTip = tip
 	b.miningAddress = getMiningAddress(block)
+	b.seqMgr.MoveMiningAddr(block.Height, b.miningAddress)
 	b.lastHeight = block.Height
 	b.lastHash = block.Hash
 	b.prevBlockHashMap[b.lastHeight] = b.lastHash
@@ -675,6 +696,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 		Timestamp: block.Timestamp.Unix(),
 		TxAmount:  len(block.Transactions),
 	}
+	
 
 	addedUtxoCount := 0
 	deledUtxoCount := 0
@@ -740,7 +762,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 						} else {
 							b.mutex.Unlock()
 							// 无效的脚本
-							common.Log.Infof("not miner ascending tx %s, utxo: %s, %v", tx.Txid, ascend.FundingUtxo, ascend.Assets)
+							common.Log.Infof("not miner staking tx %s, utxo: %s, %v", tx.Txid, ascend.FundingUtxo, ascend.Assets)
 							continue
 						}
 					}

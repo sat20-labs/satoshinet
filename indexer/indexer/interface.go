@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/wire"
 
@@ -235,4 +236,8 @@ func (b *IndexerMgr) GetSeqMgr() *common.MiningSequenceMgr {
 
 func (b *IndexerMgr) GetMinerInfo(pubkey string) (*common.MinerInfo) {
 	return b.rpcService.GetMinerInfo(pubkey)
+}
+
+func (b *IndexerMgr) CheckBlockMiningInfo(block *btcutil.Block) error {
+	return b.compiling.CheckBlockMiningInfo(block)
 }
