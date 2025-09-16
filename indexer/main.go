@@ -36,7 +36,7 @@ func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool
 	shareIndexer.InitIndexer(indexerMgr)
 	indexerMgr.Init()
 
-	_, err = initRpcService(dbPath, host, p, bTestNet, indexerMgr)
+	_, err = initRpcService(dbPath, host, p+1, bTestNet, indexerMgr)
 	if err != nil {
 		common.Log.Error(err)
 		return nil, err
