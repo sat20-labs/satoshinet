@@ -200,24 +200,29 @@ func (vm *ValidatorManager) generateNewBlock_bootstrap() error {
 	now := time.Now().Unix()
 	lastBlockTime := vm.cfg.PosMiner.GetBlockRecvTime()
 	past := now - lastBlockTime
-	if past <= MinerInterval {
+	if past <= MinerInterval { // miner出块时间
 		// 还没到时间
 		return nil
 	}
 	
 	miningNode := vm.miningSeqMgr.GetCurrentMiningInfo()
-	peer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
+	minerPeer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
+	var corePeer *peerpkg.Peer
+	if miningNode.NodeType == indexer.NODE_TYPE_MINER {
+		corePeer = vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.Father.PubKey)
+	}
+	if (minerPeer == nil || now - minerPeer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds)) &&
+	(corePeer == nil || now - corePeer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds) ) {
+		// 直接出块
+		return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
+	}
+
 	if past < 2*MinerInterval + PreWarningInterval {
-		// 已经到了miner或者core代替出块的时间，继续等
-		return nil
-	} else if past < 3*MinerInterval {
-		if peer != nil && peer.Connected() {
-			err := peer.SendPingAndWait(2 * time.Second, "", nil)
-			if err == nil {
-				// 在线，等最后的几秒钟
-				return err
-			}
+		// 已经到了core代替出块的时间
+		if corePeer == nil || now - corePeer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds) {
+			return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
 		}
+		return nil
 	}
 
 	// 已经超时，或者不在线，bootstrap节点代替出块
@@ -243,17 +248,10 @@ func (vm *ValidatorManager) generateNewBlock_core() error {
 	
 	miningNode := vm.miningSeqMgr.GetCurrentMiningInfo()
 	peer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
-	if past > MinerInterval && past < MinerInterval + PreWarningInterval {
-		// 已经到了必须出块的时间，继续等
-		return nil
-	} else if past > MinerInterval + PreWarningInterval && past <= 2*MinerInterval {
-		// 看看该节点是不是不在线，如果不在线，就代替出块
-		if peer != nil && peer.Connected() {
-			err := peer.SendPingAndWait(2 * time.Second, "", nil)
-			if err == nil {
-				// 在线，等最后的几秒钟
-				return err
-			}
+	if peer != nil && now - peer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds) {
+		if past > MinerInterval && past < MinerInterval + PreWarningInterval {
+			// 已经到了必须出块的时间，继续等
+			return nil
 		}
 	}
 
@@ -302,14 +300,9 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 		utils.Log.Errorf("block BtcEncode failed, %v", err)
 		return err
 	}
-	if father != nil {
-		// 向fatherPeer发起ping请求，如果得到响应，就广播出块，否则就继续等
-		err = father.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
-		if err != nil {
-			utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", father.String(), err) 
-			return err
-		}
-	} else {
+
+	switch miningNode.NodeType {
+	case indexer.NODE_TYPE_BOOTSTRAP:
 		// 引导节点出块，只能随机选在线的核心节点，如果没有连接的节点，放弃出块
 		core := vm.cfg.PosMiner.GetRandomCorePeer()
 		if core != nil {
@@ -321,7 +314,39 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 			utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", core.String(), err) 
 			return err
 		}
+
+	case indexer.NODE_TYPE_CORE:
+		if father != nil && father.Connected() {
+			// 向fatherPeer发起ping请求，如果得到响应，就广播出块，否则就继续等
+			err = father.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
+			if err != nil {
+				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", father.String(), err) 
+				return err
+			}
+		} else {
+			utils.Log.Errorf("can't connect to bootstrap node")
+			return fmt.Errorf("can't connect to bootstrap node")
+		}
+		
+	case indexer.NODE_TYPE_MINER:
+		if father != nil && father.Connected() {
+			// 向fatherPeer发起ping请求，如果得到响应，就广播出块，否则就继续等
+			err = father.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
+			if err != nil {
+				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", father.String(), err) 
+				return err
+			}
+		} else {
+			// 尝试直接连接bootstrap
+			bootstrapNode := miningNode.Father.Father
+			if bootstrapNode != nil {
+				// bootstrapPeer := vm.cfg.PosMiner.GetPeerByValidatorId(bootstrapNode.PubKey)
+				// TODO 都连接bootstrap的话，会导致bootstrap连接太多，只能用于应急，
+				// 每个节点都应该知道bootstrap节点的地址，但不维持连接，只维持跟上一级的连接
+			}
+		}
 	}
+
 	if next != nil {
 		// 让next早点拿到block数据
 		next.SendPing(wire.CmdBlock, buf.Bytes())

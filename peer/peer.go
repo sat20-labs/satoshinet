@@ -54,7 +54,8 @@ const (
 	// messages.
 	pingInterval = 2 * time.Minute
 
-	minerPingInterval = 30 * time.Second
+	MinerPingSeconds = 20
+	MinerPingInterval = MinerPingSeconds * time.Second
 
 	// negotiateTimeout is the duration of inactivity before we timeout a
 	// peer that hasn't completed the initial version negotiation.
@@ -1970,7 +1971,7 @@ func (p *Peer) pingHandler() {
 	remoteServices := p.Services()
 	if p.cfg.Services&wire.SFNodeMiner == wire.SFNodeMiner && 
 	remoteServices&wire.SFNodeMiner == wire.SFNodeMiner {
-		d = minerPingInterval
+		d = MinerPingInterval
 	}
 
 	pingTicker := time.NewTicker(d)

@@ -2174,7 +2174,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		} else {
 			miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
 			for k, v := range state.minerPeers {
-				if miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_CORE {
+				if miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_CORE && v.Peer.Connected() {
 					result = v.Peer
 					break
 				}
@@ -3253,6 +3253,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		TimerGenerate:          cfg.TimerGenerate,
 		ProcessBlock:           s.syncManager.ProcessBlock,
 		GetPeerByValidatorId:   s.GetPeerByValidatorId,
+		GetRandomCorePeer:      s.GetRandomCorePeer,
 		ConnectedCount:         s.ConnectedCount,
 		IsCurrent:              s.syncManager.IsCurrent,
 		BtcdDir:                homeDir,
