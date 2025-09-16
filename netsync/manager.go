@@ -767,6 +767,14 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 
 	// Process the block to include validation, best chain selection, orphan
 	// handling, etc.
+	var lastBlock int
+	if sm.syncPeer != nil {
+		lastBlock = int(sm.syncPeer.LastBlock())
+	} 
+	if lastBlock < int(bmsg.block.Height()) {
+		lastBlock = int(bmsg.block.Height())
+	}
+	sm.chain.SetTipHeight(lastBlock)
 	_, isOrphan, err := sm.chain.ProcessBlock(bmsg.block, behaviorFlags)
 	if err != nil {
 		// When the error is a rule error, it means the block was simply
@@ -1422,6 +1430,14 @@ out:
 				msg.reply <- peerID
 
 			case processBlockMsg:
+				var lastBlock int
+				if sm.syncPeer != nil {
+					lastBlock = int(sm.syncPeer.LastBlock())
+				} 
+				if lastBlock < int(msg.block.Height()) {
+					lastBlock = int(msg.block.Height())
+				}
+				sm.chain.SetTipHeight(lastBlock)
 				_, isOrphan, err := sm.chain.ProcessBlock(
 					msg.block, msg.flags)
 				if err != nil {

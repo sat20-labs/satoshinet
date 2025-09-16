@@ -153,6 +153,21 @@ func (b *BlockChain) showCurrentOrphans() {
 	log.Debugf("---------------------------------------------------------------------------------------")
 }
 
+func (b *BlockChain) SetTipHeight(tip int) {
+	if tip == 0 {
+		tip = int(b.bestChain.Height())
+	}
+	b.chainLock.Lock()
+	defer b.chainLock.Unlock()
+	b.tipHeight = tip
+}
+
+func (b *BlockChain) GetTipHeight() int {
+	b.chainLock.RLock()
+	defer b.chainLock.RUnlock()
+	return b.tipHeight
+}
+
 // ProcessBlock is the main workhorse for handling insertion of new blocks into
 // the block chain.  It includes functionality such as rejecting duplicate
 // blocks, ensuring blocks follow all rules, orphan handling, and insertion into
@@ -166,6 +181,7 @@ func (b *BlockChain) showCurrentOrphans() {
 func (b *BlockChain) ProcessBlock(block *btcutil.Block, flags BehaviorFlags) (bool, bool, error) {
 	b.chainLock.Lock()
 	defer b.chainLock.Unlock()
+
 
 	fastAdd := flags&BFFastAdd == BFFastAdd
 

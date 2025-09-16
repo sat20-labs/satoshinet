@@ -20,13 +20,6 @@ const (
 	// maxCFHeadersLen is the max number of filter headers we will attempt
 	// to decode.
 	maxCFHeadersLen = 100000
-
-	// maxCFCheckptPayload calculates the maximum reasonable payload size
-	// for CF checkpoint messages.
-	//
-	// Calculation: 1 byte (filter type) + 32 bytes (stop hash) +
-	// 5 bytes (max varint) + (maxCFHeadersLen * 32 bytes per hash)
-	maxCFCheckptPayload = 1 + 32 + 5 + (maxCFHeadersLen * 32)
 )
 
 // ErrInsaneCFHeaderCount signals that we were asked to decode an
@@ -84,24 +77,16 @@ func (msg *MsgCFCheckpt) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) 
 		return ErrInsaneCFHeaderCount
 	}
 
-	if count == 0 {
-		msg.FilterHeaders = make([]*chainhash.Hash, 0)
-		return nil
-	}
-
-	// Optimize memory allocation by creating a single backing array for
-	// all hashes. This reduces GC pressure and improves cache locality.
-	hashes := make([]chainhash.Hash, count)
+	// Create a contiguous slice of hashes to deserialize into in order to
+	// reduce the number of allocations.
 	msg.FilterHeaders = make([]*chainhash.Hash, count)
-
-	// Now we'll read all the hashes directly into the backing array we've
-	// created above. We'll then point the underlying filter header hashes
-	// into this backing array.
 	for i := uint64(0); i < count; i++ {
-		if _, err := io.ReadFull(r, hashes[i][:]); err != nil {
+		var cfh chainhash.Hash
+		_, err := io.ReadFull(r, cfh[:])
+		if err != nil {
 			return err
 		}
-		msg.FilterHeaders[i] = &hashes[i]
+		msg.FilterHeaders[i] = &cfh
 	}
 
 	return nil
@@ -166,19 +151,15 @@ func (msg *MsgCFCheckpt) Command() string {
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver. This is part of the Message interface implementation.
 func (msg *MsgCFCheckpt) MaxPayloadLength(pver uint32) uint32 {
-	// Use a more precise calculation based on the maximum number of
-	// filter headers we support. No no reason to read more than we'll
-	// process in BtcDecode.
-	return maxCFCheckptPayload
+	// Message size depends on the blockchain height, so return general limit
+	// for all messages.
+	return MaxMessagePayload
 }
 
-// NewMsgCFCheckpt returns a new bitcoin cfheaders message that conforms to the
-// Message interface. See MsgCFCheckpt for details.
+// NewMsgCFCheckpt returns a new bitcoin cfheaders message that conforms to
+// the Message interface. See MsgCFCheckpt for details.
 func NewMsgCFCheckpt(filterType FilterType, stopHash *chainhash.Hash,
 	headersCount int) *MsgCFCheckpt {
-
-	// We pre-allocate with an exact capacity when count is known to avoid
-	// slice growth during message construction.
 	return &MsgCFCheckpt{
 		FilterType:    filterType,
 		StopHash:      *stopHash,
