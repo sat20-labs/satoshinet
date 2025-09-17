@@ -175,13 +175,24 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	var err error
 	switch vm.GetNodeType() {
 	case indexer.NODE_TYPE_BOOTSTRAP:
-		err = vm.generateNewBlock_bootstrap()
+		if vm.isMyTurn() {
+			err = vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
+		} else {
+			err = vm.generateNewBlock_bootstrap()
+		}
+
 	case indexer.NODE_TYPE_CORE:
-		err = vm.generateNewBlock_core()
+		if vm.isMyTurn() {
+			err = vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
+		} else if vm.isMyGroupTurn() {
+			err = vm.generateNewBlock_core()
+		}
+		
 	case indexer.NODE_TYPE_MINER:
 		if vm.isMyTurn() {
 			err = vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
 		}
+		
 	default:
 		utils.Log.Infof("[ValidatorManager] %s is not a miner", vm.localValidatorId)
 		return
@@ -196,19 +207,10 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 }
 
 func (vm *ValidatorManager) generateNewBlock_bootstrap() error {
-	if vm.isMyTurn() {
-		return vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
-	}
-
 	// 需要监控出块的miner有没有及时出块，如果没有，需要由核心节点代替出块
 	// 如果核心节点也不在线，由引导节点代替出块
 	now := time.Now().Unix()
-	lastBlockTime := vm.cfg.PosMiner.GetBlockRecvTime()
-	past := now - lastBlockTime
-	if past <= MinerInterval { // miner出块时间
-		// 还没到时间
-		return nil
-	}
+	past := now - vm.lastBlockTime
 	
 	miningNode := vm.miningSeqMgr.GetCurrentMiningInfo()
 	minerPeer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
@@ -227,7 +229,7 @@ func (vm *ValidatorManager) generateNewBlock_bootstrap() error {
 		if corePeer == nil || now - corePeer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds) {
 			return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
 		}
-		return nil
+		return fmt.Errorf("wait core node %s to mine block", corePeer.String())
 	}
 
 	// 已经超时，或者不在线，bootstrap节点代替出块
@@ -235,28 +237,19 @@ func (vm *ValidatorManager) generateNewBlock_bootstrap() error {
 }
 
 func (vm *ValidatorManager) generateNewBlock_core() error {
-	if vm.isMyTurn() {
-		return vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
-	}
-	if !vm.isMyGroupTurn() {
-		return nil
-	}
+	// 监控下面的节点出块
 
 	// 该组成员出块，需要监控出块的miner有没有及时出块，如果没有，需要由核心节点代替出块
 	now := time.Now().Unix()
-	lastBlockTime := vm.cfg.PosMiner.GetBlockRecvTime()
-	past := now - lastBlockTime
-	if past <= MinerInterval {
-		// 还没到时间
-		return nil
-	}
+	past := now - vm.lastBlockTime
+
 	
 	miningNode := vm.miningSeqMgr.GetCurrentMiningInfo()
 	peer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
 	if peer != nil && now - peer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds) {
 		if past > MinerInterval && past < MinerInterval + PreWarningInterval {
-			// 已经到了必须出块的时间，继续等
-			return nil
+			// 再等等
+			return fmt.Errorf("wait miner node %s to mine block", peer.String())
 		}
 	}
 
@@ -291,6 +284,7 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 		}
 	}
 
+	// 仅仅是记录排序器的实际挖矿地址，不是输入的miningNode
 	currentMiningAddr := vm.miningSeqMgr.GetCurrentMiningAddr()
 
 	// 出块后不要直接上链，而是给father节点去做进一步的审核，杜绝分叉
