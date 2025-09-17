@@ -152,8 +152,9 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 		return
 	}
 
+	now := time.Now().Unix()
 	lastBlockTime := vm.cfg.PosMiner.GetBlockRecvTime()
-	if time.Now().Unix() - lastBlockTime < MinerInterval {
+	if now - lastBlockTime < MinerInterval {
 		// The miner time is not past, ignore
 		utils.Log.Debugf("[ValidatorManager] not in time")
 		return
@@ -166,7 +167,7 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 
 	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
 	if txSizeInMempool == 0 {
-		utils.Log.Infof("[ValidatorManager] mempool is empty")
+		utils.Log.Debugf("[ValidatorManager] mempool is empty")
 		return
 	}
 
