@@ -668,7 +668,7 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 		sp.Peer.QueueMessage(wire.NewMsgPong(msg.Nonce), nil)
 		return
 	}
-	
+	peerLog.Infof("OnPing from %s embeded with cmd %s", sp.String(), msg.SubCmd)
 	// 特殊的ping消息：
 	// 如果是outbound的peer发过来的消息，不需要再往上发送，因为peer就是上级
 	// 如果是inbound的peer发过来的消息，需要往上一级发送
