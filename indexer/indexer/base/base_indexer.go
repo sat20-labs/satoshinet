@@ -733,6 +733,13 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 				ascend.AnchorTxId = tx.Txid
 				b.utxoIndex.AscendMap[ascend.FundingUtxo] = ascend
 
+				/*
+				质押资产成为挖矿节点的条件：
+				1. 通道地址：核心通道地址，或者连接核心节点的通道地址
+				2. 足够的资产
+				目前的限制：现在只会在一个ascending交易中做判断，这不是合理的方式，可能将穿越资产当作质押资产
+				TODO：采用合约的方式，将质押资产锁定在合约中，交易也明确必须是STAKE的合约动作
+				*/
 				coreNodeKey := hex.EncodeToString(ascend.PubB)
 				_, ok := b.coreNodeMap[coreNodeKey]
 				if !ok {

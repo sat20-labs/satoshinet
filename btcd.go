@@ -120,6 +120,10 @@ func btcdMain(serverChan chan<- *server) error {
 		return nil
 	}
 
+	if cfg.TestNet {
+		indexer.CHAIN = "testnet"
+	}
+
 	// initialize anchor config
 	anchorCfg := &anchortx.AnchorConfig{
 		IndexerAccessKey: cfg.IndexerAccessKey,
