@@ -3022,7 +3022,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		services &^= wire.SFNodeNetwork
 	}
 	if cfg.Generate && cfg.MiningPubKey != "" {
-		services &^= wire.SFNodeMiner
+		services |= wire.SFNodeMiner
 	}
 
 	amgr := addrmgr.New(cfg.DataDir, btcdLookup)
