@@ -305,9 +305,9 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 	case indexer.NODE_TYPE_BOOTSTRAP:
 		// 引导节点出块，只能随机选在线的核心节点，如果没有连接的节点，放弃出块
 		core := vm.cfg.PosMiner.GetRandomCorePeer()
-		if core != nil {
-			utils.Log.Errorf("no one core node connected")
-			return fmt.Errorf("no one core node connected")
+		if core == nil || !core.Connected() {
+			utils.Log.Errorf("no other core node connected")
+			return fmt.Errorf("no other core node connected")
 		}
 		err = core.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
 		if err != nil {
@@ -324,8 +324,12 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 				return err
 			}
 		} else {
-			utils.Log.Errorf("can't connect to bootstrap node")
-			return fmt.Errorf("can't connect to bootstrap node")
+			utils.Log.Errorf("not connect to bootstrap node")
+			return fmt.Errorf("not connect to bootstrap node")
+		}
+		if next != nil {
+			// 让next早点拿到block数据, 如果是普通miner发起的，在OnPing由core节点做这件事
+			next.SendPing(wire.CmdBlock, buf.Bytes())
 		}
 		
 	case indexer.NODE_TYPE_MINER:
@@ -337,20 +341,20 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 				return err
 			}
 		} else {
-			// 尝试直接连接bootstrap
-			bootstrapNode := miningNode.Father.Father
-			if bootstrapNode != nil {
-				// bootstrapPeer := vm.cfg.PosMiner.GetPeerByValidatorId(bootstrapNode.PubKey)
-				// TODO 都连接bootstrap的话，会导致bootstrap连接太多，只能用于应急，
-				// 每个节点都应该知道bootstrap节点的地址，但不维持连接，只维持跟上一级的连接
+			// 尝试连接其他core节点
+			core := vm.cfg.PosMiner.GetRandomCorePeer()
+			if core == nil || !core.Connected() {
+				utils.Log.Errorf("no other core node connected")
+				return fmt.Errorf("no other core node connected")
+			}
+			err = core.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
+			if err != nil {
+				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", core.String(), err) 
+				return err
 			}
 		}
 	}
 
-	if next != nil {
-		// 让next早点拿到block数据
-		next.SendPing(wire.CmdBlock, buf.Bytes())
-	}
 	
 	// 验证通过，提交block
 	hash, height, err := vm.cfg.PosMiner.SubmitNewBlock(block)

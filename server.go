@@ -694,7 +694,7 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 
 		err := miningSeqMgr.CheckCurrentMiningPubKey(validatorId)
 		if err != nil {
-			reason = fmt.Sprintf("not %s's turn", validatorId)
+			reason = fmt.Sprintf("not its turn to mine a block, %s", validatorId)
 			break
 		}
 
@@ -742,6 +742,12 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 					break
 				}
 			}
+		}
+
+		// 让next优先得到该block
+		next := sp.server.GetPeerByValidatorId(node.Next.PubKey)
+		if next != nil && next.Connected() {
+			next.SendPing(wire.CmdBlock, msg.Payload)
 		}
 
 		// 检查通过，该block可以被接受，尝试加入区块链 (POSMiner的submitBlock也是调用这个)
@@ -2172,9 +2178,11 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 				result = p.Peer
 			}
 		} else {
+			// 找到任意一个已经连接的core node，或bootstrap node
 			miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
 			for k, v := range state.minerPeers {
-				if miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_CORE && v.Peer.Connected() {
+				if (miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_CORE || 
+				miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_BOOTSTRAP) && v.Peer.Connected() {
 					result = v.Peer
 					break
 				}
