@@ -2722,9 +2722,7 @@ func (s *server) Start() {
 					os.Exit(-1)
 				case <-ticker.C:
 					if done == nil {
-						tip := s.chain.GetTipHeight()
-						tip2 := indexerShare.ShareIndexer.GetChainTip()
-						tip = max(tip, tip2)
+						tip := indexerShare.ShareIndexer.GetChainTip()
 						height := indexerShare.ShareIndexer.GetSyncHeight()
 						srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d", 
 							height, tip, s.connManager.GetConnCount(), s.connManager.GetAcceptCount())

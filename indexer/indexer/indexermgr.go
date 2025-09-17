@@ -337,6 +337,6 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	//}
 }
 
-func (p *IndexerMgr) DisconnectBlock(height, tip int) {
+func (p *IndexerMgr) DisconnectBlock(height int) {
 	p.handleReorg(height)
 }
