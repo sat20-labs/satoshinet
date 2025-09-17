@@ -139,6 +139,7 @@ func btcdMain(serverChan chan<- *server) error {
 
 	if cfg.Generate {
 
+		var localPubKey []byte
 		if cfg.EnableSTP {
 			// 只有核心节点，才需要启动stp服务
 			err = stp.LoadSTP(cfg.HomeDir)
@@ -161,21 +162,33 @@ func btcdMain(serverChan chan<- *server) error {
 				// 	return err
 				// }
 			}
-			pubkey, err := stp.GetPubKey()
+			localPubKey, err = stp.GetPubKey()
 			if err != nil {
 				btcdLog.Errorf("GetPubKey failed %v", err)
 				return err
 			}
+		}
 
-			// 提供stp服务，必然是core node，需要自主提供索引器， 其挖矿地址是核心通道地址
-			localPubkeyStr := hex.EncodeToString(pubkey)
+		if cfg.ServerPubKey == "" {
+			// 引导节点 or 核心节点
 			if cfg.MiningPubKey != "" {
-				if localPubkeyStr != cfg.MiningPubKey {
-					btcdLog.Errorf("mining pubkey must be consistent with wallet pubkey")
-					return fmt.Errorf("mining pubkey must be consistent with wallet pubkey")
+				if len(localPubKey) > 0 {
+					localPubkeyStr := hex.EncodeToString(localPubKey)
+					if localPubkeyStr != cfg.MiningPubKey {
+						btcdLog.Errorf("mining pubkey must be consistent with wallet pubkey")
+						return fmt.Errorf("mining pubkey must be consistent with wallet pubkey")
+					}
 				}
 			} else {
-				cfg.MiningPubKey = localPubkeyStr
+				if len(localPubKey) == 0 {
+					return fmt.Errorf("mining pubkey must be set")
+				}
+				cfg.MiningPubKey = hex.EncodeToString(localPubKey)
+			}
+
+			pubkey, err := hex.DecodeString(cfg.MiningPubKey)
+			if err != nil {
+				return err
 			}
 
 			var addr btcutil.Address
@@ -201,7 +214,7 @@ func btcdMain(serverChan chan<- *server) error {
 					btcdLog.Errorf("GetIndexerPubkey %s failed, %v", cfg.MiningPubKey, err)
 					return err
 				}
-				if indexerPubkey != bootstrapPubkey && indexerPubkey != localPubkeyStr {
+				if indexerPubkey != bootstrapPubkey && indexerPubkey != cfg.MiningPubKey {
 					btcdLog.Errorf("core node should use local indexer or bootstrap indexer")
 					return fmt.Errorf("core node should use local indexer or bootstrap indexer")
 				}
