@@ -138,34 +138,35 @@ func btcdMain(serverChan chan<- *server) error {
 	}()
 
 	if cfg.Generate {
-		err = stp.LoadSTP(cfg.HomeDir)
-		if err != nil {
-			btcdLog.Errorf("Unable to load STP: %v", err)
-			return err
-		}
-
-		// 只有在钱包解锁之后才能启动miner
-		if !stp.IsUnlocked() {
-			// 创建或者解锁钱包
-			err := walletInterAction(interrupt)
-			if err != nil {
-				btcdLog.Errorf("Unable to create/unlock wallet %v", err)
-				return err
-			}
-			// 等索引器同步后在启动stp模块
-			// err = stp.StartSTP()
-			// if err != nil {
-			// 	btcdLog.Errorf("Unable to start STP, %v", err)
-			// 	return err
-			// }
-		}
-		pubkey, err := stp.GetPubKey()
-		if err != nil {
-			btcdLog.Errorf("GetPubKey failed %v", err)
-			return err
-		}
 
 		if cfg.EnableSTP {
+			// 只有核心节点，才需要启动stp服务
+			err = stp.LoadSTP(cfg.HomeDir)
+			if err != nil {
+				btcdLog.Errorf("Unable to load STP: %v", err)
+				return err
+			}
+			// 只有在钱包解锁之后才能启动miner
+			if !stp.IsUnlocked() {
+				// 创建或者解锁钱包
+				err := walletInterAction(interrupt)
+				if err != nil {
+					btcdLog.Errorf("Unable to create/unlock wallet %v", err)
+					return err
+				}
+				// 等索引器同步后在启动stp模块
+				// err = stp.StartSTP()
+				// if err != nil {
+				// 	btcdLog.Errorf("Unable to start STP, %v", err)
+				// 	return err
+				// }
+			}
+			pubkey, err := stp.GetPubKey()
+			if err != nil {
+				btcdLog.Errorf("GetPubKey failed %v", err)
+				return err
+			}
+
 			// 提供stp服务，必然是core node，需要自主提供索引器， 其挖矿地址是核心通道地址
 			localPubkeyStr := hex.EncodeToString(pubkey)
 			if cfg.MiningPubKey != "" {
@@ -208,28 +209,30 @@ func btcdMain(serverChan chan<- *server) error {
 			btcdLog.Infof("mining address %s", addr)
 			cfg.miningAddrs = append(cfg.miningAddrs, addr)
 		} else {
-			// 普通挖矿节点，没有L1索引器，需要由提供接入的核心节点提供索引器服务，同时挖矿所得直接进入两者的通道地址
-			if cfg.MiningPubKey == "" {
-				btcdLog.Errorf("mining pubkey must be set when enable Generate")
-				return fmt.Errorf("mining pubkey must be set when enable Generate")
+			// 普通挖矿节点，需要配置接入节点（核心节点）的pubkey，如果没有配置，直接退出
+			if cfg.MiningPubKey == "" || cfg.ServerPubKey == "" {
+				btcdLog.Errorf("mining pubkey and server pubkey must be set when enable Generate")
+				return fmt.Errorf("mining pubkey and server pubkey must be set when enable Generate")
 			}
 			pubkeyA, err := hex.DecodeString(cfg.MiningPubKey)
 			if err != nil {
 				btcdLog.Errorf("DecodeString %s failed, %v", cfg.MiningPubKey, err)
 				return err
 			}
-			
-			// 这里可能索引器没有配置，最好是从配置文件（conf.yaml）中读取
+			pubkeyB, err := hex.DecodeString(cfg.ServerPubKey)
+			if err != nil {
+				btcdLog.Errorf("DecodeString %s failed, %v", cfg.ServerPubKey, err)
+				return err
+			}
+			// 和索引器的公钥比较
 			indexerPubkey, err := anchortx.GetIndexerPubkey(cfg.MiningPubKey)
 			if err != nil {
 				btcdLog.Errorf("GetIndexerPubkey %s failed, %v", cfg.MiningPubKey, err)
 				return err
 			}
-
-			pubkeyB, err := hex.DecodeString(indexerPubkey)
-			if err != nil {
-				btcdLog.Errorf("DecodeString %s failed, %v", indexerPubkey, err)
-				return err
+			if indexerPubkey != cfg.ServerPubKey {
+				btcdLog.Errorf("invalid server key %s", cfg.ServerPubKey)
+				return fmt.Errorf("invalid server key %s", cfg.ServerPubKey)
 			}
 			addr, err := getP2WSHAddress(pubkeyA, pubkeyB, activeNetParams.Params)
 			if err != nil {

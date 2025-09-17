@@ -134,7 +134,8 @@ type config struct {
 	DropTxIndex          bool          `long:"droptxindex" description:"Deletes the hash-based transaction index from the database on start up and then exits."`
 	ExternalIPs          []string      `long:"externalip" description:"Add an ip to the list of local addresses we claim to listen on to peers"`
 	Generate             bool          `long:"generate" description:"Generate (mine) bitcoins using the POS"`
-	MiningPubKey         string        `long:"miningpubkey" description:"The public key of miningaddr[0]"`
+	MiningPubKey         string        `long:"miningpubkey" description:"The public key of mining node"`
+	ServerPubKey         string        `long:"serverpubkey" description:"The public key of server node"`
 	TimerGenerate        bool          `long:"timergenerate" description:"Generate (mine) bitcoins using the POS with timer enabled"`
 	EnableSTP        	 bool          `long:"enableSTP" description:"Enable STP service"`
 	IndexerScheme        string        `long:"indexerscheme" description:"The scheme for indexer"`
