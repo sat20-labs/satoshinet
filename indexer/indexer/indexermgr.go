@@ -152,13 +152,13 @@ func (b *IndexerMgr) initRpcClient(dbPath string, cfg *RPCConfig) error {
 				common.Log.Panic("rpc client init failed")
 			} else {
 				if b.compiling.GetSyncHeight() < tip {
-					b.ConnectBlock(nil, tip+1, tip)
+					b.ConnectBlock(nil, tip, tip)
 				}
 			}
 		}()
 	} else {
 		if b.compiling.GetSyncHeight() < tip {
-			b.ConnectBlock(nil, tip+1, tip)
+			b.ConnectBlock(nil, tip, tip)
 		}
 	}
 
@@ -308,7 +308,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	common.Log.Infof("compiling height %d, block %d, tip %d", lastHeight, height, tip)
 	if lastHeight+1 < height && height > 1 {
 		// 节点区块数据已经同步，但是索引器重建，走这个流程
-		for i := lastHeight + 1; i < height; i++ {
+		for i := lastHeight + 1; i <= height; i++ {
 			err := p.compiling.SyncBlockWithHeight(i, tip, true)
 			if err != nil {
 				common.Log.Errorf("SyncBlockWithHeight %d failed, %v", i, err)

@@ -2723,12 +2723,10 @@ func (s *server) Start() {
 						height := indexerShare.ShareIndexer.GetSyncHeight()
 						srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d", 
 							height, tip, s.connManager.GetConnCount(), s.connManager.GetAcceptCount())
-						if height == tip && (s.connManager.GetConnCount() != 0 || 
-							s.connManager.GetAcceptCount() != 0) {
+						if height == tip {
 							done = time.After(12 * time.Second)
 						}
 					} else {
-						
 						// 先启动stp模块，可能需要自动质押并成为miner
 						if cfg.EnableSTP {
 							go func() {
