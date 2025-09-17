@@ -41,11 +41,13 @@ type BaseIndexer struct {
 	coreNodeMap        map[string]*common.CoreNodeInfo    // pubkey, 不清空
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 
-	seqMgr             *common.MiningSequenceMgr // 不需要复制到rpc实例
 
 	miningAddress    string
 	lastHeight       int // 内存数据同步区块
 	lastHash         string
+
+	// 不需要复制的数据
+	seqMgr             *common.MiningSequenceMgr // 不需要复制到rpc实例
 	prevBlockHashMap map[int]string // 记录过去6个区块hash，判断哪个区块分叉
 	////////////
 
@@ -195,6 +197,8 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 
 	newInst.lastHash = b.lastHash
 	newInst.lastHeight = b.lastHeight
+	newInst.miningAddress = b.miningAddress
+
 	newInst.stats = b.stats.Clone()
 	newInst.blockprocCB = b.blockprocCB
 	newInst.updateDBCB = b.updateDBCB

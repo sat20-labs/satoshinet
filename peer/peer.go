@@ -232,6 +232,8 @@ type Config struct {
 	// nil in  which case the host will be parsed as an IP address.
 	HostToNetAddress HostToNetAddrFunc
 
+	ValidatorId string // local mining pubkey
+
 	// Proxy indicates a proxy is being used for connections.  The only
 	// effect this has is to prevent leaking the tor proxy address, so it
 	// only needs to specified if using a tor proxy.
@@ -2245,7 +2247,7 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	// Advertise if inv messages for transactions are desired.
 	msg.DisableRelayTx = p.cfg.DisableRelayTx
 
-	msg.ValidatorId = p.validatorId
+	msg.ValidatorId = p.cfg.ValidatorId
 
 	return msg, nil
 }

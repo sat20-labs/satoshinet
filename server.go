@@ -242,6 +242,7 @@ type server struct {
 	db                   database.DB
 	timeSource           blockchain.MedianTimeSource
 	services             wire.ServiceFlag
+	miningPubKey         string
 
 	// The following fields are used for optional indexes.  They will be nil
 	// if the associated index is not enabled.  These fields are set during
@@ -2338,6 +2339,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 		},
 		NewestBlock:         sp.newestBlock,
 		HostToNetAddress:    sp.server.addrManager.HostToNetAddress,
+		ValidatorId:         sp.server.miningPubKey,
 		Proxy:               cfg.Proxy,
 		UserAgentName:       userAgentName,
 		UserAgentVersion:    userAgentVersion,
@@ -3069,6 +3071,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		db:                   db,
 		timeSource:           blockchain.NewMedianTime(),
 		services:             services,
+		miningPubKey:         cfg.MiningPubKey,
 		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize),
 		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
 		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
@@ -3240,8 +3243,6 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	// 	IsCurrent:              s.syncManager.IsCurrent,
 	// })
 
-	miningPubKey, _ := hex.DecodeString(cfg.MiningPubKey)
-
 	var miningAddr btcutil.Address
 	if len(cfg.miningAddrs) != 0 {
 		miningAddr = cfg.miningAddrs[0]
@@ -3257,7 +3258,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		ChainParams:            chainParams,
 		BlockTemplateGenerator: blockTemplateGenerator,
 		MiningAddr:             miningAddr,
-		MiningPubKey:           hex.EncodeToString(miningPubKey),
+		MiningPubKey:           cfg.MiningPubKey,
 		TimerGenerate:          cfg.TimerGenerate,
 		ProcessBlock:           s.syncManager.ProcessBlock,
 		GetPeerByValidatorId:   s.GetPeerByValidatorId,
