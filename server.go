@@ -757,9 +757,14 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 			reason = fmt.Sprintf("ProcessBlock failed, %v", err)
 			break
 		}
+		peerLog.Infof("block %s from %s is accepted", block.Hash().String(), sp.String())
 
 		code = 0
 		break
+	}
+
+	if code != 0 {
+		peerLog.Errorf("OnPing %s failed, reason %s", sp.String(), reason)
 	}
 
 	// 响应ping消息

@@ -18,7 +18,7 @@ const (
 	MinerInterval      int64 = 9  // 出块时间间隔12S，但留3S给出块节点与引导节点同步数据
 	PreWarningInterval int64 = 6   // 超时这么长时间还没出块
 
-	CheckingInterval   int64 = 2   // 检查出块顺序
+	CheckingInterval   int64 = 3   // 检查出块顺序
 
 	UnexceptionInterval int64 = 2 * MinerInterval //  超过2个Miner的时间， 就认为出块异常， bootstrap node 会重启Epoch, 目前直接出块以防出块卡死
 )
@@ -34,7 +34,7 @@ type ValidatorManager struct {
 	localValidatorId string
 	miningSeqMgr *common.MiningSequenceMgr
 	myself *common.MiningInfo
-
+	lastBlockTime int64
 	quit chan struct{}
 
 	generatorTicker *time.Ticker
@@ -150,8 +150,10 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	}
 
 	now := time.Now().Unix()
-	lastBlockTime := vm.cfg.PosMiner.GetBlockRecvTime()
-	if now - lastBlockTime < MinerInterval {
+	if vm.lastBlockTime == 0 {
+		vm.lastBlockTime = vm.cfg.PosMiner.GetBlockRecvTime()
+	}
+	if now - vm.lastBlockTime < MinerInterval {
 		// The miner time is not past, ignore
 		utils.Log.Debugf("[ValidatorManager] not in time")
 		return
@@ -164,7 +166,9 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 
 	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
 	if txSizeInMempool == 0 {
-		utils.Log.Debugf("[ValidatorManager] mempool is empty")
+		utils.Log.Debugf("[ValidatorManager] mempool is empty, current miner %s", vm.miningSeqMgr.GetCurrentMiningAddr())
+		// 重置等待时间
+		vm.lastBlockTime = now
 		return
 	}
 
@@ -184,7 +188,10 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	}
 	if err != nil {
 		utils.Log.Errorf("[ValidatorManager] generateNewBlock failed, %v", err)
+		return
 	}
+
+	vm.lastBlockTime = 0
 
 }
 
@@ -361,12 +368,13 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 		utils.Log.Errorf("[ValidatorManager] SubmitNewBlock %s failed, %v", block.BlockHash().String(), err)
 		return err
 	}
-	utils.Log.Infof("[ValidatorManager] SubmitNewBlock %s succeeded, height = %d", hash.String(), height)
-	
+
 	// 等待排序器移动当前挖矿地址，避免下次进来还能继续挖矿
 	for vm.miningSeqMgr.GetCurrentMiningAddr() != currentMiningAddr {
 		time.Sleep(100*time.Millisecond)
 	}
+	utils.Log.Infof("[ValidatorManager] SubmitNewBlock %s succeeded, height %d, next miner %s", 
+		hash.String(), height, vm.miningSeqMgr.GetCurrentMiningAddr())
 
 	return nil
 }
