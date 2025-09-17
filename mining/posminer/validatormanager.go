@@ -143,9 +143,6 @@ exit:
 
 func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	utils.Log.Debugf("[ValidatorManager]checkAndGenerateNewBlock...")
-	defer func() {
-		utils.Log.Debugf("[ValidatorManager]checkAndGenerateNewBlock finished.")
-	}()
 	
 	if !vm.cfg.IsCurrent() {
 		utils.Log.Infof("[ValidatorManager] not reach the tip of block yet")
