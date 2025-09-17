@@ -652,7 +652,7 @@ func (m *POSMiner) GetBlockRecvTime() int64 {
 func (m *POSMiner) GetMempoolTxSize() int32 {
 
 	if m.g == nil {
-		utils.Log.Tracef("[PosMiner] Invalid mempool generator.")
+		utils.Log.Errorf("[PosMiner] Invalid mempool generator.")
 		return 0
 	}
 	txSource := m.g.TxSource()

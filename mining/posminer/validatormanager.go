@@ -153,6 +153,15 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	if vm.lastBlockTime == 0 {
 		vm.lastBlockTime = vm.cfg.PosMiner.GetBlockRecvTime()
 	}
+
+	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
+	if txSizeInMempool == 0 {
+		utils.Log.Debugf("[ValidatorManager] mempool is empty, current miner %s", vm.miningSeqMgr.GetCurrentMiningAddr())
+		// 重置等待时间
+		vm.lastBlockTime = now
+		return
+	}
+	
 	if now - vm.lastBlockTime < MinerInterval {
 		// The miner time is not past, ignore
 		utils.Log.Debugf("[ValidatorManager] not in time")
@@ -161,14 +170,6 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 
 	if !vm.hasMultiMiner() {
 		utils.Log.Infof("need multi miner to generate block")
-		return
-	}
-
-	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
-	if txSizeInMempool == 0 {
-		utils.Log.Debugf("[ValidatorManager] mempool is empty, current miner %s", vm.miningSeqMgr.GetCurrentMiningAddr())
-		// 重置等待时间
-		vm.lastBlockTime = now
 		return
 	}
 
