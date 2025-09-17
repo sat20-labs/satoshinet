@@ -47,6 +47,7 @@ import (
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/sat20-labs/indexer/common"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 )
 
 const (
@@ -669,6 +670,8 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 		return
 	}
 	peerLog.Infof("OnPing from %s embeded with cmd %s", sp.String(), msg.SubCmd)
+
+
 	// 特殊的ping消息：
 	// 如果是outbound的peer发过来的消息，不需要再往上发送，因为peer就是上级
 	// 如果是inbound的peer发过来的消息，需要往上一级发送
@@ -678,30 +681,20 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 	var block *btcutil.Block
 	for true {
 		code = wire.RejectInvalid
+		if msg.SubCmd != wire.CmdBlock {
+			reason = "payload is not block"
+			break
+		}
+
 		miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
 		if miningSeqMgr == nil {
 			reason = "miningSeqMgr is nil"
 			break
 		}
 	
-		if msg.SubCmd != wire.CmdBlock {
-			reason = "payload is not block"
-			break
-		}
+		// 不一定是该validator挖的区块，但必然是矿工才转发
 		if miningSeqMgr.GetNodeType(validatorId) == common.NODE_TYPE_NORMAL {
 			reason = "not a miner"
-			break
-		}
-
-		err := miningSeqMgr.CheckCurrentMiningPubKey(validatorId)
-		if err != nil {
-			reason = fmt.Sprintf("not its turn to mine a block, %s", validatorId)
-			break
-		}
-
-		node := miningSeqMgr.GetMiningInfo(validatorId)
-		if node == nil {
-			reason = fmt.Sprintf("GetMiningInfo %s failed", validatorId)
 			break
 		}
 
@@ -713,6 +706,18 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 			break
 		}
 		block = btcutil.NewBlock(&msgBlock)
+		miningAddr := sindexer.GetMiningAddress(&msgBlock, sp.server.chainParams)
+		err := miningSeqMgr.CheckCurrentMiningAddr(miningAddr)
+		if err != nil {
+			reason = fmt.Sprintf("not its turn to mine a block, %s", miningAddr)
+			break
+		}
+		miningNode := miningSeqMgr.GetMiningInfoWithAddr(miningAddr)
+		if miningNode == nil {
+			reason = fmt.Sprintf("GetMiningInfoWithAddr %s failed", miningAddr)
+			break
+		}
+
 		// Ensure the block is building from the expected previous block.
 		expectedPrevHash := sp.server.chain.BestSnapshot().Hash
 		prevHash := &block.MsgBlock().Header.PrevBlock
@@ -731,22 +736,24 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 
 		if sp.Peer.Inbound() {
 			// 本地检查通过，如果还有上级节点，需要继续发给上级节点，让上级节点进一步检查 （最多2级）
-			if node.Father != nil {
-				father := sp.server.GetPeerByValidatorId(node.Father.PubKey)
-				if father == nil {
-					reason = fmt.Sprintf("can't find father peer %s", node.Father.PubKey)
+			// 本地大概率就是miningNode.Father，所以这里需要再往上传
+			if miningNode.Father != nil && miningNode.Father.Father != nil {
+				pubkey := miningNode.Father.Father.PubKey
+				bootstrap := sp.server.GetPeerByValidatorId(pubkey)
+				if bootstrap == nil {
+					reason = fmt.Sprintf("can't find bootstrap peer %s", pubkey)
 					break
 				}
-				err := father.SendPingAndWait(2 * time.Second, wire.CmdBlock, msg.Payload)
+				err := bootstrap.SendPingAndWait(2 * time.Second, wire.CmdBlock, msg.Payload)
 				if err != nil {
-					reason = fmt.Sprintf("SendPingAndWait %s failed, %v", father.String(), err)
+					reason = fmt.Sprintf("SendPingAndWait %s failed, %v", bootstrap.String(), err)
 					break
 				}
 			}
 		}
 
 		// 让next优先得到该block
-		next := sp.server.GetPeerByValidatorId(node.Next.PubKey)
+		next := sp.server.GetPeerByValidatorId(miningNode.Next.PubKey)
 		if next != nil && next.Connected() {
 			next.SendPing(wire.CmdBlock, msg.Payload)
 		}
@@ -2188,7 +2195,9 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
 			for k, v := range state.minerPeers {
 				if (miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_CORE || 
-				miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_BOOTSTRAP) && v.Peer.Connected() {
+				miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_BOOTSTRAP) && 
+				v.Connected() &&
+				s.miningPubKey != v.ValidatorId() {
 					result = v.Peer
 					break
 				}

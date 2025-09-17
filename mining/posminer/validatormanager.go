@@ -215,22 +215,30 @@ func (vm *ValidatorManager) generateNewBlock_bootstrap() error {
 	
 	miningNode := vm.miningSeqMgr.GetCurrentMiningInfo()
 	minerPeer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
-	var corePeer *peerpkg.Peer
+	var fatherPeer *peerpkg.Peer
 	if miningNode.NodeType == indexer.NODE_TYPE_MINER {
-		corePeer = vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.Father.PubKey)
-	}
-	if (minerPeer == nil || now - minerPeer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds)) &&
-	(corePeer == nil || now - corePeer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds) ) {
-		// 直接出块
-		return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
+		fatherPeer = vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.Father.PubKey)
 	}
 
-	if past < 2*MinerInterval + PreWarningInterval {
-		// 已经到了core代替出块的时间
-		if corePeer == nil || now - corePeer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds) {
+	if miningNode.NodeType == indexer.NODE_TYPE_MINER {
+		if (minerPeer == nil || now - minerPeer.LastPingTime().Unix() > 4*int64(peerpkg.MinerPingSeconds)) {
+			// 该节点没连接，要等core node代替出块
+			if fatherPeer == nil || now - fatherPeer.LastPingTime().Unix() > 4*int64(peerpkg.MinerPingSeconds) {
+				// 该组的corenode不存在，或者已经很久没有连接过来，直接出块
+				return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
+			}
+		}
+	} else {
+		// core node
+		if minerPeer == nil || now - minerPeer.LastPingTime().Unix() > 4*int64(peerpkg.MinerPingSeconds) {
+			// corenode不存在，或者已经很久没有连接过来，直接出块
 			return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
 		}
-		return fmt.Errorf("wait core node %s to mine block", corePeer.String())
+	}
+	
+	// 等待miner或者其father出块
+	if past < 2*MinerInterval + PreWarningInterval {
+		return fmt.Errorf("wait miner node %s to mine block", miningNode.PubKey)
 	}
 
 	// 已经超时，或者不在线，bootstrap节点代替出块
@@ -244,13 +252,12 @@ func (vm *ValidatorManager) generateNewBlock_core() error {
 	now := time.Now().Unix()
 	past := now - vm.lastBlockTime
 
-	
 	miningNode := vm.miningSeqMgr.GetCurrentMiningInfo()
 	peer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
-	if peer != nil && now - peer.LastPingTime().Unix() < 4*int64(peerpkg.MinerPingSeconds) {
-		if past > MinerInterval && past < MinerInterval + PreWarningInterval {
+	if peer != nil && peer.Connected() {
+		if past < MinerInterval + PreWarningInterval {
 			// 再等等
-			return fmt.Errorf("wait miner node %s to mine block", peer.String())
+			return fmt.Errorf("wait miner node %s to mine block", miningNode.PubKey)
 		}
 	}
 
@@ -269,20 +276,19 @@ func (vm *ValidatorManager) hasMultiMiner() bool {
 }
 
 func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.MiningInfo) error {
-	// 先ping一下父节点和下一个节点，让对方知道我在线
 	var father, next *peerpkg.Peer
 	if miningNode.Father != nil {
 		father = vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.Father.PubKey)
 		if father == nil {
 			return fmt.Errorf("can't find father peer %s", miningNode.Father.PubKey)
 		}
-		father.SendPing("", nil)
+		//father.SendPing("", nil)
 	}
 	if nextNode != nil {
 		next = vm.cfg.PosMiner.GetPeerByValidatorId(nextNode.PubKey)
-		if next != nil {
-			next.SendPing("", nil)
-		}
+		//if next != nil {
+			//next.SendPing("", nil)
+		//}
 	}
 
 	// 仅仅是记录排序器的实际挖矿地址，不是输入的miningNode
@@ -335,7 +341,7 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 	case indexer.NODE_TYPE_MINER:
 		if father != nil && father.Connected() {
 			// 向fatherPeer发起ping请求，如果得到响应，就广播出块，否则就继续等
-			err = father.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
+			err = father.SendPingAndWait(4 * time.Second, wire.CmdBlock, buf.Bytes())
 			if err != nil {
 				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", father.String(), err) 
 				return err
@@ -347,7 +353,7 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 				utils.Log.Errorf("no other core node connected")
 				return fmt.Errorf("no other core node connected")
 			}
-			err = core.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
+			err = core.SendPingAndWait(4 * time.Second, wire.CmdBlock, buf.Bytes())
 			if err != nil {
 				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", core.String(), err) 
 				return err

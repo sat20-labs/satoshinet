@@ -48,6 +48,6 @@ func (b *BaseIndexer) GetSequenceMgr() *common.MiningSequenceMgr {
 }
 
 func (b *BaseIndexer) CheckBlockMiningInfo(block *btcutil.Block) error {
-	miningAddr := getMiningAddressV2(block.MsgBlock(), b.chaincfgParam)
+	miningAddr := common.GetMiningAddress(block.MsgBlock(), b.chaincfgParam)
 	return b.seqMgr.CheckCurrentMiningAddr(miningAddr)
 }

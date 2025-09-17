@@ -140,3 +140,23 @@ func GetDefaultChannelAddress(chainParams *chaincfg.Params) (string, error) {
 	corenodepubkey, _ := hex.DecodeString(indexer.GetCoreNodePubKey())
 	return GetChannelAddress(bootstrappubkey, corenodepubkey, chainParams)
 }
+
+func GetMiningAddress(block *wire.MsgBlock, chaincfgParam *chaincfg.Params) string {
+	if block == nil || len(block.Transactions) == 0 {
+		return ""
+	}
+
+	coinbaseTx := block.Transactions[0]
+	// 聪网的coinbase输出只有一个有效地址
+	for _, txOut := range coinbaseTx.TxOut {
+		if IsOpReturn(txOut.PkScript) {
+			continue
+		}
+		_, addrs, _, err := txscript.ExtractPkScriptAddrs(txOut.PkScript, chaincfgParam)
+		if err != nil || len(addrs) == 0 {
+			continue
+		}
+		return addrs[0].EncodeAddress()
+	}
+	return ""
+}
