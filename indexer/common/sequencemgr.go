@@ -375,7 +375,9 @@ func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
 
 	if b.currHeight <= int(b.chainParam.Checkpoints[0].Height) {
 		node := b.addressMap[addr]
-		b.currMiningNode = node.Next
+		if node != nil {
+			b.currMiningNode = node.Next
+		}
 	} else {
 		// addr 有可能是替补地址，所以只移动指针
 		b.currMiningNode = b.currMiningNode.Next
