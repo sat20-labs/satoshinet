@@ -692,7 +692,7 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 			break
 		}
 	
-		// 不一定是该validator挖的区块，但必然是矿工才转发
+		// 不一定是该validator挖的区块，但必然是矿工才转发，否则拒绝
 		if miningSeqMgr.GetNodeType(validatorId) == common.NODE_TYPE_NORMAL {
 			reason = "not a miner"
 			break
@@ -739,15 +739,18 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 			// 本地大概率就是miningNode.Father，所以这里需要再往上传
 			if miningNode.Father != nil && miningNode.Father.Father != nil {
 				pubkey := miningNode.Father.Father.PubKey
-				bootstrap := sp.server.GetPeerByValidatorId(pubkey)
-				if bootstrap == nil {
-					reason = fmt.Sprintf("can't find bootstrap peer %s", pubkey)
-					break
-				}
-				err := bootstrap.SendPingAndWait(2 * time.Second, wire.CmdBlock, msg.Payload)
-				if err != nil {
-					reason = fmt.Sprintf("SendPingAndWait %s failed, %v", bootstrap.String(), err)
-					break
+				// 本地节点如果是bootstrap，就不检查了
+				if sp.server.miningPubKey != pubkey {
+					bootstrap := sp.server.GetPeerByValidatorId(pubkey)
+					if bootstrap == nil {
+						reason = fmt.Sprintf("can't find bootstrap peer %s", pubkey)
+						break
+					}
+					err := bootstrap.SendPingAndWait(2 * time.Second, wire.CmdBlock, msg.Payload)
+					if err != nil {
+						reason = fmt.Sprintf("SendPingAndWait %s failed, %v", bootstrap.String(), err)
+						break
+					}
 				}
 			}
 		}
