@@ -389,6 +389,13 @@ func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
 	return nil
 }
 
+// 测试接口，不要调用
+func (b *MiningSequenceMgr) SetCurrentMiningAddr(addr string) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	b.currMiningNode = b.addressMap[addr]
+}
+
 // 当前挖矿节点
 func (b *MiningSequenceMgr) GetCurrentMiningInfo() *MiningInfo {
 	b.mutex.RLock()

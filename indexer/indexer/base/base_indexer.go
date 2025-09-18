@@ -42,7 +42,7 @@ type BaseIndexer struct {
 	coreNodeMapUpdated bool
 	channelMap         map[string]*common.ChannelInfo // address, 
 
-	miningAddress    string
+	miningAddress    string // 排序器的挖矿地址，可能不是当前区块的地址
 	lastHeight       int // 内存数据同步区块
 	lastHash         string
 
@@ -631,7 +631,7 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 
 	// Update the sync stats
 	b.stats.ChainTip = tip
-	b.miningAddress = getMiningAddress(block)
+	b.miningAddress = b.seqMgr.GetCurrentMiningAddr() //getMiningAddress(block)
 	b.seqMgr.MoveMiningAddr(block.Height, b.miningAddress)
 	b.lastHeight = block.Height
 	b.lastHash = block.Hash
