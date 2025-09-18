@@ -2758,7 +2758,11 @@ func (s *server) Start() {
 						for i := 0; i < 10; i++ {
 							if anchortx.IsMinerNode(pubkey) {
 								srvrLog.Infof("Start pos miner.")
-								s.posMiner.Start()
+								err := s.posMiner.Start()
+								if err != nil {
+									btcdLog.Errorf("Start miner failed, exit")
+									os.Exit(-1)
+								}
 								break out
 							}
 							time.Sleep(time.Second)
@@ -3275,6 +3279,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		BlockTemplateGenerator: blockTemplateGenerator,
 		MiningAddr:             miningAddr,
 		MiningPubKey:           cfg.MiningPubKey,
+		ServerPubKey:           cfg.ServerPubKey,
 		TimerGenerate:          cfg.TimerGenerate,
 		ProcessBlock:           s.syncManager.ProcessBlock,
 		GetPeerByValidatorId:   s.GetPeerByValidatorId,

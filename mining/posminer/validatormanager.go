@@ -32,6 +32,7 @@ type ValidatorManager struct {
 	// ValidatorId uint64
 	cfg *ValidatorManagerConfig
 	localValidatorId string
+	serverValidatorId string
 	miningSeqMgr *common.MiningSequenceMgr
 	myself *common.MiningInfo
 	lastBlockTime int64
@@ -46,6 +47,7 @@ func NewValidatorManager(cfg *ValidatorManagerConfig) *ValidatorManager {
 	validatorMgr := &ValidatorManager{
 		cfg: cfg,
 		localValidatorId: cfg.MiningPubKey,
+		serverValidatorId: cfg.ServerPubKey,
 		quit: make(chan struct{}),
 	}
 
@@ -58,6 +60,20 @@ func NewValidatorManager(cfg *ValidatorManagerConfig) *ValidatorManager {
 	if validatorMgr.myself == nil {
 		utils.Log.Errorf("GetMiningInfo %s failed", validatorMgr.localValidatorId)
 		return nil
+	}
+
+	
+	if validatorMgr.serverValidatorId == "" {
+		if validatorMgr.myself.NodeType != indexer.NODE_TYPE_BOOTSTRAP {
+			validatorMgr.serverValidatorId = indexer.GetBootstrapPubKey()
+		}
+	}
+	if validatorMgr.myself.NodeType != indexer.NODE_TYPE_BOOTSTRAP {
+		// check server node is the same
+		if validatorMgr.myself.Father.PubKey != validatorMgr.serverValidatorId {
+			utils.Log.Errorf("the server pubkey %s is not the same as %s", validatorMgr.serverValidatorId, validatorMgr.myself.Father.PubKey)
+			return nil
+		}
 	}
 
 	return validatorMgr

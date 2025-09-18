@@ -71,6 +71,7 @@ type Config struct {
 	// MiningAddrs is the payment addresses to use for the generated blocks.
 	MiningAddr   btcutil.Address
 	MiningPubKey string
+	ServerPubKey string
 
 	TimerGenerate bool
 
@@ -267,14 +268,14 @@ func (m *POSMiner) solveBlock(msgBlock *wire.MsgBlock, blockHeight int32) bool {
 // already been started will have no effect.
 //
 // This function is safe for concurrent access.
-func (m *POSMiner) Start() {
+func (m *POSMiner) Start() error {
 	m.Lock()
 	defer m.Unlock()
 
 	// Nothing to do if the miner is already running or if running in
 	// discrete mode (using GenerateNBlocks).
 	if m.started || m.discreteMining {
-		return
+		return nil
 	}
 
 	m.quit = make(chan struct{})
@@ -291,13 +292,16 @@ func (m *POSMiner) Start() {
 	// Start ValidatorManager
 	m.validatorMgr = NewValidatorManager(cfg)
 	if m.validatorMgr == nil {
-		utils.Log.Panic("NewValidatorManager failed")
+		utils.Log.Errorf("NewValidatorManager failed")
+		return fmt.Errorf("NewValidatorManager failed")
 	}
 	
 	m.validatorMgr.Start()
 
 	m.started = true
 	utils.Log.Infof("POS miner started")
+
+	return nil
 }
 
 // Stop gracefully stops the mining process by signalling all workers, and the

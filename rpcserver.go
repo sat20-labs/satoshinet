@@ -3681,6 +3681,7 @@ func handleSetGenerate(s *rpcServer, cmd interface{}, closeChan <-chan struct{})
 		generate = false
 	}
 
+	var err error
 	if !generate {
 		s.cfg.PosMiner.Stop()
 	} else {
@@ -3696,9 +3697,9 @@ func handleSetGenerate(s *rpcServer, cmd interface{}, closeChan <-chan struct{})
 
 		// It's safe to call start even if it's already started.
 		s.cfg.PosMiner.SetNumWorkers(int32(genProcLimit))
-		s.cfg.PosMiner.Start()
+		err = s.cfg.PosMiner.Start()
 	}
-	return nil, nil
+	return nil, err
 }
 
 // Text used to signify that a signed message follows and to prevent
