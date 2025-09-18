@@ -1013,7 +1013,7 @@ var MainNetParams = Params{
 var TestNetParams = Params{
 	Name:        "testnet",
 	Net:         wire.TestNet,
-	DefaultPort: "29526",
+	DefaultPort: "19526",
 	DNSSeeds:    []DNSSeed{
 		// {"seed.sat20.org", true},
 		// {"seed.ordx.market", true},
@@ -1038,7 +1038,7 @@ var TestNetParams = Params{
 
 	// Checkpoints ordered from oldest to newest.
 	Checkpoints: []Checkpoint{
-		{2134, newHashFromStr("a620cc40cc8056eab5e8ba3bc9ec213b81eb615881278ef8eaa575a2082afdf7")},
+		{2141, newHashFromStr("439d084471ea057eaf76eb407020d00f850342ea0c68163ae1e55681888a4caf")},
 	},
 
 	// Consensus rule change deployments.
