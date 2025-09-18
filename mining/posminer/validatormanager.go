@@ -371,8 +371,10 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 	}
 
 	// 等待排序器移动当前挖矿地址，避免下次进来还能继续挖矿
-	for vm.miningSeqMgr.GetCurrentMiningAddr() == currentMiningAddr {
+	i := 0
+	for vm.miningSeqMgr.GetCurrentMiningAddr() == currentMiningAddr && i < 20 {
 		time.Sleep(100*time.Millisecond)
+		i++
 	}
 	utils.Log.Infof("[ValidatorManager] SubmitNewBlock %s succeeded, height %d, next miner %s", 
 		hash.String(), height, vm.miningSeqMgr.GetCurrentMiningAddr())

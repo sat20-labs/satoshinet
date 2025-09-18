@@ -926,9 +926,9 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 	rpcsLog.Debugf("OnGetBlocks")
 
 	rpcsLog.Debugf("Message get blocks: %d", len(msg.BlockLocatorHashes))
-	for i := range msg.BlockLocatorHashes {
-		rpcsLog.Debugf("%s", msg.BlockLocatorHashes[i].String())
-	}
+	// for i := range msg.BlockLocatorHashes {
+	// 	rpcsLog.Debugf("%s", msg.BlockLocatorHashes[i].String())
+	// }
 
 	chain := sp.server.chain
 	hashList := chain.LocateBlocks(msg.BlockLocatorHashes, &msg.HashStop,
