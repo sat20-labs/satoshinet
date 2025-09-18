@@ -103,18 +103,22 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 
 	b.rebuildSequence()
 
-	if height >= 0 {
-		// 老版本还没升级时miningAddr==“”
-		node, ok := b.addressMap[miningAddr]
-		if !ok {
-			b.currMiningNode = b.sequence[0]
-		} else {
-			b.currMiningNode = node.Next
-		}
-		b.currHeight = height+1
-	} else {
+	if height <= int(b.chainParam.Checkpoints[0].Height) {
 		b.currMiningNode = b.sequence[0]
-		b.currHeight = 1
+		b.currHeight = height
+	} else {
+		if miningAddr != "" {
+			node, ok := b.addressMap[miningAddr]
+			if !ok {
+				return fmt.Errorf("can't find miner info %s", miningAddr)
+			} else {
+				b.currMiningNode = node.Next
+			}
+			b.currHeight = height+1
+		} else {
+			// 重新建索引数据库
+			return fmt.Errorf("mining address is nil, please rebuild indexer database")
+		}
 	}
 
 	return nil
@@ -376,10 +380,7 @@ func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
 	defer b.mutex.Unlock()
 
 	if b.currHeight <= int(b.chainParam.Checkpoints[0].Height) {
-		node := b.addressMap[addr]
-		if node != nil {
-			b.currMiningNode = node.Next
-		}
+		//b.currMiningNode = b.sequence[0]
 	} else {
 		// addr 有可能是替补地址，所以只移动指针
 		b.currMiningNode = b.currMiningNode.Next
