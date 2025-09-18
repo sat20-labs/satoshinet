@@ -1766,8 +1766,7 @@ func (b *BlockChain) locateInventory(locator BlockLocator, hashStop *chainhash.H
 		total = maxEntries
 	}
 
-	log.Debugf("Will sync block from : %s, Height: %d", startNode.hash.String(), startNode.height)
-	log.Debugf("Will sync block counr: %d", total)
+	log.Debugf("Will sync block from : %s, Height: %d, total: %d", startNode.hash.String(), startNode.height, total)
 
 	return startNode, total
 }
