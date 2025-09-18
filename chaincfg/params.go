@@ -1038,7 +1038,7 @@ var TestNetParams = Params{
 
 	// Checkpoints ordered from oldest to newest.
 	Checkpoints: []Checkpoint{
-		{2227, newHashFromStr("82343722e05f9f882cee25b85a43f63158d2f7e7c6682835678dca451fec20bc")},
+		{2230, newHashFromStr("55a1cc5d88923c44524fce0e038d2c9611d3a964eca995306d88ef62dbcf7789")},
 	},
 
 	// Consensus rule change deployments.
