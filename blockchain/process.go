@@ -135,6 +135,9 @@ func (b *BlockChain) processOrphans(hash *chainhash.Hash, flags BehaviorFlags) e
 // prevOrphans  map[chainhash.Hash][]*orphanBlock
 
 func (b *BlockChain) showCurrentOrphans() {
+	if len(b.orphans) == 0 && len(b.prevOrphans) == 0 {
+		return
+	}
 	log.Debugf("Current orphans:")
 	log.Debugf("orphans List:")
 	for hash, block := range b.orphans {

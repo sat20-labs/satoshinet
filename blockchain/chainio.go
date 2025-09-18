@@ -1274,7 +1274,7 @@ func (b *BlockChain) initChainState() error {
 			node.status = status
 			b.index.addNode(node)
 
-			b.logBlockNode(node)
+			//b.logBlockNode(node)
 
 			lastNode = node
 			i++

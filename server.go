@@ -986,9 +986,9 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 	headers := chain.LocateHeaders(msg.BlockLocatorHashes, &msg.HashStop)
 
 	rpcsLog.Debugf("Will get blocksHeader: %d", len(headers))
-	for _, header := range headers {
-		rpcsLog.Debugf("%s", header.BlockHash().String())
-	}
+	// for _, header := range headers {
+	// 	rpcsLog.Debugf("%s", header.BlockHash().String())
+	// }
 	// Send found headers to the requesting peer.
 	blockHeaders := make([]*wire.BlockHeader, len(headers))
 	for i := range headers {

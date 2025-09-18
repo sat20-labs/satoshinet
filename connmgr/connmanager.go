@@ -226,7 +226,7 @@ func (cm *ConnManager) handleFailedConn(c *ConnReq, triggerReconnect bool) {
 	} else if cm.cfg.GetNewAddress != nil {
 		cm.failedAttempts++
 		if cm.failedAttempts >= maxFailedAttempts {
-			log.Debugf("Max failed connection attempts reached: [%d] "+
+			log.Tracef("Max failed connection attempts reached: [%d] "+
 				"-- retrying connection in: %v", maxFailedAttempts,
 				cm.cfg.RetryDuration)
 			theId := c.id
@@ -270,7 +270,7 @@ out:
 				connReq := msg.c
 				connReq.updateState(ConnPending)
 				pending[msg.c.id] = connReq
-				log.Debugf("registerPending: Pending connReq  %v with id %d", connReq.Addr, msg.c.id)
+				log.Tracef("registerPending: Pending connReq  %v with id %d", connReq.Addr, msg.c.id)
 				close(msg.done)
 
 			case handleConnected:
@@ -281,15 +281,14 @@ out:
 					if msg.conn != nil {
 						msg.conn.Close()
 					}
-					log.Debugf("Ignoring connection for "+
-						"canceled connreq=%v", connReq)
+					log.Tracef("Ignoring connection for canceled connreq=%v", connReq)
 					continue
 				}
 
 				connReq.updateState(ConnEstablished)
 				connReq.conn = msg.conn
 				conns[connReq.id] = connReq
-				log.Debugf("Connected to %v with id %d (%s)", connReq.Addr, connReq.id, connReq.conn.LocalAddr().String())
+				log.Infof("Connected to %v with id %d (%s)", connReq.Addr, connReq.id, connReq.conn.LocalAddr().String())
 				connReq.retryCount = 0
 				cm.failedAttempts = 0
 
@@ -300,7 +299,7 @@ out:
 				}
 
 			case handleDisconnected:
-				log.Debugf("Disconnected conn with id %d", msg.id)
+				//log.Debugf("Disconnected conn with id %d", msg.id)
 				connReq, ok := conns[msg.id]
 				if !ok {
 					connReq, ok = pending[msg.id]
@@ -315,7 +314,7 @@ out:
 					// ignore a later, successful
 					// connection.
 					connReq.updateState(ConnCanceled)
-					log.Debugf("Canceling: %v with id %d, removed it from pending list", connReq, msg.id)
+					log.Tracef("Canceling: %v with id %d, removed it from pending list", connReq, msg.id)
 					delete(pending, msg.id)
 					continue
 
@@ -324,7 +323,7 @@ out:
 				// An existing connection was located, mark as
 				// disconnected and execute disconnection
 				// callback.
-				log.Debugf("Disconnected [%d] %s <-> %s", connReq.id, connReq.conn.LocalAddr().String(), connReq.Addr.String())
+				log.Infof("Disconnected [%d] %s <-> %s", connReq.id, connReq.conn.LocalAddr().String(), connReq.Addr.String())
 				delete(conns, msg.id)
 				connCount := atomic.LoadUint64(&cm.connCount)
 				if connCount > 1 {
@@ -358,7 +357,7 @@ out:
 					connReq.Permanent {
 
 					connReq.updateState(ConnPending)
-					log.Debugf("Reconnecting to %v",
+					log.Infof("Reconnecting to %v",
 						connReq)
 					pending[msg.id] = connReq
 					cm.handleFailedConn(connReq, msg.triggerReconnect)
@@ -368,14 +367,15 @@ out:
 				connReq := msg.c
 
 				if _, ok := pending[connReq.id]; !ok {
-					log.Debugf("Ignoring connection for "+
-						"canceled conn req: %v", connReq)
+					log.Debugf("Ignoring connection for canceled conn req: %v", connReq)
 					continue
 				}
 
 				connReq.updateState(ConnFailing)
-				log.Debugf("Failed to connect to %v: %v",
-					connReq, msg.err)
+				if msg.err.Error() != "no valid connect address" {
+					log.Errorf("Failed to connect to %v: %v",
+						connReq, msg.err)
+				}
 				cm.handleFailedConn(connReq, false)
 			}
 
@@ -527,7 +527,7 @@ func (cm *ConnManager) Connect(c *ConnReq) {
 		}
 	}
 
-	log.Debugf("Attempting to connect to %v", c)
+	log.Infof("Attempting to connect to %v", c)
 
 	conn, err := cm.cfg.Dial(c.Addr)
 	if err != nil {
@@ -543,7 +543,7 @@ func (cm *ConnManager) Connect(c *ConnReq) {
 	case <-cm.quit:
 	}
 
-	log.Debugf("[ConnManager]Connect success with addr: [%d]%s.", c.id, c.Addr.String())
+	log.Infof("[ConnManager]Connect success with addr: [%d]%s.", c.id, c.Addr.String())
 }
 
 func (cm *ConnManager) GetConnCount() uint64 {
@@ -620,7 +620,7 @@ func (cm *ConnManager) Start() {
 		return
 	}
 
-	log.Trace("Connection manager started")
+	log.Infof("Connection manager started")
 	cm.wg.Add(1)
 	go cm.connHandler()
 
@@ -659,7 +659,7 @@ func (cm *ConnManager) Stop() {
 	}
 
 	close(cm.quit)
-	log.Trace("Connection manager stopped")
+	log.Info("Connection manager stopped")
 }
 
 // New returns a new connection manager.
