@@ -161,9 +161,7 @@ func (m *POSMiner) submitBlock(block *btcutil.Block) bool {
 	}
 
 	// The block was accepted.
-	coinbaseTx := block.MsgBlock().Transactions[0].TxOut[0]
-	utils.Log.Infof("Block submitted via POS miner accepted (hash %s, "+
-		"amount %v)", block.Hash(), btcutil.Amount(coinbaseTx.Value))
+	utils.Log.Infof("Block submitted via POS miner accepted (hash %s)", block.Hash())
 	return true
 }
 

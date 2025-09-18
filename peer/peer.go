@@ -1113,7 +1113,7 @@ func (p *Peer) SendPingAndWait(timeout time.Duration, cmd string, payload []byte
 
 	duration, rejectCode, reason, err := p.waitForPong(timeout, cmd, payload)
 	if err != nil {
-		log.Errorf("Peer %s did not respond in time: %v\n", p.String(), err)
+		log.Errorf("Peer %s did not respond in time: %v", p.String(), err)
     	return err
 	} 
 
@@ -1122,7 +1122,7 @@ func (p *Peer) SendPingAndWait(timeout time.Duration, cmd string, payload []byte
 		return fmt.Errorf("peer reject block, %d %s", rejectCode, reason)
 	}
 
-    log.Debugf("Peer %v responded in %v\n", p.String(), duration)
+    log.Debugf("Peer %v responded in %v", p.String(), duration)
 	return nil
 }
 
