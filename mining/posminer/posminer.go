@@ -299,7 +299,7 @@ func (m *POSMiner) Start() error {
 	m.validatorMgr.Start()
 
 	m.started = true
-	utils.Log.Infof("POS miner started, mining address: %s", cfg.MiningAddr.EncodeAddress())
+	utils.Log.Infof("POS miner started, local mining address: %s", cfg.MiningAddr.EncodeAddress())
 
 	return nil
 }

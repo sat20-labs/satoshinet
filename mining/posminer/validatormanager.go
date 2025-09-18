@@ -81,6 +81,10 @@ func NewValidatorManager(cfg *ValidatorManagerConfig) *ValidatorManager {
 
 func (vm *ValidatorManager) Start() {
 	utils.Log.Tracef("StartValidatorManager")
+
+	// 测试用，set mining address 
+	//vm.miningSeqMgr.SetCurrentMiningAddr("tb1qqs42pk590l0qvz7jwa2xfeg0krcxjdg5fax2r0aavzd3u8yhfqksfe8rhm")
+	
 	
 	go vm.generatorTimer()
 	go vm.pingTimer()
