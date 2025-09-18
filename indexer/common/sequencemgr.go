@@ -105,7 +105,7 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 
 	if height <= int(b.chainParam.Checkpoints[0].Height) {
 		b.currMiningNode = b.sequence[0]
-		b.currHeight = height
+		b.currHeight = height+1
 	} else {
 		if miningAddr != "" {
 			node, ok := b.addressMap[miningAddr]
