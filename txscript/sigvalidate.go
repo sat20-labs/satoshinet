@@ -376,11 +376,11 @@ func (t *taprootSigVerifier) Verify() verifyResult {
 		opts = append(opts, WithAnnex(t.annex))
 	}
 
-	logOut("****************************************************************")
-	logOut("taprootSigVerifier Verify")
-	logOut("sigHashes = %v", t.hashCache)
-	logOut("hashType = %v", t.hashType)
-	logOut("idx = %v", t.inputIndex)
+	// logOut("****************************************************************")
+	// logOut("taprootSigVerifier Verify")
+	// logOut("sigHashes = %v", t.hashCache)
+	// logOut("hashType = %v", t.hashType)
+	// logOut("idx = %v", t.inputIndex)
 
 	// Before we attempt to verify the signature, we'll need to first
 	// compute the sighash based on the input and tx information.
@@ -393,8 +393,8 @@ func (t *taprootSigVerifier) Verify() verifyResult {
 		return verifyResult{}
 	}
 
-	log.Debugf("Taproot Verify sighash: %x", sigHash)
-	logOut("****************************************************************")
+	//log.Debugf("Taproot Verify sighash: %x", sigHash)
+	//logOut("****************************************************************")
 
 	return verifyResult{
 		sigValid: t.verifySig(sigHash),

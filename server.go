@@ -2043,6 +2043,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 	state.forAllPeers(func(sp *serverPeer) {
 		peerLog.Debugf("Relay inventory msg %v to %s", msg, sp.String())
 		if !sp.Connected() {
+			peerLog.Warningf("peer %s not connected", sp.String())
 			return
 		}
 
@@ -2070,6 +2071,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			// Don't relay the transaction to the peer when it has
 			// transaction relaying disabled.
 			if sp.relayTxDisabled() {
+				peerLog.Warningf("peer %s not relayTx Disabled", sp.String())
 				return
 			}
 
@@ -2085,6 +2087,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			// is less than the peer's feefilter.
 			feeFilter := atomic.LoadInt64(&sp.feeFilter)
 			if feeFilter > 0 && txD.FeePerKB < feeFilter {
+				peerLog.Warningf("peer %s has feeFilter %d", sp.String(), feeFilter)
 				return
 			}
 
@@ -2092,6 +2095,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			// filter loaded and the transaction doesn't match it.
 			if sp.filter.IsLoaded() {
 				if !sp.filter.MatchTxAndUpdate(txD.Tx) {
+					peerLog.Warningf("peer %s has bloom filter and tx %s not matched", sp.String(), txD.Tx.MsgTx().TxID())
 					return
 				}
 			}
