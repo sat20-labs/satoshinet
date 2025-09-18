@@ -104,11 +104,13 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 	b.rebuildSequence()
 
 	if height >= 0 {
+		// 老版本还没升级时miningAddr==“”
 		node, ok := b.addressMap[miningAddr]
 		if !ok {
-			return fmt.Errorf("invalid mining address %s", miningAddr)
+			b.currMiningNode = b.sequence[0]
+		} else {
+			b.currMiningNode = node.Next
 		}
-		b.currMiningNode = node.Next
 		b.currHeight = height+1
 	} else {
 		b.currMiningNode = b.sequence[0]
