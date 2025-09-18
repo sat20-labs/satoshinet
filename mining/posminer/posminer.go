@@ -508,7 +508,7 @@ func New(cfg *Config) *POSMiner {
 
 // OnTimeGenerateBlock is invoke when time to generate block.
 func (m *POSMiner) OnTimeGenerateBlock() (*wire.MsgBlock, error) {
-	utils.Log.Debugf("Timeup for OnTimeGenerateBlock ......")
+	//utils.Log.Debugf("Timeup for OnTimeGenerateBlock ......")
 
 	//return m.GenerateNewTestBlock()
 
