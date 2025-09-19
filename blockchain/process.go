@@ -192,12 +192,6 @@ func (b *BlockChain) ProcessBlock(block *btcutil.Block, flags BehaviorFlags) (bo
 		return false, false, ruleError(ErrDuplicateBlock, str)
 	}
 
-	// 检查是不是由正确的miner挖出来的块
-	err = b.assetIndexerMgr.CheckBlockMiningInfo(block)
-	if err != nil {
-		return false, false, err
-	}
-
 	// Perform preliminary sanity checks on the block and its transactions.
 	err = checkBlockSanity(block, b.chainParams.PowLimit, b.timeSource, flags)
 	if err != nil {

@@ -47,7 +47,8 @@ func (b *BaseIndexer) GetSequenceMgr() *common.MiningSequenceMgr {
 	return b.seqMgr
 }
 
+// block的高度必须设置
 func (b *BaseIndexer) CheckBlockMiningInfo(block *btcutil.Block) error {
 	miningAddr := common.GetMiningAddress(block.MsgBlock(), b.chaincfgParam)
-	return b.seqMgr.CheckCurrentMiningAddr(miningAddr)
+	return b.seqMgr.CheckMiningAddr(int(block.Height()), miningAddr)
 }

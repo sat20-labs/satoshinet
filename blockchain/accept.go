@@ -37,9 +37,15 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 	blockHeight := prevNode.height + 1
 	block.SetHeight(blockHeight)
 
+	// 检查是不是由正确的miner挖出来的块，需要先确定这个block的高度
+	err := b.assetIndexerMgr.CheckBlockMiningInfo(block)
+	if err != nil {
+		return false, err
+	}
+
 	// The block must pass all of the validation rules which depend on the
 	// position of the block within the block chain.
-	err := b.checkBlockContext(block, prevNode, flags)
+	err = b.checkBlockContext(block, prevNode, flags)
 	if err != nil {
 		return false, err
 	}

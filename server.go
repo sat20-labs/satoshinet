@@ -2748,56 +2748,49 @@ func (s *server) Start() {
 			}
 			// 等二层索引器工作
 			time.Sleep(3*time.Second)
-
-			var done <-chan time.Time
 			ticker := time.NewTicker(3 * time.Second)
 		out:
 			for {
 				select {
-				case <-done:
-					ticker.Stop()
-					srvrLog.Infof("can't start pos miner.")
-					os.Exit(-1)
 				case <-ticker.C:
-					if done == nil {
-						tip1 := indexerShare.ShareIndexer.GetChainTip()
-						tip2 := s.getTipFromSyncPeer()
-						tip := max(tip1, tip2)
-						height := indexerShare.ShareIndexer.GetSyncHeight()
-						srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d", 
-							height, tip, s.connManager.GetConnCount(), s.connManager.GetAcceptCount())
-						if height == tip {
-							done = time.After(3 * time.Second)
-						}
-					} else {
-						// 先启动stp模块，可能需要自动质押并成为miner
-						if cfg.EnableSTP {
-							go func() {
-								err = stp.StartSTP()
-								if err != nil {
-									btcdLog.Errorf("Unable to start STP, %v", err)
-									os.Exit(-1)
-								}
-							}()
-						}
-
-						// 如果失败退出，就重新启动节点，再试一次
-						for i := 0; i < 10; i++ {
-							if anchortx.IsMinerNode(pubkey) {
-								srvrLog.Infof("Start pos miner.")
-								err := s.posMiner.Start()
-								if err != nil {
-									btcdLog.Errorf("Start miner failed, exit")
-									os.Exit(-1)
-								}
-								break out
-							}
-							time.Sleep(time.Second)
-						}
-						
-						btcdLog.Errorf("not a miner, exit")
-						os.Exit(-1)
+					
+					tip1 := indexerShare.ShareIndexer.GetChainTip()
+					tip2 := s.getTipFromSyncPeer()
+					tip := max(tip1, tip2)
+					height := indexerShare.ShareIndexer.GetSyncHeight()
+					srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d", 
+						height, tip, s.connManager.GetConnCount(), s.connManager.GetAcceptCount())
+					if height != tip {
+						break
 					}
+						
+					// 先启动stp模块，可能需要自动质押并成为miner
+					if cfg.EnableSTP {
+						go func() {
+							err = stp.StartSTP()
+							if err != nil {
+								btcdLog.Errorf("Unable to start STP, %v", err)
+								os.Exit(-1)
+							}
+						}()
+					}
+
+					// 如果失败退出，就重新启动节点，再试一次
+					for i := 0; i < 10; i++ {
+						if anchortx.IsMinerNode(pubkey) {
+							srvrLog.Infof("Start pos miner.")
+							err := s.posMiner.Start()
+							if err != nil {
+								btcdLog.Errorf("Start miner failed, exit")
+								os.Exit(-1)
+							}
+							break out
+						}
+						time.Sleep(time.Second)
+					}
+					
+					btcdLog.Errorf("not a miner, exit")
+					os.Exit(-1)
 				}
 			}
 		}()

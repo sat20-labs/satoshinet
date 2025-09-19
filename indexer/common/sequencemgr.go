@@ -316,6 +316,56 @@ func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string) error {
 }
 
 
+// 检查某个高度下的挖矿地址是否有效
+func (b *MiningSequenceMgr) CheckMiningAddr(height int, addr string) error {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
+	// 第一个checkpoint，是pos版本升级时，老版本最后一个块
+	// 这个高度以下，只需要确认是有效的miner出的块就行，没有顺序
+	if height <= int(b.chainParam.Checkpoints[0].Height) {
+		_, ok := b.addressMap[addr]
+		if ok {
+			return nil
+		}
+		if b.chainParam.Name == "testnet" {
+			// 测试网络因为普通挖矿节点依赖索引器生成挖矿地址，索引器没有正确配置公钥，导致挖矿地址异常
+			if addr == "tb1qgx496h0szk6wtpgpmczu25gmnpnfg2lfp8hc5pedfxr7y50ws3eqt07mqy" {
+				return nil
+			}
+		}
+		
+		return fmt.Errorf("invalid mining address %s", addr)
+	}
+
+	// TODO 这里假定了miner不变，才有效。但实际上不大可能不变。删除本地聪网数据时，indexer的数据需要同步删除，这样miner才能根据区块重建
+	// 移动到某个高度: seq[0] 对应 b.chainParam.Checkpoints[0].Height+1
+	i := int(b.chainParam.Checkpoints[0].Height+1)
+	node := b.sequence[0]
+	for i != height {
+		i++
+		node = node.Next
+	}
+	
+	if addr == node.MiningAddress {
+		return nil
+	}
+	if node.Father != nil {
+		father := node.Father
+		if father.MiningAddress == addr {
+			return nil
+		}
+		if father.Father != nil {
+			if father.Father.MiningAddress == addr {
+				return nil
+			}
+		}
+	}
+	
+	return fmt.Errorf("invalid mining address %s", addr)
+}
+
+
 // 检查当前挖矿地址是否有效，miner或者其father都是有效节点
 func (b *MiningSequenceMgr) CheckCurrentMiningPubKey(pubkey string) error {
 	b.mutex.RLock()
@@ -367,7 +417,9 @@ func (b *MiningSequenceMgr) GetNodeType(pubkey string) int {
 // 设置当前挖矿地址，每个区块处理完成后调用一次
 func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
 	if height == 0 {
+		b.mutex.Lock()
 		b.currHeight = 1
+		b.mutex.Unlock()
 		return nil
 	}
 
