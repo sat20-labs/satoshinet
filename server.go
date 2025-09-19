@@ -1954,6 +1954,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	}
 	if sp.ValidatorId() != "" {
 		state.minerPeers[sp.ValidatorId()] = sp
+		srvrLog.Debugf("add miner peer %s", sp.String())
 	}
 
 	// Update the address' last seen time if the peer has acknowledged
@@ -2029,7 +2030,7 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 		}
 		delete(list, sp.ID())
 		delete(state.minerPeers, sp.ValidatorId())
-		srvrLog.Debugf("Removed peer %s", sp)
+		srvrLog.Debugf("Removed peer %s", sp.String())
 		return
 	}
 }
@@ -2224,8 +2225,10 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			// 找到任意一个已经连接的core node，或bootstrap node
 			miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
 			for k, v := range state.minerPeers {
-				if (miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_CORE || 
-				miningSeqMgr.GetNodeType(k) == common.NODE_TYPE_BOOTSTRAP) && 
+				peerLog.Debugf("miner peer %s", v.String())
+				typ := miningSeqMgr.GetNodeType(k)
+				if (typ == common.NODE_TYPE_CORE || 
+				typ == common.NODE_TYPE_BOOTSTRAP) && 
 				v.Connected() &&
 				s.miningPubKey != v.ValidatorId() {
 					result = v.Peer
