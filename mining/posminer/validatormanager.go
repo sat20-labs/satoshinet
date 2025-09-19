@@ -36,6 +36,7 @@ type ValidatorManager struct {
 	miningSeqMgr *common.MiningSequenceMgr
 	myself *common.MiningInfo
 	lastBlockTime int64
+	lastBlock int
 	quit chan struct{}
 
 	generatorTicker *time.Ticker
@@ -143,6 +144,8 @@ func (vm *ValidatorManager) onPingTimer() {
 // 在轮到自己出块时，reset interval
 func (vm *ValidatorManager) generatorTimer() {
 	vm.generatorTicker = time.NewTicker(time.Duration(CheckingInterval) * time.Second)
+	vm.lastBlockTime = vm.cfg.PosMiner.GetBlockRecvTime()
+	vm.lastBlock = int(vm.cfg.PosMiner.GetBlockHeight())
 
 exit:
 	for {
@@ -170,8 +173,9 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	}
 
 	now := time.Now().Unix()
-	if vm.lastBlockTime == 0 {
+	if vm.lastBlock != int(vm.cfg.PosMiner.GetBlockHeight()) {
 		vm.lastBlockTime = vm.cfg.PosMiner.GetBlockRecvTime()
+		vm.lastBlock = int(vm.cfg.PosMiner.GetBlockHeight())
 	}
 
 	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
