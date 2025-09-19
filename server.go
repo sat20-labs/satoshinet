@@ -3082,6 +3082,14 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		services |= wire.SFNodeMiner
 	}
 
+	// seqMgr 最早初始化
+	assetIndexer, err := indexerEntry.NewIndexerMgr(cfg.HomeDir, "",
+		activeNetParams.rpcPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
+		interrupt)
+	if err != nil {
+		return nil, err
+	}
+
 	amgr := addrmgr.New(cfg.DataDir, btcdLookup)
 
 	var listeners []net.Listener
@@ -3102,13 +3110,6 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	}
 	if len(agentWhitelist) > 0 {
 		srvrLog.Infof("User-agent whitelist %s", agentWhitelist)
-	}
-
-	assetIndexer, err := indexerEntry.NewIndexerMgr(cfg.HomeDir, "",
-		activeNetParams.rpcPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
-		interrupt)
-	if err != nil {
-		return nil, err
 	}
 
 	s := server{
