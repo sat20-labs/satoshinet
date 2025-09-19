@@ -1727,6 +1727,7 @@ out:
 	idleTimer.Stop()
 
 	// Ensure connection is closed.
+	log.Debugf("inHandler forcely disconnect Peer %s", p)
 	p.Disconnect()
 
 	close(p.inQuit)
@@ -1916,6 +1917,7 @@ out:
 
 			err := p.writeMessage(msg.msg, msg.encoding)
 			if err != nil {
+				log.Errorf("Failed to send message to %s: %v", p, err)
 				p.Disconnect()
 				if p.shouldLogWriteError(err) {
 					log.Errorf("Failed to send message to "+
@@ -2409,10 +2411,12 @@ func (p *Peer) start() error {
 	select {
 	case err := <-negotiateErr:
 		if err != nil {
+			log.Debugf("Starting peer %s failed, %v", p, err)
 			p.Disconnect()
 			return err
 		}
 	case <-time.After(negotiateTimeout):
+		log.Debugf("Starting peer %s failed, negotiation timeout", p)
 		p.Disconnect()
 		return errors.New("protocol negotiation timeout")
 	}

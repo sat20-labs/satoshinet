@@ -1352,14 +1352,11 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 			// Disconnect the peer regardless of whether it was
 			// banned.
 			sp.addBanScore(100, 0, cmd)
-			sp.Disconnect()
-			return false
 		}
 
 		// Disconnect the peer regardless of protocol version or banning
 		// state.
-		peerLog.Debugf("%s sent an unsupported %s request -- "+
-			"disconnecting", sp, cmd)
+		peerLog.Debugf("%s sent an unsupported %s request -- disconnecting", sp, cmd)
 		sp.Disconnect()
 		return false
 	}
@@ -1898,6 +1895,7 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 
 	// Disconnect peers with unwanted user agents.
 	if sp.HasUndesiredUserAgent(s.agentBlacklist, s.agentWhitelist) {
+		srvrLog.Debugf("New peer %s ignored - HasUndesiredUserAgent", sp)
 		sp.Disconnect()
 		return false
 	}
@@ -2347,6 +2345,7 @@ func disconnectPeer(peerList map[int32]*serverPeer, allPeers map[string]*serverP
 			// to iterate so won't corrupt the loop.
 			delete(peerList, addr)
 			delete(allPeers, peer.ValidatorId())
+			srvrLog.Debugf("disconnectPeer %s", peer)
 			peer.Disconnect()
 			return true
 		}
