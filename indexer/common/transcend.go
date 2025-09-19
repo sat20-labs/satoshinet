@@ -364,12 +364,12 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 func CreateStakeInvoice(assetName *indexer.AssetName, amt *indexer.Decimal) ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddData([]byte(assetName.String())).
-		AddData([]byte(amt.ToFormatString())).
+		AddData([]byte(amt.String())).
 		Script()
 }
 
-func ParseStakeInvoice(script []byte) (address string, txid string, assetName string,
-	amt *indexer.Decimal, witness []byte, err error) {
+func ParseStakeInvoice(script []byte) (assetName string,
+	amt *indexer.Decimal, err error) {
 	tokenizer := txscript.MakeScriptTokenizer(0, script)
 
 	// assetName

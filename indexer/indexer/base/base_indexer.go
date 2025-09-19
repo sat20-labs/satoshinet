@@ -674,6 +674,141 @@ func (b *BaseIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 	return info
 }
 
+func (b *BaseIndexer) handleStakeAsset(ascend *common.AscendData, data []byte) {
+	/*
+	质押资产成为挖矿节点的条件：
+	1. 通道地址：核心通道地址，或者连接核心节点的通道地址
+	2. 足够的资产
+	3. 交易中有一个质押的op_return (posv2版本之后)
+	目前的限制：现在只会在一个ascending交易中做判断，这不是合理的方式，可能将穿越资产当作质押资产
+	TODO：采用合约的方式，将质押资产锁定在合约中，交易也明确必须是STAKE的合约动作
+	*/
+
+	if ascend.Height <= int(b.chaincfgParam.Checkpoints[0].Height) {
+		// 不需要检查是否有一个stake的op_return
+	} else {
+		if data == nil {
+			return
+		}
+		assetName, amt, err := common.ParseStakeInvoice(data)
+		if err != nil {
+			common.Log.Errorf("handleStakeAsset no staking asset info, %v", err)
+			return
+		}
+		if assetName == indexer.ASSET_PLAIN_SAT.String() {
+			if len(ascend.Assets) != 0 || fmt.Sprintf("%d", ascend.Value) != amt.String() {
+				common.Log.Errorf("handleStakeAsset invalid sats value, %d -> %s", ascend.Value, amt.String())
+				return
+			}
+		} else {
+			info, err := ascend.Assets.Find(indexer.NewAssetNameFromString(assetName))
+			if err != nil || info.Amount.Cmp(amt) != 0 {
+				common.Log.Errorf("handleStakeAsset invalid asset amt, %s -> %s", info.Amount.String(), amt.String())
+				return 
+			}
+		}
+	}
+
+	b.addMinerNode(ascend)
+}
+
+func (b *BaseIndexer) handleStakeAssetV2(height int, tx *common.Transaction, data []byte) {
+	name, amt, err := common.ParseStakeInvoice(data)
+	if err != nil {
+		common.Log.Errorf("handleStakeAssetV2 no staking asset info, %v", err)
+		return
+	}
+	assetName := indexer.NewAssetNameFromString(name)
+	// 检查该tx是否有对应的资产信息
+	var stakeAsset *common.Output
+	for _, txOut := range tx.Outputs {
+		if common.IsOpReturn(txOut.Address.PkScript) {
+			continue
+		}
+		if txOut.Address.Type != int(txscript.WitnessV0ScriptHashTy) {
+			continue
+		}
+
+		if name == indexer.ASSET_PLAIN_SAT.String() {
+			if len(txOut.Assets) != 0 || fmt.Sprintf("%d", txOut.Value) != amt.String() {
+				common.Log.Errorf("handleStakeAssetV2 %s invalid sats value, %d -> %s", tx.Txid, txOut.Value, amt.String())
+				continue
+			}
+		} else {
+			info, err := txOut.Assets.Find(assetName)
+			if err != nil || info.Amount.Cmp(amt) != 0 {
+				common.Log.Errorf("handleStakeAssetV2 %s invalid asset amt, %s -> %s", tx.Txid, info.Amount.String(), amt.String())
+				continue 
+			}
+		}
+
+		stakeAsset = txOut
+		break
+	}
+	if stakeAsset == nil {
+		common.Log.Errorf("can't find staking asset output, tx %s", tx.Txid)
+		return
+	}
+
+	channelInfo, ok := b.channelMap[stakeAsset.Address.Addresses[0]]
+	if ok {
+		common.Log.Errorf("can't find channel info from %s", stakeAsset.Address.Addresses[0])
+		return
+	}
+	ascend := &common.AscendData{
+		Height: height,
+		FundingUtxo: fmt.Sprintf("%s:%d", tx.Txid, stakeAsset.N),
+		AnchorTxId: "",
+		Address: channelInfo.Address,
+		Value: stakeAsset.Value,
+		Assets: stakeAsset.Assets,
+		PubA: channelInfo.PubA,
+		PubB: channelInfo.PubB,
+	}
+
+	b.addMinerNode(ascend)
+}
+
+func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
+	coreNodeKey := hex.EncodeToString(ascend.PubB)
+	_, ok := b.coreNodeMap[coreNodeKey]
+	if !ok {
+		if b.IsCoreNodeAscend(ascend) {
+			// 新增加一个core node
+			coreNode := common.NewCoreNodeInfo(ascend)
+			coreNodeKey = hex.EncodeToString(ascend.PubB)
+
+			b.mutex.Lock()
+			b.coreNodeMap[coreNodeKey] = coreNode
+			serverNodeKey := hex.EncodeToString(ascend.PubA)
+			serverNode := b.coreNodeMap[serverNodeKey]
+			serverNode.ChildMiners[coreNodeKey] = coreNode.AscendUtxo
+			b.seqMgr.AddNode(coreNodeKey, serverNodeKey)
+			b.coreNodeMapUpdated = true
+			b.mutex.Unlock()
+
+			common.Log.Infof("add core node %s at height %d", coreNodeKey, ascend.Height)
+		} else {
+			b.mutex.Lock()
+			coreNodeKey := hex.EncodeToString(ascend.PubA)
+			coreNode, ok := b.coreNodeMap[coreNodeKey]
+			if ok && b.HasMinerEligibility(ascend.Assets) {
+				// 一个连接到corenode的普通miner
+				b.coreNodeMapUpdated = true
+				childKey := hex.EncodeToString(ascend.PubB)
+				coreNode.ChildMiners[childKey] = ascend.FundingUtxo
+				b.seqMgr.AddNode(childKey, coreNodeKey)
+				b.mutex.Unlock()
+				common.Log.Infof("add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
+			} else {
+				b.mutex.Unlock()
+				// 无效的脚本
+				common.Log.Infof("not miner staking tx %s, utxo: %s, %v", ascend.AnchorTxId, ascend.FundingUtxo, ascend.Assets)
+			}
+		}
+	}
+}
+
 // satoshinet 只需要保存utxo即可
 // 所有聪都来自锚定交易，也就是闪电网络通道
 func (b *BaseIndexer) processBlock(block *common.Block) {
@@ -714,54 +849,9 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 				ascend.AnchorTxId = tx.Txid
 				b.utxoIndex.AscendMap[ascend.FundingUtxo] = ascend
 
-				/*
-				质押资产成为挖矿节点的条件：
-				1. 通道地址：核心通道地址，或者连接核心节点的通道地址
-				2. 足够的资产
-				目前的限制：现在只会在一个ascending交易中做判断，这不是合理的方式，可能将穿越资产当作质押资产
-				TODO：采用合约的方式，将质押资产锁定在合约中，交易也明确必须是STAKE的合约动作
-				*/
-				coreNodeKey := hex.EncodeToString(ascend.PubB)
-				_, ok := b.coreNodeMap[coreNodeKey]
-				if !ok {
-					if b.IsCoreNodeAscend(ascend) {
-						// 新增加一个core node
-						coreNode := common.NewCoreNodeInfo(ascend)
-						coreNodeKey = hex.EncodeToString(ascend.PubB)
-
-						b.mutex.Lock()
-						b.coreNodeMap[coreNodeKey] = coreNode
-						serverNodeKey := hex.EncodeToString(ascend.PubA)
-						serverNode := b.coreNodeMap[serverNodeKey]
-						serverNode.ChildMiners[coreNodeKey] = coreNode.AscendUtxo
-						b.seqMgr.AddNode(coreNodeKey, serverNodeKey)
-						b.coreNodeMapUpdated = true
-						b.mutex.Unlock()
-
-						common.Log.Infof("BaseIndexer.processBlock-> add core node %s at height %d", coreNodeKey, ascend.Height)
-					} else {
-						b.mutex.Lock()
-						coreNodeKey := hex.EncodeToString(ascend.PubA)
-						coreNode, ok := b.coreNodeMap[coreNodeKey]
-						if ok && b.HasMinerEligibility(ascend.Assets) {
-							// 一个连接到corenode的普通miner
-							b.coreNodeMapUpdated = true
-							childKey := hex.EncodeToString(ascend.PubB)
-							coreNode.ChildMiners[childKey] = ascend.FundingUtxo
-							b.seqMgr.AddNode(childKey, coreNodeKey)
-							b.mutex.Unlock()
-							common.Log.Infof("BaseIndexer.processBlock-> add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
-						} else {
-							b.mutex.Unlock()
-							// 无效的脚本
-							common.Log.Infof("not miner staking tx %s, utxo: %s, %v", tx.Txid, ascend.FundingUtxo, ascend.Assets)
-							continue
-						}
-					}
-				}
-
+				b.handleStakeAsset(ascend, nil)
 				// 仅仅是通道地址，有可能是合约控制
-				_, ok = b.channelMap[ascend.Address]
+				_, ok := b.channelMap[ascend.Address]
 				if !ok {
 					b.channelMap[ascend.Address] = &common.ChannelInfo{
 						ChannelInfoInDB: common.ChannelInfoInDB{
@@ -880,6 +970,17 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 					case common.CONTENT_TYPE_CHANNELID:
 						// 如果是通道更新，data中包含通道承诺高度
 						// 更新通道的最新高度 TODO
+
+					case common.CONTENT_TYPE_STAKE:
+						// 质押资产，成为矿机
+						if ascend != nil {
+							// 利用ascending质押
+							b.handleStakeAsset(ascend, data)
+						} else {
+							// 直接在聪网上转账并质押，只需要有对应的op_return
+							b.handleStakeAssetV2(block.Height, tx, data)
+						}
+						
 
 					case common.CONTENT_TYPE_BINDREFERRER:
 						// tx的输入和输出都是被推荐人地址，data是推荐人名字，每个地址只能绑定一个推荐人
