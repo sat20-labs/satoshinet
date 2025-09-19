@@ -358,3 +358,36 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 
 	return result, nil
 }
+
+
+// 调用 sindexer.NullDataScript 组装成最终的 op_return 数据
+func CreateStakeInvoice(assetName *indexer.AssetName, amt *indexer.Decimal) ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddData([]byte(assetName.String())).
+		AddData([]byte(amt.ToFormatString())).
+		Script()
+}
+
+func ParseStakeInvoice(script []byte) (address string, txid string, assetName string,
+	amt *indexer.Decimal, witness []byte, err error) {
+	tokenizer := txscript.MakeScriptTokenizer(0, script)
+
+	// assetName
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		err = fmt.Errorf("script is missing asset name")
+		return
+	}
+	assetName = string(tokenizer.Data())
+
+	// amt
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		err = fmt.Errorf("script is missing asset amt")
+		return
+	}
+	amt, err = indexer.NewDecimalFromFormatString(string(tokenizer.Data()))
+	if err != nil {
+		return
+	}
+
+	return
+}
