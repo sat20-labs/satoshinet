@@ -2137,6 +2137,11 @@ type getPeersMsg struct {
 	reply chan []*serverPeer
 }
 
+type getPeerMsg struct {
+	id int32
+	reply chan *serverPeer
+}
+
 type getPeerByValidatorIdMsg struct {
 	validatorId string
 	reply chan *peer.Peer
@@ -2189,6 +2194,16 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			peers = append(peers, sp)
 		})
 		msg.reply <- peers
+
+	case getPeerMsg:
+		peer, ok := state.persistentPeers[msg.id]
+		if !ok {
+			peer, ok = state.outboundPeers[msg.id]
+			if !ok {
+				peer = state.inboundPeers[msg.id]
+			}
+		}
+		msg.reply <- peer
 
 	case getPeerByValidatorIdMsg:
 		var result *peer.Peer
@@ -2567,6 +2582,13 @@ func (s *server) ConnectedCount() int32 {
 	return <-replyChan
 }
 
+
+func (s *server) GetPeerById(peerId int32) *serverPeer {
+	replyChan := make(chan *serverPeer)
+	s.query <- getPeerMsg{id:peerId, reply: replyChan}
+	return <-replyChan
+}
+
 func (s *server) GetPeerByValidatorId(validatorId string) *peer.Peer {
 	replyChan := make(chan *peer.Peer)
 	s.query <- getPeerByValidatorIdMsg{validatorId: validatorId, reply: replyChan}
@@ -2738,12 +2760,14 @@ func (s *server) Start() {
 					os.Exit(-1)
 				case <-ticker.C:
 					if done == nil {
-						tip := indexerShare.ShareIndexer.GetChainTip()
+						tip1 := indexerShare.ShareIndexer.GetChainTip()
+						tip2 := s.getTipFromSyncPeer()
+						tip := max(tip1, tip2)
 						height := indexerShare.ShareIndexer.GetSyncHeight()
 						srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d", 
 							height, tip, s.connManager.GetConnCount(), s.connManager.GetAcceptCount())
 						if height == tip {
-							done = time.After(12 * time.Second)
+							done = time.After(3 * time.Second)
 						}
 					} else {
 						// 先启动stp模块，可能需要自动质押并成为miner
@@ -2783,6 +2807,15 @@ func (s *server) Start() {
 	if cfg.SaveMempool {
 		s.loadMempoolCache()
 	}
+}
+
+func (s *server) getTipFromSyncPeer() int {
+	peerId := s.syncManager.SyncPeerID()
+	peer := s.GetPeerById(peerId)
+	if peer != nil {
+		return int(peer.LastBlock())
+	}
+	return 0
 }
 
 // Stop gracefully shuts down the server by stopping and disconnecting all
