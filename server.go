@@ -547,6 +547,13 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// is received.
 	sp.setDisableRelayTx(msg.DisableRelayTx)
 
+	miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
+	if miningSeqMgr != nil {
+		if miningSeqMgr.GetNodeType(msg.ValidatorId) != common.NODE_TYPE_NORMAL {
+			sp.isWhitelisted = true
+		}
+	}
+
 	return nil
 }
 
@@ -697,6 +704,7 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 			reason = "not a miner"
 			break
 		}
+		sp.isWhitelisted = true
 
 		// 检查block，是否可以被接受
 		var msgBlock wire.MsgBlock
