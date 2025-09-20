@@ -36,6 +36,7 @@ import (
 type MiningInfo struct {
 	PubKey        string
 	MiningAddress string
+	JoinHeight    int
 	NodeType      int
 	Father        *MiningInfo
 	Children      []*MiningInfo
@@ -74,7 +75,7 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 	// 先加最顶级的节点
 	for bootstrap, v := range coreNodeMap {
 		if v.ServerNode == "" {
-			node, err := b.addNode(bootstrap, "") // 先加引导节点
+			node, err := b.addNode(bootstrap, "", v.AscendHeight) // 先加引导节点
 			if err != nil {
 				return err
 			}
@@ -84,7 +85,7 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 
 	for core, v := range coreNodeMap {
 		if v.ServerNode != "" {
-			node, err := b.addNode(core, v.ServerNode) // 先加父节点
+			node, err := b.addNode(core, v.ServerNode, v.AscendHeight) // 先加父节点
 			if err != nil {
 				return err
 			}
@@ -92,8 +93,8 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 		}
 
 		// 再加子节点
-		for child := range v.ChildMiners {
-			node, err := b.addNode(child, core)
+		for child, info := range v.ChildMiners {
+			node, err := b.addNode(child, core, info.AscendHeight)
 			if err != nil {
 				return err
 			}
@@ -126,7 +127,7 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 
 
 // 添加节点
-func (b *MiningSequenceMgr) addNode(pubkey, father string) (*MiningInfo, error) {
+func (b *MiningSequenceMgr) addNode(pubkey, father string, height int) (*MiningInfo, error) {
 	
 	if _, ok := b.nodes[pubkey]; ok {
 		return b.nodes[pubkey], nil // 已存在
@@ -156,6 +157,7 @@ func (b *MiningSequenceMgr) addNode(pubkey, father string) (*MiningInfo, error) 
 	node := &MiningInfo{
 		PubKey:        pubkey,
 		MiningAddress: channelAddr,
+		JoinHeight:    height,
 	}
 	b.nodes[pubkey] = node
 	b.addressMap[channelAddr] = node
@@ -180,11 +182,11 @@ func (b *MiningSequenceMgr) addNode(pubkey, father string) (*MiningInfo, error) 
 }
 
 // 添加节点
-func (b *MiningSequenceMgr) AddNode(pubkey, father string) (*MiningInfo, error) {
+func (b *MiningSequenceMgr) AddNode(pubkey, father string, height int) (*MiningInfo, error) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
-	node, err := b.addNode(pubkey, father)
+	node, err := b.addNode(pubkey, father, height)
 	if err != nil {
 		return nil, err
 	}
@@ -338,18 +340,27 @@ func (b *MiningSequenceMgr) CheckMiningAddr(height int, addr string) error {
 		return fmt.Errorf("invalid mining address %s", addr)
 	}
 
-	// 删除本地聪网数据时，indexer的数据需要同步删除，这样miner才能根据区块重建
-	// 只支持在当前高度往前移动
+	var node *MiningInfo
 	if  height < b.currHeight {
-		// 往后移动，可能面临miner改变的影响，暂时不要支持
-		return fmt.Errorf("height %d less than sequence inner height %d", height, b.currHeight)
-	}
-	
-	i := b.currHeight
-	node := b.currMiningNode
-	for i != height {
-		i++
-		node = node.Next
+		i := b.currHeight
+		node = b.currMiningNode
+		for i != height {
+			i--
+			node = node.Prev
+			for i <= node.JoinHeight {
+				node = node.Prev
+			}
+		}
+	} else {
+		i := b.currHeight
+		node = b.currMiningNode
+		for i != height {
+			i++
+			node = node.Next
+			for i <= node.JoinHeight {
+				node = node.Next
+			}
+		}
 	}
 	
 	if addr == node.MiningAddress {
@@ -440,7 +451,11 @@ func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
 		//b.currMiningNode = b.sequence[0]
 	} else {
 		// addr 有可能是替补地址，所以只移动指针
+		// 跳过在这个高度还无效的miner
 		b.currMiningNode = b.currMiningNode.Next
+		for height <= b.currMiningNode.JoinHeight {
+			b.currMiningNode = b.currMiningNode.Next
+		}
 	}
 	b.currHeight++
 	

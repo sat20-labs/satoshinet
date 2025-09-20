@@ -302,7 +302,7 @@ func GetAllCoreNodeFromDB(ldb indexer.KVDB, chainParam *chaincfg.Params) map[str
 		corenode.ChannelAddr, _ = common.GetDefaultChannelAddress(chainParam)
 		result[indexer.GetCoreNodePubKey()] = corenode
 
-		bootstrapNode.ChildMiners[indexer.GetCoreNodePubKey()] = ""
+		bootstrapNode.ChildMiners[indexer.GetCoreNodePubKey()] = &common.MinerAscendInfo{}
 	}
 
 	return result

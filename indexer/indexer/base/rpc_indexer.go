@@ -494,7 +494,7 @@ func (b *RpcIndexer) GetMinerInfo(pubkey string) *common.MinerInfo {
 	for _, v := range b.coreNodeMap {
 		ascendUtxo, ok := v.ChildMiners[pubkey]
 		if ok {
-			data := b.getAscendData(ascendUtxo)
+			data := b.getAscendData(ascendUtxo.AscendUtxo)
 			return data.ToMinerInfo()
 		}
 	}

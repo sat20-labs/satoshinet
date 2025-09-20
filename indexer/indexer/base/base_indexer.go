@@ -782,8 +782,11 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 			b.coreNodeMap[coreNodeKey] = coreNode
 			serverNodeKey := hex.EncodeToString(ascend.PubA)
 			serverNode := b.coreNodeMap[serverNodeKey]
-			serverNode.ChildMiners[coreNodeKey] = coreNode.AscendUtxo
-			b.seqMgr.AddNode(coreNodeKey, serverNodeKey)
+			serverNode.ChildMiners[coreNodeKey] = &common.MinerAscendInfo{
+				AscendHeight: ascend.Height,
+				AscendUtxo: coreNode.AscendUtxo,
+			} 
+			b.seqMgr.AddNode(coreNodeKey, serverNodeKey, ascend.Height)
 			b.coreNodeMapUpdated = true
 			b.mutex.Unlock()
 
@@ -796,8 +799,11 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 				// 一个连接到corenode的普通miner
 				b.coreNodeMapUpdated = true
 				childKey := hex.EncodeToString(ascend.PubB)
-				coreNode.ChildMiners[childKey] = ascend.FundingUtxo
-				b.seqMgr.AddNode(childKey, coreNodeKey)
+				coreNode.ChildMiners[childKey] =  &common.MinerAscendInfo{
+					AscendHeight: ascend.Height,
+					AscendUtxo: ascend.FundingUtxo,
+				}
+				b.seqMgr.AddNode(childKey, coreNodeKey, ascend.Height)
 				b.mutex.Unlock()
 				common.Log.Infof("add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
 			} else {

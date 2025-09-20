@@ -71,9 +71,9 @@ type TickerInfo struct {
 
 // UtxoL1 进入聪网，TxIdL2是进入交易
 type AscendData struct {
-	Height      int           `json:"height"`
-	FundingUtxo string        `json:"fundingUtxo"`
-	AnchorTxId  string        `json:"anchorTxId"`
+	Height      int           `json:"height"` // L2
+	FundingUtxo string        `json:"fundingUtxo"` // L1
+	AnchorTxId  string        `json:"anchorTxId"` // L2
 	Value       int64         `json:"value"`
 	Assets      wire.TxAssets `json:"assets"`  // 最多一种资产
 	Sig         []byte        `json:"invoiceSig"`
@@ -112,15 +112,20 @@ type DescendData struct {
 	Address      string        `json:"address"` // 通道地址
 }
 
+type MinerAscendInfo struct {
+	AscendHeight int	// L2
+	AscendUtxo   string // L1
+}
+
 type CoreNodeInfo struct {
 	MinerInfo
-	ChildMiners map[string]string // pubkey->ascend utxo
+	ChildMiners map[string]*MinerAscendInfo // pubkey->ascend 
 }
 
 type MinerInfo struct {
-	AscendHeight int	//
-	AscendUtxo string
-	AnchorTxId string
+	AscendHeight int	// L2
+	AscendUtxo string	// L1 
+	AnchorTxId string	// L2
 	AssetName  string
 	AssetAmt   string
 	ServerNode string
@@ -139,20 +144,20 @@ func NewCoreNodeInfo(data *AscendData) *CoreNodeInfo {
 				ChannelAddr: "",
 				ServerNode: "",
 			},
-			ChildMiners: make(map[string]string),
+			ChildMiners: make(map[string]*MinerAscendInfo),
 		}
 	}
 	
 	return &CoreNodeInfo{
 		MinerInfo: *data.ToMinerInfo(),
-		ChildMiners: make(map[string]string),
+		ChildMiners: make(map[string]*MinerAscendInfo),
 	}
 }
 
 func (p *CoreNodeInfo) Clone() *CoreNodeInfo {
 	n := &CoreNodeInfo{
 			MinerInfo: p.MinerInfo,
-			ChildMiners: make(map[string]string),
+			ChildMiners: make(map[string]*MinerAscendInfo),
 		}
 	for k2, v2 := range p.ChildMiners {
 		n.ChildMiners[k2] = v2
