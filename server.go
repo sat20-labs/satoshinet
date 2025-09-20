@@ -444,7 +444,7 @@ func (sp *serverPeer) addBanScore(persistent, transient uint32, reason string) b
 		return false
 	}
 	if sp.isWhitelisted {
-		peerLog.Debugf("Misbehaving whitelisted peer %s: %s", sp, reason)
+		peerLog.Tracef("Misbehaving whitelisted peer %s: %s", sp, reason)
 		return false
 	}
 

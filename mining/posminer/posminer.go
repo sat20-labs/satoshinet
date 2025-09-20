@@ -652,23 +652,12 @@ func (m *POSMiner) GetBlockRecvTime() int64 {
 
 
 func (m *POSMiner) GetMempoolTxSize() int32 {
-
 	if m.g == nil {
 		utils.Log.Errorf("[PosMiner] Invalid mempool generator.")
 		return 0
 	}
-	txSource := m.g.TxSource()
-	if txSource == nil {
-		utils.Log.Tracef("[PosMiner] Invalid mempool tx source.")
-		return 0
-	}
-	sourceTxns := txSource.MiningDescs()
 
-	txSize := len(sourceTxns)
-
-	utils.Log.Tracef("[PosMiner] Current mempool tx size = %d", txSize)
-
-	return int32(txSize)
+	return int32(m.g.TxSource().Count())
 }
 
 func (m *POSMiner) GetPeerByValidatorId(validatorId string) *peerpkg.Peer {

@@ -73,6 +73,8 @@ type TxSource interface {
 	// HaveTransaction returns whether or not the passed transaction hash
 	// exists in the source pool.
 	HaveTransaction(hash *chainhash.Hash) bool
+
+	Count() int
 }
 
 // txPrioItem houses a transaction along with extra information that allows the
