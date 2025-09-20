@@ -4423,7 +4423,7 @@ func (s *rpcServer) processRequest(request *btcjson.Request, isAdmin bool, close
 	var err error
 	var jsonErr *btcjson.RPCError
 
-	rpcsLog.Infof("processRequest %s", request.Method)
+	rpcsLog.Debugf("processRequest %s", request.Method)
 
 	if !isAdmin {
 		if _, ok := rpcLimited[request.Method]; !ok {
@@ -4748,7 +4748,7 @@ func (s *rpcServer) Start() {
 		w.Header().Set("Content-Type", "application/json")
 		r.Close = true
 
-		rpcsLog.Infof("Receive request from client %s, %s %s", r.RemoteAddr, r.Method, r.URL.String())
+		rpcsLog.Debugf("Receive request from client %s, %s %s", r.RemoteAddr, r.Method, r.URL.String())
 		// Limit the number of connections to max allowed.
 		if s.limitConnections(w, r.RemoteAddr) {
 			return

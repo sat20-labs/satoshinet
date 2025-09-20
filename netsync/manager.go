@@ -1181,7 +1181,7 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	peer := imsg.peer
 
-	log.Infof("handleInvMsg from peer %s", peer)
+	log.Debugf("handleInvMsg from peer %s", peer)
 
 	state, exists := sm.peerStates[peer]
 	if !exists {

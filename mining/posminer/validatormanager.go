@@ -180,7 +180,7 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 
 	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
 	if txSizeInMempool == 0 {
-		utils.Log.Debugf("[ValidatorManager] mempool is empty, current miner %s", vm.miningSeqMgr.GetCurrentMiningAddr())
+		utils.Log.Infof("[ValidatorManager] mempool is empty, current miner %s", vm.miningSeqMgr.GetCurrentMiningAddr())
 		// 重置等待时间
 		vm.lastBlockTime = now
 		return

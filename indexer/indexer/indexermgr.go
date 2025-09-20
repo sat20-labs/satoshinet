@@ -223,7 +223,7 @@ func (b *IndexerMgr) handleReorg(height int) {
 // 假设当前最新高度是h，那么数据库记录，最多只到（h-6），这样确保即使回滚，只需要从数据库回滚即可
 // 为了保证数据库记录最高到（h-6），我们做一次数据备份，到合适实际再写入数据库
 func (b *IndexerMgr) updateDB(height, tip int) {
-	if height == tip {
+	if height >= tip {
 		b.updateServiceInstance()
 	}
 

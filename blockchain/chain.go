@@ -704,6 +704,9 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 
 	// This node is now the end of the best chain.
 	b.bestChain.SetTip(node)
+	if node.Height() > int32(b.tipHeight) {
+		b.tipHeight = int(node.Height())
+	}
 
 	// Update the state for the best block.  Notice how this replaces the
 	// entire struct instead of updating the existing one.  This effectively
