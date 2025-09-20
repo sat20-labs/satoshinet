@@ -211,11 +211,15 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 			err = vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
 		} else if vm.isMyGroupTurn() {
 			err = vm.generateNewBlock_core()
+		} else {
+			utils.Log.Debugf("not my turn")
 		}
 		
 	case indexer.NODE_TYPE_MINER:
 		if vm.isMyTurn() {
 			err = vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
+		} else {
+			utils.Log.Debugf("not my turn")
 		}
 		
 	default:
