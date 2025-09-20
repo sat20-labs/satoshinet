@@ -338,10 +338,15 @@ func (b *MiningSequenceMgr) CheckMiningAddr(height int, addr string) error {
 		return fmt.Errorf("invalid mining address %s", addr)
 	}
 
-	// TODO 这里假定了miner不变，才有效。但实际上不大可能不变。删除本地聪网数据时，indexer的数据需要同步删除，这样miner才能根据区块重建
-	// 移动到某个高度: seq[0] 对应 b.chainParam.Checkpoints[0].Height+1
-	i := int(b.chainParam.Checkpoints[0].Height+1)
-	node := b.sequence[0]
+	// 删除本地聪网数据时，indexer的数据需要同步删除，这样miner才能根据区块重建
+	// 只支持在当前高度往前移动
+	if  height < b.currHeight {
+		// 往后移动，可能面临miner改变的影响，暂时不要支持
+		return fmt.Errorf("height %d less than sequence inner height %d", height, b.currHeight)
+	}
+	
+	i := b.currHeight
+	node := b.currMiningNode
 	for i != height {
 		i++
 		node = node.Next
