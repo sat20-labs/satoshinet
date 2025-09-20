@@ -212,7 +212,7 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 		} else if vm.isMyGroupTurn() {
 			err = vm.generateNewBlock_core()
 		} else {
-			utils.Log.Debugf("not my turn")
+			utils.Log.Debugf("not my group turn")
 		}
 		
 	case indexer.NODE_TYPE_MINER:
