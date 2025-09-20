@@ -164,6 +164,7 @@ type BlockChain struct {
 	// chain state can be quickly reconstructed on load.
 	stateLock     sync.RWMutex
 	stateSnapshot *BestState
+	tipHeight     int
 
 	// The following caches are used to efficiently keep track of the
 	// current deployment threshold state of each rule change deployment.
@@ -722,7 +723,7 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 		b.sendNotification(NTBlockConnected, block)
 	}()
 
-	b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), int(node.Height()))
+	b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), b.tipHeight)
 
 	// Since we may have changed the UTXO cache, we make sure it didn't exceed its
 	// maximum size.  If we're pruned and have flushed already, this will be a no-op.

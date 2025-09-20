@@ -88,7 +88,7 @@ func NewIndexerMgr(
 		dbDir:             cfg.DataPath + "/db/indexer/" + chainParam.Name + "/",
 		chaincfgParam:     chainParam,
 		maxIndexHeight:    0,
-		periodFlushToDB:   6,
+		periodFlushToDB:   30,
 		compilingBackupDB: nil,
 		rpcService:        nil,
 		bRunning:          false,

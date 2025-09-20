@@ -77,7 +77,7 @@ func NewBaseIndexer(
 		db:               basicDB,
 		stats:            &SyncStats{},
 		periodFlushToDB:  periodFlushToDB,
-		keepBlockHistory: 6,
+		keepBlockHistory: 20,
 		blocksChan:       make(chan *common.Block, BLOCK_PREFETCH),
 		chaincfgParam:    chaincfgParam,
 		maxIndexHeight:   maxIndexHeight,
