@@ -211,9 +211,11 @@ func (msg *MsgVersion) BtcEncode(w io.Writer, pver uint32, enc MessageEncoding) 
 		}
 	}
 
-	err = WriteVarString(w, pver, msg.ValidatorId)
-	if err != nil {
-		return err
+	if msg.ValidatorId != "" {
+		err = WriteVarString(w, pver, msg.ValidatorId)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
