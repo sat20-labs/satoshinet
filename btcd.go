@@ -142,37 +142,34 @@ func btcdMain(serverChan chan<- *server) error {
 	}()
 
 	if cfg.Generate {
-
 		var localPubKey []byte
-		if cfg.EnableSTP {
-			// 只有核心节点，才需要启动stp服务
-			err = stp.LoadSTP(cfg.HomeDir)
-			if err != nil {
-				btcdLog.Errorf("Unable to load STP: %v", err)
-				return err
-			}
-			// 只有在钱包解锁之后才能启动miner
-			if !stp.IsUnlocked() {
-				// 创建或者解锁钱包
-				err := walletInterAction(interrupt)
-				if err != nil {
-					btcdLog.Errorf("Unable to create/unlock wallet %v", err)
-					return err
-				}
-				// 等索引器同步后在启动stp模块
-				// err = stp.StartSTP()
-				// if err != nil {
-				// 	btcdLog.Errorf("Unable to start STP, %v", err)
-				// 	return err
-				// }
-			}
-			localPubKey, err = stp.GetPubKey()
-			if err != nil {
-				btcdLog.Errorf("GetPubKey failed %v", err)
-				return err
-			}
+		// 挖矿就必须对出块签名，需要stp模块提供钱包签名
+		err = stp.LoadSTP(cfg.HomeDir)
+		if err != nil {
+			btcdLog.Errorf("Unable to load STP: %v", err)
+			return err
 		}
-
+		// 只有在钱包解锁之后才能启动miner
+		if !stp.IsUnlocked() {
+			// 创建或者解锁钱包
+			err := walletInterAction(interrupt)
+			if err != nil {
+				btcdLog.Errorf("Unable to create/unlock wallet %v", err)
+				return err
+			}
+			// 等索引器同步后在启动stp模块
+			// err = stp.StartSTP()
+			// if err != nil {
+			// 	btcdLog.Errorf("Unable to start STP, %v", err)
+			// 	return err
+			// }
+		}
+		localPubKey, err = stp.GetPubKey()
+		if err != nil {
+			btcdLog.Errorf("GetPubKey failed %v", err)
+			return err
+		}
+		
 		if cfg.ServerPubKey == "" {
 			// 引导节点 or 核心节点
 			if cfg.MiningPubKey != "" {

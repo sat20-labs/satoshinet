@@ -90,15 +90,15 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 				return err
 			}
 			node.NodeType = indexer.NODE_TYPE_CORE
-		}
 
-		// 再加子节点
-		for child, info := range v.ChildMiners {
-			node, err := b.addNode(child, core, info.AscendHeight)
-			if err != nil {
-				return err
+			// 再加子节点
+			for child, info := range v.ChildMiners {
+				node, err := b.addNode(child, core, info.AscendHeight)
+				if err != nil {
+					return err
+				}
+				node.NodeType = indexer.NODE_TYPE_MINER
 			}
-			node.NodeType = indexer.NODE_TYPE_MINER
 		}
 	}
 
@@ -121,6 +121,8 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 			return fmt.Errorf("mining address is nil, please rebuild indexer database")
 		}
 	}
+
+	b.DisplaySelf()
 
 	return nil
 }
@@ -540,4 +542,11 @@ func (b *MiningSequenceMgr) GetMiningHeightWithAddr(addr string) int {
 	}
 
 	return b.currHeight + i
+}
+
+func (b *MiningSequenceMgr) DisplaySelf() {
+	Log.Debugf("Current sequuncer: %d %s", b.currHeight, b.currMiningNode.PubKey)
+	for i, v := range b.sequence {
+		Log.Debugf("%d: %d %s %d", i, v.NodeType, v.PubKey, v.JoinHeight)
+	}
 }

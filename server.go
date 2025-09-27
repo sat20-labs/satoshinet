@@ -47,7 +47,7 @@ import (
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/sat20-labs/indexer/common"
-	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	
 )
 
 const (
@@ -678,116 +678,12 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 	}
 	peerLog.Infof("OnPing from %s embeded with cmd %s", sp.String(), msg.SubCmd)
 
-
-	// 特殊的ping消息：
-	// 如果是outbound的peer发过来的消息，不需要再往上发送，因为peer就是上级
-	// 如果是inbound的peer发过来的消息，需要往上一级发送
-	var code wire.RejectCode
-	var reason string
-	validatorId := sp.Peer.ValidatorId()
-	var block *btcutil.Block
-	for true {
-		code = wire.RejectInvalid
-		if msg.SubCmd != wire.CmdBlock {
-			reason = "payload is not block"
-			break
-		}
-
-		miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
-		if miningSeqMgr == nil {
-			reason = "miningSeqMgr is nil"
-			break
-		}
-	
-		// 不一定是该validator挖的区块，但必然是矿工才转发，否则拒绝
-		if miningSeqMgr.GetNodeType(validatorId) == common.NODE_TYPE_NORMAL {
-			reason = "not a miner"
-			break
-		}
+	miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
+	if miningSeqMgr != nil && miningSeqMgr.GetNodeType(sp.Peer.ValidatorId()) != common.NODE_TYPE_NORMAL {
 		sp.isWhitelisted = true
-
-		// 检查block，是否可以被接受
-		var msgBlock wire.MsgBlock
-		rbuf := bytes.NewReader(msg.Payload)
-		if err := msgBlock.BtcDecode(rbuf, wire.ProtocolVersion, wire.WitnessEncoding); err != nil {
-			reason = "block BtcDecode failed, " + err.Error()
-			break
-		}
-		block = btcutil.NewBlock(&msgBlock)
-		miningAddr := sindexer.GetMiningAddress(&msgBlock, sp.server.chainParams)
-		err := miningSeqMgr.CheckCurrentMiningAddr(miningAddr)
-		if err != nil {
-			reason = fmt.Sprintf("not its turn to mine a block, %s", miningAddr)
-			break
-		}
-		miningNode := miningSeqMgr.GetMiningInfoWithAddr(miningAddr)
-		if miningNode == nil {
-			reason = fmt.Sprintf("GetMiningInfoWithAddr %s failed", miningAddr)
-			break
-		}
-
-		// Ensure the block is building from the expected previous block.
-		expectedPrevHash := sp.server.chain.BestSnapshot().Hash
-		prevHash := &block.MsgBlock().Header.PrevBlock
-		if !expectedPrevHash.IsEqual(prevHash) {
-			reason = "not build from tip block"
-			break
-		}
-		if err := sp.server.chain.CheckConnectBlockTemplate(block); err != nil {
-			if _, ok := err.(blockchain.RuleError); !ok {
-				reason = fmt.Sprintf("Failed to process block proposal: %v", err)
-			} else {
-				reason = fmt.Sprintf("Rejected block proposal: %v", err)
-			}
-			break
-		}
-
-		if sp.Peer.Inbound() {
-			// 本地检查通过，如果还有上级节点，需要继续发给上级节点，让上级节点进一步检查 （最多2级）
-			// 本地大概率就是miningNode.Father，所以这里需要再往上传
-			if miningNode.Father != nil && miningNode.Father.Father != nil {
-				pubkey := miningNode.Father.Father.PubKey
-				// 本地节点如果是bootstrap，就不检查了
-				if sp.server.miningPubKey != pubkey {
-					bootstrap := sp.server.GetPeerByValidatorId(pubkey)
-					if bootstrap == nil {
-						reason = fmt.Sprintf("can't find bootstrap peer %s", pubkey)
-						break
-					}
-					err := bootstrap.SendPingAndWait(2 * time.Second, wire.CmdBlock, msg.Payload)
-					if err != nil {
-						reason = fmt.Sprintf("SendPingAndWait %s failed, %v", bootstrap.String(), err)
-						break
-					}
-				}
-			}
-		}
-
-		// 让next优先得到该block
-		next := sp.server.GetPeerByValidatorId(miningNode.Next.PubKey)
-		if next != nil && next.Connected() {
-			next.SendPing(wire.CmdBlock, msg.Payload)
-		}
-
-		// 检查通过，该block可以被接受，尝试加入区块链 (POSMiner的submitBlock也是调用这个)
-		_, err = sp.server.syncManager.ProcessBlock(block, blockchain.BFFastAdd)
-		if err != nil {
-			reason = fmt.Sprintf("ProcessBlock failed, %v", err)
-			break
-		}
-		peerLog.Infof("block %s from %s is accepted", block.Hash().String(), sp.String())
-
-		code = 0
-		break
 	}
 
-	if code != 0 {
-		peerLog.Errorf("OnPing %s failed, reason %s", sp.String(), reason)
-	}
-
-	// 响应ping消息
-	sp.Peer.QueueMessage(wire.NewMsgPongWithCode(msg.Nonce, code, reason), nil)
-
+	sp.server.posMiner.OnBlockGenerated(sp.Peer, msg)
 }
 
 // OnPong is invoked when a peer receives a pong message.  It
@@ -2222,9 +2118,10 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		} else {
 			// 找到任意一个已经连接的core node，或bootstrap node
 			miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
+			miningSeqMgr.DisplaySelf()
 			for k, v := range state.minerPeers {
-				peerLog.Debugf("miner peer %s", v.String())
 				typ := miningSeqMgr.GetNodeType(k)
+				peerLog.Debugf("miner peer %s %d %d %s", v.String(), typ, v.Connected(), s.miningPubKey)
 				if (typ == common.NODE_TYPE_CORE || 
 				typ == common.NODE_TYPE_BOOTSTRAP) && 
 				v.Connected() &&
@@ -2775,15 +2672,13 @@ func (s *server) Start() {
 					}
 						
 					// 先启动stp模块，可能需要自动质押并成为miner
-					if cfg.EnableSTP {
-						go func() {
-							err = stp.StartSTP()
-							if err != nil {
-								btcdLog.Errorf("Unable to start STP, %v", err)
-								os.Exit(-1)
-							}
-						}()
-					}
+					go func() {
+						err = stp.StartSTP()
+						if err != nil {
+							btcdLog.Errorf("Unable to start STP, %v", err)
+							os.Exit(-1)
+						}
+					}()
 
 					// 如果失败退出，就重新启动节点，再试一次
 					for i := 0; i < 10; i++ {
@@ -3316,6 +3211,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 
 	s.posMiner = posminer.New(&posminer.Config{
 		ChainParams:            chainParams,
+		Chain:                  s.chain,
 		BlockTemplateGenerator: blockTemplateGenerator,
 		MiningAddr:             miningAddr,
 		MiningPubKey:           cfg.MiningPubKey,

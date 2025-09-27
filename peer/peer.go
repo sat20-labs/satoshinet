@@ -1084,7 +1084,7 @@ func (p *Peer) HandlePongMsg(msg *wire.MsgPong) {
 	//}
 }
 
-func (p *Peer) SendPing(cmd string, payload []byte) error {
+func (p *Peer) SendPing(cmd string, payload, sig []byte) error {
     // 生成 nonce
     nonce, err := wire.RandomUint64()
     if err != nil {
@@ -1101,17 +1101,18 @@ func (p *Peer) SendPing(cmd string, payload []byte) error {
     p.QueueMessage(&wire.MsgPing{
 		Nonce: nonce, 
 		SubCmd: cmd, 
-		Payload: payload}, nil)
+		Payload: payload,
+		Sig: sig}, nil)
 	return nil
 }
 
-func (p *Peer) SendPingAndWait(timeout time.Duration, cmd string, payload []byte) error {
+func (p *Peer) SendPingAndWait(timeout time.Duration, cmd string, payload, sig []byte) error {
 	if !p.Connected() {
 		log.Errorf("%s not connetcted", p.String())
 		return fmt.Errorf("%s not connetcted", p.String())
 	}
 
-	duration, rejectCode, reason, err := p.waitForPong(timeout, cmd, payload)
+	duration, rejectCode, reason, err := p.waitForPong(timeout, cmd, payload, sig)
 	if err != nil {
 		log.Errorf("Peer %s did not respond in time: %v", p.String(), err)
     	return err
@@ -1128,7 +1129,7 @@ func (p *Peer) SendPingAndWait(timeout time.Duration, cmd string, payload []byte
 
 // WaitForPongIn sends a ping to peer p, and waits up to timeout for the pong.
 // Returns measured round-trip time (duration), or error if timeout or failed to send.
-func (p *Peer) waitForPong(timeout time.Duration, subCmd string, payload []byte) (
+func (p *Peer) waitForPong(timeout time.Duration, subCmd string, payload, sig []byte) (
 	time.Duration, wire.RejectCode, string, error) {
     // 生成 nonce
     nonce, err := wire.RandomUint64()
@@ -1150,7 +1151,8 @@ func (p *Peer) waitForPong(timeout time.Duration, subCmd string, payload []byte)
     p.QueueMessage(&wire.MsgPing{
 		Nonce: nonce, 
 		SubCmd: subCmd, 
-		Payload: payload}, nil)
+		Payload: payload,
+		Sig: sig}, nil)
 
     // 等待
     select {
@@ -1533,6 +1535,7 @@ out:
 				continue
 			}
 
+			log.Errorf("readMessage from %s failed, %v", p, err)
 			// Only log the error and send reject message if the
 			// local peer is not forcibly disconnecting and the
 			// remote peer has not disconnected.

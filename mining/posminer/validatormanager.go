@@ -2,14 +2,23 @@ package posminer
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/anchortx"
+	"github.com/sat20-labs/satoshinet/blockchain"
+	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	shareindexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
 	peerpkg "github.com/sat20-labs/satoshinet/peer"
+	"github.com/sat20-labs/satoshinet/stp"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -334,6 +343,12 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 		utils.Log.Errorf("block BtcEncode failed, %v", err)
 		return err
 	}
+	payload := buf.Bytes()
+	sig, err := vm.Sign(payload)
+	if err != nil {
+		utils.Log.Errorf("sign block failed, %v", err)
+		return err
+	}
 
 	switch miningNode.NodeType {
 	case indexer.NODE_TYPE_BOOTSTRAP:
@@ -343,7 +358,7 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 			utils.Log.Errorf("no other core node connected")
 			return fmt.Errorf("no other core node connected")
 		}
-		err = core.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
+		err = core.SendPingAndWait(2 * time.Second, wire.CmdBlock, payload, sig)
 		if err != nil {
 			utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", core.String(), err) 
 			return err
@@ -352,7 +367,7 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 	case indexer.NODE_TYPE_CORE:
 		if father != nil && father.Connected() {
 			// 向fatherPeer发起ping请求，如果得到响应，就广播出块，否则就继续等
-			err = father.SendPingAndWait(2 * time.Second, wire.CmdBlock, buf.Bytes())
+			err = father.SendPingAndWait(2 * time.Second, wire.CmdBlock, payload, sig)
 			if err != nil {
 				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", father.String(), err) 
 				return err
@@ -363,13 +378,13 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 		}
 		if next != nil {
 			// 让next早点拿到block数据, 如果是普通miner发起的，在OnPing由core节点做这件事
-			next.SendPing(wire.CmdBlock, buf.Bytes())
+			next.SendPing(wire.CmdBlock, payload, sig)
 		}
 		
 	case indexer.NODE_TYPE_MINER:
 		if father != nil && father.Connected() {
 			// 向fatherPeer发起ping请求，如果得到响应，就广播出块，否则就继续等
-			err = father.SendPingAndWait(4 * time.Second, wire.CmdBlock, buf.Bytes())
+			err = father.SendPingAndWait(4 * time.Second, wire.CmdBlock, payload, sig)
 			if err != nil {
 				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", father.String(), err) 
 				return err
@@ -381,7 +396,7 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 				utils.Log.Errorf("no other core node connected")
 				return fmt.Errorf("no other core node connected")
 			}
-			err = core.SendPingAndWait(4 * time.Second, wire.CmdBlock, buf.Bytes())
+			err = core.SendPingAndWait(4 * time.Second, wire.CmdBlock, payload, sig)
 			if err != nil {
 				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", core.String(), err) 
 				return err
@@ -422,4 +437,172 @@ func (vm *ValidatorManager) isMyTurn() bool {
 
 func (vm *ValidatorManager) isMyGroupTurn() bool {
 	return vm.miningSeqMgr.CheckCurrentMiningPubKey(vm.localValidatorId) == nil
+}
+
+
+func GetMinerToken(height int, validatorId string) []byte {
+
+	// Token Data format: "satsnet:height:validatorid:hash"
+	tokenData := fmt.Sprintf("satsnet:miner:%d:%s", height, validatorId)
+	tokenSource := sha256.Sum256([]byte(tokenData))
+	return tokenSource[:]
+}
+
+func (vm *ValidatorManager) Sign(payload []byte) ([]byte, error) {
+	sig, err := stp.SignMsg(payload)
+	if err != nil {
+		utils.Log.Errorf("ValidatorManager Sign failed, %v", err)
+		return nil, err
+	}
+	return sig, nil
+}
+
+func (vm *ValidatorManager) VerifyBlockSig(validatorId string, payload, sig []byte) bool {
+	pubKey, err := hex.DecodeString(validatorId)
+	if err != nil {
+		return false
+	}
+	publicKey, err := secp256k1.ParsePubKey(pubKey[:])
+	if err != nil {
+		utils.Log.Warnf("ParsePubKey %s failed, %v", validatorId, err)
+		return false
+	}
+
+	signature, err := ecdsa.ParseDERSignature(sig)
+	if err != nil {
+		utils.Log.Warnf("ParseDERSignature failed, %v", err)
+		return false
+	}
+
+	return anchortx.VerifyMessage(publicKey, payload, signature)
+}
+
+// 接收到其他节点发送过来的刚生成的block，需要进行验证
+func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgPing) {
+	// 特殊的ping消息：
+	// 如果是outbound的peer发过来的消息，不需要再往上发送，因为peer就是上级
+	// 如果是inbound的peer发过来的消息，需要往上一级发送
+	var code wire.RejectCode
+	var reason string
+	validatorId := peer.ValidatorId()
+	var block *btcutil.Block
+	for {
+		code = wire.RejectInvalid
+		if msg.SubCmd != wire.CmdBlock {
+			reason = "payload is not block"
+			break
+		}
+
+		miningSeqMgr := shareindexer.ShareIndexer.GetSeqMgr()
+		if miningSeqMgr == nil {
+			reason = "miningSeqMgr is nil"
+			break
+		}
+	
+		// 不一定是该validator挖的区块，但必然是矿工才转发，否则拒绝
+		if miningSeqMgr.GetNodeType(validatorId) == indexer.NODE_TYPE_NORMAL {
+			reason = "not a miner"
+			break
+		}
+
+		// 检查block，是否可以被接受
+		var msgBlock wire.MsgBlock
+		rbuf := bytes.NewReader(msg.Payload)
+		if err := msgBlock.BtcDecode(rbuf, wire.ProtocolVersion, wire.WitnessEncoding); err != nil {
+			reason = "block BtcDecode failed, " + err.Error()
+			break
+		}
+		utils.Log.Infof("OnBlockGenerated receive block %s", msgBlock.BlockHash().String())
+		block = btcutil.NewBlock(&msgBlock)
+
+		miningAddr := sindexer.GetMiningAddress(&msgBlock, vm.cfg.ChainParams)
+		err := miningSeqMgr.CheckCurrentMiningAddr(miningAddr)
+		if err != nil {
+			reason = fmt.Sprintf("not its turn to mine a block, %s", miningAddr)
+			break
+		}
+		miningNode := miningSeqMgr.GetMiningInfoWithAddr(miningAddr)
+		if miningNode == nil {
+			reason = fmt.Sprintf("GetMiningInfoWithAddr %s failed", miningAddr)
+			break
+		}
+
+		currentMiner := miningSeqMgr.GetCurrentMiningAddr()
+		if currentMiner != miningAddr {
+			// 非miner本身，需要等过一个时间窗口
+			now := time.Now().Unix()
+			if now - vm.lastBlockTime < MinerInterval + PreWarningInterval {
+				// The miner time is not past, ignore
+				reason = "not in time"
+				break
+			}
+		}
+
+		checked := vm.VerifyBlockSig(miningNode.PubKey, msg.Payload, msg.Sig)
+		if !checked {
+			reason = "invalid signature"
+			break
+		}
+
+		// Ensure the block is building from the expected previous block.
+		expectedPrevHash := vm.cfg.Chain.BestSnapshot().Hash
+		prevHash := &block.MsgBlock().Header.PrevBlock
+		if !expectedPrevHash.IsEqual(prevHash) {
+			reason = fmt.Sprintf("block %s not build from tip", msgBlock.BlockHash().String())
+			break
+		}
+		if err := vm.cfg.Chain.CheckConnectBlockTemplate(block); err != nil {
+			if _, ok := err.(blockchain.RuleError); !ok {
+				reason = fmt.Sprintf("Failed to process block proposal: %v", err)
+			} else {
+				reason = fmt.Sprintf("Rejected block proposal: %v", err)
+			}
+			break
+		}
+
+		if peer.Inbound() {
+			// 本地检查通过，如果还有上级节点，需要继续发给上级节点，让上级节点进一步检查 （最多2级）
+			// 本地大概率就是miningNode.Father，所以这里需要再往上传
+			if miningNode.Father != nil && miningNode.Father.Father != nil {
+				pubkey := miningNode.Father.Father.PubKey
+				// 本地节点如果是bootstrap，就不检查了
+				if vm.localValidatorId != pubkey {
+					bootstrap := vm.cfg.PosMiner.GetPeerByValidatorId(pubkey)
+					if bootstrap == nil {
+						reason = fmt.Sprintf("can't find bootstrap peer %s", pubkey)
+						break
+					}
+					err := bootstrap.SendPingAndWait(2 * time.Second, wire.CmdBlock, msg.Payload, msg.Sig)
+					if err != nil {
+						reason = fmt.Sprintf("SendPingAndWait %s failed, %v", bootstrap.String(), err)
+						break
+					}
+				}
+			}
+		}
+
+		// 让next优先得到该block
+		next := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.Next.PubKey)
+		if next != nil && next.Connected() {
+			next.SendPing(wire.CmdBlock, msg.Payload, msg.Sig)
+		}
+
+		// 检查通过，该block可以被接受，尝试加入区块链
+		_, err = vm.cfg.ProcessBlock(block, blockchain.BFFastAdd)
+		if err != nil {
+			reason = fmt.Sprintf("ProcessBlock failed, %v", err)
+			break
+		}
+		utils.Log.Infof("block %s from %s is accepted", block.Hash().String(), peer.String())
+
+		code = 0
+		break
+	}
+
+	if code != 0 {
+		utils.Log.Errorf("OnPing %s failed, reason %s", peer.String(), reason)
+	}
+
+	// 响应ping消息
+	peer.QueueMessage(wire.NewMsgPongWithCode(msg.Nonce, code, reason), nil)
 }

@@ -16,8 +16,8 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
-	"github.com/sat20-labs/satoshinet/wire"
 	peerpkg "github.com/sat20-labs/satoshinet/peer"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -60,6 +60,7 @@ type Config struct {
 	// ChainParams identifies which chain parameters the cpu miner is
 	// associated with.
 	ChainParams *chaincfg.Params
+	Chain       *blockchain.BlockChain
 
 	// Btcd Dir
 	BtcdDir string
@@ -526,7 +527,12 @@ func (m *POSMiner) OnTimeGenerateBlock() (*wire.MsgBlock, error) {
 	if err := m.g.BlockChain().CheckConnectBlockTemplate(block); err != nil {
 		return nil, fmt.Errorf("CheckConnectBlockTemplate failed: %v", err)
 	}
+	utils.Log.Infof("OnTimeGenerateBlock generate block %s", msgblock.BlockHash().String())
 	return msgblock, nil
+}
+
+func (m *POSMiner) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgPing) {
+	m.validatorMgr.OnBlockGenerated(peer, msg)
 }
 
 func (m *POSMiner) GenerateNewTestBlock() (*chainhash.Hash, int32, error) {
