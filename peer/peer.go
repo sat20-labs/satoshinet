@@ -1062,6 +1062,7 @@ func (p *Peer) HandlePongMsg(msg *wire.MsgPong) {
 	// without large usage of the ping rpc call since we ping infrequently
 	// enough that if they overlap we would have timed out the peer.
 	//if p.ProtocolVersion() > wire.BIP0031Version {
+		log.Debugf("pong nonce %d, last nonce %d, ", msg.Nonce, p.lastPingNonce)
 		p.statsMtx.Lock()
 		if p.lastPingNonce != 0 && msg.Nonce == p.lastPingNonce {
 			p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
@@ -1913,6 +1914,7 @@ out:
 					p.lastPingNonce = m.Nonce
 					p.lastPingTime = time.Now()
 					p.statsMtx.Unlock()
+					log.Debugf("ping nonce %d", m.Nonce)
 				//}
 			}
 
