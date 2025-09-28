@@ -142,6 +142,8 @@ https://github.com/sat20-labs/satoshinet/tree/main/install/ubuntu_22.04
 3. 改名为 satsnet.confg
 4. 将以下几个配置项打开，并且修改你的bitcoind的rpc用户名和密码：
 
+addpeer=服务节点ip地址
+
 ; 本地节点rpc接口用户名和密码
 rpcuser=your_name
 rpcpass=your_password
@@ -149,8 +151,8 @@ rpcpass=your_password
 ; 激活挖矿
 generate=true
 
-; 激活STP服务，普通节点设置为false
-enableSTP=true
+; 你的节点需要连接的服务节点的公钥，服务节点的地址在addpeer配置
+serverpubkey=server_node_pubkey
 
 ; 质押了资产的钱包的公钥，请修改
 miningpubkey=your_wallet_pubkey
