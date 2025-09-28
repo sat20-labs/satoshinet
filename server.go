@@ -2702,8 +2702,24 @@ func (s *server) Start() {
 
 	}
 
+	// 需要等同步到最新高度再加载
 	if cfg.SaveMempool {
-		s.loadMempoolCache()
+		go func() {
+			time.Sleep(5*time.Second) // 等待peer连接并获取最新高度
+			for {
+				tip1 := indexerShare.ShareIndexer.GetChainTip()
+				tip2 := s.getTipFromSyncPeer()
+				tip := max(tip1, tip2)
+				height := indexerShare.ShareIndexer.GetSyncHeight()
+				srvrLog.Infof("syncHeight %d tip %d", height, tip)
+				if height != tip {
+					time.Sleep(time.Second)
+					continue
+				}
+				s.loadMempoolCache()
+				break
+			}
+		}()
 	}
 }
 

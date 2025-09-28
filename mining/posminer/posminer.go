@@ -181,12 +181,12 @@ func (m *POSMiner) solveBlock(msgBlock *wire.MsgBlock, blockHeight int32) bool {
 	utils.Log.Tracef("solveBlock ...")
 	// Choose a random extra nonce offset for this block template and
 	// worker.
-	enOffset, err := wire.RandomUint64()
-	if err != nil {
-		utils.Log.Errorf("Unexpected error while generating random "+
-			"extra nonce offset: %v", err)
-		enOffset = 0
-	}
+	// enOffset, err := wire.RandomUint64()
+	// if err != nil {
+	// 	utils.Log.Errorf("Unexpected error while generating random "+
+	// 		"extra nonce offset: %v", err)
+	// 	enOffset = 0
+	// }
 
 	// Create some convenience variables.
 	header := &msgBlock.Header
@@ -205,7 +205,7 @@ func (m *POSMiner) solveBlock(msgBlock *wire.MsgBlock, blockHeight int32) bool {
 	// Update the extra nonce in the block template with the
 	// new value by regenerating the coinbase script and
 	// setting the merkle root to the new value.
-	m.g.UpdateExtraNonce(msgBlock, blockHeight, extraNonce+enOffset)
+	m.g.UpdateExtraNonce(msgBlock, blockHeight, extraNonce)
 
 	// Search through the entire nonce range for a solution while
 	// periodically checking for early quit and stale block

@@ -14,6 +14,9 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/indexer/common"
+
+	"github.com/sat20-labs/satoshinet/stp"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -245,8 +248,16 @@ func mergeUtxoView(viewA *blockchain.UtxoViewpoint, viewB *blockchain.UtxoViewpo
 // it starts with the block height that is required by version 2 blocks and adds
 // the extra nonce as well as additional coinbase flags.
 func standardCoinbaseScript(nextBlockHeight int32, extraNonce uint64) ([]byte, error) {
+
+	data := common.GetScriptSignData(int(nextBlockHeight), extraNonce)
+	sig, err := stp.SignMsg([]byte(data))
+	if err != nil {
+		return nil, err
+	}
+	//sig := CoinbaseFlags
+
 	return txscript.NewScriptBuilder().AddInt64(int64(nextBlockHeight)).
-		AddInt64(int64(extraNonce)).AddData([]byte(CoinbaseFlags)).
+		AddInt64(int64(extraNonce)).AddData([]byte(sig)).
 		Script()
 }
 

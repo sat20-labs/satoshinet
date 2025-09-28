@@ -1,6 +1,4 @@
-
 package common
-
 
 import (
 	"encoding/hex"
@@ -8,18 +6,21 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/txscript"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
-
-/* 
+/*
 下面的接口，假定索引器的高度就是当前高度，在当前高度下的挖矿顺序和挖矿地址
 基本规则：
 	1. 按公钥顺序
 	2. 分层次：先引导节点（A，B，C...）->核心节点（A1,A2,A3...）->普通节点(A11,A12,A13...)
 	3. 替补规则：子节点不在线，由父节点替补挖矿，不能漏掉
-	
+
 	A ->  A1 -- A11,A12,A13
 		A2 -- A21,A22,A23
 		A3 -- A31,A32,A33
@@ -319,9 +320,46 @@ func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string) error {
 	return fmt.Errorf("invalid mining address %s", addr)
 }
 
+func GetScriptSignData(height int, nonce uint64) []byte {
+	return []byte(fmt.Sprintf("%d-%d", height, nonce))
+}
+
+func VerifyStandardCoinbaseScript(script, pubkey []byte) (error) {
+	tokenizer := txscript.MakeScriptTokenizer(0, script)
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing contract path")
+	}
+	height := tokenizer.ExtractInt64()
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing invoke result")
+	}
+	nonce := tokenizer.ExtractInt64()
+
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing invoke result")
+	}
+	sig := tokenizer.Data()
+	signature, err := ecdsa.ParseDERSignature(sig)
+	if err != nil {
+		return err
+	}
+
+	publicKey, err := secp256k1.ParsePubKey(pubkey)
+	if err != nil {
+		return err
+	}
+
+	data := GetScriptSignData(int(height), uint64(nonce))
+	if !VerifyMessage(publicKey, []byte(data), signature) {
+		return fmt.Errorf("VerifyStandardCoinbaseScript VerifyMessage failed")
+	}
+	return nil
+}
 
 // 检查某个高度下的挖矿地址是否有效
-func (b *MiningSequenceMgr) CheckMiningAddr(height int, addr string) error {
+func (b *MiningSequenceMgr) CheckMiningAddr(tx *wire.MsgTx, height int, addr string) error {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 
@@ -340,6 +378,20 @@ func (b *MiningSequenceMgr) CheckMiningAddr(height int, addr string) error {
 		}
 		
 		return fmt.Errorf("invalid mining address %s", addr)
+	}
+
+	// 验证签名
+	miningInfo, ok := b.addressMap[addr]
+	if !ok {
+		return fmt.Errorf("invalid mining address %s", addr)
+	}
+	pubkey, err := hex.DecodeString(miningInfo.PubKey)
+	if err != nil {
+		return fmt.Errorf("CheckMiningAddr %v", err)
+	}
+	err = VerifyStandardCoinbaseScript(tx.TxIn[0].SignatureScript, pubkey)
+	if err != nil {
+		return fmt.Errorf("CheckMiningAddr %v", err)
 	}
 
 	var node *MiningInfo
