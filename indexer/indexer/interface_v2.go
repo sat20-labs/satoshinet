@@ -121,7 +121,6 @@ func convertAssets(info *sindexer.UtxoInfo, assetMap map[common.TickerName]*comm
 	// 白聪资产去除绑定资产的聪
 	bindingSats := int64(0)
 	if len(info.Assets) != 0 {
-		var hasUnboundAsset bool
 		for _, asset := range info.Assets {
 			total, ok := assetMap[asset.Name]
 			if ok {
@@ -130,17 +129,9 @@ func convertAssets(info *sindexer.UtxoInfo, assetMap map[common.TickerName]*comm
 				total = &asset.Amount
 			}
 			assetMap[asset.Name] = total
-
-			if asset.BindingSat != 0 &&
-			asset.Amount.Int64()%int64(asset.BindingSat) != 0 {
-				hasUnboundAsset = true
-			}
 		}
-		bindingSats = info.Assets.GetBindingSatAmout()
 		// 如果存在没绑定聪的ordx资产，需要为其预留空白聪
-		if hasUnboundAsset {
-			bindingSats++
-		}
+		bindingSats = info.Assets.GetBindingSatAmout() + int64(info.Assets.GetUnboundAssetCount())
 	}
 	value := (info.Value - bindingSats)
 	if value > 0 {
