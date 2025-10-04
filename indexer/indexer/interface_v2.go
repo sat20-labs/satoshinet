@@ -5,7 +5,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/wire"
 	swire "github.com/sat20-labs/satoshinet/wire"
-	indexer "github.com/sat20-labs/indexer/common"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 )
 
 // return: utxoId->asset
@@ -21,22 +21,39 @@ func (b *IndexerMgr) GetAssetUTXOsInAddressWithTickV3(address string, ticker *sw
 		if err != nil {
 			continue
 		}
-		info := b.GetTxOutputWithUtxoV3(utxo)
-		if info == nil {
+
+		output := b.GetTxOutputWithUtxo(utxo)
+		if output == nil {
 			continue
 		}
 
+		var assetsInUtxo common.AssetsInUtxo
+		assetsInUtxo.UtxoId = output.UtxoId
+		assetsInUtxo.OutPoint = utxo
+		assetsInUtxo.Value = output.OutValue.Value
+		assetsInUtxo.PkScript = output.OutValue.PkScript
+		
+		for _, v := range output.OutValue.Assets {
+			asset := common.DisplayAsset{
+				AssetName:  v.Name,
+				Amount:     v.Amount.String(),
+				Precision:  v.Amount.Precision,
+				BindingSat: int(v.BindingSat),
+			}
+			assetsInUtxo.Assets = append(assetsInUtxo.Assets, &asset)
+		}
+		
 		if ticker == nil {
-			result[utxoId] = info
+			result[utxoId] = &assetsInUtxo
 		} else if common.IsPlainAsset(ticker) {
 			// 即使包含其他资产，只要有白聪存在，就可以放进来
-			if info.HasPlainSat() {
-				result[utxoId] = info
+			if output.HasPlainSat() {
+				result[utxoId] = &assetsInUtxo
 			}
 		} else {
-			for _, asset := range info.Assets {
+			for _, asset := range assetsInUtxo.Assets {
 				if asset.AssetName == *ticker {
-					result[utxoId] = info
+					result[utxoId] = &assetsInUtxo
 				}
 			}
 		}
@@ -58,12 +75,12 @@ func (b *IndexerMgr) GetTxOutputWithUtxoV3(utxo string) *common.AssetsInUtxo {
 	assetsInUtxo.Value = output.OutValue.Value
 	assetsInUtxo.PkScript = output.OutValue.PkScript
 	
-	for _, asset := range output.OutValue.Assets {
+	for _, v := range output.OutValue.Assets {
 		asset := common.DisplayAsset{
-			AssetName:  asset.Name,
-			Amount:     asset.Amount.String(),
-			Precision:  asset.Amount.Precision,
-			BindingSat: int(asset.BindingSat),
+			AssetName:  v.Name,
+			Amount:     v.Amount.String(),
+			Precision:  v.Amount.Precision,
+			BindingSat: int(v.BindingSat),
 		}
 
 		assetsInUtxo.Assets = append(assetsInUtxo.Assets, &asset)
@@ -80,7 +97,6 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 	}
 
 	totalSats := int64(0)
-	value := int64(0)
 	result := make(map[wire.AssetName]*common.Decimal)
 	for utxoId := range utxos {
 		utxo, err := b.rpcService.GetUtxoByID(utxoId)
@@ -93,30 +109,46 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 		}
 		totalSats += info.Value
 
-		// 白聪资产去除绑定资产的聪
-		assetAmt := int64(0)
-		if len(info.Assets) != 0 {
-			for _, asset := range info.Assets {
-				total, ok := result[asset.Name]
-				if ok {
-					total = total.Add(&asset.Amount)
-				} else {
-					total = &asset.Amount
-				}
-				result[asset.Name] = total
-			}
-			assetAmt = info.Assets.GetBindingSatAmout()
-		}
-		
-		value += (info.Value - assetAmt)
+		convertAssets(info, result)
 	}
 	result[common.ASSET_ALL_SAT] = common.NewDefaultDecimal(totalSats)
-	if value != 0 {
-		result[common.ASSET_PLAIN_SAT] = indexer.NewDefaultDecimal(value)
-	}
-
+	
 	return result
 }
+
+func convertAssets(info *sindexer.UtxoInfo, assetMap map[common.TickerName]*common.Decimal)  {
+
+	// 白聪资产去除绑定资产的聪
+	bindingSats := int64(0)
+	if len(info.Assets) != 0 {
+		var hasUnboundAsset bool
+		for _, asset := range info.Assets {
+			total, ok := assetMap[asset.Name]
+			if ok {
+				total = total.Add(&asset.Amount)
+			} else {
+				total = &asset.Amount
+			}
+			assetMap[asset.Name] = total
+
+			if asset.BindingSat != 0 &&
+			asset.Amount.Int64()%int64(asset.BindingSat) != 0 {
+				hasUnboundAsset = true
+			}
+		}
+		bindingSats = info.Assets.GetBindingSatAmout()
+		// 如果存在没绑定聪的ordx资产，需要为其预留空白聪
+		if hasUnboundAsset {
+			bindingSats++
+		}
+	}
+	value := (info.Value - bindingSats)
+	if value > 0 {
+		plainSats := assetMap[common.ASSET_PLAIN_SAT]
+		assetMap[common.ASSET_PLAIN_SAT] = common.DecimalAdd(plainSats, common.NewDefaultDecimal(value))
+	}
+}
+
 
 // return: ticker -> asset info (inscriptinId -> asset ranges)
 func (b *IndexerMgr) GetAssetsWithUtxoV3(utxo string) map[common.TickerName]*common.Decimal {
@@ -127,23 +159,6 @@ func (b *IndexerMgr) GetAssetsWithUtxoV3(utxo string) map[common.TickerName]*com
 	}
 
 	result := make(map[wire.AssetName]*common.Decimal)
-	// 白聪资产去除绑定资产的聪
-	assetAmt := int64(0)
-	if len(info.Assets) != 0 {
-		for _, asset := range info.Assets {
-			total, ok := result[asset.Name]
-			if ok {
-				total = total.Add(&asset.Amount)
-			} else {
-				total = &asset.Amount
-			}
-			result[asset.Name] = total
-		}
-		assetAmt = info.Assets.GetBindingSatAmout()
-	}
-	value := (info.Value - assetAmt)
-	if value != 0 {
-		result[common.ASSET_PLAIN_SAT] = indexer.NewDefaultDecimal(value)
-	}
+	convertAssets(info, result)
 	return result
 }
