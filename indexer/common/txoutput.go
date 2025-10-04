@@ -66,11 +66,18 @@ func (p *TxOutput) Zero() bool {
 }
 
 func (p *TxOutput) HasPlainSat() bool {
-	if len(p.OutValue.Assets) == 0 {
-		return p.OutValue.Value > 0
+	return p.GetPlainSat() > 0
+}
+
+// 是否存在一些n>0并且没有对应聪的资产
+func (p *TxOutput) HasUnboundAsset() bool {
+	for _, asset := range p.OutValue.Assets {
+		if asset.BindingSat != 0 &&
+		asset.Amount.Int64()%int64(asset.BindingSat) != 0 {
+			return true
+		}
 	}
-	assetAmt := p.OutValue.Assets.GetBindingSatAmout()
-	return p.OutValue.Value > assetAmt
+	return false
 }
 
 // 去掉已经绑定了资产的聪. 与主网不同，聪网上每一个聪，都只能代表一种资产。如果一个聪有多种资产，只能选择一种到聪网流通。
@@ -79,6 +86,15 @@ func (p *TxOutput) GetPlainSat() int64 {
 		return p.OutValue.Value
 	}
 	assetAmt := p.OutValue.Assets.GetBindingSatAmout()
+	// 聪网需要考虑有一些ordx资产，因为n参数的影响，<n的资产并没有绑定聪
+	// 在获取该utxo的空白聪数量时，最好就把这部分聪预留下来
+	if p.HasUnboundAsset() {
+		assetAmt++
+	}
+	if p.OutValue.Value < assetAmt {
+		return 0
+	}
+
 	return p.OutValue.Value - assetAmt
 }
 
