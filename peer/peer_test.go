@@ -446,6 +446,12 @@ func TestPeerListeners(t *testing.T) {
 			OnAddrV2: func(p *peer.Peer, msg *wire.MsgAddrV2) {
 				ok <- msg
 			},
+			OnMineBlock: func(p *peer.Peer, msg *wire.MsgMineBlock) {
+				ok <- msg
+			},
+			OnMineAck: func(p *peer.Peer, msg *wire.MsgMineAck) {
+				ok <- msg
+			},
 		},
 		UserAgentName:     "peer",
 		UserAgentVersion:  "1.0",

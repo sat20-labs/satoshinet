@@ -797,33 +797,50 @@ func NetAddressKey(na *wire.NetAddressV2) string {
 // consecutively.
 func (a *AddrManager) GetAddress() *KnownAddress {
 	// Protect concurrent access.
-	a.mtx.Lock()
-	defer a.mtx.Unlock()
-
+	a.mtx.RLock()
 	if a.numAddresses() == 0 {
+		a.mtx.RUnlock()
 		return nil
 	}
+	// 有可能耗时很长，导致其他调用被阻塞，尝试复制一份数据再进行
+	nTried := a.nTried
+	nNew := a.nNew
+	rand := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	var addrTried [triedBucketCount]*list.List
+	copy(addrTried[:], a.addrTried[:])
+	
+	var addrNew [newBucketCount]map[string]*KnownAddress
+	for i, addrmap := range a.addrNew {
+		newmap := make(map[string]*KnownAddress)
+		for k, v := range addrmap {
+			newmap[k] = v
+		}
+		addrNew[i] = newmap
+	}
+
+	a.mtx.RUnlock()
 
 	// Use a 50% chance for choosing between tried and new table entries.
-	if a.nTried > 0 && (a.nNew == 0 || a.rand.Intn(2) == 0) {
+	if nTried > 0 && (nNew == 0 || rand.Intn(2) == 0) {
 		// Tried entry.
 		large := 1 << 30
 		factor := 1.0
 		for {
 			// pick a random bucket.
-			bucket := a.rand.Intn(len(a.addrTried))
-			if a.addrTried[bucket].Len() == 0 {
+			bucket := rand.Intn(len(addrTried))
+			if addrTried[bucket].Len() == 0 {
 				continue
 			}
 
 			// Pick a random entry in the list
-			e := a.addrTried[bucket].Front()
+			e := addrTried[bucket].Front()
 			for i :=
-				a.rand.Int63n(int64(a.addrTried[bucket].Len())); i > 0; i-- {
+				rand.Int63n(int64(addrTried[bucket].Len())); i > 0; i-- {
 				e = e.Next()
 			}
 			ka := e.Value.(*KnownAddress)
-			randval := a.rand.Intn(large)
+			randval := rand.Intn(large)
 			if float64(randval) < (factor * ka.chance() * float64(large)) {
 				log.Tracef("Selected %v from tried bucket",
 					NetAddressKey(ka.na))
@@ -838,20 +855,20 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 		factor := 1.0
 		for {
 			// Pick a random bucket.
-			bucket := a.rand.Intn(len(a.addrNew))
-			if len(a.addrNew[bucket]) == 0 {
+			bucket := rand.Intn(len(addrNew))
+			if len(addrNew[bucket]) == 0 {
 				continue
 			}
 			// Then, a random entry in it.
 			var ka *KnownAddress
-			nth := a.rand.Intn(len(a.addrNew[bucket]))
-			for _, value := range a.addrNew[bucket] {
+			nth := rand.Intn(len(addrNew[bucket]))
+			for _, value := range addrNew[bucket] {
 				if nth == 0 {
 					ka = value
 				}
 				nth--
 			}
-			randval := a.rand.Intn(large)
+			randval := rand.Intn(large)
 			if float64(randval) < (factor * ka.chance() * float64(large)) {
 				log.Tracef("Selected %v from new bucket",
 					NetAddressKey(ka.na))

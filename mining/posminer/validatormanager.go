@@ -156,6 +156,8 @@ func (vm *ValidatorManager) generatorTimer() {
 	vm.lastBlockTime = vm.cfg.PosMiner.GetBlockRecvTime()
 	vm.lastBlock = int(vm.cfg.PosMiner.GetBlockHeight())
 
+	utils.Log.Debugf("init lastBlockTime to %d", vm.lastBlockTime)
+
 exit:
 	for {
 		select {
@@ -185,6 +187,8 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	if vm.lastBlock != int(vm.cfg.PosMiner.GetBlockHeight()) {
 		vm.lastBlockTime = vm.cfg.PosMiner.GetBlockRecvTime()
 		vm.lastBlock = int(vm.cfg.PosMiner.GetBlockHeight())
+
+		utils.Log.Debugf("block updated. height %d, lastBlockTime %d", vm.lastBlock, vm.lastBlockTime)
 	}
 
 	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
@@ -192,6 +196,7 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 		utils.Log.Infof("[ValidatorManager] mempool is empty, current miner %s", vm.miningSeqMgr.GetCurrentMiningAddr())
 		// 重置等待时间
 		vm.lastBlockTime = now
+		utils.Log.Debugf("reset lastBlockTime time to %d", vm.lastBlockTime)
 		return
 	}
 	
@@ -241,6 +246,7 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	}
 
 	vm.lastBlockTime = 0
+	utils.Log.Debugf("set lastBlockTime time to %d", vm.lastBlockTime)
 
 }
 
@@ -358,18 +364,18 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 			utils.Log.Errorf("no other core node connected")
 			return fmt.Errorf("no other core node connected")
 		}
-		err = core.SendPingAndWait(2 * time.Second, wire.CmdBlock, payload, sig)
+		err = core.SendMineBlockAndWait(2 * time.Second, wire.CmdBlock, payload, sig)
 		if err != nil {
-			utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", core.String(), err) 
+			utils.Log.Errorf("[ValidatorManager] SendMineBlockAndWait %s failed, %v", core.String(), err) 
 			return err
 		}
 
 	case indexer.NODE_TYPE_CORE:
 		if father != nil && father.Connected() {
 			// 向fatherPeer发起ping请求，如果得到响应，就广播出块，否则就继续等
-			err = father.SendPingAndWait(2 * time.Second, wire.CmdBlock, payload, sig)
+			err = father.SendMineBlockAndWait(2 * time.Second, wire.CmdBlock, payload, sig)
 			if err != nil {
-				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", father.String(), err) 
+				utils.Log.Errorf("[ValidatorManager] SendMineBlockAndWait %s failed, %v", father.String(), err) 
 				return err
 			}
 		} else {
@@ -378,15 +384,15 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 		}
 		if next != nil {
 			// 让next早点拿到block数据, 如果是普通miner发起的，在OnPing由core节点做这件事
-			next.SendPing(wire.CmdBlock, payload, sig)
+			next.SendMineBlock(wire.CmdBlock, payload, sig)
 		}
 		
 	case indexer.NODE_TYPE_MINER:
 		if father != nil && father.Connected() {
 			// 向fatherPeer发起ping请求，如果得到响应，就广播出块，否则就继续等
-			err = father.SendPingAndWait(4 * time.Second, wire.CmdBlock, payload, sig)
+			err = father.SendMineBlockAndWait(4 * time.Second, wire.CmdBlock, payload, sig)
 			if err != nil {
-				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", father.String(), err) 
+				utils.Log.Errorf("[ValidatorManager] SendMineBlockAndWait %s failed, %v", father.String(), err) 
 				return err
 			}
 		} else {
@@ -396,9 +402,9 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 				utils.Log.Errorf("no other core node connected")
 				return fmt.Errorf("no other core node connected")
 			}
-			err = core.SendPingAndWait(4 * time.Second, wire.CmdBlock, payload, sig)
+			err = core.SendMineBlockAndWait(4 * time.Second, wire.CmdBlock, payload, sig)
 			if err != nil {
-				utils.Log.Errorf("[ValidatorManager] sendPingAndWait %s failed, %v", core.String(), err) 
+				utils.Log.Errorf("[ValidatorManager] SendMineBlockAndWait %s failed, %v", core.String(), err) 
 				return err
 			}
 		}
@@ -478,7 +484,7 @@ func (vm *ValidatorManager) VerifyBlockSig(validatorId string, payload, sig []by
 }
 
 // 接收到其他节点发送过来的刚生成的block，需要进行验证
-func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgPing) {
+func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgMineBlock) {
 	// 特殊的ping消息：
 	// 如果是outbound的peer发过来的消息，不需要再往上发送，因为peer就是上级
 	// 如果是inbound的peer发过来的消息，需要往上一级发送
@@ -533,6 +539,7 @@ func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgPi
 			now := time.Now().Unix()
 			if now - vm.lastBlockTime < MinerInterval + PreWarningInterval {
 				// The miner time is not past, ignore
+				utils.Log.Debugf("now %d - lastblockTime %d = %d, < 15s", now, vm.lastBlockTime, now - vm.lastBlockTime)
 				reason = "not in time"
 				break
 			}
@@ -572,9 +579,9 @@ func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgPi
 						reason = fmt.Sprintf("can't find bootstrap peer %s", pubkey)
 						break
 					}
-					err := bootstrap.SendPingAndWait(2 * time.Second, wire.CmdBlock, msg.Payload, msg.Sig)
+					err := bootstrap.SendMineBlockAndWait(2 * time.Second, wire.CmdBlock, msg.Payload, msg.Sig)
 					if err != nil {
-						reason = fmt.Sprintf("SendPingAndWait %s failed, %v", bootstrap.String(), err)
+						reason = fmt.Sprintf("SendMineBlockAndWait %s failed, %v", bootstrap.String(), err)
 						break
 					}
 				}
@@ -584,7 +591,7 @@ func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgPi
 		// 让next优先得到该block
 		next := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.Next.PubKey)
 		if next != nil && next.Connected() {
-			next.SendPing(wire.CmdBlock, msg.Payload, msg.Sig)
+			next.SendMineBlock(wire.CmdBlock, msg.Payload, msg.Sig)
 		}
 
 		// 检查通过，该block可以被接受，尝试加入区块链
@@ -600,9 +607,9 @@ func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgPi
 	}
 
 	if code != 0 {
-		utils.Log.Errorf("OnPing %s failed, reason %s", peer.String(), reason)
+		utils.Log.Errorf("OnBlockGenerated %s failed, reason %s", peer.String(), reason)
 	}
 
 	// 响应ping消息
-	peer.QueueMessage(wire.NewMsgPongWithCode(msg.Nonce, code, reason), nil)
+	peer.QueueMessage(wire.NewMsgMineAckWithCode(msg.Nonce, code, reason), nil)
 }

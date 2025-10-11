@@ -23,11 +23,6 @@ type MsgPing struct {
 	// Unique value associated with message that is used to identify
 	// specific ping message.
 	Nonce uint64
-
-	// embedding data
-	SubCmd  string
-	Payload []byte
-	Sig     []byte
 }
 
 // BtcDecode decodes r using the bitcoin protocol encoding into the receiver.
@@ -36,38 +31,12 @@ func (msg *MsgPing) BtcDecode(r io.Reader, pver uint32, enc MessageEncoding) err
 	// There was no nonce for BIP0031Version and earlier.
 	// NOTE: > is not a mistake here.  The BIP0031 was defined as AFTER
 	// the version unlike most others.
-	// if pver > BIP0031Version {
-	// 	nonce, err := binarySerializer.Uint64(r, littleEndian)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	msg.Nonce = nonce
-	// }
-
-	buf := binarySerializer.Borrow()
-	defer binarySerializer.Return(buf)
-
-	nonce, err := ReadVarIntBuf(r, pver, buf)
-	if err != nil {
-		return err
-	}
-	msg.Nonce = nonce
-
-	subCmd, err := readVarStringBuf(r, pver, buf)
-	if err == nil {
-		msg.SubCmd = subCmd
-
-		payload, err := ReadVarBytesBuf(r, pver, buf, MaxBlockPayload, "block")
+	if pver > BIP0031Version {
+		nonce, err := binarySerializer.Uint64(r, littleEndian)
 		if err != nil {
 			return err
 		}
-		msg.Payload = payload
-
-		sig, err := ReadVarBytesBuf(r, pver, buf, 256, "sig")
-		if err != nil {
-			return err
-		}
-		msg.Sig = sig
+		msg.Nonce = nonce
 	}
 
 	return nil
@@ -79,34 +48,8 @@ func (msg *MsgPing) BtcEncode(w io.Writer, pver uint32, enc MessageEncoding) err
 	// There was no nonce for BIP0031Version and earlier.
 	// NOTE: > is not a mistake here.  The BIP0031 was defined as AFTER
 	// the version unlike most others.
-	// if pver > BIP0031Version {
-	// 	err := binarySerializer.PutUint64(w, littleEndian, msg.Nonce)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// }
-
-	buf := binarySerializer.Borrow()
-	defer binarySerializer.Return(buf)
-
-	err := WriteVarIntBuf(w, pver, msg.Nonce, buf)
-	if err != nil {
-		return err
-	}
-
-	// 兼容区块浏览器，在subcmd为空时，不编码
-	if msg.SubCmd != "" {
-		err = writeVarStringBuf(w, pver, msg.SubCmd, buf)
-		if err != nil {
-			return err
-		}
-
-		err = WriteVarBytesBuf(w, pver, msg.Payload, buf)
-		if err != nil {
-			return err
-		}
-
-		err = WriteVarBytesBuf(w, pver, msg.Sig, buf)
+	if pver > BIP0031Version {
+		err := binarySerializer.PutUint64(w, littleEndian, msg.Nonce)
 		if err != nil {
 			return err
 		}
@@ -128,11 +71,10 @@ func (msg *MsgPing) MaxPayloadLength(pver uint32) uint32 {
 	// There was no nonce for BIP0031Version and earlier.
 	// NOTE: > is not a mistake here.  The BIP0031 was defined as AFTER
 	// the version unlike most others.
-	// if pver > BIP0031Version {
-	// 	// Nonce 8 bytes.
-	// 	plen += 8
-	// }
-	plen = 8 + CommandSize + MaxBlockPayload
+	if pver > BIP0031Version {
+		// Nonce 8 bytes.
+		plen += 8
+	}
 
 	return plen
 }

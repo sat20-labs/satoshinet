@@ -531,8 +531,10 @@ func (m *POSMiner) OnTimeGenerateBlock() (*wire.MsgBlock, error) {
 	return msgblock, nil
 }
 
-func (m *POSMiner) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgPing) {
-	m.validatorMgr.OnBlockGenerated(peer, msg)
+func (m *POSMiner) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgMineBlock) {
+	if m.started {
+		m.validatorMgr.OnBlockGenerated(peer, msg)
+	}
 }
 
 func (m *POSMiner) GenerateNewTestBlock() (*chainhash.Hash, int32, error) {

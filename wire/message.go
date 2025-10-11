@@ -58,6 +58,9 @@ const (
 	CmdCFHeaders    = "cfheaders"
 	CmdCFCheckpt    = "cfcheckpt"
 	CmdSendAddrV2   = "sendaddrv2"
+
+	CmdMineBlock   = "mineblock"
+	CmdMineAck     = "mineack"
 )
 
 // MessageEncoding represents the wire message encoding format to be used.
@@ -190,6 +193,12 @@ func makeEmptyMessage(command string) (Message, error) {
 
 	case CmdCFCheckpt:
 		msg = &MsgCFCheckpt{}
+
+	case CmdMineBlock:
+		msg = &MsgMineBlock{}
+
+	case CmdMineAck:
+		msg = &MsgMineAck{}
 
 	default:
 		return nil, ErrUnknownMessage

@@ -9,10 +9,6 @@ import (
 	"io"
 )
 
-const (
-	MAX_REJECT_REASON = 512
-)
-
 // MsgPong implements the Message interface and represents a bitcoin pong
 // message which is used primarily to confirm that a connection is still valid
 // in response to a bitcoin ping message (MsgPing).
@@ -22,10 +18,6 @@ type MsgPong struct {
 	// Unique value associated with message that is used to identify
 	// specific ping message.
 	Nonce uint64
-
-	// 如果有subcmd，这里是subcmd的执行结果
-	Code RejectCode
-	Reason string
 }
 
 // BtcDecode decodes r using the bitcoin protocol encoding into the receiver.
@@ -33,39 +25,17 @@ type MsgPong struct {
 func (msg *MsgPong) BtcDecode(r io.Reader, pver uint32, enc MessageEncoding) error {
 	// NOTE: <= is not a mistake here.  The BIP0031 was defined as AFTER
 	// the version unlike most others.
-	// if pver <= BIP0031Version {
-	// 	str := fmt.Sprintf("pong message invalid for protocol "+
-	// 		"version %d", pver)
-	// 	return messageError("MsgPong.BtcDecode", str)
-	// }
+	if pver <= BIP0031Version {
+		str := fmt.Sprintf("pong message invalid for protocol "+
+			"version %d", pver)
+		return messageError("MsgPong.BtcDecode", str)
+	}
 
-	// nonce, err := binarySerializer.Uint64(r, littleEndian)
-	// if err != nil {
-	// 	return err
-	// }
-	// msg.Nonce = nonce
-
-	buf := binarySerializer.Borrow()
-	defer binarySerializer.Return(buf)
-
-	nonce, err := ReadVarIntBuf(r, pver, buf)
+	nonce, err := binarySerializer.Uint64(r, littleEndian)
 	if err != nil {
 		return err
 	}
 	msg.Nonce = nonce
-
-	if _, err := io.ReadFull(r, buf[:1]); err != nil {
-		return err
-	}
-	msg.Code = RejectCode(buf[0])
-
-	// Human readable string with specific details (over and above the
-	// reject code above) about why the command was rejected.
-	reason, err := readVarStringBuf(r, pver, buf)
-	if err != nil {
-		return err
-	}
-	msg.Reason = reason
 
 	return nil
 }
@@ -75,39 +45,13 @@ func (msg *MsgPong) BtcDecode(r io.Reader, pver uint32, enc MessageEncoding) err
 func (msg *MsgPong) BtcEncode(w io.Writer, pver uint32, enc MessageEncoding) error {
 	// NOTE: <= is not a mistake here.  The BIP0031 was defined as AFTER
 	// the version unlike most others.
-	// if pver <= BIP0031Version {
-	// 	str := fmt.Sprintf("pong message invalid for protocol "+
-	// 		"version %d", pver)
-	// 	return messageError("MsgPong.BtcEncode", str)
-	// }
-
-	// return binarySerializer.PutUint64(w, littleEndian, msg.Nonce)
-	buf := binarySerializer.Borrow()
-	defer binarySerializer.Return(buf)
-
-	err := WriteVarIntBuf(w, pver, msg.Nonce, buf)
-	if err != nil {
-		return err
+	if pver <= BIP0031Version {
+		str := fmt.Sprintf("pong message invalid for protocol "+
+			"version %d", pver)
+		return messageError("MsgPong.BtcEncode", str)
 	}
 
-	// Code indicating why the command was rejected.
-	buf[0] = byte(msg.Code)
-	if _, err := w.Write(buf[:1]); err != nil {
-		return err
-	}
-
-	if len(msg.Reason) > MAX_REJECT_REASON {
-		return fmt.Errorf("length of reason too long")
-	}
-
-	// Human readable string with specific details (over and above the
-	// reject code above) about why the command was rejected.
-	err = writeVarStringBuf(w, pver, msg.Reason, buf)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return binarySerializer.PutUint64(w, littleEndian, msg.Nonce)
 }
 
 // Command returns the protocol command string for the message.  This is part
@@ -123,10 +67,10 @@ func (msg *MsgPong) MaxPayloadLength(pver uint32) uint32 {
 	// The pong message did not exist for BIP0031Version and earlier.
 	// NOTE: > is not a mistake here.  The BIP0031 was defined as AFTER
 	// the version unlike most others.
-	//if pver > BIP0031Version {
+	if pver > BIP0031Version {
 		// Nonce 8 bytes.
-		plen += 8 + 1 + MAX_REJECT_REASON
-	//}
+		plen += 8
+	}
 
 	return plen
 }
@@ -136,15 +80,5 @@ func (msg *MsgPong) MaxPayloadLength(pver uint32) uint32 {
 func NewMsgPong(nonce uint64) *MsgPong {
 	return &MsgPong{
 		Nonce: nonce,
-		Code: 0,
-		Reason: "",
-	}
-}
-
-func NewMsgPongWithCode(nonce uint64, code RejectCode, reason string) *MsgPong {
-	return &MsgPong{
-		Nonce: nonce,
-		Code: code,
-		Reason: reason,
 	}
 }

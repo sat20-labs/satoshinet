@@ -671,19 +671,13 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 // OnPing is invoked when a peer receives a ping message.  It
 // blocks until the ping has been fully processed.
 func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
-
-	if msg.SubCmd == "" {
-		sp.Peer.QueueMessage(wire.NewMsgPong(msg.Nonce), nil)
-		return
-	}
-	peerLog.Infof("OnPing from %s embeded with cmd %s", sp.String(), msg.SubCmd)
-
+	// 刷新
 	miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
 	if miningSeqMgr != nil && miningSeqMgr.GetNodeType(sp.Peer.ValidatorId()) != common.NODE_TYPE_NORMAL {
 		sp.isWhitelisted = true
 	}
 
-	sp.server.posMiner.OnBlockGenerated(sp.Peer, msg)
+	sp.Peer.HandlePingMsg(msg)
 }
 
 // OnPong is invoked when a peer receives a pong message.  It
@@ -1521,6 +1515,20 @@ func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 	sp.server.syncManager.QueueNotFound(msg, p)
 }
 
+func (sp *serverPeer) OnMineBlock(_ *peer.Peer, msg *wire.MsgMineBlock) {
+	if msg.SubCmd == "" {
+		sp.Peer.QueueMessage(wire.NewMsgMineAck(msg.Nonce), nil)
+		return
+	}
+	peerLog.Infof("OnMineBlock from %s embeded with cmd %s", sp.String(), msg.SubCmd)
+
+	sp.server.posMiner.OnBlockGenerated(sp.Peer, msg)
+}
+
+func (sp *serverPeer) OnMineAck(_ *peer.Peer, msg *wire.MsgMineAck) {
+	sp.Peer.HandleMineAckMsg(msg)
+}
+
 // randomUint16Number returns a random uint16 in a specified input range.  Note
 // that the range is in zeroth ordering; if you pass it 1800, you will get
 // values from 0 to 1800.
@@ -2121,7 +2129,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			miningSeqMgr.DisplaySelf()
 			for k, v := range state.minerPeers {
 				typ := miningSeqMgr.GetNodeType(k)
-				peerLog.Debugf("miner peer %s %d %d %s", v.String(), typ, v.Connected(), s.miningPubKey)
+				peerLog.Debugf("miner peer %s %d %v %s", v.String(), typ, v.Connected(), s.miningPubKey)
 				if (typ == common.NODE_TYPE_CORE || 
 				typ == common.NODE_TYPE_BOOTSTRAP) && 
 				v.Connected() &&
@@ -2279,6 +2287,8 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 			OnRead:         sp.OnRead,
 			OnWrite:        sp.OnWrite,
 			OnNotFound:     sp.OnNotFound,
+			OnMineBlock:    sp.OnMineBlock,
+			OnMineAck:      sp.OnMineAck,
 		},
 		NewestBlock:         sp.newestBlock,
 		HostToNetAddress:    sp.server.addrManager.HostToNetAddress,

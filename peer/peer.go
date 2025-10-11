@@ -203,6 +203,10 @@ type MessageListeners struct {
 	// OnSendAddrV2 is invoked when a peer receives a sendaddrv2 message.
 	OnSendAddrV2 func(p *Peer, msg *wire.MsgSendAddrV2)
 
+	// new message
+	OnMineBlock func(p *Peer, msg *wire.MsgMineBlock)
+	OnMineAck func(p *Peer, msg *wire.MsgMineAck)
+
 	// OnRead is invoked when a peer receives a bitcoin message.  It
 	// consists of the number of bytes read, the message, and whether or not
 	// an error in the read occurred.  Typically, callers will opt to use
@@ -488,11 +492,13 @@ type Peer struct {
 	lastPingNonce      uint64    // Set to nonce if we have a pending ping.
 	lastPingTime       time.Time // Time we sent last ping.
 	lastPingMicros     int64     // Time for last ping to return.
-	lastPingResult     wire.RejectCode
-	lastPingReason      string
 
-	 // 新增：用于等待 Pong 的 map，从 nonce 到 channel
-    pongWaiters       map[uint64]chan struct{}
+	lastMineBlockNonce   uint64    // Set to nonce if we have a pending ping.
+	lastMineBlockTime    time.Time // Time we sent last ping.
+	lastMineBlockMicros  int64     // Time for last ping to return.
+	lastMineAckResult    wire.RejectCode
+	lastMineAckReason    string
+    mineAckWaiters       map[uint64]chan struct{} // 用于等待 MsgMineAck 的 map，从 nonce 到 channel
 
 	stallControl  chan stallControlMsg
 	outputQueue   chan outMsg
@@ -1049,6 +1055,18 @@ func (p *Peer) PushRejectMsg(command string, code wire.RejectCode, reason string
 	<-doneChan
 }
 
+// handlePingMsg is invoked when a peer receives a ping bitcoin message.  For
+// recent clients (protocol version > BIP0031Version), it replies with a pong
+// message.  For older clients, it does nothing and anything other than failure
+// is considered a successful ping.
+func (p *Peer) HandlePingMsg(msg *wire.MsgPing) {
+	// Only reply with pong if the message is from a new enough client.
+	if p.ProtocolVersion() > wire.BIP0031Version {
+		// Include nonce from ping so pong can be identified.
+		p.QueueMessage(wire.NewMsgPong(msg.Nonce), nil)
+	}
+}
+
 // handlePongMsg is invoked when a peer receives a pong bitcoin message.  It
 // updates the ping statistics as required for recent clients (protocol
 // version > BIP0031Version).  There is no effect for older clients or when a
@@ -1061,31 +1079,43 @@ func (p *Peer) HandlePongMsg(msg *wire.MsgPong) {
 	// and overlapping pings will be ignored. It is unlikely to occur
 	// without large usage of the ping rpc call since we ping infrequently
 	// enough that if they overlap we would have timed out the peer.
-	//if p.ProtocolVersion() > wire.BIP0031Version {
+	if p.ProtocolVersion() > wire.BIP0031Version {
 		log.Debugf("pong nonce %d, last nonce %d, ", msg.Nonce, p.lastPingNonce)
 		p.statsMtx.Lock()
 		if p.lastPingNonce != 0 && msg.Nonce == p.lastPingNonce {
 			p.lastPingMicros = time.Since(p.lastPingTime).Nanoseconds()
 			p.lastPingMicros /= 1000 // convert to usec.
 			p.lastPingNonce = 0
-			p.lastPingResult = msg.Code
-			p.lastPingReason = msg.Reason
-
-			if ch, ok := p.pongWaiters[msg.Nonce]; ok {
-	            // 非阻塞发送
-	            select {
-	            case ch <- struct{}{}:
-	            default:
-	            }
-	            // 删除这个 waiter
-	            delete(p.pongWaiters, msg.Nonce)
-	        }
 		}
 		p.statsMtx.Unlock()
-	//}
+	}
 }
 
-func (p *Peer) SendPing(cmd string, payload, sig []byte) error {
+func (p *Peer) HandleMineAckMsg(msg *wire.MsgMineAck) {
+	
+	log.Debugf("MineAck nonce %d, last nonce %d, ", msg.Nonce, p.lastMineBlockNonce)
+	p.statsMtx.Lock()
+	if p.lastMineBlockNonce != 0 && msg.Nonce == p.lastMineBlockNonce {
+		p.lastMineBlockMicros = time.Since(p.lastMineBlockTime).Nanoseconds()
+		p.lastMineBlockMicros /= 1000 // convert to usec.
+		p.lastMineBlockNonce = 0
+		p.lastMineAckResult = msg.Code
+		p.lastMineAckReason = msg.Reason
+
+		if ch, ok := p.mineAckWaiters[msg.Nonce]; ok {
+			// 非阻塞发送
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+			// 删除这个 waiter
+			delete(p.mineAckWaiters, msg.Nonce)
+		}
+	}
+	p.statsMtx.Unlock()
+}
+
+func (p *Peer) SendMineBlock(cmd string, payload, sig []byte) error {
     // 生成 nonce
     nonce, err := wire.RandomUint64()
     if err != nil {
@@ -1094,12 +1124,14 @@ func (p *Peer) SendPing(cmd string, payload, sig []byte) error {
 
     // 记录 lastPingTime & lastPingNonce
 	p.statsMtx.Lock()
-    p.lastPingTime = time.Now()
-    p.lastPingNonce = nonce
+    p.lastMineBlockTime = time.Now()
+    p.lastMineBlockNonce = nonce
     p.statsMtx.Unlock()
 
+	log.Debugf("MineBlock nonce %d", nonce)
+
     // 发送 ping
-    p.QueueMessage(&wire.MsgPing{
+    p.QueueMessage(&wire.MsgMineBlock{
 		Nonce: nonce, 
 		SubCmd: cmd, 
 		Payload: payload,
@@ -1107,13 +1139,13 @@ func (p *Peer) SendPing(cmd string, payload, sig []byte) error {
 	return nil
 }
 
-func (p *Peer) SendPingAndWait(timeout time.Duration, cmd string, payload, sig []byte) error {
+func (p *Peer) SendMineBlockAndWait(timeout time.Duration, cmd string, payload, sig []byte) error {
 	if !p.Connected() {
 		log.Errorf("%s not connetcted", p.String())
 		return fmt.Errorf("%s not connetcted", p.String())
 	}
 
-	duration, rejectCode, reason, err := p.waitForPong(timeout, cmd, payload, sig)
+	duration, rejectCode, reason, err := p.waitForMineAck(timeout, cmd, payload, sig)
 	if err != nil {
 		log.Errorf("Peer %s did not respond in time: %v", p.String(), err)
     	return err
@@ -1130,7 +1162,7 @@ func (p *Peer) SendPingAndWait(timeout time.Duration, cmd string, payload, sig [
 
 // WaitForPongIn sends a ping to peer p, and waits up to timeout for the pong.
 // Returns measured round-trip time (duration), or error if timeout or failed to send.
-func (p *Peer) waitForPong(timeout time.Duration, subCmd string, payload, sig []byte) (
+func (p *Peer) waitForMineAck(timeout time.Duration, subCmd string, payload, sig []byte) (
 	time.Duration, wire.RejectCode, string, error) {
     // 生成 nonce
     nonce, err := wire.RandomUint64()
@@ -1140,16 +1172,18 @@ func (p *Peer) waitForPong(timeout time.Duration, subCmd string, payload, sig []
 
     // 记录 lastPingTime & lastPingNonce
 	p.statsMtx.Lock()
-    p.lastPingTime = time.Now()
-    p.lastPingNonce = nonce
+    p.lastMineBlockTime = time.Now()
+    p.lastMineBlockNonce = nonce
 	
     // 创建等待 chan
     waiter := make(chan struct{}, 1)
-    p.pongWaiters[nonce] = waiter
+    p.mineAckWaiters[nonce] = waiter
     p.statsMtx.Unlock()
 
+	log.Debugf("MineBlock nonce %d", nonce)
+
     // 发送 ping
-    p.QueueMessage(&wire.MsgPing{
+    p.QueueMessage(&wire.MsgMineBlock{
 		Nonce: nonce, 
 		SubCmd: subCmd, 
 		Payload: payload,
@@ -1160,18 +1194,18 @@ func (p *Peer) waitForPong(timeout time.Duration, subCmd string, payload, sig []
     case <-waiter:
         // 收到 pong
 		p.statsMtx.RLock()
-        duration := time.Since(p.lastPingTime)
-		code := p.lastPingResult
-		reason := p.lastPingReason
+        duration := time.Since(p.lastMineBlockTime)
+		code := p.lastMineAckResult
+		reason := p.lastMineAckReason
 		p.statsMtx.RUnlock()
         return duration, code, reason, nil
     case <-time.After(timeout):
         // 超时
         // 清理
         p.statsMtx.Lock()
-        delete(p.pongWaiters, nonce)
+        delete(p.mineAckWaiters, nonce)
         p.statsMtx.Unlock()
-        return 0, 0, "", fmt.Errorf("pong timeout: no response within %s", timeout)
+        return 0, 0, "", fmt.Errorf("mineack timeout: no response within %s", timeout)
     }
 }
 
@@ -1717,6 +1751,16 @@ out:
 				p.cfg.Listeners.OnSendHeaders(p, msg)
 			}
 
+		case *wire.MsgMineBlock:
+			if p.cfg.Listeners.OnMineBlock != nil {
+				p.cfg.Listeners.OnMineBlock(p, msg)
+			}
+
+		case *wire.MsgMineAck:
+			if p.cfg.Listeners.OnMineAck != nil {
+				p.cfg.Listeners.OnMineAck(p, msg)
+			}
+
 		default:
 			log.Debugf("Received unhandled message of type %v "+
 				"from %v", rmsg.Command(), p)
@@ -1909,13 +1953,13 @@ out:
 			case *wire.MsgPing:
 				// Only expects a pong message in later protocol
 				// versions.  Also set up statistics.
-				//if p.ProtocolVersion() > wire.BIP0031Version {
+				if p.ProtocolVersion() > wire.BIP0031Version {
 					p.statsMtx.Lock()
 					p.lastPingNonce = m.Nonce
 					p.lastPingTime = time.Now()
 					p.statsMtx.Unlock()
 					log.Debugf("ping nonce %d", m.Nonce)
-				//}
+				}
 			}
 
 			p.stallControl <- stallControlMsg{sccSendMessage, msg.msg}
@@ -2522,7 +2566,7 @@ func newPeerBase(origCfg *Config, inbound bool) *Peer {
 		cfg:             cfg, // Copy so caller can't mutate.
 		services:        cfg.Services,
 		protocolVersion: cfg.ProtocolVersion,
-		pongWaiters:     make(map[uint64]chan struct{}),
+		mineAckWaiters:     make(map[uint64]chan struct{}),
 	}
 	return &p
 }
