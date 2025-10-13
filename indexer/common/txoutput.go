@@ -74,6 +74,7 @@ func (p *TxOutput) GetUnboundAssetCount() int {
 	return p.OutValue.Assets.GetUnboundAssetCount()
 }
 
+// 等同于 GetPlainSat_Floor 
 // 去掉已经绑定了资产的聪. 与主网不同，聪网上每一个聪，都只能代表一种资产。如果一个聪有多种资产，只能选择一种到聪网流通。
 func (p *TxOutput) GetPlainSat() int64 {
 	if len(p.OutValue.Assets) == 0 {
@@ -87,6 +88,17 @@ func (p *TxOutput) GetPlainSat() int64 {
 		return 0
 	}
 
+	return p.OutValue.Value - assetAmt
+}
+
+// 完全不考虑哪些不足一聪的聪资产
+// 去掉已经绑定了资产的聪. 与主网不同，聪网上每一个聪，都只能代表一种资产。如果一个聪有多种资产，只能选择一种到聪网流通。
+func (p *TxOutput) GetPlainSat_Ceil() int64 {
+	if len(p.OutValue.Assets) == 0 {
+		return p.OutValue.Value
+	}
+	assetAmt := p.OutValue.Assets.GetBindingSatAmout()
+	
 	return p.OutValue.Value - assetAmt
 }
 
