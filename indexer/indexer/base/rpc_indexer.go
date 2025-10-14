@@ -119,10 +119,6 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 		return nil, err
 	}
 
-	if err != nil {
-		return nil, err
-	}
-
 	_, ok = b.deletedUtxoMap[output.UtxoId]
 	if ok {
 		return nil, fmt.Errorf("utxo %s is spent", utxo)
