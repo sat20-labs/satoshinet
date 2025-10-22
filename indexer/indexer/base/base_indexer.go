@@ -432,6 +432,12 @@ func (b *BaseIndexer) UpdateDB() {
 		if v.AddressType == uint32(txscript.NullDataTy) ||
 			v.AddressType == uint32(txscript.NonStandardTy) {
 			// 这两个地址的数据会越来越大，以后考虑分桶保存，再考虑保存这两个地址的utxo
+			if v.Op == 1 {
+				err = db.BindAddressDBKeyToId(k, v.AddressId, wb)
+				if err != nil {
+					common.Log.Panicf("Error setting in db %v", err)
+				}
+			}
 			continue
 		}
 		key := db.GetAddressDBKeyV2(k)
@@ -560,9 +566,10 @@ func (b *BaseIndexer) UpdateDB() {
 	b.tickInfoMap = make(map[string]*common.TickerInfo)
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
 
-	// if !b.CheckSelf() {
-	// 	common.Log.Panicf("BaseIndexer.CheckSelf failed")
-	// }
+	// TODO 临时打开，验证数据
+	if !b.CheckSelf() {
+		common.Log.Panicf("BaseIndexer.CheckSelf failed")
+	}
 }
 
 func (b *BaseIndexer) handleReorg(currentBlock *common.Block) int {
@@ -1361,6 +1368,21 @@ func (b *BaseIndexer) CheckSelf() bool {
 		}
 
 		ascendSats1 += value.OutputSats - value.InputSats
+	}
+
+	common.Log.Infof("total address %d", b.stats.AddressCount)
+	for i := uint64(0); i < (b.stats.AddressCount); i++ {
+		addr, err := db.GetAddressByIDFromDB(b.db, i)
+		if err != nil {
+			common.Log.Panicf("GetAddressByIDFromDB %d error: %v", i, err)
+		}
+		id, err := db.GetAddressIdFromDB(b.db, addr)
+		if err != nil {
+			common.Log.Panicf("GetAddressIdFromDB %d error: %v", i, err)
+		}
+		if id != i {
+			common.Log.Panicf("address id different %d %d", i, id)
+		}
 	}
 
 	// 计算下聪网上有多少聪，是否跟状态一致
