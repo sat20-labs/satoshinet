@@ -65,6 +65,9 @@ func ConvertBlock(block *wire.MsgBlock, height int, chaincfgParam *chaincfg.Para
 
 			if len(addrs) == 0 {
 				address := "UNKNOWN"
+				if scyptClass == txscript.NonStandardTy {
+					scyptClass = txscript.NullDataTy
+				}
 				if scyptClass == txscript.NullDataTy {
 					address = "OP_RETURN"
 				}

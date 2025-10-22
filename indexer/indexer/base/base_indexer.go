@@ -432,13 +432,6 @@ func (b *BaseIndexer) UpdateDB() {
 		if v.AddressType == uint32(txscript.NullDataTy) ||
 			v.AddressType == uint32(txscript.NonStandardTy) {
 			// 这两个地址的数据会越来越大，以后考虑分桶保存，再考虑保存这两个地址的utxo
-			if v.Op == 1 {
-				err = db.BindAddressDBKeyToId(k, v.AddressId, wb)
-				if err != nil {
-					common.Log.Panicf("Error setting in db %v", err)
-				}
-			}
-			continue
 		}
 		key := db.GetAddressDBKeyV2(k)
 		value := v.ToAddressValueInDBV2()
@@ -567,9 +560,9 @@ func (b *BaseIndexer) UpdateDB() {
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
 
 	// TODO 临时打开，验证数据
-	// if !b.CheckSelf() {
-	// 	common.Log.Panicf("BaseIndexer.CheckSelf failed")
-	// }
+	if !b.CheckSelf() {
+		common.Log.Panicf("BaseIndexer.CheckSelf failed")
+	}
 }
 
 func (b *BaseIndexer) handleReorg(currentBlock *common.Block) int {
@@ -1410,35 +1403,34 @@ func (b *BaseIndexer) CheckSelf() bool {
 		if err != nil {
 			common.Log.Panicf("item.Value error: %v", err)
 		}
+		utxoCount++
 		if value.AddressType == uint16(txscript.NullDataTy) ||
 			value.AddressType == uint16(txscript.NonStandardTy) {
 			descendSats += value.Value
-			return nil
+		} else {
+			// 用于打印不存在table2中的utxo
+			// if value.UtxoId == 0x17453400960000 {
+			// 	key := item.Key()
+			// 	str, _ := db.GetUtxoByDBKey(key)
+			// 	common.Log.Infof("%x %s", value.UtxoId, str)
+			// }
+
+			sats := value.Value
+			// if sats > 0 {
+				nonZeroUtxo++
+			//}
+
+			satsInUtxo += sats
+			utxosInT1[value.UtxoId] = true
 		}
-
-		// 用于打印不存在table2中的utxo
-		// if value.UtxoId == 0x17453400960000 {
-		// 	key := item.Key()
-		// 	str, _ := db.GetUtxoByDBKey(key)
-		// 	common.Log.Infof("%x %s", value.UtxoId, str)
-		// }
-
-		sats := value.Value
-		if sats > 0 {
-			nonZeroUtxo++
-		}
-
-		satsInUtxo += sats
-		utxoCount++
 
 		for _, addressId := range value.AddressIds {
 			addressesInT1[addressId] = true
 		}
-		utxosInT1[value.UtxoId] = true
-
-		addressInUtxo = len(addressesInT1)
+		
 		return nil
 	})
+	addressInUtxo = len(addressesInT1)
 
 	common.Log.Infof("%s table takes %v", common.DB_KEY_UTXO, time.Since(startTime2))
 	common.Log.Infof("1. utxo: %d(%d), sats %d, descend %d, address %d", utxoCount, nonZeroUtxo, satsInUtxo, descendSats, addressInUtxo)
@@ -1467,16 +1459,16 @@ func (b *BaseIndexer) CheckSelf() bool {
 				continue
 			}
 			utxosInT2[utxoId] = true
-			nonZeroUtxoInAddress++
 		}
 		if len(value.Utxos) > 0 {
 			addressesInT2[value.AddressId] = true
 		}
 
-		allAddressCount = len(addressesInT2)
-
 		return nil
 	})
+	allAddressCount = len(addressesInT2)
+	nonZeroUtxoInAddress = len(utxosInT2)
+
 	common.Log.Infof("%s table takes %v", common.DB_KEY_ADDRESSVALUE, time.Since(startTime2))
 	common.Log.Infof("2. utxo: %d(%d), sats %d, address %d", allutxoInAddress, nonZeroUtxoInAddress, satsInAddress, allAddressCount)
 
@@ -1516,8 +1508,8 @@ func (b *BaseIndexer) CheckSelf() bool {
 		common.Log.Panicf("address count different %d %d", addressInUtxo, allAddressCount)
 	}
 
-	if utxoCount != allutxoInAddress {
-		common.Log.Panicf("utxo different %d %d", utxoCount, allutxoInAddress)
+	if nonZeroUtxo != nonZeroUtxoInAddress {
+		common.Log.Panicf("utxo different %d %d", nonZeroUtxo, nonZeroUtxoInAddress)
 	}
 
 	// testnet: block 26432 多奖励了0.001btc，2642多奖励了0.0015，所以测试网络对比数据会有异常，只在主网上验证
