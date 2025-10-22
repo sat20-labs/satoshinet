@@ -567,9 +567,9 @@ func (b *BaseIndexer) UpdateDB() {
 	b.tickAddressMap = make(map[string]map[string]*indexer.Decimal)
 
 	// TODO 临时打开，验证数据
-	if !b.CheckSelf() {
-		common.Log.Panicf("BaseIndexer.CheckSelf failed")
-	}
+	// if !b.CheckSelf() {
+	// 	common.Log.Panicf("BaseIndexer.CheckSelf failed")
+	// }
 }
 
 func (b *BaseIndexer) handleReorg(currentBlock *common.Block) int {
