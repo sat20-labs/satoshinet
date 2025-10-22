@@ -412,6 +412,10 @@ func (b *RpcIndexer) GetReferree(name string) (map[string]int, error) {
 
 // only for RPC interface
 func (b *RpcIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
+	if ticker.String() == indexer.ASSET_ALL_SAT.String() {
+		ticker = &indexer.ASSET_PLAIN_SAT
+	}
+
 	b.mutex.RLock()
 	info, ok := b.tickInfoMap[ticker.String()]
 	b.mutex.RUnlock()
