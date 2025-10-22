@@ -225,8 +225,9 @@ func (b *RpcIndexer) GetAddressId(address string) uint64 {
 		data, err := db.GetAddressDataFromDBV2(b.db, address)
 		if err == nil {
 			value := data.ToAddressValueV2()
-			b.addressValueMap[address] = value
 			id = value.AddressId
+			b.addressValueMap[address] = value
+			b.addressIdMap[id] = address
 		}
 	}
 
