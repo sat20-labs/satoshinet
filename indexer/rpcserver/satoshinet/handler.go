@@ -49,6 +49,57 @@ func (s *Service) sendRawTx(c *gin.Context) {
 }
 
 
+func (s *Service) sendRawTxs(c *gin.Context) {
+	resp := &indexerwire.SendRawTxsResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+	var req indexerwire.SendRawTxsReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	result, err := satsnet_rpc.TestRawTransaction(req.SignedTxHex)
+	if err != nil {
+	    resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	var reject bool
+	for _, r := range result {
+		if r.Allowed {
+			resp.Data = append(resp.Data, r.Txid)
+		} else {
+			resp.Data = append(resp.Data, r.RejectReason)
+			reject = true
+		}
+	}
+	if reject {
+		resp.Code = -1
+		resp.Msg = "reject"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	for i, signedTx := range req.SignedTxHex {
+		_, err := satsnet_rpc.SendRawTransaction(signedTx, req.Maxfeerate != 0)
+		if err != nil {
+			resp.Code = -i
+			resp.Msg = err.Error()
+			c.JSON(http.StatusOK, resp)
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 func (s *Service) testRawTx(c *gin.Context) {
 	resp := &indexerwire.TestRawTxResp{
 		BaseResp: indexerwire.BaseResp{
