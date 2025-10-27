@@ -135,10 +135,36 @@ func TestRawTransaction(signedTxHex []string) ([]*btcjson.TestMempoolAcceptResul
 	if err != nil {
 		return nil, err
 	}
+
+	for i, r := range resp {
+		if !r.Allowed {
+			if indexer.IsValidTx(r.RejectReason) {
+				// 修改结果
+				tx := txs[i]
+				r.Txid = tx.TxID()
+				r.Allowed = true
+				r.RejectReason = ""
+				continue
+			} else if strings.Contains(r.RejectReason, "the locked tx is anchored already in sats net") {
+				// 只有聪网交易才会走到这里
+				tx := txs[i]
+				parts := strings.Split(r.RejectReason, "the locked tx is anchored already in sats net")
+				if len(parts) != 2 {
+					return nil, err
+				}
+				if strings.Contains(parts[1], tx.TxID()) {
+					// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播
+					r.Txid = tx.TxID()
+					r.Allowed = true
+					r.RejectReason = ""
+					continue
+				}
+			}
+		}
+	}
 	
 	return resp, nil
 }
-
 
 func SendRawTransaction(txHex string, allowHighFees bool) (*chainhash.Hash, error) {
 	txBytes, err := hex.DecodeString(txHex)
@@ -155,7 +181,45 @@ func SendRawTransaction(txHex string, allowHighFees bool) (*chainhash.Hash, erro
 		return nil, err
 	}
 
-	return _client.client.SendRawTransaction(msgTx, allowHighFees)
+	/*
+	                                           要广播的txId																												  目标utxo对应的anchor txId         										目标utxo
+	-26: TX rejected: The anchor tx is invalid 41d0c16816756bc32a7b839b7bd3845b0f94c0990da036f486c6fbc4210c4552:the locked tx is anchored already in sats net, anchorTx cbaf995a3b0457f3f821068692b9e4664a8a215b4695caac7c73c279453f503a, utxo c08e081650f45b1f2709962285cc618ee2beeee620a9b6e3b850e571739a15b5:0
+	
+											要广播的txId																											 该tx包含一个输入utxo
+	-25: TX rejected: orphan transaction 7b23cb6e5531bc8a19665576ebb2e6d96a0e703224f8079ae6947dfa93e0f8ba references outputs of unknown or fully-spent transaction adbd1d2d33b9f8b1fdc328941a192ef66403923961f677301647e3f5dd05bced:0
+	*/
+
+	txId, err := _client.client.SendRawTransaction(msgTx, allowHighFees)
+	if err != nil {
+		errStr := err.Error()
+		hash := msgTx.TxHash()
+		if indexer.IsValidTx(errStr) {
+			return &hash, nil
+		} else if strings.Contains(errStr, "the locked tx is anchored already in sats net") {
+			// 聪网的特殊处理
+			// 这里检查该anchorTx是否就是我们要广播的TxId，如果是，说明anchorTx已经被广播
+			parts := strings.Split(errStr, "the locked tx is anchored already in sats net")
+			if len(parts) != 2 {
+				return nil, err
+			}
+			if strings.Contains(parts[1], msgTx.TxID()) {
+				// 聪网的特殊处理，检查包含该utxo的anchorTx是否已经被广播，并且anchorTx相同
+				return &hash, nil
+			} else {
+				return nil, err
+			}
+		} else if strings.Contains(errStr, "-25: TX rejected: orphan transaction") {
+			// TODO 聪网需要处理这种情况
+			// 特殊情况下，一个聪网的deanchorTx广播会触发这种问题: 看看是否该Tx已经存在聪网上
+			_, err2 := GetTx(msgTx.TxID())
+			if err2 == nil {
+				return &hash, nil
+			} else {
+				return nil, err
+			}
+		}
+	}
+	return txId, err
 }
 
 func GetBestBlock() (*chainhash.Hash, int32, error) {
