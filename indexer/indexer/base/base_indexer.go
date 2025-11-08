@@ -130,7 +130,7 @@ func (b *BaseIndexer) reset() {
 }
 
 // 只保存UpdateDB需要用的数据
-func (b *BaseIndexer) Clone() *BaseIndexer {
+func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 	startTime := time.Now()
 	newInst := NewBaseIndexer(b.db, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 
@@ -187,6 +187,9 @@ func (b *BaseIndexer) Clone() *BaseIndexer {
 			Op:          value.Op,
 			Utxos:       make(map[uint64]bool),
 		}
+		if setStoredFlag {
+			value.Op = 0 // 当作已经写入数据库
+		}
 		for id, v := range value.Utxos {
 			n.Utxos[id] = v
 		}
@@ -215,10 +218,12 @@ func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 		delete(b.utxoIndex.Index, key)
 	}
 
-	// TODO 需要增加一个重新加载机制，以便释放老的不需要的数据
-	// for k := range another.addressValueMap {
-	// 	delete(b.addressValueMap, k)
-	// }
+	for k := range another.addressValueMap {
+		v, ok := b.addressValueMap[k]
+		if ok && v.Op == 0 {
+			delete(b.addressValueMap, k)
+		}
+	}
 	// for k := range b.tickInfoMap {
 	// 	delete(b.tickInfoMap, k)
 	// }
@@ -267,6 +272,20 @@ func (b *BaseIndexer) prefechAddress() {
 				}
 			}
 			for _, addr := range v.Address.Addresses {
+				_, ok := b.addressValueMap[addr]
+				if !ok {
+					data, err := db.GetAddressDataFromDBTxnV2(txn, addr)
+					if err != nil {
+						common.Log.Errorf("failed to get address data by address %s: %v", addr, err)
+						continue
+					}
+					b.addressValueMap[addr] = data.ToAddressValueV2()
+				}
+			}
+		}
+
+		for _, addrmap := range b.tickAddressMap {
+			for addr := range addrmap {
 				_, ok := b.addressValueMap[addr]
 				if !ok {
 					data, err := db.GetAddressDataFromDBTxnV2(txn, addr)
@@ -1065,6 +1084,7 @@ func (b *BaseIndexer) inputUtxo(input *common.Output) {
 	for _, address := range input.Address.Addresses {
 		utxomap, ok := b.addressValueMap[address]
 		if ok {
+			utxomap.Op = 1
 			delete(utxomap.Utxos, utxoId)
 		} else {
 			common.Log.Panicf("%s should be loaded before", address)
@@ -1111,6 +1131,7 @@ func (b *BaseIndexer) outputUtxo(output *common.Output) {
 			// b.addressIdMap[address] = utxomap
 		}
 		utxomap.Utxos[utxoId] = true
+		utxomap.Op = 1
 	}
 }
 
@@ -1264,6 +1285,7 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 						data, err := db.GetAddressDataFromDBTxnV2(txn, address)
 						if err != nil {
 							addressId := b.generateAddressId()
+							common.Log.Infof("generateAddressId %d %s", addressId, address)
 							b.addressValueMap[address] = &indexer.AddressValueV2{
 								AddressType: uint32(output.Address.Type),
 								AddressId:   addressId,
@@ -1337,7 +1359,17 @@ func (b *BaseIndexer) CheckSelf() bool {
 
 	startTime := time.Now()
 
-	common.Log.Infof("stats: %v", b.stats)
+	// 当前instance中的stats，其addressCounnt跟数据库不一致，需要从数据库中读取
+	syncStats := &SyncStats{}
+	err := db.GetValueFromDB([]byte(SyncStatsKey), syncStats, b.db)
+	if err == indexer.ErrKeyNotFound {
+		common.Log.Info("no db")
+		return true
+	} else if err != nil {
+		common.Log.Panicf("BaseIndexer.LoadSyncStatsFromDB failed, %v", err)
+	}
+
+	common.Log.Infof("stats: %v", b.stats) 
 	common.Log.Infof("Code Ver: %s", common.SATOSHINET_INDEXER_VERSION)
 	common.Log.Infof("DB Ver: %s", b.GetBaseDBVer())
 	// totalSats := common.FirstOrdinalInTheory(b.stats.SyncHeight + 1)
@@ -1363,8 +1395,8 @@ func (b *BaseIndexer) CheckSelf() bool {
 		ascendSats1 += value.OutputSats - value.InputSats
 	}
 
-	common.Log.Infof("total address %d", b.stats.AddressCount)
-	for i := uint64(0); i < (b.stats.AddressCount); i++ {
+	common.Log.Infof("total address %d", syncStats.AddressCount)
+	for i := uint64(0); i < (syncStats.AddressCount); i++ {
 		addr, err := db.GetAddressByIDFromDB(b.db, i)
 		if err != nil {
 			common.Log.Panicf("GetAddressByIDFromDB %d error: %v", i, err)
@@ -1422,10 +1454,10 @@ func (b *BaseIndexer) CheckSelf() bool {
 
 			satsInUtxo += sats
 			utxosInT1[value.UtxoId] = true
-		}
 
-		for _, addressId := range value.AddressIds {
-			addressesInT1[addressId] = true
+			for _, addressId := range value.AddressIds {
+				addressesInT1[addressId] = true
+			}
 		}
 		
 		return nil
@@ -1451,6 +1483,7 @@ func (b *BaseIndexer) CheckSelf() bool {
 			common.Log.Panicf("item.Value error: %v", err)
 		}
 
+		validUtxo := false
 		for _, utxoId := range value.Utxos {
 			allutxoInAddress++
 
@@ -1459,8 +1492,9 @@ func (b *BaseIndexer) CheckSelf() bool {
 				continue
 			}
 			utxosInT2[utxoId] = true
+			validUtxo = true
 		}
-		if len(value.Utxos) > 0 {
+		if validUtxo {
 			addressesInT2[value.AddressId] = true
 		}
 

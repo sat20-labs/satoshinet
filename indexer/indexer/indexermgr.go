@@ -260,7 +260,7 @@ func (b *IndexerMgr) performUpdateDBInBuffer() {
 }
 
 func (b *IndexerMgr) prepareDBBuffer() {
-	b.compilingBackupDB = b.compiling.Clone()
+	b.compilingBackupDB = b.compiling.Clone(true)
 	common.Log.Infof("backup instance %d cloned", b.compilingBackupDB.GetHeight())
 }
 

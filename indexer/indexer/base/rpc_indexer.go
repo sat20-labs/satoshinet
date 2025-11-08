@@ -33,7 +33,7 @@ type RpcIndexer struct {
 
 func NewRpcIndexer(base *BaseIndexer) *RpcIndexer {
 	indexer := &RpcIndexer{
-		BaseIndexer:        *base.Clone(),
+		BaseIndexer:        *base.Clone(false),
 		addressIdMap:       make(map[uint64]string),
 		deletedUtxoMap:     make(map[uint64]bool),
 		bSearching:         false,
