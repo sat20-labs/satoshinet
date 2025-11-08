@@ -49,6 +49,30 @@ func (p *TxOutput) Clone() *TxOutput {
 	}
 }
 
+func (p *TxOutput) ToAssetsInUtxo() *common.AssetsInUtxo{
+	if p == nil {
+		return nil
+	}
+
+	assets := make([]*common.DisplayAsset, 0)
+	for _, asset := range p.OutValue.Assets {
+		display := common.DisplayAsset{
+			AssetName: asset.Name,
+			Amount: asset.Amount.String(),
+			Precision: asset.Amount.Precision,
+			BindingSat: int(asset.BindingSat),
+		}
+		assets = append(assets, &display)
+	}
+	return &common.AssetsInUtxo{
+		UtxoId: p.UtxoId,
+		OutPoint: p.OutPointStr,
+		Value: p.OutValue.Value,
+		PkScript: p.OutValue.PkScript,
+		Assets: assets,
+	}
+}
+
 func (p *TxOutput) Height() int {
 	if p.UtxoId == common.INVALID_ID {
 		return -1
