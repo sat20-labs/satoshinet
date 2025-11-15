@@ -671,7 +671,7 @@ func (m *POSMiner) GetMempoolTxSize() int32 {
 func (m *POSMiner) GetPeerByValidatorId(validatorId string) *peerpkg.Peer {
 	peer := m.cfg.GetPeerByValidatorId(validatorId)
 	if peer == nil {
-		utils.Log.Errorf("GetPeerByValidatorId %s failed", validatorId)
+		utils.Log.Warningf("GetPeerByValidatorId %s failed", validatorId)
 		return nil
 	}
 	if !peer.Connected() {

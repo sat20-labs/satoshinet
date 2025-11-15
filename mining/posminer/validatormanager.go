@@ -202,7 +202,7 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 	
 	if now - vm.lastBlockTime < MinerInterval {
 		// The miner time is not past, ignore
-		utils.Log.Debugf("[ValidatorManager] not in time")
+		utils.Log.Debugf("[ValidatorManager] not in time %d", now - vm.lastBlockTime)
 		return
 	}
 
