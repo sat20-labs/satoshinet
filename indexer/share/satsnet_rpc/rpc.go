@@ -138,27 +138,21 @@ func TestRawTransaction(signedTxHex []string) ([]*btcjson.TestMempoolAcceptResul
 
 	for i, r := range resp {
 		if !r.Allowed {
+			accept := false
 			if indexer.IsValidTx(r.RejectReason) {
 				// 修改结果
-				tx := txs[i]
-				r.Txid = tx.TxID()
-				r.Allowed = true
-				r.RejectReason = ""
-				continue
-			} else if strings.Contains(r.RejectReason, "the locked tx is anchored already in sats net") {
-				// 只有聪网交易才会走到这里
-				tx := txs[i]
-				parts := strings.Split(r.RejectReason, "the locked tx is anchored already in sats net")
-				if len(parts) != 2 {
-					return nil, err
+				accept = true
+			} else {
+				// 看看是否可以获取到该tx
+				_, err := GetTx(r.Txid)
+				if err == nil {
+					accept = true
 				}
-				if strings.Contains(parts[1], tx.TxID()) {
-					// 聪网的特殊处理，只检查包含该utxo的anchorTx是否已经被广播
-					r.Txid = tx.TxID()
-					r.Allowed = true
-					r.RejectReason = ""
-					continue
-				}
+			}
+			if accept {
+				// 修改结果
+				resp[i].Allowed = true
+				resp[i].RejectReason = ""
 			}
 		}
 	}
@@ -195,22 +189,7 @@ func SendRawTransaction(txHex string, allowHighFees bool) (*chainhash.Hash, erro
 		hash := msgTx.TxHash()
 		if indexer.IsValidTx(errStr) {
 			return &hash, nil
-		} else if strings.Contains(errStr, "the locked tx is anchored already in sats net") {
-			// 聪网的特殊处理
-			// 这里检查该anchorTx是否就是我们要广播的TxId，如果是，说明anchorTx已经被广播
-			parts := strings.Split(errStr, "the locked tx is anchored already in sats net")
-			if len(parts) != 2 {
-				return nil, err
-			}
-			if strings.Contains(parts[1], msgTx.TxID()) {
-				// 聪网的特殊处理，检查包含该utxo的anchorTx是否已经被广播，并且anchorTx相同
-				return &hash, nil
-			} else {
-				return nil, err
-			}
-		} else if strings.Contains(errStr, "-25: TX rejected: orphan transaction") {
-			// TODO 聪网需要处理这种情况
-			// 特殊情况下，一个聪网的deanchorTx广播会触发这种问题: 看看是否该Tx已经存在聪网上
+		} else {
 			_, err2 := GetTx(msgTx.TxID())
 			if err2 == nil {
 				return &hash, nil
