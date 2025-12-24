@@ -24,7 +24,7 @@ type Indexer interface {
 	GetUtxoById(utxoId uint64) string
 	GetUtxoId(utxo string) uint64
 	// return: utxoId->value
-	GetUTXOsWithAddress(address string) (map[uint64]bool, error)
+	GetUTXOsWithAddress(address string) (map[uint64]int64, error)
 	// return: utxo, sat ranges
 
 	GetTickerMap(protocol string) map[string]*common.TickerInfo

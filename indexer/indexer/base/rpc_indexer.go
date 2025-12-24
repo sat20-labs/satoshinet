@@ -169,7 +169,7 @@ func (b *RpcIndexer) getAddressValue2(address string, ldb indexer.KVDB) *indexer
 	if !ok {
 		data, err := db.GetAddressDataFromDBV2(ldb, address)
 		if err == nil {
-			value = data.ToAddressValueV2()
+			value = indexer.ToAddressValueV2(data)
 			b.addressValueMap[address] = value
 			ok = true
 		}
@@ -224,7 +224,7 @@ func (b *RpcIndexer) GetAddressId(address string) uint64 {
 	if id == indexer.INVALID_ID {
 		data, err := db.GetAddressDataFromDBV2(b.db, address)
 		if err == nil {
-			value := data.ToAddressValueV2()
+			value := indexer.ToAddressValueV2(data)
 			id = value.AddressId
 			b.addressValueMap[address] = value
 			b.addressIdMap[id] = address
@@ -244,7 +244,7 @@ func (b *RpcIndexer) GetOrdinalsWithUtxoId(id uint64) (string, wire.TxAssets, er
 }
 
 // key: utxoId, value: btc value
-func (b *RpcIndexer) GetUTXOs(address string) (map[uint64]bool, error) {
+func (b *RpcIndexer) GetUTXOs(address string) (map[uint64]int64, error) {
 	addrValue, err := b.getUtxosWithAddress(address)
 	if err != nil {
 		return nil, err

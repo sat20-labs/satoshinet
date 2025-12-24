@@ -185,7 +185,7 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 			AddressType: value.AddressType,
 			AddressId:   value.AddressId,
 			Op:          value.Op,
-			Utxos:       make(map[uint64]bool),
+			Utxos:       make(map[uint64]int64),
 		}
 		if setStoredFlag {
 			value.Op = 0 // 当作已经写入数据库
@@ -279,7 +279,7 @@ func (b *BaseIndexer) prefechAddress() {
 						common.Log.Errorf("failed to get address data by address %s: %v", addr, err)
 						continue
 					}
-					b.addressValueMap[addr] = data.ToAddressValueV2()
+					b.addressValueMap[addr] = indexer.ToAddressValueV2(data)
 				}
 			}
 		}
@@ -293,7 +293,7 @@ func (b *BaseIndexer) prefechAddress() {
 						common.Log.Errorf("failed to get address data by address %s: %v", addr, err)
 						continue
 					}
-					b.addressValueMap[addr] = data.ToAddressValueV2()
+					b.addressValueMap[addr] = indexer.ToAddressValueV2(data)
 				}
 			}
 		}
@@ -448,8 +448,8 @@ func (b *BaseIndexer) UpdateDB() {
 
 	// address -> utxo
 	for k, v := range b.addressValueMap {
-		if v.AddressType == uint32(txscript.NullDataTy) ||
-			v.AddressType == uint32(txscript.NonStandardTy) {
+		if v.AddressType == int(txscript.NullDataTy) ||
+			v.AddressType == int(txscript.NonStandardTy) {
 			// 这两个地址的数据会越来越大，以后考虑分桶保存，再考虑保存这两个地址的utxo
 		}
 		key := db.GetAddressDBKeyV2(k)
@@ -1130,7 +1130,7 @@ func (b *BaseIndexer) outputUtxo(output *common.Output) {
 			// }
 			// b.addressIdMap[address] = utxomap
 		}
-		utxomap.Utxos[utxoId] = true
+		utxomap.Utxos[utxoId] = output.Value
 		utxomap.Op = 1
 	}
 }
@@ -1188,7 +1188,7 @@ func (b *BaseIndexer) loadUtxoFromTxn(utxostr string, txn indexer.ReadBatch) err
 				common.Log.Errorf("failed to get address data by address %s, utxo: %s, utxoId: %d, err: %v", address, utxostr, utxo.UtxoId, err)
 				return err
 			}
-			b.addressValueMap[address] = data.ToAddressValueV2()
+			b.addressValueMap[address] = indexer.ToAddressValueV2(data)
 		}
 		addresses.Addresses = append(addresses.Addresses, address)
 	}
@@ -1235,7 +1235,7 @@ func (b *BaseIndexer) prefetchTickerInfoFromDB(name string, divisibility int, ad
 					common.Log.Errorf("failed to get address data by address %s: %v", addr, err)
 					continue
 				}
-				b.addressValueMap[addr] = data.ToAddressValueV2()
+				b.addressValueMap[addr] = indexer.ToAddressValueV2(data)
 			}
 			amt, err := stp.GetTickerHolderInfoFromDBTxn(txn, name, addrValue.AddressId)
 			if err != nil {
@@ -1287,13 +1287,13 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 							addressId := b.generateAddressId()
 							common.Log.Infof("generateAddressId %d %s", addressId, address)
 							b.addressValueMap[address] = &indexer.AddressValueV2{
-								AddressType: uint32(output.Address.Type),
+								AddressType: (output.Address.Type),
 								AddressId:   addressId,
 								Op:          1,
-								Utxos:       make(map[uint64]bool),
+								Utxos:       make(map[uint64]int64),
 							}
 						} else {
-							b.addressValueMap[address] = data.ToAddressValueV2()
+							b.addressValueMap[address] = indexer.ToAddressValueV2(data)
 						}
 					}
 				}
@@ -1487,11 +1487,11 @@ func (b *BaseIndexer) CheckSelf() bool {
 		for _, utxoId := range value.Utxos {
 			allutxoInAddress++
 
-			if value.AddressType == uint32(txscript.NullDataTy) ||
-				value.AddressType == uint32(txscript.NonStandardTy) {
+			if value.AddressType == int32(txscript.NullDataTy) ||
+				value.AddressType == int32(txscript.NonStandardTy) {
 				continue
 			}
-			utxosInT2[utxoId] = true
+			utxosInT2[utxoId.UtxoId] = true
 			validUtxo = true
 		}
 		if validUtxo {
