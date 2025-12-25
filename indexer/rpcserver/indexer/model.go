@@ -326,6 +326,7 @@ func (s *Model) GetAssetSummaryV3(address string, start int, limit int) ([]*inde
 	for tickName, balance := range tickerMap {
 		resp := &indexer.DisplayAsset{}
 		resp.AssetName = tickName
+		resp.Precision = balance.Precision
 		resp.Amount = balance.String()
 		resp.BindingSat = (s.indexer.GetBindingSat(&tickName))
 		result = append(result, resp)
