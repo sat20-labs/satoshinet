@@ -454,7 +454,7 @@ func (b *BaseIndexer) UpdateDB() {
 		}
 		key := db.GetAddressDBKeyV2(k)
 		value := v.ToAddressValueInDBV2()
-		err := db.SetDB(key, value, wb)
+		err := db.SetDBWithProto3(key, value, wb)
 		if err != nil {
 			common.Log.Panicf("Error setting in db %v", err)
 		}
@@ -1478,7 +1478,7 @@ func (b *BaseIndexer) CheckSelf() bool {
 	b.db.BatchRead([]byte(indexer.DB_KEY_ADDRESSV2), false, func(k, v []byte) error {
 
 		var value indexer.AddressValueInDBV2
-		err := db.DecodeBytes(v, &value)
+		err := db.DecodeBytesWithProto3(v, &value)
 		if err != nil {
 			common.Log.Panicf("item.Value error: %v", err)
 		}
@@ -1588,12 +1588,16 @@ func (b *BaseIndexer) printfUtxos(utxos map[uint64]bool) map[uint64]string {
 			if err == nil {
 				common.Log.Infof("%x %s %d", value.UtxoId, str, value.Value)
 				result[value.UtxoId] = str
+				if len(result) >= 10 {
+					common.Log.Infof("too many utxo to print")
+					return fmt.Errorf("too many utxo...")
+				}
 			}
 
-			delete(utxos, value.UtxoId)
-			if len(utxos) == 0 {
-				return nil
-			}
+			// delete(utxos, value.UtxoId)
+			// if len(utxos) == 0 {
+			// 	return nil
+			// }
 		}
 
 		return nil
