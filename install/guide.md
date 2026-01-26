@@ -127,8 +127,6 @@ rpc_service:
 
 挖矿节点
 ----
-我们提供了  Ubuntu 22.04.4 LTS 的可执行文件，不需要自己下载代码和编译就可以直接在Ubuntu 22.04 上使用。下载链接：
-https://github.com/sat20-labs/satoshinet/tree/main/install/ubuntu_22.04
 
 在这里我们先提供在测试网络上质押挖矿的教程。
 
