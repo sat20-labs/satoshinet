@@ -1,0 +1,28 @@
+# server node configuration
+
+env: prd
+chain: mainnet
+peers:
+  - b@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@https://apiprd.sat20.org/stp/mainnet
+  - s@022ab2945f61304f117f55d469c341d606ceb729de436c80c0e6ad7819cdd53ce7@https://apiprd.ordx.market/stp/mainnet
+mode: server
+rpc:
+  scheme: http
+  host: 0.0.0.0:9529
+  proxy: mainnet
+
+indexer_layer1:
+  scheme: http
+  host: 127.0.0.1:8009
+  proxy: btc/mainnet
+
+indexer_layer2:
+  scheme: http
+  host: 127.0.0.1:9528
+  proxy: mainnet
+
+log: info
+
+wallet:
+  stake: true
+  psfile: wallet.password
