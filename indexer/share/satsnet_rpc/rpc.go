@@ -175,14 +175,6 @@ func SendRawTransaction(txHex string, allowHighFees bool) (*chainhash.Hash, erro
 		return nil, err
 	}
 
-	/*
-	                                           要广播的txId																												  目标utxo对应的anchor txId         										目标utxo
-	-26: TX rejected: The anchor tx is invalid 41d0c16816756bc32a7b839b7bd3845b0f94c0990da036f486c6fbc4210c4552:the locked tx is anchored already in sats net, anchorTx cbaf995a3b0457f3f821068692b9e4664a8a215b4695caac7c73c279453f503a, utxo c08e081650f45b1f2709962285cc618ee2beeee620a9b6e3b850e571739a15b5:0
-	
-											要广播的txId																											 该tx包含一个输入utxo
-	-25: TX rejected: orphan transaction 7b23cb6e5531bc8a19665576ebb2e6d96a0e703224f8079ae6947dfa93e0f8ba references outputs of unknown or fully-spent transaction adbd1d2d33b9f8b1fdc328941a192ef66403923961f677301647e3f5dd05bced:0
-	*/
-
 	txId, err := _client.client.SendRawTransaction(msgTx, allowHighFees)
 	if err != nil {
 		errStr := err.Error()
