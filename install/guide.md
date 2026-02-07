@@ -120,7 +120,7 @@ rpc_service:
 ----
 非挖矿节点，按照如下步骤运行节点
 1. 将satsnet_testnet.conf拷贝到可执行文件 satoshinet 的同目录下
-2. 改名为 satsnet.confg
+2. 改名为 satsnet.conf
 3. 直接运行即可
 
 
@@ -137,7 +137,7 @@ rpc_service:
 挖矿：
 1. 将这个目录satoshinet/install/ubuntu_22.04的两个文件satoshinet和stpd.so下载到本地，比如 /data/satoshinet 目录下
 2. 将satsnet_mainnet.conf拷贝到 /data/satoshinet 目录下
-3. 改名为 satsnet.confg
+3. 改名为 satsnet.conf
 4. 修改你的bitcoind的rpc用户名和密码和钱包公钥
 rpcuser=your_name
 rpcpass=your_password
