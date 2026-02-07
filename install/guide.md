@@ -145,7 +145,7 @@ rpcpass=your_password
 ; 可以从钱包的配置-安全-显示pubkey，将公钥复制到这个配置项
 miningpubkey=your_wallet_pubkey
 
-5. 将conf_mainnet.yaml拷贝到 /data/satoshinet 目录下，修改 indexer_layer1 的 host为你自建的索引器服务地址。如果在索引器在同一台电脑，不用修改。
+5. 将conf_mainnet.yaml拷贝到 /data/satoshinet 目录下，然后修改文件名为conf.yaml。打开这个文件，修改 indexer_layer1 的 host为你自建的索引器服务地址。如果在索引器在同一台电脑，不用修改。
 6. 输入命令行 ./satoshinet ， 按照提示导入钱包，并且设定一个钱包密码。该密码会自动保存在 /data/satoshinet/wallet.password 中，方便调试阶段不用重复输入密码。等调试完成后，启动服务之后，可以删除这个文件，防止密码泄漏。
 7. 设定密码之后，app会自动退出，现在继续输入命令行 ./satoshinet 观察挖矿服务是否顺利启动。(需要在上面的质押交易确认后再启动)
 8. 如果交易已经确认，启动satoshinet后，将自动将该节点提升为挖矿节点，这个过程可能需要几分钟，在这之前，app可能会因为还不符合挖矿条件自动退出，需要多启动几次。
