@@ -1,21 +1,23 @@
-//go:build stp_source
+//go:build wallet_source
 
 package stp
 
 import (
 	"log"
-	"github.com/sat20-labs/satoshinet/stp/transcend/plugin"
+	"github.com/sat20-labs/satoshinet/wallet/sdk/plugin"
 )
 
+
 /*
-非plugin模式，需要将transcend所有代码，copy到本目录，然后编译。用于不支持plugin的平台，比如windows。
+非plugin模式，需要将sat20wallet/sdk的所有代码，copy到./sdk，然后编译。用于不支持plugin的平台，比如windows。
 */
+
 
 func LoadSTP(dbPath string) error {
 
-	err := plugin.InitSTP(dbPath)
+	err := plugin.InitWallet(dbPath)
 	if err != nil {
-		log.Printf("initSTP failed: %v", err)
+		log.Printf("InitWallet failed: %v", err)
 		return err
 	}
 	
@@ -25,16 +27,16 @@ func LoadSTP(dbPath string) error {
 
 
 func StartSTP() error {
-	err := plugin.StartSTP()
+	err := plugin.StartWalletMgr()
 	if err != nil {
-		log.Printf("StartSTP failed, %v", err)
+		log.Printf("StartWalletMgr failed, %v", err)
 		return err
 	}
 	return nil
 }
 
 func ReleaseSTP() {
-	plugin.ReleaseSTP()
+	plugin.ReleaseWalletMgr()
 }
 
 func SignMsg(msg []byte) ([]byte, error) {

@@ -1,4 +1,4 @@
-//go:build stp_plugin
+//go:build wallet_plugin
 
 package stp
 
@@ -8,51 +8,51 @@ import (
 	"plugin"
 )
 
-var _stpMgr *plugin.Plugin
+var _walletMgr *plugin.Plugin
 
 func LoadSTP(dbPath string) error {
-	if _stpMgr != nil {
+	if _walletMgr != nil {
 		return nil
 	}
 
 	// 打开插件文件
-	p, err := plugin.Open("./stpd.so")
+	p, err := plugin.Open("./wallet.so")
 	if err != nil {
 		log.Printf("plugin.Open failed. %v", err)
 		return err
 	}
 
-	symbol, err := p.Lookup("InitSTP")
+	symbol, err := p.Lookup("InitWalletMgr")
 	if err != nil {
-		log.Printf("Lookup InitSTP failed: %v", err)
+		log.Printf("Lookup InitWalletMgr failed: %v", err)
 		return err
 	}
 
-	initSTP, ok := symbol.(func(string) error)
+	f, ok := symbol.(func(string) error)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return fmt.Errorf("symbol type assertion failed")
 	}
 
-	err = initSTP(dbPath)
+	err = f(dbPath)
 	if err != nil {
-		log.Printf("initSTP failed: %v", err)
+		log.Printf("InitWalletMgr failed: %v", err)
 		return err
 	}
 
-	_stpMgr = p
+	_walletMgr = p
 	return nil
 }
 
 
 func StartSTP() error {
-	if _stpMgr == nil {
+	if _walletMgr == nil {
 		return fmt.Errorf("STPManager not init")
 	}
 
-	symbol, err := _stpMgr.Lookup("StartSTP")
+	symbol, err := _walletMgr.Lookup("StartWalletMgr")
 	if err != nil {
-		log.Printf("Lookup StartSTP failed: %v", err)
+		log.Printf("Lookup StartWalletMgr failed: %v", err)
 		return err
 	}
 
@@ -64,62 +64,62 @@ func StartSTP() error {
 
 	err = f()
 	if err != nil {
-		log.Printf("StartSTP failed, %v", err)
+		log.Printf("StartWalletMgr failed, %v", err)
 		return err
 	}
-	log.Printf("StartSTP completed")
+	log.Printf("StartWalletMgr completed")
 	return nil
 }
 
 func ReleaseSTP() {
-	if _stpMgr == nil {
+	if _walletMgr == nil {
 		return 
 	}
 
-	symbol, err := _stpMgr.Lookup("ReleaseSTP")
+	symbol, err := _walletMgr.Lookup("ReleaseWalletMgr")
 	if err != nil {
-		log.Printf("Lookup ReleaseSTP failed: %v", err)
+		log.Printf("Lookup ReleaseWalletMgr failed: %v", err)
 		return 
 	}
 
-	releaseSTP, ok := symbol.(func())
+	f, ok := symbol.(func())
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return 
 	}
 
-	releaseSTP()
+	f()
 
-	_stpMgr = nil
+	_walletMgr = nil
 }
 
 
 func SignMsg(msg []byte) ([]byte, error) {
-	if _stpMgr == nil {
-		return nil, fmt.Errorf("STPManager not init")
+	if _walletMgr == nil {
+		return nil, fmt.Errorf("WalletManager not init")
 	}
 
-	symbol, err := _stpMgr.Lookup("SignMsg")
+	symbol, err := _walletMgr.Lookup("SignMsg")
 	if err != nil {
 		log.Printf("Lookup SignMsg failed: %v", err)
 		return  nil, err
 	}
 
-	signMsg, ok := symbol.(func([]byte) ([]byte, error))
+	f, ok := symbol.(func([]byte) ([]byte, error))
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return nil, fmt.Errorf("symbol type assertion failed")
 	}
 
-	return signMsg(msg)
+	return f(msg)
 }
 
 func IsWalletExists() (bool) {
-	if _stpMgr == nil {
+	if _walletMgr == nil {
 		return false
 	}
 
-	symbol, err := _stpMgr.Lookup("IsWalletExisting")
+	symbol, err := _walletMgr.Lookup("IsWalletExisting")
 	if err != nil {
 		log.Printf("Lookup IsWalletExisting failed: %v", err)
 		return  false
@@ -136,11 +136,11 @@ func IsWalletExists() (bool) {
 
 
 func IsUnlocked() (bool) {
-	if _stpMgr == nil {
+	if _walletMgr == nil {
 		return false
 	}
 
-	symbol, err := _stpMgr.Lookup("IsUnlocked")
+	symbol, err := _walletMgr.Lookup("IsUnlocked")
 	if err != nil {
 		log.Printf("Lookup IsUnlocked failed: %v", err)
 		return  false
@@ -157,11 +157,11 @@ func IsUnlocked() (bool) {
 
 
 func CreateWallet(pw string) (string, error) {
-	if _stpMgr == nil {
-		return "", fmt.Errorf("STPManager not init")
+	if _walletMgr == nil {
+		return "", fmt.Errorf("WalletManager not init")
 	}
 
-	symbol, err := _stpMgr.Lookup("CreateWallet")
+	symbol, err := _walletMgr.Lookup("CreateWallet")
 	if err != nil {
 		log.Printf("Lookup CreateWallet failed: %v", err)
 		return "", err
@@ -177,11 +177,11 @@ func CreateWallet(pw string) (string, error) {
 }
 
 func UnlockWallet(pw string) (error) {
-	if _stpMgr == nil {
-		return fmt.Errorf("STPManager not init")
+	if _walletMgr == nil {
+		return fmt.Errorf("WalletManager not init")
 	}
 
-	symbol, err := _stpMgr.Lookup("UnlockWallet")
+	symbol, err := _walletMgr.Lookup("UnlockWallet")
 	if err != nil {
 		log.Printf("Lookup UnlockWallet failed: %v", err)
 		return err
@@ -197,11 +197,11 @@ func UnlockWallet(pw string) (error) {
 }
 
 func ImportWallet(mn, pw string) (error) {
-	if _stpMgr == nil {
-		return fmt.Errorf("STPManager not init")
+	if _walletMgr == nil {
+		return fmt.Errorf("WalletManager not init")
 	}
 
-	symbol, err := _stpMgr.Lookup("ImportWallet")
+	symbol, err := _walletMgr.Lookup("ImportWallet")
 	if err != nil {
 		log.Printf("Lookup ImportWallet failed: %v", err)
 		return err
@@ -217,11 +217,11 @@ func ImportWallet(mn, pw string) (error) {
 }
 
 func GetPubKey() ([]byte, error) {
-	if _stpMgr == nil {
-		return nil, fmt.Errorf("STPManager not init")
+	if _walletMgr == nil {
+		return nil, fmt.Errorf("WalletManager not init")
 	}
 
-	symbol, err := _stpMgr.Lookup("GetPubKey")
+	symbol, err := _walletMgr.Lookup("GetPubKey")
 	if err != nil {
 		log.Printf("Lookup GetPubKey failed: %v", err)
 		return  nil, err
