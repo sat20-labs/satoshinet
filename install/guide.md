@@ -124,18 +124,17 @@ rpc_service:
 3. 直接运行即可
 
 
-
 挖矿节点
 ----
 我们先提供在mainnet上质押挖矿的教程。testnet4的流程一样，只是资产是ordx:f:dogcoin，数量是1000。
-挖矿节点挖矿时需要用钱包签名，需要导入stp模块，但目前stp模块还没有开源，我们提供了最新代码编译的可执行文件在./satoshinet/install/ubuntu_22.04 这个目录下。
+挖矿节点挖矿时需要用钱包签名，需要导入wallet模块.
 
 质押：
 在mainnet质押，需要将100万枚ordx:f:pearl质押到你和服务节点的通道地址上。你可以选择引导节点作为服务节点，这种时候你本身会成为核心节点，需要提供全功能服务；你也可以选择其他核心节点作为服务节点，这个时候你就是一个普通的挖矿节点，不需要提供其他服务。（目前暂时只能选择普通挖矿节点）
 插件钱包提供了质押入口，你只需要选择：配置->节点配置，选择节点类型，确认你的钱包中有足够的质押资产，然后发起质押。该质押过程会将你钱包中足够数量的质押资产，转移到通道地址中。在等待交易完成的时间，可以继续做下一步，准备启动挖矿服务。
 
 挖矿：
-1. 将这个目录satoshinet/install/ubuntu_22.04的两个文件satoshinet和stpd.so下载到本地，比如 /data/satoshinet 目录下
+1. 更新源代码，执行 build_miner.sh，编译完成后，应该有satoshinet_miner和wallet.so这两个文件生成，将这两个文件拷贝到/data/satoshinet，将satoshinet_miner改名为satoshinet
 2. 将satsnet_mainnet.conf拷贝到 /data/satoshinet 目录下
 3. 改名为 satsnet.conf
 4. 修改你的bitcoind的rpc用户名和密码和钱包公钥
@@ -154,6 +153,13 @@ miningpubkey=your_wallet_pubkey
 nohup ./satoshinet > ./nohup.log 2>&1 &
 11. 这个时候可以删除wallet.password文件 （下次重启，需要先将创建一个同样的文件，并且将密码输入其中）
 
+
+
+
+核心节点
+----
+基本过程跟建立挖矿节点类似，只是编译时使用build.sh，生成satoshinet_core和stpd.so文件。
+但目前stp模块还没有开源，也就是暂时不支持社区建立核心节点。有需求的，可以先私下沟通。
 
 
 区块浏览器
