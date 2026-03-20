@@ -814,7 +814,7 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 			b.mutex.Lock()
 			coreNodeKey := hex.EncodeToString(ascend.PubA)
 			coreNode, ok := b.coreNodeMap[coreNodeKey]
-			if ok && b.HasMinerEligibility(ascend.Assets) {
+			if ok && b.HasMinerEligibility(ascend.Height, ascend.Assets) {
 				// 一个连接到corenode的普通miner
 				b.coreNodeMapUpdated = true
 				childKey := hex.EncodeToString(ascend.PubB)
@@ -927,9 +927,8 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 				if err == nil {
 					switch ctype {
 					case common.CONTENT_TYPE_DESCENDING:
-						descend, err := GenDescend(tx, i, string(data))
+						descend, err := GenDescend(tx, i, block.Height, string(data))
 						if err == nil {
-							descend.Height = block.Height
 							b.utxoIndex.DescendMap[descend.NullDataUtxo] = descend
 
 							var bindingSatNum int64
@@ -1681,19 +1680,19 @@ func (p *BaseIndexer) getAddressId(address string) (uint64, int) {
 // 服务节点是引导节点，并且有足够资产才算是
 func (p *BaseIndexer) IsCoreNodeAscend(ascend *common.AscendData) bool {
 	if hex.EncodeToString(ascend.PubA) == indexer.GetBootstrapPubKey() {
-		return p.HasCoreNodeEligibility(ascend.Assets)
+		return p.HasCoreNodeEligibility(ascend.Height, ascend.Assets)
 	}
 	return false
 	// 连接core node的都只是普通miner
 }
 
 func (p *BaseIndexer) IsCoreNodeDescend(descend *common.DescendData) bool {
-	return p.HasCoreNodeEligibility(descend.Assets)
+	return p.HasCoreNodeEligibility(descend.Height, descend.Assets)
 }
 
-func (p *BaseIndexer) HasCoreNodeEligibility(assets wire.TxAssets) bool {
-	coreAssetName := indexer.GetStakeAssetName()
-	coreAssetAmount := indexer.GetStakeAssetAmt()
+func (p *BaseIndexer) HasCoreNodeEligibility(height int, assets wire.TxAssets) bool {
+	coreAssetName := indexer.GetStakeAssetNameWithHeightL2(height)
+	coreAssetAmount := indexer.GetStakeAssetAmtWithHeightL2(height)
 	for _, asset := range assets {
 		if asset.Name.String() == coreAssetName {
 			return asset.Amount.Int64() >= coreAssetAmount
@@ -1703,6 +1702,6 @@ func (p *BaseIndexer) HasCoreNodeEligibility(assets wire.TxAssets) bool {
 }
 
 // 暂时等于corenode
-func (p *BaseIndexer) HasMinerEligibility(assets wire.TxAssets) bool {
-	return p.HasCoreNodeEligibility(assets)
+func (p *BaseIndexer) HasMinerEligibility(height int, assets wire.TxAssets) bool {
+	return p.HasCoreNodeEligibility(height, assets)
 }

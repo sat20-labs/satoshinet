@@ -84,8 +84,9 @@ type AscendData struct {
 }
 
 func (p *AscendData) ToMinerInfo() *MinerInfo {
-	var amt string
+	var name, amt string
 	if len(p.Assets) > 0 {
+		name = p.Assets[0].Name.String()
 		amt = p.Assets[0].Amount.String()
 	} else {
 		amt = fmt.Sprintf("%d", p.Value)
@@ -94,7 +95,7 @@ func (p *AscendData) ToMinerInfo() *MinerInfo {
 			AscendHeight: p.Height,
 			AscendUtxo: p.FundingUtxo,
 			AnchorTxId: p.AnchorTxId,
-			AssetName: indexer.GetStakeAssetName(),
+			AssetName: name,
 			AssetAmt: amt,
 			ChannelAddr: p.Address,
 			ServerNode: hex.EncodeToString(p.PubA),
@@ -139,7 +140,7 @@ func NewCoreNodeInfo(data *AscendData) *CoreNodeInfo {
 				AscendHeight: 0,
 				AscendUtxo: "",
 				AnchorTxId: "",
-				AssetName: indexer.GetStakeAssetName(),
+				AssetName: "",
 				AssetAmt: "0",
 				ChannelAddr: "",
 				ServerNode: "",

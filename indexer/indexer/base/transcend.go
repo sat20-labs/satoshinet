@@ -29,9 +29,10 @@ func GenAscendFromAnchorPkScript(anchorPkScript []byte, netParams *chaincfg.Para
 }
 
 
-func GenDescend(tx *common.Transaction, index int, descendTxId string) (*common.DescendData, error) {
+func GenDescend(tx *common.Transaction, index, height int, descendTxId string) (*common.DescendData, error) {
 
 	var result common.DescendData
+	result.Height = height
 	output := tx.Outputs[index]
 	result.NullDataUtxo = tx.Txid + ":" + strconv.Itoa(index)
 	result.DescendTxId = descendTxId
