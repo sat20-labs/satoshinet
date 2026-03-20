@@ -15,9 +15,9 @@ import (
 
 func LoadSTP(dbPath string) error {
 
-	err := plugin.InitWallet(dbPath)
+	err := plugin.InitWalletMgr(dbPath)
 	if err != nil {
-		log.Printf("InitWallet failed: %v", err)
+		log.Printf("InitWalletMgr failed: %v", err)
 		return err
 	}
 	

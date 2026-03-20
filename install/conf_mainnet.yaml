@@ -12,8 +12,13 @@ rpc:
   proxy: mainnet
 
 indexer_layer1:
-  scheme: http
-  host: 127.0.0.1:8009
+  # 自己有索引器
+  # scheme: http
+  # host: 127.0.0.1:8009
+  # proxy: btc/mainnet
+  # 使用市场的索引器
+  scheme: https
+  host: apiprd.ordx.market
   proxy: btc/mainnet
 
 indexer_layer2:

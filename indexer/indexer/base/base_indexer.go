@@ -1692,12 +1692,8 @@ func (p *BaseIndexer) IsCoreNodeDescend(descend *common.DescendData) bool {
 }
 
 func (p *BaseIndexer) HasCoreNodeEligibility(assets wire.TxAssets) bool {
-	coreAssetName := indexer.CORENODE_STAKING_ASSET_NAME
-	coreAssetAmount := indexer.CORENODE_STAKING_ASSET_AMOUNT
-	if !p.IsMainnet() {
-		coreAssetName = indexer.TESTNET_CORENODE_STAKING_ASSET_NAME
-		coreAssetAmount = indexer.TESTNET_CORENODE_STAKING_ASSET_AMOUNT
-	}
+	coreAssetName := indexer.GetStakeAssetName()
+	coreAssetAmount := indexer.GetStakeAssetAmt()
 	for _, asset := range assets {
 		if asset.Name.String() == coreAssetName {
 			return asset.Amount.Int64() >= coreAssetAmount
