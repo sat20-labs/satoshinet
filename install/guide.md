@@ -65,7 +65,7 @@ bitcoind -chain=main -conf=/data/bitcoin/bitcoin.conf -datadir=/data/bitcoin/mai
 很多代码库修改非常频繁，需要将多个代码clone到本地，并且放到同一个工程目录中
 索引器：https://github.com/sat20-labs/indexer
 
-workspace  
+workspace  (自己的工作目录，比如/data)  
  |- bitcoin  
  |- indexer    https://github.com/sat20-labs/indexer  
  |- satoshinet  https://github.com/sat20-labs/satoshinet  
