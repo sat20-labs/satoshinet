@@ -7,6 +7,9 @@
 操作系统方面，我们主要使用 Ubuntu 22.04.4 LTS 运行各种服务，mac系统也可以正常使用，因为我们开发环境主要是mac系统。
 我们不能保证所有服务在windows系统中正常运行。
 
+假定：
+所有源代码的完整路径：/data/github/project_name
+运行路径：/data/project_name
 
 安装和运行Bitcoin Core
 ----
@@ -65,7 +68,7 @@ bitcoind -chain=main -conf=/data/bitcoin/bitcoin.conf -datadir=/data/bitcoin/mai
 很多代码库修改非常频繁，需要将多个代码clone到本地，并且放到同一个工程目录中
 索引器：https://github.com/sat20-labs/indexer
 
-workspace  (自己的工作目录，比如/data)  
+workspace  (自己的代码目录，比如/data/github)  
  |- bitcoin  
  |- indexer    https://github.com/sat20-labs/indexer  
  |- satoshinet  https://github.com/sat20-labs/satoshinet  
