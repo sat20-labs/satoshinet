@@ -2,6 +2,8 @@ package psbt
 
 import (
 	"bytes"
+	"math"
+	"math/bits"
 
 	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -93,11 +95,59 @@ func (s *TaprootBip32Derivation) SortBefore(other *TaprootBip32Derivation) bool 
 	return bytes.Compare(s.XOnlyPubKey, other.XOnlyPubKey) < 0
 }
 
+// minTaprootBip32DerivationByteSize returns the minimum number of bytes
+// required to encode a Taproot BIP32 derivation field, given the number of
+// leaf hashes.
+//
+// NOTE: This function does not account for the size of the BIP32 child indexes,
+// as we are only computing the minimum size (which occurs when the path is
+// empty). The bits package is used to safely detect and handle overflows.
+func minTaprootBip32DerivationByteSize(numHashes uint64) (uint64, error) {
+	// The Taproot BIP32 derivation field is encoded as:
+	//   [compact size uint: number of leaf hashes]
+	//   [N × 32 bytes: leaf hashes]
+	//   [4 bytes: master key fingerprint]
+	//   [M × 4 bytes: BIP32 child indexes]
+	//
+	// To compute the minimum size given the number of hashes only, we assume:
+	// - N = numHashes (provided)
+	// - M = 0 (no child indexes)
+	//
+	// So the base byte size is:
+	//   1 (leaf hash count) + (N × 32) + 4 (fingerprint)
+	//
+	// First, we calculate the total number of bytes for the leaf hashes.
+	mulCarry, totalHashesBytes := bits.Mul64(numHashes, 32)
+	if mulCarry != 0 {
+		return 0, ErrInvalidPsbtFormat
+	}
+
+	// Since we're computing the minimum possible size, we add a constant that
+	// accounts for the fixed size fields:
+	// * 1 byte for the compact size leaf hash count (assumes numHashes < 0xfd)
+	// * 4 bytes for the master key fingerprint
+	// Total: 5 bytes.
+	// All other fields (e.g., BIP32 path) are assumed absent for minimum size
+	// calculation.
+	result, addCarry := bits.Add64(5, totalHashesBytes, 0)
+	if addCarry != 0 {
+		return 0, ErrInvalidPsbtFormat
+	}
+
+	return result, nil
+}
+
 // ReadTaprootBip32Derivation deserializes a byte slice containing the Taproot
 // BIP32 derivation info that consists of a list of leaf hashes as well as the
 // normal BIP32 derivation info.
 func ReadTaprootBip32Derivation(xOnlyPubKey,
 	value []byte) (*TaprootBip32Derivation, error) {
+
+	// This function allocates additional memory while parsing the serialized
+	// data. To prevent OOM issues, validate the value length first.
+	if len(value) > MaxPsbtValueLength {
+		return nil, ErrInvalidPsbtFormat
+	}
 
 	// The taproot key BIP 32 derivation path is defined as:
 	//   <hashes len> <leaf hash>* <4 byte fingerprint> <32-bit uint>*
@@ -113,9 +163,17 @@ func ReadTaprootBip32Derivation(xOnlyPubKey,
 		return nil, ErrInvalidPsbtFormat
 	}
 
-	// A hash is 32 bytes in size, so we need at least numHashes*32 + 5
-	// bytes to be present.
-	if len(value) < (int(numHashes)*32)+5 {
+	// Prevent overflow and cap absurdly large hash counts before using them
+	// in size calculations and allocations.
+	if numHashes > math.MaxUint32 {
+		return nil, ErrInvalidPsbtFormat
+	}
+
+	minByteSize, err := minTaprootBip32DerivationByteSize(numHashes)
+	if err != nil {
+		return nil, err
+	}
+	if uint64(len(value)) < minByteSize {
 		return nil, ErrInvalidPsbtFormat
 	}
 

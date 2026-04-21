@@ -23,8 +23,14 @@ const MessageHeaderSize = 24
 const CommandSize = 12
 
 // MaxMessagePayload is the maximum bytes a message can be regardless of other
-// individual limits imposed by messages themselves.
+// individual limits imposed by messages themselves. This is used as a
+// serialization bound for all contexts (disk, RPC, network, etc.).
 const MaxMessagePayload = (1024 * 1024 * 32) // 32MB
+
+// MaxProtocolMessageLength is the maximum size of a p2p protocol message.
+// This is intentionally kept separate from MaxMessagePayload which is used as
+// a general serialization bound.
+const MaxProtocolMessageLength = (4 * 1000 * 1000) // ~4MB
 
 // Commands used in bitcoin message headers which describe the type of message.
 const (
@@ -304,11 +310,11 @@ func WriteMessageWithEncodingN(w io.Writer, msg Message, pver uint32,
 	payload := bw.Bytes()
 	lenp := len(payload)
 
-	// Enforce maximum overall message payload.
-	if lenp > MaxMessagePayload {
+	// Enforce maximum protocol message payload.
+	if lenp > MaxProtocolMessageLength {
 		str := fmt.Sprintf("message payload is too large - encoded "+
 			"%d bytes, but maximum message payload is %d bytes, %s",
-			lenp, MaxMessagePayload, cmd)
+			lenp, MaxProtocolMessageLength, cmd)
 		return totalBytes, messageError("WriteMessage", str)
 	}
 
@@ -367,11 +373,11 @@ func ReadMessageWithEncodingN(r io.Reader, pver uint32, btcnet BitcoinNet,
 		return totalBytes, nil, nil, err
 	}
 
-	// Enforce maximum message payload.
-	if hdr.length > MaxMessagePayload {
+	// Enforce maximum protocol message payload.
+	if hdr.length > MaxProtocolMessageLength {
 		str := fmt.Sprintf("message payload is too large - header "+
 			"indicates %d bytes, but max message payload is %d "+
-			"bytes. %s", hdr.length, MaxMessagePayload, hdr.command)
+			"bytes. %s", hdr.length, MaxProtocolMessageLength, hdr.command)
 		return totalBytes, nil, nil, messageError("ReadMessage", str)
 
 	}

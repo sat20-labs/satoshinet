@@ -9,10 +9,12 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -1418,6 +1420,75 @@ func TestNonWitnessToWitness(t *testing.T) {
 	if !bytes.Equal(expectedNetworkSer, b.Bytes()) {
 		t.Fatalf("Expected serialized transaction was not produced: %x", b.Bytes())
 	}
+}
+
+func TestMinTaprootBip32DerivationByteSize(t *testing.T) {
+	tests := []struct {
+		label        string
+		numHashes    uint64
+		expectedSize uint64
+		expectErr    bool
+	}{
+		{
+			label:        "only compact size and fingerprint",
+			numHashes:    0,
+			expectedSize: 5,
+		},
+		{
+			label:        "single hash",
+			numHashes:    1,
+			expectedSize: 37,
+		},
+		{
+			label:        "two hashes",
+			numHashes:    2,
+			expectedSize: 69,
+		},
+		{
+			label:     "overflow",
+			numHashes: math.MaxUint64,
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		actualSize, err := minTaprootBip32DerivationByteSize(tt.numHashes)
+		if (err != nil) != tt.expectErr {
+			t.Errorf("%s (numHashes=%d, unexpected_error=%v)",
+				tt.label, tt.numHashes, err)
+			continue
+		}
+
+		if err == nil && actualSize != tt.expectedSize {
+			t.Errorf("%s (numHashes=%d, actualSize=%d, expectedSize=%d)",
+				tt.label, tt.numHashes, actualSize, tt.expectedSize)
+		}
+	}
+}
+
+func TestReadTaprootBip32DerivationRejectsTooManyHashes(t *testing.T) {
+	var value bytes.Buffer
+	err := wire.WriteVarInt(&value, 0, math.MaxUint32+1)
+	require.NoError(t, err)
+
+	// Add the minimum trailing bytes so we exercise the hash-count guard
+	// rather than failing on the initial length check.
+	value.Write(make([]byte, 4))
+
+	derivation, err := ReadTaprootBip32Derivation(
+		bytes.Repeat([]byte{0x02}, schnorr.PubKeyBytesLen), value.Bytes(),
+	)
+	require.Nil(t, derivation)
+	require.ErrorIs(t, err, ErrInvalidPsbtFormat)
+}
+
+func TestReadTaprootBip32DerivationRejectsOversizedValue(t *testing.T) {
+	value := make([]byte, MaxPsbtValueLength+1)
+	derivation, err := ReadTaprootBip32Derivation(
+		bytes.Repeat([]byte{0x02}, schnorr.PubKeyBytesLen), value,
+	)
+	require.Nil(t, derivation)
+	require.ErrorIs(t, err, ErrInvalidPsbtFormat)
 }
 
 // TestEmptyInputSerialization tests the special serialization case for a wire
