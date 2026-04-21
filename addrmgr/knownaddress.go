@@ -68,7 +68,11 @@ func (ka *KnownAddress) chance() float64 {
 	}
 
 	// Failed attempts deprioritise.
-	for i := ka.attempts; i > 0; i-- {
+	attempts := ka.attempts // ka.attempts 可能非常大
+	if attempts >= maxFailures {
+		attempts = maxFailures
+	}
+	for i := attempts; i > 0; i-- {
 		c /= 1.5
 	}
 
