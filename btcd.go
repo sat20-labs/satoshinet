@@ -388,6 +388,12 @@ func btcdMain(serverChan chan<- *server) error {
 		return err
 	}
 
+	err = ossec.Init()
+	if err != nil {
+		btcdLog.Fatalf("security init failed: %v", err)
+	}
+
+
 	// The config file is already created if it did not exist and the log
 	// file has already been opened by now so we only need to allow
 	// creating rpc cert and key files if they don't exist.
