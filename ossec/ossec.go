@@ -13,8 +13,3 @@ func Pledge(promises, execpromises string) error {
 func PledgePromises(promises string) error {
 	return nil
 }
-
-
-func Init() error {
-	return nil
-}
