@@ -53,7 +53,7 @@ func Init() error {
 
 func basicChecks() error {
 
-/* .service 文件必须设置如下参数
+/* TODO .service 文件必须设置如下参数, 同时确保只用signer用户运行
 [Service]
 User=signer
 Group=signer
