@@ -124,7 +124,7 @@ rpc_service:
 普通节点，也就是非挖矿节点，按照如下步骤运行节点
 1. 将satsnet_testnet.conf拷贝到可执行文件 satoshinet 的同目录下
 2. 改名为 satsnet.conf
-3. 直接运行即可
+3. 运行build.sh, 得到可执行文件satoshinet, 直接运行即可
 
 
 挖矿节点
@@ -161,7 +161,7 @@ nohup ./satoshinet > ./nohup.log 2>&1 &
 
 核心节点
 ----
-基本过程跟建立挖矿节点类似，只是编译时使用build.sh，生成satoshinet_core和stpd.so文件。
+基本过程跟建立挖矿节点类似，只是编译时使用build_core.sh，生成satoshinet_core和stpd.so文件。
 但目前stp模块还没有开源，也就是暂时不支持社区建立核心节点。有需求的，可以先私下沟通。
 
 

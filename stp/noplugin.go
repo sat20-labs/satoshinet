@@ -1,3 +1,4 @@
+//go:build !stp_source && !stp_plugin && !wallet_source && !wallet_plugin
 
 package stp
 
