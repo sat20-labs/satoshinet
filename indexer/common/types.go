@@ -105,8 +105,8 @@ func (p *AscendData) ToMinerInfo() *MinerInfo {
 // UtxoL2 离开聪网，TxIdL1是回到主网
 type DescendData struct {
 	Height       int           `json:"height"`
-	DescendTxId  string        `json:"descendTxId"`
-	NullDataUtxo string        `json:"opReturn"`
+	DescendTxId  string        `json:"descendTxId"` // L1
+	NullDataUtxo string        `json:"opReturn"` // L2的utxo，包含了下降的资产信息
 	Value        int64         `json:"value"`
 	Assets       wire.TxAssets `json:"assets"`  // 支持很多种资产
 

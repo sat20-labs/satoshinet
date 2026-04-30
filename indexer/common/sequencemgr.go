@@ -33,7 +33,6 @@ import (
 	挖矿顺序：A,A1,A11,A12,A13,A2,A21,A22,A23,A3,A31,A32,A33,B,B1,B11,B12,B13,...到最后再轮回A,A1,A11...
 */
 
-
 type MiningInfo struct {
 	PubKey        string
 	MiningAddress string
@@ -55,20 +54,18 @@ type MiningSequenceMgr struct {
 	mutex          sync.RWMutex
 }
 
-
 // 构造函数
 func NewMiningSequenceMgr(chainParam *chaincfg.Params) *MiningSequenceMgr {
 	return &MiningSequenceMgr{
 		chainParam: chainParam,
-		nodes:    make(map[string]*MiningInfo),
+		nodes:      make(map[string]*MiningInfo),
 		addressMap: make(map[string]*MiningInfo),
-		sequence: make([]*MiningInfo, 0),
+		sequence:   make([]*MiningInfo, 0),
 	}
 }
 
-
 // 重新加载节点
-func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo, 
+func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 	height int, miningAddr string) error {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
@@ -107,7 +104,7 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 
 	if height <= int(b.chainParam.Checkpoints[0].Height) {
 		b.currMiningNode = b.sequence[0]
-		b.currHeight = height+1
+		b.currHeight = height + 1
 	} else {
 		if miningAddr != "" {
 			node, ok := b.addressMap[miningAddr]
@@ -116,7 +113,7 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 			} else {
 				b.currMiningNode = node.Next
 			}
-			b.currHeight = height+1
+			b.currHeight = height + 1
 		} else {
 			// 重新建索引数据库
 			return fmt.Errorf("mining address is nil, please rebuild indexer database")
@@ -128,10 +125,9 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 	return nil
 }
 
-
 // 添加节点
 func (b *MiningSequenceMgr) addNode(pubkey, father string, height int) (*MiningInfo, error) {
-	
+
 	if _, ok := b.nodes[pubkey]; ok {
 		return b.nodes[pubkey], nil // 已存在
 	}
@@ -206,19 +202,22 @@ func (b *MiningSequenceMgr) AddNode(pubkey, father string, height int) (*MiningI
 			return nil, fmt.Errorf("")
 		}
 	}
-	
+
 	b.rebuildSequence()
 	return node, nil
 }
 
 // 删除节点
-func (b *MiningSequenceMgr) RemoveNode(pubkey string) {
+func (b *MiningSequenceMgr) RemoveNode(pubkey string) error {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
 	n, ok := b.nodes[pubkey]
 	if !ok {
-		return
+		return nil
+	}
+	if len(n.Children) != 0 {
+		return fmt.Errorf("node %s still has child miners", pubkey)
 	}
 	delete(b.nodes, pubkey)
 	delete(b.addressMap, n.MiningAddress)
@@ -234,6 +233,7 @@ func (b *MiningSequenceMgr) RemoveNode(pubkey string) {
 		}
 	}
 	b.rebuildSequence()
+	return nil
 }
 
 // 重建挖矿顺序
@@ -298,7 +298,7 @@ func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string) error {
 				return nil
 			}
 		}
-		
+
 		return fmt.Errorf("invalid mining address %s", addr)
 	}
 
@@ -316,7 +316,7 @@ func (b *MiningSequenceMgr) CheckCurrentMiningAddr(addr string) error {
 			}
 		}
 	}
-	
+
 	return fmt.Errorf("invalid mining address %s", addr)
 }
 
@@ -324,7 +324,7 @@ func GetScriptSignData(height int, nonce uint64) []byte {
 	return []byte(fmt.Sprintf("%d-%d", height, nonce))
 }
 
-func VerifyStandardCoinbaseScript(script, pubkey []byte) (error) {
+func VerifyStandardCoinbaseScript(script, pubkey []byte) error {
 	tokenizer := txscript.MakeScriptTokenizer(0, script)
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -376,7 +376,7 @@ func (b *MiningSequenceMgr) CheckMiningAddr(tx *wire.MsgTx, height int, addr str
 				return nil
 			}
 		}
-		
+
 		return fmt.Errorf("invalid mining address %s", addr)
 	}
 
@@ -395,7 +395,7 @@ func (b *MiningSequenceMgr) CheckMiningAddr(tx *wire.MsgTx, height int, addr str
 	}
 
 	var node *MiningInfo
-	if  height < b.currHeight {
+	if height < b.currHeight {
 		i := b.currHeight
 		node = b.currMiningNode
 		for i != height {
@@ -416,7 +416,7 @@ func (b *MiningSequenceMgr) CheckMiningAddr(tx *wire.MsgTx, height int, addr str
 			}
 		}
 	}
-	
+
 	if addr == node.MiningAddress {
 		return nil
 	}
@@ -431,10 +431,9 @@ func (b *MiningSequenceMgr) CheckMiningAddr(tx *wire.MsgTx, height int, addr str
 			}
 		}
 	}
-	
+
 	return fmt.Errorf("invalid mining address %s", addr)
 }
-
 
 // 检查当前挖矿地址是否有效，miner或者其father都是有效节点
 func (b *MiningSequenceMgr) CheckCurrentMiningPubKey(pubkey string) error {
@@ -455,7 +454,7 @@ func (b *MiningSequenceMgr) CheckCurrentMiningPubKey(pubkey string) error {
 			}
 		}
 	}
-	
+
 	return fmt.Errorf("invalid mining pubkey %s", pubkey)
 }
 
@@ -482,7 +481,6 @@ func (b *MiningSequenceMgr) GetNodeType(pubkey string) int {
 	}
 	return node.NodeType
 }
-
 
 // 设置当前挖矿地址，每个区块处理完成后调用一次
 func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
@@ -512,7 +510,7 @@ func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
 		}
 	}
 	b.currHeight++
-	
+
 	return nil
 }
 
@@ -560,7 +558,6 @@ func (b *MiningSequenceMgr) GetNextMiningAddr() string {
 	return b.currMiningNode.Next.MiningAddress
 }
 
-// 
 func (b *MiningSequenceMgr) GetFatherMiningInfo(pubkey string) *MiningInfo {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()

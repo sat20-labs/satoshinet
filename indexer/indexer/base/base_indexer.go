@@ -40,15 +40,15 @@ type BaseIndexer struct {
 	addressValueMap    map[string]*indexer.AddressValueV2 // 每个区块处理之前填充所有需要的地址id
 	coreNodeMap        map[string]*common.CoreNodeInfo    // pubkey, 不清空
 	coreNodeMapUpdated bool
-	channelMap         map[string]*common.ChannelInfo // address, 
+	channelMap         map[string]*common.ChannelInfo // address, 所有通道
 
-	miningAddress    string // 排序器的挖矿地址，可能不是当前区块的地址
-	lastHeight       int // 内存数据同步区块
-	lastHash         string
+	miningAddress string // 排序器的挖矿地址，可能不是当前区块的地址
+	lastHeight    int    // 内存数据同步区块
+	lastHash      string
 
 	// 不需要复制的数据
-	seqMgr             *common.MiningSequenceMgr // 不需要复制到rpc实例
-	prevBlockHashMap map[int]string // 记录过去6个区块hash，判断哪个区块分叉
+	seqMgr           *common.MiningSequenceMgr // 不需要复制到rpc实例
+	prevBlockHashMap map[int]string            // 记录过去6个区块hash，判断哪个区块分叉
 	////////////
 
 	blocksChan chan *common.Block
@@ -149,7 +149,7 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 	}
 	for key, value := range b.utxoIndex.ReferrerMap {
 		newInst.utxoIndex.ReferrerMap[key] = &common.ReferrerInfo{
-			Name: value.Name,
+			Name:      value.Name,
 			BindBlock: value.BindBlock,
 		}
 	}
@@ -316,7 +316,6 @@ func (b *BaseIndexer) UpdateDB() {
 	if err != nil {
 		common.Log.Panicf("GetReferreesFromDB failed, %v", err)
 	}
-
 
 	wb := b.db.NewWriteBatch()
 	defer wb.Close()
@@ -625,7 +624,6 @@ func getMiningAddress(block *common.Block) string {
 	return ""
 }
 
-
 // sync
 func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int {
 	common.Log.Infof("BaseIndexer.syncBlock-> currentHeight %d, blockHeight %d", b.lastHeight, block.Height)
@@ -695,12 +693,12 @@ func (b *BaseIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 
 func (b *BaseIndexer) handleStakeAsset(ascend *common.AscendData, data []byte) {
 	/*
-	质押资产成为挖矿节点的条件：
-	1. 通道地址：核心通道地址，或者连接核心节点的通道地址
-	2. 足够的资产
-	3. 交易中有一个质押的op_return (posv2版本之后)
-	目前的限制：现在只会在一个ascending交易中做判断，这不是合理的方式，可能将穿越资产当作质押资产
-	TODO：采用合约的方式，将质押资产锁定在合约中，交易也明确必须是STAKE的合约动作
+		质押资产成为挖矿节点的条件：
+		1. 通道地址：核心通道地址，或者连接核心节点的通道地址
+		2. 足够的资产
+		3. 交易中有一个质押的op_return (posv2版本之后)
+		目前的限制：现在只会在一个ascending交易中做判断，这不是合理的方式，可能将穿越资产当作质押资产
+		TODO：采用合约的方式，将质押资产锁定在合约中，交易也明确必须是STAKE的合约动作
 	*/
 
 	if ascend.Height <= int(b.chaincfgParam.Checkpoints[0].Height) {
@@ -723,7 +721,7 @@ func (b *BaseIndexer) handleStakeAsset(ascend *common.AscendData, data []byte) {
 			info, err := ascend.Assets.Find(indexer.NewAssetNameFromString(assetName))
 			if err != nil || info.Amount.Cmp(amt) != 0 {
 				common.Log.Errorf("handleStakeAsset invalid asset amt, %s -> %s", info.Amount.String(), amt.String())
-				return 
+				return
 			}
 		}
 	}
@@ -757,7 +755,7 @@ func (b *BaseIndexer) handleStakeAssetV2(height int, tx *common.Transaction, dat
 			info, err := txOut.Assets.Find(assetName)
 			if err != nil || info.Amount.Cmp(amt) != 0 {
 				common.Log.Errorf("handleStakeAssetV2 %s invalid asset amt, %s -> %s", tx.Txid, info.Amount.String(), amt.String())
-				continue 
+				continue
 			}
 		}
 
@@ -775,14 +773,14 @@ func (b *BaseIndexer) handleStakeAssetV2(height int, tx *common.Transaction, dat
 		return
 	}
 	ascend := &common.AscendData{
-		Height: height,
+		Height:      height,
 		FundingUtxo: fmt.Sprintf("%s:%d", tx.Txid, stakeAsset.N),
-		AnchorTxId: "",
-		Address: channelInfo.Address,
-		Value: stakeAsset.Value,
-		Assets: stakeAsset.Assets,
-		PubA: channelInfo.PubA,
-		PubB: channelInfo.PubB,
+		AnchorTxId:  "",
+		Address:     channelInfo.Address,
+		Value:       stakeAsset.Value,
+		Assets:      stakeAsset.Assets,
+		PubA:        channelInfo.PubA,
+		PubB:        channelInfo.PubB,
 	}
 
 	b.addMinerNode(ascend)
@@ -803,8 +801,8 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 			serverNode := b.coreNodeMap[serverNodeKey]
 			serverNode.ChildMiners[coreNodeKey] = &common.MinerAscendInfo{
 				AscendHeight: ascend.Height,
-				AscendUtxo: coreNode.AscendUtxo,
-			} 
+				AscendUtxo:   coreNode.AscendUtxo,
+			}
 			b.seqMgr.AddNode(coreNodeKey, serverNodeKey, ascend.Height)
 			b.coreNodeMapUpdated = true
 			b.mutex.Unlock()
@@ -818,9 +816,9 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 				// 一个连接到corenode的普通miner
 				b.coreNodeMapUpdated = true
 				childKey := hex.EncodeToString(ascend.PubB)
-				coreNode.ChildMiners[childKey] =  &common.MinerAscendInfo{
+				coreNode.ChildMiners[childKey] = &common.MinerAscendInfo{
 					AscendHeight: ascend.Height,
-					AscendUtxo: ascend.FundingUtxo,
+					AscendUtxo:   ascend.FundingUtxo,
 				}
 				b.seqMgr.AddNode(childKey, coreNodeKey, ascend.Height)
 				b.mutex.Unlock()
@@ -834,6 +832,76 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 	}
 }
 
+func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) {
+	name, amt, err := common.ParseStakeInvoice(data)
+	if err != nil {
+		common.Log.Errorf("removeMinerNode no unstaking asset info, %v", err)
+		return
+	}
+	
+	if name == indexer.ASSET_PLAIN_SAT.String() {
+		if len(descend.Assets) != 0 || fmt.Sprintf("%d", descend.Value) != amt.String() {
+			common.Log.Errorf("removeMinerNode %s invalid sats value, %d -> %s", descend.NullDataUtxo, descend.Value, amt.String())
+			return
+		}
+	} else {
+		info, err := descend.Assets.Find(indexer.NewAssetNameFromString(name))
+		if err != nil || info.Amount.Cmp(amt) != 0 {
+			common.Log.Errorf("removeMinerNode %s invalid asset amt, %s -> %s", descend.NullDataUtxo, info.Amount.String(), amt.String())
+			return
+		}
+	}
+
+	channelInfo, ok := b.channelMap[descend.Address]
+	if !ok {
+		common.Log.Errorf("can't find channel info from %s", descend.Address)
+		return
+	}
+
+	nodeKey := hex.EncodeToString(channelInfo.PubB)
+	parentKey := hex.EncodeToString(channelInfo.PubA)
+
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if coreNode, ok := b.coreNodeMap[nodeKey]; ok {
+		// 如果是core node
+		if len(coreNode.ChildMiners) != 0 {
+			common.Log.Errorf("core node %s still has child miners", nodeKey)
+			return
+		}
+		if err := b.seqMgr.RemoveNode(nodeKey); err != nil {
+			common.Log.Errorf("RemoveNode %s failed, %v", nodeKey, err)
+			return
+		}
+		if parent, ok := b.coreNodeMap[coreNode.ServerNode]; ok {
+			delete(parent.ChildMiners, nodeKey)
+		}
+		delete(b.coreNodeMap, nodeKey)
+		b.coreNodeMapUpdated = true
+		common.Log.Infof("remove core node %s at tx %s", nodeKey, descend.DescendTxId)
+		return
+	}
+
+	// miner
+	parent, ok := b.coreNodeMap[parentKey]
+	if !ok {
+		common.Log.Errorf("can't find parent core node %s for miner %s", parentKey, nodeKey)
+		return
+	}
+	if _, ok := parent.ChildMiners[nodeKey]; !ok {
+		common.Log.Errorf("can't find miner node %s under core node %s", nodeKey, parentKey)
+		return
+	}
+	if err := b.seqMgr.RemoveNode(nodeKey); err != nil {
+		common.Log.Errorf("RemoveNode %s failed, %v", nodeKey, err)
+		return
+	}
+	delete(parent.ChildMiners, nodeKey)
+	b.coreNodeMapUpdated = true
+	common.Log.Infof("remove miner node %s at tx %s", nodeKey, descend.DescendTxId)
+}
+
 // satoshinet 只需要保存utxo即可
 // 所有聪都来自锚定交易，也就是闪电网络通道
 func (b *BaseIndexer) processBlock(block *common.Block) {
@@ -841,7 +909,6 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 		Timestamp: block.Timestamp.Unix(),
 		TxAmount:  len(block.Transactions),
 	}
-	
 
 	addedUtxoCount := 0
 	deledUtxoCount := 0
@@ -921,13 +988,14 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			}
 		}
 
+		var descend *common.DescendData
 		for i, output := range tx.Outputs {
 			if txIndex != 0 && common.IsOpReturn(output.Address.PkScript) {
 				ctype, data, err := common.ReadDataFromNullDataScript(output.Address.PkScript)
 				if err == nil {
 					switch ctype {
 					case common.CONTENT_TYPE_DESCENDING:
-						descend, err := GenDescend(tx, i, block.Height, string(data))
+						descend, err = GenDescend(tx, i, block.Height, string(data))
 						if err == nil {
 							b.utxoIndex.DescendMap[descend.NullDataUtxo] = descend
 
@@ -959,15 +1027,8 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 								}
 							}
 
-							// TODO
-							// 需要检查通道中是否还有足够的资产，才能确定是否是corenode退出，现在不支持corenode退出
-							// if b.IsCoreNodeDescend(descend) {
-							// 	channel, ok := b.channelMap[descend.Address]
-							// 	if ok {
-							// 		delete(b.coreNodeMap, hex.EncodeToString(channel.PubB))
-							// 		b.coreNodeMapUpdated = true
-							// 	}
-							// }
+							// miner/core node的descending，如果是unstake，必须包含unstake的资产信息，
+							// 才能正确移除miner/core node身份。在下面处理。
 						} else {
 							common.Log.Errorf("GenDescend %s:%d failed, %v", tx.Txid, i, err)
 						}
@@ -1004,7 +1065,15 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 							// 直接在聪网上转账并质押，只需要有对应的op_return
 							b.handleStakeAssetV2(block.Height, tx, data)
 						}
-						
+
+					case common.CONTENT_TYPE_UNSTAKE:
+						// 取消质押，移除矿工或核心节点身份
+						// 必须包含descending的资产信息，并且放在unstake之前，才能正确移除miner/core node身份
+						if descend != nil {
+							b.removeMinerNode(descend, data)
+						} else {
+							common.Log.Errorf("unstake without descend info, tx %s", tx.Txid)
+						}
 
 					case common.CONTENT_TYPE_BINDREFERRER:
 						// tx的输入和输出都是被推荐人地址，data是推荐人名字，每个地址只能绑定一个推荐人
@@ -1014,7 +1083,7 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 							if err != nil {
 								//
 								b.utxoIndex.ReferrerMap[inputAddress] = &common.ReferrerInfo{
-									Name: string(data),
+									Name:      string(data),
 									BindBlock: block.Height,
 								}
 							} else {
@@ -1368,7 +1437,7 @@ func (b *BaseIndexer) CheckSelf() bool {
 		common.Log.Panicf("BaseIndexer.LoadSyncStatsFromDB failed, %v", err)
 	}
 
-	common.Log.Infof("stats: %v", b.stats) 
+	common.Log.Infof("stats: %v", b.stats)
 	common.Log.Infof("Code Ver: %s", common.SATOSHINET_INDEXER_VERSION)
 	common.Log.Infof("DB Ver: %s", b.GetBaseDBVer())
 	// totalSats := common.FirstOrdinalInTheory(b.stats.SyncHeight + 1)
@@ -1448,7 +1517,7 @@ func (b *BaseIndexer) CheckSelf() bool {
 
 			sats := value.Value
 			// if sats > 0 {
-				nonZeroUtxo++
+			nonZeroUtxo++
 			//}
 
 			satsInUtxo += sats
@@ -1458,7 +1527,7 @@ func (b *BaseIndexer) CheckSelf() bool {
 				addressesInT1[addressId] = true
 			}
 		}
-		
+
 		return nil
 	})
 	addressInUtxo = len(addressesInT1)
@@ -1684,10 +1753,6 @@ func (p *BaseIndexer) IsCoreNodeAscend(ascend *common.AscendData) bool {
 	}
 	return false
 	// 连接core node的都只是普通miner
-}
-
-func (p *BaseIndexer) IsCoreNodeDescend(descend *common.DescendData) bool {
-	return p.HasCoreNodeEligibility(descend.Height, descend.Assets)
 }
 
 func (p *BaseIndexer) HasCoreNodeEligibility(height int, assets wire.TxAssets) bool {
