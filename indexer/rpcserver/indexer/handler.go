@@ -459,7 +459,20 @@ func (s *Handle) getMinerInfo(c *gin.Context) {
 	}
 
 	pubkey := c.Param("pubkey")
-	resp.Data = s.model.GetMinerInfo(pubkey)
+	corenode := s.model.GetCoreNodeInfo(pubkey)
+	if corenode != nil {
+		resp.Data = &localwire.MinerInfo{
+			MinerInfo: &corenode.MinerInfo,
+			IsCoreNode: true,
+			ChildCount: len(corenode.ChildMiners),
+		}
+	} else {
+		resp.Data = &localwire.MinerInfo{
+			MinerInfo: s.model.GetMinerInfo(pubkey),
+			IsCoreNode: false,
+			ChildCount: 0,
+		}
+	}
 
 	c.JSON(http.StatusOK, resp)
 }

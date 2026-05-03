@@ -839,17 +839,14 @@ func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) 
 		return
 	}
 	
-	if name == indexer.ASSET_PLAIN_SAT.String() {
-		if len(descend.Assets) != 0 || fmt.Sprintf("%d", descend.Value) != amt.String() {
-			common.Log.Errorf("removeMinerNode %s invalid sats value, %d -> %s", descend.NullDataUtxo, descend.Value, amt.String())
-			return
-		}
-	} else {
-		info, err := descend.Assets.Find(indexer.NewAssetNameFromString(name))
-		if err != nil || info.Amount.Cmp(amt) != 0 {
-			common.Log.Errorf("removeMinerNode %s invalid asset amt, %s -> %s", descend.NullDataUtxo, info.Amount.String(), amt.String())
-			return
-		}
+	if name != indexer.GetStakeAssetName(descend.Height) {
+		common.Log.Errorf("removeMinerNode %s invalid staking asset name %s", descend.NullDataUtxo, name)
+		return
+	}
+	info, err := descend.Assets.Find(indexer.NewAssetNameFromString(name))
+	if err != nil || info.Amount.Cmp(amt) != 0 {
+		common.Log.Errorf("removeMinerNode %s invalid asset amt, %s -> %s", descend.NullDataUtxo, info.Amount.String(), amt.String())
+		return
 	}
 
 	channelInfo, ok := b.channelMap[descend.Address]

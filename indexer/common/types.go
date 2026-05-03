@@ -129,7 +129,7 @@ type MinerInfo struct {
 	AnchorTxId string	// L2
 	AssetName  string
 	AssetAmt   string
-	ServerNode string
+	ServerNode string // 服务端公钥
 	ChannelAddr string
 }
 

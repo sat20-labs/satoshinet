@@ -86,6 +86,9 @@ func (p *TxOutput) Value() int64 {
 }
 
 func (p *TxOutput) Zero() bool {
+	if p == nil {
+		return true
+	}
 	return p.OutValue.Value == 0 && len(p.OutValue.Assets) == 0
 }
 

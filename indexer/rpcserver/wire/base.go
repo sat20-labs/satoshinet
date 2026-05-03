@@ -51,9 +51,15 @@ type GetCoreNodeInfoResp struct {
 	Data *common.CoreNodeInfo     `json:"data"`
 }
 
+type MinerInfo struct {
+	*common.MinerInfo
+	IsCoreNode bool		`json:"isCoreNode"`
+	ChildCount int		`json:"childCount"`
+}
+
 type GetMinerInfoResp struct {
 	indexerwire.BaseResp
-	Data *common.MinerInfo     `json:"data"`
+	Data *MinerInfo     `json:"data"`
 }
 
 type TickersResp struct {
