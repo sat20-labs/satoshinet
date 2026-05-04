@@ -430,6 +430,10 @@ func (s *Handle) getCoreNodeInfo(c *gin.Context) {
 
 	pubkey := c.Param("pubkey")
 	resp.Data = s.model.GetCoreNodeInfo(pubkey)
+	if resp.Data == nil {
+		resp.Code = -1
+		resp.Msg = "not found"
+	}
 
 	c.JSON(http.StatusOK, resp)
 }
@@ -476,6 +480,7 @@ func (s *Handle) getMinerInfo(c *gin.Context) {
 			}
 		} else {
 			resp.Data = nil
+			resp.Code = -1
 			resp.Msg = "not found"
 		}
 	}
