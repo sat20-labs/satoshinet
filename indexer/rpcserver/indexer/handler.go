@@ -467,10 +467,16 @@ func (s *Handle) getMinerInfo(c *gin.Context) {
 			ChildCount: len(corenode.ChildMiners),
 		}
 	} else {
-		resp.Data = &localwire.MinerInfo{
-			MinerInfo: s.model.GetMinerInfo(pubkey),
-			IsCoreNode: false,
-			ChildCount: 0,
+		minerInfo := s.model.GetMinerInfo(pubkey)
+		if minerInfo != nil {
+			resp.Data = &localwire.MinerInfo{
+				MinerInfo: minerInfo,
+				IsCoreNode: false,
+				ChildCount: 0,
+			}
+		} else {
+			resp.Data = nil
+			resp.Msg = "not found"
 		}
 	}
 
