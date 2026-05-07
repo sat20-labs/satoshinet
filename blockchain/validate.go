@@ -134,7 +134,6 @@ func IsAnchorTx(msgTx *wire.MsgTx) bool {
 	return true
 }
 
-
 // IsDeAnchorTx determines whether or not a transaction is a deAnchor tx.  A deAnchorTx
 // is a special transaction created by lnd that freeze some assets in op_return output
 func IsDeAnchorTx(msgTx *wire.MsgTx) bool {
@@ -372,7 +371,6 @@ func CheckTransactionSanity(tx *btcutil.Tx) error {
 			}
 		}
 	}
-
 
 	return nil
 }
@@ -1189,6 +1187,37 @@ func logTxAssets(desc string, assets wire.TxAssets) {
 // 	return rangeSize
 // }
 
+func checkCoinbaseFees(coinbaseTx *wire.MsgTx, expectedSatoshiOut int64,
+	expectedFeeAssets wire.TxAssets) error {
+
+	var totalSatoshiOut int64
+	totalAssetOut := wire.TxAssets{}
+	for _, txOut := range coinbaseTx.TxOut {
+		totalSatoshiOut += txOut.Value
+		if err := totalAssetOut.Merge(txOut.Assets); err != nil {
+			str := fmt.Sprintf("coinbase transaction has invalid asset outputs: %v",
+				err)
+			return ruleError(ErrBadCoinbaseValue, str)
+		}
+	}
+
+	if totalSatoshiOut > expectedSatoshiOut {
+		str := fmt.Sprintf("coinbase transaction for block pays %v "+
+			"which is more than expected value of %v",
+			totalSatoshiOut, expectedSatoshiOut)
+		return ruleError(ErrBadCoinbaseValue, str)
+	}
+
+	remainingFeeAssets := expectedFeeAssets.Clone()
+	if err := remainingFeeAssets.Split(totalAssetOut); err != nil {
+		str := fmt.Sprintf("coinbase transaction asset fees %v exceed "+
+			"expected fee assets %v", totalAssetOut, expectedFeeAssets)
+		return ruleError(ErrBadCoinbaseValue, str)
+	}
+
+	return nil
+}
+
 // checkConnectBlock performs several checks to confirm connecting the passed
 // block to the chain represented by the passed view does not violate any rules.
 // In addition, the passed view is updated to spend all of the referenced
@@ -1349,22 +1378,11 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 		}
 	}
 
-	// The total output values of the coinbase transaction must not exceed
-	// the expected subsidy value plus total transaction fees gained from
-	// mining the block.  It is safe to ignore overflow and out of range
-	// errors here because those error conditions would have already been
-	// caught by checkTransactionSanity.
-	var totalSatoshiOut int64
-	for _, txOut := range transactions[0].MsgTx().TxOut {
-		totalSatoshiOut += txOut.Value
-	}
 	expectedSatoshiOut := CalcBlockSubsidy(node.height, b.chainParams) +
 		totalFees
-	if totalSatoshiOut > expectedSatoshiOut {
-		str := fmt.Sprintf("coinbase transaction for block pays %v "+
-			"which is more than expected value of %v",
-			totalSatoshiOut, expectedSatoshiOut)
-		return ruleError(ErrBadCoinbaseValue, str)
+	if err := checkCoinbaseFees(transactions[0].MsgTx(), expectedSatoshiOut,
+		totalFeeAssets); err != nil {
+		return err
 	}
 
 	// Don't run scripts if this node is before the latest known good

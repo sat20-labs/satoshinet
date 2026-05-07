@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	indexerCommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -145,6 +146,212 @@ func TestCheckConnectBlockTemplate(t *testing.T) {
 	if err == nil {
 		t.Fatal("CheckConnectBlockTemplate: Did not received expected error " +
 			"on block 4 with invalid difficulty bits")
+	}
+}
+
+func TestCheckCoinbaseFees(t *testing.T) {
+	feeAssets := wire.TxAssets{
+		{
+			Name: wire.AssetName{
+				Protocol: "ordx",
+				Type:     "ft",
+				Ticker:   "foo",
+			},
+			Amount:     *indexerCommon.NewDefaultDecimal(10),
+			BindingSat: 1,
+		},
+	}
+
+	tests := []struct {
+		name        string
+		coinbaseTx  *wire.MsgTx
+		wantErrCode ErrorCode
+	}{
+		{
+			name: "matching satoshi and asset fees",
+			coinbaseTx: &wire.MsgTx{
+				TxOut: []*wire.TxOut{
+					wire.NewTxOut(50, feeAssets.Clone(), []byte{0x51}),
+				},
+			},
+		},
+		{
+			name: "missing asset fees is allowed",
+			coinbaseTx: &wire.MsgTx{
+				TxOut: []*wire.TxOut{
+					wire.NewTxOut(50, nil, []byte{0x51}),
+				},
+			},
+		},
+		{
+			name: "unexpected extra asset fees",
+			coinbaseTx: &wire.MsgTx{
+				TxOut: []*wire.TxOut{
+					wire.NewTxOut(50, wire.TxAssets{
+						{
+							Name: wire.AssetName{
+								Protocol: "ordx",
+								Type:     "ft",
+								Ticker:   "foo",
+							},
+							Amount:     *indexerCommon.NewDefaultDecimal(11),
+							BindingSat: 1,
+						},
+					}, []byte{0x51}),
+				},
+			},
+			wantErrCode: ErrBadCoinbaseValue,
+		},
+		{
+			name: "excess satoshi fees",
+			coinbaseTx: &wire.MsgTx{
+				TxOut: []*wire.TxOut{
+					wire.NewTxOut(51, feeAssets.Clone(), []byte{0x51}),
+				},
+			},
+			wantErrCode: ErrBadCoinbaseValue,
+		},
+	}
+
+	for _, test := range tests {
+		err := checkCoinbaseFees(test.coinbaseTx, 50, feeAssets)
+		if test.wantErrCode == 0 {
+			if err != nil {
+				t.Fatalf("%s: unexpected error: %v", test.name, err)
+			}
+			continue
+		}
+
+		if err == nil {
+			t.Fatalf("%s: expected error %v", test.name, test.wantErrCode)
+		}
+
+		ruleErr, ok := err.(RuleError)
+		if !ok {
+			t.Fatalf("%s: expected RuleError, got %T", test.name, err)
+		}
+		if ruleErr.ErrorCode != test.wantErrCode {
+			t.Fatalf("%s: got error code %v, want %v", test.name,
+				ruleErr.ErrorCode, test.wantErrCode)
+		}
+	}
+}
+
+func TestCheckTransactionInputsCalculatesFractionalAssetFees(t *testing.T) {
+	t.Helper()
+
+	mustDecimal := func(s string) indexerCommon.Decimal {
+		t.Helper()
+
+		d, err := indexerCommon.NewDecimalFromFormatString(s)
+		if err != nil {
+			t.Fatalf("parse decimal %q: %v", s, err)
+		}
+		return *d
+	}
+
+	assetName := wire.AssetName{
+		Protocol: "brc20",
+		Type:     "f",
+		Ticker:   "btcs",
+	}
+	newAsset := func(amount string) wire.AssetInfo {
+		return wire.AssetInfo{
+			Name:       assetName,
+			Amount:     mustDecimal(amount),
+			BindingSat: 0,
+		}
+	}
+
+	view := NewUtxoViewpoint()
+	tx := wire.NewMsgTx(1)
+
+	inputs := []struct {
+		value  int64
+		amount string
+	}{
+		{value: 0, amount: "99.990481:6"},
+		{value: 0, amount: "99.992872:6"},
+		{value: 0, amount: "99.991797:6"},
+		{value: 0, amount: "190.907612312199321968:18"},
+		{value: 0, amount: "199.984114:6"},
+		{value: 0, amount: "99.990909:6"},
+		{value: 73338, amount: ""},
+	}
+	for i, input := range inputs {
+		outpoint := wire.OutPoint{
+			Hash:  chainhash.Hash{byte(i + 1)},
+			Index: uint32(i),
+		}
+		tx.AddTxIn(wire.NewTxIn(&outpoint, nil, nil))
+
+		prevOut := wire.NewTxOut(input.value, nil, []byte{0x51})
+		if input.amount != "" {
+			prevOut.Assets = wire.TxAssets{newAsset(input.amount)}
+		}
+		view.Entries()[outpoint] = NewUtxoEntry(prevOut, 1, false)
+	}
+
+	tx.AddTxOut(wire.NewTxOut(3212, wire.TxAssets{newAsset("790.857785:6")},
+		[]byte{0x51}))
+	tx.AddTxOut(wire.NewTxOut(70116, nil, []byte{0x51}))
+	tx.AddTxOut(wire.NewTxOut(0, nil, []byte{0x6a}))
+
+	txFee, feeAssets, err := CheckTransactionInputs(btcutil.NewTx(tx), false,
+		10, view, &chaincfg.MainNetParams)
+	if err != nil {
+		t.Fatalf("CheckTransactionInputs: unexpected error: %v", err)
+	}
+	if txFee != 10 {
+		t.Fatalf("unexpected sat fee: got %d want %d", txFee, 10)
+	}
+
+	expectedFeeAssets := wire.TxAssets{newAsset("0.000000312199321968:18")}
+	if !feeAssets.Equal(expectedFeeAssets) {
+		t.Fatalf("unexpected fee assets: got %v want %v", feeAssets,
+			expectedFeeAssets)
+	}
+}
+
+func TestCheckCoinbaseFeesAllowsMissingFractionalAssetFees(t *testing.T) {
+	t.Helper()
+
+	feeAmount, err := indexerCommon.NewDecimalFromFormatString(
+		"0.000000312199321968:18",
+	)
+	if err != nil {
+		t.Fatalf("parse decimal: %v", err)
+	}
+
+	feeAssets := wire.TxAssets{
+		{
+			Name: wire.AssetName{
+				Protocol: "brc20",
+				Type:     "f",
+				Ticker:   "btcs",
+			},
+			Amount:     *feeAmount,
+			BindingSat: 0,
+		},
+	}
+
+	missingFeeCoinbase := &wire.MsgTx{
+		TxOut: []*wire.TxOut{
+			wire.NewTxOut(10, nil, []byte{0x51}),
+		},
+	}
+	err = checkCoinbaseFees(missingFeeCoinbase, 10, feeAssets)
+	if err != nil {
+		t.Fatalf("expected coinbase without fractional asset fee to pass: %v", err)
+	}
+
+	matchingCoinbase := &wire.MsgTx{
+		TxOut: []*wire.TxOut{
+			wire.NewTxOut(10, feeAssets.Clone(), []byte{0x51}),
+		},
+	}
+	if err := checkCoinbaseFees(matchingCoinbase, 10, feeAssets); err != nil {
+		t.Fatalf("expected matching fractional asset fee to pass: %v", err)
 	}
 }
 

@@ -497,7 +497,7 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 		return nil, err
 	}
 	sortedByFee := g.policy.BlockPrioritySize == 0
-	priorityQueue := newTxPriorityQueue(len(sourceTxns), sortedByFee) 
+	priorityQueue := newTxPriorityQueue(len(sourceTxns), sortedByFee)
 
 	// Create a slice to hold the transactions to be included in the
 	// generated block with reserved space.  Also create a utxo view to
@@ -644,8 +644,8 @@ mempoolLoop:
 	// 	return nil, err
 	// }
 	// segwitActive := segwitState == blockchain.ThresholdActive
-	segwitActive := true // satsnet support segwit always
-	witnessIncluded := true // 
+	segwitActive := true    // satsnet support segwit always
+	witnessIncluded := true //
 
 	// Choose which transactions make it into the block.
 	for priorityQueue.Len() > 0 {
@@ -894,7 +894,7 @@ mempoolLoop:
 		return nil, err
 	}
 
-	log.Debugf("Created new block template (%d transactions, %d in fees, %d signature operations cost, %d weight", 
+	log.Debugf("Created new block template (%d transactions, %d in fees, %d signature operations cost, %d weight",
 		len(msgBlock.Transactions), totalFees, blockSigOpCost, blockWeight)
 
 	return &BlockTemplate{
