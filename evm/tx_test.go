@@ -65,8 +65,9 @@ func TestParseDeployTxCombinesMultipleOPReturns(t *testing.T) {
 
 func TestParseInvokeTxRejectsMultipleContracts(t *testing.T) {
 	contract := testContract(t)
-	other := contract
-	other.Hash[0] ^= 1
+	otherHash := ContractAddressHash(contract)
+	otherHash[0] ^= 1
+	other := testContractWithHash(t, otherHash)
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
 	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: 1000})

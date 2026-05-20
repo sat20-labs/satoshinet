@@ -13,5 +13,5 @@ func EVMAddressFromGeth(a gethcommon.Address) EVMAddress {
 }
 
 func ContractGethAddress(a ContractAddress) gethcommon.Address {
-	return GethAddress(a.Hash)
+	return GethAddress(ContractAddressHash(a))
 }

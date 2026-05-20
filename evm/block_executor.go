@@ -254,7 +254,7 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Call(CallRequest{
 		Caller: caller,
-		Target: validated.Contract.Hash,
+		Target: ContractAddressHash(validated.Contract),
 		CallID: callID,
 		Input:  validated.Payload.Calldata,
 		Gas:    validated.Payload.GasLimit,
@@ -302,8 +302,8 @@ func (e *BlockExecutor) ExecuteTrigger(call TriggerCall) error {
 	callID := DeriveTriggerCallID(call.Trigger.Contract, call.Trigger.ID, int64(e.Block.Number))
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Call(CallRequest{
-		Caller: call.Trigger.Contract.Hash,
-		Target: call.Trigger.Contract.Hash,
+		Caller: ContractAddressHash(call.Trigger.Contract),
+		Target: ContractAddressHash(call.Trigger.Contract),
 		CallID: callID,
 		Input:  call.Calldata,
 		Gas:    call.GasLimit,

@@ -37,7 +37,7 @@ func TestEVMEndToEndSolidityCounter(t *testing.T) {
 		input := packSolidityMethod(t, compiled.ABI, "incrementBy", big.NewInt(int64(i+1)))
 		call := rt.Call(evm.CallRequest{
 			Caller: caller,
-			Target: contract.Hash,
+			Target: evm.ContractAddressHash(contract),
 			CallID: fmt.Sprintf("counter-increment-%d", i),
 			Input:  input,
 			Gas:    200000,
@@ -47,9 +47,9 @@ func TestEVMEndToEndSolidityCounter(t *testing.T) {
 		require.Equal(t, evm.ResultStatusSuccess, call.Status)
 	}
 
-	value := callSolidityViewUint256(t, rt, contract.Hash, callers[0], compiled.ABI, "value", block)
+	value := callSolidityViewUint256(t, rt, evm.ContractAddressHash(contract), callers[0], compiled.ABI, "value", block)
 	require.Equal(t, uint64(6), value.Uint64())
-	lastCaller := callSolidityViewAddress(t, rt, contract.Hash, callers[0], compiled.ABI, "lastCaller", block)
+	lastCaller := callSolidityViewAddress(t, rt, evm.ContractAddressHash(contract), callers[0], compiled.ABI, "lastCaller", block)
 	require.Equal(t, gethcommon.Address(evm.GethAddress(callers[2])), lastCaller)
 }
 
@@ -68,7 +68,7 @@ func TestEVMEndToEndSolidityMiniERC20(t *testing.T) {
 	transferAlice := packSolidityMethod(t, compiled.ABI, "transfer", gethcommon.Address(evm.GethAddress(alice)), big.NewInt(125_000_000))
 	call := rt.Call(evm.CallRequest{
 		Caller: deployer,
-		Target: contract.Hash,
+		Target: evm.ContractAddressHash(contract),
 		CallID: "erc20-transfer-alice",
 		Input:  transferAlice,
 		Gas:    250000,
@@ -80,7 +80,7 @@ func TestEVMEndToEndSolidityMiniERC20(t *testing.T) {
 	approveBob := packSolidityMethod(t, compiled.ABI, "approve", gethcommon.Address(evm.GethAddress(bob)), big.NewInt(20_000_000))
 	call = rt.Call(evm.CallRequest{
 		Caller: alice,
-		Target: contract.Hash,
+		Target: evm.ContractAddressHash(contract),
 		CallID: "erc20-approve-bob",
 		Input:  approveBob,
 		Gas:    250000,
@@ -96,7 +96,7 @@ func TestEVMEndToEndSolidityMiniERC20(t *testing.T) {
 	)
 	call = rt.Call(evm.CallRequest{
 		Caller: bob,
-		Target: contract.Hash,
+		Target: evm.ContractAddressHash(contract),
 		CallID: "erc20-transfer-from",
 		Input:  transferFromAlice,
 		Gas:    300000,
@@ -105,9 +105,9 @@ func TestEVMEndToEndSolidityMiniERC20(t *testing.T) {
 	require.NoError(t, call.Err)
 	require.Equal(t, evm.ResultStatusSuccess, call.Status)
 
-	require.Equal(t, uint64(112_500_000), callERC20Balance(t, rt, contract.Hash, alice, deployer, compiled.ABI, block).Uint64())
-	require.Equal(t, uint64(12_500_000), callERC20Balance(t, rt, contract.Hash, bob, deployer, compiled.ABI, block).Uint64())
-	require.Equal(t, uint64(875_000_000), callERC20Balance(t, rt, contract.Hash, deployer, deployer, compiled.ABI, block).Uint64())
+	require.Equal(t, uint64(112_500_000), callERC20Balance(t, rt, evm.ContractAddressHash(contract), alice, deployer, compiled.ABI, block).Uint64())
+	require.Equal(t, uint64(12_500_000), callERC20Balance(t, rt, evm.ContractAddressHash(contract), bob, deployer, compiled.ABI, block).Uint64())
+	require.Equal(t, uint64(875_000_000), callERC20Balance(t, rt, evm.ContractAddressHash(contract), deployer, deployer, compiled.ABI, block).Uint64())
 }
 
 func TestEVMEndToEndSolidityVaultTriggerAssetSettlement(t *testing.T) {

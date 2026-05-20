@@ -680,6 +680,16 @@ func TestPayToAddrScript(t *testing.T) {
 			err)
 	}
 
+	contractAddr, err := btcutil.NewAddressContractFromHash(
+		btcutil.ContractAddressVersionV1,
+		2,
+		hexToBytes("00112233445566778899aabbccddeeff00112233"),
+		&chaincfg.MainNetParams,
+	)
+	if err != nil {
+		t.Fatalf("Unable to create contract address: %v", err)
+	}
+
 	// Errors used in the tests below defined here for convenience and to
 	// keep the horizontal test size shorter.
 	errUnsupportedAddress := scriptError(ErrUnsupportedAddress, "")
@@ -746,6 +756,12 @@ func TestPayToAddrScript(t *testing.T) {
 			"OP_0 DATA_20 0x748e50366adb8ae4b0255e406a28f99d24b73cbc",
 			nil,
 		},
+		// contract address on mainnet.
+		{
+			contractAddr,
+			"OP_0 OP_IF DATA_2 0x4354 DATA_22 0x010200112233445566778899aabbccddeeff00112233 OP_ENDIF OP_0",
+			nil,
+		},
 
 		// Supported address types with nil pointers.
 		{(*btcutil.AddressPubKeyHash)(nil), "", errUnsupportedAddress},
@@ -754,6 +770,7 @@ func TestPayToAddrScript(t *testing.T) {
 		{(*btcutil.AddressWitnessPubKeyHash)(nil), "", errUnsupportedAddress},
 		{(*btcutil.AddressWitnessScriptHash)(nil), "", errUnsupportedAddress},
 		{(*btcutil.AddressTaproot)(nil), "", errUnsupportedAddress},
+		{(*btcutil.AddressContract)(nil), "", errUnsupportedAddress},
 
 		// Unsupported address type.
 		{&bogusAddress{}, "", errUnsupportedAddress},

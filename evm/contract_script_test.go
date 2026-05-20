@@ -42,6 +42,6 @@ func TestParseContractPkScriptUsesProvidedPrefix(t *testing.T) {
 	got, ok, err := ParseContractPkScript(script, MainnetContractPrefix)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, MainnetContractPrefix, got.Prefix)
-	require.Equal(t, contract.Hash, got.Hash)
+	require.Equal(t, MainnetContractPrefix, got.Prefix())
+	require.Equal(t, ContractAddressHash(contract), ContractAddressHash(got))
 }

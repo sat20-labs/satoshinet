@@ -141,7 +141,7 @@ func TestEVMBlockExecutionValidatorAllowsBlocksWithoutEVMWork(t *testing.T) {
 func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	contract := testContractAddressForBlockchain(t)
 	runtime := evm.NewRuntime(nil)
-	runtime.SetCode(contract.Hash, callAssetPrecompileCodeForBlockchain())
+	runtime.SetCode(evm.ContractAddressHash(contract), callAssetPrecompileCodeForBlockchain())
 	resultTx := testEVMResultTx(t, evm.ResultStatusSuccess, 1)
 	blockTime := time.Unix(1710000000, 0)
 

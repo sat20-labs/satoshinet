@@ -18,7 +18,7 @@ func (v UTXOAssetView) AssetBalance(owner EVMAddress, assetName string) (*scommo
 	}
 	total := zeroDecimal()
 	for _, u := range v.UTXOs {
-		if u.Contract.Hash != owner {
+		if ContractAddressHash(u.Contract) != owner {
 			continue
 		}
 		amount, err := u.AssetAmount(assetName)

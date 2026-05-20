@@ -74,5 +74,6 @@ func ValidateResultContractSpend(tx *wire.MsgTx, inputScripts map[OutPoint][]byt
 }
 
 func resultSpendContractKey(contract ContractAddress) string {
-	return fmt.Sprintf("%d:%d:%x", contract.Version, contract.Type, contract.Hash[:])
+	hash := ContractAddressHash(contract)
+	return fmt.Sprintf("%d:%d:%x", contract.Version(), contract.ContractType(), hash[:])
 }

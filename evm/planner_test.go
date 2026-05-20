@@ -46,8 +46,9 @@ func TestBuildCanonicalResultPlan(t *testing.T) {
 
 func TestBuildCanonicalResultPlanRejectsMixedContracts(t *testing.T) {
 	contract := testContract(t)
-	other := contract
-	other.Hash[0] ^= 1
+	otherHash := ContractAddressHash(contract)
+	otherHash[0] ^= 1
+	other := testContractWithHash(t, otherHash)
 
 	_, err := BuildCanonicalResultPlan(ResultPlanRequest{
 		Contract:     contract,

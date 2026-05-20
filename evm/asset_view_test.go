@@ -8,8 +8,9 @@ import (
 
 func TestUTXOAssetViewBalance(t *testing.T) {
 	contract := testContract(t)
-	other := contract
-	other.Hash[0] ^= 1
+	otherHash := ContractAddressHash(contract)
+	otherHash[0] ^= 1
+	other := testContractWithHash(t, otherHash)
 	view := NewUTXOAssetView([]UTXO{
 		mustUTXO(t, OutPoint{TxID: "a", Vout: 0}, contract, SatoshiAssetName, 10, 0),
 		mustUTXO(t, OutPoint{TxID: "b", Vout: 0}, contract, SatoshiAssetName, 20, 0),
@@ -17,7 +18,7 @@ func TestUTXOAssetViewBalance(t *testing.T) {
 		mustUTXO(t, OutPoint{TxID: "d", Vout: 0}, other, SatoshiAssetName, 40, 0),
 	})
 
-	balance, err := view.AssetBalance(contract.Hash, SatoshiAssetName)
+	balance, err := view.AssetBalance(ContractAddressHash(contract), SatoshiAssetName)
 	require.NoError(t, err)
 	require.Equal(t, 0, balance.Cmp(mustDefaultDecimal(t, 30)))
 }

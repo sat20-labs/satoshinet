@@ -34,7 +34,7 @@ func TestEVMCommonContractsCounterMultipleCallers(t *testing.T) {
 	for i, caller := range callers {
 		call := rt.Call(evm.CallRequest{
 			Caller: caller,
-			Target: deploy.Contract.Hash,
+			Target: evm.ContractAddressHash(deploy.Contract),
 			CallID: "counter-call",
 			Gas:    100000,
 			Block:  block,
@@ -65,7 +65,7 @@ func TestEVMCommonContractsRevertStatus(t *testing.T) {
 
 	call := rt.Call(evm.CallRequest{
 		Caller: caller,
-		Target: deploy.Contract.Hash,
+		Target: evm.ContractAddressHash(deploy.Contract),
 		CallID: "reverter-call",
 		Gas:    100000,
 		Block:  block,

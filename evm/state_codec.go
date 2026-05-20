@@ -58,10 +58,11 @@ func (s *MemoryStateDB) MarshalBinary() ([]byte, error) {
 	writeUvarint(&buf, uint64(len(triggerKeys)))
 	for _, key := range triggerKeys {
 		trigger := s.triggers[key]
-		writeBytes(&buf, []byte(trigger.Contract.Prefix))
-		buf.WriteByte(trigger.Contract.Version)
-		buf.WriteByte(byte(trigger.Contract.Type))
-		buf.Write(trigger.Contract.Hash[:])
+		contractHash := ContractAddressHash(trigger.Contract)
+		writeBytes(&buf, []byte(trigger.Contract.Prefix()))
+		buf.WriteByte(trigger.Contract.Version())
+		buf.WriteByte(trigger.Contract.ContractType())
+		buf.Write(contractHash[:])
 		writeBytes(&buf, []byte(trigger.ID))
 		buf.WriteByte(byte(trigger.Kind))
 		writeVarint64(&buf, trigger.Height)
@@ -192,14 +193,13 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 			if err != nil {
 				return nil, fmt.Errorf("decode trigger calldata %d: %w", i, err)
 			}
+			contract, err := NewContractAddress(string(prefixBytes), version, contractType, contractHash)
+			if err != nil {
+				return nil, fmt.Errorf("decode trigger contract %d: %w", i, err)
+			}
 			trigger := Trigger{
-				ID: string(idBytes),
-				Contract: ContractAddress{
-					Prefix:  string(prefixBytes),
-					Version: version,
-					Type:    contractType,
-					Hash:    contractHash,
-				},
+				ID:       string(idBytes),
+				Contract: contract,
 				Kind:     TriggerKind(kind),
 				Height:   height,
 				GasLimit: gasLimit,

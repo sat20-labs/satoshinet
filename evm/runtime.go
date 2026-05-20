@@ -173,7 +173,7 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		}
 		r.AssetIntents = append(r.AssetIntents, capturedIntents...)
 		for _, trigger := range capturedTriggers {
-			if trigger.Contract.Hash == (EVMAddress{}) {
+			if ContractAddressHash(trigger.Contract) == (EVMAddress{}) {
 				trigger.Contract = r.contractAddressFromGeth(GethAddress(req.Target))
 			}
 			_ = r.State.RegisterTrigger(trigger)
@@ -286,12 +286,11 @@ func (r *Runtime) contractAddressFromGeth(addr gethcommon.Address) ContractAddre
 	if prefix == "" {
 		prefix = TestnetContractPrefix
 	}
-	return ContractAddress{
-		Prefix:  prefix,
-		Version: AddressVersionV1,
-		Type:    ContractTypeEVM,
-		Hash:    hash,
+	contract, err := NewContractAddress(prefix, AddressVersionV1, ContractTypeEVM, hash)
+	if err != nil {
+		return ContractAddress{}
 	}
+	return contract
 }
 
 func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {

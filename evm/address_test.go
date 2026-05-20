@@ -22,8 +22,8 @@ func TestContractAddressRoundTrip(t *testing.T) {
 	if !decoded.Equal(contract) {
 		t.Fatalf("decoded mismatch: got %+v want %+v", decoded, contract)
 	}
-	if decoded.Hash.String() != addr.String() {
-		t.Fatalf("hash mismatch: got %s want %s", decoded.Hash.String(), addr.String())
+	if ContractAddressHash(decoded).String() != addr.String() {
+		t.Fatalf("hash mismatch: got %s want %s", ContractAddressHash(decoded).String(), addr.String())
 	}
 }
 

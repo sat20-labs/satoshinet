@@ -74,11 +74,11 @@ func TestRuntimeCapturesTriggerRegistration(t *testing.T) {
 	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, callTriggerPrecompileCode())
+	runtime.SetCode(ContractAddressHash(contract), callTriggerPrecompileCode())
 
 	result := runtime.Call(CallRequest{
 		Caller: caller,
-		Target: contract.Hash,
+		Target: ContractAddressHash(contract),
 		CallID: "call-1",
 		Input:  EncodeRegisterHeightTriggerCall("vault-release", 100, 50000, []byte{1, 2, 3}),
 		Gas:    100000,
@@ -98,11 +98,11 @@ func TestRuntimeDiscardsTriggerRegistrationOnOuterRevert(t *testing.T) {
 	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, callTriggerPrecompileThenRevertCode())
+	runtime.SetCode(ContractAddressHash(contract), callTriggerPrecompileThenRevertCode())
 
 	result := runtime.Call(CallRequest{
 		Caller: caller,
-		Target: contract.Hash,
+		Target: ContractAddressHash(contract),
 		CallID: "call-1",
 		Input:  EncodeRegisterHeightTriggerCall("vault-release", 100, 50000, nil),
 		Gas:    100000,
@@ -146,7 +146,7 @@ func TestRuntimeCapturesTransferAssetIntent(t *testing.T) {
 	require.Equal(t, SatoshiAssetName, runtime.AssetIntents[0].AssetName)
 	require.Equal(t, "tb1qdest", runtime.AssetIntents[0].To)
 	require.Equal(t, 0, runtime.AssetIntents[0].Amount.Cmp(mustDefaultDecimal(t, 77)))
-	require.Equal(t, caller, runtime.AssetIntents[0].From.Hash)
+	require.Equal(t, caller, ContractAddressHash(runtime.AssetIntents[0].From))
 }
 
 func TestRuntimeDiscardsAssetIntentOnOuterRevert(t *testing.T) {

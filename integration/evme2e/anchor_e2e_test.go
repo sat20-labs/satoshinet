@@ -160,7 +160,7 @@ func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NotEqual(t, [32]byte{}, root.StateRoot)
-	require.Equal(t, evm.TestnetContractPrefix, contract.Prefix)
+	require.Equal(t, evm.TestnetContractPrefix, contract.Prefix())
 }
 
 func generateOrWaitBlockAtLeast(t *testing.T, node *rpctest.Harness, nodes []*rpctest.Harness, minHeight int32) []*chainhash.Hash {

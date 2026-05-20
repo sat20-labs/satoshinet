@@ -12,9 +12,7 @@ var contractScriptMagic = []byte("CT")
 const contractScriptPayloadLen = 22
 
 func ContractPkScript(contract ContractAddress) ([]byte, error) {
-	payload := make([]byte, 0, contractScriptPayloadLen)
-	payload = append(payload, contract.Version, contract.Type)
-	payload = append(payload, contract.Hash[:]...)
+	payload := contract.ScriptAddress()
 	return txscript.NewScriptBuilder().
 		AddOp(txscript.OP_FALSE).
 		AddOp(txscript.OP_IF).

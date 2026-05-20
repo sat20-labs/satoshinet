@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
-	"github.com/sat20-labs/satoshinet/btcutil/bech32"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -862,6 +861,23 @@ func payToWitnessTaprootScript(rawKey []byte) ([]byte, error) {
 	return NewScriptBuilder().AddOp(OP_1).AddData(rawKey).Script()
 }
 
+// payToContractScript creates a contract output script from a 22-byte
+// contract address payload.
+func payToContractScript(payload []byte) ([]byte, error) {
+	if len(payload) != contractScriptPayloadLen {
+		return nil, scriptError(ErrUnsupportedAddress,
+			"contract address payload must be 22 bytes")
+	}
+	return NewScriptBuilder().
+		AddOp(OP_FALSE).
+		AddOp(OP_IF).
+		AddData(contractScriptMagic).
+		AddData(payload).
+		AddOp(OP_ENDIF).
+		AddOp(OP_FALSE).
+		Script()
+}
+
 // payToPubkeyScript creates a new script to pay a transaction output to a
 // public key. It is expected that the input is a valid pubkey.
 func payToPubKeyScript(serializedPubKey []byte) ([]byte, error) {
@@ -914,6 +930,13 @@ func PayToAddrScript(addr btcutil.Address) ([]byte, error) {
 				nilAddrErrStr)
 		}
 		return payToWitnessTaprootScript(addr.ScriptAddress())
+
+	case *btcutil.AddressContract:
+		if addr == nil {
+			return nil, scriptError(ErrUnsupportedAddress,
+				nilAddrErrStr)
+		}
+		return payToContractScript(addr.ScriptAddress())
 	}
 
 	str := fmt.Sprintf("unable to generate payment script for unsupported "+
@@ -1002,54 +1025,12 @@ func scriptHashToAddrs(hash []byte, params *chaincfg.Params) []btcutil.Address {
 	return addrs
 }
 
-type addressContract struct {
-	encoded string
-	payload []byte
-	net     *chaincfg.Params
-}
-
-func (a *addressContract) String() string {
-	return a.encoded
-}
-
-func (a *addressContract) EncodeAddress() string {
-	return a.encoded
-}
-
-func (a *addressContract) ScriptAddress() []byte {
-	out := make([]byte, len(a.payload))
-	copy(out, a.payload)
-	return out
-}
-
-func (a *addressContract) IsForNet(net *chaincfg.Params) bool {
-	if a.net == nil || net == nil {
-		return a.net == net
-	}
-	return a.net.Net == net.Net
-}
-
-func contractPrefixForNet(params *chaincfg.Params) string {
-	if params != nil && params.Net == wire.MainNet {
-		return "ca"
-	}
-	return "tc"
-}
-
 func contractScriptToAddrs(payload []byte, params *chaincfg.Params) []btcutil.Address {
-	data, err := bech32.ConvertBits(payload, 8, 5, true)
+	addr, err := btcutil.NewAddressContract(payload, params)
 	if err != nil {
 		return nil
 	}
-	encoded, err := bech32.Encode(contractPrefixForNet(params), data)
-	if err != nil {
-		return nil
-	}
-	return []btcutil.Address{&addressContract{
-		encoded: encoded,
-		payload: payload,
-		net:     params,
-	}}
+	return []btcutil.Address{addr}
 }
 
 // ExtractPkScriptAddrs returns the type of script, addresses and required

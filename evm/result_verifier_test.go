@@ -149,7 +149,7 @@ func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, callAssetPrecompileCode())
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
 		GasLimit:  100000,

@@ -126,7 +126,7 @@ type triggerKey struct {
 }
 
 func newTriggerKey(contract ContractAddress, id string) triggerKey {
-	return triggerKey{contract: contract.Hash, id: id}
+	return triggerKey{contract: ContractAddressHash(contract), id: id}
 }
 
 func sortedTriggerKeys(triggers map[triggerKey]Trigger) []triggerKey {

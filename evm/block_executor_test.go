@@ -75,7 +75,7 @@ func TestBlockExecutorInvokeRevertRequiresFundingInputResult(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, []byte{0x60, 0x00, 0x60, 0x00, 0xfd})
+	runtime.SetCode(ContractAddressHash(contract), []byte{0x60, 0x00, 0x60, 0x00, 0xfd})
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: 100000, CallNonce: 1})
 	resultTx := testResultTx(t, ResultStatusRevert, 1, []wire.OutPoint{
@@ -98,7 +98,7 @@ func TestBlockExecutorRejectsResultMissingInvokeFundingInput(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, []byte{0x60, 0x00, 0x60, 0x00, 0xfd})
+	runtime.SetCode(ContractAddressHash(contract), []byte{0x60, 0x00, 0x60, 0x00, 0xfd})
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: 100000, CallNonce: 1})
 	resultTx := testResultTx(t, ResultStatusRevert, 1, []wire.OutPoint{
@@ -118,7 +118,7 @@ func TestBlockExecutorAssetIntentRequiresResultAndVerifier(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, callAssetPrecompileCode())
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
 		GasLimit:  100000,
@@ -153,7 +153,7 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, callAssetPrecompileCode())
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
 		GasLimit:  100000,
@@ -195,7 +195,7 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, callAssetPrecompileCode())
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
 		ID:       "vault-release",
 		Contract: contract,
@@ -233,7 +233,7 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 func TestBlockExecutorTriggerRequiresResultWithoutInvokeFunding(t *testing.T) {
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(contract.Hash, callAssetPrecompileCode())
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 
 	executor := NewBlockExecutor(BlockExecutionRequest{
 		Runtime: runtime,

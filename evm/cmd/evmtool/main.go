@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/evm"
-	"github.com/sat20-labs/satoshinet/wire"
 	evmcommon "github.com/sat20-labs/satoshinet/evm/common"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 func main() {
@@ -89,10 +89,10 @@ func decodeAddress(args []string) {
 	}
 	contract, err := evm.DecodeContractAddress(fs.Arg(0))
 	exitIfErr(err)
-	fmt.Printf("prefix=%s\n", contract.Prefix)
-	fmt.Printf("version=%d\n", contract.Version)
-	fmt.Printf("type=%d\n", contract.Type)
-	fmt.Printf("evm=%s\n", contract.Hash.String())
+	fmt.Printf("prefix=%s\n", contract.Prefix())
+	fmt.Printf("version=%d\n", contract.Version())
+	fmt.Printf("type=%d\n", contract.ContractType())
+	fmt.Printf("evm=%s\n", evm.ContractAddressHash(contract).String())
 }
 
 func encodeContractScript(args []string) {
@@ -123,7 +123,7 @@ func decodeContractScript(args []string) {
 	encoded, err := contract.Encode()
 	exitIfErr(err)
 	fmt.Printf("contract=%s\n", encoded)
-	fmt.Printf("evm=%s\n", contract.Hash.String())
+	fmt.Printf("evm=%s\n", evm.ContractAddressHash(contract).String())
 }
 
 func deriveCreateAddress(args []string) {
@@ -139,7 +139,7 @@ func deriveCreateAddress(args []string) {
 	encoded, err := contract.Encode()
 	exitIfErr(err)
 	fmt.Printf("contract=%s\n", encoded)
-	fmt.Printf("evm=%s\n", contract.Hash.String())
+	fmt.Printf("evm=%s\n", evm.ContractAddressHash(contract).String())
 }
 
 func deriveTriggerCallID(args []string) {

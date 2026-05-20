@@ -3,13 +3,15 @@ package common
 import (
 	"encoding/hex"
 	"fmt"
+
+	"github.com/sat20-labs/satoshinet/btcutil"
 )
 
 const (
-	MainnetContractPrefix = "ca"
-	TestnetContractPrefix = "tc"
+	MainnetContractPrefix = btcutil.ContractMainnetPrefix
+	TestnetContractPrefix = btcutil.ContractTestnetPrefix
 
-	AddressVersionV1 byte = 1
+	AddressVersionV1 = btcutil.ContractAddressVersionV1
 
 	ContractTypeTemplate byte = 1
 	ContractTypeEVM      byte = 2

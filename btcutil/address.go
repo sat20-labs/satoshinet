@@ -54,6 +54,24 @@ var (
 	ErrAddressCollision = errors.New("address collision")
 )
 
+const (
+	// ContractMainnetPrefix is the bech32 human-readable prefix for
+	// SatoshiNet contract addresses on mainnet.
+	ContractMainnetPrefix = "ca"
+
+	// ContractTestnetPrefix is the bech32 human-readable prefix for
+	// SatoshiNet contract addresses on non-mainnet networks.
+	ContractTestnetPrefix = "tc"
+
+	// ContractAddressVersionV1 is the current contract address payload
+	// version.
+	ContractAddressVersionV1 byte = 1
+
+	// ContractAddressPayloadLen is the encoded payload length:
+	// version(1) || contract type(1) || contract id(20).
+	ContractAddressPayloadLen = 22
+)
+
 // encodeAddress returns a human-readable payment address given a ripemd160 hash
 // and netID which encodes the bitcoin network and address type.  It is used
 // in both pay-to-pubkey-hash (P2PKH) and pay-to-script-hash (P2SH) address
@@ -154,6 +172,14 @@ func DecodeAddress(addr string, defaultNet *chaincfg.Params) (Address, error) {
 	oneIndex := strings.LastIndexByte(addr, '1')
 	if oneIndex > 1 {
 		prefix := addr[:oneIndex+1]
+		if isContractBech32Prefix(prefix) {
+			contractAddr, err := decodeContractAddress(addr)
+			if err != nil {
+				return nil, err
+			}
+			return contractAddr, nil
+		}
+
 		if chaincfg.IsBech32SegwitPrefix(prefix) {
 			witnessVer, witnessProg, err := decodeSegWitAddress(addr)
 			if err != nil {
@@ -276,6 +302,191 @@ func decodeSegWitAddress(address string) (byte, []byte, error) {
 	}
 
 	return version, regrouped, nil
+}
+
+func contractPrefixForNet(net *chaincfg.Params) string {
+	if net != nil && net.Net == chaincfg.MainNetParams.Net {
+		return ContractMainnetPrefix
+	}
+	return ContractTestnetPrefix
+}
+
+func isContractBech32Prefix(prefix string) bool {
+	hrp := strings.ToLower(strings.TrimSuffix(prefix, "1"))
+	return hrp == ContractMainnetPrefix || hrp == ContractTestnetPrefix
+}
+
+func decodeContractAddress(address string) (*AddressContract, error) {
+	hrp, data, err := bech32.Decode(address)
+	if err != nil {
+		return nil, err
+	}
+	return newAddressContract(hrp, data, true)
+}
+
+// AddressContract is an Address for a SatoshiNet contract output.  Its
+// payload is version(1) || contract type(1) || contract id(20).
+type AddressContract struct {
+	prefix  string
+	payload [ContractAddressPayloadLen]byte
+}
+
+// NewAddressContract returns a new contract address for the passed network.
+func NewAddressContract(payload []byte, net *chaincfg.Params) (*AddressContract, error) {
+	data, err := bech32.ConvertBits(payload, 8, 5, true)
+	if err != nil {
+		return nil, err
+	}
+	return newAddressContract(contractPrefixForNet(net), data, true)
+}
+
+// NewAddressContractWithPrefix returns a new contract address for the passed
+// human-readable prefix.
+func NewAddressContractWithPrefix(payload []byte, prefix string) (*AddressContract, error) {
+	data, err := bech32.ConvertBits(payload, 8, 5, true)
+	if err != nil {
+		return nil, err
+	}
+	return newAddressContract(prefix, data, true)
+}
+
+// NewAddressContractFromHash returns a new contract address from individual
+// payload fields.
+func NewAddressContractFromHash(version, contractType byte, hash []byte,
+	net *chaincfg.Params) (*AddressContract, error) {
+
+	if len(hash) != ripemd160.Size {
+		return nil, errors.New("contract hash must be 20 bytes")
+	}
+	payload := make([]byte, 0, ContractAddressPayloadLen)
+	payload = append(payload, version, contractType)
+	payload = append(payload, hash...)
+	return NewAddressContract(payload, net)
+}
+
+// NewAddressContractFromHashWithPrefix returns a new contract address from
+// individual payload fields and a human-readable prefix.
+func NewAddressContractFromHashWithPrefix(version, contractType byte, hash []byte,
+	prefix string) (*AddressContract, error) {
+
+	if len(hash) != ripemd160.Size {
+		return nil, errors.New("contract hash must be 20 bytes")
+	}
+	payload := make([]byte, 0, ContractAddressPayloadLen)
+	payload = append(payload, version, contractType)
+	payload = append(payload, hash...)
+	return NewAddressContractWithPrefix(payload, prefix)
+}
+
+func newAddressContract(prefix string, data []byte, encodedData bool) (*AddressContract, error) {
+	prefix = strings.ToLower(prefix)
+	if prefix != ContractMainnetPrefix && prefix != ContractTestnetPrefix {
+		return nil, ErrUnknownAddressType
+	}
+
+	payload := data
+	var err error
+	if encodedData {
+		payload, err = bech32.ConvertBits(data, 5, 8, false)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(payload) != ContractAddressPayloadLen {
+		return nil, errors.New("contract address payload must be 22 bytes")
+	}
+	if payload[0] != ContractAddressVersionV1 {
+		return nil, fmt.Errorf("unsupported contract address version: %d", payload[0])
+	}
+	if payload[1] == 0 {
+		return nil, errors.New("contract address type must be non-zero")
+	}
+
+	addr := &AddressContract{prefix: prefix}
+	copy(addr.payload[:], payload)
+	return addr, nil
+}
+
+// EncodeAddress returns the string encoding of a contract address.
+func (a *AddressContract) EncodeAddress() string {
+	data, err := bech32.ConvertBits(a.payload[:], 8, 5, true)
+	if err != nil {
+		return ""
+	}
+	encoded, err := bech32.Encode(a.prefix, data)
+	if err != nil {
+		return ""
+	}
+	return encoded
+}
+
+// Encode returns the string encoding of a contract address.
+func (a *AddressContract) Encode() (string, error) {
+	data, err := bech32.ConvertBits(a.payload[:], 8, 5, true)
+	if err != nil {
+		return "", err
+	}
+	return bech32.Encode(a.prefix, data)
+}
+
+// Prefix returns the bech32 human-readable prefix.
+func (a *AddressContract) Prefix() string {
+	return a.prefix
+}
+
+// Version returns the contract address payload version.
+func (a *AddressContract) Version() byte {
+	return a.payload[0]
+}
+
+// ContractType returns the contract type byte.
+func (a *AddressContract) ContractType() byte {
+	return a.payload[1]
+}
+
+// ContractHash returns the 20-byte contract id.
+func (a *AddressContract) ContractHash() [ripemd160.Size]byte {
+	var hash [ripemd160.Size]byte
+	copy(hash[:], a.payload[2:])
+	return hash
+}
+
+// ScriptAddress returns the 22-byte contract payload.
+func (a *AddressContract) ScriptAddress() []byte {
+	out := make([]byte, ContractAddressPayloadLen)
+	copy(out, a.payload[:])
+	return out
+}
+
+// IsForNet returns whether the contract address is associated with the passed
+// network.
+func (a *AddressContract) IsForNet(net *chaincfg.Params) bool {
+	return a.prefix == contractPrefixForNet(net)
+}
+
+// String returns the human-readable contract address string.
+func (a *AddressContract) String() string {
+	return a.EncodeAddress()
+}
+
+// MustEncode returns the encoded contract address string or panics.
+func (a *AddressContract) MustEncode() string {
+	encoded := a.EncodeAddress()
+	if encoded == "" {
+		panic("invalid contract address")
+	}
+	return encoded
+}
+
+// Equal returns whether two contract addresses are equal.
+func (a *AddressContract) Equal(b AddressContract) bool {
+	return a.prefix == b.prefix && a.payload == b.payload
+}
+
+// Validate validates the contract address payload.
+func (a *AddressContract) Validate() error {
+	_, err := NewAddressContractWithPrefix(a.ScriptAddress(), a.prefix)
+	return err
 }
 
 // AddressPubKeyHash is an Address for a pay-to-pubkey-hash (P2PKH)

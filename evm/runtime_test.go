@@ -6,7 +6,7 @@ import (
 )
 
 func TestRuntimeCallSimpleReturn(t *testing.T) {
-	contract := testContract(t).Hash
+	contract := ContractAddressHash(testContract(t))
 	caller, err := ParseEVMAddressHex("11112233445566778899aabbccddeeff00112233")
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestRuntimeDeployThenCall(t *testing.T) {
 
 	call := rt.Call(CallRequest{
 		Caller: caller,
-		Target: deploy.Contract.Hash,
+		Target: ContractAddressHash(deploy.Contract),
 		CallID: "call-1",
 		Gas:    100000,
 		Block:  BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},

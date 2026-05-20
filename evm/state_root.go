@@ -44,9 +44,10 @@ func (s *MemoryStateDB) StateRoot() [32]byte {
 	triggerKeys := sortedTriggerKeys(s.triggers)
 	for _, key := range triggerKeys {
 		trigger := s.triggers[key]
-		writeLengthPrefixed(h, []byte(trigger.Contract.Prefix))
-		h.Write([]byte{trigger.Contract.Version, byte(trigger.Contract.Type)})
-		h.Write(trigger.Contract.Hash[:])
+		contractHash := ContractAddressHash(trigger.Contract)
+		writeLengthPrefixed(h, []byte(trigger.Contract.Prefix()))
+		h.Write([]byte{trigger.Contract.Version(), trigger.Contract.ContractType()})
+		h.Write(contractHash[:])
 		writeLengthPrefixed(h, []byte(trigger.ID))
 		h.Write([]byte{byte(trigger.Kind)})
 		binary.BigEndian.PutUint64(tmp[:], uint64(trigger.Height))
