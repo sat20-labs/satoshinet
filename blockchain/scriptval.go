@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/evm"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -73,6 +74,25 @@ out:
 			sigScript := txIn.SignatureScript
 			witness := txIn.Witness
 			pkScript := utxo.PkScript()
+			if evm.IsContractPkScript(pkScript) {
+				inputScripts, err := evmInputScripts(txVI.tx.MsgTx(), v.utxoView)
+				if err == nil {
+					_, err = evm.ValidateResultContractSpend(
+						txVI.tx.MsgTx(), inputScripts,
+						evm.TestnetContractPrefix)
+				}
+				if err != nil {
+					str := fmt.Sprintf("input %s:%d references invalid "+
+						"EVM contract spend %v: %v",
+						txVI.tx.Hash(), txVI.txInIndex,
+						txIn.PreviousOutPoint, err)
+					err := ruleError(ErrScriptValidation, str)
+					v.sendResult(err)
+					break out
+				}
+				v.sendResult(nil)
+				continue
+			}
 			inputAmount := utxo.Amount()
 			txAssets := utxo.TxAssets()
 			vm, err := txscript.NewEngine(
@@ -114,6 +134,22 @@ out:
 			break out
 		}
 	}
+}
+
+func evmInputScripts(tx *wire.MsgTx, utxoView *UtxoViewpoint) (map[evm.OutPoint][]byte, error) {
+	inputScripts := make(map[evm.OutPoint][]byte, len(tx.TxIn))
+	for i, txIn := range tx.TxIn {
+		if txIn == nil {
+			return nil, fmt.Errorf("nil input %d", i)
+		}
+		entry := utxoView.LookupEntry(txIn.PreviousOutPoint)
+		if entry == nil {
+			return nil, fmt.Errorf("missing input script for %v",
+				txIn.PreviousOutPoint)
+		}
+		inputScripts[evm.WireOutPointToEVM(txIn.PreviousOutPoint)] = entry.PkScript()
+	}
+	return inputScripts, nil
 }
 
 // Validate validates the scripts for all of the passed transaction inputs using

@@ -19,18 +19,18 @@ import (
 )
 
 const (
-	SAT20_MAGIC_NUMBER          = txscript.OP_16
+	SAT20_MAGIC_NUMBER = txscript.OP_16
 	// 通道
-	CONTENT_TYPE_MIN	        = txscript.OP_0
-	CONTENT_TYPE_CHANNELID      = txscript.OP_0
-	CONTENT_TYPE_ASCENDING      = txscript.OP_DATA_1
-	CONTENT_TYPE_DESCENDING     = txscript.OP_DATA_2
-	CONTENT_TYPE_PAYMENT        = txscript.OP_DATA_3
-	CONTENT_TYPE_STAKE          = txscript.OP_DATA_4
-	CONTENT_TYPE_UNSTAKE        = txscript.OP_DATA_5
-	CONTENT_TYPE_DEPOSIT        = txscript.OP_DATA_6
-	CONTENT_TYPE_WITHDRAW       = txscript.OP_DATA_7
-	CONTENT_TYPE_LIQUIDPOOL     = txscript.OP_DATA_8
+	CONTENT_TYPE_MIN        = txscript.OP_0
+	CONTENT_TYPE_CHANNELID  = txscript.OP_0
+	CONTENT_TYPE_ASCENDING  = txscript.OP_DATA_1
+	CONTENT_TYPE_DESCENDING = txscript.OP_DATA_2
+	CONTENT_TYPE_PAYMENT    = txscript.OP_DATA_3
+	CONTENT_TYPE_STAKE      = txscript.OP_DATA_4
+	CONTENT_TYPE_UNSTAKE    = txscript.OP_DATA_5
+	CONTENT_TYPE_DEPOSIT    = txscript.OP_DATA_6
+	CONTENT_TYPE_WITHDRAW   = txscript.OP_DATA_7
+	CONTENT_TYPE_LIQUIDPOOL = txscript.OP_DATA_8
 
 	// 通道合约
 	CONTENT_TYPE_PERFORMACTION  = txscript.OP_DATA_20
@@ -38,20 +38,25 @@ const (
 	CONTENT_TYPE_INVOKECONTRACT = txscript.OP_DATA_22
 	CONTENT_TYPE_INVOKERESULT   = txscript.OP_DATA_23
 
-	// EVM合约
-	CONTENT_TYPE_EVM_DEPLOY     = txscript.OP_DATA_31
-	CONTENT_TYPE_EVM_INVOKE     = txscript.OP_DATA_32
-	CONTENT_TYPE_EVM_RESULT     = txscript.OP_DATA_33
+	// 聪网智能合约
+	CONTENT_TYPE_CONTRACT_DEPLOY = CONTENT_TYPE_DEPLOYCONTRACT
+	CONTENT_TYPE_CONTRACT_INVOKE = CONTENT_TYPE_INVOKECONTRACT
+	CONTENT_TYPE_CONTRACT_RESULT = CONTENT_TYPE_INVOKERESULT
+	CONTENT_TYPE_CONTRACT_STATE_ROOT = txscript.OP_DATA_24
+
+	CONTENT_TYPE_EVM_DEPLOY = CONTENT_TYPE_CONTRACT_DEPLOY
+	CONTENT_TYPE_EVM_INVOKE = CONTENT_TYPE_CONTRACT_INVOKE
+	CONTENT_TYPE_EVM_RESULT = CONTENT_TYPE_CONTRACT_RESULT
 
 	// ordx
-	CONTENT_TYPE_UNBIND         = txscript.OP_DATA_40
-	CONTENT_TYPE_SWAP           = txscript.OP_DATA_41
-	CONTENT_TYPE_BINDREFERRER   = txscript.OP_DATA_42
-	CONTENT_TYPE_FREEZE         = txscript.OP_DATA_43
-	CONTENT_TYPE_UNFREEZE       = txscript.OP_DATA_44
+	CONTENT_TYPE_UNBIND       = txscript.OP_DATA_40
+	CONTENT_TYPE_SWAP         = txscript.OP_DATA_41
+	CONTENT_TYPE_BINDREFERRER = txscript.OP_DATA_42
+	CONTENT_TYPE_FREEZE       = txscript.OP_DATA_43
+	CONTENT_TYPE_UNFREEZE     = txscript.OP_DATA_44
 
-	CONTENT_TYPE_MEMO	        = txscript.OP_DATA_75
-	CONTENT_TYPE_MAX	        = txscript.OP_DATA_75
+	CONTENT_TYPE_MEMO = txscript.OP_DATA_75
+	CONTENT_TYPE_MAX  = txscript.OP_DATA_75
 	// -> OP_DATA_75
 
 	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 8
@@ -71,7 +76,6 @@ type ContractInvokeData struct {
 	PubKey       []byte
 	Sig          []byte
 }
-
 
 func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	value int64, assets wire.TxAssets, sig []byte, err error) {
@@ -234,7 +238,7 @@ func IsSTPNullDataScript(script []byte) bool {
 	}
 
 	// content type
-	if !tokenizer.Next() || tokenizer.Err() != nil  {
+	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return false
 	}
 	ctype := tokenizer.ExtractInt64()
@@ -306,7 +310,6 @@ func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error
 	tokenizer := txscript.MakeScriptTokenizer(0, script)
 	result := ContractDeployData{}
 
-	
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing contract path")
 	}
@@ -365,7 +368,6 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 
 	return result, nil
 }
-
 
 // 调用 sindexer.NullDataScript 组装成最终的 op_return 数据
 func CreateStakeInvoice(assetName *indexer.AssetName, amt *indexer.Decimal) ([]byte, error) {

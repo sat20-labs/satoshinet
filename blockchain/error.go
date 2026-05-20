@@ -221,12 +221,16 @@ const (
 	// for block proposals submitted via getblocktemplate RPC.
 	ErrPrevBlockNotBest
 
-		// ErrTimewarpAttack indicates a timewarp attack i.e.
+	// ErrTimewarpAttack indicates a timewarp attack i.e.
 	// when block's timestamp is too early on diff adjustment block.
 	ErrTimewarpAttack
 
 	// ErrAnchorTXVerifyFailed indicates that the anchor transaction verify failed
 	ErrAnchorTXVerifyFailed
+
+	// ErrInvalidEVMBlock indicates a block violates EVM transaction ordering
+	// or structural rules.
+	ErrInvalidEVMBlock
 
 	ErrOrdinalsNotAllowed
 )
@@ -277,6 +281,7 @@ var errorCodeStrings = map[ErrorCode]string{
 	ErrInvalidAncestorBlock:      "ErrInvalidAncestorBlock",
 	ErrPrevBlockNotBest:          "ErrPrevBlockNotBest",
 	ErrAnchorTXVerifyFailed:      "ErrAnchorTXVerifyFailed",
+	ErrInvalidEVMBlock:           "ErrInvalidEVMBlock",
 }
 
 // String returns the ErrorCode as a human-readable name.

@@ -1176,6 +1176,11 @@ func TestStringifyClass(t *testing.T) {
 			stringed: "nulldata",
 		},
 		{
+			name:     "contractty",
+			class:    ContractTy,
+			stringed: "contract",
+		},
+		{
 			name:     "broken",
 			class:    ScriptClass(255),
 			stringed: "Invalid",
@@ -1188,6 +1193,50 @@ func TestStringifyClass(t *testing.T) {
 			t.Errorf("%s: got %#q, want %#q", test.name,
 				typeString, test.stringed)
 		}
+	}
+}
+
+func TestExtractPkScriptAddrsContract(t *testing.T) {
+	t.Parallel()
+
+	script := []byte{
+		OP_FALSE,
+		OP_IF,
+		OP_DATA_2, 'C', 'T',
+		OP_DATA_22,
+		0x01, 0x01,
+		0x00, 0x11, 0x22, 0x33, 0x44,
+		0x55, 0x66, 0x77, 0x88, 0x99,
+		0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+		0xff, 0x00, 0x11, 0x22, 0x33,
+		OP_ENDIF,
+		OP_FALSE,
+	}
+	class, addrs, reqSigs, err := ExtractPkScriptAddrs(script, &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if class != ContractTy {
+		t.Fatalf("unexpected class %v", class)
+	}
+	if reqSigs != 0 {
+		t.Fatalf("unexpected required sigs %d", reqSigs)
+	}
+	if len(addrs) != 1 {
+		t.Fatalf("unexpected address count %d", len(addrs))
+	}
+	got := addrs[0].EncodeAddress()
+	if len(got) < 3 || got[:3] != "tc1" {
+		t.Fatalf("unexpected contract address prefix %s", got)
+	}
+	if !bytes.Equal(addrs[0].ScriptAddress(), script[6:28]) {
+		t.Fatalf("unexpected contract script address %x", addrs[0].ScriptAddress())
+	}
+	if !addrs[0].IsForNet(&chaincfg.TestNetParams) {
+		t.Fatal("contract address should match testnet params")
+	}
+	if GetScriptClass(script) != ContractTy {
+		t.Fatalf("unexpected script class %v", GetScriptClass(script))
 	}
 }
 

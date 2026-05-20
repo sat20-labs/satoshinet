@@ -16,6 +16,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/evm"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -834,6 +835,55 @@ func CheckBlockHeaderContext(header *wire.BlockHeader, prevNode HeaderCtx,
 	return nil
 }
 
+func checkEVMBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {
+	prefix := evm.TestnetContractPrefix
+	if params != nil {
+		prefix = evm.ContractPrefixForNet(params.Net)
+	}
+
+	coinbaseTx := block.Transactions()[0].MsgTx()
+	if _, _, err := evm.FindCoinbaseStateRoot(coinbaseTx); err != nil {
+		str := fmt.Sprintf("block contains invalid EVM state root in "+
+			"coinbase: %v", err)
+		return ruleError(ErrInvalidEVMBlock, str)
+	}
+
+	seenEVM := false
+	seenResult := false
+	for i, tx := range block.Transactions()[1:] {
+		info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
+		if err != nil {
+			str := fmt.Sprintf("block contains malformed EVM transaction "+
+				"%v at index %d: %v", tx.Hash(), i+1, err)
+			return ruleError(ErrInvalidEVMBlock, str)
+		}
+		if info.IsEVM {
+			if info.Type == evm.TxTypeCoinbaseStateRoot {
+				str := fmt.Sprintf("block contains EVM state root "+
+					"outside coinbase at index %d", i+1)
+				return ruleError(ErrInvalidEVMBlock, str)
+			}
+			if seenResult && info.Type != evm.TxTypeResult {
+				str := fmt.Sprintf("block contains EVM transaction %v "+
+					"after EVM_RESULT transactions at index %d",
+					tx.Hash(), i+1)
+				return ruleError(ErrInvalidEVMBlock, str)
+			}
+			if info.Type == evm.TxTypeResult {
+				seenResult = true
+			}
+			seenEVM = true
+			continue
+		}
+		if seenEVM {
+			str := fmt.Sprintf("block contains non-EVM transaction %v "+
+				"after EVM transactions at index %d", tx.Hash(), i+1)
+			return ruleError(ErrInvalidEVMBlock, str)
+		}
+	}
+	return nil
+}
+
 // checkBlockContext performs several validation checks on the block which depend
 // on its position within the block chain.
 //
@@ -850,6 +900,10 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 	header := &block.MsgBlock().Header
 	err := CheckBlockHeaderContext(header, prevNode, flags, b, false)
 	if err != nil {
+		return err
+	}
+
+	if err := checkEVMBlockOrder(block, b.chainParams); err != nil {
 		return err
 	}
 
@@ -1293,6 +1347,9 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 	if err != nil {
 		return err
 	}
+	if err := b.validateEVMBlock(block, view); err != nil {
+		return err
+	}
 
 	// BIP0016 describes a pay-to-script-hash type that is considered a
 	// "standard" type.  The rules for this BIP only apply to transactions
@@ -1532,6 +1589,13 @@ func (b *BlockChain) CheckConnectBlockTemplate(block *btcutil.Block) error {
 	view.SetBestHash(&tip.hash)
 	newNode := newBlockNode(&header, tip)
 	return b.checkConnectBlock(newNode, block, view, nil)
+}
+
+func (b *BlockChain) validateEVMBlock(block *btcutil.Block, view *UtxoViewpoint) error {
+	if b.evmBlockValidator == nil {
+		return nil
+	}
+	return b.evmBlockValidator.ValidateEVMBlock(block, view)
 }
 
 // ChainParams returns the Blockchain's configured chaincfg.Params.

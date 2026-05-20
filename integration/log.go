@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/sat20-labs/satoshinet/rpcclient"
+	"github.com/sirupsen/logrus"
 )
 
 type logWriter struct{}

@@ -21,6 +21,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/evm"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -1580,13 +1581,13 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 	// In satsnet, the min relay fee is 0, not to validate relay Fee Met
 	if !blockchain.IsDeAnchorTx(tx.MsgTx()) {
 		err = mp.validateRelayFeeMet(
-			tx, txFee, txSize, utxoView, nextBlockHeight, isNew, rateLimit,
-		)
+			tx, txFee, feeAssets, txSize, utxoView, nextBlockHeight,
+			isNew, rateLimit)
 		if err != nil {
 			return nil, err
 		}
 	}
-	
+
 	// If the transaction has any conflicts, and we've made it this far,
 	// then we're processing a potential replacement.
 	var conflicts map[chainhash.Hash]*btcutil.Tx
@@ -1742,11 +1743,15 @@ func (mp *TxPool) validateSigCost(tx *btcutil.Tx,
 
 // validateRelayFeeMet checks that the min relay fee is covered by this
 // transaction.
-func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee, txSize int64,
+func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee int64,
+	feeAssets wire.TxAssets, txSize int64,
 	utxoView *blockchain.UtxoViewpoint, nextBlockHeight int32,
 	isNew, rateLimit bool) error {
 
 	txHash := tx.Hash()
+	if mp.isEVMTx(tx) {
+		return nil
+	}
 
 	// Most miners allow a free transaction area in blocks they mine to go
 	// alongside the area used for high-priority transactions as well as
@@ -1819,6 +1824,15 @@ func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee, txSize int64,
 		oldTotal, mp.pennyTotal, mp.cfg.Policy.FreeTxRelayLimit*10*1000)
 
 	return nil
+}
+
+func (mp *TxPool) isEVMTx(tx *btcutil.Tx) bool {
+	prefix := evm.TestnetContractPrefix
+	if mp.cfg.ChainParams != nil {
+		prefix = evm.ContractPrefixForNet(mp.cfg.ChainParams.Net)
+	}
+	info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
+	return err == nil && info.IsEVM
 }
 
 func (mp *TxPool) Save(dataDir string) error {

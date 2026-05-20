@@ -14,6 +14,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/evm"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 
 	"github.com/sat20-labs/satoshinet/stp"
@@ -89,6 +90,9 @@ type txPrioItem struct {
 	priority  float64
 	feePerKB  int64
 	feeAssets wire.TxAssets
+	evmTx     bool
+	evmType   evm.TxType
+	evmGas    uint64
 
 	// dependsOn holds a map of transaction hashes which this one depends
 	// on.  It will only be set when the transaction references other
@@ -154,6 +158,10 @@ func (pq *txPriorityQueue) SetLessFunc(lessFunc txPriorityQueueLessFunc) {
 // txPQByPriority sorts a txPriorityQueue by transaction priority and then fees
 // per kilobyte.
 func txPQByPriority(pq *txPriorityQueue, i, j int) bool {
+	if less, ok := txPQByEVMOrdering(pq, i, j); ok {
+		return less
+	}
+
 	// Using > here so that pop gives the highest priority item as opposed
 	// to the lowest.  Sort by priority first, then fee.
 	if pq.items[i].priority == pq.items[j].priority {
@@ -166,12 +174,39 @@ func txPQByPriority(pq *txPriorityQueue, i, j int) bool {
 // txPQByFee sorts a txPriorityQueue by fees per kilobyte and then transaction
 // priority.
 func txPQByFee(pq *txPriorityQueue, i, j int) bool {
+	if less, ok := txPQByEVMOrdering(pq, i, j); ok {
+		return less
+	}
+
 	// Using > here so that pop gives the highest fee item as opposed
 	// to the lowest.  Sort by fee first, then priority.
 	if pq.items[i].feePerKB == pq.items[j].feePerKB {
 		return pq.items[i].priority > pq.items[j].priority
 	}
 	return pq.items[i].feePerKB > pq.items[j].feePerKB
+}
+
+func txPQByEVMOrdering(pq *txPriorityQueue, i, j int) (bool, bool) {
+	left := pq.items[i]
+	right := pq.items[j]
+	if left.evmTx != right.evmTx {
+		return !left.evmTx, true
+	}
+	if !left.evmTx {
+		return false, false
+	}
+	if left.evmGas != right.evmGas {
+		return left.evmGas > right.evmGas, true
+	}
+	if left.evmType != right.evmType {
+		return left.evmType < right.evmType, true
+	}
+	if left.tx == nil || right.tx == nil {
+		return false, false
+	}
+	leftHash := left.tx.Hash()
+	rightHash := right.tx.Hash()
+	return bytes.Compare(leftHash[:], rightHash[:]) < 0, true
 }
 
 // newTxPriorityQueue returns a new transaction priority queue that reserves the
@@ -190,6 +225,29 @@ func newTxPriorityQueue(reserve int, sortByFee bool) *txPriorityQueue {
 		pq.SetLessFunc(txPQByPriority)
 	}
 	return pq
+}
+
+func evmContractPrefix(params *chaincfg.Params) string {
+	if params == nil {
+		return evm.TestnetContractPrefix
+	}
+	return evm.ContractPrefixForNet(params.Net)
+}
+
+func evmMiningInfo(tx *wire.MsgTx, contractPrefix string) (bool, evm.TxType, uint64) {
+	info, err := evm.ClassifyTxForBlockOrder(tx, contractPrefix)
+	return err == nil && info.IsEVM, info.Type, info.GasLimit
+}
+
+func shouldSkipLowFeeTx(prioItem *txPrioItem, sortedByFee bool, blockPlusTxWeight uint32, policy *Policy) bool {
+	if !sortedByFee {
+		return false
+	}
+	if prioItem.evmTx {
+		return false
+	}
+	return prioItem.fee < int64(policy.TxMinFreeFee) &&
+		blockPlusTxWeight >= policy.BlockMinWeight
 }
 
 // BlockTemplate houses a block that has yet to be solved along with additional
@@ -528,6 +586,8 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 	log.Debugf("Considering %d transactions for inclusion to new block",
 		len(sourceTxns))
 
+	contractPrefix := evmContractPrefix(g.chainParams)
+
 mempoolLoop:
 	for _, txDesc := range sourceTxns {
 		// A block can't have more than one coinbase or contain
@@ -570,6 +630,8 @@ mempoolLoop:
 		// other transactions in the mempool so they can be properly
 		// ordered below.
 		prioItem := &txPrioItem{tx: tx}
+		prioItem.evmTx, prioItem.evmType, prioItem.evmGas = evmMiningInfo(
+			tx.MsgTx(), contractPrefix)
 		for _, txIn := range tx.MsgTx().TxIn {
 			originHash := &txIn.PreviousOutPoint.Hash
 			entry := utxos.LookupEntry(txIn.PreviousOutPoint)
@@ -653,6 +715,13 @@ mempoolLoop:
 		// depending on the sort order) transaction.
 		prioItem := heap.Pop(priorityQueue).(*txPrioItem)
 		tx := prioItem.tx
+		if g.policy.EVMResultBuilder != nil && prioItem.evmTx &&
+			prioItem.evmType == evm.TxTypeResult {
+
+			log.Debugf("Skipping mempool EVM_RESULT tx %s; "+
+				"template will generate canonical results", tx.Hash())
+			continue
+		}
 
 		switch {
 		// If segregated witness has not been activated yet, then we
@@ -730,9 +799,7 @@ mempoolLoop:
 
 		// Skip free transactions once the block is larger than the
 		// minimum block size.
-		if sortedByFee &&
-			prioItem.fee < int64(g.policy.TxMinFreeFee) &&
-			blockPlusTxWeight >= g.policy.BlockMinWeight {
+		if shouldSkipLowFeeTx(prioItem, sortedByFee, blockPlusTxWeight, g.policy) {
 
 			log.Debugf("Skipping tx %s with fee %d "+
 				"< TxMinFreeFee %d and block weight %d >= "+
@@ -828,6 +895,25 @@ mempoolLoop:
 		}
 	}
 
+	ts := medianAdjustedTime(best, g.timeSource)
+	if g.policy.EVMResultBuilder != nil {
+		addedWeight, addedSigOps, resultTxFees, resultTxSigOps,
+			addedFees, addedFeeAssets, err := g.addEVMResultsToTemplate(
+			&blockTxns, coinbaseTx, blockUtxos, nextBlockHeight,
+			best.Hash, ts, segwitActive, blockWeight, blockSigOpCost)
+		if err != nil {
+			return nil, err
+		}
+		blockWeight += addedWeight
+		blockSigOpCost += addedSigOps
+		totalFees += addedFees
+		if len(addedFeeAssets) > 0 {
+			totalFeeAssets.Merge(addedFeeAssets)
+		}
+		txFees = append(txFees, resultTxFees...)
+		txSigOpCosts = append(txSigOpCosts, resultTxSigOps...)
+	}
+
 	if len(blockTxns) <= 1 {
 		// No transactions fit
 		err := fmt.Errorf("no any new tx need to be mining")
@@ -857,7 +943,6 @@ mempoolLoop:
 	// Calculate the required difficulty for the block.  The timestamp
 	// is potentially adjusted to ensure it comes after the median time of
 	// the last several blocks per the chain consensus rules.
-	ts := medianAdjustedTime(best, g.timeSource)
 	reqDifficulty, err := g.chain.CalcNextRequiredDifficulty(ts)
 	if err != nil {
 		return nil, err
@@ -905,6 +990,112 @@ mempoolLoop:
 		ValidPayAddress:   payToAddress != nil,
 		WitnessCommitment: witnessCommitment,
 	}, nil
+}
+
+func (g *BlkTmplGenerator) addEVMResultsToTemplate(blockTxns *[]*btcutil.Tx,
+	coinbaseTx *btcutil.Tx, blockUtxos *blockchain.UtxoViewpoint,
+	nextBlockHeight int32, prevHash chainhash.Hash, timestamp time.Time, segwitActive bool,
+	currentWeight uint32, currentSigOps int64) (
+	uint32, int64, []int64, []int64, int64, wire.TxAssets, error) {
+
+	buildResult, err := g.policy.EVMResultBuilder(EVMTemplateBuildRequest{
+		Txs:        (*blockTxns)[1:],
+		CoinbaseTx: coinbaseTx,
+		Height:     nextBlockHeight,
+		PrevHash:   prevHash,
+		Timestamp:  timestamp,
+	})
+	if err != nil {
+		return 0, 0, nil, nil, 0, nil, err
+	}
+	if len(buildResult.ResultTxs) == 0 && buildResult.StateRoot == [32]byte{} {
+		return 0, 0, nil, nil, 0, nil, nil
+	}
+
+	coinbaseWeightBefore := blockchain.GetTransactionWeight(coinbaseTx)
+	if err := evm.UpsertCoinbaseStateRoot(coinbaseTx.MsgTx(), buildResult.StateRoot); err != nil {
+		return 0, 0, nil, nil, 0, nil, err
+	}
+	coinbaseTx.ClearHashCache()
+	weightAdded := uint32(blockchain.GetTransactionWeight(coinbaseTx) -
+		coinbaseWeightBefore)
+
+	var sigOpsAdded int64
+	var feesAdded int64
+	txFeesAdded := make([]int64, 0, len(buildResult.ResultTxs))
+	txSigOpsAdded := make([]int64, 0, len(buildResult.ResultTxs))
+	feeAssetsAdded := wire.TxAssets{}
+	for _, msgTx := range buildResult.ResultTxs {
+		tx := btcutil.NewTx(msgTx)
+		if err := mergeMissingEVMResultUtxos(blockUtxos, tx, g.fetchUtxoView); err != nil {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("EVM_RESULT fetch utxos: %w", err)
+		}
+
+		txWeight := uint32(blockchain.GetTransactionWeight(tx))
+		if currentWeight+weightAdded+txWeight >= g.policy.BlockMaxWeight {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("EVM_RESULT transactions exceed block max weight")
+		}
+		sigOpCost, err := blockchain.GetSigOpCost(tx, false,
+			blockUtxos, true, segwitActive)
+		if err != nil {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("EVM_RESULT sigops: %w", err)
+		}
+		if currentSigOps+sigOpsAdded+int64(sigOpCost) > blockchain.MaxBlockSigOpsCost {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("EVM_RESULT transactions exceed block sigops limit")
+		}
+		txFee, feeAssets, err := blockchain.CheckTransactionInputs(tx, true,
+			nextBlockHeight, blockUtxos, g.chainParams)
+		if err != nil {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("EVM_RESULT inputs: %w", err)
+		}
+		if err := blockchain.ValidateTransactionScripts(tx, blockUtxos,
+			txscript.StandardVerifyFlags, g.sigCache, g.hashCache); err != nil {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("EVM_RESULT scripts: %w", err)
+		}
+		spendTransaction(blockUtxos, tx, nextBlockHeight)
+		*blockTxns = append(*blockTxns, tx)
+		weightAdded += txWeight
+		sigOpsAdded += int64(sigOpCost)
+		feesAdded += txFee
+		txFeesAdded = append(txFeesAdded, txFee)
+		txSigOpsAdded = append(txSigOpsAdded, int64(sigOpCost))
+		if len(feeAssets) > 0 {
+			feeAssetsAdded.Merge(feeAssets)
+		}
+	}
+	return weightAdded, sigOpsAdded, txFeesAdded, txSigOpsAdded, feesAdded, feeAssetsAdded, nil
+}
+
+func (g *BlkTmplGenerator) fetchUtxoView(tx *btcutil.Tx) (*blockchain.UtxoViewpoint, error) {
+	if g == nil || g.chain == nil {
+		return nil, nil
+	}
+	return g.chain.FetchUtxoView(tx)
+}
+
+func mergeMissingEVMResultUtxos(blockUtxos *blockchain.UtxoViewpoint, tx *btcutil.Tx,
+	fetch func(*btcutil.Tx) (*blockchain.UtxoViewpoint, error)) error {
+
+	if blockUtxos == nil || tx == nil || fetch == nil {
+		return nil
+	}
+	missing := false
+	for _, txIn := range tx.MsgTx().TxIn {
+		entry := blockUtxos.LookupEntry(txIn.PreviousOutPoint)
+		if entry == nil || entry.IsSpent() {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return nil
+	}
+	resultUtxos, err := fetch(tx)
+	if err != nil || resultUtxos == nil {
+		return err
+	}
+	mergeUtxoView(blockUtxos, resultUtxos)
+	return nil
 }
 
 // AddWitnessCommitment adds the witness commitment as an OP_RETURN output

@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/btcutil/bech32"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -65,11 +66,15 @@ const (
 	NullDataTy                               // Empty data-only (provably prunable).
 	WitnessV1TaprootTy                       // Taproot output
 	WitnessUnknownTy                         // Witness unknown
+
+	// ContractTy identifies a SatoshiNet contract output.  Use a high value
+	// to leave room for future Bitcoin upstream script classes.
+	ContractTy ScriptClass = 200
 )
 
 // scriptClassToName houses the human-readable strings which describe each
 // script class.
-var scriptClassToName = []string{
+var scriptClassToName = map[ScriptClass]string{
 	NonStandardTy:         "nonstandard",
 	PubKeyTy:              "pubkey",
 	PubKeyHashTy:          "pubkeyhash",
@@ -80,16 +85,18 @@ var scriptClassToName = []string{
 	NullDataTy:            "nulldata",
 	WitnessV1TaprootTy:    "witness_v1_taproot",
 	WitnessUnknownTy:      "witness_unknown",
+	ContractTy:            "contract",
 }
 
 // String implements the Stringer interface by returning the name of
 // the enum script class. If the enum is invalid then "Invalid" will be
 // returned.
 func (t ScriptClass) String() string {
-	if int(t) > len(scriptClassToName) || int(t) < 0 {
+	name, ok := scriptClassToName[t]
+	if !ok {
 		return "Invalid"
 	}
-	return scriptClassToName[t]
+	return name
 }
 
 // extractCompressedPubKey extracts a compressed public key from the passed
@@ -468,6 +475,34 @@ func isWitnessTaprootScript(script []byte) bool {
 	return extractWitnessV1KeyBytes(script) != nil
 }
 
+var contractScriptMagic = []byte("CT")
+
+const contractScriptPayloadLen = 22
+
+func extractContractScriptPayload(script []byte) []byte {
+	if len(script) != 30 {
+		return nil
+	}
+	if script[0] != OP_FALSE ||
+		script[1] != OP_IF ||
+		script[2] != byte(len(contractScriptMagic)) ||
+		string(script[3:5]) != string(contractScriptMagic) ||
+		script[5] != contractScriptPayloadLen ||
+		script[28] != OP_ENDIF ||
+		script[29] != OP_FALSE {
+		return nil
+	}
+	payload := script[6:28]
+	if payload[0] != 1 || payload[1] == 0 {
+		return nil
+	}
+	return payload
+}
+
+func isContractScript(script []byte) bool {
+	return extractContractScriptPayload(script) != nil
+}
+
 // isAnnexedWitness returns true if the passed witness has a final push
 // that is a witness annex.
 func isAnnexedWitness(witness wire.TxWitness) bool {
@@ -548,6 +583,8 @@ func typeOfScript(scriptVersion uint16, script []byte) ScriptClass {
 			return MultiSigTy
 		case isNullDataScript(scriptVersion, script):
 			return NullDataTy
+		case isContractScript(script):
+			return ContractTy
 		}
 	case TaprootWitnessVersion:
 		switch {
@@ -580,9 +617,9 @@ func GetScriptClass(script []byte) ScriptClass {
 //
 // Not to be confused with GetScriptClass.
 func NewScriptClass(name string) (*ScriptClass, error) {
-	for i, n := range scriptClassToName {
+	for class, n := range scriptClassToName {
 		if n == name {
-			value := ScriptClass(i)
+			value := class
 			return &value, nil
 		}
 	}
@@ -965,6 +1002,56 @@ func scriptHashToAddrs(hash []byte, params *chaincfg.Params) []btcutil.Address {
 	return addrs
 }
 
+type addressContract struct {
+	encoded string
+	payload []byte
+	net     *chaincfg.Params
+}
+
+func (a *addressContract) String() string {
+	return a.encoded
+}
+
+func (a *addressContract) EncodeAddress() string {
+	return a.encoded
+}
+
+func (a *addressContract) ScriptAddress() []byte {
+	out := make([]byte, len(a.payload))
+	copy(out, a.payload)
+	return out
+}
+
+func (a *addressContract) IsForNet(net *chaincfg.Params) bool {
+	if a.net == nil || net == nil {
+		return a.net == net
+	}
+	return a.net.Net == net.Net
+}
+
+func contractPrefixForNet(params *chaincfg.Params) string {
+	if params != nil && params.Net == wire.MainNet {
+		return "ca"
+	}
+	return "tc"
+}
+
+func contractScriptToAddrs(payload []byte, params *chaincfg.Params) []btcutil.Address {
+	data, err := bech32.ConvertBits(payload, 8, 5, true)
+	if err != nil {
+		return nil
+	}
+	encoded, err := bech32.Encode(contractPrefixForNet(params), data)
+	if err != nil {
+		return nil
+	}
+	return []btcutil.Address{&addressContract{
+		encoded: encoded,
+		payload: payload,
+		net:     params,
+	}}
+}
+
 // ExtractPkScriptAddrs returns the type of script, addresses and required
 // signatures associated with the passed PkScript.  Note that it only works for
 // 'standard' transaction script types.  Any data such as public keys which are
@@ -1038,6 +1125,10 @@ func ExtractPkScriptAddrs(pkScript []byte,
 			addrs = append(addrs, addr)
 		}
 		return WitnessV1TaprootTy, addrs, 1, nil
+	}
+
+	if payload := extractContractScriptPayload(pkScript); payload != nil {
+		return ContractTy, contractScriptToAddrs(payload, chainParams), 0, nil
 	}
 
 	// If none of the above passed, then the address must be non-standard.

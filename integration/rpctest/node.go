@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
@@ -30,6 +31,7 @@ type nodeConfig struct {
 	profile    string
 	debugLevel string
 	extra      []string
+	env        []string
 	nodeDir    string
 
 	exe          string
@@ -37,6 +39,7 @@ type nodeConfig struct {
 	certFile     string
 	keyFile      string
 	certificates []byte
+	disableTLS   bool
 }
 
 // newConfig returns a newConfig with all default values.
@@ -83,6 +86,12 @@ func (n *nodeConfig) setDefaults() error {
 		return err
 	}
 	n.certificates = cert
+	for _, arg := range n.extra {
+		if arg == "--notls" || strings.HasPrefix(arg, "--notls=") {
+			n.disableTLS = true
+			break
+		}
+	}
 	return nil
 }
 
@@ -136,7 +145,11 @@ func (n *nodeConfig) arguments() []string {
 
 // command returns the exec.Cmd which will be used to start the btcd process.
 func (n *nodeConfig) command() *exec.Cmd {
-	return exec.Command(n.exe, n.arguments()...)
+	cmd := exec.Command(n.exe, n.arguments()...)
+	if len(n.env) > 0 {
+		cmd.Env = append(os.Environ(), n.env...)
+	}
+	return cmd
 }
 
 // rpcConnConfig returns the rpc connection config that can be used to connect
@@ -148,6 +161,7 @@ func (n *nodeConfig) rpcConnConfig() rpc.ConnConfig {
 		User:                 n.rpcUser,
 		Pass:                 n.rpcPass,
 		Certificates:         n.certificates,
+		DisableTLS:           n.disableTLS,
 		DisableAutoReconnect: true,
 	}
 }
@@ -164,6 +178,7 @@ type node struct {
 
 	cmd     *exec.Cmd
 	pidFile string
+	logFile *os.File
 
 	dataDir string
 }
@@ -185,7 +200,16 @@ func newNode(config *nodeConfig, dataDir string) (*node, error) {
 // test case, or panic, it is important that the process be stopped via stop(),
 // otherwise, it will persist unless explicitly killed.
 func (n *node) start() error {
+	logFile, err := os.Create(filepath.Join(n.dataDir, "btcd.stdout.log"))
+	if err != nil {
+		return err
+	}
+	n.logFile = logFile
+	n.cmd.Stdout = logFile
+	n.cmd.Stderr = logFile
 	if err := n.cmd.Start(); err != nil {
+		_ = logFile.Close()
+		n.logFile = nil
 		return err
 	}
 
@@ -215,7 +239,13 @@ func (n *node) stop() error {
 		// or error starting the process
 		return nil
 	}
-	defer n.cmd.Wait()
+	defer func() {
+		_ = n.cmd.Wait()
+		if n.logFile != nil {
+			_ = n.logFile.Close()
+			n.logFile = nil
+		}
+	}()
 	if runtime.GOOS == "windows" {
 		return n.cmd.Process.Signal(os.Kill)
 	}

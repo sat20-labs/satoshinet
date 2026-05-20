@@ -9,3 +9,4 @@ log/*
 addblock
 btcctl
 satsnet.conf
+integration/evme2e/data/

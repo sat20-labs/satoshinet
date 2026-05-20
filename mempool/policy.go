@@ -10,6 +10,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/evm"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -103,6 +104,20 @@ func checkInputsStandard(tx *btcutil.Tx, utxoView *blockchain.UtxoViewpoint) err
 		// function.
 		entry := utxoView.LookupEntry(txIn.PreviousOutPoint)
 		originPkScript := entry.PkScript()
+		if evm.IsContractPkScript(originPkScript) {
+			inputScripts, err := evmInputScripts(tx.MsgTx(), utxoView)
+			if err == nil {
+				_, err = evm.ValidateResultContractSpend(
+					tx.MsgTx(), inputScripts,
+					evm.TestnetContractPrefix)
+			}
+			if err != nil {
+				str := fmt.Sprintf("transaction input #%d spends an "+
+					"invalid EVM contract UTXO: %v", i, err)
+				return txRuleError(wire.RejectNonstandard, str)
+			}
+			continue
+		}
 		switch txscript.GetScriptClass(originPkScript) {
 		case txscript.ScriptHashTy:
 			numSigOps := txscript.GetPreciseSigOpCount(
@@ -123,6 +138,22 @@ func checkInputsStandard(tx *btcutil.Tx, utxoView *blockchain.UtxoViewpoint) err
 	}
 
 	return nil
+}
+
+func evmInputScripts(tx *wire.MsgTx, utxoView *blockchain.UtxoViewpoint) (map[evm.OutPoint][]byte, error) {
+	inputScripts := make(map[evm.OutPoint][]byte, len(tx.TxIn))
+	for i, txIn := range tx.TxIn {
+		if txIn == nil {
+			return nil, fmt.Errorf("nil input %d", i)
+		}
+		entry := utxoView.LookupEntry(txIn.PreviousOutPoint)
+		if entry == nil {
+			return nil, fmt.Errorf("missing input script for %v",
+				txIn.PreviousOutPoint)
+		}
+		inputScripts[evm.WireOutPointToEVM(txIn.PreviousOutPoint)] = entry.PkScript()
+	}
+	return inputScripts, nil
 }
 
 // checkPkScriptStandard performs a series of checks on a transaction output
@@ -341,7 +372,12 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 	// None of the output public key scripts can be a non-standard script or
 	// be "dust" (except when the script is a null data script).
 	// numNullDataOutputs := 0
+	hasEVMContractOutput := false
 	for i, txOut := range msgTx.TxOut {
+		if evm.IsContractPkScript(txOut.PkScript) {
+			hasEVMContractOutput = true
+			continue
+		}
 		scriptClass := txscript.GetScriptClass(txOut.PkScript)
 		err := checkPkScriptStandard(txOut.PkScript, scriptClass)
 		if err != nil {
@@ -367,6 +403,25 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 		// 		"dust: %v", i, txOut.Value)
 		// 	return txRuleError(wire.RejectDust, str)
 		// }
+	}
+	info, err := evm.ClassifyTxForBlockOrder(msgTx, evm.TestnetContractPrefix)
+	if err != nil {
+		return txRuleError(wire.RejectNonstandard,
+			fmt.Sprintf("malformed EVM transaction: %v", err))
+	}
+	if info.IsEVM {
+		switch info.Type {
+		case evm.TxTypeDeploy:
+			if !hasEVMContractOutput {
+				return txRuleError(wire.RejectNonstandard,
+					"EVM_DEPLOY has no contract funding output")
+			}
+		case evm.TxTypeInvoke:
+			if !hasEVMContractOutput {
+				return txRuleError(wire.RejectNonstandard,
+					"EVM_INVOKE has no contract funding output")
+			}
+		}
 	}
 
 	// satoshinet permission

@@ -82,7 +82,7 @@ type Config struct {
 	ProcessBlock func(*btcutil.Block, blockchain.BehaviorFlags) (bool, error)
 
 	GetPeerByValidatorId func(validatorId string) *peerpkg.Peer
-	GetRandomCorePeer func () *peerpkg.Peer
+	GetRandomCorePeer    func() *peerpkg.Peer
 
 	// ConnectedCount defines the function to use to obtain how many other
 	// peers the server is connected to.  This is used by the automatic
@@ -296,7 +296,7 @@ func (m *POSMiner) Start() error {
 		utils.Log.Errorf("NewValidatorManager failed")
 		return fmt.Errorf("NewValidatorManager failed")
 	}
-	
+
 	m.validatorMgr.Start()
 
 	m.started = true
@@ -422,6 +422,12 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 	//go m.speedMonitor()
 
 	m.Unlock()
+	defer func() {
+		m.Lock()
+		m.started = false
+		m.discreteMining = false
+		m.Unlock()
+	}()
 
 	utils.Log.Tracef("Generating %d blocks", n)
 
@@ -462,7 +468,7 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 		if err != nil {
 			errStr := fmt.Sprintf("Failed to create new block template: %v", err)
 			utils.Log.Warning(errStr)
-			continue
+			return nil, errors.New(errStr)
 		}
 
 		// Attempt to solve the block.  The function will exit early
@@ -476,12 +482,6 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 			i++
 			if i == n {
 				utils.Log.Tracef("Generated %d blocks", i)
-				m.Lock()
-				//close(m.speedMonitorQuit)
-				//m.wg.Wait()
-				m.started = false
-				m.discreteMining = false
-				m.Unlock()
 				return blockHashes, nil
 			}
 		}
@@ -657,7 +657,6 @@ func (m *POSMiner) GetBlockHash() chainhash.Hash {
 func (m *POSMiner) GetBlockRecvTime() int64 {
 	return m.g.BestSnapshot().RecvTime
 }
-
 
 func (m *POSMiner) GetMempoolTxSize() int32 {
 	if m.g == nil {

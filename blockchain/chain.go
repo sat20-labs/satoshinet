@@ -15,6 +15,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/database"
+	"github.com/sat20-labs/satoshinet/evm"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -105,6 +106,7 @@ type BlockChain struct {
 	sigCache            *txscript.SigCache
 	indexManager        IndexManager
 	assetIndexerMgr     *indexer.IndexerMgr
+	evmBlockValidator   EVMBlockValidator
 	hashCache           *txscript.HashCache
 
 	// The following fields are calculated based upon the provided chain
@@ -676,6 +678,15 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 			return err
 		}
 
+		if provider, ok := b.evmBlockValidator.(EVMBlockStateProvider); ok {
+			if postState, ok := provider.EVMBlockPostState(block.Hash()); ok {
+				err = dbStoreEVMBlockState(dbTx, block.Hash(), postState)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
 		// Allow the index manager to call each of the currently active
 		// optional indexes with the block being connected so they can
 		// update themselves accordingly.
@@ -817,6 +828,11 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 		// Update the transaction spend journal by removing the record
 		// that contains all txos spent by the block.
 		err = dbRemoveSpendJournalEntry(dbTx, block.Hash())
+		if err != nil {
+			return err
+		}
+
+		err = dbDeleteEVMBlockState(dbTx, block.Hash(), &prevNode.hash)
 		if err != nil {
 			return err
 		}
@@ -2118,6 +2134,18 @@ type IndexManager interface {
 	DisconnectBlock(database.Tx, *btcutil.Block, []SpentTxOut) error
 }
 
+// EVMBlockValidator validates SatoshiNet EVM execution and settlement for a
+// block after its input UTXOs have been loaded into the view.
+type EVMBlockValidator interface {
+	ValidateEVMBlock(block *btcutil.Block, view *UtxoViewpoint) error
+}
+
+// EVMBlockStateProvider is optionally implemented by an EVMBlockValidator that
+// can expose the post-state generated during block validation.
+type EVMBlockStateProvider interface {
+	EVMBlockPostState(hash *chainhash.Hash) (*evm.MemoryStateDB, bool)
+}
+
 // Config is a descriptor which specifies the blockchain instance configuration.
 type Config struct {
 	// DB defines the database which houses the blocks and will be used to
@@ -2177,6 +2205,11 @@ type Config struct {
 	IndexManager IndexManager
 
 	AssetIndexManager *indexer.IndexerMgr
+
+	// EVMBlockValidator optionally validates EVM execution, Result TX
+	// settlement, and coinbase state-root commitments during block
+	// connection.
+	EVMBlockValidator EVMBlockValidator
 
 	// HashCache defines a transaction hash mid-state cache to use when
 	// validating transactions. This cache has the potential to greatly
@@ -2238,6 +2271,7 @@ func New(config *Config) (*BlockChain, error) {
 		sigCache:            config.SigCache,
 		indexManager:        config.IndexManager,
 		assetIndexerMgr:     config.AssetIndexManager,
+		evmBlockValidator:   config.EVMBlockValidator,
 		minRetargetTimespan: targetTimespan / adjustmentFactor,
 		maxRetargetTimespan: targetTimespan * adjustmentFactor,
 		blocksPerRetarget:   int32(targetTimespan / targetTimePerBlock),

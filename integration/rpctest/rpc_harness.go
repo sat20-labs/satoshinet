@@ -117,6 +117,24 @@ type Harness struct {
 	sync.Mutex
 }
 
+func (h *Harness) IndexerURL(proxy string) (string, error) {
+	if h == nil || h.node == nil || h.node.config == nil {
+		return "", fmt.Errorf("harness is not initialized")
+	}
+	host, portText, err := net.SplitHostPort(h.node.config.rpcListen)
+	if err != nil {
+		return "", err
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return "", err
+	}
+	if proxy == "" {
+		proxy = "testnet"
+	}
+	return fmt.Sprintf("http://%s:%d/%s", host, port+1, proxy), nil
+}
+
 // New creates and initializes new instance of the rpc test harness.
 // Optionally, websocket handlers and a specified configuration may be passed.
 // In the case that a nil config is passed, a default configuration will be
@@ -126,6 +144,12 @@ type Harness struct {
 // NOTE: This function is safe for concurrent access.
 func New(activeNet *chaincfg.Params, handlers *rpcclient.NotificationHandlers,
 	extraArgs []string, customExePath string) (*Harness, error) {
+
+	return NewWithEnv(activeNet, handlers, extraArgs, customExePath, nil)
+}
+
+func NewWithEnv(activeNet *chaincfg.Params, handlers *rpcclient.NotificationHandlers,
+	extraArgs []string, customExePath string, env []string) (*Harness, error) {
 
 	harnessStateMtx.Lock()
 	defer harnessStateMtx.Unlock()
@@ -165,15 +189,13 @@ func New(activeNet *chaincfg.Params, handlers *rpcclient.NotificationHandlers,
 		return nil, err
 	}
 
-	miningAddr := fmt.Sprintf("--miningaddr=%s", wallet.coinbaseAddr)
-	extraArgs = append(extraArgs, miningAddr)
-
 	config, err := newConfig(
 		nodeTestData, certFile, keyFile, extraArgs, customExePath,
 	)
 	if err != nil {
 		return nil, err
 	}
+	config.env = append(config.env, env...)
 
 	// Generate p2p+rpc listening addresses.
 	config.listen, config.rpcListen = ListenAddressGenerator()
@@ -527,8 +549,14 @@ func (h *Harness) GenerateAndSubmitBlockWithCustomCoinbaseOutputs(
 // addresses with unique ports and should be used to overwrite rpctest's
 // default generator which is prone to use colliding ports.
 func generateListeningAddresses() (string, string) {
-	return fmt.Sprintf(ListenerFormat, NextAvailablePort()),
-		fmt.Sprintf(ListenerFormat, NextAvailablePort())
+	listenPort := NextAvailablePort()
+	rpcPort := NextAvailablePort()
+	// SatoshiNet starts the built-in L2 indexer RPC service on rpcPort+1.
+	// Reserve the next sequential port as well so the following harness node
+	// does not race with that implicit listener.
+	_ = NextAvailablePort()
+	return fmt.Sprintf(ListenerFormat, listenPort),
+		fmt.Sprintf(ListenerFormat, rpcPort)
 }
 
 // NextAvailablePort returns the first port that is available for listening by

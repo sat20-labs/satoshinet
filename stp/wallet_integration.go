@@ -4,7 +4,7 @@ package stp
 
 import (
 	"log"
-	"github.com/sat20-labs/satoshinet/wallet/sdk/plugin"
+	"github.com/sat20-labs/satoshinet/stp/wallet/plugin"
 )
 
 

@@ -896,16 +896,6 @@ func handleEstimateFee(s *rpcServer, cmd interface{}, closeChan <-chan struct{})
 
 // handleGenerate handles generate commands.
 func handleGenerate(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-	// Respond with an error if there are no addresses to pay the
-	// created blocks to.
-	if len(cfg.miningAddrs) == 0 {
-		return nil, &btcjson.RPCError{
-			Code: btcjson.ErrRPCInternal.Code,
-			Message: "No payment addresses specified " +
-				"via --miningaddr",
-		}
-	}
-
 	// Respond with an error if there's virtually 0 chance of mining a block
 	// with the CPU.
 	if !s.cfg.ChainParams.GenerateSupported {
@@ -1267,7 +1257,7 @@ func handleGetBlockChainInfo(s *rpcServer, cmd interface{}, closeChan <-chan str
 
 		case chaincfg.DeploymentTestDummyMinActivation:
 			forkName = "dummy-min-activation"
-			
+
 		case chaincfg.DeploymentCSV:
 			forkName = "csv"
 
@@ -4507,7 +4497,7 @@ func (s *rpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		errMsg := "webserver doesn't support hijacking"
-		rpcsLog.Warnf(errMsg)
+		rpcsLog.Warn(errMsg)
 		errCode := http.StatusInternalServerError
 		http.Error(w, strconv.Itoa(errCode)+" "+errMsg, errCode)
 		return
