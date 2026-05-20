@@ -67,7 +67,11 @@ const (
 	// version.
 	ContractAddressVersionV1 byte = 1
 
-	// ContractAddressPayloadLen is the encoded payload length:
+	// ContractAddressMinPayloadLen is the minimum encoded contract payload
+	// length: version(1) || contract type(1) || contract id.
+	ContractAddressMinPayloadLen = 3
+
+	// ContractAddressPayloadLen is the legacy EVM payload length:
 	// version(1) || contract type(1) || contract id(20).
 	ContractAddressPayloadLen = 22
 )
@@ -324,11 +328,12 @@ func decodeContractAddress(address string) (*AddressContract, error) {
 	return newAddressContract(hrp, data, true)
 }
 
-// AddressContract is an Address for a SatoshiNet contract output.  Its
-// payload is version(1) || contract type(1) || contract id(20).
+// AddressContract is an Address for a SatoshiNet contract output. Its payload
+// is version(1) || contract type(1) || contract id. Different contract types
+// may use different contract id lengths.
 type AddressContract struct {
 	prefix  string
-	payload [ContractAddressPayloadLen]byte
+	payload []byte
 }
 
 // NewAddressContract returns a new contract address for the passed network.
@@ -350,29 +355,43 @@ func NewAddressContractWithPrefix(payload []byte, prefix string) (*AddressContra
 	return newAddressContract(prefix, data, true)
 }
 
-// NewAddressContractFromHash returns a new contract address from individual
-// payload fields.
+// NewAddressContractFromHash returns a new legacy 20-byte contract address
+// from individual payload fields.
 func NewAddressContractFromHash(version, contractType byte, hash []byte,
 	net *chaincfg.Params) (*AddressContract, error) {
 
 	if len(hash) != ripemd160.Size {
 		return nil, errors.New("contract hash must be 20 bytes")
 	}
-	payload := make([]byte, 0, ContractAddressPayloadLen)
+	payload := make([]byte, 0, 2+len(hash))
 	payload = append(payload, version, contractType)
 	payload = append(payload, hash...)
 	return NewAddressContract(payload, net)
 }
 
-// NewAddressContractFromHashWithPrefix returns a new contract address from
-// individual payload fields and a human-readable prefix.
+// NewAddressContractFromHashWithPrefix returns a new legacy 20-byte contract
+// address from individual payload fields and a human-readable prefix.
 func NewAddressContractFromHashWithPrefix(version, contractType byte, hash []byte,
 	prefix string) (*AddressContract, error) {
 
 	if len(hash) != ripemd160.Size {
 		return nil, errors.New("contract hash must be 20 bytes")
 	}
-	payload := make([]byte, 0, ContractAddressPayloadLen)
+	payload := make([]byte, 0, 2+len(hash))
+	payload = append(payload, version, contractType)
+	payload = append(payload, hash...)
+	return NewAddressContractWithPrefix(payload, prefix)
+}
+
+// NewAddressContractFromPayloadHashWithPrefix returns a new contract address
+// from individual payload fields and a variable-length contract hash.
+func NewAddressContractFromPayloadHashWithPrefix(version, contractType byte, hash []byte,
+	prefix string) (*AddressContract, error) {
+
+	if len(hash) == 0 {
+		return nil, errors.New("contract hash must be non-empty")
+	}
+	payload := make([]byte, 0, 2+len(hash))
 	payload = append(payload, version, contractType)
 	payload = append(payload, hash...)
 	return NewAddressContractWithPrefix(payload, prefix)
@@ -392,8 +411,8 @@ func newAddressContract(prefix string, data []byte, encodedData bool) (*AddressC
 			return nil, err
 		}
 	}
-	if len(payload) != ContractAddressPayloadLen {
-		return nil, errors.New("contract address payload must be 22 bytes")
+	if len(payload) < ContractAddressMinPayloadLen {
+		return nil, errors.New("contract address payload too short")
 	}
 	if payload[0] != ContractAddressVersionV1 {
 		return nil, fmt.Errorf("unsupported contract address version: %d", payload[0])
@@ -402,14 +421,16 @@ func newAddressContract(prefix string, data []byte, encodedData bool) (*AddressC
 		return nil, errors.New("contract address type must be non-zero")
 	}
 
-	addr := &AddressContract{prefix: prefix}
-	copy(addr.payload[:], payload)
+	addr := &AddressContract{
+		prefix:  prefix,
+		payload: append([]byte(nil), payload...),
+	}
 	return addr, nil
 }
 
 // EncodeAddress returns the string encoding of a contract address.
 func (a *AddressContract) EncodeAddress() string {
-	data, err := bech32.ConvertBits(a.payload[:], 8, 5, true)
+	data, err := bech32.ConvertBits(a.payload, 8, 5, true)
 	if err != nil {
 		return ""
 	}
@@ -422,7 +443,7 @@ func (a *AddressContract) EncodeAddress() string {
 
 // Encode returns the string encoding of a contract address.
 func (a *AddressContract) Encode() (string, error) {
-	data, err := bech32.ConvertBits(a.payload[:], 8, 5, true)
+	data, err := bech32.ConvertBits(a.payload, 8, 5, true)
 	if err != nil {
 		return "", err
 	}
@@ -451,11 +472,14 @@ func (a *AddressContract) ContractHash() [ripemd160.Size]byte {
 	return hash
 }
 
-// ScriptAddress returns the 22-byte contract payload.
+// ContractHashBytes returns the variable-length contract id.
+func (a *AddressContract) ContractHashBytes() []byte {
+	return append([]byte(nil), a.payload[2:]...)
+}
+
+// ScriptAddress returns the contract payload.
 func (a *AddressContract) ScriptAddress() []byte {
-	out := make([]byte, ContractAddressPayloadLen)
-	copy(out, a.payload[:])
-	return out
+	return append([]byte(nil), a.payload...)
 }
 
 // IsForNet returns whether the contract address is associated with the passed
@@ -480,7 +504,7 @@ func (a *AddressContract) MustEncode() string {
 
 // Equal returns whether two contract addresses are equal.
 func (a *AddressContract) Equal(b AddressContract) bool {
-	return a.prefix == b.prefix && a.payload == b.payload
+	return a.prefix == b.prefix && bytes.Equal(a.payload, b.payload)
 }
 
 // Validate validates the contract address payload.

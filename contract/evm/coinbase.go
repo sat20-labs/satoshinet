@@ -3,7 +3,7 @@ package evm
 import (
 	"errors"
 
-	evmcommon "github.com/sat20-labs/satoshinet/evm/common"
+	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 

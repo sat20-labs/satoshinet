@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sat20-labs/satoshinet/evm"
-	evmcommon "github.com/sat20-labs/satoshinet/evm/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
+	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 

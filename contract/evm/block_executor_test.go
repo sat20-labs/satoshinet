@@ -5,7 +5,7 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	evmcommon "github.com/sat20-labs/satoshinet/evm/common"
+	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )

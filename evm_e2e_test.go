@@ -9,8 +9,8 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/database"
 	_ "github.com/sat20-labs/satoshinet/database/ffldb"
-	"github.com/sat20-labs/satoshinet/evm"
-	evmcommon "github.com/sat20-labs/satoshinet/evm/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
+	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )

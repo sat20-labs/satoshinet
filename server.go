@@ -37,7 +37,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
 	"github.com/sat20-labs/satoshinet/database"
-	"github.com/sat20-labs/satoshinet/evm"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	indexerEntry "github.com/sat20-labs/satoshinet/indexer"
 	sidxcommon "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"

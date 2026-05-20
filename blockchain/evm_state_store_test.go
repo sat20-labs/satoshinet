@@ -10,7 +10,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/database"
 	_ "github.com/sat20-labs/satoshinet/database/ffldb"
-	"github.com/sat20-labs/satoshinet/evm"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 

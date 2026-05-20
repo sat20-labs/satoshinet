@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/sat20-labs/satoshinet/evm"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/stretchr/testify/require"
 )
 

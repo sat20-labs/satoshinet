@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	scommon "github.com/sat20-labs/indexer/common"
-	evmcommon "github.com/sat20-labs/satoshinet/evm/common"
+	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 

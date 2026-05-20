@@ -14,8 +14,8 @@ import (
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/evm"
-	evmcommon "github.com/sat20-labs/satoshinet/evm/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
+	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )

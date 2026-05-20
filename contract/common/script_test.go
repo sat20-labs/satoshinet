@@ -28,6 +28,20 @@ func TestContractPkScriptRoundTrip(t *testing.T) {
 	require.True(t, IsContractPkScript(script))
 }
 
+func TestContractPkScriptRoundTripWithTemplateHash(t *testing.T) {
+	hash := sha256.Sum256([]byte("template contract"))
+	contract, err := NewContractAddressFromHash(TestnetContractPrefix, AddressVersionV1, ContractTypeTemplate, hash[:])
+	require.NoError(t, err)
+	script, err := ContractPkScript(contract)
+	require.NoError(t, err)
+
+	got, ok, err := ParseContractPkScript(script, TestnetContractPrefix)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.True(t, contract.Equal(got))
+	require.Equal(t, hash[:], ContractAddressHashBytes(got))
+}
+
 func TestInvokeNullDataScriptRoundTrip(t *testing.T) {
 	invoke := InvokePayload{GasLimit: 123, CallNonce: 4, Calldata: []byte{0xaa}}
 	script, err := InvokeNullDataScript(invoke)

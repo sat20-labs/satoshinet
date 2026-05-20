@@ -8,8 +8,8 @@ import (
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/evm"
-	evmcommon "github.com/sat20-labs/satoshinet/evm/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
+	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 

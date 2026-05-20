@@ -9,8 +9,6 @@ import (
 
 var contractScriptMagic = []byte("CT")
 
-const contractScriptPayloadLen = 22
-
 func ContractPkScript(contract ContractAddress) ([]byte, error) {
 	payload := contract.ScriptAddress()
 	return txscript.NewScriptBuilder().
@@ -24,23 +22,26 @@ func ContractPkScript(contract ContractAddress) ([]byte, error) {
 }
 
 func ParseContractPkScript(pkScript []byte, prefix string) (ContractAddress, bool, error) {
-	if len(pkScript) != 30 {
+	if len(pkScript) < 11 {
 		return ContractAddress{}, false, nil
 	}
 	if pkScript[0] != txscript.OP_FALSE ||
 		pkScript[1] != txscript.OP_IF ||
 		pkScript[2] != byte(len(contractScriptMagic)) ||
-		!bytes.Equal(pkScript[3:5], contractScriptMagic) ||
-		pkScript[5] != contractScriptPayloadLen ||
-		pkScript[28] != txscript.OP_ENDIF ||
-		pkScript[29] != txscript.OP_FALSE {
+		!bytes.Equal(pkScript[3:5], contractScriptMagic) {
+		return ContractAddress{}, false, nil
+	}
+	payloadLen := int(pkScript[5])
+	payloadStart := 6
+	payloadEnd := payloadStart + payloadLen
+	if payloadLen < 3 || len(pkScript) != payloadEnd+2 ||
+		pkScript[payloadEnd] != txscript.OP_ENDIF ||
+		pkScript[payloadEnd+1] != txscript.OP_FALSE {
 		return ContractAddress{}, false, nil
 	}
 
-	payload := pkScript[6:28]
-	var hash EVMAddress
-	copy(hash[:], payload[2:])
-	contract, err := NewContractAddress(prefix, payload[0], payload[1], hash)
+	payload := pkScript[payloadStart:payloadEnd]
+	contract, err := NewContractAddressFromHash(prefix, payload[0], payload[1], payload[2:])
 	if err != nil {
 		return ContractAddress{}, false, fmt.Errorf("invalid contract script payload: %w", err)
 	}

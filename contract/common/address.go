@@ -10,7 +10,11 @@ import (
 type ContractAddress = btcutil.AddressContract
 
 func NewContractAddress(prefix string, version, typ byte, hash EVMAddress) (ContractAddress, error) {
-	addr, err := btcutil.NewAddressContractFromHashWithPrefix(version, typ, hash[:], prefix)
+	return NewContractAddressFromHash(prefix, version, typ, hash[:])
+}
+
+func NewContractAddressFromHash(prefix string, version, typ byte, hash []byte) (ContractAddress, error) {
+	addr, err := btcutil.NewAddressContractFromPayloadHashWithPrefix(version, typ, hash, prefix)
 	if err != nil {
 		return ContractAddress{}, err
 	}
@@ -31,4 +35,8 @@ func DecodeContractAddress(s string) (ContractAddress, error) {
 
 func ContractAddressHash(contract ContractAddress) EVMAddress {
 	return EVMAddress(contract.ContractHash())
+}
+
+func ContractAddressHashBytes(contract ContractAddress) []byte {
+	return contract.ContractHashBytes()
 }
