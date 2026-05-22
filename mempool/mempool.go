@@ -22,6 +22,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -1830,6 +1831,10 @@ func (mp *TxPool) isEVMTx(tx *btcutil.Tx) bool {
 	prefix := evm.TestnetContractPrefix
 	if mp.cfg.ChainParams != nil {
 		prefix = evm.ContractPrefixForNet(mp.cfg.ChainParams.Net)
+	}
+	templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
+	if templateErr == nil && templateInfo.IsTemplate {
+		return true
 	}
 	info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
 	return err == nil && info.IsEVM

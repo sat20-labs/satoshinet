@@ -544,7 +544,7 @@ func (m *POSMiner) GenerateNewTestBlock() (*chainhash.Hash, int32, error) {
 	curHeight := m.g.BestSnapshot().Height
 	if curHeight != 0 && !m.cfg.IsCurrent() {
 		time.Sleep(time.Second)
-		utils.Log.Tracef("curHeight = %d and not current %d.", curHeight, m.cfg.IsCurrent())
+		utils.Log.Tracef("curHeight = %d and not current %v.", curHeight, m.cfg.IsCurrent())
 		err := fmt.Errorf("the blockchain is not best chain")
 		return nil, 0, err
 	}

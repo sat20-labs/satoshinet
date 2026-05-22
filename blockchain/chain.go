@@ -14,8 +14,9 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	"github.com/sat20-labs/satoshinet/contract/template"
+	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -98,16 +99,17 @@ type BlockChain struct {
 	// The following fields are set when the instance is created and can't
 	// be changed afterwards, so there is no need to protect them with a
 	// separate mutex.
-	checkpoints         []chaincfg.Checkpoint
-	checkpointsByHeight map[int32]*chaincfg.Checkpoint
-	db                  database.DB
-	chainParams         *chaincfg.Params
-	timeSource          MedianTimeSource
-	sigCache            *txscript.SigCache
-	indexManager        IndexManager
-	assetIndexerMgr     *indexer.IndexerMgr
-	evmBlockValidator   EVMBlockValidator
-	hashCache           *txscript.HashCache
+	checkpoints            []chaincfg.Checkpoint
+	checkpointsByHeight    map[int32]*chaincfg.Checkpoint
+	db                     database.DB
+	chainParams            *chaincfg.Params
+	timeSource             MedianTimeSource
+	sigCache               *txscript.SigCache
+	indexManager           IndexManager
+	assetIndexerMgr        *indexer.IndexerMgr
+	evmBlockValidator      EVMBlockValidator
+	templateBlockValidator TemplateBlockValidator
+	hashCache              *txscript.HashCache
 
 	// The following fields are calculated based upon the provided chain
 	// parameters.  They are also set when the instance is created and
@@ -686,6 +688,14 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 				}
 			}
 		}
+		if provider, ok := b.templateBlockValidator.(TemplateBlockStateProvider); ok {
+			if postState, ok := provider.TemplateBlockPostState(block.Hash()); ok {
+				err = dbStoreTemplateBlockState(dbTx, block.Hash(), postState)
+				if err != nil {
+					return err
+				}
+			}
+		}
 
 		// Allow the index manager to call each of the currently active
 		// optional indexes with the block being connected so they can
@@ -833,6 +843,10 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 		}
 
 		err = dbDeleteEVMBlockState(dbTx, block.Hash(), &prevNode.hash)
+		if err != nil {
+			return err
+		}
+		err = dbDeleteTemplateBlockState(dbTx, block.Hash(), &prevNode.hash)
 		if err != nil {
 			return err
 		}
@@ -2146,6 +2160,19 @@ type EVMBlockStateProvider interface {
 	EVMBlockPostState(hash *chainhash.Hash) (*evm.MemoryStateDB, bool)
 }
 
+// TemplateBlockValidator validates SatoshiNet template contract execution and
+// settlement for a block after its input UTXOs have been loaded into the view.
+type TemplateBlockValidator interface {
+	ValidateTemplateBlock(block *btcutil.Block, view *UtxoViewpoint) error
+}
+
+// TemplateBlockStateProvider is optionally implemented by a
+// TemplateBlockValidator that can expose the post-state generated during block
+// validation.
+type TemplateBlockStateProvider interface {
+	TemplateBlockPostState(hash *chainhash.Hash) (*template.RuntimeStore, bool)
+}
+
 // Config is a descriptor which specifies the blockchain instance configuration.
 type Config struct {
 	// DB defines the database which houses the blocks and will be used to
@@ -2211,6 +2238,11 @@ type Config struct {
 	// connection.
 	EVMBlockValidator EVMBlockValidator
 
+	// TemplateBlockValidator optionally validates template contract execution,
+	// Result TX settlement, and coinbase state-root commitments during block
+	// connection.
+	TemplateBlockValidator TemplateBlockValidator
+
 	// HashCache defines a transaction hash mid-state cache to use when
 	// validating transactions. This cache has the potential to greatly
 	// speed up transaction validation as re-using the pre-calculated
@@ -2263,27 +2295,28 @@ func New(config *Config) (*BlockChain, error) {
 	targetTimePerBlock := int64(params.TargetTimePerBlock / time.Second)
 	adjustmentFactor := params.RetargetAdjustmentFactor
 	b := BlockChain{
-		checkpoints:         config.Checkpoints,
-		checkpointsByHeight: checkpointsByHeight,
-		db:                  config.DB,
-		chainParams:         params,
-		timeSource:          config.TimeSource,
-		sigCache:            config.SigCache,
-		indexManager:        config.IndexManager,
-		assetIndexerMgr:     config.AssetIndexManager,
-		evmBlockValidator:   config.EVMBlockValidator,
-		minRetargetTimespan: targetTimespan / adjustmentFactor,
-		maxRetargetTimespan: targetTimespan * adjustmentFactor,
-		blocksPerRetarget:   int32(targetTimespan / targetTimePerBlock),
-		index:               newBlockIndex(config.DB, params),
-		utxoCache:           newUtxoCache(config.DB, config.UtxoCacheMaxSize),
-		hashCache:           config.HashCache,
-		bestChain:           newChainView(nil),
-		orphans:             make(map[chainhash.Hash]*orphanBlock),
-		prevOrphans:         make(map[chainhash.Hash][]*orphanBlock),
-		warningCaches:       newThresholdCaches(vbNumBits),
-		deploymentCaches:    newThresholdCaches(chaincfg.DefinedDeployments),
-		pruneTarget:         config.Prune,
+		checkpoints:            config.Checkpoints,
+		checkpointsByHeight:    checkpointsByHeight,
+		db:                     config.DB,
+		chainParams:            params,
+		timeSource:             config.TimeSource,
+		sigCache:               config.SigCache,
+		indexManager:           config.IndexManager,
+		assetIndexerMgr:        config.AssetIndexManager,
+		evmBlockValidator:      config.EVMBlockValidator,
+		templateBlockValidator: config.TemplateBlockValidator,
+		minRetargetTimespan:    targetTimespan / adjustmentFactor,
+		maxRetargetTimespan:    targetTimespan * adjustmentFactor,
+		blocksPerRetarget:      int32(targetTimespan / targetTimePerBlock),
+		index:                  newBlockIndex(config.DB, params),
+		utxoCache:              newUtxoCache(config.DB, config.UtxoCacheMaxSize),
+		hashCache:              config.HashCache,
+		bestChain:              newChainView(nil),
+		orphans:                make(map[chainhash.Hash]*orphanBlock),
+		prevOrphans:            make(map[chainhash.Hash][]*orphanBlock),
+		warningCaches:          newThresholdCaches(vbNumBits),
+		deploymentCaches:       newThresholdCaches(chaincfg.DefinedDeployments),
+		pruneTarget:            config.Prune,
 	}
 
 	// Ensure all the deployments are synchronized with our clock if

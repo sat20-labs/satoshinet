@@ -15,11 +15,36 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/contract/evm"
 	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
+
+func TestBlockHasEVMWorkIgnoresTemplateTransactions(t *testing.T) {
+	tx, _, err := tmplcontract.BuildDeployTx(tmplcontract.DeployTxBuildRequest{
+		ContractPrefix: tmplcontract.TestnetContractPrefix,
+		Contract:       tmplcontract.NewLimitOrderContract("ordx:f:test"),
+		Deployer:       "miner-test",
+		Random:         []byte("miner-template-random"),
+		GasLimit:       1000,
+		Funding: tmplcontract.TxFunding{
+			Value: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildDeployTx: %v", err)
+	}
+
+	txs := []*btcutil.Tx{btcutil.NewTx(tx)}
+	if !blockHasTemplateWork(txs, &chaincfg.TestNetParams) {
+		t.Fatal("expected template deploy to be classified as template work")
+	}
+	if blockHasEVMWork(txs, &chaincfg.TestNetParams) {
+		t.Fatal("template deploy must not be classified as EVM work")
+	}
+}
 
 // TestTxFeePrioHeap ensures the priority queue for transaction fees and
 // priorities works as expected.

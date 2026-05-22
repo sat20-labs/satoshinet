@@ -9,6 +9,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -37,6 +38,7 @@ type EVMBlockExecutionConfig struct {
 	ResolveResultOutput evm.ResultOutputResolver
 	ResolveTriggers     evm.TriggerResolver
 	VerifyResult        evm.ResultVerifier
+	SkipStateRootVerify bool
 }
 
 // EVMBlockExecutionValidator validates EVM transaction replay, Result TX
@@ -93,7 +95,30 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 	runtime.ContractPrefix = prefix
 
 	blockTxs := make([]*wire.MsgTx, 0, len(txs)-1)
+	templatePrefix := tmplcontract.TestnetContractPrefix
+	if v.cfg.ChainParams != nil {
+		templatePrefix = tmplcontract.ContractPrefixForNet(v.cfg.ChainParams.Net)
+	}
+	hasTemplateWork := blockContainsTemplateWork(block, v.cfg.ChainParams)
+	resultTxCount := 0
 	for _, tx := range txs[1:] {
+		info, err := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
+		if err == nil && info.IsTemplate && info.Type == tmplcontract.TxTypeResult {
+			resultTxCount++
+		}
+	}
+	skipTemplateResult := hasTemplateWork && resultTxCount > 1
+	for _, tx := range txs[1:] {
+		if isTemplateContractTx(tx.MsgTx(), v.cfg.ChainParams) {
+			info, _ := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
+			if info.Type != tmplcontract.TxTypeResult {
+				continue
+			}
+			if skipTemplateResult {
+				skipTemplateResult = false
+				continue
+			}
+		}
 		blockTxs = append(blockTxs, tx.MsgTx())
 	}
 	contractOverlay, err := v.blockContractOverlay(blockTxs, prefix, block.Height())
@@ -113,7 +138,7 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		ResolveTriggers: v.cfg.ResolveTriggers,
 	}
 	var result evm.BlockExecutionResult
-	if hasRoot {
+	if hasRoot && !v.cfg.SkipStateRootVerify {
 		result, err = evm.ExecuteBlockAndVerifyStateRoot(req)
 	} else {
 		result, err = evm.ExecuteBlock(req)
@@ -178,7 +203,15 @@ func (v *EVMBlockExecutionValidator) scanEVMWork(block *btcutil.Block, prefix st
 
 	hasExecution := false
 	needsCaller := false
+	templatePrefix := tmplcontract.TestnetContractPrefix
+	if v.cfg.ChainParams != nil {
+		templatePrefix = tmplcontract.ContractPrefixForNet(v.cfg.ChainParams.Net)
+	}
 	for i, tx := range txs[1:] {
+		templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
+		if templateErr == nil && templateInfo.IsTemplate && templateInfo.Type != tmplcontract.TxTypeResult {
+			continue
+		}
 		info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
 		if err != nil {
 			return false, false, false, evmBlockRuleError(

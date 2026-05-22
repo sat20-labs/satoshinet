@@ -256,11 +256,22 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 		"SATOSHINET_RPCTEST_NODE_ROLE=" + role,
 		"SATOSHINET_RPCTEST_STP_MNEMONIC=" + mnemonic,
 	}
+	for _, name := range []string{
+		"SATOSHINET_POS_MINER_INTERVAL",
+		"SATOSHINET_POS_PREWARNING_INTERVAL",
+		"SATOSHINET_POS_CHECKING_INTERVAL",
+	} {
+		if value := os.Getenv(name); value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
 	r, err := rpctest.NewWithEnv(&chaincfg.TestNetParams, nil, btcdCfg, "", env)
 	require.NoError(t, err)
 	r.MaxConnRetries = 200
 	r.ConnectionRetryTimeout = 100 * time.Millisecond
 	require.NoError(t, r.SetUp(false, 0))
+	t.Logf("started %s node: pid=%d rpc=%s p2p=%s log=%s",
+		role, r.NodePID(), r.RPCAddress(), r.P2PAddress(), r.LogFile())
 	t.Cleanup(func() {
 		require.NoError(t, r.TearDown())
 	})

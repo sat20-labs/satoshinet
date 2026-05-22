@@ -14,7 +14,9 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 
 	"github.com/sat20-labs/satoshinet/stp"
@@ -91,6 +93,7 @@ type txPrioItem struct {
 	feePerKB  int64
 	feeAssets wire.TxAssets
 	evmTx     bool
+	evmFamily int
 	evmType   evm.TxType
 	evmGas    uint64
 
@@ -195,6 +198,9 @@ func txPQByEVMOrdering(pq *txPriorityQueue, i, j int) (bool, bool) {
 	if !left.evmTx {
 		return false, false
 	}
+	if left.evmFamily != right.evmFamily {
+		return left.evmFamily < right.evmFamily, true
+	}
 	if left.evmGas != right.evmGas {
 		return left.evmGas > right.evmGas, true
 	}
@@ -235,8 +241,20 @@ func evmContractPrefix(params *chaincfg.Params) string {
 }
 
 func evmMiningInfo(tx *wire.MsgTx, contractPrefix string) (bool, evm.TxType, uint64) {
+	isContract, _, txType, gas := contractMiningInfo(tx, contractPrefix)
+	return isContract, txType, gas
+}
+
+func contractMiningInfo(tx *wire.MsgTx, contractPrefix string) (bool, int, evm.TxType, uint64) {
+	templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx, contractPrefix)
+	if templateErr == nil && templateInfo.IsTemplate {
+		return true, 1, evm.TxType(templateInfo.Type), templateInfo.GasLimit
+	}
 	info, err := evm.ClassifyTxForBlockOrder(tx, contractPrefix)
-	return err == nil && info.IsEVM, info.Type, info.GasLimit
+	if err == nil && info.IsEVM {
+		return true, 2, info.Type, info.GasLimit
+	}
+	return false, 0, info.Type, info.GasLimit
 }
 
 func shouldSkipLowFeeTx(prioItem *txPrioItem, sortedByFee bool, blockPlusTxWeight uint32, policy *Policy) bool {
@@ -630,7 +648,7 @@ mempoolLoop:
 		// other transactions in the mempool so they can be properly
 		// ordered below.
 		prioItem := &txPrioItem{tx: tx}
-		prioItem.evmTx, prioItem.evmType, prioItem.evmGas = evmMiningInfo(
+		prioItem.evmTx, prioItem.evmFamily, prioItem.evmType, prioItem.evmGas = contractMiningInfo(
 			tx.MsgTx(), contractPrefix)
 		for _, txIn := range tx.MsgTx().TxIn {
 			originHash := &txIn.PreviousOutPoint.Hash
@@ -715,10 +733,10 @@ mempoolLoop:
 		// depending on the sort order) transaction.
 		prioItem := heap.Pop(priorityQueue).(*txPrioItem)
 		tx := prioItem.tx
-		if g.policy.EVMResultBuilder != nil && prioItem.evmTx &&
+		if (g.policy.EVMResultBuilder != nil || g.policy.TemplateResultBuilder != nil) && prioItem.evmTx &&
 			prioItem.evmType == evm.TxTypeResult {
 
-			log.Debugf("Skipping mempool EVM_RESULT tx %s; "+
+			log.Debugf("Skipping mempool contract RESULT tx %s; "+
 				"template will generate canonical results", tx.Hash())
 			continue
 		}
@@ -896,14 +914,19 @@ mempoolLoop:
 	}
 
 	ts := medianAdjustedTime(best, g.timeSource)
-	if g.policy.EVMResultBuilder != nil {
+	hasTemplateWork := blockHasTemplateWork(blockTxns[1:], g.chainParams)
+	hasEVMWork := blockHasEVMWork(blockTxns[1:], g.chainParams)
+	var templateStateRoot [32]byte
+	var evmStateRoot [32]byte
+	if g.policy.TemplateResultBuilder != nil && hasTemplateWork {
 		addedWeight, addedSigOps, resultTxFees, resultTxSigOps,
-			addedFees, addedFeeAssets, err := g.addEVMResultsToTemplate(
+			addedFees, addedFeeAssets, err := g.addTemplateResultsToTemplate(
 			&blockTxns, coinbaseTx, blockUtxos, nextBlockHeight,
 			best.Hash, ts, segwitActive, blockWeight, blockSigOpCost)
 		if err != nil {
 			return nil, err
 		}
+		templateStateRoot = coinbaseContractStateRoot(coinbaseTx)
 		blockWeight += addedWeight
 		blockSigOpCost += addedSigOps
 		totalFees += addedFees
@@ -912,6 +935,31 @@ mempoolLoop:
 		}
 		txFees = append(txFees, resultTxFees...)
 		txSigOpCosts = append(txSigOpCosts, resultTxSigOps...)
+	}
+	if g.policy.EVMResultBuilder != nil && hasEVMWork {
+		addedWeight, addedSigOps, resultTxFees, resultTxSigOps,
+			addedFees, addedFeeAssets, err := g.addEVMResultsToTemplate(
+			&blockTxns, coinbaseTx, blockUtxos, nextBlockHeight,
+			best.Hash, ts, segwitActive, blockWeight, blockSigOpCost)
+		if err != nil {
+			return nil, err
+		}
+		evmStateRoot = coinbaseContractStateRoot(coinbaseTx)
+		blockWeight += addedWeight
+		blockSigOpCost += addedSigOps
+		totalFees += addedFees
+		if len(addedFeeAssets) > 0 {
+			totalFeeAssets.Merge(addedFeeAssets)
+		}
+		txFees = append(txFees, resultTxFees...)
+		txSigOpCosts = append(txSigOpCosts, resultTxSigOps...)
+	}
+	if templateStateRoot != [32]byte{} || evmStateRoot != [32]byte{} {
+		combinedRoot := contractcommon.CombineStateRoots(templateStateRoot, evmStateRoot)
+		if err := evm.UpsertCoinbaseStateRoot(coinbaseTx.MsgTx(), combinedRoot); err != nil {
+			return nil, err
+		}
+		coinbaseTx.ClearHashCache()
 	}
 
 	if len(blockTxns) <= 1 {
@@ -1064,6 +1112,130 @@ func (g *BlkTmplGenerator) addEVMResultsToTemplate(blockTxns *[]*btcutil.Tx,
 		}
 	}
 	return weightAdded, sigOpsAdded, txFeesAdded, txSigOpsAdded, feesAdded, feeAssetsAdded, nil
+}
+
+func coinbaseContractStateRoot(coinbaseTx *btcutil.Tx) [32]byte {
+	if coinbaseTx == nil {
+		return [32]byte{}
+	}
+	payload, found, err := evm.FindCoinbaseStateRoot(coinbaseTx.MsgTx())
+	if err != nil || !found {
+		return [32]byte{}
+	}
+	return payload.StateRoot
+}
+
+func (g *BlkTmplGenerator) addTemplateResultsToTemplate(blockTxns *[]*btcutil.Tx,
+	coinbaseTx *btcutil.Tx, blockUtxos *blockchain.UtxoViewpoint,
+	nextBlockHeight int32, prevHash chainhash.Hash, timestamp time.Time, segwitActive bool,
+	currentWeight uint32, currentSigOps int64) (
+	uint32, int64, []int64, []int64, int64, wire.TxAssets, error) {
+
+	buildResult, err := g.policy.TemplateResultBuilder(TemplateContractBuildRequest{
+		Txs:        (*blockTxns)[1:],
+		CoinbaseTx: coinbaseTx,
+		Height:     nextBlockHeight,
+		PrevHash:   prevHash,
+		Timestamp:  timestamp,
+	})
+	if err != nil {
+		return 0, 0, nil, nil, 0, nil, err
+	}
+	if len(buildResult.ResultTxs) == 0 && buildResult.StateRoot == [32]byte{} {
+		return 0, 0, nil, nil, 0, nil, nil
+	}
+
+	coinbaseWeightBefore := blockchain.GetTransactionWeight(coinbaseTx)
+	if err := tmplcontract.UpsertCoinbaseStateRoot(coinbaseTx.MsgTx(), buildResult.StateRoot); err != nil {
+		return 0, 0, nil, nil, 0, nil, err
+	}
+	coinbaseTx.ClearHashCache()
+	weightAdded := uint32(blockchain.GetTransactionWeight(coinbaseTx) -
+		coinbaseWeightBefore)
+
+	var sigOpsAdded int64
+	var feesAdded int64
+	txFeesAdded := make([]int64, 0, len(buildResult.ResultTxs))
+	txSigOpsAdded := make([]int64, 0, len(buildResult.ResultTxs))
+	feeAssetsAdded := wire.TxAssets{}
+	for _, msgTx := range buildResult.ResultTxs {
+		tx := btcutil.NewTx(msgTx)
+		if err := mergeMissingEVMResultUtxos(blockUtxos, tx, g.fetchUtxoView); err != nil {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("template RESULT fetch utxos: %w", err)
+		}
+		txWeight := uint32(blockchain.GetTransactionWeight(tx))
+		if currentWeight+weightAdded+txWeight >= g.policy.BlockMaxWeight {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("template RESULT transactions exceed block max weight")
+		}
+		sigOpCost, err := blockchain.GetSigOpCost(tx, false,
+			blockUtxos, true, segwitActive)
+		if err != nil {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("template RESULT sigops: %w", err)
+		}
+		if currentSigOps+sigOpsAdded+int64(sigOpCost) > blockchain.MaxBlockSigOpsCost {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("template RESULT transactions exceed block sigops limit")
+		}
+		txFee, feeAssets, err := blockchain.CheckTransactionInputs(tx, true,
+			nextBlockHeight, blockUtxos, g.chainParams)
+		if err != nil {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("template RESULT inputs: %w", err)
+		}
+		if err := blockchain.ValidateTransactionScripts(tx, blockUtxos,
+			txscript.StandardVerifyFlags, g.sigCache, g.hashCache); err != nil {
+			return 0, 0, nil, nil, 0, nil, fmt.Errorf("template RESULT scripts: %w", err)
+		}
+		spendTransaction(blockUtxos, tx, nextBlockHeight)
+		*blockTxns = append(*blockTxns, tx)
+		weightAdded += txWeight
+		sigOpsAdded += int64(sigOpCost)
+		feesAdded += txFee
+		txFeesAdded = append(txFeesAdded, txFee)
+		txSigOpsAdded = append(txSigOpsAdded, int64(sigOpCost))
+		if len(feeAssets) > 0 {
+			feeAssetsAdded.Merge(feeAssets)
+		}
+	}
+	return weightAdded, sigOpsAdded, txFeesAdded, txSigOpsAdded, feesAdded, feeAssetsAdded, nil
+}
+
+func blockHasTemplateWork(txs []*btcutil.Tx, params *chaincfg.Params) bool {
+	prefix := tmplcontract.TestnetContractPrefix
+	if params != nil {
+		prefix = tmplcontract.ContractPrefixForNet(params.Net)
+	}
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		info, err := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
+		if err == nil && info.IsTemplate && info.Type != tmplcontract.TxTypeCoinbaseStateRoot {
+			return true
+		}
+	}
+	return false
+}
+
+func blockHasEVMWork(txs []*btcutil.Tx, params *chaincfg.Params) bool {
+	prefix := evm.TestnetContractPrefix
+	templatePrefix := tmplcontract.TestnetContractPrefix
+	if params != nil {
+		prefix = evm.ContractPrefixForNet(params.Net)
+		templatePrefix = tmplcontract.ContractPrefixForNet(params.Net)
+	}
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
+		if templateErr == nil && templateInfo.IsTemplate {
+			continue
+		}
+		info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
+		if err == nil && info.IsEVM && info.Type != evm.TxTypeCoinbaseStateRoot {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *BlkTmplGenerator) fetchUtxoView(tx *btcutil.Tx) (*blockchain.UtxoViewpoint, error) {

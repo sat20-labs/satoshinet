@@ -135,6 +135,27 @@ func (h *Harness) IndexerURL(proxy string) (string, error) {
 	return fmt.Sprintf("http://%s:%d/%s", host, port+1, proxy), nil
 }
 
+func (h *Harness) NodePID() int {
+	if h == nil || h.node == nil || h.node.cmd == nil || h.node.cmd.Process == nil {
+		return 0
+	}
+	return h.node.cmd.Process.Pid
+}
+
+func (h *Harness) RPCAddress() string {
+	if h == nil || h.node == nil || h.node.config == nil {
+		return ""
+	}
+	return h.node.config.rpcListen
+}
+
+func (h *Harness) LogFile() string {
+	if h == nil || h.node == nil || h.node.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(h.node.dataDir, "btcd.stdout.log")
+}
+
 // New creates and initializes new instance of the rpc test harness.
 // Optionally, websocket handlers and a specified configuration may be passed.
 // In the case that a nil config is passed, a default configuration will be

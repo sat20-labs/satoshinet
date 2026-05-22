@@ -690,6 +690,14 @@ func TestPayToAddrScript(t *testing.T) {
 		t.Fatalf("Unable to create contract address: %v", err)
 	}
 
+	templateContractAddr, err := btcutil.NewAddressContract(
+		append([]byte{btcutil.ContractAddressVersionV1, 1}, bytes.Repeat([]byte{0x22}, 32)...),
+		&chaincfg.MainNetParams,
+	)
+	if err != nil {
+		t.Fatalf("Unable to create template contract address: %v", err)
+	}
+
 	// Errors used in the tests below defined here for convenience and to
 	// keep the horizontal test size shorter.
 	errUnsupportedAddress := scriptError(ErrUnsupportedAddress, "")
@@ -760,6 +768,12 @@ func TestPayToAddrScript(t *testing.T) {
 		{
 			contractAddr,
 			"OP_0 OP_IF DATA_2 0x4354 DATA_22 0x010200112233445566778899aabbccddeeff00112233 OP_ENDIF OP_0",
+			nil,
+		},
+		// variable-length contract address on mainnet.
+		{
+			templateContractAddr,
+			"OP_0 OP_IF DATA_2 0x4354 DATA_34 0x01012222222222222222222222222222222222222222222222222222222222222222 OP_ENDIF OP_0",
 			nil,
 		},
 
@@ -1251,6 +1265,40 @@ func TestExtractPkScriptAddrsContract(t *testing.T) {
 	}
 	if !addrs[0].IsForNet(&chaincfg.TestNetParams) {
 		t.Fatal("contract address should match testnet params")
+	}
+	if GetScriptClass(script) != ContractTy {
+		t.Fatalf("unexpected script class %v", GetScriptClass(script))
+	}
+}
+
+func TestExtractPkScriptAddrsVariableLengthContract(t *testing.T) {
+	t.Parallel()
+
+	payload := append([]byte{0x01, 0x01}, bytes.Repeat([]byte{0x22}, 32)...)
+	script := []byte{
+		OP_FALSE,
+		OP_IF,
+		OP_DATA_2, 'C', 'T',
+		byte(len(payload)),
+	}
+	script = append(script, payload...)
+	script = append(script, OP_ENDIF, OP_FALSE)
+
+	class, addrs, reqSigs, err := ExtractPkScriptAddrs(script, &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if class != ContractTy {
+		t.Fatalf("unexpected class %v", class)
+	}
+	if reqSigs != 0 {
+		t.Fatalf("unexpected required sigs %d", reqSigs)
+	}
+	if len(addrs) != 1 {
+		t.Fatalf("unexpected address count %d", len(addrs))
+	}
+	if !bytes.Equal(addrs[0].ScriptAddress(), payload) {
+		t.Fatalf("unexpected contract script address %x", addrs[0].ScriptAddress())
 	}
 	if GetScriptClass(script) != ContractTy {
 		t.Fatalf("unexpected script class %v", GetScriptClass(script))

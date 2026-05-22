@@ -36,8 +36,9 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
-	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
+	"github.com/sat20-labs/satoshinet/database"
 	indexerEntry "github.com/sat20-labs/satoshinet/indexer"
 	sidxcommon "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
@@ -3132,21 +3133,30 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	if err != nil {
 		return nil, err
 	}
+	templateValidator, err := newTemplateBlockValidator(s.db, s.chainParams, assetIndexer)
+	if err != nil {
+		return nil, err
+	}
+	templateResultBuilder, err := newTemplateContractResultBuilder(s.db, s.chainParams, assetIndexer)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create a new block chain instance with the appropriate configuration.
 	s.chain, err = blockchain.New(&blockchain.Config{
-		DB:                s.db,
-		Interrupt:         interrupt,
-		ChainParams:       s.chainParams,
-		Checkpoints:       checkpoints,
-		TimeSource:        s.timeSource,
-		SigCache:          s.sigCache,
-		IndexManager:      indexManager,
-		AssetIndexManager: assetIndexer,
-		EVMBlockValidator: evmValidator,
-		HashCache:         s.hashCache,
-		Prune:             cfg.Prune * 1024 * 1024,
-		UtxoCacheMaxSize:  uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
+		DB:                     s.db,
+		Interrupt:              interrupt,
+		ChainParams:            s.chainParams,
+		Checkpoints:            checkpoints,
+		TimeSource:             s.timeSource,
+		SigCache:               s.sigCache,
+		IndexManager:           indexManager,
+		AssetIndexManager:      assetIndexer,
+		EVMBlockValidator:      evmValidator,
+		TemplateBlockValidator: templateValidator,
+		HashCache:              s.hashCache,
+		Prune:                  cfg.Prune * 1024 * 1024,
+		UtxoCacheMaxSize:       uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
 	})
 	if err != nil {
 		return nil, err
@@ -3229,13 +3239,14 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	// NOTE: The CPU miner relies on the mempool, so the mempool has to be
 	// created before calling the function to create the CPU miner.
 	policy := mining.Policy{
-		BlockMinWeight:    cfg.BlockMinWeight,
-		BlockMaxWeight:    cfg.BlockMaxWeight,
-		BlockMinSize:      cfg.BlockMinSize,
-		BlockMaxSize:      cfg.BlockMaxSize,
-		BlockPrioritySize: cfg.BlockPrioritySize,
-		TxMinFreeFee:      cfg.minRelayTxFee,
-		EVMResultBuilder:  evmResultBuilder,
+		BlockMinWeight:        cfg.BlockMinWeight,
+		BlockMaxWeight:        cfg.BlockMaxWeight,
+		BlockMinSize:          cfg.BlockMinSize,
+		BlockMaxSize:          cfg.BlockMaxSize,
+		BlockPrioritySize:     cfg.BlockPrioritySize,
+		TxMinFreeFee:          cfg.minRelayTxFee,
+		EVMResultBuilder:      evmResultBuilder,
+		TemplateResultBuilder: templateResultBuilder,
 	}
 	blockTemplateGenerator := mining.NewBlkTmplGenerator(&policy,
 		s.chainParams, s.txMemPool, s.chain, s.timeSource,
@@ -3429,12 +3440,13 @@ func newEVMBlockValidator(db database.DB, params *chaincfg.Params, assetIndexer 
 	btcdLog.Infof("EVM validation is enabled, gas asset=%s fixed gas price=%d",
 		gasConfig.GasAssetName, gasConfig.FixedGasPrice)
 	return blockchain.NewEVMBlockExecutionValidator(blockchain.EVMBlockExecutionConfig{
-		ChainParams:      params,
-		GasConfig:        gasConfig,
-		NewRuntime:       stateStore.RuntimeFactory(),
-		ResolveCaller:    evm.LastInputCallerResolver,
-		ContractUTXOs:    evmContractUTXOProvider(assetIndexer),
-		ResolveRecipient: evmScriptRecipientResolver(params),
+		ChainParams:         params,
+		GasConfig:           gasConfig,
+		NewRuntime:          stateStore.RuntimeFactory(),
+		ResolveCaller:       evm.LastInputCallerResolver,
+		ContractUTXOs:       evmContractUTXOProvider(assetIndexer),
+		ResolveRecipient:    evmScriptRecipientResolver(params),
+		SkipStateRootVerify: true,
 	}), nil
 }
 
@@ -3449,8 +3461,10 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 	contractUTXOs := evmContractUTXOProvider(assetIndexer)
 	resolveScript := evmResultScriptResolver(params)
 	contractPrefix := evm.TestnetContractPrefix
+	templatePrefix := tmplcontract.TestnetContractPrefix
 	if params != nil {
 		contractPrefix = evm.ContractPrefixForNet(params.Net)
+		templatePrefix = tmplcontract.ContractPrefixForNet(params.Net)
 	}
 	resolveOutput := func(resultTx *wire.MsgTx) ([]evm.ResultOutput, error) {
 		return evm.ResultOutputsFromTx(resultTx, contractPrefix,
@@ -3468,8 +3482,34 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 			return mining.EVMTemplateBuildResult{}, err
 		}
 		txs := make([]*wire.MsgTx, 0, len(req.Txs))
+		hasTemplateWork := false
+		resultTxCount := 0
 		for _, tx := range req.Txs {
-			txs = append(txs, tx.MsgTx())
+			msgTx := tx.MsgTx()
+			templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(msgTx, templatePrefix)
+			if templateErr == nil && templateInfo.IsTemplate {
+				if templateInfo.Type == tmplcontract.TxTypeResult {
+					resultTxCount++
+				} else {
+					hasTemplateWork = true
+				}
+			}
+		}
+		skipTemplateResult := hasTemplateWork && resultTxCount > 1
+		for _, tx := range req.Txs {
+			msgTx := tx.MsgTx()
+			templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(msgTx, templatePrefix)
+			if templateErr == nil && templateInfo.IsTemplate {
+				if templateInfo.Type != tmplcontract.TxTypeResult {
+					skipTemplateResult = true
+					continue
+				}
+				if skipTemplateResult {
+					skipTemplateResult = false
+					continue
+				}
+			}
+			txs = append(txs, msgTx)
 		}
 		result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 			Txs:            txs,
@@ -3493,6 +3533,83 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 		return mining.EVMTemplateBuildResult{
 			ResultTxs: result.ResultTxs,
 			StateRoot: result.Execution.StateRoot,
+		}, nil
+	}, nil
+}
+
+func newTemplateBlockValidator(db database.DB, params *chaincfg.Params,
+	assetIndexer *indexer.IndexerMgr) (blockchain.TemplateBlockValidator, error) {
+
+	gasConfig := tmplcontract.DefaultGasConfig()
+	if err := gasConfig.Validate(); err != nil {
+		return nil, err
+	}
+	stateStore := blockchain.NewTemplateStateStore(db)
+	contractPrefix := tmplcontract.TestnetContractPrefix
+	if params != nil {
+		contractPrefix = tmplcontract.ContractPrefixForNet(params.Net)
+	}
+	btcdLog.Infof("Template contract validation is enabled, gas asset=%s", gasConfig.GasAssetName)
+	return blockchain.NewTemplateBlockExecutionValidator(blockchain.TemplateBlockExecutionConfig{
+		ChainParams:         params,
+		ContractPrefix:      contractPrefix,
+		GasConfig:           gasConfig,
+		Registry:            tmplcontract.NewDefaultRegistry(),
+		NewRuntime:          stateStore.RuntimeFactory(),
+		ResolveInvoker:      tmplcontract.LastInputInvokerResolver(params),
+		ResolveOutput:       templateResultOutputResolver(params, contractPrefix),
+		ContractUTXOs:       templateContractUTXOProvider(assetIndexer),
+		SkipStateRootVerify: true,
+	}), nil
+}
+
+func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
+	assetIndexer *indexer.IndexerMgr) (mining.TemplateContractResultBuilder, error) {
+
+	gasConfig := tmplcontract.DefaultGasConfig()
+	if err := gasConfig.Validate(); err != nil {
+		return nil, err
+	}
+	stateStore := blockchain.NewTemplateStateStore(db)
+	contractPrefix := tmplcontract.TestnetContractPrefix
+	if params != nil {
+		contractPrefix = tmplcontract.ContractPrefixForNet(params.Net)
+	}
+	resolveOutput := templateResultOutputResolver(params, contractPrefix)
+	return func(req mining.TemplateContractBuildRequest) (mining.TemplateContractBuildResult, error) {
+		parentBlock := btcutil.NewBlock(&wire.MsgBlock{
+			Header: wire.BlockHeader{
+				PrevBlock: req.PrevHash,
+				Timestamp: req.Timestamp,
+			},
+		})
+		store, err := stateStore.RuntimeFactory()(parentBlock, nil)
+		if err != nil {
+			return mining.TemplateContractBuildResult{}, err
+		}
+		txs := make([]*wire.MsgTx, 0, len(req.Txs))
+		for _, tx := range req.Txs {
+			txs = append(txs, tx.MsgTx())
+		}
+		result, err := tmplcontract.BuildBlockResultTxs(tmplcontract.BlockResultBuildRequest{
+			Txs:            txs,
+			Store:          store,
+			Registry:       tmplcontract.NewDefaultRegistry(),
+			ContractPrefix: contractPrefix,
+			GasConfig:      gasConfig,
+			ContractUTXOs:  templateContractUTXOProvider(assetIndexer),
+			BlockHeight:    int64(req.Height),
+			ResolveInvoker: tmplcontract.LastInputInvokerResolver(params),
+			ResolveScript:  templateResultScriptResolver(params),
+			ResolveOutput:  resolveOutput,
+		})
+		if err != nil {
+			return mining.TemplateContractBuildResult{}, err
+		}
+		return mining.TemplateContractBuildResult{
+			ResultTxs: result.ResultTxs,
+			StateRoot: result.Execution.StateRoot,
+			Execution: result.Execution,
 		}, nil
 	}, nil
 }
@@ -3563,6 +3680,74 @@ func evmResultScriptResolver(params *chaincfg.Params) evm.ResultRecipientScriptR
 			return nil, err
 		}
 		return txscript.PayToAddrScript(addr)
+	}
+}
+
+func templateContractUTXOProvider(assetIndexer *indexer.IndexerMgr) tmplcontract.ContractUTXOProvider {
+	if assetIndexer == nil {
+		return nil
+	}
+	return func(contract tmplcontract.ContractAddress) ([]tmplcontract.UTXO, error) {
+		address := contract.MustEncode()
+		byAsset := assetIndexer.GetAssetUTXOsInAddress(address)
+		utxos := make([]tmplcontract.UTXO, 0)
+		seen := make(map[string]struct{})
+		for _, outputs := range byAsset {
+			for _, output := range outputs {
+				if output == nil {
+					continue
+				}
+				if _, ok := seen[output.OutPointStr]; ok {
+					continue
+				}
+				seen[output.OutPointStr] = struct{}{}
+				outpoint, err := wire.NewOutPointFromString(output.OutPointStr)
+				if err != nil {
+					return nil, err
+				}
+				if output.OutValue.Value < 0 {
+					return nil, fmt.Errorf("negative template contract output value")
+				}
+				utxos = append(utxos, tmplcontract.UTXO{
+					OutPoint: tmplcontract.WireOutPointToTemplate(*outpoint),
+					Contract: contract,
+					Value:    output.OutValue.Value,
+					Assets:   output.OutValue.Assets.Clone(),
+					Height:   int64(output.Height()),
+				})
+			}
+		}
+		return utxos, nil
+	}
+}
+
+func templateScriptRecipientResolver(params *chaincfg.Params) tmplcontract.ScriptRecipientResolver {
+	return func(pkScript []byte) (string, bool, error) {
+		address, err := sidxcommon.GetBTCAddressFromPkScript(pkScript, params)
+		if err != nil {
+			return "", false, nil
+		}
+		return address, true, nil
+	}
+}
+
+func templateResultScriptResolver(params *chaincfg.Params) tmplcontract.ResultRecipientScriptResolver {
+	return func(output tmplcontract.ResultOutput) ([]byte, error) {
+		if contract, err := tmplcontract.DecodeContractAddress(output.To); err == nil {
+			return tmplcontract.ContractPkScript(contract)
+		}
+		addr, err := btcutil.DecodeAddress(output.To, params)
+		if err != nil {
+			return nil, err
+		}
+		return txscript.PayToAddrScript(addr)
+	}
+}
+
+func templateResultOutputResolver(params *chaincfg.Params, contractPrefix string) tmplcontract.ResultOutputResolver {
+	return func(resultTx *wire.MsgTx) ([]tmplcontract.ResultOutput, error) {
+		return tmplcontract.ResultOutputsFromTx(resultTx, contractPrefix,
+			templateScriptRecipientResolver(params))
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -52,6 +53,10 @@ type Policy struct {
 	// EVMResultBuilder optionally appends canonical EVM_RESULT transactions
 	// and returns the EVM state root to commit in the coinbase.
 	EVMResultBuilder EVMTemplateResultBuilder
+
+	// TemplateResultBuilder optionally appends canonical template RESULT
+	// transactions and returns the template state root to commit in the coinbase.
+	TemplateResultBuilder TemplateContractResultBuilder
 }
 
 type EVMTemplateBuildRequest struct {
@@ -68,6 +73,22 @@ type EVMTemplateBuildResult struct {
 }
 
 type EVMTemplateResultBuilder func(EVMTemplateBuildRequest) (EVMTemplateBuildResult, error)
+
+type TemplateContractBuildRequest struct {
+	Txs        []*btcutil.Tx
+	CoinbaseTx *btcutil.Tx
+	Height     int32
+	PrevHash   chainhash.Hash
+	Timestamp  time.Time
+}
+
+type TemplateContractBuildResult struct {
+	ResultTxs []*wire.MsgTx
+	StateRoot [32]byte
+	Execution tmplcontract.BlockExecutionResult
+}
+
+type TemplateContractResultBuilder func(TemplateContractBuildRequest) (TemplateContractBuildResult, error)
 
 // minInt is a helper function to return the minimum of two ints.  This avoids
 // a math import and the need to cast to floats.

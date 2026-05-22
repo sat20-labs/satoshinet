@@ -239,17 +239,36 @@ func (n *node) stop() error {
 		// or error starting the process
 		return nil
 	}
-	defer func() {
-		_ = n.cmd.Wait()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- n.cmd.Wait()
 		if n.logFile != nil {
 			_ = n.logFile.Close()
 			n.logFile = nil
 		}
 	}()
+
 	if runtime.GOOS == "windows" {
-		return n.cmd.Process.Signal(os.Kill)
+		_ = n.cmd.Process.Signal(os.Kill)
+		return <-waitDone
 	}
-	return n.cmd.Process.Signal(os.Interrupt)
+
+	if err := n.cmd.Process.Signal(os.Interrupt); err != nil {
+		return err
+	}
+
+	select {
+	case err := <-waitDone:
+		return err
+	case <-time.After(10 * time.Second):
+		log.Printf("btcd process %d did not exit after interrupt; killing",
+			n.cmd.Process.Pid)
+		if err := n.cmd.Process.Signal(os.Kill); err != nil {
+			return err
+		}
+		return <-waitDone
+	}
 }
 
 // cleanup cleanups process and args files. The file housing the pid of the

@@ -2,7 +2,7 @@ package template
 
 import "fmt"
 
-type Factory func() Runtime
+type Factory func() Contract
 
 type Registry struct {
 	factories map[string]Factory
@@ -26,7 +26,20 @@ func (r *Registry) Register(templateName string, factory Factory) error {
 	return nil
 }
 
-func (r *Registry) NewRuntime(templateName string) (Runtime, error) {
+func NewDefaultRegistry() *Registry {
+	r := NewRegistry()
+	mustRegister(r, TemplateLimitOrder, func() Contract { return NewLimitOrderContract("") })
+	mustRegister(r, TemplateAMM, func() Contract { return NewAMMContract("", "", 0, "") })
+	return r
+}
+
+func mustRegister(r *Registry, templateName string, factory Factory) {
+	if err := r.Register(templateName, factory); err != nil {
+		panic(err)
+	}
+}
+
+func (r *Registry) NewContract(templateName string) (Contract, error) {
 	factory, ok := r.factories[templateName]
 	if !ok {
 		return nil, fmt.Errorf("unknown template %s", templateName)

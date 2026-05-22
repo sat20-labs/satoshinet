@@ -29,14 +29,25 @@
             "program": "${workspaceFolder}/integration/evme2e",
             "buildFlags": "-tags=rpctest -mod=mod",
             "env": {
-                "SATOSHINET_EVM_NETWORK_E2E": "1"
+                "SATOSHINET_EVM_NETWORK_E2E": "1",
+                "SATOSHINET_TEMPLATE_NETWORK_E2E": "1",
+                 "SATOSHINET_POS_MINER_INTERVAL": "1",
+                "SATOSHINET_POS_PREWARNING_INTERVAL": "1",
+                "SATOSHINET_POS_CHECKING_INTERVAL": "1"
             },
             "args": [
-                "-test.run", "^TestNetworkAscendFromFakeL1Indexer$",
+                "-test.run", "^TestNetworkTemplateLimitOrderLargeBuyFilledBySmallSells$",
                 "-test.count=1",
-                "-test.timeout=180s",
+               // "-test.timeout=180s",
                 "-test.v"
             ]
+        },
+        {
+            "name": "Attach bootstrap node",
+            "type": "go",
+            "request": "attach",
+            "mode": "local",
+            "processId": 23384
         },
         {
             "name": "satsnet_client",

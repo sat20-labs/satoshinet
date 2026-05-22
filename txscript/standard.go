@@ -476,22 +476,24 @@ func isWitnessTaprootScript(script []byte) bool {
 
 var contractScriptMagic = []byte("CT")
 
-const contractScriptPayloadLen = 22
-
 func extractContractScriptPayload(script []byte) []byte {
-	if len(script) != 30 {
+	if len(script) < 11 {
 		return nil
 	}
 	if script[0] != OP_FALSE ||
 		script[1] != OP_IF ||
 		script[2] != byte(len(contractScriptMagic)) ||
-		string(script[3:5]) != string(contractScriptMagic) ||
-		script[5] != contractScriptPayloadLen ||
-		script[28] != OP_ENDIF ||
-		script[29] != OP_FALSE {
+		string(script[3:5]) != string(contractScriptMagic) {
 		return nil
 	}
-	payload := script[6:28]
+	payloadLen := int(script[5])
+	if payloadLen < btcutil.ContractAddressMinPayloadLen ||
+		len(script) != payloadLen+8 ||
+		script[6+payloadLen] != OP_ENDIF ||
+		script[7+payloadLen] != OP_FALSE {
+		return nil
+	}
+	payload := script[6 : 6+payloadLen]
 	if payload[0] != 1 || payload[1] == 0 {
 		return nil
 	}
@@ -861,12 +863,16 @@ func payToWitnessTaprootScript(rawKey []byte) ([]byte, error) {
 	return NewScriptBuilder().AddOp(OP_1).AddData(rawKey).Script()
 }
 
-// payToContractScript creates a contract output script from a 22-byte
-// contract address payload.
+// payToContractScript creates a contract output script from a contract address
+// payload.
 func payToContractScript(payload []byte) ([]byte, error) {
-	if len(payload) != contractScriptPayloadLen {
+	if len(payload) < btcutil.ContractAddressMinPayloadLen || len(payload) >= OP_PUSHDATA1 {
 		return nil, scriptError(ErrUnsupportedAddress,
-			"contract address payload must be 22 bytes")
+			"invalid contract address payload length")
+	}
+	if payload[0] != btcutil.ContractAddressVersionV1 || payload[1] == 0 {
+		return nil, scriptError(ErrUnsupportedAddress,
+			"invalid contract address payload")
 	}
 	return NewScriptBuilder().
 		AddOp(OP_FALSE).
