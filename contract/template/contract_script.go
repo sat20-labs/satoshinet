@@ -13,6 +13,13 @@ type ContractScriptResolver func(pkScript []byte) (ContractAddress, bool, error)
 
 func StandardContractScriptResolver(prefix string) ContractScriptResolver {
 	return func(pkScript []byte) (ContractAddress, bool, error) {
-		return ParseContractPkScript(pkScript, prefix)
+		addr, ok, err := ParseContractPkScript(pkScript, prefix)
+		if err != nil || !ok {
+			return addr, ok, err
+		}
+		if addr.ContractType() != ContractTypeTemplate {
+			return ContractAddress{}, false, nil
+		}
+		return addr, true, nil
 	}
 }

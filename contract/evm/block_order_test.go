@@ -19,6 +19,7 @@ func TestClassifyTxForBlockOrder(t *testing.T) {
 	deployTx := wire.NewMsgTx(2)
 	deployTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0}})
 	deployTx.AddTxOut(&wire.TxOut{PkScript: deployScript})
+	deployTx.AddTxOut(wire.NewTxOut(0, nil, testContractScript(testContract(t))))
 
 	info, err := ClassifyTxForBlockOrder(deployTx, TestnetContractPrefix)
 	if err != nil {

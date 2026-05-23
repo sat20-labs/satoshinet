@@ -152,6 +152,7 @@ func testTemplateDeployTx(t *testing.T, contract Contract) (*wire.MsgTx, Contrac
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, nil, testTemplateContractScript(addr)))
 	return tx, addr
 }
 

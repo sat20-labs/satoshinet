@@ -982,7 +982,13 @@ func (b *BlockChain) reorganizeChain(detachNodes, attachNodes *list.List) error 
 		forkNode = newBest
 	}
 
-	b.assetIndexerMgr.DisconnectBlock(int(forkNode.height))
+	disconnectTo := newBest
+	if forkNode != nil {
+		disconnectTo = forkNode
+	}
+	if disconnectTo != nil {
+		b.assetIndexerMgr.DisconnectBlock(int(disconnectTo.height))
+	}
 
 	// Connect the new best chain blocks using the utxocache directly.  It's more
 	// efficient and since we already checked that the blocks are correct and that

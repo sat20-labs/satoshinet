@@ -30,6 +30,10 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string) (TxOrderInfo
 	}
 	switch parsed.Type {
 	case TxTypeDeploy:
+		hasOutput, err := hasEVMContractOutput(tx, contractPrefix)
+		if err != nil || !hasOutput {
+			return TxOrderInfo{}, err
+		}
 		if parsed.Deploy != nil {
 			info.GasLimit = parsed.Deploy.GasLimit
 		}
@@ -39,4 +43,18 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string) (TxOrderInfo
 		}
 	}
 	return info, nil
+}
+
+func hasEVMContractOutput(tx *wire.MsgTx, contractPrefix string) (bool, error) {
+	resolver := StandardContractScriptResolver(contractPrefix)
+	for _, txOut := range tx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		_, ok, err := resolver(txOut.PkScript)
+		if err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
 }

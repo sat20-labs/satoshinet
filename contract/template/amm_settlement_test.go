@@ -170,6 +170,72 @@ func TestSettleAMMWaitsUntilPoolMeetsK(t *testing.T) {
 	require.Len(t, plan.Deals, 1)
 }
 
+func TestSettleAMMAddLiquidityCanMakePoolReady(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	addr := runtime.Address()
+	err := runtime.ApplyFunding([]ContractOutput{{
+		OutPoint: OutPoint{TxID: "deploy", Vout: 1},
+		Contract: addr,
+		Value:    20,
+		Assets:   testAsset("ordx:f:test", 90),
+	}}, "")
+	require.NoError(t, err)
+
+	buyParam, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeBuy,
+		AssetName: "ordx:f:test",
+		Amt:       "1",
+		UnitPrice: "10",
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action: InvokeAPISwap,
+		Param:  buyParam,
+		CallID: DeriveInvokeCallID("buy", 1, addr),
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "buy", Vout: 1},
+			Contract: addr,
+			Value:    20,
+		}},
+		Height: 1,
+	})
+	require.NoError(t, err)
+	plan, err := runtime.SettleBlock(1)
+	require.NoError(t, err)
+	require.Empty(t, plan.Deals)
+
+	addParam, err := (&AddLiquidityInvokeParam{
+		OrderType: OrderTypeAddLiquidity,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		Value:     1,
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action: InvokeAPIAddLiquidity,
+		Param:  addParam,
+		CallID: DeriveInvokeCallID("add", 1, addr),
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "add", Vout: 1},
+			Contract: addr,
+			Value:    1,
+			Assets:   testAsset("ordx:f:test", 10),
+		}},
+		Height: 2,
+	})
+	require.NoError(t, err)
+
+	plan, err = runtime.SettleBlock(2)
+	require.NoError(t, err)
+	require.Len(t, plan.Deals, 1)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.True(t, state.Running.TradingReady)
+	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+	require.Equal(t, ItemStatusDealt, state.Items[1].Done)
+}
+
 func TestSettleAMMDoesNotRecheckInitialKAfterReady(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	addr := runtime.Address()

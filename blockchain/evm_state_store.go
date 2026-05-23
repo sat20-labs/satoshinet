@@ -7,8 +7,8 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	"github.com/sat20-labs/satoshinet/database"
 )
 
 var (
@@ -179,7 +179,15 @@ func (s *EVMStateStore) RuntimeFactory() EVMRuntimeFactory {
 		prevHash := block.MsgBlock().Header.PrevBlock
 		state, err := s.LoadBlockState(&prevHash)
 		if errors.Is(err, ErrEVMStateNotFound) {
-			state = evm.NewMemoryStateDB()
+			_, tipState, tipErr := s.LoadTip()
+			if tipErr != nil {
+				return nil, tipErr
+			}
+			if tipState != nil {
+				state = tipState
+			} else {
+				state = evm.NewMemoryStateDB()
+			}
 		} else if err != nil {
 			return nil, err
 		}

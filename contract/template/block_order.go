@@ -35,10 +35,18 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string) (TxOrderInfo
 		if err != nil {
 			return TxOrderInfo{}, err
 		}
+		hasOutput, err := hasTemplateContractOutput(tx, contractPrefix)
+		if err != nil || !hasOutput {
+			return TxOrderInfo{}, err
+		}
 		info.GasLimit = deploy.GasLimit
 	case TxTypeInvoke:
 		invoke, err := DecodeInvokePayload(payload)
 		if err != nil {
+			return TxOrderInfo{}, err
+		}
+		hasOutput, err := hasTemplateContractOutput(tx, contractPrefix)
+		if err != nil || !hasOutput {
 			return TxOrderInfo{}, err
 		}
 		info.GasLimit = invoke.GasLimit
@@ -76,4 +84,18 @@ func classifyTemplatePayload(tx *wire.MsgTx) (TxType, []byte, bool, error) {
 		return 0, nil, false, nil
 	}
 	return txType, payload, true, nil
+}
+
+func hasTemplateContractOutput(tx *wire.MsgTx, contractPrefix string) (bool, error) {
+	resolver := StandardContractScriptResolver(contractPrefix)
+	for _, txOut := range tx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		_, ok, err := resolver(txOut.PkScript)
+		if err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
 }

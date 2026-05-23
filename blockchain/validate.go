@@ -1687,7 +1687,8 @@ func blockContainsTemplateWork(block *btcutil.Block, params *chaincfg.Params) bo
 			continue
 		}
 		info, err := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
-		if err == nil && info.IsTemplate && info.Type != tmplcontract.TxTypeCoinbaseStateRoot {
+		if err == nil && info.IsTemplate &&
+			(info.Type == tmplcontract.TxTypeDeploy || info.Type == tmplcontract.TxTypeInvoke) {
 			return true
 		}
 	}
@@ -1722,7 +1723,8 @@ func blockContainsEVMWork(block *btcutil.Block, params *chaincfg.Params) bool {
 			continue
 		}
 		info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
-		if err == nil && info.IsEVM && info.Type != evm.TxTypeCoinbaseStateRoot {
+		if err == nil && info.IsEVM &&
+			(info.Type == evm.TxTypeDeploy || info.Type == evm.TxTypeInvoke) {
 			return true
 		}
 	}

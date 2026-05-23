@@ -6,8 +6,8 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
-	"github.com/sat20-labs/satoshinet/contract/evm"
 	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -35,6 +35,15 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 	deploy := wire.NewMsgTx(2)
 	deploy.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 1}})
 	deploy.AddTxOut(&wire.TxOut{PkScript: deployScript})
+	contract, err := evm.NewContractAddress(evm.TestnetContractPrefix, evm.AddressVersionV1, evm.ContractTypeEVM, evm.EVMAddress{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractOut, err := evm.NewContractTxOut(0, nil, contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy.AddTxOut(contractOut)
 
 	validBlock := btcutil.NewBlock(&wire.MsgBlock{
 		Transactions: []*wire.MsgTx{coinbase, ordinary, deploy},

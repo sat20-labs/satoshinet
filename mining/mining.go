@@ -1054,7 +1054,7 @@ func (g *BlkTmplGenerator) addEVMResultsToTemplate(blockTxns *[]*btcutil.Tx,
 		Timestamp:  timestamp,
 	})
 	if err != nil {
-		return 0, 0, nil, nil, 0, nil, err
+		return 0, 0, nil, nil, 0, nil, fmt.Errorf("EVM result builder: %w", err)
 	}
 	if len(buildResult.ResultTxs) == 0 && buildResult.StateRoot == [32]byte{} {
 		return 0, 0, nil, nil, 0, nil, nil
@@ -1139,7 +1139,7 @@ func (g *BlkTmplGenerator) addTemplateResultsToTemplate(blockTxns *[]*btcutil.Tx
 		Timestamp:  timestamp,
 	})
 	if err != nil {
-		return 0, 0, nil, nil, 0, nil, err
+		return 0, 0, nil, nil, 0, nil, fmt.Errorf("template result builder: %w", err)
 	}
 	if len(buildResult.ResultTxs) == 0 && buildResult.StateRoot == [32]byte{} {
 		return 0, 0, nil, nil, 0, nil, nil
@@ -1208,7 +1208,8 @@ func blockHasTemplateWork(txs []*btcutil.Tx, params *chaincfg.Params) bool {
 			continue
 		}
 		info, err := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
-		if err == nil && info.IsTemplate && info.Type != tmplcontract.TxTypeCoinbaseStateRoot {
+		if err == nil && info.IsTemplate &&
+			(info.Type == tmplcontract.TxTypeDeploy || info.Type == tmplcontract.TxTypeInvoke) {
 			return true
 		}
 	}
@@ -1231,7 +1232,8 @@ func blockHasEVMWork(txs []*btcutil.Tx, params *chaincfg.Params) bool {
 			continue
 		}
 		info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
-		if err == nil && info.IsEVM && info.Type != evm.TxTypeCoinbaseStateRoot {
+		if err == nil && info.IsEVM &&
+			(info.Type == evm.TxTypeDeploy || info.Type == evm.TxTypeInvoke) {
 			return true
 		}
 	}

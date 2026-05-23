@@ -121,7 +121,15 @@ func (s *TemplateStateStore) RuntimeFactory() TemplateRuntimeFactory {
 		prevHash := block.MsgBlock().Header.PrevBlock
 		store, err := s.LoadBlockState(&prevHash)
 		if errors.Is(err, ErrTemplateStateNotFound) {
-			store = template.NewRuntimeStore()
+			_, tipStore, tipErr := s.LoadTip()
+			if tipErr != nil {
+				return nil, tipErr
+			}
+			if tipStore != nil {
+				store = tipStore
+			} else {
+				store = template.NewRuntimeStore()
+			}
 		} else if err != nil {
 			return nil, err
 		}

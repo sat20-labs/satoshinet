@@ -132,15 +132,23 @@ func (r *ContractRuntime) settleAMM(height int64) (*SettlementPlan, error) {
 		return a.ID < b.ID
 	})
 
-	poolAsset := parseDecimalOrZero(state.Running.AssetAmtInPool)
-	if !state.Running.TradingReady {
-		return plan, nil
-	}
 	changed, err := applyAMMLiquidity(&state, plan)
 	if err != nil {
 		return nil, err
 	}
-	poolAsset = parseDecimalOrZero(state.Running.AssetAmtInPool)
+	if !state.Running.TradingReady {
+		state.Running.TradingReady = state.Running.ammTradingReady()
+	}
+	if !state.Running.TradingReady {
+		if changed {
+			recomputeRunningDataPreservePool(&state, state.Running.AssetAmtInPool, state.Running.SatValueInPool)
+			if err := r.saveRuntimeState(state); err != nil {
+				return nil, err
+			}
+		}
+		return plan, nil
+	}
+	poolAsset := parseDecimalOrZero(state.Running.AssetAmtInPool)
 	poolGas := state.Running.SatValueInPool
 	for _, id := range itemIDs {
 		item := &state.Items[id]

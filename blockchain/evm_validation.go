@@ -99,23 +99,17 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 	if v.cfg.ChainParams != nil {
 		templatePrefix = tmplcontract.ContractPrefixForNet(v.cfg.ChainParams.Net)
 	}
-	hasTemplateWork := blockContainsTemplateWork(block, v.cfg.ChainParams)
-	resultTxCount := 0
-	for _, tx := range txs[1:] {
-		info, err := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
-		if err == nil && info.IsTemplate && info.Type == tmplcontract.TxTypeResult {
-			resultTxCount++
-		}
+	evmFundingOutpoints, err := collectEVMFundingOutpoints(txs[1:], prefix, templatePrefix)
+	if err != nil {
+		return err
 	}
-	skipTemplateResult := hasTemplateWork && resultTxCount > 1
 	for _, tx := range txs[1:] {
 		if isTemplateContractTx(tx.MsgTx(), v.cfg.ChainParams) {
 			info, _ := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
 			if info.Type != tmplcontract.TxTypeResult {
 				continue
 			}
-			if skipTemplateResult {
-				skipTemplateResult = false
+			if !resultSpendsAnyOutpoint(tx.MsgTx(), evmFundingOutpoints) {
 				continue
 			}
 		}
@@ -218,14 +212,58 @@ func (v *EVMBlockExecutionValidator) scanEVMWork(block *btcutil.Block, prefix st
 				"malformed EVM transaction %v at index %d: %v",
 				tx.Hash(), i+1, err)
 		}
-		if info.IsEVM && info.Type != evm.TxTypeCoinbaseStateRoot {
+		if info.IsEVM && (info.Type == evm.TxTypeDeploy || info.Type == evm.TxTypeInvoke) {
 			hasExecution = true
-			if info.Type == evm.TxTypeDeploy || info.Type == evm.TxTypeInvoke {
-				needsCaller = true
-			}
+			needsCaller = true
 		}
 	}
 	return hasRoot, hasExecution, needsCaller, nil
+}
+
+func collectEVMFundingOutpoints(txs []*btcutil.Tx, evmPrefix, templatePrefix string) (map[wire.OutPoint]struct{}, error) {
+	outpoints := make(map[wire.OutPoint]struct{})
+	resolver := evm.StandardContractScriptResolver(evmPrefix)
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		msgTx := tx.MsgTx()
+		templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(msgTx, templatePrefix)
+		if templateErr == nil && templateInfo.IsTemplate && templateInfo.Type != tmplcontract.TxTypeResult {
+			continue
+		}
+		info, err := evm.ClassifyTxForBlockOrder(msgTx, evmPrefix)
+		if err != nil || !info.IsEVM || (info.Type != evm.TxTypeDeploy && info.Type != evm.TxTypeInvoke) {
+			continue
+		}
+		hash := msgTx.TxHash()
+		for i, txOut := range msgTx.TxOut {
+			if txOut == nil {
+				continue
+			}
+			if _, ok, err := resolver(txOut.PkScript); err != nil {
+				return nil, evmBlockRuleError("parse EVM contract output: %v", err)
+			} else if ok {
+				outpoints[wire.OutPoint{Hash: hash, Index: uint32(i)}] = struct{}{}
+			}
+		}
+	}
+	return outpoints, nil
+}
+
+func resultSpendsAnyOutpoint(tx *wire.MsgTx, outpoints map[wire.OutPoint]struct{}) bool {
+	if tx == nil || len(outpoints) == 0 {
+		return false
+	}
+	for _, txIn := range tx.TxIn {
+		if txIn == nil {
+			continue
+		}
+		if _, ok := outpoints[txIn.PreviousOutPoint]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (v *EVMBlockExecutionValidator) runtime(block *btcutil.Block, view *UtxoViewpoint) (*evm.Runtime, error) {

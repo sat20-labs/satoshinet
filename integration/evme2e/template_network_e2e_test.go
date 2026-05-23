@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/integration/rpctest"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -192,6 +194,232 @@ func TestNetworkTemplateLimitOrderLargeSellFilledBySmallBuys(t *testing.T) {
 	fixture.requireNodesSynced(t)
 }
 
+func TestNetworkTemplateLimitOrderBuyTakesLowerPricedSells(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
+	}
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:lotprice": 1000,
+	})
+
+	const limitAsset = "ordx:f:lotprice"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+	traderBAddr := testTaprootAddress(t, traderB)
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 10, 10, 900},
+		[]int64{10, 10, 10, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		tmplcontract.NewLimitOrderContract(limitAsset),
+		"limit-order-price-e2e",
+		[]byte("limit-order-price-random"),
+		[]wire.OutPoint{gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value:  1,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	sellPrices := []string{"10", "9", "8"}
+	for i := range sellPrices {
+		sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", sellPrices[i])
+		sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, uint64(i+1), tmplcontract.InvokeAPISwap, sellParam,
+			[]wire.OutPoint{assetOuts[i], gasOuts[i+1]},
+			tmplcontract.TxFunding{
+				Value:  tmplcontract.SwapInvokeFee,
+				Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, limitAsset, 10), networkTemplateFunding(t, gasAsset, 100000)},
+			})
+		fixture.sendAndWaitTx(t, sellTx)
+	}
+
+	buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "40", "10")
+	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
+		[]wire.OutPoint{gasOuts[4]},
+		tmplcontract.TxFunding{
+			Value:  413,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, buyTx)
+
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, limitAsset, "30")
+	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateLimitOrderRefundOpenOrders(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
+	}
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:lotrefund": 1000,
+	})
+
+	const limitAsset = "ordx:f:lotrefund"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderAAddr := testTaprootAddress(t, traderA)
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 10, 900},
+		[]int64{10, 10, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		tmplcontract.NewLimitOrderContract(limitAsset),
+		"limit-order-refund-e2e",
+		[]byte("limit-order-refund-random"),
+		[]wire.OutPoint{gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value:  1,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	for i := 0; i < 2; i++ {
+		sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
+		sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, uint64(i+1), tmplcontract.InvokeAPISwap, sellParam,
+			[]wire.OutPoint{assetOuts[i], gasOuts[i+1]},
+			tmplcontract.TxFunding{
+				Value:  tmplcontract.SwapInvokeFee,
+				Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, limitAsset, 10), networkTemplateFunding(t, gasAsset, 100000)},
+			})
+		fixture.sendAndWaitTx(t, sellTx)
+	}
+
+	refundTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 3, tmplcontract.InvokeAPIRefund, nil,
+		nil,
+		tmplcontract.TxFunding{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, refundTx)
+
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderAAddr, limitAsset, "20")
+	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
+	}
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:lottarget": 1000,
+	})
+
+	const limitAsset = "ordx:f:lottarget"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderAAddr := testTaprootAddress(t, traderA)
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 10, 900},
+		[]int64{10, 10, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		tmplcontract.NewLimitOrderContract(limitAsset),
+		"limit-order-target-refund-e2e",
+		[]byte("limit-order-target-refund-random"),
+		[]wire.OutPoint{gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value:  1,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	for i := 0; i < 2; i++ {
+		sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
+		sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, uint64(i+1), tmplcontract.InvokeAPISwap, sellParam,
+			[]wire.OutPoint{assetOuts[i], gasOuts[i+1]},
+			tmplcontract.TxFunding{
+				Value:  tmplcontract.SwapInvokeFee,
+				Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, limitAsset, 10), networkTemplateFunding(t, gasAsset, 100000)},
+			})
+		fixture.sendAndWaitTx(t, sellTx)
+	}
+
+	refundParam := templateRefundParam(t, []int64{0})
+	refundTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 3, tmplcontract.InvokeAPIRefund, refundParam,
+		nil,
+		tmplcontract.TxFunding{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, refundTx)
+
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderAAddr, limitAsset, "10")
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), limitAsset, "10")
+	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateLimitOrderRefundPartiallyFilledSell(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
+	}
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:lotpartial": 1000,
+	})
+
+	const limitAsset = "ordx:f:lotpartial"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+	traderAAddr := testTaprootAddress(t, traderA)
+	traderBAddr := testTaprootAddress(t, traderB)
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000, 1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{40, 900},
+		[]int64{40, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		tmplcontract.NewLimitOrderContract(limitAsset),
+		"limit-order-partial-refund-e2e",
+		[]byte("limit-order-partial-refund-random"),
+		[]wire.OutPoint{gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value:  1,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "40", "10")
+	sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
+		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
+		tmplcontract.TxFunding{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, limitAsset, 40), networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, sellTx)
+
+	for i := 0; i < 3; i++ {
+		buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", "10")
+		buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, uint64(i+1), tmplcontract.InvokeAPISwap, buyParam,
+			[]wire.OutPoint{gasOuts[i+2]},
+			tmplcontract.TxFunding{
+				Value:  110,
+				Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+			})
+		fixture.sendAndWaitTx(t, buyTx)
+	}
+
+	refundParam := templateRefundParam(t, []int64{0})
+	refundTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 5, tmplcontract.InvokeAPIRefund, refundParam,
+		nil,
+		tmplcontract.TxFunding{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, refundTx)
+
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, limitAsset, "30")
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderAAddr, limitAsset, "10")
+	fixture.requireNodesSynced(t)
+}
+
 func TestNetworkTemplateAMMContract(t *testing.T) {
 	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
 		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
@@ -246,6 +474,156 @@ func TestNetworkTemplateAMMContract(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, sellTx)
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
+	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
+	}
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:ammready": 1000,
+	})
+
+	const ammAsset = "ordx:f:ammready"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+	traderBAddr := testTaprootAddress(t, traderB)
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{90, 10, 900},
+		[]int64{100, 100, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		tmplcontract.NewAMMContract(ammAsset, "100", 20, "2000"),
+		"amm-ready-e2e",
+		[]byte("amm-ready-random"),
+		[]wire.OutPoint{assetOuts[0], gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value: 20,
+			Assets: []tmplcontract.AssetAmount{
+				networkTemplateFunding(t, ammAsset, 90),
+				networkTemplateFunding(t, gasAsset, 100000),
+			},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	buyParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeBuy, "1", "10")
+	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
+		[]wire.OutPoint{gasOuts[1]},
+		tmplcontract.TxFunding{
+			Value:  20,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, buyTx)
+	requireAssetSummaryZero(t, fixture.bootstrapNode, traderBAddr, ammAsset)
+
+	addParam := templateAddLiquidityParam(t, ammAsset, "10", 1)
+	addTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 2, tmplcontract.InvokeAPIAddLiquidity, addParam,
+		[]wire.OutPoint{assetOuts[1], gasOuts[2]},
+		tmplcontract.TxFunding{
+			Value: 1,
+			Assets: []tmplcontract.AssetAmount{
+				networkTemplateFunding(t, ammAsset, 10),
+				networkTemplateFunding(t, gasAsset, 100000),
+			},
+		})
+	fixture.sendAndWaitTx(t, addTx)
+
+	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
+	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateAMMRejectsBuySlippage(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
+	}
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:ammslip": 1000,
+	})
+
+	const ammAsset = "ordx:f:ammslip"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+	traderBAddr := testTaprootAddress(t, traderB)
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000},
+		[]int64{1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{100, 900},
+		[]int64{100, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		tmplcontract.NewAMMContract(ammAsset, "100", 20, "2000"),
+		"amm-slip-e2e",
+		[]byte("amm-slip-random"),
+		[]wire.OutPoint{assetOuts[0], gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value: 20,
+			Assets: []tmplcontract.AssetAmount{
+				networkTemplateFunding(t, ammAsset, 100),
+				networkTemplateFunding(t, gasAsset, 100000),
+			},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	buyParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeBuy, "90", "10")
+	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
+		[]wire.OutPoint{gasOuts[1]},
+		tmplcontract.TxFunding{
+			Value:  20,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, buyTx)
+
+	requireAssetSummaryZero(t, fixture.bootstrapNode, traderBAddr, ammAsset)
+	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateAMMSellAddsAssetToPool(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
+	}
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:ammsell": 1000,
+	})
+
+	const ammAsset = "ordx:f:ammsell"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000},
+		[]int64{1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{100, 100, 800},
+		[]int64{100, 100, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		tmplcontract.NewAMMContract(ammAsset, "100", 20, "2000"),
+		"amm-sell-e2e",
+		[]byte("amm-sell-random"),
+		[]wire.OutPoint{assetOuts[0], gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value: 20,
+			Assets: []tmplcontract.AssetAmount{
+				networkTemplateFunding(t, ammAsset, 100),
+				networkTemplateFunding(t, gasAsset, 100000),
+			},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	sellParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeSell, "100", "1")
+	sellTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
+		[]wire.OutPoint{assetOuts[1], gasOuts[1]},
+		tmplcontract.TxFunding{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, ammAsset, 100), networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, sellTx)
+
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), ammAsset, "200")
 	fixture.requireNodesSynced(t)
 }
 
@@ -305,6 +683,148 @@ func TestNetworkTemplateAMMAddRemoveLiquidity(t *testing.T) {
 	fixture.sendAndWaitTx(t, removeTx)
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
 	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" || os.Getenv("SATOSHINET_EVM_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 and SATOSHINET_EVM_NETWORK_E2E=1 to run mixed template/EVM E2E")
+	}
+	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "5")
+	t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "5")
+	t.Setenv("SATOSHINET_POS_CHECKING_INTERVAL", "1")
+
+	counter := compileNetworkSolidityContract(t, solidityNetworkCounterSource, "Counter")
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:mix": 1000,
+	})
+
+	const limitAsset = "ordx:f:mix"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+	traderBAddr := testTaprootAddress(t, traderB)
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset,
+		[]int64{3000000, 3000000, 3000000, 5000000},
+		[]int64{1000, 1000, 1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
+		[]int64{10, 1000}, traderA)
+
+	templateDeployTx, templateContract := buildTemplateDeployTxWithInputs(t, fixture, traderA,
+		tmplcontract.NewLimitOrderContract(limitAsset),
+		"mixed-template-e2e",
+		[]byte("mixed-template-random"),
+		[]wire.OutPoint{gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value:  1,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, templateDeployTx)
+	waitForTemplateAssetUtxo(t, fixture.bootstrapNode, templateContract.MustEncode(), gasAsset, 1)
+
+	evmDeployTx, evmContract, evmChanges := buildTemplateWitnessEVMDeployTx(t, fixture, traderA, 1,
+		solidityDeployCode(t, counter, nil),
+		[]wire.OutPoint{gasOuts[3]},
+		evm.TxFunding{Assets: []evm.AssetAmount{networkEVMGasFunding(t, gasAsset, 3000000)}},
+		[]*wire.TxOut{testSpendAssetOutput(gasAsset, 2000000, fixture.spendScript)})
+	fixture.sendAndWaitTx(t, evmDeployTx)
+	require.NotEmpty(t, evmChanges)
+	requireEVMResultStatusForTx(t, fixture.bootstrapNode, evmDeployTx, evmContract, evm.ResultStatusSuccess)
+	waitForTemplateAssetUtxo(t, fixture.bootstrapNode, evmContract.MustEncode(), gasAsset, 1)
+
+	sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
+	templateSellTx := buildTemplateInvokeTxWithInputs(t, fixture, traderA, templateContract, 1, tmplcontract.InvokeAPISwap, sellParam,
+		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
+		tmplcontract.TxFunding{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, limitAsset, 10), networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", "10")
+	templateBuyTx := buildTemplateInvokeTxWithInputs(t, fixture, traderB, templateContract, 2, tmplcontract.InvokeAPISwap, buyParam,
+		[]wire.OutPoint{gasOuts[2]},
+		tmplcontract.TxFunding{
+			Value:  110,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	evmInvokeTx := buildTemplateWitnessEVMInvokeTx(t, fixture, traderA, evmContract, 2,
+		packNetworkSolidityMethod(t, counter.ABI, "incrementBy", big.NewInt(0)),
+		[]wire.OutPoint{evmChanges[0]},
+		evm.TxFunding{Assets: []evm.AssetAmount{networkEVMGasFunding(t, gasAsset, 100000)}})
+
+	sendTx(t, fixture.bootstrapNode, templateSellTx)
+	sendTx(t, fixture.bootstrapNode, templateBuyTx)
+	sendTx(t, fixture.bootstrapNode, evmInvokeTx)
+	blockHash := fixture.waitForTxsInSameBlock(t, templateSellTx, templateBuyTx, evmInvokeTx)
+
+	block, err := fixture.bootstrapNode.Client.GetBlock(blockHash)
+	require.NoError(t, err)
+	requireTemplateResultBeforeEVMResult(t, block)
+	root, found, err := evm.FindCoinbaseStateRoot(block.Transactions[0])
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEqual(t, [32]byte{}, root.StateRoot)
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
+	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateContractStateRollbackOnInvalidate(t *testing.T) {
+	if os.Getenv("SATOSHINET_TEMPLATE_NETWORK_E2E") != "1" {
+		t.Skip("set SATOSHINET_TEMPLATE_NETWORK_E2E=1 to run the external-node template contract network E2E")
+	}
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:rollback": 1000,
+	})
+
+	const limitAsset = "ordx:f:rollback"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+	traderBAddr := testTaprootAddress(t, traderB)
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
+		[]int64{10, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTxWithInputs(t, fixture, traderA,
+		tmplcontract.NewLimitOrderContract(limitAsset),
+		"rollback-template-e2e",
+		[]byte("rollback-template-random"),
+		[]wire.OutPoint{gasOuts[0]},
+		tmplcontract.TxFunding{
+			Value:  1,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
+	sellTx := buildTemplateInvokeTxWithInputs(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
+		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
+		tmplcontract.TxFunding{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, limitAsset, 10), networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, sellTx)
+
+	buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", "10")
+	buyTx := buildTemplateInvokeTxWithInputs(t, fixture, traderB, contract, 2, tmplcontract.InvokeAPISwap, buyParam,
+		[]wire.OutPoint{gasOuts[2]},
+		tmplcontract.TxFunding{
+			Value:  110,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, buyTx)
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
+
+	buyHash := buyTx.TxHash()
+	buyVerbose, err := fixture.bootstrapNode.Client.GetRawTransactionVerbose(&buyHash)
+	require.NoError(t, err)
+	require.NotEmpty(t, buyVerbose.BlockHash)
+	buyBlockHash, err := chainhash.NewHashFromStr(buyVerbose.BlockHash)
+	require.NoError(t, err)
+
+	require.NoError(t, fixture.bootstrapNode.Client.InvalidateBlock(buyBlockHash))
+	requireAssetSummaryZero(t, fixture.bootstrapNode, traderBAddr, limitAsset)
 }
 
 type templateNetworkFixture struct {
@@ -405,9 +925,15 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 
 func configureFastPOSTimers(t *testing.T) {
 	t.Helper()
-	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "1")
-	t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "1")
-	t.Setenv("SATOSHINET_POS_CHECKING_INTERVAL", "1")
+	if os.Getenv("SATOSHINET_POS_MINER_INTERVAL") == "" {
+		t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "1")
+	}
+	if os.Getenv("SATOSHINET_POS_PREWARNING_INTERVAL") == "" {
+		t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "1")
+	}
+	if os.Getenv("SATOSHINET_POS_CHECKING_INTERVAL") == "" {
+		t.Setenv("SATOSHINET_POS_CHECKING_INTERVAL", "1")
+	}
 }
 
 func (f *templateNetworkFixture) splitAsset(t *testing.T, anchorTx *wire.MsgTx, asset string,
@@ -436,6 +962,47 @@ func (f *templateNetworkFixture) waitForTx(t *testing.T, tx *wire.MsgTx) {
 	waitForPOSTx(t, f.bootstrapNode, f.nodes, tx)
 }
 
+func (f *templateNetworkFixture) waitForTxsInSameBlock(t *testing.T, txs ...*wire.MsgTx) *chainhash.Hash {
+	t.Helper()
+	require.NotEmpty(t, txs)
+	deadline := time.Now().Add(90 * time.Second)
+	var lastBlock string
+	lastStatus := make([]string, len(txs))
+	for time.Now().Before(deadline) {
+		confirmed := true
+		blockHash := ""
+		for i, tx := range txs {
+			hash := tx.TxHash()
+			verbose, err := f.bootstrapNode.Client.GetRawTransactionVerbose(&hash)
+			if err != nil || verbose.Confirmations < 1 || verbose.BlockHash == "" {
+				if err != nil {
+					lastStatus[i] = fmt.Sprintf("%s err=%v", hash, err)
+				} else {
+					lastStatus[i] = fmt.Sprintf("%s confirmations=%d block=%s", hash, verbose.Confirmations, verbose.BlockHash)
+				}
+				confirmed = false
+				continue
+			}
+			lastStatus[i] = fmt.Sprintf("%s confirmations=%d block=%s", hash, verbose.Confirmations, verbose.BlockHash)
+			if blockHash == "" {
+				blockHash = verbose.BlockHash
+			} else if blockHash != verbose.BlockHash {
+				t.Fatalf("transactions mined in different blocks: first=%s current=%s tx=%s", blockHash, verbose.BlockHash, hash)
+			}
+		}
+		if confirmed && blockHash != "" {
+			require.NoError(t, rpctest.JoinNodes(f.nodes, rpctest.Blocks))
+			hash, err := chainhash.NewHashFromStr(blockHash)
+			require.NoError(t, err)
+			return hash
+		}
+		lastBlock = blockHash
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("transactions were not mined in the same block, last block=%s status=%v", lastBlock, lastStatus)
+	return nil
+}
+
 func (f *templateNetworkFixture) requireNodesSynced(t *testing.T) {
 	t.Helper()
 	bestHash, bestHeight, err := f.bootstrapNode.Client.GetBestBlock()
@@ -444,6 +1011,31 @@ func (f *templateNetworkFixture) requireNodesSynced(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, bestHeight, coreBestHeight)
 	require.Equal(t, bestHash, coreBestHash)
+}
+
+func requireAssetSummaryZero(t *testing.T, node *rpctest.Harness, address, assetName string) {
+	t.Helper()
+	var (
+		lastSummary map[string]string
+		lastErr     error
+	)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		summary, err := fetchAssetSummary(node, address)
+		lastSummary, lastErr = summary, err
+		if err != nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		value := summary[assetName]
+		if value == "" || value == "0" {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	require.NoError(t, lastErr)
+	require.True(t, lastSummary[assetName] == "" || lastSummary[assetName] == "0",
+		"address=%s asset=%s summary=%v", address, assetName, lastSummary)
 }
 
 func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, funding tmplcontract.TxFunding) []wire.OutPoint {
@@ -535,6 +1127,21 @@ func fetchTemplateAssetUtxos(t *testing.T, node *rpctest.Harness, address, asset
 	return nil
 }
 
+func waitForTemplateAssetUtxo(t *testing.T, node *rpctest.Harness, address, assetName string, amount int64) {
+	t.Helper()
+	want := networkTemplateFunding(t, assetName, amount)
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, utxo := range fetchTemplateAssetUtxos(t, node, address, assetName) {
+			if templateUtxoHasAsset(utxo, want) {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	require.Failf(t, "missing asset utxo", "address=%s asset=%s amount=%d", address, assetName, amount)
+}
+
 func templateUtxoHasAsset(utxo *indexercommon.AssetsInUtxo, want tmplcontract.AssetAmount) bool {
 	for _, asset := range utxo.Assets {
 		if asset == nil || asset.AssetName.String() != want.AssetName || asset.Invalid {
@@ -591,6 +1198,13 @@ func buildTemplateDeployTx(t *testing.T, fixture *templateNetworkFixture, signer
 	if fixture != nil {
 		inputs = fixture.selectFundingOutPoints(t, funding)
 	}
+	return buildTemplateDeployTxWithInputs(t, fixture, signer, contract, deployer, random, inputs, funding)
+}
+
+func buildTemplateDeployTxWithInputs(t *testing.T, fixture *templateNetworkFixture, signer *btcec.PrivateKey, contract tmplcontract.Contract,
+	deployer string, random []byte, inputs []wire.OutPoint, funding tmplcontract.TxFunding) (*wire.MsgTx, tmplcontract.ContractAddress) {
+
+	t.Helper()
 	tx, address, err := tmplcontract.BuildDeployTx(tmplcontract.DeployTxBuildRequest{
 		ContractPrefix: tmplcontract.TestnetContractPrefix,
 		Contract:       contract,
@@ -612,12 +1226,56 @@ func buildTemplateInvokeTx(t *testing.T, fixture *templateNetworkFixture, signer
 	if fixture != nil {
 		inputs = fixture.selectFundingOutPoints(t, funding)
 	}
+	return buildTemplateInvokeTxWithInputs(t, fixture, signer, contract, nonce, action, param, inputs, funding)
+}
+
+func buildTemplateInvokeTxWithInputs(t *testing.T, fixture *templateNetworkFixture, signer *btcec.PrivateKey, contract tmplcontract.ContractAddress,
+	nonce uint64, action string, param []byte, inputs []wire.OutPoint, funding tmplcontract.TxFunding) *wire.MsgTx {
+
+	t.Helper()
 	tx, err := tmplcontract.BuildInvokeTx(tmplcontract.InvokeTxBuildRequest{
 		Contract:  contract,
 		GasLimit:  100000,
 		CallNonce: nonce,
 		Action:    action,
 		Param:     param,
+		Funding:   funding,
+		Inputs:    inputs,
+	})
+	require.NoError(t, err)
+	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
+	return tx
+}
+
+func buildTemplateWitnessEVMDeployTx(t *testing.T, fixture *templateNetworkFixture, signer *btcec.PrivateKey, nonce uint64,
+	initCode []byte, inputs []wire.OutPoint, funding evm.TxFunding, changeOutputs []*wire.TxOut) (*wire.MsgTx, evm.ContractAddress, []wire.OutPoint) {
+
+	t.Helper()
+	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
+		ContractPrefix: evm.TestnetContractPrefix,
+		Caller:         mustNetworkEVMAddressFromKey(t, signer),
+		GasLimit:       8000000,
+		DeployNonce:    nonce,
+		InitCode:       initCode,
+		Funding:        funding,
+		Inputs:         inputs,
+		ChangeOutputs:  changeOutputs,
+	})
+	require.NoError(t, err)
+	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
+	change := collectSpendableOutPoints(t, tx, changeOutputs)
+	return tx, contract, change
+}
+
+func buildTemplateWitnessEVMInvokeTx(t *testing.T, fixture *templateNetworkFixture, signer *btcec.PrivateKey, contract evm.ContractAddress,
+	nonce uint64, calldata []byte, inputs []wire.OutPoint, funding evm.TxFunding) *wire.MsgTx {
+
+	t.Helper()
+	tx, err := evm.BuildInvokeTx(evm.InvokeTxBuildRequest{
+		Contract:  contract,
+		GasLimit:  5000000,
+		CallNonce: nonce,
+		Calldata:  calldata,
 		Funding:   funding,
 		Inputs:    inputs,
 	})
@@ -663,6 +1321,14 @@ func templateLimitOrderParam(t *testing.T, assetName string, orderType int, amt,
 	return encoded
 }
 
+func templateRefundParam(t *testing.T, itemIDs []int64) []byte {
+	t.Helper()
+	param := tmplcontract.RefundInvokeParam{ItemIDs: itemIDs}
+	encoded, err := param.Encode()
+	require.NoError(t, err)
+	return encoded
+}
+
 func templateAddLiquidityParam(t *testing.T, assetName, amt string, value int64) []byte {
 	t.Helper()
 	param := tmplcontract.AddLiquidityInvokeParam{
@@ -694,6 +1360,74 @@ func networkTemplateFunding(t *testing.T, assetName string, amount int64) tmplco
 		AssetName: assetName,
 		Amount:    indexercommon.NewDefaultDecimal(amount),
 	}
+}
+
+func networkEVMGasFunding(t *testing.T, assetName string, amount int64) evm.AssetAmount {
+	t.Helper()
+	return evm.AssetAmount{
+		AssetName: assetName,
+		Amount:    indexercommon.NewDefaultDecimal(amount),
+	}
+}
+
+func requireTemplateResultBeforeEVMResult(t *testing.T, block *wire.MsgBlock) {
+	t.Helper()
+	templateResultIndex := -1
+	evmResultIndex := -1
+	types := make([]string, 0, len(block.Transactions))
+	for i, tx := range block.Transactions {
+		label := fmt.Sprintf("%d:%s", i, tx.TxHash())
+		templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx, tmplcontract.TestnetContractPrefix)
+		if templateErr == nil && templateInfo.IsTemplate {
+			label += fmt.Sprintf(":template:%d", templateInfo.Type)
+		}
+		if templateErr == nil && templateInfo.IsTemplate && templateInfo.Type == tmplcontract.TxTypeResult && templateResultIndex < 0 {
+			templateResultIndex = i
+			types = append(types, label)
+			continue
+		}
+		evmInfo, evmErr := evm.ClassifyTxForBlockOrder(tx, evm.TestnetContractPrefix)
+		if evmErr == nil && evmInfo.IsEVM {
+			label += fmt.Sprintf(":evm:%d", evmInfo.Type)
+		}
+		if evmErr == nil && evmInfo.IsEVM && evmInfo.Type == evm.TxTypeResult && evmResultIndex < 0 {
+			evmResultIndex = i
+		}
+		types = append(types, label)
+	}
+	require.GreaterOrEqual(t, templateResultIndex, 0, "missing template result transaction: %v", types)
+	require.GreaterOrEqual(t, evmResultIndex, 0, "missing EVM result transaction: %v", types)
+	require.Less(t, templateResultIndex, evmResultIndex, "template result must be before EVM result")
+}
+
+func requireEVMResultStatusForTx(t *testing.T, node *rpctest.Harness, tx *wire.MsgTx, contract evm.ContractAddress, status evm.ResultStatus) {
+	t.Helper()
+	outputs, err := evm.FindContractOutputsForContract(tx, evm.StandardContractScriptResolver(evm.TestnetContractPrefix), contract)
+	require.NoError(t, err)
+	require.NotEmpty(t, outputs)
+	hash := tx.TxHash()
+	verbose, err := node.Client.GetRawTransactionVerbose(&hash)
+	require.NoError(t, err)
+	require.NotEmpty(t, verbose.BlockHash)
+	blockHash, err := chainhash.NewHashFromStr(verbose.BlockHash)
+	require.NoError(t, err)
+	block, err := node.Client.GetBlock(blockHash)
+	require.NoError(t, err)
+
+	target := wire.OutPoint{Hash: hash, Index: outputs[0].Vout}
+	for _, blockTx := range block.Transactions {
+		parsed, err := evm.ParseTx(blockTx, nil)
+		if err != nil || parsed.Type != evm.TxTypeResult || parsed.Result == nil {
+			continue
+		}
+		for _, txIn := range blockTx.TxIn {
+			if txIn.PreviousOutPoint == target {
+				require.Equal(t, status, parsed.Result.Status)
+				return
+			}
+		}
+	}
+	t.Fatalf("missing EVM result for tx %s in block %s", hash, verbose.BlockHash)
 }
 
 func testTaprootAddress(t *testing.T, key *btcec.PrivateKey) string {
