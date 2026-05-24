@@ -71,6 +71,7 @@ type RunningData struct {
 	TotalRefundGas  int64             `json:"totalRefundGas"`
 	TotalLPTAmt     string            `json:"totalLptAmt,omitempty"`
 	LPBalances      map[string]string `json:"lpBalances,omitempty"`
+	LPCosts         map[string]int64  `json:"lpCosts,omitempty"`
 }
 
 func (r *RunningData) Apply(item *InvokeItem) {

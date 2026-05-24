@@ -16,6 +16,7 @@ const (
 	MaxPriceDivisibility          = 10
 	SwapInvokeFee          int64  = 10
 	SwapServiceFeeRatio    int64  = 8
+	AMMProfitShareLP              = 60
 )
 
 const (

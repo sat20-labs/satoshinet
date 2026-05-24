@@ -399,6 +399,94 @@ func TestSettleLimitOrdersRefundCanTargetMultipleOrders(t *testing.T) {
 	require.Equal(t, ItemStatusRefunded, state.Items[3].Done)
 }
 
+func TestSettleLimitOrdersSamePriceUsesFIFO(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	addr := runtime.Address()
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell0", "seller0", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell1", "seller1", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 2)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "10", "10", 110, nil, 3)
+
+	plan, err := runtime.SettleBlock(3)
+	require.NoError(t, err)
+	require.Len(t, plan.Deals, 1)
+	require.Equal(t, int64(0), plan.Deals[0].SellItemID)
+	require.Equal(t, int64(2), plan.Deals[0].BuyItemID)
+	require.Equal(t, "seller0", plan.Transfers[1].To)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+	require.Equal(t, ItemStatusInit, state.Items[1].Done)
+	require.Equal(t, "10", state.Items[1].RemainingAmt)
+}
+
+func TestSettleLimitOrdersIgnoreFutureHeightOrders(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	addr := runtime.Address()
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 5)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "10", "10", 110, nil, 5)
+
+	plan, err := runtime.SettleBlock(4)
+	require.NoError(t, err)
+	require.Empty(t, plan.Deals)
+	require.Empty(t, plan.Transfers)
+
+	plan, err = runtime.SettleBlock(5)
+	require.NoError(t, err)
+	require.Len(t, plan.Deals, 1)
+}
+
+func TestSettleLimitOrdersBuyRefundsSurplusWhenFilledAtBetterPrice(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	addr := runtime.Address()
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell, "20", "8", SwapInvokeFee, testAsset("ordx:f:test", 20), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "20", "10", 211, nil, 2)
+
+	plan, err := runtime.SettleBlock(2)
+	require.NoError(t, err)
+	require.Len(t, plan.Deals, 1)
+	require.Equal(t, int64(160), plan.Deals[0].SatValue)
+	require.Len(t, plan.Transfers, 3)
+	require.Equal(t, "buyer", plan.Transfers[0].To)
+	require.Equal(t, "20", plan.Transfers[0].AssetAmt)
+	require.Equal(t, "seller", plan.Transfers[1].To)
+	require.Equal(t, int64(160), plan.Transfers[1].SatValue)
+	require.Equal(t, "buyer", plan.Transfers[2].To)
+	require.Equal(t, int64(40), plan.Transfers[2].SatValue)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, ItemStatusDealt, state.Items[1].Done)
+	require.Zero(t, state.Items[1].RemainingValue)
+	require.Equal(t, int64(40), state.Items[1].OutValue)
+}
+
+func TestSettleLimitOrdersRefundCannotCancelOtherUsersOrder(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	addr := runtime.Address()
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "alice", OrderTypeBuy, "10", "2", 30, nil, 1)
+	refundParam, err := (&RefundInvokeParam{ItemIDs: []int64{0}}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:  InvokeAPIRefund,
+		Param:   refundParam,
+		CallID:  DeriveInvokeCallID("refund", 1, addr),
+		Invoker: "bob",
+		Height:  2,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlock(2)
+	require.NoError(t, err)
+	require.Empty(t, plan.Transfers)
+	require.ElementsMatch(t, []int64{1}, plan.ItemIDs)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, ItemStatusInit, state.Items[0].Done)
+	require.Equal(t, ItemStatusRefunded, state.Items[1].Done)
+}
+
 func applyLimitOrderInvokeForTest(t *testing.T, runtime *ContractRuntime, addr ContractAddress,
 	callID, invoker string, orderType int, amt, unitPrice string, value int64, assets wire.TxAssets, height int64) {
 

@@ -491,8 +491,8 @@ func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
 	traderB := fixture.traderB
 	traderBAddr := testTaprootAddress(t, traderB)
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000}, traderA)
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{90, 10, 900},
 		[]int64{100, 100, 1000}, traderA)
 
@@ -531,6 +531,15 @@ func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
 			},
 		})
 	fixture.sendAndWaitTx(t, addTx)
+
+	triggerParam := templateRefundParam(t, []int64{})
+	triggerTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 3, tmplcontract.InvokeAPIRefund, triggerParam,
+		[]wire.OutPoint{gasOuts[3]},
+		tmplcontract.TxFunding{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: []tmplcontract.AssetAmount{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, triggerTx)
 
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
 	fixture.requireNodesSynced(t)
@@ -614,7 +623,7 @@ func TestNetworkTemplateAMMSellAddsAssetToPool(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, deployTx)
 
-	sellParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeSell, "100", "1")
+	sellParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeSell, "1", "1")
 	sellTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[1], gasOuts[1]},
 		tmplcontract.TxFunding{
