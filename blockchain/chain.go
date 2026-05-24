@@ -109,6 +109,7 @@ type BlockChain struct {
 	assetIndexerMgr        *indexer.IndexerMgr
 	evmBlockValidator      EVMBlockValidator
 	templateBlockValidator TemplateBlockValidator
+	contractBlockValidator ContractBlockValidator
 	hashCache              *txscript.HashCache
 
 	// The following fields are calculated based upon the provided chain
@@ -2179,6 +2180,12 @@ type TemplateBlockStateProvider interface {
 	TemplateBlockPostState(hash *chainhash.Hash) (*template.RuntimeStore, bool)
 }
 
+// ContractBlockValidator validates all enabled contract execution engines for
+// a block after its input UTXOs have been loaded into the view.
+type ContractBlockValidator interface {
+	ValidateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error
+}
+
 // Config is a descriptor which specifies the blockchain instance configuration.
 type Config struct {
 	// DB defines the database which houses the blocks and will be used to
@@ -2249,6 +2256,11 @@ type Config struct {
 	// connection.
 	TemplateBlockValidator TemplateBlockValidator
 
+	// ContractBlockValidator optionally validates all contract execution
+	// engines through a single external interface. If nil, a composite
+	// validator is built from EVMBlockValidator and TemplateBlockValidator.
+	ContractBlockValidator ContractBlockValidator
+
 	// HashCache defines a transaction hash mid-state cache to use when
 	// validating transactions. This cache has the potential to greatly
 	// speed up transaction validation as re-using the pre-calculated
@@ -2300,6 +2312,16 @@ func New(config *Config) (*BlockChain, error) {
 	targetTimespan := int64(params.TargetTimespan / time.Second)
 	targetTimePerBlock := int64(params.TargetTimePerBlock / time.Second)
 	adjustmentFactor := params.RetargetAdjustmentFactor
+	contractBlockValidator := config.ContractBlockValidator
+	if contractBlockValidator == nil &&
+		(config.TemplateBlockValidator != nil || config.EVMBlockValidator != nil) {
+		contractBlockValidator = NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
+			ChainParams:       params,
+			TemplateValidator: config.TemplateBlockValidator,
+			EVMValidator:      config.EVMBlockValidator,
+		})
+	}
+
 	b := BlockChain{
 		checkpoints:            config.Checkpoints,
 		checkpointsByHeight:    checkpointsByHeight,
@@ -2311,6 +2333,7 @@ func New(config *Config) (*BlockChain, error) {
 		assetIndexerMgr:        config.AssetIndexManager,
 		evmBlockValidator:      config.EVMBlockValidator,
 		templateBlockValidator: config.TemplateBlockValidator,
+		contractBlockValidator: contractBlockValidator,
 		minRetargetTimespan:    targetTimespan / adjustmentFactor,
 		maxRetargetTimespan:    targetTimespan * adjustmentFactor,
 		blocksPerRetarget:      int32(targetTimespan / targetTimePerBlock),

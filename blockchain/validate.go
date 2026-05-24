@@ -16,8 +16,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
-	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractengine "github.com/sat20-labs/satoshinet/contract"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -837,82 +836,15 @@ func CheckBlockHeaderContext(header *wire.BlockHeader, prevNode HeaderCtx,
 	return nil
 }
 
-func checkEVMBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {
-	evmPrefix := evm.TestnetContractPrefix
-	templatePrefix := tmplcontract.TestnetContractPrefix
-	if params != nil {
-		evmPrefix = evm.ContractPrefixForNet(params.Net)
-		templatePrefix = tmplcontract.ContractPrefixForNet(params.Net)
-	}
-
-	coinbaseTx := block.Transactions()[0].MsgTx()
-	if _, _, err := evm.FindCoinbaseStateRoot(coinbaseTx); err != nil {
-		str := fmt.Sprintf("block contains invalid EVM state root in "+
-			"coinbase: %v", err)
-		return ruleError(ErrInvalidEVMBlock, str)
-	}
-
-	seenContract := false
-	seenResult := false
-	seenEVMContract := false
-	for i, tx := range block.Transactions()[1:] {
-		templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
-		if templateErr == nil && templateInfo.IsTemplate {
-			if templateInfo.Type == tmplcontract.TxTypeCoinbaseStateRoot {
-				str := fmt.Sprintf("block contains template state root "+
-					"outside coinbase at index %d", i+1)
-				return ruleError(ErrInvalidEVMBlock, str)
-			}
-			if seenResult && templateInfo.Type != tmplcontract.TxTypeResult {
-				str := fmt.Sprintf("block contains contract transaction %v "+
-					"after RESULT transactions at index %d",
-					tx.Hash(), i+1)
-				return ruleError(ErrInvalidEVMBlock, str)
-			}
-			if seenEVMContract && templateInfo.Type != tmplcontract.TxTypeResult {
-				str := fmt.Sprintf("block contains template transaction %v "+
-					"after EVM transactions at index %d", tx.Hash(), i+1)
-				return ruleError(ErrInvalidEVMBlock, str)
-			}
-			if templateInfo.Type == tmplcontract.TxTypeResult {
-				seenResult = true
-			}
-			seenContract = true
-			continue
-		}
-		info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), evmPrefix)
-		if err != nil {
-			str := fmt.Sprintf("block contains malformed EVM transaction "+
-				"%v at index %d: %v", tx.Hash(), i+1, err)
-			return ruleError(ErrInvalidEVMBlock, str)
-		}
-		if info.IsEVM {
-			if info.Type == evm.TxTypeCoinbaseStateRoot {
-				str := fmt.Sprintf("block contains EVM state root "+
-					"outside coinbase at index %d", i+1)
-				return ruleError(ErrInvalidEVMBlock, str)
-			}
-			if seenResult && info.Type != evm.TxTypeResult {
-				str := fmt.Sprintf("block contains contract transaction %v "+
-					"after RESULT transactions at index %d",
-					tx.Hash(), i+1)
-				return ruleError(ErrInvalidEVMBlock, str)
-			}
-			if info.Type == evm.TxTypeResult {
-				seenResult = true
-			} else {
-				seenEVMContract = true
-			}
-			seenContract = true
-			continue
-		}
-		if seenContract {
-			str := fmt.Sprintf("block contains non-contract transaction %v "+
-				"after contract transactions at index %d", tx.Hash(), i+1)
-			return ruleError(ErrInvalidEVMBlock, str)
-		}
+func checkContractBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {
+	if err := contractengine.CheckBlockOrder(block, params); err != nil {
+		return ruleError(ErrInvalidEVMBlock, err.Error())
 	}
 	return nil
+}
+
+func checkEVMBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {
+	return checkContractBlockOrder(block, params)
 }
 
 // checkBlockContext performs several validation checks on the block which depend
@@ -934,7 +866,7 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 		return err
 	}
 
-	if err := checkEVMBlockOrder(block, b.chainParams); err != nil {
+	if err := checkContractBlockOrder(block, b.chainParams); err != nil {
 		return err
 	}
 
@@ -1378,7 +1310,7 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 	if err != nil {
 		return err
 	}
-	if err := b.validateEVMBlock(block, view); err != nil {
+	if err := b.validateContractBlock(block, view); err != nil {
 		return err
 	}
 
@@ -1623,76 +1555,26 @@ func (b *BlockChain) CheckConnectBlockTemplate(block *btcutil.Block) error {
 	return b.checkConnectBlock(newNode, block, view, nil)
 }
 
+func (b *BlockChain) validateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error {
+	if b.contractBlockValidator != nil {
+		return b.contractBlockValidator.ValidateContractBlock(block, view)
+	}
+	if b.templateBlockValidator == nil && b.evmBlockValidator != nil {
+		return b.evmBlockValidator.ValidateEVMBlock(block, view)
+	}
+	if b.templateBlockValidator != nil || b.evmBlockValidator != nil {
+		validator := NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
+			ChainParams:       b.chainParams,
+			TemplateValidator: b.templateBlockValidator,
+			EVMValidator:      b.evmBlockValidator,
+		})
+		return validator.ValidateContractBlock(block, view)
+	}
+	return nil
+}
+
 func (b *BlockChain) validateEVMBlock(block *btcutil.Block, view *UtxoViewpoint) error {
-	hasTemplateWork := blockContainsTemplateWork(block, b.chainParams)
-	hasEVMWork := blockContainsEVMWork(block, b.chainParams)
-	if b.templateBlockValidator != nil && hasTemplateWork {
-		if err := b.templateBlockValidator.ValidateTemplateBlock(block, view); err != nil {
-			return err
-		}
-	}
-	if b.evmBlockValidator != nil && hasEVMWork {
-		if err := b.evmBlockValidator.ValidateEVMBlock(block, view); err != nil {
-			return err
-		}
-	}
-	if hasTemplateWork || hasEVMWork {
-		return b.verifyCombinedContractStateRoot(block, hasTemplateWork, hasEVMWork)
-	}
-	return nil
-}
-
-func (b *BlockChain) verifyCombinedContractStateRoot(block *btcutil.Block, hasTemplateWork, hasEVMWork bool) error {
-	var templateRoot [32]byte
-	if hasTemplateWork {
-		provider, ok := b.templateBlockValidator.(TemplateBlockStateProvider)
-		if !ok {
-			return ruleError(ErrInvalidEVMBlock, "template validator cannot expose post-state")
-		}
-		postState, ok := provider.TemplateBlockPostState(block.Hash())
-		if !ok || postState == nil {
-			return ruleError(ErrInvalidEVMBlock, "missing template post-state")
-		}
-		templateRoot = postState.StateRoot()
-	}
-	var evmRoot [32]byte
-	if hasEVMWork {
-		provider, ok := b.evmBlockValidator.(EVMBlockStateProvider)
-		if !ok {
-			return ruleError(ErrInvalidEVMBlock, "EVM validator cannot expose post-state")
-		}
-		postState, ok := provider.EVMBlockPostState(block.Hash())
-		if !ok || postState == nil {
-			return ruleError(ErrInvalidEVMBlock, "missing EVM post-state")
-		}
-		evmRoot = postState.StateRoot()
-	}
-	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot)
-	if err := evm.VerifyCoinbaseStateRoot(block.Transactions()[0].MsgTx(), expected); err != nil {
-		return ruleError(ErrInvalidEVMBlock, fmt.Sprintf("combined contract state root: %v", err))
-	}
-	return nil
-}
-
-func blockContainsTemplateWork(block *btcutil.Block, params *chaincfg.Params) bool {
-	if block == nil {
-		return false
-	}
-	prefix := tmplcontract.TestnetContractPrefix
-	if params != nil {
-		prefix = tmplcontract.ContractPrefixForNet(params.Net)
-	}
-	for _, tx := range block.Transactions()[1:] {
-		if tx == nil {
-			continue
-		}
-		info, err := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
-		if err == nil && info.IsTemplate &&
-			(info.Type == tmplcontract.TxTypeDeploy || info.Type == tmplcontract.TxTypeInvoke) {
-			return true
-		}
-	}
-	return false
+	return b.validateContractBlock(block, view)
 }
 
 func isTemplateContractTx(tx *wire.MsgTx, params *chaincfg.Params) bool {
@@ -1702,33 +1584,6 @@ func isTemplateContractTx(tx *wire.MsgTx, params *chaincfg.Params) bool {
 	}
 	info, err := tmplcontract.ClassifyTxForBlockOrder(tx, prefix)
 	return err == nil && info.IsTemplate
-}
-
-func blockContainsEVMWork(block *btcutil.Block, params *chaincfg.Params) bool {
-	if block == nil {
-		return false
-	}
-	prefix := evm.TestnetContractPrefix
-	templatePrefix := tmplcontract.TestnetContractPrefix
-	if params != nil {
-		prefix = evm.ContractPrefixForNet(params.Net)
-		templatePrefix = tmplcontract.ContractPrefixForNet(params.Net)
-	}
-	for _, tx := range block.Transactions()[1:] {
-		if tx == nil {
-			continue
-		}
-		templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
-		if templateErr == nil && templateInfo.IsTemplate {
-			continue
-		}
-		info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
-		if err == nil && info.IsEVM &&
-			(info.Type == evm.TxTypeDeploy || info.Type == evm.TxTypeInvoke) {
-			return true
-		}
-	}
-	return false
 }
 
 // ChainParams returns the Blockchain's configured chaincfg.Params.

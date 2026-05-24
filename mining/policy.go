@@ -10,7 +10,6 @@ import (
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -50,16 +49,13 @@ type Policy struct {
 	// (block template generation).
 	TxMinFreeFee btcutil.Amount
 
-	// EVMResultBuilder optionally appends canonical EVM_RESULT transactions
-	// and returns the EVM state root to commit in the coinbase.
-	EVMResultBuilder EVMTemplateResultBuilder
-
-	// TemplateResultBuilder optionally appends canonical template RESULT
-	// transactions and returns the template state root to commit in the coinbase.
-	TemplateResultBuilder TemplateContractResultBuilder
+	// ContractResultBuilder optionally appends canonical contract RESULT
+	// transactions and returns the combined contract state root to commit in
+	// the coinbase.
+	ContractResultBuilder ContractResultBuilder
 }
 
-type EVMTemplateBuildRequest struct {
+type ContractBuildRequest struct {
 	Txs        []*btcutil.Tx
 	CoinbaseTx *btcutil.Tx
 	Height     int32
@@ -67,28 +63,12 @@ type EVMTemplateBuildRequest struct {
 	Timestamp  time.Time
 }
 
-type EVMTemplateBuildResult struct {
+type ContractBuildResult struct {
 	ResultTxs []*wire.MsgTx
 	StateRoot [32]byte
 }
 
-type EVMTemplateResultBuilder func(EVMTemplateBuildRequest) (EVMTemplateBuildResult, error)
-
-type TemplateContractBuildRequest struct {
-	Txs        []*btcutil.Tx
-	CoinbaseTx *btcutil.Tx
-	Height     int32
-	PrevHash   chainhash.Hash
-	Timestamp  time.Time
-}
-
-type TemplateContractBuildResult struct {
-	ResultTxs []*wire.MsgTx
-	StateRoot [32]byte
-	Execution tmplcontract.BlockExecutionResult
-}
-
-type TemplateContractResultBuilder func(TemplateContractBuildRequest) (TemplateContractBuildResult, error)
+type ContractResultBuilder func(ContractBuildRequest) (ContractBuildResult, error)
 
 // minInt is a helper function to return the minimum of two ints.  This avoids
 // a math import and the need to cast to floats.

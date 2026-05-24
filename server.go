@@ -36,6 +36,8 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
+	contractengine "github.com/sat20-labs/satoshinet/contract"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/database"
@@ -3141,6 +3143,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	if err != nil {
 		return nil, err
 	}
+	contractResultBuilder := newContractResultBuilder(s.chainParams, templateResultBuilder, evmResultBuilder)
 
 	// Create a new block chain instance with the appropriate configuration.
 	s.chain, err = blockchain.New(&blockchain.Config{
@@ -3245,8 +3248,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		BlockMaxSize:          cfg.BlockMaxSize,
 		BlockPrioritySize:     cfg.BlockPrioritySize,
 		TxMinFreeFee:          cfg.minRelayTxFee,
-		EVMResultBuilder:      evmResultBuilder,
-		TemplateResultBuilder: templateResultBuilder,
+		ContractResultBuilder: contractResultBuilder,
 	}
 	blockTemplateGenerator := mining.NewBlkTmplGenerator(&policy,
 		s.chainParams, s.txMemPool, s.chain, s.timeSource,
@@ -3451,7 +3453,7 @@ func newEVMBlockValidator(db database.DB, params *chaincfg.Params, assetIndexer 
 }
 
 func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
-	assetIndexer *indexer.IndexerMgr) (mining.EVMTemplateResultBuilder, error) {
+	assetIndexer *indexer.IndexerMgr) (mining.ContractResultBuilder, error) {
 
 	gasConfig, err := configuredEVMGasConfig()
 	if err != nil {
@@ -3470,7 +3472,7 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 		return evm.ResultOutputsFromTx(resultTx, contractPrefix,
 			evmScriptRecipientResolver(params))
 	}
-	return func(req mining.EVMTemplateBuildRequest) (mining.EVMTemplateBuildResult, error) {
+	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
 		parentBlock := btcutil.NewBlock(&wire.MsgBlock{
 			Header: wire.BlockHeader{
 				PrevBlock: req.PrevHash,
@@ -3479,7 +3481,7 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 		})
 		runtime, err := stateStore.RuntimeFactory()(parentBlock, nil)
 		if err != nil {
-			return mining.EVMTemplateBuildResult{}, err
+			return mining.ContractBuildResult{}, err
 		}
 		txs := make([]*wire.MsgTx, 0, len(req.Txs))
 		hasTemplateWork := false
@@ -3528,9 +3530,9 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 			ResolveOutput: resolveOutput,
 		})
 		if err != nil {
-			return mining.EVMTemplateBuildResult{}, err
+			return mining.ContractBuildResult{}, err
 		}
-		return mining.EVMTemplateBuildResult{
+		return mining.ContractBuildResult{
 			ResultTxs: result.ResultTxs,
 			StateRoot: result.Execution.StateRoot,
 		}, nil
@@ -3564,7 +3566,7 @@ func newTemplateBlockValidator(db database.DB, params *chaincfg.Params,
 }
 
 func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
-	assetIndexer *indexer.IndexerMgr) (mining.TemplateContractResultBuilder, error) {
+	assetIndexer *indexer.IndexerMgr) (mining.ContractResultBuilder, error) {
 
 	gasConfig := tmplcontract.DefaultGasConfig()
 	if err := gasConfig.Validate(); err != nil {
@@ -3576,7 +3578,7 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 		contractPrefix = tmplcontract.ContractPrefixForNet(params.Net)
 	}
 	resolveOutput := templateResultOutputResolver(params, contractPrefix)
-	return func(req mining.TemplateContractBuildRequest) (mining.TemplateContractBuildResult, error) {
+	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
 		parentBlock := btcutil.NewBlock(&wire.MsgBlock{
 			Header: wire.BlockHeader{
 				PrevBlock: req.PrevHash,
@@ -3585,7 +3587,7 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 		})
 		store, err := stateStore.RuntimeFactory()(parentBlock, nil)
 		if err != nil {
-			return mining.TemplateContractBuildResult{}, err
+			return mining.ContractBuildResult{}, err
 		}
 		txs := make([]*wire.MsgTx, 0, len(req.Txs))
 		for _, tx := range req.Txs {
@@ -3604,14 +3606,52 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 			ResolveOutput:  resolveOutput,
 		})
 		if err != nil {
-			return mining.TemplateContractBuildResult{}, err
+			return mining.ContractBuildResult{}, err
 		}
-		return mining.TemplateContractBuildResult{
+		return mining.ContractBuildResult{
 			ResultTxs: result.ResultTxs,
 			StateRoot: result.Execution.StateRoot,
-			Execution: result.Execution,
 		}, nil
 	}, nil
+}
+
+func newContractResultBuilder(params *chaincfg.Params, templateBuilder, evmBuilder mining.ContractResultBuilder) mining.ContractResultBuilder {
+	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
+		var templateResult mining.ContractBuildResult
+		var err error
+		hasTemplateWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeTemplate)
+		hasEVMWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeEVM)
+		if templateBuilder != nil && hasTemplateWork {
+			templateResult, err = templateBuilder(req)
+			if err != nil {
+				return mining.ContractBuildResult{}, err
+			}
+		}
+
+		evmReq := req
+		if len(templateResult.ResultTxs) != 0 {
+			evmReq.Txs = append([]*btcutil.Tx(nil), req.Txs...)
+			for _, resultTx := range templateResult.ResultTxs {
+				evmReq.Txs = append(evmReq.Txs, btcutil.NewTx(resultTx))
+			}
+		}
+
+		var evmResult mining.ContractBuildResult
+		if evmBuilder != nil && hasEVMWork {
+			evmResult, err = evmBuilder(evmReq)
+			if err != nil {
+				return mining.ContractBuildResult{}, err
+			}
+		}
+
+		resultTxs := make([]*wire.MsgTx, 0, len(templateResult.ResultTxs)+len(evmResult.ResultTxs))
+		resultTxs = append(resultTxs, templateResult.ResultTxs...)
+		resultTxs = append(resultTxs, evmResult.ResultTxs...)
+		return mining.ContractBuildResult{
+			ResultTxs: resultTxs,
+			StateRoot: contractcommon.CombineStateRoots(templateResult.StateRoot, evmResult.StateRoot),
+		}, nil
+	}
 }
 
 func configuredEVMGasConfig() (evm.GasConfig, error) {

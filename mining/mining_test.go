@@ -15,6 +15,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractengine "github.com/sat20-labs/satoshinet/contract"
 	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
@@ -38,10 +39,10 @@ func TestBlockHasEVMWorkIgnoresTemplateTransactions(t *testing.T) {
 	}
 
 	txs := []*btcutil.Tx{btcutil.NewTx(tx)}
-	if !blockHasTemplateWork(txs, &chaincfg.TestNetParams) {
+	if !contractengine.BlockHasContractTypeWork(txs, &chaincfg.TestNetParams, evmcommon.ContractTypeTemplate) {
 		t.Fatal("expected template deploy to be classified as template work")
 	}
-	if blockHasEVMWork(txs, &chaincfg.TestNetParams) {
+	if contractengine.BlockHasContractTypeWork(txs, &chaincfg.TestNetParams, evmcommon.ContractTypeEVM) {
 		t.Fatal("template deploy must not be classified as EVM work")
 	}
 }
@@ -285,12 +286,12 @@ func TestAddEVMResultsToTemplateCommitsRootAndFees(t *testing.T) {
 	builderCalled := false
 	policy := &Policy{
 		BlockMaxWeight: blockchain.MaxBlockWeight,
-		EVMResultBuilder: func(req EVMTemplateBuildRequest) (EVMTemplateBuildResult, error) {
+		ContractResultBuilder: func(req ContractBuildRequest) (ContractBuildResult, error) {
 			builderCalled = true
 			if req.Height != 100 {
 				t.Fatalf("unexpected height %d", req.Height)
 			}
-			return EVMTemplateBuildResult{
+			return ContractBuildResult{
 				ResultTxs: []*wire.MsgTx{resultTx},
 				StateRoot: stateRoot,
 			}, nil
@@ -313,7 +314,7 @@ func TestAddEVMResultsToTemplateCommitsRootAndFees(t *testing.T) {
 	view.AddTxOuts(funding, 99)
 
 	weight, sigOps, txFees, txSigOps, fees, feeAssets, err :=
-		g.addEVMResultsToTemplate(&blockTxns, coinbaseTx, view, 100,
+		g.addContractResultsToTemplate(&blockTxns, coinbaseTx, view, 100,
 			chainhash.Hash{9}, time.Unix(1710000000, 0), true, 0, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +339,7 @@ func TestAddEVMResultsToTemplateCommitsRootAndFees(t *testing.T) {
 		feeAssets[0].Amount.Cmp(scommon.NewDefaultDecimal(40)) != 0 {
 		t.Fatalf("unexpected EVM fee assets: %v", feeAssets)
 	}
-	if err := evm.VerifyCoinbaseStateRoot(coinbaseTx.MsgTx(), stateRoot); err != nil {
+	if err := contractengine.VerifyCoinbaseStateRoot(coinbaseTx.MsgTx(), stateRoot); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -373,7 +374,7 @@ func TestMergeMissingEVMResultUtxosFetchesContractAssetInput(t *testing.T) {
 
 	blockUtxos := blockchain.NewUtxoViewpoint()
 	fetches := 0
-	err = mergeMissingEVMResultUtxos(blockUtxos, result, func(tx *btcutil.Tx) (*blockchain.UtxoViewpoint, error) {
+	err = mergeMissingContractResultUtxos(blockUtxos, result, func(tx *btcutil.Tx) (*blockchain.UtxoViewpoint, error) {
 		fetches++
 		view := blockchain.NewUtxoViewpoint()
 		view.AddTxOuts(funding, 99)
@@ -390,7 +391,7 @@ func TestMergeMissingEVMResultUtxosFetchesContractAssetInput(t *testing.T) {
 		t.Fatalf("expected result input %s to be available after merge", resultInput)
 	}
 
-	err = mergeMissingEVMResultUtxos(blockUtxos, result, func(tx *btcutil.Tx) (*blockchain.UtxoViewpoint, error) {
+	err = mergeMissingContractResultUtxos(blockUtxos, result, func(tx *btcutil.Tx) (*blockchain.UtxoViewpoint, error) {
 		fetches++
 		return blockchain.NewUtxoViewpoint(), nil
 	})
