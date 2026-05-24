@@ -2,11 +2,19 @@ package template
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"sort"
 )
 
 type RuntimeStore struct {
 	runtimes map[string]*ContractRuntime
+}
+
+type RuntimeSnapshot struct {
+	Address      string               `json:"address"`
+	TemplateName string               `json:"templateName"`
+	Version      uint32               `json:"version"`
+	State        TemplateRuntimeState `json:"state"`
 }
 
 func NewRuntimeStore() *RuntimeStore {
@@ -43,6 +51,29 @@ func (s *RuntimeStore) Get(contract ContractAddress) (*ContractRuntime, bool) {
 func (s *RuntimeStore) Exists(contract ContractAddress) bool {
 	_, ok := s.Get(contract)
 	return ok
+}
+
+func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
+	keys := s.sortedKeys()
+	out := make([]RuntimeSnapshot, 0, len(keys))
+	for _, key := range keys {
+		runtime := s.runtimes[key]
+		if runtime == nil {
+			continue
+		}
+		state, err := runtime.RuntimeState()
+		if err != nil {
+			return nil, err
+		}
+		address := runtime.Address()
+		out = append(out, RuntimeSnapshot{
+			Address:      address.EncodeAddress(),
+			TemplateName: runtime.TemplateName(),
+			Version:      runtime.Version(),
+			State:        cloneRuntimeState(state),
+		})
+	}
+	return out, nil
 }
 
 func (s *RuntimeStore) SettleBlock(height int64) ([]*SettlementPlan, error) {
@@ -100,4 +131,16 @@ func (s *RuntimeStore) sortedKeys() []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func cloneRuntimeState(state TemplateRuntimeState) TemplateRuntimeState {
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return TemplateRuntimeState{}
+	}
+	var out TemplateRuntimeState
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		return TemplateRuntimeState{}
+	}
+	return out
 }

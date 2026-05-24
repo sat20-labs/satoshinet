@@ -7,11 +7,12 @@ import (
 	"strings"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 	swire "github.com/sat20-labs/satoshinet/wire"
-	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
 )
@@ -25,7 +26,6 @@ func NewModel(indexer shareIndexer.Indexer) *Model {
 		indexer: indexer,
 	}
 }
-
 
 func (s *Model) GetTickerList(protocol string, start, limit int) ([]*common.TickerInfo, int) {
 	tickmap := s.indexer.GetTickerMap(protocol)
@@ -58,9 +58,8 @@ func (s *Model) GetTickerInfo(tickerName string) (*common.TickerInfo, error) {
 	return ticker, nil
 }
 
-
 func (s *Model) GetHolderListV3(tickName string, start, limit uint64) ([]*indexerwire.HolderV3, uint64, error) {
-	
+
 	assetName := indexer.NewAssetNameFromString(tickName)
 	holders := s.indexer.GetHoldersWithTick(assetName)
 
@@ -90,7 +89,6 @@ func (s *Model) GetHolderListV3(tickName string, start, limit uint64) ([]*indexe
 	return result, total, nil
 }
 
-
 func (s *Model) getPlainUtxos(address string, value int64, start, limit int) ([]*indexerwire.PlainUtxo, int, error) {
 	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, &indexer.ASSET_PLAIN_SAT)
 	if err != nil {
@@ -119,10 +117,10 @@ func (s *Model) getPlainUtxos(address string, value int64, start, limit int) ([]
 			txid, vout, _ := indexer.ParseUtxo(txOut.OutPoint)
 			avaibableUtxoList = append(avaibableUtxoList, &indexerwire.PlainUtxo{
 				Height: height,
-				Index: index,
-				Txid:  txid,
-				Vout:  vout,
-				Value: txOut.Value,
+				Index:  index,
+				Txid:   txid,
+				Vout:   vout,
+				Value:  txOut.Value,
 			})
 		}
 	}
@@ -158,25 +156,25 @@ func (s *Model) getAllUtxos(address string, start, limit int) ([]*indexerwire.Pl
 		if IsSpent(txOut.OutPoint) {
 			continue
 		}
-		
+
 		txid, vout, _ := indexer.ParseUtxo(txOut.OutPoint)
 
 		height, index, _ := indexer.FromUtxoId(utxoId)
 		if len(txOut.Assets) == 0 {
 			plainUtxos = append(plainUtxos, &indexerwire.PlainUtxo{
 				Height: height,
-				Index: index,
-				Txid:  txid,
-				Vout:  vout,
-				Value: txOut.Value,
+				Index:  index,
+				Txid:   txid,
+				Vout:   vout,
+				Value:  txOut.Value,
 			})
 		} else {
 			otherUtxos = append(otherUtxos, &indexerwire.PlainUtxo{
 				Height: height,
-				Index: index,
-				Txid:  txid,
-				Vout:  vout,
-				Value: txOut.Value,
+				Index:  index,
+				Txid:   txid,
+				Vout:   vout,
+				Value:  txOut.Value,
 			})
 		}
 	}
@@ -220,7 +218,6 @@ func (s *Model) GetAssetSummary(address string, start int, limit int) (*indexerw
 
 	return &result, nil
 }
-
 
 func (s *Model) GetExistingUtxos(req *indexerwire.UtxosReq) ([]string, error) {
 	result := make([]string, 0)
@@ -267,7 +264,7 @@ func (s *Model) GetReferree(name string, start, limit int) ([]*localwire.Referre
 	referrees := s.indexer.GetReferree(name)
 	for k, v := range referrees {
 		result = append(result, &localwire.ReferreeInfo{
-			Name: k,
+			Name:      k,
 			BindBlock: v,
 		})
 	}
@@ -286,7 +283,6 @@ func (s *Model) GetReferree(name string, start, limit int) ([]*localwire.Referre
 
 	return result[start:limit], total
 }
-
 
 func (s *Model) GetAllCoreNode() ([]string, error) {
 	data := s.indexer.GetAllCoreNode()
@@ -315,7 +311,7 @@ func (s *Model) CheckMiner(pubkey string) bool {
 	return s.indexer.IsMinerNode(pubkey)
 }
 
-func (s *Model) GetMinerInfo(pubkey string) (*common.MinerInfo) {
+func (s *Model) GetMinerInfo(pubkey string) *common.MinerInfo {
 	return s.indexer.GetMinerInfo(pubkey)
 }
 
@@ -415,4 +411,203 @@ func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) 
 	})
 
 	return result, len(result), nil
+}
+
+func (s *Model) GetSupportedTemplateContracts() []string {
+	return []string{tmplcontract.TemplateLimitOrder, tmplcontract.TemplateAMM}
+}
+
+func (s *Model) GetDeployedTemplateContracts(start, limit int) ([]string, int) {
+	contracts, total := s.indexer.GetTemplateContracts(start, limit)
+	out := make([]string, 0, len(contracts))
+	for _, contract := range contracts {
+		if contract == nil {
+			continue
+		}
+		out = append(out, contract.Address)
+	}
+	return out, total
+}
+
+func (s *Model) GetTemplateContracts(start, limit int) ([]*tmplcontract.ContractInfo, int) {
+	return s.indexer.GetTemplateContracts(start, limit)
+}
+
+func (s *Model) GetTemplateContract(address string) (*tmplcontract.ContractInfo, error) {
+	contract, ok := s.indexer.GetTemplateContract(address)
+	if !ok || contract == nil {
+		return nil, fmt.Errorf("template contract %s not found", address)
+	}
+	return contract, nil
+}
+
+func (s *Model) GetTemplateContractHistory(address string, start, limit int) ([]tmplcontract.HistoryRecord, int, error) {
+	if _, err := s.GetTemplateContract(address); err != nil {
+		return nil, 0, err
+	}
+	history, total := s.indexer.GetTemplateContractHistory(address, start, limit)
+	return history, total, nil
+}
+
+func (s *Model) GetTemplateContractHistoryByAddress(contractAddress, address string, start, limit int) ([]tmplcontract.HistoryRecord, int, error) {
+	contract, err := s.GetTemplateContract(contractAddress)
+	if err != nil {
+		return nil, 0, err
+	}
+	itemAddress := make(map[int64]string)
+	for _, item := range contract.RuntimeState.Items {
+		itemAddress[item.ID] = item.Address
+	}
+	allHistory, _ := s.indexer.GetTemplateContractHistory(contractAddress, 0, 0)
+	filtered := make([]tmplcontract.HistoryRecord, 0)
+	for _, record := range allHistory {
+		if recordHasTemplateAddress(record, itemAddress, address) {
+			filtered = append(filtered, record)
+		}
+	}
+	total := len(filtered)
+	return paginateTemplateHistory(filtered, start, limit), total, nil
+}
+
+func (s *Model) GetTemplateContractAllAddresses(contractAddress string, start, limit int) ([]string, int, error) {
+	contract, err := s.GetTemplateContract(contractAddress)
+	if err != nil {
+		return nil, 0, err
+	}
+	seen := make(map[string]struct{})
+	for _, item := range contract.RuntimeState.Items {
+		if item.Address == "" {
+			continue
+		}
+		seen[item.Address] = struct{}{}
+	}
+	addresses := make([]string, 0, len(seen))
+	for address := range seen {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+	total := len(addresses)
+	if start < 0 {
+		start = 0
+	}
+	if limit <= 0 {
+		limit = total
+	}
+	if start >= total {
+		return nil, total, nil
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	return addresses[start:end], total, nil
+}
+
+func (s *Model) GetTemplateContractAnalytics(contractAddress string) (*localwire.TemplateContractAnalytics, error) {
+	contract, err := s.GetTemplateContract(contractAddress)
+	if err != nil {
+		return nil, err
+	}
+	analytics := &localwire.TemplateContractAnalytics{
+		Address:        contract.Address,
+		TemplateName:   contract.TemplateName,
+		Version:        contract.Version,
+		UpdatedHeight:  contract.UpdatedHeight,
+		Running:        contract.RuntimeState.Running,
+		StatusCount:    make(map[int]int),
+		OrderTypeCount: make(map[int]int),
+	}
+	for _, item := range contract.RuntimeState.Items {
+		analytics.TotalItems++
+		analytics.StatusCount[item.Done]++
+		analytics.OrderTypeCount[item.OrderType]++
+		if item.Finished() {
+			analytics.FinishedItems++
+		} else {
+			analytics.ActiveItems++
+		}
+	}
+	return analytics, nil
+}
+
+func (s *Model) GetTemplateContractUserStatus(contractAddress, address string) (*localwire.TemplateContractUserStatus, error) {
+	contract, err := s.GetTemplateContract(contractAddress)
+	if err != nil {
+		return nil, err
+	}
+	status := &localwire.TemplateContractUserStatus{
+		Address:  address,
+		Contract: contractAddress,
+		Items:    make([]tmplcontract.InvokeItem, 0),
+	}
+	for _, item := range contract.RuntimeState.Items {
+		if item.Address != address {
+			continue
+		}
+		status.TotalItems++
+		status.Items = append(status.Items, item)
+		if item.Finished() {
+			status.FinishedItems++
+		} else {
+			status.ActiveItems++
+		}
+	}
+	return status, nil
+}
+
+func (s *Model) GetTemplateContractInvokeItemByInUtxo(contractAddress, inUtxo string) (*tmplcontract.InvokeItem, error) {
+	contract, err := s.GetTemplateContract(contractAddress)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range contract.RuntimeState.Items {
+		for _, raw := range strings.Split(item.InUtxos, ",") {
+			if strings.TrimSpace(raw) == inUtxo {
+				cloned := item
+				return &cloned, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("invoke item with input utxo %s not found", inUtxo)
+}
+
+func recordHasTemplateAddress(record tmplcontract.HistoryRecord, itemAddress map[int64]string, address string) bool {
+	for _, itemID := range record.ItemIDs {
+		if itemAddress[itemID] == address {
+			return true
+		}
+	}
+	if record.Settlement != nil {
+		for _, transfer := range record.Settlement.Transfers {
+			if transfer.To == address {
+				return true
+			}
+		}
+	}
+	if record.Result != nil {
+		for _, output := range record.Result.Outputs {
+			if output.To == address {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func paginateTemplateHistory(history []tmplcontract.HistoryRecord, start, limit int) []tmplcontract.HistoryRecord {
+	total := len(history)
+	if start < 0 {
+		start = 0
+	}
+	if limit <= 0 {
+		limit = total
+	}
+	if start >= total {
+		return nil
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	return history[start:end]
 }

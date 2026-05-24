@@ -53,4 +53,13 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/utxo/info/:utxo", s.handle.getUtxoInfoV3)
 	r.POST(proxy+"/v3/utxos/info", s.handle.getUtxoInfoListV3)
 
+	// Template contract query APIs. The /info routes keep the old wallet contract client shape.
+	r.GET(proxy+"/info/contracts/support", s.handle.getSupportedTemplateContracts)
+	r.GET(proxy+"/info/contracts/deployed", s.handle.getDeployedTemplateContracts)
+	r.GET(proxy+"/info/contract/*path", s.handle.getTemplateContractLegacy)
+
+	r.GET(proxy+"/v3/contracts/template", s.handle.getTemplateContracts)
+	r.GET(proxy+"/v3/contract/template/:contract/history", s.handle.getTemplateContractHistory)
+	r.GET(proxy+"/v3/contract/template/:contract", s.handle.getTemplateContract)
+
 }

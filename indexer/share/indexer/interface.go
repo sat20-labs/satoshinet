@@ -3,11 +3,11 @@ package indexer
 import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 
 type Indexer interface {
-
 	Start() error
 	Stop()
 
@@ -51,4 +51,8 @@ type Indexer interface {
 	IsMinerNode(pubkey string) bool
 	GetMinerInfo(pubkey string) *common.MinerInfo
 	GetSeqMgr() *common.MiningSequenceMgr
+
+	GetTemplateContracts(start, limit int) ([]*tmplcontract.ContractInfo, int)
+	GetTemplateContract(address string) (*tmplcontract.ContractInfo, bool)
+	GetTemplateContractHistory(address string, start, limit int) ([]tmplcontract.HistoryRecord, int)
 }

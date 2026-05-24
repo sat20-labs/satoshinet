@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
 
@@ -57,6 +58,11 @@ type IndexerMgr struct {
 
 	bRunning  bool
 	interrupt <-chan struct{}
+
+	templateIndexMu         sync.RWMutex
+	templateRuntimeStore    *tmplcontract.RuntimeStore
+	templateContractIndex   map[string]*tmplcontract.ContractInfo
+	templateContractHistory map[string][]tmplcontract.HistoryRecord
 }
 
 var instance *IndexerMgr
@@ -84,15 +90,18 @@ func NewIndexerMgr(
 	}
 
 	mgr := &IndexerMgr{
-		cfg:               cfg,
-		dbDir:             cfg.DataPath + "/db/indexer/" + chainParam.Name + "/",
-		chaincfgParam:     chainParam,
-		maxIndexHeight:    0,
-		periodFlushToDB:   30,
-		compilingBackupDB: nil,
-		rpcService:        nil,
-		bRunning:          false,
-		interrupt:         interrupt,
+		cfg:                     cfg,
+		dbDir:                   cfg.DataPath + "/db/indexer/" + chainParam.Name + "/",
+		chaincfgParam:           chainParam,
+		maxIndexHeight:          0,
+		periodFlushToDB:         30,
+		compilingBackupDB:       nil,
+		rpcService:              nil,
+		bRunning:                false,
+		interrupt:               interrupt,
+		templateRuntimeStore:    tmplcontract.NewRuntimeStore(),
+		templateContractIndex:   make(map[string]*tmplcontract.ContractInfo),
+		templateContractHistory: make(map[string][]tmplcontract.HistoryRecord),
 	}
 
 	instance = mgr
@@ -117,6 +126,7 @@ func (b *IndexerMgr) Init() {
 	}
 
 	b.rpcService = base_indexer.NewRpcIndexer(b.compiling)
+	b.loadTemplateContractIndex()
 
 	b.compilingBackupDB = nil
 
@@ -231,7 +241,7 @@ func (b *IndexerMgr) updateDB(height, tip int) {
 	syncHeight := b.compiling.GetSyncHeight()
 	blocksInHistory := b.compiling.GetBlockHistory()
 
-	gap := complingHeight-syncHeight
+	gap := complingHeight - syncHeight
 	if gap < blocksInHistory {
 		common.Log.Infof("performUpdateDBInBuffer nothing to do at height %d-%d", complingHeight, syncHeight)
 	} else {
@@ -317,7 +327,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 					return
 				}
 				p.updateDB(height, tip2)
-				
+
 			}
 			// 重新设置buffer
 			p.prepareDBBuffer()
@@ -352,7 +362,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
 	// TODO 优化indexer的设计
 	p.updateDB(height, tip)
-	if (height+1)%200 == 0 {  // TODO 先多检查，以后稳定了再降低检查频率
+	if (height+1)%200 == 0 { // TODO 先多检查，以后稳定了再降低检查频率
 		p.checkSelf()
 	}
 }

@@ -1,8 +1,11 @@
 package indexer
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
@@ -47,7 +50,6 @@ func (s *Handle) getHealth(c *gin.Context) {
 	c.JSON(code, rsp)
 }
 
-
 func (s *Handle) getTickerList(c *gin.Context) {
 	resp := &localwire.TickersResp{
 		BaseResp: indexerwire.BaseResp{
@@ -70,7 +72,6 @@ func (s *Handle) getTickerList(c *gin.Context) {
 
 	c.JSON(http.StatusOK, resp)
 }
-
 
 func (s *Handle) getTickerInfo(c *gin.Context) {
 	resp := &localwire.TickerInfoResp{
@@ -127,7 +128,6 @@ func (s *Handle) getHolderListV3(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, resp)
 }
-
 
 // @Summary Retrieves available UTXOs
 // @Description Get UTXOs in a address and its value is greater than the specific value. If value=0, get all UTXOs
@@ -419,7 +419,6 @@ func (s *Handle) checkCoreNode(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-
 func (s *Handle) getCoreNodeInfo(c *gin.Context) {
 	resp := &localwire.GetCoreNodeInfoResp{
 		BaseResp: indexerwire.BaseResp{
@@ -437,7 +436,6 @@ func (s *Handle) getCoreNodeInfo(c *gin.Context) {
 
 	c.JSON(http.StatusOK, resp)
 }
-
 
 func (s *Handle) checkMiner(c *gin.Context) {
 	resp := &localwire.CheckCoreNodeResp{
@@ -466,7 +464,7 @@ func (s *Handle) getMinerInfo(c *gin.Context) {
 	corenode := s.model.GetCoreNodeInfo(pubkey)
 	if corenode != nil {
 		resp.Data = &localwire.MinerInfo{
-			MinerInfo: &corenode.MinerInfo,
+			MinerInfo:  &corenode.MinerInfo,
 			IsCoreNode: true,
 			ChildCount: len(corenode.ChildMiners),
 		}
@@ -474,7 +472,7 @@ func (s *Handle) getMinerInfo(c *gin.Context) {
 		minerInfo := s.model.GetMinerInfo(pubkey)
 		if minerInfo != nil {
 			resp.Data = &localwire.MinerInfo{
-				MinerInfo: minerInfo,
+				MinerInfo:  minerInfo,
 				IsCoreNode: false,
 				ChildCount: 0,
 			}
@@ -603,4 +601,174 @@ func (s *Handle) getUtxoInfoListV3(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getSupportedTemplateContracts(c *gin.Context) {
+	resp := &localwire.ContractContentResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Contracts: s.model.GetSupportedTemplateContracts(),
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getDeployedTemplateContracts(c *gin.Context) {
+	resp := &localwire.DeployedContractResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+	start, limit := parseStartLimit(c)
+	resp.ContractURLs, _ = s.model.GetDeployedTemplateContracts(start, limit)
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getTemplateContracts(c *gin.Context) {
+	resp := &localwire.TemplateContractsResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+	start, limit := parseStartLimit(c)
+	resp.Data, resp.Total = s.model.GetTemplateContracts(start, limit)
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getTemplateContract(c *gin.Context) {
+	resp := &localwire.TemplateContractResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+	contract, err := s.model.GetTemplateContract(c.Param("contract"))
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = contract
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getTemplateContractHistory(c *gin.Context) {
+	resp := &localwire.TemplateContractHistoryResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+	start, limit := parseStartLimit(c)
+	history, total, err := s.model.GetTemplateContractHistory(c.Param("contract"), start, limit)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = history
+	resp.Total = total
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getTemplateContractLegacy(c *gin.Context) {
+	resp := &localwire.ContractStatusResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+	status, err := s.templateContractLegacyStatus(c)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Status = status
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) templateContractLegacyStatus(c *gin.Context) (string, error) {
+	parts := strings.Split(strings.Trim(c.Param("path"), "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "", errTemplateLegacyPath(c.Param("path"))
+	}
+	start, limit := parseStartLimit(c)
+	switch parts[0] {
+	case "analytics":
+		if len(parts) != 2 {
+			return "", errTemplateLegacyPath(c.Param("path"))
+		}
+		return modelJSON(s.model.GetTemplateContractAnalytics(parts[1]))
+	case "history":
+		if len(parts) != 2 {
+			return "", errTemplateLegacyPath(c.Param("path"))
+		}
+		history, _, err := s.model.GetTemplateContractHistory(parts[1], start, limit)
+		return marshalStatusJSON(history, err)
+	case "userhistory":
+		if len(parts) != 3 {
+			return "", errTemplateLegacyPath(c.Param("path"))
+		}
+		history, _, err := s.model.GetTemplateContractHistoryByAddress(parts[1], parts[2], start, limit)
+		return marshalStatusJSON(history, err)
+	case "item":
+		if len(parts) != 4 || parts[1] != "inutxo" {
+			return "", errTemplateLegacyPath(c.Param("path"))
+		}
+		return modelJSON(s.model.GetTemplateContractInvokeItemByInUtxo(parts[2], parts[3]))
+	case "alluser":
+		if len(parts) != 2 {
+			return "", errTemplateLegacyPath(c.Param("path"))
+		}
+		addresses, _, err := s.model.GetTemplateContractAllAddresses(parts[1], start, limit)
+		return marshalStatusJSON(addresses, err)
+	case "user":
+		if len(parts) != 3 {
+			return "", errTemplateLegacyPath(c.Param("path"))
+		}
+		return modelJSON(s.model.GetTemplateContractUserStatus(parts[1], parts[2]))
+	default:
+		if len(parts) != 1 {
+			return "", errTemplateLegacyPath(c.Param("path"))
+		}
+		return modelJSON(s.model.GetTemplateContract(parts[0]))
+	}
+}
+
+func parseStartLimit(c *gin.Context) (int, int) {
+	start, err := strconv.Atoi(c.DefaultQuery("start", "0"))
+	if err != nil {
+		start = 0
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", QueryParamDefaultLimit))
+	if err != nil {
+		limit = 100
+	}
+	return start, limit
+}
+
+func modelJSON[T any](data T, err error) (string, error) {
+	return marshalStatusJSON(data, err)
+}
+
+func marshalStatusJSON(data any, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func errTemplateLegacyPath(path string) error {
+	return fmt.Errorf("invalid template contract query path %s", path)
 }

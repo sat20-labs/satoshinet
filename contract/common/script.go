@@ -3,36 +3,49 @@ package common
 import (
 	"fmt"
 
-	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	"github.com/sat20-labs/satoshinet/txscript"
 )
 
 const (
-	ContentTypeContractDeploy    = sindexer.CONTENT_TYPE_CONTRACT_DEPLOY
-	ContentTypeContractInvoke    = sindexer.CONTENT_TYPE_CONTRACT_INVOKE
-	ContentTypeContractResult    = sindexer.CONTENT_TYPE_CONTRACT_RESULT
-	ContentTypeContractStateRoot = sindexer.CONTENT_TYPE_CONTRACT_STATE_ROOT
+	sat20MagicNumber = txscript.OP_16
+
+	ContentTypeContractDeploy    = txscript.OP_DATA_31
+	ContentTypeContractInvoke    = txscript.OP_DATA_32
+	ContentTypeContractResult    = txscript.OP_DATA_33
+	ContentTypeContractStateRoot = txscript.OP_DATA_34
 
 	ContentTypeEVMDeploy    = ContentTypeContractDeploy
 	ContentTypeEVMInvoke    = ContentTypeContractInvoke
 	ContentTypeEVMResult    = ContentTypeContractResult
 	ContentTypeEVMStateRoot = ContentTypeContractStateRoot
 
-	MaxNullDataPayloadLen = sindexer.MAX_PAYLOAD_LEN
+	MaxNullDataPayloadLen = txscript.MaxDataCarrierSize - 8
 )
 
 func NullDataScript(txType TxType, content []byte) ([]byte, error) {
+	if len(content) > MaxNullDataPayloadLen {
+		return nil, fmt.Errorf("data size %d is larger than max allowed size %d", len(content), MaxNullDataPayloadLen)
+	}
+
+	var contentType uint8
 	switch txType {
 	case TxTypeDeploy:
-		return sindexer.NullDataScript(ContentTypeContractDeploy, content)
+		contentType = ContentTypeContractDeploy
 	case TxTypeInvoke:
-		return sindexer.NullDataScript(ContentTypeContractInvoke, content)
+		contentType = ContentTypeContractInvoke
 	case TxTypeResult:
-		return sindexer.NullDataScript(ContentTypeContractResult, content)
+		contentType = ContentTypeContractResult
 	case TxTypeCoinbaseStateRoot:
-		return sindexer.NullDataScript(ContentTypeContractStateRoot, content)
+		contentType = ContentTypeContractStateRoot
 	default:
 		return nil, fmt.Errorf("unsupported evm tx type %d", txType)
 	}
+
+	return txscript.NewScriptBuilder().
+		AddOp(txscript.OP_RETURN).
+		AddOp(sat20MagicNumber).
+		AddInt64(int64(contentType)).
+		AddData(content).Script()
 }
 
 func NullDataScripts(txType TxType, content []byte) ([][]byte, error) {
@@ -83,9 +96,23 @@ func StateRootNullDataScript(payload StateRootPayload) ([]byte, error) {
 }
 
 func ReadNullDataScript(script []byte) (TxType, []byte, error) {
-	contentType, content, err := sindexer.ReadDataFromNullDataScript(script)
-	if err != nil {
-		return 0, nil, err
+	tokenizer := txscript.MakeScriptTokenizer(0, script)
+	if !tokenizer.Next() || tokenizer.Opcode() != txscript.OP_RETURN {
+		return 0, nil, fmt.Errorf("script is not OP_RETURN")
+	}
+	if !tokenizer.Next() || tokenizer.Opcode() != sat20MagicNumber {
+		return 0, nil, fmt.Errorf("script is not SAT20 script")
+	}
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return 0, nil, fmt.Errorf("script is missing contract content type")
+	}
+	contentType := uint8(tokenizer.ExtractInt64())
+	if !tokenizer.Next() || tokenizer.Data() == nil {
+		return 0, nil, fmt.Errorf("script is missing contract payload")
+	}
+	content := tokenizer.Data()
+	if len(content) > MaxNullDataPayloadLen {
+		return 0, nil, fmt.Errorf("data size %d is larger than max allowed size %d", len(content), MaxNullDataPayloadLen)
 	}
 	switch contentType {
 	case ContentTypeContractDeploy:

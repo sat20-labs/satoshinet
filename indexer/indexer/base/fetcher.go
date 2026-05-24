@@ -95,6 +95,7 @@ func ConvertBlock(block *wire.MsgBlock, height int, chaincfgParam *chaincfg.Para
 			Txid:    tx.TxID(),
 			Inputs:  inputs,
 			Outputs: outputs,
+			MsgTx:   tx,
 		}
 	}
 
@@ -107,7 +108,6 @@ func ConvertBlock(block *wire.MsgBlock, height int, chaincfgParam *chaincfg.Para
 		Transactions:  txs,
 	}
 }
-
 
 // Prefetches blocks from bitcoind and sends them to the blocksChan
 func (b *BaseIndexer) spawnBlockFetcher(startHeigh int, endHeight int, stopChan chan struct{}) {

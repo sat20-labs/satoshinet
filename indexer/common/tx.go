@@ -7,7 +7,6 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-
 type Input struct {
 	Txid            string `json:"txid"`
 	UtxoId          uint64
@@ -36,9 +35,10 @@ type Output struct {
 }
 
 type Transaction struct {
-	Txid    string    `json:"txid"`
-	Inputs  []*Input  `json:"inputs"`
-	Outputs []*Output `json:"outputs"`
+	Txid    string      `json:"txid"`
+	Inputs  []*Input    `json:"inputs"`
+	Outputs []*Output   `json:"outputs"`
+	MsgTx   *wire.MsgTx `json:"-"`
 }
 
 type Block struct {
@@ -50,22 +50,22 @@ type Block struct {
 }
 
 type ReferrerInfo struct {
-	Name		string
-	BindBlock	int
+	Name      string
+	BindBlock int
 }
 
 type UTXOIndex struct {
-	Index      map[string]*Output
-	AscendMap  map[string]*AscendData
-	DescendMap map[string]*DescendData
+	Index       map[string]*Output
+	AscendMap   map[string]*AscendData
+	DescendMap  map[string]*DescendData
 	ReferrerMap map[string]*ReferrerInfo // 被推荐人地址-》推荐人名字
 }
 
 func NewUTXOIndex() *UTXOIndex {
 	return &UTXOIndex{
-		Index:      make(map[string]*Output),
-		AscendMap:  make(map[string]*AscendData),
-		DescendMap: make(map[string]*DescendData),
+		Index:       make(map[string]*Output),
+		AscendMap:   make(map[string]*AscendData),
+		DescendMap:  make(map[string]*DescendData),
 		ReferrerMap: make(map[string]*ReferrerInfo),
 	}
 }
@@ -73,4 +73,3 @@ func NewUTXOIndex() *UTXOIndex {
 func GetUtxoId(addrAndId *Output) uint64 {
 	return indexer.ToUtxoId(addrAndId.Height, addrAndId.TxId, int(addrAndId.N))
 }
-
