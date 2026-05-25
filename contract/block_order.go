@@ -5,6 +5,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
@@ -62,6 +63,19 @@ func ClassifyTxForBlockOrderWithPrefix(tx *wire.MsgTx, prefix string) (TxClass, 
 			TxType:       contractcommon.TxType(info.Type),
 			Priority:     PriorityEVM,
 			GasLimit:     info.GasLimit,
+		}, true, nil
+	}
+
+	agentInfo, agentErr := agentcontract.ClassifyTxForBlockOrder(tx, prefix)
+	if agentErr != nil {
+		return TxClass{}, false, agentErr
+	}
+	if agentInfo.IsAgent {
+		return TxClass{
+			ContractType: contractcommon.ContractTypeAgent,
+			TxType:       contractcommon.TxType(agentInfo.Type),
+			Priority:     PriorityAgent,
+			GasLimit:     agentInfo.GasLimit,
 		}, true, nil
 	}
 	return TxClass{}, false, nil
