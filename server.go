@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
@@ -33,10 +34,12 @@ import (
 	"github.com/sat20-labs/satoshinet/blockchain/indexers"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/btcutil/bloom"
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
 	contractengine "github.com/sat20-labs/satoshinet/contract"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
@@ -56,6 +59,8 @@ import (
 )
 
 const (
+	agentConfirmTxFee = int64(10)
+
 	// defaultServices describes the default services that are supported by
 	// the server.
 	defaultServices = wire.SFNodeNetwork | wire.SFNodeNetworkLimited |
@@ -232,6 +237,7 @@ type server struct {
 	syncManager  *netsync.SyncManager
 	chain        *blockchain.BlockChain
 	txMemPool    *mempool.TxPool
+	agentLLM     agentcontract.LLMClient
 	//cpuMiner             *cpuminer.CPUMiner
 	posMiner             *posminer.POSMiner
 	modifyRebroadcastInv chan interface{}
@@ -2735,6 +2741,11 @@ func (s *server) Start() {
 			}
 		}()
 	}
+
+	if s.agentLLM != nil {
+		s.wg.Add(1)
+		go s.agentContractHandler()
+	}
 }
 
 func (s *server) getTipFromSyncPeer() int {
@@ -2798,6 +2809,247 @@ func (s *server) saveMempoolCache() {
 
 func (s *server) loadMempoolCache() {
 	s.txMemPool.Load(s.BtcdDir)
+}
+
+func (s *server) agentContractHandler() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(cfg.AgentCheckInterval)
+	defer ticker.Stop()
+
+	srvrLog.Infof("Agent contract handler started, interval=%s", cfg.AgentCheckInterval)
+	for {
+		if err := s.processAgentContracts(); err != nil {
+			srvrLog.Warnf("Agent contract handler: %v", err)
+		}
+		select {
+		case <-ticker.C:
+		case <-s.quit:
+			srvrLog.Infof("Agent contract handler stopped")
+			return
+		}
+	}
+}
+
+func (s *server) processAgentContracts() error {
+	if s == nil || s.agentLLM == nil || s.chain == nil || s.db == nil {
+		return nil
+	}
+	store := blockchain.NewAgentStateStore(s.db)
+	_, runtimeStore, err := store.LoadTip()
+	if err != nil {
+		return err
+	}
+	if runtimeStore == nil {
+		return nil
+	}
+	best := s.chain.BestSnapshot()
+	heightValue := int64(best.Height)
+	unixValue := time.Now().Unix()
+	if !best.MedianTime.IsZero() {
+		unixValue = best.MedianTime.Unix()
+	}
+	candidates, err := runtimeStore.PendingPredictionConfirms(heightValue, unixValue)
+	if err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	corenodeAgent := agentcontract.NewPredictionAgent(s.agentLLM)
+	for _, candidate := range candidates {
+		resultURL := candidate.Contract.SourceURL
+		observedAt := heightValue
+		if candidate.Contract.TimeBase == agentcontract.TimeBaseUnix {
+			observedAt = unixValue
+		}
+		param, err := corenodeAgent.BuildConfirmParam(context.Background(), agentcontract.PredictionAgentConfirmRequest{
+			Contract:   candidate.Contract,
+			ResultURL:  resultURL,
+			ObservedAt: observedAt,
+		})
+		if err != nil {
+			srvrLog.Warnf("Agent contract %s confirm build failed: %v",
+				candidate.Address.EncodeAddress(), err)
+			continue
+		}
+		tx, err := s.submitAgentConfirmTx(candidate, param)
+		if err != nil {
+			srvrLog.Warnf("Agent contract %s confirm submit failed: %v",
+				candidate.Address.EncodeAddress(), err)
+			continue
+		}
+		srvrLog.Infof("Agent contract %s confirm submitted: tx=%s result_type=%s outcome=%s result_url=%s result_hash=%s",
+			candidate.Address.EncodeAddress(), tx.TxID(), param.ResultType, param.OutcomeID,
+			param.ResultURL, param.ResultHash)
+	}
+	return nil
+}
+
+func (s *server) submitAgentConfirmTx(candidate agentcontract.PredictionConfirmCandidate,
+	param agentcontract.PredictionConfirmParam) (*wire.MsgTx, error) {
+
+	if s == nil || s.assetIndexer == nil || s.txMemPool == nil {
+		return nil, fmt.Errorf("agent confirm submitter is not ready")
+	}
+	if s.agentConfirmInMempool(candidate.Address) {
+		return nil, fmt.Errorf("agent confirm transaction is already in mempool")
+	}
+	encoded, err := param.Encode()
+	if err != nil {
+		return nil, err
+	}
+	funding, err := s.selectAgentConfirmFundingUTXO()
+	if err != nil {
+		return nil, err
+	}
+	changeScript, err := agentCoreChangeScript(s.chainParams)
+	if err != nil {
+		return nil, err
+	}
+	if funding.OutValue.Value <= agentConfirmTxFee {
+		return nil, fmt.Errorf("agent confirm funding value is too small")
+	}
+	changeOut := wire.NewTxOut(
+		funding.OutValue.Value-agentConfirmTxFee,
+		funding.OutValue.Assets.Clone(),
+		changeScript,
+	)
+	tx, err := agentcontract.BuildInvokeTx(agentcontract.InvokeTxBuildRequest{
+		Contract:  candidate.Address,
+		GasLimit:  1000,
+		CallNonce: uint64(time.Now().UnixNano()),
+		Action:    agentcontract.InvokeAPIConfirm,
+		Param:     encoded,
+		Funding:   agentcontract.TxFunding{},
+		Inputs:    []wire.OutPoint{funding.OutPoint},
+		ChangeOutputs: []*wire.TxOut{
+			changeOut,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	packet, err := spsbt.NewFromUnsignedTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	packet.Inputs[0].WitnessUtxo = cloneTxOut(&funding.OutValue)
+	if err := stp.SignPsbt_SatsNet(packet); err != nil {
+		return nil, err
+	}
+	if err := spsbt.MaybeFinalizeAll(packet); err != nil {
+		return nil, err
+	}
+	signedTx, err := spsbt.Extract(packet)
+	if err != nil {
+		return nil, err
+	}
+	accepted, err := s.txMemPool.ProcessTransaction(btcutil.NewTx(signedTx), false, true, 0)
+	if err != nil {
+		return nil, err
+	}
+	s.AnnounceNewTransactions(accepted)
+	return signedTx, nil
+}
+
+type agentConfirmFundingUTXO struct {
+	OutPoint wire.OutPoint
+	OutValue wire.TxOut
+}
+
+func (s *server) selectAgentConfirmFundingUTXO() (agentConfirmFundingUTXO, error) {
+	pubKey, err := stp.GetPubKey()
+	if err != nil {
+		return agentConfirmFundingUTXO{}, err
+	}
+	address, err := sidxcommon.PubKeyBytesToP2TRAddress(pubKey, s.chainParams)
+	if err != nil {
+		return agentConfirmFundingUTXO{}, err
+	}
+	expectedScript, err := agentCoreChangeScript(s.chainParams)
+	if err != nil {
+		return agentConfirmFundingUTXO{}, err
+	}
+	byAsset := s.assetIndexer.GetAssetUTXOsInAddress(address)
+	plain := byAsset[sidxcommon.ASSET_PLAIN_SAT]
+	sort.SliceStable(plain, func(i, j int) bool {
+		if plain[i].Height() != plain[j].Height() {
+			return plain[i].Height() < plain[j].Height()
+		}
+		return plain[i].OutPointStr < plain[j].OutPointStr
+	})
+	for _, utxo := range plain {
+		if utxo == nil || utxo.OutValue.Value <= agentConfirmTxFee {
+			continue
+		}
+		if !bytes.Equal(utxo.OutValue.PkScript, expectedScript) {
+			continue
+		}
+		outpoint, err := wire.NewOutPointFromString(utxo.OutPointStr)
+		if err != nil {
+			continue
+		}
+		if s.txMemPool.CheckSpend(*outpoint) != nil {
+			continue
+		}
+		return agentConfirmFundingUTXO{
+			OutPoint: *outpoint,
+			OutValue: *cloneTxOut(&utxo.OutValue),
+		}, nil
+	}
+	return agentConfirmFundingUTXO{}, fmt.Errorf("no spendable corenode funding UTXO")
+}
+
+func (s *server) agentConfirmInMempool(contract agentcontract.ContractAddress) bool {
+	if s == nil || s.txMemPool == nil {
+		return false
+	}
+	prefix := agentcontract.ContractPrefixForNet(s.chainParams.Net)
+	resolver := agentcontract.StandardContractScriptResolver(prefix)
+	for _, desc := range s.txMemPool.TxDescs() {
+		if desc == nil || desc.Tx == nil {
+			continue
+		}
+		parsed, err := agentcontract.ParseTx(desc.Tx.MsgTx(), resolver)
+		if err != nil || parsed.Invoke == nil || parsed.Invoke.Action != agentcontract.InvokeAPIConfirm {
+			continue
+		}
+		for _, output := range parsed.ContractOutputs {
+			if output.Contract.Equal(contract) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func agentCoreChangeScript(params *chaincfg.Params) ([]byte, error) {
+	pubKey, err := stp.GetPubKey()
+	if err != nil {
+		return nil, err
+	}
+	address, err := sidxcommon.PubKeyBytesToP2TRAddress(pubKey, params)
+	if err != nil {
+		return nil, err
+	}
+	addr, err := btcutil.DecodeAddress(address, params)
+	if err != nil {
+		return nil, err
+	}
+	return txscript.PayToAddrScript(addr)
+}
+
+func cloneTxOut(output *wire.TxOut) *wire.TxOut {
+	if output == nil {
+		return nil
+	}
+	cp := &wire.TxOut{
+		Value:    output.Value,
+		Assets:   output.Assets.Clone(),
+		PkScript: append([]byte(nil), output.PkScript...),
+	}
+	return cp
 }
 
 // ScheduleShutdown schedules a server shutdown after the specified duration.
@@ -3143,7 +3395,20 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	if err != nil {
 		return nil, err
 	}
-	contractResultBuilder := newContractResultBuilder(s.chainParams, templateResultBuilder, evmResultBuilder)
+	agentValidator, err := newAgentBlockValidator(s.db, s.chainParams, assetIndexer)
+	if err != nil {
+		return nil, err
+	}
+	agentResultBuilder, err := newAgentContractResultBuilder(s.db, s.chainParams, assetIndexer)
+	if err != nil {
+		return nil, err
+	}
+	agentLLM, err := newAgentLLMClientFromConfig()
+	if err != nil {
+		return nil, err
+	}
+	s.agentLLM = agentLLM
+	contractResultBuilder := newContractResultBuilder(s.chainParams, templateResultBuilder, evmResultBuilder, agentResultBuilder)
 
 	// Create a new block chain instance with the appropriate configuration.
 	s.chain, err = blockchain.New(&blockchain.Config{
@@ -3157,6 +3422,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		AssetIndexManager:      assetIndexer,
 		EVMBlockValidator:      evmValidator,
 		TemplateBlockValidator: templateValidator,
+		AgentBlockValidator:    agentValidator,
 		HashCache:              s.hashCache,
 		Prune:                  cfg.Prune * 1024 * 1024,
 		UtxoCacheMaxSize:       uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
@@ -3615,12 +3881,92 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 	}, nil
 }
 
-func newContractResultBuilder(params *chaincfg.Params, templateBuilder, evmBuilder mining.ContractResultBuilder) mining.ContractResultBuilder {
+func newAgentBlockValidator(db database.DB, params *chaincfg.Params,
+	assetIndexer *indexer.IndexerMgr) (blockchain.AgentBlockValidator, error) {
+
+	runtimeConfig, err := configuredAgentRuntimeConfig(params)
+	if err != nil {
+		return nil, err
+	}
+	stateStore := blockchain.NewAgentStateStore(db)
+	contractPrefix := agentcontract.TestnetContractPrefix
+	if params != nil {
+		contractPrefix = agentcontract.ContractPrefixForNet(params.Net)
+	}
+	btcdLog.Infof("Agent contract validation is enabled, agent address=%s bootstrap address=%s",
+		runtimeConfig.AgentAddress, runtimeConfig.BootstrapAddress)
+	return blockchain.NewAgentBlockExecutionValidator(blockchain.AgentBlockExecutionConfig{
+		ChainParams:         params,
+		ContractPrefix:      contractPrefix,
+		RuntimeConfig:       runtimeConfig,
+		GasConfig:           agentcontract.GasConfig{},
+		NewRuntime:          stateStore.RuntimeFactory(),
+		ResolveInvoker:      agentInvokerResolver(params, assetIndexer),
+		ResolveResultOutput: agentResultOutputResolver(params, contractPrefix),
+		ContractUTXOs:       agentContractUTXOProvider(assetIndexer),
+		SkipStateRootVerify: true,
+	}), nil
+}
+
+func newAgentContractResultBuilder(db database.DB, params *chaincfg.Params,
+	assetIndexer *indexer.IndexerMgr) (mining.ContractResultBuilder, error) {
+
+	runtimeConfig, err := configuredAgentRuntimeConfig(params)
+	if err != nil {
+		return nil, err
+	}
+	stateStore := blockchain.NewAgentStateStore(db)
+	contractPrefix := agentcontract.TestnetContractPrefix
+	if params != nil {
+		contractPrefix = agentcontract.ContractPrefixForNet(params.Net)
+	}
+	resolveOutput := agentResultOutputResolver(params, contractPrefix)
+	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
+		parentBlock := btcutil.NewBlock(&wire.MsgBlock{
+			Header: wire.BlockHeader{
+				PrevBlock: req.PrevHash,
+				Timestamp: req.Timestamp,
+			},
+		})
+		store, err := stateStore.RuntimeFactory()(parentBlock, nil)
+		if err != nil {
+			return mining.ContractBuildResult{}, err
+		}
+		txs := make([]*wire.MsgTx, 0, len(req.Txs))
+		for _, tx := range req.Txs {
+			txs = append(txs, tx.MsgTx())
+		}
+		result, err := agentcontract.BuildBlockResultTxs(agentcontract.BlockResultBuildRequest{
+			Txs:            txs,
+			Store:          store,
+			ContractPrefix: contractPrefix,
+			RuntimeConfig:  runtimeConfig,
+			GasConfig:      agentcontract.GasConfig{},
+			ContractUTXOs:  agentContractUTXOProvider(assetIndexer),
+			BlockHeight:    int64(req.Height),
+			ResolveInvoker: agentInvokerResolver(params, assetIndexer),
+			ResolveScript:  agentResultScriptResolver(params),
+			ResolveOutput:  resolveOutput,
+		})
+		if err != nil {
+			return mining.ContractBuildResult{}, err
+		}
+		return mining.ContractBuildResult{
+			ResultTxs: result.ResultTxs,
+			StateRoot: result.Execution.StateRoot,
+		}, nil
+	}, nil
+}
+
+func newContractResultBuilder(params *chaincfg.Params, templateBuilder, evmBuilder,
+	agentBuilder mining.ContractResultBuilder) mining.ContractResultBuilder {
+
 	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
 		var templateResult mining.ContractBuildResult
 		var err error
 		hasTemplateWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeTemplate)
 		hasEVMWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeEVM)
+		hasAgentWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeAgent)
 		if templateBuilder != nil && hasTemplateWork {
 			templateResult, err = templateBuilder(req)
 			if err != nil {
@@ -3644,14 +3990,77 @@ func newContractResultBuilder(params *chaincfg.Params, templateBuilder, evmBuild
 			}
 		}
 
-		resultTxs := make([]*wire.MsgTx, 0, len(templateResult.ResultTxs)+len(evmResult.ResultTxs))
+		var agentResult mining.ContractBuildResult
+		if agentBuilder != nil && hasAgentWork {
+			agentResult, err = agentBuilder(req)
+			if err != nil {
+				return mining.ContractBuildResult{}, err
+			}
+		}
+
+		resultTxs := make([]*wire.MsgTx, 0,
+			len(templateResult.ResultTxs)+len(evmResult.ResultTxs)+len(agentResult.ResultTxs))
 		resultTxs = append(resultTxs, templateResult.ResultTxs...)
 		resultTxs = append(resultTxs, evmResult.ResultTxs...)
+		resultTxs = append(resultTxs, agentResult.ResultTxs...)
+		stateRoot := contractcommon.CombineStateRoots(templateResult.StateRoot, evmResult.StateRoot,
+			agentResult.StateRoot)
 		return mining.ContractBuildResult{
 			ResultTxs: resultTxs,
-			StateRoot: contractcommon.CombineStateRoots(templateResult.StateRoot, evmResult.StateRoot),
+			StateRoot: stateRoot,
 		}, nil
 	}
+}
+
+func configuredAgentRuntimeConfig(params *chaincfg.Params) (agentcontract.RuntimeConfig, error) {
+	agentPubKey, err := hex.DecodeString(common.GetCoreNodePubKey())
+	if err != nil {
+		return agentcontract.RuntimeConfig{}, err
+	}
+	agentAddress, err := sidxcommon.PubKeyBytesToP2TRAddress(agentPubKey, params)
+	if err != nil {
+		return agentcontract.RuntimeConfig{}, err
+	}
+	bootstrapPubKey, err := hex.DecodeString(common.GetBootstrapPubKey())
+	if err != nil {
+		return agentcontract.RuntimeConfig{}, err
+	}
+	bootstrapAddress, err := sidxcommon.PubKeyBytesToP2TRAddress(bootstrapPubKey, params)
+	if err != nil {
+		return agentcontract.RuntimeConfig{}, err
+	}
+	return agentcontract.RuntimeConfig{
+		CoreNodeAddress:  agentAddress,
+		AgentAddress:     agentAddress,
+		BootstrapAddress: bootstrapAddress,
+	}, nil
+}
+
+func newAgentLLMClientFromConfig() (agentcontract.LLMClient, error) {
+	llmCfg := agentcontract.LLMConfig{
+		Provider:    cfg.AgentLLMProvider,
+		Endpoint:    cfg.AgentLLMEndpoint,
+		Model:       cfg.AgentLLMModel,
+		APIKey:      cfg.AgentLLMAPIKey,
+		Timeout:     cfg.AgentLLMTimeout,
+		Temperature: cfg.AgentLLMTemperature,
+		MaxTokens:   cfg.AgentLLMMaxTokens,
+	}
+	normalized, err := llmCfg.Normalized()
+	if err != nil {
+		return nil, err
+	}
+	if normalized.Provider == "" {
+		btcdLog.Infof("Agent LLM access is disabled")
+		return nil, nil
+	}
+	client, err := agentcontract.NewLLMClient(normalized)
+	if err != nil {
+		return nil, err
+	}
+	btcdLog.Infof("Agent LLM access is enabled, provider=%s endpoint=%s model=%s",
+		normalized.Provider, normalized.Endpoint, normalized.Model)
+	return client, nil
 }
 
 func configuredEVMGasConfig() (evm.GasConfig, error) {
@@ -3788,6 +4197,100 @@ func templateResultOutputResolver(params *chaincfg.Params, contractPrefix string
 	return func(resultTx *wire.MsgTx) ([]tmplcontract.ResultOutput, error) {
 		return tmplcontract.ResultOutputsFromTx(resultTx, contractPrefix,
 			templateScriptRecipientResolver(params))
+	}
+}
+
+func agentContractUTXOProvider(assetIndexer *indexer.IndexerMgr) agentcontract.ContractUTXOProvider {
+	if assetIndexer == nil {
+		return nil
+	}
+	return func(contract agentcontract.ContractAddress) ([]agentcontract.UTXO, error) {
+		address := contract.MustEncode()
+		byAsset := assetIndexer.GetAssetUTXOsInAddress(address)
+		utxos := make([]agentcontract.UTXO, 0)
+		seen := make(map[string]struct{})
+		for _, outputs := range byAsset {
+			for _, output := range outputs {
+				if output == nil {
+					continue
+				}
+				if _, ok := seen[output.OutPointStr]; ok {
+					continue
+				}
+				seen[output.OutPointStr] = struct{}{}
+				outpoint, err := wire.NewOutPointFromString(output.OutPointStr)
+				if err != nil {
+					return nil, err
+				}
+				if output.OutValue.Value < 0 {
+					return nil, fmt.Errorf("negative agent contract output value")
+				}
+				utxos = append(utxos, agentcontract.UTXO{
+					OutPoint: agentcontract.WireOutPointToAgent(*outpoint),
+					Contract: contract,
+					Value:    output.OutValue.Value,
+					Assets:   output.OutValue.Assets.Clone(),
+					Height:   int64(output.Height()),
+				})
+			}
+		}
+		return utxos, nil
+	}
+}
+
+func agentScriptRecipientResolver(params *chaincfg.Params) agentcontract.ScriptRecipientResolver {
+	return func(pkScript []byte) (string, bool, error) {
+		address, err := sidxcommon.GetBTCAddressFromPkScript(pkScript, params)
+		if err != nil {
+			return "", false, nil
+		}
+		return address, true, nil
+	}
+}
+
+func agentResultScriptResolver(params *chaincfg.Params) agentcontract.ResultRecipientScriptResolver {
+	return func(output agentcontract.ResultOutput) ([]byte, error) {
+		if contract, err := agentcontract.DecodeContractAddress(output.To); err == nil {
+			return agentcontract.ContractPkScript(contract)
+		}
+		addr, err := btcutil.DecodeAddress(output.To, params)
+		if err != nil {
+			return nil, err
+		}
+		return txscript.PayToAddrScript(addr)
+	}
+}
+
+func agentResultOutputResolver(params *chaincfg.Params, contractPrefix string) agentcontract.ResultOutputResolver {
+	return func(resultTx *wire.MsgTx) ([]agentcontract.ResultOutput, error) {
+		return agentcontract.ResultOutputsFromTx(resultTx, contractPrefix,
+			agentScriptRecipientResolver(params))
+	}
+}
+
+func agentInvokerResolver(params *chaincfg.Params, assetIndexer *indexer.IndexerMgr) agentcontract.InvokerResolver {
+	base := agentcontract.LastInputInvokerResolver(params)
+	return func(tx *wire.MsgTx, parsed agentcontract.ParsedTx) (string, error) {
+		invoker, err := base(tx, parsed)
+		if err == nil {
+			return invoker, nil
+		}
+		if tx == nil || len(tx.TxIn) == 0 || assetIndexer == nil {
+			return "", err
+		}
+		outpoint := tx.TxIn[len(tx.TxIn)-1].PreviousOutPoint.String()
+		output := assetIndexer.GetTxOutputWithUtxo(outpoint)
+		if output == nil {
+			return "", err
+		}
+		address, ok, scriptErr := agentScriptRecipientResolver(params)(output.OutValue.PkScript)
+		if scriptErr != nil {
+			return "", scriptErr
+		}
+		if !ok || address == "" {
+			return "", err
+		}
+		return address, nil
 	}
 }
 

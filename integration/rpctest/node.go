@@ -53,7 +53,7 @@ func newConfig(nodeDir, certFile, keyFile string, extra []string,
 		var err error
 		btcdPath, err = btcdExecutablePath()
 		if err != nil {
-			btcdPath = "btcd"
+			return nil, err
 		}
 	}
 
@@ -146,6 +146,7 @@ func (n *nodeConfig) arguments() []string {
 // command returns the exec.Cmd which will be used to start the btcd process.
 func (n *nodeConfig) command() *exec.Cmd {
 	cmd := exec.Command(n.exe, n.arguments()...)
+	cmd.Dir = n.nodeDir
 	if len(n.env) > 0 {
 		cmd.Env = append(os.Environ(), n.env...)
 	}

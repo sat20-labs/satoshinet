@@ -5,7 +5,11 @@ package stp
 import (
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"plugin"
+
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
 var _walletMgr *plugin.Plugin
@@ -15,8 +19,15 @@ func LoadSTP(dbPath string) error {
 		return nil
 	}
 
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Printf("os.Executable failed. %v", err)
+		return err
+	}
+	pluginPath := filepath.Join(filepath.Dir(exePath), "wallet.so")
+
 	// 打开插件文件
-	p, err := plugin.Open("./wallet.so")
+	p, err := plugin.Open(pluginPath)
 	if err != nil {
 		log.Printf("plugin.Open failed. %v", err)
 		return err
@@ -43,7 +54,6 @@ func LoadSTP(dbPath string) error {
 	_walletMgr = p
 	return nil
 }
-
 
 func StartSTP() error {
 	if _walletMgr == nil {
@@ -73,26 +83,25 @@ func StartSTP() error {
 
 func ReleaseSTP() {
 	if _walletMgr == nil {
-		return 
+		return
 	}
 
 	symbol, err := _walletMgr.Lookup("ReleaseWalletMgr")
 	if err != nil {
 		log.Printf("Lookup ReleaseWalletMgr failed: %v", err)
-		return 
+		return
 	}
 
 	f, ok := symbol.(func())
 	if !ok {
 		log.Printf("symbol type assertion failed")
-		return 
+		return
 	}
 
 	f()
 
 	_walletMgr = nil
 }
-
 
 func SignMsg(msg []byte) ([]byte, error) {
 	if _walletMgr == nil {
@@ -102,7 +111,7 @@ func SignMsg(msg []byte) ([]byte, error) {
 	symbol, err := _walletMgr.Lookup("SignMsg")
 	if err != nil {
 		log.Printf("Lookup SignMsg failed: %v", err)
-		return  nil, err
+		return nil, err
 	}
 
 	f, ok := symbol.(func([]byte) ([]byte, error))
@@ -114,7 +123,27 @@ func SignMsg(msg []byte) ([]byte, error) {
 	return f(msg)
 }
 
-func IsWalletExists() (bool) {
+func SignPsbt_SatsNet(packet *spsbt.Packet) error {
+	if _walletMgr == nil {
+		return fmt.Errorf("WalletManager not init")
+	}
+
+	symbol, err := _walletMgr.Lookup("SignPsbt_SatsNet")
+	if err != nil {
+		log.Printf("Lookup SignPsbt_SatsNet failed: %v", err)
+		return err
+	}
+
+	f, ok := symbol.(func(*spsbt.Packet) error)
+	if !ok {
+		log.Printf("symbol type assertion failed")
+		return fmt.Errorf("symbol type assertion failed")
+	}
+
+	return f(packet)
+}
+
+func IsWalletExists() bool {
 	if _walletMgr == nil {
 		return false
 	}
@@ -122,10 +151,10 @@ func IsWalletExists() (bool) {
 	symbol, err := _walletMgr.Lookup("IsWalletExisting")
 	if err != nil {
 		log.Printf("Lookup IsWalletExisting failed: %v", err)
-		return  false
+		return false
 	}
 
-	isWalletExisting, ok := symbol.(func() (bool))
+	isWalletExisting, ok := symbol.(func() bool)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return false
@@ -134,8 +163,7 @@ func IsWalletExists() (bool) {
 	return isWalletExisting()
 }
 
-
-func IsUnlocked() (bool) {
+func IsUnlocked() bool {
 	if _walletMgr == nil {
 		return false
 	}
@@ -143,10 +171,10 @@ func IsUnlocked() (bool) {
 	symbol, err := _walletMgr.Lookup("IsUnlocked")
 	if err != nil {
 		log.Printf("Lookup IsUnlocked failed: %v", err)
-		return  false
+		return false
 	}
 
-	isUnlocked, ok := symbol.(func() (bool))
+	isUnlocked, ok := symbol.(func() bool)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return false
@@ -154,7 +182,6 @@ func IsUnlocked() (bool) {
 
 	return isUnlocked()
 }
-
 
 func CreateWallet(pw string) (string, error) {
 	if _walletMgr == nil {
@@ -176,7 +203,7 @@ func CreateWallet(pw string) (string, error) {
 	return f(pw)
 }
 
-func UnlockWallet(pw string) (error) {
+func UnlockWallet(pw string) error {
 	if _walletMgr == nil {
 		return fmt.Errorf("WalletManager not init")
 	}
@@ -187,7 +214,7 @@ func UnlockWallet(pw string) (error) {
 		return err
 	}
 
-	f, ok := symbol.(func(string) (error))
+	f, ok := symbol.(func(string) error)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return fmt.Errorf("symbol type assertion failed")
@@ -196,7 +223,7 @@ func UnlockWallet(pw string) (error) {
 	return f(pw)
 }
 
-func ImportWallet(mn, pw string) (error) {
+func ImportWallet(mn, pw string) error {
 	if _walletMgr == nil {
 		return fmt.Errorf("WalletManager not init")
 	}
@@ -207,7 +234,7 @@ func ImportWallet(mn, pw string) (error) {
 		return err
 	}
 
-	f, ok := symbol.(func(string, string) (error))
+	f, ok := symbol.(func(string, string) error)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return fmt.Errorf("symbol type assertion failed")
@@ -224,7 +251,7 @@ func GetPubKey() ([]byte, error) {
 	symbol, err := _walletMgr.Lookup("GetPubKey")
 	if err != nil {
 		log.Printf("Lookup GetPubKey failed: %v", err)
-		return  nil, err
+		return nil, err
 	}
 
 	getPubKey, ok := symbol.(func() ([]byte, error))

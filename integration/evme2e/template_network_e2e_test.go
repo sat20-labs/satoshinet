@@ -1177,6 +1177,29 @@ func waitForPOSTx(t *testing.T, node *rpctest.Harness, nodes []*rpctest.Harness,
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	for i, n := range nodes {
+		if n == nil || n.Client == nil {
+			continue
+		}
+		_, height, heightErr := n.Client.GetBestBlock()
+		mempool, mempoolErr := n.Client.GetRawMempool()
+		verbose, verboseErr := n.Client.GetRawTransactionVerbose(&txHash)
+		confirmations := uint64(0)
+		if verboseErr == nil {
+			confirmations = verbose.Confirmations
+		}
+		t.Logf("waitForPOSTx timeout node=%d rpc=%s height=%d height_err=%v mempool_len=%d mempool_err=%v tx_confirmations=%d tx_verbose_err=%v",
+			i, n.RPCAddress(), height, heightErr, len(mempool), mempoolErr, confirmations, verboseErr)
+		if logPath := n.LogFile(); logPath != "" {
+			if data, err := os.ReadFile(logPath); err == nil {
+				const maxLogTail = 8192
+				if len(data) > maxLogTail {
+					data = data[len(data)-maxLogTail:]
+				}
+				t.Logf("waitForPOSTx timeout node=%d log_tail:\n%s", i, string(data))
+			}
+		}
+	}
 	verbose, err := node.Client.GetRawTransactionVerbose(&txHash)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, verbose.Confirmations, uint64(1))

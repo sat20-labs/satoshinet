@@ -68,7 +68,11 @@ func ContractUTXOProviderWithTxOutputs(base ContractUTXOProvider, txs []*wire.Ms
 		if err != nil {
 			continue
 		}
-		for _, output := range parsed.ContractOutputs {
+		outputs := parsed.ContractOutputs
+		if len(outputs) == 0 {
+			outputs = contractOutputsFromTx(tx, resolver)
+		}
+		for _, output := range outputs {
 			contract := output.Contract
 			current[contract.EncodeAddress()] = append(current[contract.EncodeAddress()], UTXO{
 				OutPoint: output.OutPoint,
@@ -109,6 +113,33 @@ func ContractUTXOProviderWithTxOutputs(base ContractUTXOProvider, txs []*wire.Ms
 		})
 		return out, nil
 	}
+}
+
+func contractOutputsFromTx(tx *wire.MsgTx, resolver ContractScriptResolver) []ContractOutput {
+	if tx == nil || resolver == nil {
+		return nil
+	}
+	txid := tx.TxID()
+	outputs := make([]ContractOutput, 0)
+	for i, txOut := range tx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		contract, ok, err := resolver(txOut.PkScript)
+		if err != nil || !ok || contract.ContractType() != ContractTypeAgent {
+			continue
+		}
+		vout := uint32(i)
+		outputs = append(outputs, ContractOutput{
+			OutPoint: OutPoint{TxID: txid, Vout: vout},
+			Vout:     vout,
+			Contract: contract,
+			Value:    txOut.Value,
+			Assets:   txOut.Assets.Clone(),
+			PkScript: cloneBytes(txOut.PkScript),
+		})
+	}
+	return outputs
 }
 
 func BuildSettlementResultPlan(plan *PredictionSettlementPlan) (ResultPlan, error) {
@@ -153,6 +184,10 @@ func AugmentResultPlans(plans []ResultPlan, contractUTXOs ContractUTXOProvider) 
 			return nil, err
 		}
 		if contractUTXOs == nil {
+			continue
+		}
+		if len(out[i].Outputs) == 0 {
+			out[i].Inputs = uniqueOutPoints(out[i].Inputs)
 			continue
 		}
 		utxos, err := contractUTXOs(contract)
@@ -561,13 +596,13 @@ func verifyResultOutputs(actual, expected []ResultOutput) error {
 		return fmt.Errorf("result output count mismatch: got %d want %d", len(actual), len(expected))
 	}
 	for i := range expected {
-		if actual[i].To != expected[i].To ||
-			actual[i].Value != expected[i].Value ||
-			actual[i].AssetName != expected[i].AssetName ||
-			actual[i].AssetAmt != expected[i].AssetAmt {
+		got := normalizeResultOutput(actual[i])
+		want := normalizeResultOutput(expected[i])
+		if got.To != want.To ||
+			got.Value != want.Value {
 			return fmt.Errorf("result output %d mismatch", i)
 		}
-		if !actual[i].Assets.Equal(expected[i].Assets) {
+		if !got.Assets.Equal(want.Assets) {
 			return fmt.Errorf("result output %d assets mismatch", i)
 		}
 	}

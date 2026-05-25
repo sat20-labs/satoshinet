@@ -69,6 +69,8 @@ const (
 	defaultMaxOrphanTxSize       = 100000
 	defaultSigCacheMaxSize       = 100000
 	defaultUtxoCacheMaxSizeMiB   = 250
+	defaultAgentLLMTimeout       = time.Second * 60
+	defaultAgentCheckInterval    = time.Minute
 	sampleConfigFilename         = "sample-satsnet.conf"
 	defaultTxIndex               = true
 	defaultAddrIndex             = false
@@ -114,6 +116,14 @@ type config struct {
 	AddrIndex            bool          `long:"addrindex" description:"Maintain a full address-based transaction index which makes the searchrawtransactions RPC available"`
 	AgentBlacklist       []string      `long:"agentblacklist" description:"A comma separated list of user-agent substrings which will cause btcd to reject any peers whose user-agent contains any of the blacklisted substrings."`
 	AgentWhitelist       []string      `long:"agentwhitelist" description:"A comma separated list of user-agent substrings which will cause btcd to require all peers' user-agents to contain one of the whitelisted substrings. The blacklist is applied before the whitelist, and an empty whitelist will allow all agents that do not fail the blacklist."`
+	AgentLLMProvider     string        `long:"agentllmprovider" description:"Natural-language contract Agent LLM provider. Supported values: ollama, openai. Empty disables Agent LLM access."`
+	AgentLLMEndpoint     string        `long:"agentllmendpoint" description:"Natural-language contract Agent LLM API endpoint. Ollama defaults to http://127.0.0.1:11434; OpenAI-compatible defaults to https://api.openai.com/v1."`
+	AgentLLMModel        string        `long:"agentllmmodel" description:"Natural-language contract Agent LLM model name."`
+	AgentLLMAPIKey       string        `long:"agentllmapikey" default-mask:"-" description:"Natural-language contract Agent LLM API key for OpenAI-compatible endpoints."`
+	AgentLLMTimeout      time.Duration `long:"agentllmtimeout" description:"Natural-language contract Agent LLM request timeout. Valid time units are {s, m, h}."`
+	AgentLLMTemperature  float64       `long:"agentllmtemperature" description:"Natural-language contract Agent LLM sampling temperature."`
+	AgentLLMMaxTokens    int           `long:"agentllmmaxtokens" description:"Natural-language contract Agent LLM maximum response tokens. Zero uses provider default."`
+	AgentCheckInterval   time.Duration `long:"agentcheckinterval" description:"Natural-language contract Agent polling interval. Valid time units are {s, m, h}."`
 	BanDuration          time.Duration `long:"banduration" description:"How long to ban misbehaving peers.  Valid time units are {s, m, h}.  Minimum 1 second"`
 	BanThreshold         uint32        `long:"banthreshold" description:"Maximum allowed ban score before disconnecting and banning misbehaving peers."`
 	BlockMaxSize         uint32        `long:"blockmaxsize" description:"Maximum block size in bytes to be used when creating a block"`
@@ -137,7 +147,7 @@ type config struct {
 	MiningPubKey         string        `long:"miningpubkey" description:"The public key of mining node"`
 	ServerPubKey         string        `long:"serverpubkey" description:"The public key of server node"`
 	TimerGenerate        bool          `long:"timergenerate" description:"Generate (mine) bitcoins using the POS with timer enabled"`
-	EnableSTP        	 bool          `long:"enableSTP" description:"Enable STP service"`
+	EnableSTP            bool          `long:"enableSTP" description:"Enable STP service"`
 	IndexerScheme        string        `long:"indexerscheme" description:"The scheme for indexer"`
 	IndexerAccessKey     string        `long:"indexeraccesskey" description:"The access key of indexer"`
 	IndexerHost          string        `long:"indexerhost" description:"The host for indexer"`
@@ -488,6 +498,7 @@ func loadConfig() (*config, []string, error) {
 		DbType:               defaultDbType,
 		RPCKey:               rpcKeyFile,
 		RPCCert:              rpcCertFile,
+		AgentCheckInterval:   defaultAgentCheckInterval,
 		MinRelayTxFee:        mempool.DefaultMinRelayTxFee.ToBTC(),
 		FreeTxRelayLimit:     defaultFreeTxRelayLimit,
 		TrickleInterval:      defaultTrickleInterval,
@@ -499,6 +510,7 @@ func loadConfig() (*config, []string, error) {
 		MaxOrphanTxs:         defaultMaxOrphanTransactions,
 		SigCacheMaxSize:      defaultSigCacheMaxSize,
 		UtxoCacheMaxSizeMiB:  defaultUtxoCacheMaxSizeMiB,
+		AgentLLMTimeout:      defaultAgentLLMTimeout,
 		Generate:             defaultGenerate,
 		TxIndex:              defaultTxIndex,
 		AddrIndex:            defaultAddrIndex,
@@ -669,6 +681,39 @@ func loadConfig() (*config, []string, error) {
 		str := "%s: The mainnet, testnet, regtest, segnet, signet and simnet" +
 			"params can't be used together -- choose one of the " +
 			"five"
+		err := fmt.Errorf(str, funcName)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+
+	cfg.AgentLLMProvider = strings.ToLower(strings.TrimSpace(cfg.AgentLLMProvider))
+	cfg.AgentLLMEndpoint = strings.TrimSpace(cfg.AgentLLMEndpoint)
+	cfg.AgentLLMModel = strings.TrimSpace(cfg.AgentLLMModel)
+	switch cfg.AgentLLMProvider {
+	case "", "ollama", "openai":
+	default:
+		str := "%s: unsupported agentllmprovider %q"
+		err := fmt.Errorf(str, funcName, cfg.AgentLLMProvider)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+	if cfg.AgentLLMProvider != "" && cfg.AgentLLMModel == "" {
+		str := "%s: agentllmmodel is required when agentllmprovider is set"
+		err := fmt.Errorf(str, funcName)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+	if cfg.AgentLLMTimeout <= 0 {
+		cfg.AgentLLMTimeout = defaultAgentLLMTimeout
+	}
+	if cfg.AgentCheckInterval <= 0 {
+		cfg.AgentCheckInterval = defaultAgentCheckInterval
+	}
+	if cfg.AgentLLMMaxTokens < 0 {
+		str := "%s: agentllmmaxtokens cannot be negative"
 		err := fmt.Errorf(str, funcName)
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, usageMessage)
@@ -1476,7 +1521,7 @@ func getP2WSHAddress(aPub, bPub []byte, params *chaincfg.Params) (btcutil.Addres
 	if err != nil {
 		return nil, err
 	}
-    pkScript, err := WitnessScriptHash(witnessScript)
+	pkScript, err := WitnessScriptHash(witnessScript)
 	if err != nil {
 		return nil, err
 	}

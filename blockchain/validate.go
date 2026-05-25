@@ -1559,14 +1559,15 @@ func (b *BlockChain) validateContractBlock(block *btcutil.Block, view *UtxoViewp
 	if b.contractBlockValidator != nil {
 		return b.contractBlockValidator.ValidateContractBlock(block, view)
 	}
-	if b.templateBlockValidator == nil && b.evmBlockValidator != nil {
+	if b.templateBlockValidator == nil && b.agentBlockValidator == nil && b.evmBlockValidator != nil {
 		return b.evmBlockValidator.ValidateEVMBlock(block, view)
 	}
-	if b.templateBlockValidator != nil || b.evmBlockValidator != nil {
+	if b.templateBlockValidator != nil || b.evmBlockValidator != nil || b.agentBlockValidator != nil {
 		validator := NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
 			ChainParams:       b.chainParams,
 			TemplateValidator: b.templateBlockValidator,
 			EVMValidator:      b.evmBlockValidator,
+			AgentValidator:    b.agentBlockValidator,
 		})
 		return validator.ValidateContractBlock(block, view)
 	}

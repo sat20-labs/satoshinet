@@ -14,6 +14,7 @@ type CompositeContractBlockValidatorConfig struct {
 
 	TemplateValidator TemplateBlockValidator
 	EVMValidator      EVMBlockValidator
+	AgentValidator    AgentBlockValidator
 }
 
 type CompositeContractBlockValidator struct {
@@ -27,6 +28,7 @@ func NewCompositeContractBlockValidator(cfg CompositeContractBlockValidatorConfi
 func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error {
 	hasTemplateWork := blockContainsContractTypeWork(block, v.cfg.ChainParams, contractcommon.ContractTypeTemplate)
 	hasEVMWork := blockContainsContractTypeWork(block, v.cfg.ChainParams, contractcommon.ContractTypeEVM)
+	hasAgentWork := blockContainsContractTypeWork(block, v.cfg.ChainParams, contractcommon.ContractTypeAgent)
 
 	if v.cfg.TemplateValidator != nil && hasTemplateWork {
 		if err := v.cfg.TemplateValidator.ValidateTemplateBlock(block, view); err != nil {
@@ -38,13 +40,18 @@ func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.B
 			return err
 		}
 	}
-	if hasTemplateWork || hasEVMWork {
-		return v.verifyCombinedStateRoot(block, hasTemplateWork, hasEVMWork)
+	if v.cfg.AgentValidator != nil && hasAgentWork {
+		if err := v.cfg.AgentValidator.ValidateAgentBlock(block, view); err != nil {
+			return err
+		}
+	}
+	if hasTemplateWork || hasEVMWork || hasAgentWork {
+		return v.verifyCombinedStateRoot(block, hasTemplateWork, hasEVMWork, hasAgentWork)
 	}
 	return nil
 }
 
-func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil.Block, hasTemplateWork, hasEVMWork bool) error {
+func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil.Block, hasTemplateWork, hasEVMWork, hasAgentWork bool) error {
 	var templateRoot [32]byte
 	if hasTemplateWork {
 		provider, ok := v.cfg.TemplateValidator.(TemplateBlockStateProvider)
@@ -69,7 +76,19 @@ func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil
 		}
 		evmRoot = postState.StateRoot()
 	}
-	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot)
+	var agentRoot [32]byte
+	if hasAgentWork {
+		provider, ok := v.cfg.AgentValidator.(AgentBlockStateProvider)
+		if !ok {
+			return ruleError(ErrInvalidEVMBlock, "agent validator cannot expose post-state")
+		}
+		postState, ok := provider.AgentBlockPostState(block.Hash())
+		if !ok || postState == nil {
+			return ruleError(ErrInvalidEVMBlock, "missing agent post-state")
+		}
+		agentRoot = postState.StateRoot()
+	}
+	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot, agentRoot)
 	if err := contractengine.VerifyCoinbaseStateRoot(block.Transactions()[0].MsgTx(), expected); err != nil {
 		return ruleError(ErrInvalidEVMBlock, fmt.Sprintf("combined contract state root: %v", err))
 	}

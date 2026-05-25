@@ -14,6 +14,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/contract/agent"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/database"
@@ -109,6 +110,7 @@ type BlockChain struct {
 	assetIndexerMgr        *indexer.IndexerMgr
 	evmBlockValidator      EVMBlockValidator
 	templateBlockValidator TemplateBlockValidator
+	agentBlockValidator    AgentBlockValidator
 	contractBlockValidator ContractBlockValidator
 	hashCache              *txscript.HashCache
 
@@ -697,6 +699,14 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 				}
 			}
 		}
+		if provider, ok := b.agentBlockValidator.(AgentBlockStateProvider); ok {
+			if postState, ok := provider.AgentBlockPostState(block.Hash()); ok {
+				err = dbStoreAgentBlockState(dbTx, block.Hash(), postState)
+				if err != nil {
+					return err
+				}
+			}
+		}
 
 		// Allow the index manager to call each of the currently active
 		// optional indexes with the block being connected so they can
@@ -848,6 +858,10 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 			return err
 		}
 		err = dbDeleteTemplateBlockState(dbTx, block.Hash(), &prevNode.hash)
+		if err != nil {
+			return err
+		}
+		err = dbDeleteAgentBlockState(dbTx, block.Hash(), &prevNode.hash)
 		if err != nil {
 			return err
 		}
@@ -2180,6 +2194,18 @@ type TemplateBlockStateProvider interface {
 	TemplateBlockPostState(hash *chainhash.Hash) (*template.RuntimeStore, bool)
 }
 
+// AgentBlockValidator validates SatoshiNet Agent contract execution and
+// settlement for a block after its input UTXOs have been loaded into the view.
+type AgentBlockValidator interface {
+	ValidateAgentBlock(block *btcutil.Block, view *UtxoViewpoint) error
+}
+
+// AgentBlockStateProvider is optionally implemented by an AgentBlockValidator
+// that can expose the post-state generated during block validation.
+type AgentBlockStateProvider interface {
+	AgentBlockPostState(hash *chainhash.Hash) (*agent.RuntimeStore, bool)
+}
+
 // ContractBlockValidator validates all enabled contract execution engines for
 // a block after its input UTXOs have been loaded into the view.
 type ContractBlockValidator interface {
@@ -2256,9 +2282,15 @@ type Config struct {
 	// connection.
 	TemplateBlockValidator TemplateBlockValidator
 
+	// AgentBlockValidator optionally validates Agent contract execution,
+	// Result TX settlement, and coinbase state-root commitments during block
+	// connection.
+	AgentBlockValidator AgentBlockValidator
+
 	// ContractBlockValidator optionally validates all contract execution
 	// engines through a single external interface. If nil, a composite
-	// validator is built from EVMBlockValidator and TemplateBlockValidator.
+	// validator is built from EVMBlockValidator, TemplateBlockValidator, and
+	// AgentBlockValidator.
 	ContractBlockValidator ContractBlockValidator
 
 	// HashCache defines a transaction hash mid-state cache to use when
@@ -2314,11 +2346,13 @@ func New(config *Config) (*BlockChain, error) {
 	adjustmentFactor := params.RetargetAdjustmentFactor
 	contractBlockValidator := config.ContractBlockValidator
 	if contractBlockValidator == nil &&
-		(config.TemplateBlockValidator != nil || config.EVMBlockValidator != nil) {
+		(config.TemplateBlockValidator != nil || config.EVMBlockValidator != nil ||
+			config.AgentBlockValidator != nil) {
 		contractBlockValidator = NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
 			ChainParams:       params,
 			TemplateValidator: config.TemplateBlockValidator,
 			EVMValidator:      config.EVMBlockValidator,
+			AgentValidator:    config.AgentBlockValidator,
 		})
 	}
 
@@ -2333,6 +2367,7 @@ func New(config *Config) (*BlockChain, error) {
 		assetIndexerMgr:        config.AssetIndexManager,
 		evmBlockValidator:      config.EVMBlockValidator,
 		templateBlockValidator: config.TemplateBlockValidator,
+		agentBlockValidator:    config.AgentBlockValidator,
 		contractBlockValidator: contractBlockValidator,
 		minRetargetTimespan:    targetTimespan / adjustmentFactor,
 		maxRetargetTimespan:    targetTimespan * adjustmentFactor,

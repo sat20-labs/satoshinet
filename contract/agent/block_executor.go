@@ -129,19 +129,22 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx) error {
 	}
 	e.Store.Add(validated.Runtime)
 	record := ExecutionRecord{
-		Height:         e.BlockHeight,
-		TxID:           tx.TxID(),
-		Type:           TxTypeDeploy,
-		Kind:           ExecutionKindDeploy,
-		CallID:         DeriveDeployCallID(tx.TxID(), validated.Address),
-		Contract:       validated.Address,
-		Status:         ResultPayload{},
-		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  contractOutputOutPoints(validated.FundingOutputs),
-		RequiresResult: true,
+		Height:        e.BlockHeight,
+		TxID:          tx.TxID(),
+		Type:          TxTypeDeploy,
+		Kind:          ExecutionKindDeploy,
+		CallID:        DeriveDeployCallID(tx.TxID(), validated.Address),
+		Contract:      validated.Address,
+		Status:        ResultPayload{},
+		GasLimit:      validated.Payload.GasLimit,
+		FundingInputs: contractOutputOutPoints(validated.FundingOutputs),
 	}
 	e.records = append(e.records, record)
-	e.resultPlans = append(e.resultPlans, stateResultPlan(validated.Address, record.FundingInputs))
+	if resultPlan, ok := stateResultPlan(validated.Address, validated.FundingOutputs); ok {
+		record.RequiresResult = true
+		e.records[len(e.records)-1] = record
+		e.resultPlans = append(e.resultPlans, resultPlan)
+	}
 	return nil
 }
 
@@ -185,7 +188,13 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 		e.resultPlans = append(e.resultPlans, resultPlan)
 	}
 
-	requiresResult := settlement != nil || validated.Payload.Action == InvokeAPIReady
+	requiresResult := settlement != nil
+	var readyResultPlan ResultPlan
+	if validated.Payload.Action == InvokeAPIReady {
+		var ok bool
+		readyResultPlan, ok = stateResultPlan(validated.Contract, validated.FundingOutputs)
+		requiresResult = ok
+	}
 	record := ExecutionRecord{
 		Height:         e.BlockHeight,
 		TxID:           tx.TxID(),
@@ -198,8 +207,8 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 		RequiresResult: requiresResult,
 	}
 	e.records = append(e.records, record)
-	if validated.Payload.Action == InvokeAPIReady {
-		e.resultPlans = append(e.resultPlans, stateResultPlan(validated.Contract, record.FundingInputs))
+	if validated.Payload.Action == InvokeAPIReady && requiresResult {
+		e.resultPlans = append(e.resultPlans, readyResultPlan)
 	}
 	return nil
 }
@@ -255,11 +264,21 @@ func contractOutputOutPoints(outputs []ContractOutput) []OutPoint {
 	return out
 }
 
-func stateResultPlan(contract ContractAddress, inputs []OutPoint) ResultPlan {
+func stateResultPlan(contract ContractAddress, outputs []ContractOutput) (ResultPlan, bool) {
+	inputs := make([]OutPoint, 0, len(outputs))
+	for _, output := range outputs {
+		if output.Value != 0 || len(output.Assets) != 0 {
+			continue
+		}
+		inputs = append(inputs, output.OutPoint)
+	}
+	if len(inputs) == 0 {
+		return ResultPlan{}, false
+	}
 	return ResultPlan{
 		Contract: contract.EncodeAddress(),
 		Inputs:   uniqueOutPoints(append([]OutPoint(nil), inputs...)),
-	}
+	}, true
 }
 
 func cloneExecutionRecords(in []ExecutionRecord) []ExecutionRecord {

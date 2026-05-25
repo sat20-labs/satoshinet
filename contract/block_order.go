@@ -40,6 +40,7 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, params *chaincfg.Params) (TxClass, 
 }
 
 func ClassifyTxForBlockOrderWithPrefix(tx *wire.MsgTx, prefix string) (TxClass, bool, error) {
+	var firstErr error
 	templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx, prefix)
 	if templateErr == nil && templateInfo.IsTemplate {
 		return TxClass{
@@ -49,15 +50,12 @@ func ClassifyTxForBlockOrderWithPrefix(tx *wire.MsgTx, prefix string) (TxClass, 
 			GasLimit:     templateInfo.GasLimit,
 		}, true, nil
 	}
+	if templateErr != nil {
+		firstErr = templateErr
+	}
 
 	info, err := evm.ClassifyTxForBlockOrder(tx, prefix)
-	if err != nil {
-		if templateErr != nil {
-			return TxClass{}, false, templateErr
-		}
-		return TxClass{}, false, err
-	}
-	if info.IsEVM {
+	if err == nil && info.IsEVM {
 		return TxClass{
 			ContractType: contractcommon.ContractTypeEVM,
 			TxType:       contractcommon.TxType(info.Type),
@@ -65,18 +63,24 @@ func ClassifyTxForBlockOrderWithPrefix(tx *wire.MsgTx, prefix string) (TxClass, 
 			GasLimit:     info.GasLimit,
 		}, true, nil
 	}
+	if err != nil && firstErr == nil {
+		firstErr = err
+	}
 
 	agentInfo, agentErr := agentcontract.ClassifyTxForBlockOrder(tx, prefix)
-	if agentErr != nil {
-		return TxClass{}, false, agentErr
-	}
-	if agentInfo.IsAgent {
+	if agentErr == nil && agentInfo.IsAgent {
 		return TxClass{
 			ContractType: contractcommon.ContractTypeAgent,
 			TxType:       contractcommon.TxType(agentInfo.Type),
 			Priority:     PriorityAgent,
 			GasLimit:     agentInfo.GasLimit,
 		}, true, nil
+	}
+	if agentErr != nil && firstErr == nil {
+		firstErr = agentErr
+	}
+	if firstErr != nil {
+		return TxClass{}, false, firstErr
 	}
 	return TxClass{}, false, nil
 }

@@ -4,14 +4,14 @@ package stp
 
 import (
 	"log"
+
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	"github.com/sat20-labs/satoshinet/stp/wallet/plugin"
 )
-
 
 /*
 非plugin模式，需要将sat20wallet/sdk的所有代码，copy到./sdk，然后编译。用于不支持plugin的平台，比如windows。
 */
-
 
 func LoadSTP(dbPath string) error {
 
@@ -20,11 +20,9 @@ func LoadSTP(dbPath string) error {
 		log.Printf("InitWalletMgr failed: %v", err)
 		return err
 	}
-	
 
 	return nil
 }
-
 
 func StartSTP() error {
 	err := plugin.StartWalletMgr()
@@ -44,27 +42,29 @@ func SignMsg(msg []byte) ([]byte, error) {
 	return plugin.SignMsg(msg)
 }
 
-func IsWalletExists() (bool) {
+func SignPsbt_SatsNet(packet *spsbt.Packet) error {
+	return plugin.SignPsbt_SatsNet(packet)
+}
+
+func IsWalletExists() bool {
 	return plugin.IsWalletExisting()
 }
 
-
-func IsUnlocked() (bool) {
+func IsUnlocked() bool {
 	return plugin.IsUnlocked()
 }
-
 
 func CreateWallet(pw string) (string, error) {
 
 	return plugin.CreateWallet(pw)
 }
 
-func UnlockWallet(pw string) (error) {
+func UnlockWallet(pw string) error {
 
 	return plugin.UnlockWallet(pw)
 }
 
-func ImportWallet(mn, pw string) (error) {
+func ImportWallet(mn, pw string) error {
 
 	return plugin.ImportWallet(mn, pw)
 }

@@ -1,9 +1,11 @@
-//go:build !rpctest && !stp_source && !stp_plugin && !wallet_source && !wallet_plugin
+//go:build !stp_source && !stp_plugin && !wallet_source && !wallet_plugin
 
 package stp
 
 import (
 	"fmt"
+
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
 func LoadSTP(dbPath string) error {
@@ -19,6 +21,10 @@ func ReleaseSTP() {
 
 func SignMsg(msg []byte) ([]byte, error) {
 	return nil, fmt.Errorf("not implemented")
+}
+
+func SignPsbt_SatsNet(packet *spsbt.Packet) error {
+	return fmt.Errorf("not implemented")
 }
 
 func IsWalletExists() bool {
