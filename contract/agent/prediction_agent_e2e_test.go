@@ -157,6 +157,62 @@ func TestPredictionAgentUsesFinalRedirectURL(t *testing.T) {
 	}
 }
 
+func TestPredictionAgentSearchesSameSiteResultLinkWhenSourcePending(t *testing.T) {
+	var resultServer *httptest.Server
+	resultServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/match/preview/123":
+			_, _ = w.Write([]byte(`<html><body>
+				<h1>Upcoming game</h1>
+				<a href="/match/result/123">Final score</a>
+			</body></html>`))
+		case "/match/result/123":
+			_, _ = w.Write([]byte(`<html><body>Final: Team A 101, Team B 98.</body></html>`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer resultServer.Close()
+
+	client := &sequenceLLMClient{responses: []string{
+		`{"result_type":"pending","reason":"preview page has no final score"}`,
+		`{"result_type":"outcome","outcome_id":"a","reason":"Team A won"}`,
+	}}
+	contract := predictionContractForResultServer(resultServer.URL)
+	corenodeAgent := NewPredictionAgent(client)
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.ResultURL != resultServer.URL+"/match/result/123" {
+		t.Fatalf("result url mismatch: %s", param.ResultURL)
+	}
+	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "a" {
+		t.Fatalf("decision mismatch: %#v", param)
+	}
+	if client.calls != 2 {
+		t.Fatalf("llm call count mismatch: %d", client.calls)
+	}
+}
+
+type sequenceLLMClient struct {
+	responses []string
+	calls     int
+}
+
+func (c *sequenceLLMClient) Complete(ctx context.Context, req LLMCompletionRequest) (LLMCompletionResponse, error) {
+	if c.calls >= len(c.responses) {
+		return LLMCompletionResponse{}, ErrPredictionResultPending
+	}
+	response := c.responses[c.calls]
+	c.calls++
+	return LLMCompletionResponse{Content: response}, nil
+}
+
 func predictionContractForResultServer(serverURL string) PredictionContract {
 	contract := validPredictionContract()
 	contract.SourceURL = serverURL + "/match/preview/123"

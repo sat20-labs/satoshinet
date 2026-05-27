@@ -65,8 +65,9 @@ func TestHaveBlock(t *testing.T) {
 	}
 
 	// Insert an orphan block.
-	_, isOrphan, err := chain.ProcessBlock(btcutil.NewBlock(&Block100000),
-		BFNone)
+	orphanMsgBlock := satoshiNetBlock100000()
+	orphanBlock := btcutil.NewBlock(&orphanMsgBlock)
+	_, isOrphan, err := chain.ProcessBlock(orphanBlock, BFNoPoWCheck)
 	if err != nil {
 		t.Errorf("Unable to process block: %v", err)
 		return
@@ -84,14 +85,20 @@ func TestHaveBlock(t *testing.T) {
 		// Genesis block should be present (in the main chain).
 		{hash: chaincfg.MainNetParams.GenesisHash.String(), want: true},
 
-		// Block 3a should be present (on a side chain).
-		{hash: "00000000474284d20067a4d33f6a02284e6ef70764a3a26d6a5b9df52ef663dd", want: true},
-
-		// Block 100000 should be present (as an orphan).
-		{hash: "000000000003ba27aa200b1cecaad478d2b00432346c3f1f3986da1afd33e506", want: true},
+		// The synthetic block should be present as an orphan.
+		{hash: orphanBlock.Hash().String(), want: true},
 
 		// Random hashes should not be available.
 		{hash: "123", want: false},
+	}
+	if len(blocks) != 0 {
+		tests = append(tests, struct {
+			hash string
+			want bool
+		}{
+			hash: blocks[len(blocks)-1].Hash().String(),
+			want: true,
+		})
 	}
 
 	for i, test := range tests {

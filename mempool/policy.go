@@ -12,7 +12,6 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	contractengine "github.com/sat20-labs/satoshinet/contract"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
-	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -106,16 +105,15 @@ func checkInputsStandard(tx *btcutil.Tx, utxoView *blockchain.UtxoViewpoint) err
 		// function.
 		entry := utxoView.LookupEntry(txIn.PreviousOutPoint)
 		originPkScript := entry.PkScript()
-		if evm.IsContractPkScript(originPkScript) {
-			inputScripts, err := evmInputScripts(tx.MsgTx(), utxoView)
+		if contractengine.IsContractPkScript(originPkScript) {
+			inputScripts, err := contractInputScripts(tx.MsgTx(), utxoView)
 			if err == nil {
-				_, err = evm.ValidateResultContractSpend(
-					tx.MsgTx(), inputScripts,
-					evm.TestnetContractPrefix)
+				_, err = contractengine.ValidateResultContractSpend(
+					tx.MsgTx(), inputScripts, contractcommon.TestnetContractPrefix)
 			}
 			if err != nil {
 				str := fmt.Sprintf("transaction input #%d spends an "+
-					"invalid EVM contract UTXO: %v", i, err)
+					"invalid contract UTXO: %v", i, err)
 				return txRuleError(wire.RejectNonstandard, str)
 			}
 			continue
@@ -142,8 +140,8 @@ func checkInputsStandard(tx *btcutil.Tx, utxoView *blockchain.UtxoViewpoint) err
 	return nil
 }
 
-func evmInputScripts(tx *wire.MsgTx, utxoView *blockchain.UtxoViewpoint) (map[evm.OutPoint][]byte, error) {
-	inputScripts := make(map[evm.OutPoint][]byte, len(tx.TxIn))
+func contractInputScripts(tx *wire.MsgTx, utxoView *blockchain.UtxoViewpoint) (map[wire.OutPoint][]byte, error) {
+	inputScripts := make(map[wire.OutPoint][]byte, len(tx.TxIn))
 	for i, txIn := range tx.TxIn {
 		if txIn == nil {
 			return nil, fmt.Errorf("nil input %d", i)
@@ -153,7 +151,7 @@ func evmInputScripts(tx *wire.MsgTx, utxoView *blockchain.UtxoViewpoint) (map[ev
 			return nil, fmt.Errorf("missing input script for %v",
 				txIn.PreviousOutPoint)
 		}
-		inputScripts[evm.WireOutPointToEVM(txIn.PreviousOutPoint)] = entry.PkScript()
+		inputScripts[txIn.PreviousOutPoint] = entry.PkScript()
 	}
 	return inputScripts, nil
 }
@@ -374,10 +372,10 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 	// None of the output public key scripts can be a non-standard script or
 	// be "dust" (except when the script is a null data script).
 	// numNullDataOutputs := 0
-	hasEVMContractOutput := false
+	hasContractOutput := false
 	for i, txOut := range msgTx.TxOut {
-		if evm.IsContractPkScript(txOut.PkScript) {
-			hasEVMContractOutput = true
+		if contractengine.IsContractPkScript(txOut.PkScript) {
+			hasContractOutput = true
 			continue
 		}
 		scriptClass := txscript.GetScriptClass(txOut.PkScript)
@@ -414,7 +412,7 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 	if found {
 		switch payloadType {
 		case contractcommon.TxTypeDeploy, contractcommon.TxTypeInvoke:
-			if !hasEVMContractOutput {
+			if !hasContractOutput {
 				return txRuleError(wire.RejectNonstandard,
 					"contract deploy/invoke has no contract funding output")
 			}

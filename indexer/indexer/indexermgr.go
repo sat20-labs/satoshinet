@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	contractengine "github.com/sat20-labs/satoshinet/contract"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
@@ -63,6 +64,10 @@ type IndexerMgr struct {
 	templateRuntimeStore    *tmplcontract.RuntimeStore
 	templateContractIndex   map[string]*tmplcontract.ContractInfo
 	templateContractHistory map[string][]tmplcontract.HistoryRecord
+
+	contractIndexMu sync.RWMutex
+	contractIndex   map[string]*contractengine.ContractSummary
+	contractHistory map[string][]contractengine.ContractHistoryRecord
 }
 
 var instance *IndexerMgr
@@ -102,6 +107,8 @@ func NewIndexerMgr(
 		templateRuntimeStore:    tmplcontract.NewRuntimeStore(),
 		templateContractIndex:   make(map[string]*tmplcontract.ContractInfo),
 		templateContractHistory: make(map[string][]tmplcontract.HistoryRecord),
+		contractIndex:           make(map[string]*contractengine.ContractSummary),
+		contractHistory:         make(map[string][]contractengine.ContractHistoryRecord),
 	}
 
 	instance = mgr
@@ -126,6 +133,7 @@ func (b *IndexerMgr) Init() {
 	}
 
 	b.rpcService = base_indexer.NewRpcIndexer(b.compiling)
+	b.loadContractIndex()
 	b.loadTemplateContractIndex()
 
 	b.compilingBackupDB = nil

@@ -15,6 +15,7 @@ import (
 const templateContractIndexSnapshotKey = "template-contract-index-v1"
 
 func (s *IndexerMgr) processBlock(block *common.Block) {
+	s.indexContracts(block)
 	s.indexTemplateContracts(block)
 }
 
@@ -66,11 +67,13 @@ func (s *IndexerMgr) indexTemplateContracts(block *common.Block) {
 			continue
 		}
 		s.templateContractHistory[record.Contract] = append(s.templateContractHistory[record.Contract], record)
+		s.upsertTemplateContractHistoryLocked(record)
 	}
 	if err := s.updateTemplateContractSnapshotsLocked(block.Height); err != nil {
 		common.Log.Errorf("snapshot template contracts at block %d failed: %v", block.Height, err)
 		return
 	}
+	s.syncTemplateContractSummariesLocked(block.Height)
 	if err := s.persistTemplateContractIndexLocked(block.Height); err != nil {
 		common.Log.Errorf("persist template contract index at block %d failed: %v", block.Height, err)
 	}

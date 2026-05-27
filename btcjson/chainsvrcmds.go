@@ -683,6 +683,35 @@ func NewGetRawTransactionCmd(txHash string, verbose *int) *GetRawTransactionCmd 
 	}
 }
 
+// GetContractCmd defines the getcontract JSON-RPC command.
+type GetContractCmd struct {
+	Address string
+}
+
+func NewGetContractCmd(address string) *GetContractCmd {
+	return &GetContractCmd{Address: address}
+}
+
+// GetContractStateCmd defines the getcontractstate JSON-RPC command.
+type GetContractStateCmd struct {
+	Address string
+}
+
+func NewGetContractStateCmd(address string) *GetContractStateCmd {
+	return &GetContractStateCmd{Address: address}
+}
+
+// GetContractHistoryCmd defines the getcontracthistory JSON-RPC command.
+type GetContractHistoryCmd struct {
+	Address string
+	Skip    *int `jsonrpcdefault:"0"`
+	Count   *int `jsonrpcdefault:"100"`
+}
+
+func NewGetContractHistoryCmd(address string, skip, count *int) *GetContractHistoryCmd {
+	return &GetContractHistoryCmd{Address: address, Skip: skip, Count: count}
+}
+
 // GetTxOutCmd defines the gettxout JSON-RPC command.
 type GetTxOutCmd struct {
 	Txid           string
@@ -1180,6 +1209,9 @@ func init() {
 	MustRegisterCmd("getchaintips", (*GetChainTipsCmd)(nil), flags)
 	MustRegisterCmd("getchaintxstats", (*GetChainTxStatsCmd)(nil), flags)
 	MustRegisterCmd("getconnectioncount", (*GetConnectionCountCmd)(nil), flags)
+	MustRegisterCmd("getcontract", (*GetContractCmd)(nil), flags)
+	MustRegisterCmd("getcontracthistory", (*GetContractHistoryCmd)(nil), flags)
+	MustRegisterCmd("getcontractstate", (*GetContractStateCmd)(nil), flags)
 	MustRegisterCmd("getdescriptorinfo", (*GetDescriptorInfoCmd)(nil), flags)
 	MustRegisterCmd("getdifficulty", (*GetDifficultyCmd)(nil), flags)
 	MustRegisterCmd("getgenerate", (*GetGenerateCmd)(nil), flags)

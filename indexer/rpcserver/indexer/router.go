@@ -53,13 +53,14 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/utxo/info/:utxo", s.handle.getUtxoInfoV3)
 	r.POST(proxy+"/v3/utxos/info", s.handle.getUtxoInfoListV3)
 
-	// Template contract query APIs. The /info routes keep the old wallet contract client shape.
-	r.GET(proxy+"/info/contracts/support", s.handle.getSupportedTemplateContracts)
-	r.GET(proxy+"/info/contracts/deployed", s.handle.getDeployedTemplateContracts)
-	r.GET(proxy+"/info/contract/*path", s.handle.getTemplateContractLegacy)
-
-	r.GET(proxy+"/v3/contracts/template", s.handle.getTemplateContracts)
-	r.GET(proxy+"/v3/contract/template/:contract/history", s.handle.getTemplateContractHistory)
-	r.GET(proxy+"/v3/contract/template/:contract", s.handle.getTemplateContract)
+	r.GET(proxy+"/v3/contracts", s.handle.getContracts)
+	r.GET(proxy+"/v3/contracts/:contract", s.handle.getContract)
+	r.GET(proxy+"/v3/contracts/:contract/state", s.handle.getContractState)
+	r.GET(proxy+"/v3/contracts/:contract/history", s.handle.getContractHistory)
+	r.GET(proxy+"/v3/contracts/:contract/analytics", s.handle.getContractAnalytics)
+	r.GET(proxy+"/v3/contracts/:contract/items/inutxo/:inutxo", s.handle.getContractInvokeItem)
+	r.GET(proxy+"/v3/contracts/:contract/users", s.handle.getContractUsers)
+	r.GET(proxy+"/v3/contracts/:contract/users/:address", s.handle.getContractUser)
+	r.GET(proxy+"/v3/contracts/:contract/users/:address/history", s.handle.getContractUserHistory)
 
 }

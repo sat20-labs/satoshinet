@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
+
+var ErrPredictionResultPending = errors.New("prediction result is pending")
 
 type PredictionLLMResolveRequest struct {
 	Contract   PredictionContract
@@ -55,6 +58,9 @@ func (r *PredictionLLMResolver) Resolve(ctx context.Context, req PredictionLLMRe
 	decision, err := decodePredictionLLMDecision(response.Content)
 	if err != nil {
 		return PredictionConfirmParam{}, err
+	}
+	if strings.TrimSpace(decision.ResultType) == "pending" {
+		return PredictionConfirmParam{}, ErrPredictionResultPending
 	}
 	param := PredictionConfirmParam{
 		ResultType: strings.TrimSpace(decision.ResultType),
@@ -105,6 +111,7 @@ func predictionResolvePrompt(contract PredictionContract, cleanedText string) st
 	b.WriteString("\nResult text:\n")
 	b.WriteString(cleanedText)
 	b.WriteString("\n\nChoose exactly one allowed outcome when the result is clear. ")
+	b.WriteString("Use result_type \"pending\" and empty outcome_id when the event result is not available yet. ")
 	b.WriteString("Use result_type \"unverifiable\" and empty outcome_id when the result cannot be verified. ")
 	b.WriteString("Use result_type \"invalid\" and empty outcome_id when the event or market is invalid.")
 	return b.String()

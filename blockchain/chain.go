@@ -683,7 +683,7 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 			return err
 		}
 
-		if provider, ok := b.evmBlockValidator.(EVMBlockStateProvider); ok {
+		if provider, ok := b.contractStateProvider(evmContractStateProvider).(EVMBlockStateProvider); ok {
 			if postState, ok := provider.EVMBlockPostState(block.Hash()); ok {
 				err = dbStoreEVMBlockState(dbTx, block.Hash(), postState)
 				if err != nil {
@@ -691,7 +691,7 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 				}
 			}
 		}
-		if provider, ok := b.templateBlockValidator.(TemplateBlockStateProvider); ok {
+		if provider, ok := b.contractStateProvider(templateContractStateProvider).(TemplateBlockStateProvider); ok {
 			if postState, ok := provider.TemplateBlockPostState(block.Hash()); ok {
 				err = dbStoreTemplateBlockState(dbTx, block.Hash(), postState)
 				if err != nil {
@@ -699,7 +699,7 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 				}
 			}
 		}
-		if provider, ok := b.agentBlockValidator.(AgentBlockStateProvider); ok {
+		if provider, ok := b.contractStateProvider(agentContractStateProvider).(AgentBlockStateProvider); ok {
 			if postState, ok := provider.AgentBlockPostState(block.Hash()); ok {
 				err = dbStoreAgentBlockState(dbTx, block.Hash(), postState)
 				if err != nil {
@@ -758,7 +758,9 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 		b.sendNotification(NTBlockConnected, block)
 	}()
 
-	b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), b.tipHeight)
+	if b.assetIndexerMgr != nil {
+		b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), b.tipHeight)
+	}
 
 	// Since we may have changed the UTXO cache, we make sure it didn't exceed its
 	// maximum size.  If we're pruned and have flushed already, this will be a no-op.
@@ -1002,7 +1004,9 @@ func (b *BlockChain) reorganizeChain(detachNodes, attachNodes *list.List) error 
 		disconnectTo = forkNode
 	}
 	if disconnectTo != nil {
-		b.assetIndexerMgr.DisconnectBlock(int(disconnectTo.height))
+		if b.assetIndexerMgr != nil {
+			b.assetIndexerMgr.DisconnectBlock(int(disconnectTo.height))
+		}
 	}
 
 	// Connect the new best chain blocks using the utxocache directly.  It's more
@@ -2210,6 +2214,43 @@ type AgentBlockStateProvider interface {
 // a block after its input UTXOs have been loaded into the view.
 type ContractBlockValidator interface {
 	ValidateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error
+}
+
+type contractStateProviderKind byte
+
+const (
+	evmContractStateProvider contractStateProviderKind = iota + 1
+	templateContractStateProvider
+	agentContractStateProvider
+)
+
+func (b *BlockChain) contractStateProvider(kind contractStateProviderKind) interface{} {
+	if b.contractBlockValidator != nil {
+		switch kind {
+		case evmContractStateProvider:
+			if provider, ok := b.contractBlockValidator.(EVMBlockStateProvider); ok {
+				return provider
+			}
+		case templateContractStateProvider:
+			if provider, ok := b.contractBlockValidator.(TemplateBlockStateProvider); ok {
+				return provider
+			}
+		case agentContractStateProvider:
+			if provider, ok := b.contractBlockValidator.(AgentBlockStateProvider); ok {
+				return provider
+			}
+		}
+	}
+	switch kind {
+	case evmContractStateProvider:
+		return b.evmBlockValidator
+	case templateContractStateProvider:
+		return b.templateBlockValidator
+	case agentContractStateProvider:
+		return b.agentBlockValidator
+	default:
+		return nil
+	}
 }
 
 // Config is a descriptor which specifies the blockchain instance configuration.

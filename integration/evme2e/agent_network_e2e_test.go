@@ -6,6 +6,7 @@ package evme2e
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +23,7 @@ import (
 	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	sindexercommon "github.com/sat20-labs/satoshinet/indexer/common"
+	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/integration/rpctest"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -29,9 +31,65 @@ import (
 )
 
 func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
+	runAgentPredictionAutoConfirmScenario(t, agentPredictionE2EScenario{
+		LLMContent:    `{"result_type":"outcome","outcome_id":"a","reason":"Team A won"}`,
+		Outcomes:      defaultAgentPredictionOutcomes(),
+		ExpectedAlice: "90000",
+	})
+}
+
+func TestNetworkAgentPredictionNoWinnerRefund(t *testing.T) {
+	runAgentPredictionAutoConfirmScenario(t, agentPredictionE2EScenario{
+		LLMContent: `{"result_type":"outcome","outcome_id":"c","reason":"Team C won"}`,
+		Outcomes: []agentcontract.PredictionOutcome{
+			{ID: "a", Text: "Team A wins"},
+			{ID: "b", Text: "Team B wins"},
+			{ID: "c", Text: "Team C wins"},
+		},
+		ExpectedAlice: "60000",
+		ExpectedBob:   "40000",
+	})
+}
+
+func TestNetworkAgentPredictionInvalidRefund(t *testing.T) {
+	runAgentPredictionAutoConfirmScenario(t, agentPredictionE2EScenario{
+		LLMContent:    `{"result_type":"invalid","outcome_id":"","reason":"Event result is invalid"}`,
+		Outcomes:      defaultAgentPredictionOutcomes(),
+		ExpectedAlice: "60000",
+		ExpectedBob:   "40000",
+	})
+}
+
+func TestNetworkAgentPredictionUnverifiableRefund(t *testing.T) {
+	runAgentPredictionAutoConfirmScenario(t, agentPredictionE2EScenario{
+		LLMContent:    `{"result_type":"unverifiable","outcome_id":"","reason":"Result source cannot be verified"}`,
+		Outcomes:      defaultAgentPredictionOutcomes(),
+		ExpectedAlice: "60000",
+		ExpectedBob:   "40000",
+	})
+}
+
+type agentPredictionE2EScenario struct {
+	LLMContent    string
+	Outcomes      []agentcontract.PredictionOutcome
+	ExpectedAlice string
+	ExpectedBob   string
+}
+
+func defaultAgentPredictionOutcomes() []agentcontract.PredictionOutcome {
+	return []agentcontract.PredictionOutcome{
+		{ID: "a", Text: "Team A wins"},
+		{ID: "b", Text: "Team B wins"},
+	}
+}
+
+func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictionE2EScenario) {
+	t.Helper()
 	if os.Getenv("SATOSHINET_AGENT_NETWORK_E2E") != "1" {
 		t.Skip("set SATOSHINET_AGENT_NETWORK_E2E=1 to run the Agent prediction network E2E")
 	}
+	require.NotEmpty(t, scenario.LLMContent)
+	require.NotEmpty(t, scenario.Outcomes)
 
 	configureFastPOSTimers(t)
 	oldEnableTesting := indexercommon.ENABLE_TESTING
@@ -51,7 +109,9 @@ func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
 		require.Equal(t, "/v1/chat/completions", r.URL.Path)
 		var req map[string]interface{}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"result_type\":\"outcome\",\"outcome_id\":\"a\",\"reason\":\"Team A won\"}"}}]}`))
+		content, err := json.Marshal(scenario.LLMContent)
+		require.NoError(t, err)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":` + string(content) + `}}]}`))
 	}))
 	defer llmServer.Close()
 
@@ -65,6 +125,7 @@ func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
 	coreFundingScript := p2trPkScriptFromKey(t, coreKey)
 	bootstrapAddress := p2trAddressFromKey(t, bootstrapKey)
 	aliceAddress := p2trAddressFromKey(t, traderA)
+	bobAddress := p2trAddressFromKey(t, traderB)
 
 	witnessScript, lockedPkScript, err := anchortx.GetP2WSHscript(
 		bootstrapKey.PubKey().SerializeCompressed(),
@@ -121,21 +182,14 @@ func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
 		SourceURL:    resultServer.URL + "/match/result/123",
 		BetAsset:     gasAsset,
 		MinBetUnit:   "10000",
-		Outcomes: []agentcontract.PredictionOutcome{
-			{ID: "a", Text: "Team A wins"},
-			{ID: "b", Text: "Team B wins"},
-		},
+		Outcomes:     scenario.Outcomes,
 	}
 	deployTx, agentAddress := buildAgentDeployTx(t, contract, bootstrapAddress, agentInputs[0], splitOutputs[0], spendScript)
 	signTemplateTaprootInputs(t, deployTx, bootstrapKey, redeemScript, controlBlock)
 	sendTx(t, bootstrapNode, deployTx)
 	waitForPOSTx(t, bootstrapNode, nodes, deployTx)
 
-	readyTx := buildAgentInvokeTx(t, agentAddress, agentcontract.InvokeAPIReady, nil,
-		agentInputs[1], nil, splitOutputs[1], spendScript)
-	signTemplateTaprootInputs(t, readyTx, coreKey, redeemScript, controlBlock)
-	sendTx(t, bootstrapNode, readyTx)
-	waitForPOSTx(t, bootstrapNode, nodes, readyTx)
+	waitForAgentPredictionReady(t, bootstrapNode, agentAddress.EncodeAddress())
 
 	aliceBet := mustAgentBetParam(t, "a")
 	aliceTx := buildAgentInvokeTx(t, agentAddress, agentcontract.InvokeAPIBet, aliceBet,
@@ -165,7 +219,15 @@ func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
 	sendTx(t, bootstrapNode, heartbeatTx)
 	waitForPOSTx(t, bootstrapNode, nodes, heartbeatTx)
 
-	waitForAgentWinnerPayout(t, bootstrapNode, coreNode, nodes, aliceAddress, gasAsset, "90000", int32(contract.ConfirmAfter))
+	expected := make(map[string]string)
+	if scenario.ExpectedAlice != "" {
+		expected[aliceAddress] = scenario.ExpectedAlice
+	}
+	if scenario.ExpectedBob != "" {
+		expected[bobAddress] = scenario.ExpectedBob
+	}
+	waitForAgentAssetAmounts(t, bootstrapNode, coreNode, nodes, expected, gasAsset, int32(contract.ConfirmAfter))
+	waitForAgentPredictionContractQueries(t, bootstrapNode, agentAddress.EncodeAddress(), aliceAddress, bobAddress)
 }
 
 func startAgentSatoshiNetNetwork(t *testing.T, fakeL1 *httptest.Server, llmEndpoint string) (*rpctest.Harness, *rpctest.Harness) {
@@ -281,25 +343,183 @@ func mustAgentBetParam(t *testing.T, outcome string) []byte {
 	return data
 }
 
-func waitForAgentWinnerPayout(t *testing.T, bootstrapNode, coreNode *rpctest.Harness, nodes []*rpctest.Harness,
-	address, assetName, amount string, minHeight int32) {
+func waitForAgentAssetAmounts(t *testing.T, bootstrapNode, coreNode *rpctest.Harness, nodes []*rpctest.Harness,
+	expected map[string]string, assetName string, minHeight int32) {
 
 	t.Helper()
+	require.NotEmpty(t, expected)
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		_ = rpctest.JoinNodes(nodes, rpctest.Blocks)
-		summary, err := fetchAssetSummary(bootstrapNode, address)
-		if err == nil && summary[assetName] == amount {
+		matched := true
+		for address, amount := range expected {
+			summary, err := fetchAssetSummary(bootstrapNode, address)
+			if err != nil || summary[assetName] != amount {
+				matched = false
+				break
+			}
+		}
+		if matched {
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	summary, err := fetchAssetSummary(bootstrapNode, address)
-	require.NoError(t, err)
 	_, height, heightErr := coreNode.Client.GetBestBlock()
 	require.NoError(t, heightErr)
 	require.GreaterOrEqual(t, height, minHeight)
-	require.Equal(t, amount, summary[assetName], "address=%s asset=%s summary=%v", address, assetName, summary)
+	for address, amount := range expected {
+		summary, err := fetchAssetSummary(bootstrapNode, address)
+		require.NoError(t, err)
+		require.Equal(t, amount, summary[assetName], "address=%s asset=%s summary=%v", address, assetName, summary)
+	}
+}
+
+func waitForAgentPredictionContractQueries(t *testing.T, node *rpctest.Harness, contract, alice, bob string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := checkAgentPredictionContractQueries(node, contract, alice, bob); err == nil {
+			return
+		} else {
+			lastErr = err
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	require.NoError(t, lastErr)
+}
+
+func waitForAgentPredictionReady(t *testing.T, node *rpctest.Harness, contract string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		baseURL, err := node.IndexerURL("testnet")
+		if err != nil {
+			lastErr = err
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		var history localwire.ContractHistoryResp
+		if err := getIndexerJSON(baseURL+"/v3/contracts/"+contract+"/history", &history); err != nil {
+			lastErr = err
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		for _, record := range history.Data {
+			if record.Action == agentcontract.InvokeAPIReady {
+				return
+			}
+		}
+		lastErr = fmt.Errorf("agent contract %s is not ready yet", contract)
+		time.Sleep(300 * time.Millisecond)
+	}
+	require.NoError(t, lastErr)
+}
+
+func checkAgentPredictionContractQueries(node *rpctest.Harness, contract, alice, bob string) error {
+	baseURL, err := node.IndexerURL("testnet")
+	if err != nil {
+		return err
+	}
+	var contracts localwire.ContractListResp
+	if err := getIndexerJSON(baseURL+"/v3/contracts", &contracts); err != nil {
+		return err
+	}
+	if contracts.Code != 0 {
+		return fmt.Errorf("contract list code %d: %s", contracts.Code, contracts.Msg)
+	}
+	found := false
+	for _, summary := range contracts.Data {
+		if summary.Address != contract {
+			continue
+		}
+		found = true
+		if summary.ContractTypeID != agentcontract.ContractTypeAgent || summary.Subtype != agentcontract.SubtypePrediction {
+			return fmt.Errorf("unexpected contract summary: %+v", summary)
+		}
+	}
+	if !found {
+		return fmt.Errorf("contract %s not found in list", contract)
+	}
+
+	var history localwire.ContractHistoryResp
+	if err := getIndexerJSON(baseURL+"/v3/contracts/"+contract+"/history", &history); err != nil {
+		return err
+	}
+	if history.Code != 0 {
+		return fmt.Errorf("contract history code %d: %s", history.Code, history.Msg)
+	}
+	var deploys, bets, confirms int
+	for _, record := range history.Data {
+		switch {
+		case record.Kind == "deploy":
+			deploys++
+		case record.Action == agentcontract.InvokeAPIBet:
+			bets++
+		case record.Action == agentcontract.InvokeAPIConfirm:
+			confirms++
+		}
+	}
+	if deploys == 0 || bets < 2 || confirms == 0 {
+		return fmt.Errorf("incomplete contract history: deploys=%d bets=%d confirms=%d total=%d", deploys, bets, confirms, history.Total)
+	}
+
+	var analytics localwire.ContractResp
+	if err := getIndexerJSON(baseURL+"/v3/contracts/"+contract+"/analytics", &analytics); err != nil {
+		return err
+	}
+	if analytics.Code != 0 {
+		return fmt.Errorf("contract analytics code %d: %s", analytics.Code, analytics.Msg)
+	}
+	var analyticsData struct {
+		TotalBets     int            `json:"totalBets"`
+		Confirmations int            `json:"confirmations"`
+		OutcomeBets   map[string]int `json:"outcomeBets"`
+	}
+	if err := json.Unmarshal(analytics.Data, &analyticsData); err != nil {
+		return err
+	}
+	if analyticsData.TotalBets < 2 || analyticsData.Confirmations == 0 || analyticsData.OutcomeBets["a"] == 0 || analyticsData.OutcomeBets["b"] == 0 {
+		return fmt.Errorf("unexpected analytics: %+v", analyticsData)
+	}
+
+	var users localwire.ContractResp
+	if err := getIndexerJSON(baseURL+"/v3/contracts/"+contract+"/users", &users); err != nil {
+		return err
+	}
+	if users.Code != 0 {
+		return fmt.Errorf("contract users code %d: %s", users.Code, users.Msg)
+	}
+	var userList []string
+	if err := json.Unmarshal(users.Data, &userList); err != nil {
+		return err
+	}
+	if !stringSliceContains(userList, alice) || !stringSliceContains(userList, bob) {
+		return fmt.Errorf("contract users missing alice or bob: %v", userList)
+	}
+	return nil
+}
+
+func getIndexerJSON(url string, out interface{}) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected indexer status %d", resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func p2trAddressFromKey(t *testing.T, key *btcec.PrivateKey) string {

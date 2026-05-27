@@ -871,9 +871,11 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 	}
 
 	// 检查是不是由正确的miner挖出来的块，需要先确定这个block的高度
-	err = b.assetIndexerMgr.CheckBlockMiningInfo(block)
-	if err != nil {
-		return err
+	if b.assetIndexerMgr != nil {
+		err = b.assetIndexerMgr.CheckBlockMiningInfo(block)
+		if err != nil {
+			return err
+		}
 	}
 
 	fastAdd := flags&BFFastAdd == BFFastAdd

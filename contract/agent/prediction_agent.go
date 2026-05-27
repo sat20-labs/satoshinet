@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -20,6 +22,7 @@ type PredictionResultTextFetcher interface {
 type PredictionResultFetchResult struct {
 	FinalURL string
 	Text     string
+	Links    []string
 }
 
 type PredictionResultFetcher interface {
@@ -34,6 +37,11 @@ type HTTPPredictionResultTextFetcher struct {
 type PredictionAgent struct {
 	Resolver *PredictionLLMResolver
 	Fetcher  PredictionResultFetcher
+	Searcher PredictionResultSearcher
+}
+
+type PredictionResultSearcher interface {
+	SearchPredictionResult(ctx context.Context, contract PredictionContract) ([]string, error)
 }
 
 type PredictionAgentConfirmRequest struct {
@@ -67,7 +75,39 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 	if err != nil {
 		return PredictionConfirmParam{}, err
 	}
+	param, err := a.resolveFetchedResult(ctx, req, fetched, req.ResultURL)
+	if err == nil {
+		return param, nil
+	}
+	if !errors.Is(err, ErrPredictionResultPending) {
+		return PredictionConfirmParam{}, err
+	}
+	for _, candidateURL := range append(fetched.Links, a.searchResultURLs(ctx, req.Contract)...) {
+		if !ResultURLAllowed(req.Contract.SourceURL, candidateURL) {
+			continue
+		}
+		next, fetchErr := fetcher.FetchPredictionResult(ctx, candidateURL)
+		if fetchErr != nil {
+			continue
+		}
+		param, resolveErr := a.resolveFetchedResult(ctx, req, next, candidateURL)
+		if resolveErr == nil {
+			return param, nil
+		}
+		if !errors.Is(resolveErr, ErrPredictionResultPending) {
+			return PredictionConfirmParam{}, resolveErr
+		}
+	}
+	return PredictionConfirmParam{}, ErrPredictionResultPending
+}
+
+func (a *PredictionAgent) resolveFetchedResult(ctx context.Context, req PredictionAgentConfirmRequest,
+	fetched PredictionResultFetchResult, requestedURL string) (PredictionConfirmParam, error) {
+
 	resultURL := req.ResultURL
+	if requestedURL != "" {
+		resultURL = requestedURL
+	}
 	if fetched.FinalURL != "" {
 		resultURL = fetched.FinalURL
 	}
@@ -81,6 +121,17 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 		ResultText: fetched.Text,
 		ObservedAt: req.ObservedAt,
 	})
+}
+
+func (a *PredictionAgent) searchResultURLs(ctx context.Context, contract PredictionContract) []string {
+	if a == nil || a.Searcher == nil {
+		return nil
+	}
+	urls, err := a.Searcher.SearchPredictionResult(ctx, contract)
+	if err != nil {
+		return nil
+	}
+	return urls
 }
 
 func (f HTTPPredictionResultTextFetcher) FetchResultText(ctx context.Context, resultURL string) (string, error) {
@@ -116,13 +167,15 @@ func (f HTTPPredictionResultTextFetcher) FetchPredictionResult(ctx context.Conte
 	if err != nil {
 		return PredictionResultFetchResult{}, err
 	}
-	text := ExtractPredictionResultText(string(raw))
+	rawText := string(raw)
+	text := ExtractPredictionResultText(rawText)
 	if text == "" {
 		return PredictionResultFetchResult{}, fmt.Errorf("result url text is empty")
 	}
 	return PredictionResultFetchResult{
 		FinalURL: resp.Request.URL.String(),
 		Text:     text,
+		Links:    ExtractPredictionResultLinks(rawText, resp.Request.URL),
 	}, nil
 }
 
@@ -130,6 +183,7 @@ var (
 	htmlScriptPattern = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
 	htmlStylePattern  = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
 	htmlTagPattern    = regexp.MustCompile(`(?is)<[^>]+>`)
+	htmlLinkPattern   = regexp.MustCompile(`(?is)<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>`)
 )
 
 func ExtractPredictionResultText(raw string) string {
@@ -138,4 +192,47 @@ func ExtractPredictionResultText(raw string) string {
 	raw = htmlTagPattern.ReplaceAllString(raw, " ")
 	raw = html.UnescapeString(raw)
 	return strings.Join(strings.Fields(raw), " ")
+}
+
+func ExtractPredictionResultLinks(raw string, base *url.URL) []string {
+	matches := htmlLinkPattern.FindAllStringSubmatch(raw, -1)
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+		href := html.UnescapeString(strings.TrimSpace(match[1]))
+		text := strings.ToLower(ExtractPredictionResultText(match[2]))
+		if !predictionResultLinkLooksRelevant(href, text) {
+			continue
+		}
+		parsed, err := url.Parse(href)
+		if err != nil {
+			continue
+		}
+		if base != nil {
+			parsed = base.ResolveReference(parsed)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			continue
+		}
+		normalized := parsed.String()
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func predictionResultLinkLooksRelevant(href, text string) bool {
+	value := strings.ToLower(href + " " + text)
+	for _, token := range []string{"result", "final", "score", "boxscore", "recap", "match", "game"} {
+		if strings.Contains(value, token) {
+			return true
+		}
+	}
+	return false
 }

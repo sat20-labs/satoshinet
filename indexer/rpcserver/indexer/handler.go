@@ -2,16 +2,15 @@ package indexer
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
+	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 )
 
 const QueryParamDefaultLimit = "100"
@@ -603,143 +602,95 @@ func (s *Handle) getUtxoInfoListV3(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func (s *Handle) getSupportedTemplateContracts(c *gin.Context) {
-	resp := &localwire.ContractContentResp{
-		BaseResp: indexerwire.BaseResp{
-			Code: 0,
-			Msg:  "ok",
-		},
-		Contracts: s.model.GetSupportedTemplateContracts(),
-	}
-	c.JSON(http.StatusOK, resp)
-}
-
-func (s *Handle) getDeployedTemplateContracts(c *gin.Context) {
-	resp := &localwire.DeployedContractResp{
+func (s *Handle) getContracts(c *gin.Context) {
+	resp := &localwire.ContractListResp{
 		BaseResp: indexerwire.BaseResp{
 			Code: 0,
 			Msg:  "ok",
 		},
 	}
 	start, limit := parseStartLimit(c)
-	resp.ContractURLs, _ = s.model.GetDeployedTemplateContracts(start, limit)
+	resp.Data, resp.Total = s.model.GetContracts(start, limit)
+	resp.Contracts = s.model.GetSupportedContracts()
+	resp.ContractURLs, _ = s.model.GetDeployedContracts(start, limit)
 	c.JSON(http.StatusOK, resp)
 }
 
-func (s *Handle) getTemplateContracts(c *gin.Context) {
-	resp := &localwire.TemplateContractsResp{
-		BaseResp: indexerwire.BaseResp{
-			Code: 0,
-			Msg:  "ok",
-		},
-	}
-	start, limit := parseStartLimit(c)
-	resp.Data, resp.Total = s.model.GetTemplateContracts(start, limit)
-	c.JSON(http.StatusOK, resp)
+func (s *Handle) getContract(c *gin.Context) {
+	summary, err := s.model.GetContract(c.Param("contract"))
+	s.contractStatusJSON(c, summary, err)
 }
 
-func (s *Handle) getTemplateContract(c *gin.Context) {
-	resp := &localwire.TemplateContractResp{
-		BaseResp: indexerwire.BaseResp{
-			Code: 0,
-			Msg:  "ok",
-		},
+func (s *Handle) getContractState(c *gin.Context) {
+	s.contractRPC(c, "getcontractstate", []interface{}{c.Param("contract")})
+}
+
+func (s *Handle) getContractHistory(c *gin.Context) {
+	resp := &localwire.ContractHistoryResp{
+		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
 	}
-	contract, err := s.model.GetTemplateContract(c.Param("contract"))
+	start, limit, err := parseContractHistoryWindow(c)
 	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
-	resp.Data = contract
-	c.JSON(http.StatusOK, resp)
-}
-
-func (s *Handle) getTemplateContractHistory(c *gin.Context) {
-	resp := &localwire.TemplateContractHistoryResp{
-		BaseResp: indexerwire.BaseResp{
-			Code: 0,
-			Msg:  "ok",
-		},
-	}
-	start, limit := parseStartLimit(c)
-	history, total, err := s.model.GetTemplateContractHistory(c.Param("contract"), start, limit)
+	resp.Data, resp.Total, err = s.model.GetContractHistory(c.Param("contract"), start, limit)
 	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
-	resp.Data = history
-	resp.Total = total
+	encoded, err := json.Marshal(resp.Data)
+	if err == nil {
+		resp.Status = string(encoded)
+	}
 	c.JSON(http.StatusOK, resp)
 }
 
-func (s *Handle) getTemplateContractLegacy(c *gin.Context) {
-	resp := &localwire.ContractStatusResp{
-		BaseResp: indexerwire.BaseResp{
-			Code: 0,
-			Msg:  "ok",
-		},
+func (s *Handle) contractRPC(c *gin.Context, method string, params []interface{}) {
+	resp := &localwire.ContractResp{
+		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
 	}
-	status, err := s.templateContractLegacyStatus(c)
+	result, err := satsnet_rpc.Call(method, params)
 	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
-	resp.Status = status
+	resp.Data = result
+	resp.Status = string(result)
 	c.JSON(http.StatusOK, resp)
 }
 
-func (s *Handle) templateContractLegacyStatus(c *gin.Context) (string, error) {
-	parts := strings.Split(strings.Trim(c.Param("path"), "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		return "", errTemplateLegacyPath(c.Param("path"))
-	}
+func (s *Handle) getContractAnalytics(c *gin.Context) {
+	analytics, err := s.model.GetContractAnalytics(c.Param("contract"))
+	s.contractStatusJSON(c, analytics, err)
+}
+
+func (s *Handle) getContractInvokeItem(c *gin.Context) {
+	item, err := s.model.GetContractInvokeItemByInUtxo(c.Param("contract"), c.Param("inutxo"))
+	s.contractStatusJSON(c, item, err)
+}
+
+func (s *Handle) getContractUsers(c *gin.Context) {
 	start, limit := parseStartLimit(c)
-	switch parts[0] {
-	case "analytics":
-		if len(parts) != 2 {
-			return "", errTemplateLegacyPath(c.Param("path"))
-		}
-		return modelJSON(s.model.GetTemplateContractAnalytics(parts[1]))
-	case "history":
-		if len(parts) != 2 {
-			return "", errTemplateLegacyPath(c.Param("path"))
-		}
-		history, _, err := s.model.GetTemplateContractHistory(parts[1], start, limit)
-		return marshalStatusJSON(history, err)
-	case "userhistory":
-		if len(parts) != 3 {
-			return "", errTemplateLegacyPath(c.Param("path"))
-		}
-		history, _, err := s.model.GetTemplateContractHistoryByAddress(parts[1], parts[2], start, limit)
-		return marshalStatusJSON(history, err)
-	case "item":
-		if len(parts) != 4 || parts[1] != "inutxo" {
-			return "", errTemplateLegacyPath(c.Param("path"))
-		}
-		return modelJSON(s.model.GetTemplateContractInvokeItemByInUtxo(parts[2], parts[3]))
-	case "alluser":
-		if len(parts) != 2 {
-			return "", errTemplateLegacyPath(c.Param("path"))
-		}
-		addresses, _, err := s.model.GetTemplateContractAllAddresses(parts[1], start, limit)
-		return marshalStatusJSON(addresses, err)
-	case "user":
-		if len(parts) != 3 {
-			return "", errTemplateLegacyPath(c.Param("path"))
-		}
-		return modelJSON(s.model.GetTemplateContractUserStatus(parts[1], parts[2]))
-	default:
-		if len(parts) != 1 {
-			return "", errTemplateLegacyPath(c.Param("path"))
-		}
-		return modelJSON(s.model.GetTemplateContract(parts[0]))
-	}
+	users, _, err := s.model.GetContractAllAddresses(c.Param("contract"), start, limit)
+	s.contractStatusJSON(c, users, err)
+}
+
+func (s *Handle) getContractUser(c *gin.Context) {
+	status, err := s.model.GetContractUserStatus(c.Param("contract"), c.Param("address"))
+	s.contractStatusJSON(c, status, err)
+}
+
+func (s *Handle) getContractUserHistory(c *gin.Context) {
+	start, limit := parseStartLimit(c)
+	history, _, err := s.model.GetContractHistoryByAddress(c.Param("contract"), c.Param("address"), start, limit)
+	s.contractStatusJSON(c, history, err)
 }
 
 func parseStartLimit(c *gin.Context) (int, int) {
@@ -754,21 +705,53 @@ func parseStartLimit(c *gin.Context) (int, int) {
 	return start, limit
 }
 
-func modelJSON[T any](data T, err error) (string, error) {
-	return marshalStatusJSON(data, err)
+func parseContractHistoryWindow(c *gin.Context) (int, int, error) {
+	start := 0
+	limit := 100
+	if skip := firstQuery(c, "skip", "start"); skip != "" {
+		n, err := strconv.Atoi(skip)
+		if err != nil {
+			return 0, 0, err
+		}
+		start = n
+	}
+	if count := firstQuery(c, "count", "limit"); count != "" {
+		n, err := strconv.Atoi(count)
+		if err != nil {
+			return 0, 0, err
+		}
+		limit = n
+	}
+	return start, limit, nil
 }
 
-func marshalStatusJSON(data any, err error) (string, error) {
+func (s *Handle) contractStatusJSON(c *gin.Context, data any, err error) {
+	resp := &localwire.ContractResp{
+		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
+	}
 	if err != nil {
-		return "", err
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
 	}
 	encoded, err := json.Marshal(data)
 	if err != nil {
-		return "", err
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
 	}
-	return string(encoded), nil
+	resp.Status = string(encoded)
+	resp.Data = encoded
+	c.JSON(http.StatusOK, resp)
 }
 
-func errTemplateLegacyPath(path string) error {
-	return fmt.Errorf("invalid template contract query path %s", path)
+func firstQuery(c *gin.Context, names ...string) string {
+	for _, name := range names {
+		if value := c.Query(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }

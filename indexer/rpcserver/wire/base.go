@@ -1,8 +1,10 @@
 package wire
 
 import (
+	"encoding/json"
+
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
+	contractengine "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 
@@ -74,56 +76,23 @@ type TickerInfoResp struct {
 	Data *common.TickerInfo `json:"data"`
 }
 
-type ContractContentResp struct {
+type ContractResp struct {
 	indexerwire.BaseResp
-	Contracts []string `json:"contracts"`
+	Status string          `json:"status,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
 }
 
-type DeployedContractResp struct {
+type ContractListResp struct {
 	indexerwire.BaseResp
-	ContractURLs []string `json:"url"`
+	Total        int                              `json:"total"`
+	Contracts    []string                         `json:"contracts,omitempty"`
+	ContractURLs []string                         `json:"url,omitempty"`
+	Data         []contractengine.ContractSummary `json:"data"`
 }
 
-type ContractStatusResp struct {
+type ContractHistoryResp struct {
 	indexerwire.BaseResp
-	Status string `json:"status"`
-}
-
-type TemplateContractsResp struct {
-	indexerwire.BaseResp
-	Total int                          `json:"total"`
-	Data  []*tmplcontract.ContractInfo `json:"data"`
-}
-
-type TemplateContractResp struct {
-	indexerwire.BaseResp
-	Data *tmplcontract.ContractInfo `json:"data"`
-}
-
-type TemplateContractHistoryResp struct {
-	indexerwire.BaseResp
-	Total int                          `json:"total"`
-	Data  []tmplcontract.HistoryRecord `json:"data"`
-}
-
-type TemplateContractAnalytics struct {
-	Address        string                   `json:"address"`
-	TemplateName   string                   `json:"templateName"`
-	Version        uint32                   `json:"version"`
-	UpdatedHeight  int64                    `json:"updatedHeight"`
-	Running        tmplcontract.RunningData `json:"running"`
-	TotalItems     int                      `json:"totalItems"`
-	ActiveItems    int                      `json:"activeItems"`
-	FinishedItems  int                      `json:"finishedItems"`
-	StatusCount    map[int]int              `json:"statusCount"`
-	OrderTypeCount map[int]int              `json:"orderTypeCount"`
-}
-
-type TemplateContractUserStatus struct {
-	Address       string                    `json:"address"`
-	Contract      string                    `json:"contract"`
-	TotalItems    int                       `json:"totalItems"`
-	ActiveItems   int                       `json:"activeItems"`
-	FinishedItems int                       `json:"finishedItems"`
-	Items         []tmplcontract.InvokeItem `json:"items"`
+	Total  int                                    `json:"total"`
+	Status string                                 `json:"status,omitempty"`
+	Data   []contractengine.ContractHistoryRecord `json:"data,omitempty"`
 }

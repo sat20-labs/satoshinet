@@ -3,6 +3,7 @@ package satsnet_rpc
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -114,6 +115,20 @@ func EstimateSmartFee(confTarget int64, mode btcjson.EstimateSmartFeeMode) (*btc
 	return _client.client.EstimateSmartFee(confTarget, &mode)
 }
 
+func Call(method string, params []interface{}) (json.RawMessage, error) {
+	if _client.client == nil {
+		return nil, fmt.Errorf("satoshinet rpc client is not initialized")
+	}
+	rawParams := make([]json.RawMessage, len(params))
+	for i, param := range params {
+		b, err := json.Marshal(param)
+		if err != nil {
+			return nil, err
+		}
+		rawParams[i] = b
+	}
+	return _client.client.RawRequest(method, rawParams)
+}
 
 func TestRawTransaction(signedTxHex []string) ([]*btcjson.TestMempoolAcceptResult, error) {
 	txs := make([]*wire.MsgTx, 0, len(signedTxHex))
@@ -130,7 +145,7 @@ func TestRawTransaction(signedTxHex []string) ([]*btcjson.TestMempoolAcceptResul
 		}
 		txs = append(txs, msgTx)
 	}
-	
+
 	resp, err := _client.client.TestMempoolAccept(txs, 0.1)
 	if err != nil {
 		return nil, err
@@ -156,7 +171,7 @@ func TestRawTransaction(signedTxHex []string) ([]*btcjson.TestMempoolAcceptResul
 			}
 		}
 	}
-	
+
 	return resp, nil
 }
 
@@ -232,7 +247,7 @@ func EncodeMsgBlockToString(msgBlock *wire.MsgBlock) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Convert the serialized byte buffer to a hexadecimal string
 	return hex.EncodeToString(buf.Bytes()), nil
 }
@@ -244,13 +259,13 @@ func DecodeStringToMsgBlock(encodedStr string) (*wire.MsgBlock, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Create a buffer from the byte slice
 	buf := bytes.NewBuffer(blockBytes)
 
 	// Create an empty MsgBlock to deserialize into
 	msgBlock := wire.MsgBlock{}
-	
+
 	// Deserialize the bytes into the MsgBlock
 	err = msgBlock.Deserialize(buf)
 	if err != nil {
@@ -267,7 +282,7 @@ func EncodeTxToString(tx *btcutil.Tx) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Convert the serialized byte buffer to a hexadecimal string
 	return hex.EncodeToString(buf.Bytes()), nil
 }
@@ -279,13 +294,13 @@ func DecodeStringToTx(encodedStr string) (*btcutil.Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Create a buffer from the byte slice
 	buf := bytes.NewBuffer(txBytes)
 
 	// Create an empty MsgTx to deserialize into
 	msgTx := wire.MsgTx{}
-	
+
 	// Deserialize the bytes into the MsgTx
 	err = msgTx.Deserialize(buf)
 	if err != nil {

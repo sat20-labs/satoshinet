@@ -49,23 +49,11 @@ func btcdExecutablePath() (string, error) {
 	if runtime.GOOS == "windows" {
 		outputPath += ".exe"
 	}
-	walletPath := filepath.Join(testDir, "wallet.so")
-	pluginDir, err := walletPluginSourceDir()
-	if err != nil {
-		return "", err
-	}
-	cmd := exec.Command(
-		"go", "build", "-buildmode=plugin", "-o", walletPath, "main.go",
-	)
-	cmd.Dir = pluginDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("Failed to build wallet plugin: %v: %s", err, string(output))
-	}
 	if err := writeRPCTestWalletConfig(testDir); err != nil {
 		return "", err
 	}
-	cmd = exec.Command(
-		"go", "build", "-tags=rpctest,wallet_plugin", "-o", outputPath, "github.com/sat20-labs/satoshinet",
+	cmd := exec.Command(
+		"go", "build", "-tags=rpctest,wallet_source", "-o", outputPath, "github.com/sat20-labs/satoshinet",
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("Failed to build btcd: %v: %s", err, string(output))

@@ -2831,7 +2831,7 @@ func (s *server) agentContractHandler() {
 }
 
 func (s *server) processAgentContracts() error {
-	if s == nil || s.agentLLM == nil || s.chain == nil || s.db == nil {
+	if s == nil || s.chain == nil || s.db == nil {
 		return nil
 	}
 	store := blockchain.NewAgentStateStore(s.db)
@@ -2840,6 +2840,12 @@ func (s *server) processAgentContracts() error {
 		return err
 	}
 	if runtimeStore == nil {
+		return nil
+	}
+	if err := s.processAgentReadyContracts(runtimeStore); err != nil {
+		return err
+	}
+	if s.agentLLM == nil {
 		return nil
 	}
 	best := s.chain.BestSnapshot()
@@ -2886,18 +2892,44 @@ func (s *server) processAgentContracts() error {
 	return nil
 }
 
+func (s *server) processAgentReadyContracts(runtimeStore *agentcontract.RuntimeStore) error {
+	candidates, err := runtimeStore.PendingPredictionReady()
+	if err != nil {
+		return err
+	}
+	for _, candidate := range candidates {
+		tx, err := s.submitAgentReadyTx(candidate)
+		if err != nil {
+			srvrLog.Warnf("Agent contract %s ready submit failed: %v",
+				candidate.Address.EncodeAddress(), err)
+			continue
+		}
+		srvrLog.Infof("Agent contract %s ready submitted: tx=%s",
+			candidate.Address.EncodeAddress(), tx.TxID())
+	}
+	return nil
+}
+
+func (s *server) submitAgentReadyTx(candidate agentcontract.PredictionReadyCandidate) (*wire.MsgTx, error) {
+	return s.submitAgentInvokeTx(candidate.Address, agentcontract.InvokeAPIReady, nil)
+}
+
 func (s *server) submitAgentConfirmTx(candidate agentcontract.PredictionConfirmCandidate,
 	param agentcontract.PredictionConfirmParam) (*wire.MsgTx, error) {
 
-	if s == nil || s.assetIndexer == nil || s.txMemPool == nil {
-		return nil, fmt.Errorf("agent confirm submitter is not ready")
-	}
-	if s.agentConfirmInMempool(candidate.Address) {
-		return nil, fmt.Errorf("agent confirm transaction is already in mempool")
-	}
 	encoded, err := param.Encode()
 	if err != nil {
 		return nil, err
+	}
+	return s.submitAgentInvokeTx(candidate.Address, agentcontract.InvokeAPIConfirm, encoded)
+}
+
+func (s *server) submitAgentInvokeTx(contract agentcontract.ContractAddress, action string, param []byte) (*wire.MsgTx, error) {
+	if s == nil || s.assetIndexer == nil || s.txMemPool == nil {
+		return nil, fmt.Errorf("agent invoke submitter is not ready")
+	}
+	if s.agentInvokeInMempool(contract, action) {
+		return nil, fmt.Errorf("agent %s transaction is already in mempool", action)
 	}
 	funding, err := s.selectAgentConfirmFundingUTXO()
 	if err != nil {
@@ -2916,11 +2948,11 @@ func (s *server) submitAgentConfirmTx(candidate agentcontract.PredictionConfirmC
 		changeScript,
 	)
 	tx, err := agentcontract.BuildInvokeTx(agentcontract.InvokeTxBuildRequest{
-		Contract:  candidate.Address,
+		Contract:  contract,
 		GasLimit:  1000,
 		CallNonce: uint64(time.Now().UnixNano()),
-		Action:    agentcontract.InvokeAPIConfirm,
-		Param:     encoded,
+		Action:    action,
+		Param:     param,
 		Funding:   agentcontract.TxFunding{},
 		Inputs:    []wire.OutPoint{funding.OutPoint},
 		ChangeOutputs: []*wire.TxOut{
@@ -3001,7 +3033,7 @@ func (s *server) selectAgentConfirmFundingUTXO() (agentConfirmFundingUTXO, error
 	return agentConfirmFundingUTXO{}, fmt.Errorf("no spendable corenode funding UTXO")
 }
 
-func (s *server) agentConfirmInMempool(contract agentcontract.ContractAddress) bool {
+func (s *server) agentInvokeInMempool(contract agentcontract.ContractAddress, action string) bool {
 	if s == nil || s.txMemPool == nil {
 		return false
 	}
@@ -3012,7 +3044,7 @@ func (s *server) agentConfirmInMempool(contract agentcontract.ContractAddress) b
 			continue
 		}
 		parsed, err := agentcontract.ParseTx(desc.Tx.MsgTx(), resolver)
-		if err != nil || parsed.Invoke == nil || parsed.Invoke.Action != agentcontract.InvokeAPIConfirm {
+		if err != nil || parsed.Invoke == nil || parsed.Invoke.Action != action {
 			continue
 		}
 		for _, output := range parsed.ContractOutputs {
@@ -3409,6 +3441,12 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	}
 	s.agentLLM = agentLLM
 	contractResultBuilder := newContractResultBuilder(s.chainParams, templateResultBuilder, evmResultBuilder, agentResultBuilder)
+	contractBlockValidator := blockchain.NewCompositeContractBlockValidator(blockchain.CompositeContractBlockValidatorConfig{
+		ChainParams:       s.chainParams,
+		TemplateValidator: templateValidator,
+		EVMValidator:      evmValidator,
+		AgentValidator:    agentValidator,
+	})
 
 	// Create a new block chain instance with the appropriate configuration.
 	s.chain, err = blockchain.New(&blockchain.Config{
@@ -3420,9 +3458,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		SigCache:               s.sigCache,
 		IndexManager:           indexManager,
 		AssetIndexManager:      assetIndexer,
-		EVMBlockValidator:      evmValidator,
-		TemplateBlockValidator: templateValidator,
-		AgentBlockValidator:    agentValidator,
+		ContractBlockValidator: contractBlockValidator,
 		HashCache:              s.hashCache,
 		Prune:                  cfg.Prune * 1024 * 1024,
 		UtxoCacheMaxSize:       uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
@@ -3677,11 +3713,12 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 			TxMemPool:   s.txMemPool,
 			Generator:   blockTemplateGenerator,
 			//CPUMiner:     s.cpuMiner,
-			PosMiner:     s.posMiner,
-			TxIndex:      s.txIndex,
-			AddrIndex:    s.addrIndex,
-			CfIndex:      s.cfIndex,
-			FeeEstimator: s.feeEstimator,
+			PosMiner:          s.posMiner,
+			TxIndex:           s.txIndex,
+			AddrIndex:         s.addrIndex,
+			CfIndex:           s.cfIndex,
+			FeeEstimator:      s.feeEstimator,
+			AssetIndexManager: assetIndexer,
 		})
 		if err != nil {
 			srvrLog.Errorf("Unable to start RPC server: %v", err)

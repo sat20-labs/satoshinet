@@ -5,8 +5,12 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractengine "github.com/sat20-labs/satoshinet/contract"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
+	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 )
 
 type CompositeContractBlockValidatorConfig struct {
@@ -49,6 +53,30 @@ func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.B
 		return v.verifyCombinedStateRoot(block, hasTemplateWork, hasEVMWork, hasAgentWork)
 	}
 	return nil
+}
+
+func (v *CompositeContractBlockValidator) TemplateBlockPostState(hash *chainhash.Hash) (*tmplcontract.RuntimeStore, bool) {
+	provider, ok := v.cfg.TemplateValidator.(TemplateBlockStateProvider)
+	if !ok {
+		return nil, false
+	}
+	return provider.TemplateBlockPostState(hash)
+}
+
+func (v *CompositeContractBlockValidator) EVMBlockPostState(hash *chainhash.Hash) (*evm.MemoryStateDB, bool) {
+	provider, ok := v.cfg.EVMValidator.(EVMBlockStateProvider)
+	if !ok {
+		return nil, false
+	}
+	return provider.EVMBlockPostState(hash)
+}
+
+func (v *CompositeContractBlockValidator) AgentBlockPostState(hash *chainhash.Hash) (*agentcontract.RuntimeStore, bool) {
+	provider, ok := v.cfg.AgentValidator.(AgentBlockStateProvider)
+	if !ok {
+		return nil, false
+	}
+	return provider.AgentBlockPostState(hash)
 }
 
 func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil.Block, hasTemplateWork, hasEVMWork, hasAgentWork bool) error {

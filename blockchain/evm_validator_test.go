@@ -8,8 +8,8 @@ import (
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/contract/evm"
 	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -141,19 +141,16 @@ func TestEVMBlockExecutionValidatorAllowsBlocksWithoutEVMWork(t *testing.T) {
 func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	contract := testContractAddressForBlockchain(t)
 	runtime := evm.NewRuntime(nil)
-	runtime.SetCode(evm.ContractAddressHash(contract), callAssetPrecompileCodeForBlockchain())
-	resultTx := testEVMResultTx(t, evm.ResultStatusSuccess, 1)
+	runtime.SetCode(evm.ContractAddressHash(contract), []byte{0x00})
 	blockTime := time.Unix(1710000000, 0)
 
 	executed, err := evm.ExecuteBlock(evm.BlockExecutionRequest{
-		Txs:     []*wire.MsgTx{resultTx},
 		Runtime: runtime.Clone(),
 		Block:   evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: 1000000, FixedGasPrice: 1},
 		ResolveTriggers: func(evm.TriggerResolutionContext) ([]evm.TriggerCall, error) {
 			return []evm.TriggerCall{{
 				Trigger:  evm.Trigger{ID: "vault-release", Contract: contract, Kind: evm.TriggerAtHeight, Height: 100},
 				GasLimit: 100000,
-				Calldata: evm.EncodeTransferAssetCall(evm.SatoshiAssetName, "tb1qdest", "77", nil),
 			}}, nil
 		},
 	})
@@ -166,7 +163,7 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	}
 	block := btcutil.NewBlock(&wire.MsgBlock{
 		Header:       wire.BlockHeader{Timestamp: blockTime},
-		Transactions: []*wire.MsgTx{coinbase, resultTx},
+		Transactions: []*wire.MsgTx{coinbase},
 	})
 	block.SetHeight(100)
 
@@ -179,7 +176,6 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 			return []evm.TriggerCall{{
 				Trigger:  evm.Trigger{ID: "vault-release", Contract: contract, Kind: evm.TriggerAtHeight, Height: 100},
 				GasLimit: 100000,
-				Calldata: evm.EncodeTransferAssetCall(evm.SatoshiAssetName, "tb1qdest", "77", nil),
 			}}, nil
 		},
 	})

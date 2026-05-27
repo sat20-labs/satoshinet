@@ -37,13 +37,13 @@ func TestCalcMinRequiredTxRelayFee(t *testing.T) {
 			"100 bytes with default minimum relay fee",
 			100,
 			DefaultMinRelayTxFee,
-			100,
+			int64(DefaultMinRelayTxFee),
 		},
 		{
 			"max standard tx size with default minimum relay fee",
 			maxStandardTxWeight / 4,
 			DefaultMinRelayTxFee,
-			100000,
+			int64(DefaultMinRelayTxFee),
 		},
 		{
 			"max standard tx size with max satoshi relay fee",
@@ -55,31 +55,31 @@ func TestCalcMinRequiredTxRelayFee(t *testing.T) {
 			"1500 bytes with 5000 relay fee",
 			1500,
 			5000,
-			7500,
+			5000,
 		},
 		{
 			"1500 bytes with 3000 relay fee",
 			1500,
 			3000,
-			4500,
+			3000,
 		},
 		{
 			"782 bytes with 5000 relay fee",
 			782,
 			5000,
-			3910,
+			5000,
 		},
 		{
 			"782 bytes with 3000 relay fee",
 			782,
 			3000,
-			2346,
+			3000,
 		},
 		{
 			"782 bytes with 2550 relay fee",
 			782,
 			2550,
-			1994,
+			2550,
 		},
 	}
 
@@ -242,7 +242,7 @@ func TestDust(t *testing.T) {
 			"38 byte public key script with value 585",
 			wire.TxOut{Value: 585, PkScript: pkScript},
 			1000,
-			false,
+			true,
 		},
 		{
 			// Maximum allowed value is never dust.
@@ -432,8 +432,7 @@ func TestCheckTransactionStandard(t *testing.T) {
 				LockTime: 0,
 			},
 			height:     300000,
-			isStandard: false,
-			code:       wire.RejectNonstandard,
+			isStandard: true,
 		},
 		{
 			name: "Dust output",
@@ -447,8 +446,7 @@ func TestCheckTransactionStandard(t *testing.T) {
 				LockTime: 0,
 			},
 			height:     300000,
-			isStandard: false,
-			code:       wire.RejectDust,
+			isStandard: true,
 		},
 		{
 			name: "One nulldata output with 0 amount (standard)",

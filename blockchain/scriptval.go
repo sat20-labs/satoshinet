@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
-	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractengine "github.com/sat20-labs/satoshinet/contract"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -74,16 +75,15 @@ out:
 			sigScript := txIn.SignatureScript
 			witness := txIn.Witness
 			pkScript := utxo.PkScript()
-			if evm.IsContractPkScript(pkScript) {
-				inputScripts, err := evmInputScripts(txVI.tx.MsgTx(), v.utxoView)
+			if contractengine.IsContractPkScript(pkScript) {
+				inputScripts, err := contractInputScripts(txVI.tx.MsgTx(), v.utxoView)
 				if err == nil {
-					_, err = evm.ValidateResultContractSpend(
-						txVI.tx.MsgTx(), inputScripts,
-						evm.TestnetContractPrefix)
+					_, err = contractengine.ValidateResultContractSpend(
+						txVI.tx.MsgTx(), inputScripts, contractcommon.TestnetContractPrefix)
 				}
 				if err != nil {
 					str := fmt.Sprintf("input %s:%d references invalid "+
-						"EVM contract spend %v: %v",
+						"contract spend %v: %v",
 						txVI.tx.Hash(), txVI.txInIndex,
 						txIn.PreviousOutPoint, err)
 					err := ruleError(ErrScriptValidation, str)
@@ -136,8 +136,8 @@ out:
 	}
 }
 
-func evmInputScripts(tx *wire.MsgTx, utxoView *UtxoViewpoint) (map[evm.OutPoint][]byte, error) {
-	inputScripts := make(map[evm.OutPoint][]byte, len(tx.TxIn))
+func contractInputScripts(tx *wire.MsgTx, utxoView *UtxoViewpoint) (map[wire.OutPoint][]byte, error) {
+	inputScripts := make(map[wire.OutPoint][]byte, len(tx.TxIn))
 	for i, txIn := range tx.TxIn {
 		if txIn == nil {
 			return nil, fmt.Errorf("nil input %d", i)
@@ -147,7 +147,7 @@ func evmInputScripts(tx *wire.MsgTx, utxoView *UtxoViewpoint) (map[evm.OutPoint]
 			return nil, fmt.Errorf("missing input script for %v",
 				txIn.PreviousOutPoint)
 		}
-		inputScripts[evm.WireOutPointToEVM(txIn.PreviousOutPoint)] = entry.PkScript()
+		inputScripts[txIn.PreviousOutPoint] = entry.PkScript()
 	}
 	return inputScripts, nil
 }

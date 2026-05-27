@@ -26,6 +26,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	sindexercommon "github.com/sat20-labs/satoshinet/indexer/common"
+	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/integration/rpctest"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
@@ -183,6 +184,10 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 	requireAssetSummaryAmount(t, bootstrapNode, recipient, vaultAsset, "1.25")
 	requireAssetSummaryAmount(t, bootstrapNode, vaultContract.MustEncode(), vaultAsset, "8.75")
 	requirePositiveAssetSummary(t, bootstrapNode, vaultContract.MustEncode(), gasAsset)
+	waitForEVMContractQueries(t, bootstrapNode,
+		[]string{counterContract.MustEncode(), erc20Contract.MustEncode(), vaultContract.MustEncode()},
+		counterContract.MustEncode(),
+	)
 
 	bestHash, bestHeight, err := bootstrapNode.Client.GetBestBlock()
 	require.NoError(t, err)
@@ -190,6 +195,69 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, bestHeight, coreBestHeight)
 	require.Equal(t, bestHash, coreBestHash)
+}
+
+func waitForEVMContractQueries(t *testing.T, node *rpctest.Harness, contracts []string, historyContract string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := checkEVMContractQueries(node, contracts, historyContract); err == nil {
+			return
+		} else {
+			lastErr = err
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	require.NoError(t, lastErr)
+}
+
+func checkEVMContractQueries(node *rpctest.Harness, contracts []string, historyContract string) error {
+	baseURL, err := node.IndexerURL("testnet")
+	if err != nil {
+		return err
+	}
+	var list localwire.ContractListResp
+	if err := getIndexerJSON(baseURL+"/v3/contracts", &list); err != nil {
+		return err
+	}
+	if list.Code != 0 {
+		return fmt.Errorf("contract list code %d: %s", list.Code, list.Msg)
+	}
+	found := make(map[string]bool, len(contracts))
+	for _, summary := range list.Data {
+		for _, contract := range contracts {
+			if summary.Address == contract && summary.ContractTypeID == evm.ContractTypeEVM {
+				found[contract] = true
+			}
+		}
+	}
+	for _, contract := range contracts {
+		if !found[contract] {
+			return fmt.Errorf("evm contract %s not found in contract list", contract)
+		}
+	}
+
+	var history localwire.ContractHistoryResp
+	if err := getIndexerJSON(baseURL+"/v3/contracts/"+historyContract+"/history", &history); err != nil {
+		return err
+	}
+	if history.Code != 0 {
+		return fmt.Errorf("contract history code %d: %s", history.Code, history.Msg)
+	}
+	var deploys, invokes int
+	for _, record := range history.Data {
+		if record.Kind == "deploy" {
+			deploys++
+		}
+		if record.Kind == "invoke" {
+			invokes++
+		}
+	}
+	if deploys == 0 || invokes == 0 {
+		return fmt.Errorf("incomplete evm history: deploys=%d invokes=%d total=%d", deploys, invokes, history.Total)
+	}
+	return nil
 }
 
 type networkCompiledSolidityContract struct {

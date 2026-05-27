@@ -5,40 +5,33 @@
 package blockchain
 
 import (
-	"fmt"
 	"testing"
 
+	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/txscript"
 )
 
 // TestCheckBlockScripts ensures that validating the all of the scripts in a
 // known-good block doesn't return an error.
 func TestCheckBlockScripts(t *testing.T) {
-	testBlockNum := 277647
-	blockDataFile := fmt.Sprintf("%d.dat.bz2", testBlockNum)
-	blocks, err := loadBlocks(blockDataFile)
+	chain, teardownFunc, err := chainSetup("checkblockscripts",
+		&chaincfg.RegressionNetParams)
 	if err != nil {
-		t.Errorf("Error loading file: %v\n", err)
+		t.Errorf("Failed to setup chain instance: %v", err)
 		return
 	}
-	if len(blocks) > 1 {
-		t.Errorf("The test block file must only have one block in it")
-		return
-	}
-	if len(blocks) == 0 {
-		t.Errorf("The test block file may not be empty")
-		return
-	}
+	defer teardownFunc()
 
-	storeDataFile := fmt.Sprintf("%d.utxostore.bz2", testBlockNum)
-	view, err := loadUtxoView(storeDataFile)
+	block, _, err := newBlock(chain, btcutil.NewBlock(chain.chainParams.GenesisBlock), nil)
 	if err != nil {
-		t.Errorf("Error loading txstore: %v\n", err)
+		t.Errorf("Error creating test block: %v\n", err)
 		return
 	}
+	view := NewUtxoViewpoint()
 
 	scriptFlags := txscript.ScriptBip16
-	err = checkBlockScripts(blocks[0], view, scriptFlags, nil, nil)
+	err = checkBlockScripts(block, view, scriptFlags, nil, nil)
 	if err != nil {
 		t.Errorf("Transaction script validation failed: %v\n", err)
 		return
