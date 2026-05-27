@@ -147,6 +147,10 @@ func normalizeContractHistoryRecord(record contractengine.ContractHistoryRecord)
 		if record.Status == "" {
 			record.Status = agentcontract.StatusReady
 		}
+	case agentcontract.InvokeAPIReject:
+		if record.Status == "" {
+			record.Status = agentcontract.StatusRejected
+		}
 	case agentcontract.InvokeAPIBet:
 		if record.Status == "" {
 			record.Status = agentcontract.PredictionStatusBetting

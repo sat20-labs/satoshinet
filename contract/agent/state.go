@@ -11,6 +11,7 @@ type PredictionRuntimeState struct {
 	Status        string                         `json:"status"`
 	Bets          map[string]PredictionBetRecord `json:"bets,omitempty"`
 	Confirmations []PredictionConfirmRecord      `json:"confirmations,omitempty"`
+	Rejections    []PredictionRejectRecord       `json:"rejections,omitempty"`
 }
 
 type PredictionBetRecord struct {
@@ -29,6 +30,12 @@ type PredictionConfirmRecord struct {
 	ObservedAt int64  `json:"observed_at"`
 }
 
+type PredictionRejectRecord struct {
+	Agent     string `json:"agent"`
+	Reason    string `json:"reason"`
+	CheckedAt int64  `json:"checked_at"`
+}
+
 func (s RuntimeState) Clone() RuntimeState {
 	out := s
 	out.Prediction = s.Prediction.Clone()
@@ -44,6 +51,7 @@ func (s PredictionRuntimeState) Clone() PredictionRuntimeState {
 		}
 	}
 	out.Confirmations = append([]PredictionConfirmRecord(nil), s.Confirmations...)
+	out.Rejections = append([]PredictionRejectRecord(nil), s.Rejections...)
 	return out
 }
 

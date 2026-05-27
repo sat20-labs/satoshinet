@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -199,6 +201,26 @@ func TestPredictionAgentSearchesSameSiteResultLinkWhenSourcePending(t *testing.T
 	}
 }
 
+func TestPredictionAgentReadyReviewRejectsAmbiguousContract(t *testing.T) {
+	client := &fakeLLMClient{response: `{"ready":false,"reason":"event source is not verifiable"}`}
+	contract := predictionContractForResultServer("https://example.com")
+	corenodeAgent := NewPredictionAgent(client)
+
+	reject, ready, err := corenodeAgent.ReviewReady(context.Background(), PredictionAgentReadyReviewRequest{
+		Contract:  contract,
+		CheckedAt: contract.BetDeadline,
+	})
+	if err != nil {
+		t.Fatalf("ReviewReady failed: %v", err)
+	}
+	if ready {
+		t.Fatalf("expected reject decision")
+	}
+	if reject.Reason != "event source is not verifiable" || reject.CheckedAt != contract.BetDeadline {
+		t.Fatalf("reject mismatch: %#v", reject)
+	}
+}
+
 type sequenceLLMClient struct {
 	responses []string
 	calls     int
@@ -211,6 +233,121 @@ func (c *sequenceLLMClient) Complete(ctx context.Context, req LLMCompletionReque
 	response := c.responses[c.calls]
 	c.calls++
 	return LLMCompletionResponse{Content: response}, nil
+}
+
+func TestPredictionAgentRetriesFetchAndAudits(t *testing.T) {
+	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"a","reason":"Team A won"}`}
+	contract := predictionContractForResultServer("https://example.com")
+	fetcher := &retryPredictionFetcher{failures: 1, result: PredictionResultFetchResult{
+		FinalURL: "https://example.com/match/result/123",
+		Text:     "Final: Team A 101, Team B 98.",
+	}}
+	events := make([]PredictionAgentAuditEvent, 0)
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = fetcher
+	corenodeAgent.RetryAttempts = 2
+	corenodeAgent.RetryBackoff = time.Nanosecond
+	corenodeAgent.Audit = func(event PredictionAgentAuditEvent) {
+		events = append(events, event)
+	}
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  "https://example.com/match/result/123",
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.OutcomeID != "a" || fetcher.calls != 2 {
+		t.Fatalf("unexpected result outcome=%s fetch_calls=%d", param.OutcomeID, fetcher.calls)
+	}
+	if !auditStageSeen(events, "fetch_error") || !auditStageSeen(events, "fetch_ok") || !auditStageSeen(events, "llm_decision") {
+		t.Fatalf("missing audit events: %#v", events)
+	}
+}
+
+func TestPredictionAgentRetriesLLMAndAudits(t *testing.T) {
+	client := &retryLLMClient{
+		failures: 1,
+		response: `{"result_type":"outcome","outcome_id":"a","reason":"Team A won"}`,
+	}
+	contract := predictionContractForResultServer("https://example.com")
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = &retryPredictionFetcher{result: PredictionResultFetchResult{
+		FinalURL: "https://example.com/match/result/123",
+		Text:     "Final: Team A 101, Team B 98.",
+	}}
+	corenodeAgent.RetryAttempts = 2
+	corenodeAgent.RetryBackoff = time.Nanosecond
+	events := make([]PredictionAgentAuditEvent, 0)
+	corenodeAgent.Audit = func(event PredictionAgentAuditEvent) {
+		events = append(events, event)
+	}
+
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  "https://example.com/match/result/123",
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.OutcomeID != "a" || client.calls != 2 {
+		t.Fatalf("unexpected result outcome=%s llm_calls=%d", param.OutcomeID, client.calls)
+	}
+	if !auditStageSeen(events, "llm_error") || !auditStageSeen(events, "llm_decision") {
+		t.Fatalf("missing llm audit events: %#v", events)
+	}
+}
+
+func TestHTTPPredictionResultFetcherRejectsOversizedResult(t *testing.T) {
+	resultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("abcdef"))
+	}))
+	defer resultServer.Close()
+
+	fetcher := HTTPPredictionResultTextFetcher{MaxBytes: 3}
+	_, err := fetcher.FetchPredictionResult(context.Background(), resultServer.URL)
+	if err == nil {
+		t.Fatalf("expected oversized result error")
+	}
+}
+
+type retryPredictionFetcher struct {
+	failures int
+	calls    int
+	result   PredictionResultFetchResult
+}
+
+func (f *retryPredictionFetcher) FetchPredictionResult(ctx context.Context, resultURL string) (PredictionResultFetchResult, error) {
+	f.calls++
+	if f.calls <= f.failures {
+		return PredictionResultFetchResult{}, errors.New("temporary fetch failure")
+	}
+	return f.result, nil
+}
+
+type retryLLMClient struct {
+	failures int
+	calls    int
+	response string
+}
+
+func (c *retryLLMClient) Complete(ctx context.Context, req LLMCompletionRequest) (LLMCompletionResponse, error) {
+	c.calls++
+	if c.calls <= c.failures {
+		return LLMCompletionResponse{}, errors.New("temporary llm failure")
+	}
+	return LLMCompletionResponse{Content: c.response}, nil
+}
+
+func auditStageSeen(events []PredictionAgentAuditEvent, stage string) bool {
+	for _, event := range events {
+		if event.Stage == stage {
+			return true
+		}
+	}
+	return false
 }
 
 func predictionContractForResultServer(serverURL string) PredictionContract {

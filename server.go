@@ -59,7 +59,9 @@ import (
 )
 
 const (
-	agentConfirmTxFee = int64(10)
+	agentConfirmTxFee     = int64(10)
+	agentConfirmRetryBase = time.Minute
+	agentConfirmRetryMax  = 30 * time.Minute
 
 	// defaultServices describes the default services that are supported by
 	// the server.
@@ -217,6 +219,12 @@ type cfHeaderKV struct {
 
 // server provides a bitcoin server for handling communications to and from
 // bitcoin peers.
+type agentConfirmRetryState struct {
+	NextAttempt time.Time
+	Failures    int
+	LastReason  string
+}
+
 type server struct {
 	// The following variables must only be used atomically.
 	// Putting the uint64s first makes them 64-bit aligned for 32-bit systems.
@@ -238,6 +246,8 @@ type server struct {
 	chain        *blockchain.BlockChain
 	txMemPool    *mempool.TxPool
 	agentLLM     agentcontract.LLMClient
+	agentRetryMu sync.Mutex
+	agentRetry   map[string]agentConfirmRetryState
 	//cpuMiner             *cpuminer.CPUMiner
 	posMiner             *posminer.POSMiner
 	modifyRebroadcastInv chan interface{}
@@ -2842,9 +2852,6 @@ func (s *server) processAgentContracts() error {
 	if runtimeStore == nil {
 		return nil
 	}
-	if err := s.processAgentReadyContracts(runtimeStore); err != nil {
-		return err
-	}
 	if s.agentLLM == nil {
 		return nil
 	}
@@ -2854,6 +2861,10 @@ func (s *server) processAgentContracts() error {
 	if !best.MedianTime.IsZero() {
 		unixValue = best.MedianTime.Unix()
 	}
+	corenodeAgent := agentcontract.NewPredictionAgent(s.agentLLM)
+	if err := s.processAgentReadyContracts(runtimeStore, corenodeAgent, unixValue); err != nil {
+		return err
+	}
 	candidates, err := runtimeStore.PendingPredictionConfirms(heightValue, unixValue)
 	if err != nil {
 		return err
@@ -2862,56 +2873,160 @@ func (s *server) processAgentContracts() error {
 		return nil
 	}
 
-	corenodeAgent := agentcontract.NewPredictionAgent(s.agentLLM)
 	for _, candidate := range candidates {
+		contractAddr := candidate.Address.EncodeAddress()
+		if !s.agentConfirmShouldAttempt(contractAddr, time.Now()) {
+			srvrLog.Debugf("Agent contract %s confirm skipped by retry backoff", contractAddr)
+			continue
+		}
+		corenodeAgent.Audit = func(event agentcontract.PredictionAgentAuditEvent) {
+			s.agentConfirmAudit(contractAddr, event)
+		}
 		resultURL := candidate.Contract.SourceURL
 		observedAt := heightValue
 		if candidate.Contract.TimeBase == agentcontract.TimeBaseUnix {
 			observedAt = unixValue
 		}
-		param, err := corenodeAgent.BuildConfirmParam(context.Background(), agentcontract.PredictionAgentConfirmRequest{
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.AgentLLMTimeout+30*time.Second)
+		param, err := corenodeAgent.BuildConfirmParam(ctx, agentcontract.PredictionAgentConfirmRequest{
 			Contract:   candidate.Contract,
 			ResultURL:  resultURL,
 			ObservedAt: observedAt,
 		})
+		cancel()
 		if err != nil {
-			srvrLog.Warnf("Agent contract %s confirm build failed: %v",
-				candidate.Address.EncodeAddress(), err)
+			delay := s.agentConfirmRecordFailure(contractAddr, err)
+			if errors.Is(err, agentcontract.ErrPredictionResultPending) {
+				srvrLog.Infof("Agent contract %s result pending, retry_after=%s", contractAddr, delay)
+			} else {
+				srvrLog.Warnf("Agent contract %s confirm build failed: %v, retry_after=%s", contractAddr, err, delay)
+			}
 			continue
 		}
 		tx, err := s.submitAgentConfirmTx(candidate, param)
 		if err != nil {
-			srvrLog.Warnf("Agent contract %s confirm submit failed: %v",
-				candidate.Address.EncodeAddress(), err)
+			delay := s.agentConfirmRecordFailure(contractAddr, err)
+			srvrLog.Warnf("Agent contract %s confirm submit failed: %v, retry_after=%s", contractAddr, err, delay)
 			continue
 		}
+		s.agentConfirmClearFailure(contractAddr)
 		srvrLog.Infof("Agent contract %s confirm submitted: tx=%s result_type=%s outcome=%s result_url=%s result_hash=%s",
-			candidate.Address.EncodeAddress(), tx.TxID(), param.ResultType, param.OutcomeID,
+			contractAddr, tx.TxID(), param.ResultType, param.OutcomeID,
 			param.ResultURL, param.ResultHash)
 	}
 	return nil
 }
 
-func (s *server) processAgentReadyContracts(runtimeStore *agentcontract.RuntimeStore) error {
+func (s *server) agentConfirmShouldAttempt(contractAddr string, now time.Time) bool {
+	s.agentRetryMu.Lock()
+	defer s.agentRetryMu.Unlock()
+	state, ok := s.agentRetry[contractAddr]
+	return !ok || !now.Before(state.NextAttempt)
+}
+
+func (s *server) agentConfirmRecordFailure(contractAddr string, err error) time.Duration {
+	s.agentRetryMu.Lock()
+	defer s.agentRetryMu.Unlock()
+	if s.agentRetry == nil {
+		s.agentRetry = make(map[string]agentConfirmRetryState)
+	}
+	state := s.agentRetry[contractAddr]
+	state.Failures++
+	delay := agentConfirmRetryBase
+	for i := 1; i < state.Failures && delay < agentConfirmRetryMax; i++ {
+		delay *= 2
+	}
+	if delay > agentConfirmRetryMax {
+		delay = agentConfirmRetryMax
+	}
+	state.NextAttempt = time.Now().Add(delay)
+	state.LastReason = err.Error()
+	s.agentRetry[contractAddr] = state
+	return delay
+}
+
+func (s *server) agentConfirmClearFailure(contractAddr string) {
+	s.agentRetryMu.Lock()
+	defer s.agentRetryMu.Unlock()
+	delete(s.agentRetry, contractAddr)
+}
+
+func (s *server) agentConfirmAudit(contractAddr string, event agentcontract.PredictionAgentAuditEvent) {
+	msg := truncateAgentLog(event.Error, 180)
+	reason := truncateAgentLog(event.Reason, 180)
+	srvrLog.Infof("Agent contract %s audit stage=%s url=%s final_url=%s result_type=%s outcome=%s attempt=%d text_bytes=%d cleaned_bytes=%d candidates=%d result_hash=%s reason=%s error=%s",
+		contractAddr, event.Stage, event.ResultURL, event.FinalURL, event.ResultType, event.OutcomeID,
+		event.Attempt, event.TextBytes, event.CleanedBytes, event.CandidateCount, event.ResultHash, reason, msg)
+}
+
+func truncateAgentLog(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return value[:max] + "..."
+}
+
+func (s *server) processAgentReadyContracts(runtimeStore *agentcontract.RuntimeStore,
+	corenodeAgent *agentcontract.PredictionAgent, checkedAt int64) error {
+
 	candidates, err := runtimeStore.PendingPredictionReady()
 	if err != nil {
 		return err
 	}
 	for _, candidate := range candidates {
-		tx, err := s.submitAgentReadyTx(candidate)
-		if err != nil {
-			srvrLog.Warnf("Agent contract %s ready submit failed: %v",
-				candidate.Address.EncodeAddress(), err)
+		contractAddr := candidate.Address.EncodeAddress()
+		if !s.agentConfirmShouldAttempt(contractAddr, time.Now()) {
+			srvrLog.Debugf("Agent contract %s ready skipped by retry backoff", contractAddr)
 			continue
 		}
-		srvrLog.Infof("Agent contract %s ready submitted: tx=%s",
-			candidate.Address.EncodeAddress(), tx.TxID())
+		corenodeAgent.Audit = func(event agentcontract.PredictionAgentAuditEvent) {
+			s.agentConfirmAudit(contractAddr, event)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.AgentLLMTimeout+30*time.Second)
+		reject, ready, err := corenodeAgent.ReviewReady(ctx, agentcontract.PredictionAgentReadyReviewRequest{
+			Contract:  candidate.Contract,
+			CheckedAt: checkedAt,
+		})
+		cancel()
+		if err != nil {
+			delay := s.agentConfirmRecordFailure(contractAddr, err)
+			srvrLog.Warnf("Agent contract %s ready review failed: %v, retry_after=%s", contractAddr, err, delay)
+			continue
+		}
+		var tx *wire.MsgTx
+		if ready {
+			tx, err = s.submitAgentReadyTx(candidate)
+		} else {
+			tx, err = s.submitAgentRejectTx(candidate, reject)
+		}
+		if err != nil {
+			delay := s.agentConfirmRecordFailure(contractAddr, err)
+			srvrLog.Warnf("Agent contract %s ready transition submit failed: %v, retry_after=%s", contractAddr, err, delay)
+			continue
+		}
+		s.agentConfirmClearFailure(contractAddr)
+		if ready {
+			srvrLog.Infof("Agent contract %s ready submitted: tx=%s", contractAddr, tx.TxID())
+		} else {
+			srvrLog.Infof("Agent contract %s reject submitted: tx=%s reason=%s",
+				contractAddr, tx.TxID(), truncateAgentLog(reject.Reason, 180))
+		}
 	}
 	return nil
 }
 
 func (s *server) submitAgentReadyTx(candidate agentcontract.PredictionReadyCandidate) (*wire.MsgTx, error) {
 	return s.submitAgentInvokeTx(candidate.Address, agentcontract.InvokeAPIReady, nil)
+}
+
+func (s *server) submitAgentRejectTx(candidate agentcontract.PredictionReadyCandidate,
+	param agentcontract.PredictionRejectParam) (*wire.MsgTx, error) {
+
+	encoded, err := param.Encode()
+	if err != nil {
+		return nil, err
+	}
+	return s.submitAgentInvokeTx(candidate.Address, agentcontract.InvokeAPIReject, encoded)
 }
 
 func (s *server) submitAgentConfirmTx(candidate agentcontract.PredictionConfirmCandidate,

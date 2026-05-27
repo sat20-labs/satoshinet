@@ -100,6 +100,8 @@ type AgentPredictionAnalytics struct {
 	ResultType    string                                `json:"resultType,omitempty"`
 	OutcomeID     string                                `json:"outcomeId,omitempty"`
 	LastConfirm   *agentcontract.PredictionConfirmParam `json:"lastConfirm,omitempty"`
+	Rejections    int                                   `json:"rejections"`
+	LastReject    *agentcontract.PredictionRejectParam  `json:"lastReject,omitempty"`
 	Fees          []AgentPredictionTransferView         `json:"fees,omitempty"`
 	Payouts       []AgentPredictionTransferView         `json:"payouts,omitempty"`
 	Contract      *agentcontract.PredictionContract     `json:"contract,omitempty"`
@@ -128,6 +130,7 @@ type AgentPredictionUserStatus struct {
 	OutcomeBets   map[string]int          `json:"outcomeBets"`
 	Bets          []ContractHistoryRecord `json:"bets,omitempty"`
 	Confirmations []ContractHistoryRecord `json:"confirmations,omitempty"`
+	Rejections    []ContractHistoryRecord `json:"rejections,omitempty"`
 }
 
 func (q QueryService) SupportedContracts() []string {
@@ -391,6 +394,8 @@ func contractIndexStatus(op TxOpView) string {
 	switch op.Action {
 	case agentcontract.InvokeAPIReady:
 		return agentcontract.StatusReady
+	case agentcontract.InvokeAPIReject:
+		return agentcontract.StatusRejected
 	case agentcontract.InvokeAPIBet:
 		return agentcontract.PredictionStatusBetting
 	case agentcontract.InvokeAPIConfirm:
@@ -432,6 +437,10 @@ func enrichDetailsFromPayload(details map[string]interface{}, op TxOpView) {
 		case agentcontract.InvokeAPIConfirm:
 			if confirm, err := agentcontract.DecodePredictionConfirmParam(invoke.Param); err == nil {
 				details["confirm"] = confirm
+			}
+		case agentcontract.InvokeAPIReject:
+			if reject, err := agentcontract.DecodePredictionRejectParam(invoke.Param); err == nil {
+				details["reject"] = reject
 			}
 		}
 	}
@@ -546,6 +555,15 @@ func (q QueryService) agentPredictionAnalytics(contractAddress string) (*AgentPr
 			analytics.OutcomeID = confirm.OutcomeID
 			cp := confirm
 			analytics.LastConfirm = &cp
+		case agentcontract.InvokeAPIReject:
+			analytics.ResultType = agentcontract.StatusRejected
+			reject, ok := rejectFromRecord(record)
+			if !ok {
+				continue
+			}
+			analytics.Rejections++
+			cp := reject
+			analytics.LastReject = &cp
 		}
 	}
 	analytics.TotalAmount = totalAmount.String()
@@ -565,7 +583,8 @@ func (q QueryService) agentPredictionUsers(contractAddress string, start, limit 
 		if record.Actor == "" {
 			continue
 		}
-		if record.Action == agentcontract.InvokeAPIBet || record.Action == agentcontract.InvokeAPIConfirm {
+		if record.Action == agentcontract.InvokeAPIBet || record.Action == agentcontract.InvokeAPIConfirm ||
+			record.Action == agentcontract.InvokeAPIReject {
 			seen[record.Actor] = struct{}{}
 		}
 	}
@@ -605,6 +624,8 @@ func (q QueryService) agentPredictionUserStatus(contractAddress, address string)
 			status.Bets = append(status.Bets, record)
 		case agentcontract.InvokeAPIConfirm:
 			status.Confirmations = append(status.Confirmations, record)
+		case agentcontract.InvokeAPIReject:
+			status.Rejections = append(status.Rejections, record)
 		}
 	}
 	status.TotalAmount = totalAmount.String()
@@ -832,6 +853,14 @@ func confirmFromRecord(record ContractHistoryRecord) (agentcontract.PredictionCo
 		return confirm, false
 	}
 	return confirm, true
+}
+
+func rejectFromRecord(record ContractHistoryRecord) (agentcontract.PredictionRejectParam, bool) {
+	var reject agentcontract.PredictionRejectParam
+	if record.Details == nil || !decodeDetail(record.Details["reject"], &reject) {
+		return reject, false
+	}
+	return reject, true
 }
 
 type agentPredictionBetView struct {

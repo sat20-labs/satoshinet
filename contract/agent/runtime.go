@@ -24,6 +24,11 @@ type ApplyReadyRequest struct {
 	Invoker string
 }
 
+type ApplyRejectRequest struct {
+	Invoker string
+	Param   PredictionRejectParam
+}
+
 type ApplyBetRequest struct {
 	Invoker   string
 	Param     PredictionBetParam
@@ -107,6 +112,26 @@ func (r *Runtime) ApplyReady(req ApplyReadyRequest) error {
 	}
 	r.state.Status = StatusReady
 	r.state.Prediction.Status = PredictionStatusBetting
+	return nil
+}
+
+func (r *Runtime) ApplyReject(req ApplyRejectRequest) error {
+	if err := r.requireCoreNode(req.Invoker); err != nil {
+		return err
+	}
+	if r.state.Status != StatusPendingReady {
+		return fmt.Errorf("agent contract is not pending ready")
+	}
+	if err := req.Param.Check(); err != nil {
+		return err
+	}
+	r.state.Status = StatusRejected
+	r.state.Prediction.Status = PredictionStatusRejected
+	r.state.Prediction.Rejections = append(r.state.Prediction.Rejections, PredictionRejectRecord{
+		Agent:     req.Invoker,
+		Reason:    req.Param.Reason,
+		CheckedAt: req.Param.CheckedAt,
+	})
 	return nil
 }
 

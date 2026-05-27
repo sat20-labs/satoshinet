@@ -169,6 +169,8 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 	switch validated.Payload.Action {
 	case InvokeAPIReady:
 		err = runtime.ApplyReady(ApplyReadyRequest{Invoker: invoker})
+	case InvokeAPIReject:
+		err = e.applyReject(runtime, validated, invoker)
 	case InvokeAPIBet:
 		settlement, err = e.applyBet(runtime, validated, invoker)
 	case InvokeAPIConfirm:
@@ -190,7 +192,7 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 
 	requiresResult := settlement != nil
 	var readyResultPlan ResultPlan
-	if validated.Payload.Action == InvokeAPIReady {
+	if validated.Payload.Action == InvokeAPIReady || validated.Payload.Action == InvokeAPIReject {
 		var ok bool
 		readyResultPlan, ok = stateResultPlan(validated.Contract, validated.FundingOutputs)
 		requiresResult = ok
@@ -207,10 +209,21 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 		RequiresResult: requiresResult,
 	}
 	e.records = append(e.records, record)
-	if validated.Payload.Action == InvokeAPIReady && requiresResult {
+	if (validated.Payload.Action == InvokeAPIReady || validated.Payload.Action == InvokeAPIReject) && requiresResult {
 		e.resultPlans = append(e.resultPlans, readyResultPlan)
 	}
 	return nil
+}
+
+func (e *BlockExecutor) applyReject(runtime *Runtime, validated InvokeValidation, invoker string) error {
+	param, err := DecodePredictionRejectParam(validated.Payload.Param)
+	if err != nil {
+		return err
+	}
+	return runtime.ApplyReject(ApplyRejectRequest{
+		Invoker: invoker,
+		Param:   param,
+	})
 }
 
 func (e *BlockExecutor) applyBet(runtime *Runtime, validated InvokeValidation, invoker string) (*PredictionSettlementPlan, error) {

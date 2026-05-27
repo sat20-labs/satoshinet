@@ -10,6 +10,7 @@ const (
 	InvokeAPIReady   = "ready"
 	InvokeAPIBet     = "bet"
 	InvokeAPIConfirm = "confirm"
+	InvokeAPIReject  = "reject"
 
 	TimeBaseUnix   = "unix"
 	TimeBaseHeight = "height"
@@ -46,6 +47,7 @@ const (
 	PredictionStatusConfirmed     = "Confirmed"
 	PredictionStatusSettled       = "Settled"
 	PredictionStatusRefundable    = "Refundable"
+	PredictionStatusRejected      = "Rejected"
 )
 
 const (

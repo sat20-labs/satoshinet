@@ -69,11 +69,22 @@ func TestNetworkAgentPredictionUnverifiableRefund(t *testing.T) {
 	})
 }
 
+func TestNetworkAgentPredictionReadyReject(t *testing.T) {
+	runAgentPredictionAutoConfirmScenario(t, agentPredictionE2EScenario{
+		LLMContent:       `{"result_type":"pending","outcome_id":"","reason":"unused"}`,
+		ReadyContent:     `{"ready":false,"reason":"event source is not verifiable"}`,
+		Outcomes:         defaultAgentPredictionOutcomes(),
+		ExpectedRejected: true,
+	})
+}
+
 type agentPredictionE2EScenario struct {
-	LLMContent    string
-	Outcomes      []agentcontract.PredictionOutcome
-	ExpectedAlice string
-	ExpectedBob   string
+	LLMContent       string
+	ReadyContent     string
+	Outcomes         []agentcontract.PredictionOutcome
+	ExpectedAlice    string
+	ExpectedBob      string
+	ExpectedRejected bool
 }
 
 func defaultAgentPredictionOutcomes() []agentcontract.PredictionOutcome {
@@ -109,9 +120,16 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 		require.Equal(t, "/v1/chat/completions", r.URL.Path)
 		var req map[string]interface{}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		content, err := json.Marshal(scenario.LLMContent)
+		content := scenario.LLMContent
+		if llmRequestContains(req, "Review this prediction contract") {
+			content = scenario.ReadyContent
+			if content == "" {
+				content = `{"ready":true,"reason":"contract is understandable, verifiable, and executable"}`
+			}
+		}
+		encoded, err := json.Marshal(content)
 		require.NoError(t, err)
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":` + string(content) + `}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":` + string(encoded) + `}}]}`))
 	}))
 	defer llmServer.Close()
 
@@ -189,6 +207,11 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	sendTx(t, bootstrapNode, deployTx)
 	waitForPOSTx(t, bootstrapNode, nodes, deployTx)
 
+	if scenario.ExpectedRejected {
+		waitForAgentPredictionRejected(t, bootstrapNode, agentAddress.EncodeAddress())
+		return
+	}
+
 	waitForAgentPredictionReady(t, bootstrapNode, agentAddress.EncodeAddress())
 
 	aliceBet := mustAgentBetParam(t, "a")
@@ -228,6 +251,24 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	}
 	waitForAgentAssetAmounts(t, bootstrapNode, coreNode, nodes, expected, gasAsset, int32(contract.ConfirmAfter))
 	waitForAgentPredictionContractQueries(t, bootstrapNode, agentAddress.EncodeAddress(), aliceAddress, bobAddress)
+}
+
+func llmRequestContains(req map[string]interface{}, needle string) bool {
+	messages, ok := req["messages"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, msg := range messages {
+		fields, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		content, ok := fields["content"].(string)
+		if ok && strings.Contains(content, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func startAgentSatoshiNetNetwork(t *testing.T, fakeL1 *httptest.Server, llmEndpoint string) (*rpctest.Harness, *rpctest.Harness) {
@@ -412,6 +453,34 @@ func waitForAgentPredictionReady(t *testing.T, node *rpctest.Harness, contract s
 			}
 		}
 		lastErr = fmt.Errorf("agent contract %s is not ready yet", contract)
+		time.Sleep(300 * time.Millisecond)
+	}
+	require.NoError(t, lastErr)
+}
+
+func waitForAgentPredictionRejected(t *testing.T, node *rpctest.Harness, contract string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		baseURL, err := node.IndexerURL("testnet")
+		if err != nil {
+			lastErr = err
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		var history localwire.ContractHistoryResp
+		if err := getIndexerJSON(baseURL+"/v3/contracts/"+contract+"/history", &history); err != nil {
+			lastErr = err
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		for _, record := range history.Data {
+			if record.Action == agentcontract.InvokeAPIReject {
+				return
+			}
+		}
+		lastErr = fmt.Errorf("agent contract %s is not rejected yet", contract)
 		time.Sleep(300 * time.Millisecond)
 	}
 	require.NoError(t, lastErr)

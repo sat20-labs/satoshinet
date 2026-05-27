@@ -48,6 +48,11 @@ type PredictionConfirmParam struct {
 	ObservedAt int64  `json:"observed_at"`
 }
 
+type PredictionRejectParam struct {
+	Reason    string `json:"reason"`
+	CheckedAt int64  `json:"checked_at"`
+}
+
 func (c PredictionContract) Encode() ([]byte, error) {
 	return json.Marshal(c)
 }
@@ -177,6 +182,28 @@ func (p PredictionConfirmParam) Check(contract PredictionContract) error {
 	}
 	if p.ObservedAt <= 0 {
 		return fmt.Errorf("invalid observed_at %d", p.ObservedAt)
+	}
+	return nil
+}
+
+func (p PredictionRejectParam) Encode() ([]byte, error) {
+	return json.Marshal(p)
+}
+
+func DecodePredictionRejectParam(data []byte) (PredictionRejectParam, error) {
+	var p PredictionRejectParam
+	if err := json.Unmarshal(data, &p); err != nil {
+		return PredictionRejectParam{}, err
+	}
+	return p, nil
+}
+
+func (p PredictionRejectParam) Check() error {
+	if strings.TrimSpace(p.Reason) == "" {
+		return fmt.Errorf("prediction reject reason is empty")
+	}
+	if p.CheckedAt <= 0 {
+		return fmt.Errorf("invalid checked_at %d", p.CheckedAt)
 	}
 	return nil
 }
