@@ -4,12 +4,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/sat20-labs/satoshinet/chaincfg"
 )
 
 type RuntimeConfig struct {
-	CoreNodeAddress  string
-	AgentAddress     string
-	BootstrapAddress string
+	CoreNodeAddress           string
+	CoreNodePubKey            string
+	AgentAddress              string
+	BootstrapAddress          string
+	ChainParams               *chaincfg.Params `json:"-"`
+	RequireConfirmAttestation bool
 }
 
 type Runtime struct {
@@ -178,15 +183,26 @@ func (r *Runtime) ApplyConfirm(req ApplyConfirmRequest) (*PredictionSettlementPl
 	if err := req.Param.Check(r.contract); err != nil {
 		return nil, err
 	}
+	if r.config.RequireConfirmAttestation || r.config.CoreNodePubKey != "" ||
+		req.Param.CoreNodePubKey != "" || req.Param.CoreNodeSignature != "" {
+		if err := VerifyPredictionConfirmAttestation(r.address, req.Param,
+			r.config.CoreNodePubKey, r.config.CoreNodeAddress, r.config.ChainParams); err != nil {
+			return nil, err
+		}
+	}
 	r.state.Prediction.Status = PredictionStatusConfirmed
 	r.state.Prediction.Confirmations = append(r.state.Prediction.Confirmations, PredictionConfirmRecord{
-		Agent:      req.Invoker,
-		ResultType: req.Param.ResultType,
-		OutcomeID:  req.Param.OutcomeID,
-		SourceURL:  req.Param.SourceURL,
-		ResultURL:  req.Param.ResultURL,
-		ResultHash: req.Param.ResultHash,
-		ObservedAt: req.Param.ObservedAt,
+		Agent:             req.Invoker,
+		ResultType:        req.Param.ResultType,
+		OutcomeID:         req.Param.OutcomeID,
+		SourceURL:         req.Param.SourceURL,
+		ResultURL:         req.Param.ResultURL,
+		ResultHash:        req.Param.ResultHash,
+		ObservedAt:        req.Param.ObservedAt,
+		AgentVersion:      req.Param.AgentVersion,
+		ModelVersion:      req.Param.ModelVersion,
+		CoreNodePubKey:    req.Param.CoreNodePubKey,
+		CoreNodeSignature: req.Param.CoreNodeSignature,
 	})
 	plan, err := r.buildSettlementPlan(req.Param)
 	if err != nil {

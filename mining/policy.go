@@ -61,6 +61,7 @@ type ContractBuildRequest struct {
 	Height     int32
 	PrevHash   chainhash.Hash
 	Timestamp  time.Time
+	UtxoView   *blockchain.UtxoViewpoint
 }
 
 type ContractBuildResult struct {

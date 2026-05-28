@@ -33,10 +33,6 @@ import (
 )
 
 func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
-	if os.Getenv("SATOSHINET_EVM_NETWORK_E2E") != "1" {
-		t.Skip("set SATOSHINET_EVM_NETWORK_E2E=1 to run the external-node EVM network E2E")
-	}
-
 	oldEnableTesting := indexercommon.ENABLE_TESTING
 	indexercommon.ENABLE_TESTING = true
 	t.Cleanup(func() {
@@ -88,15 +84,17 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 		})
 	bootstrapNode, coreNode := startSatoshiNetNetwork(t, fakeL1)
 	nodes := []*rpctest.Harness{bootstrapNode, coreNode}
-	spendScript := testCallerSpendScript(t)
-	recipient := testWitnessAddress(t, callerKeys[2])
+	caller0Script, _, _, _ := testCallerTaprootScript(t, callerKeys[0])
+	caller1Script, caller1Address, _, _ := testCallerTaprootScript(t, callerKeys[1])
+	caller2Script, caller2Address, _, _ := testCallerTaprootScript(t, callerKeys[2])
+	recipient := p2trAddressFromKey(t, callerKeys[2])
 
 	gasAnchor := buildNetworkAnchorTx(t, gasLockedUtxo, lockedValue,
 		testWireAsset(gasAsset, 100000000), gasAsset+"-100000000-0-1",
-		witnessScript, bootstrapKey, spendScript)
+		witnessScript, bootstrapKey, caller0Script)
 	assetAnchor := buildNetworkAnchorTx(t, assetLockedUtxo, lockedValue,
 		testWireDecimalAsset(t, vaultAsset, "10.00", 2), vaultAsset+"-10.00-2-1",
-		witnessScript, bootstrapKey, spendScript)
+		witnessScript, bootstrapKey, caller0Script)
 	sendTx(t, bootstrapNode, gasAnchor)
 	sendTx(t, bootstrapNode, assetAnchor)
 	generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 1)
@@ -106,13 +104,13 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 		[]wire.OutPoint{{Hash: gasAnchor.TxHash(), Index: 0}},
 		evm.TxFunding{Assets: []evm.AssetAmount{networkGasFunding(t, gasAsset, 3000000)}},
 		[]*wire.TxOut{
-			testSpendAssetOutput(gasAsset, 5000000, spendScript),
-			testSpendAssetOutput(gasAsset, 50000000, spendScript),
-			testSpendAssetOutput(gasAsset, 5000000, spendScript),
-			testSpendAssetOutput(gasAsset, 5000000, spendScript),
-			testSpendAssetOutput(gasAsset, 5000000, spendScript),
-			testSpendAssetOutput(gasAsset, 5000000, spendScript),
-			testSpendAssetOutput(gasAsset, 22000000, spendScript),
+			testSpendAssetOutput(gasAsset, 5000000, caller0Script),
+			testSpendAssetOutput(gasAsset, 50000000, caller0Script),
+			testSpendAssetOutput(gasAsset, 5000000, caller1Script),
+			testSpendAssetOutput(gasAsset, 5000000, caller0Script),
+			testSpendAssetOutput(gasAsset, 5000000, caller1Script),
+			testSpendAssetOutput(gasAsset, 5000000, caller2Script),
+			testSpendAssetOutput(gasAsset, 22000000, caller0Script),
 		})
 	sendAndMineTx(t, bootstrapNode, nodes, counterDeploy, 2)
 
@@ -136,7 +134,7 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 		evm.TxFunding{Assets: []evm.AssetAmount{
 			networkGasFunding(t, gasAsset, 10000000),
 		}},
-		[]*wire.TxOut{testSpendAssetOutput(gasAsset, 40000000, spendScript)})
+		[]*wire.TxOut{testSpendAssetOutput(gasAsset, 40000000, caller0Script)})
 	sendAndMineTx(t, bootstrapNode, nodes, vaultDeploy, 4)
 
 	vaultDeposit := buildContractAssetDepositTx(t, callerKeys[0],
@@ -145,7 +143,7 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 	sendAndMineTx(t, bootstrapNode, nodes, vaultDeposit, int32(releaseHeight)-1)
 	requireAssetSummaryAmount(t, bootstrapNode, vaultContract.MustEncode(), vaultAsset, "10")
 	requirePositiveAssetSummary(t, bootstrapNode, vaultContract.MustEncode(), gasAsset)
-	releaseTick := buildPassthroughAssetTx(t, callerKeys[0], counterChanges[6], gasAsset, 20000000, spendScript)
+	releaseTick := buildPassthroughAssetTx(t, callerKeys[0], counterChanges[6], gasAsset, 20000000, caller0Script)
 	sendAndMineTx(t, bootstrapNode, nodes, releaseTick, int32(releaseHeight))
 	vaultRelease := buildSolidityInvokeTx(t, callerKeys[0], vaultContract, 2,
 		packNetworkSolidityMethod(t, vault.ABI, "release"),
@@ -161,22 +159,22 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 
 	erc20Transfer := buildSolidityInvokeTx(t, callerKeys[0], erc20Contract, 1,
 		packNetworkSolidityMethod(t, erc20.ABI, "transfer",
-			gethcommon.Address(evm.GethAddress(mustNetworkEVMAddressFromKey(t, callerKeys[1]))),
+			gethcommon.Address(evm.GethAddress(evmAddressFromAddressString(caller1Address))),
 			big.NewInt(125_000_000)),
 		counterChanges[3], gasAsset, 5000000)
 	sendAndMineTx(t, bootstrapNode, nodes, erc20Transfer, int32(releaseHeight)+3)
 
 	erc20Approve := buildSolidityInvokeTx(t, callerKeys[1], erc20Contract, 2,
 		packNetworkSolidityMethod(t, erc20.ABI, "approve",
-			gethcommon.Address(evm.GethAddress(mustNetworkEVMAddressFromKey(t, callerKeys[2]))),
+			gethcommon.Address(evm.GethAddress(evmAddressFromAddressString(caller2Address))),
 			big.NewInt(20_000_000)),
 		counterChanges[4], gasAsset, 5000000)
 	sendAndMineTx(t, bootstrapNode, nodes, erc20Approve, int32(releaseHeight)+4)
 
 	erc20TransferFrom := buildSolidityInvokeTx(t, callerKeys[2], erc20Contract, 3,
 		packNetworkSolidityMethod(t, erc20.ABI, "transferFrom",
-			gethcommon.Address(evm.GethAddress(mustNetworkEVMAddressFromKey(t, callerKeys[1]))),
-			gethcommon.Address(evm.GethAddress(mustNetworkEVMAddressFromKey(t, callerKeys[2]))),
+			gethcommon.Address(evm.GethAddress(evmAddressFromAddressString(caller1Address))),
+			gethcommon.Address(evm.GethAddress(evmAddressFromAddressString(caller2Address))),
 			big.NewInt(12_500_000)),
 		counterChanges[5], gasAsset, 5000000)
 	sendAndMineTx(t, bootstrapNode, nodes, erc20TransferFrom, int32(releaseHeight)+5)
@@ -368,7 +366,8 @@ func buildSolidityDeployTx(t *testing.T, signer *btcec.PrivateKey, nonce uint64,
 	changeOutputs []*wire.TxOut) (*wire.MsgTx, evm.ContractAddress, []wire.OutPoint) {
 
 	t.Helper()
-	caller := mustNetworkEVMAddressFromKey(t, signer)
+	_, callerAddress, redeemScript, controlBlock := testCallerTaprootScript(t, signer)
+	caller := evmAddressFromAddressString(callerAddress)
 	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
 		ContractPrefix: evm.TestnetContractPrefix,
 		Caller:         caller,
@@ -380,9 +379,7 @@ func buildSolidityDeployTx(t *testing.T, signer *btcec.PrivateKey, nonce uint64,
 		ChangeOutputs:  changeOutputs,
 	})
 	require.NoError(t, err)
-	for _, txIn := range tx.TxIn {
-		txIn.SignatureScript = publicKeyPushScript(t, signer)
-	}
+	signTemplateTaprootInputs(t, tx, signer, redeemScript, controlBlock)
 	change := collectSpendableOutPoints(t, tx, changeOutputs)
 	return tx, contract, change
 }
@@ -415,9 +412,8 @@ func buildSolidityInvokeTxWithFunding(t *testing.T, signer *btcec.PrivateKey, co
 		ChangeOutputs: changeOutputs,
 	})
 	require.NoError(t, err)
-	for _, txIn := range tx.TxIn {
-		txIn.SignatureScript = publicKeyPushScript(t, signer)
-	}
+	_, _, redeemScript, controlBlock := testCallerTaprootScript(t, signer)
+	signTemplateTaprootInputs(t, tx, signer, redeemScript, controlBlock)
 	return tx
 }
 
@@ -428,9 +424,10 @@ func buildPassthroughAssetTx(t *testing.T, signer *btcec.PrivateKey, input wire.
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(&wire.TxIn{
 		PreviousOutPoint: input,
-		SignatureScript:  publicKeyPushScript(t, signer),
 	})
 	tx.AddTxOut(wire.NewTxOut(0, testWireAsset(assetName, amount), pkScript))
+	_, _, redeemScript, controlBlock := testCallerTaprootScript(t, signer)
+	signTemplateTaprootInputs(t, tx, signer, redeemScript, controlBlock)
 	return tx
 }
 
@@ -443,9 +440,10 @@ func buildContractAssetDepositTx(t *testing.T, signer *btcec.PrivateKey, input w
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(&wire.TxIn{
 		PreviousOutPoint: input,
-		SignatureScript:  publicKeyPushScript(t, signer),
 	})
 	tx.AddTxOut(contractOut)
+	_, _, redeemScript, controlBlock := testCallerTaprootScript(t, signer)
+	signTemplateTaprootInputs(t, tx, signer, redeemScript, controlBlock)
 	return tx
 }
 

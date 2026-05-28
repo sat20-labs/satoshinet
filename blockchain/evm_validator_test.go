@@ -7,9 +7,11 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -57,8 +59,12 @@ func TestValidateEVMBlockHookAllowsNilValidator(t *testing.T) {
 }
 
 func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
-	caller := mustTestEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
-	deployTx := testEVMDeployTx(t, 3, testReturn42InitCode())
+	callerAddr, err := btcutil.NewAddressPubKeyHash(testBytes(20, 0x11), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := testEVMCallerFromBTCAddress(callerAddr)
+	deployTx := testEVMDeployTxForCaller(t, 3, testReturn42InitCode(), caller)
 	resultTx := testEVMResultTxWithInputs(t, evm.ResultStatusSuccess, 1, []wire.OutPoint{
 		{Hash: deployTx.TxHash(), Index: 1},
 	})
@@ -85,10 +91,10 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	block.SetHeight(100)
 
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
-		GasConfig:     evm.GasConfig{GasAssetName: "ordx:ft:gas", FixedGasPrice: 1, MaxGasPerBlock: 1000000},
-		ResolveCaller: fixedTestCaller(caller),
+		GasConfig: evm.GasConfig{GasAssetName: "ordx:ft:gas", FixedGasPrice: 1, MaxGasPerBlock: 1000000},
 	})
-	if err := validator.ValidateEVMBlock(block, NewUtxoViewpoint()); err != nil {
+	if err := validator.ValidateEVMBlock(block, testPreviousOutputView(t,
+		deployTx.TxIn[0].PreviousOutPoint, callerAddr)); err != nil {
 		t.Fatal(err)
 	}
 	postState, ok := validator.EVMBlockPostState(block.Hash())
@@ -104,7 +110,8 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	if err := evm.UpsertCoinbaseStateRoot(coinbase, wrongRoot); err != nil {
 		t.Fatal(err)
 	}
-	err = validator.ValidateEVMBlock(block, NewUtxoViewpoint())
+	err = validator.ValidateEVMBlock(block, testPreviousOutputView(t,
+		deployTx.TxIn[0].PreviousOutPoint, callerAddr))
 	if err == nil {
 		t.Fatal("expected wrong EVM state root to be rejected")
 	}
@@ -118,7 +125,8 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 		Transactions: []*wire.MsgTx{testEVMCoinbaseTx(), deployTx, resultTx},
 	})
 	missingRootBlock.SetHeight(100)
-	err = validator.ValidateEVMBlock(missingRootBlock, NewUtxoViewpoint())
+	err = validator.ValidateEVMBlock(missingRootBlock, testPreviousOutputView(t,
+		deployTx.TxIn[0].PreviousOutPoint, callerAddr))
 	if err == nil {
 		t.Fatal("expected missing EVM state root to be rejected")
 	}
@@ -196,6 +204,11 @@ func testEVMCoinbaseTx() *wire.MsgTx {
 func testEVMDeployTx(t *testing.T, nonce uint64, initCode []byte) *wire.MsgTx {
 	t.Helper()
 	caller := mustTestEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
+	return testEVMDeployTxForCaller(t, nonce, initCode, caller)
+}
+
+func testEVMDeployTxForCaller(t *testing.T, nonce uint64, initCode []byte, caller evm.EVMAddress) *wire.MsgTx {
+	t.Helper()
 	contract, err := evm.DeriveCreateContractAddress(evm.TestnetContractPrefix, caller, nonce)
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +233,32 @@ func testEVMDeployTx(t *testing.T, nonce uint64, initCode []byte) *wire.MsgTx {
 		Amount: *scommon.NewDefaultDecimal(300000),
 	}}, contractScript))
 	return tx
+}
+
+func testPreviousOutputView(t *testing.T, outpoint wire.OutPoint, address btcutil.Address) *UtxoViewpoint {
+	t.Helper()
+	script, err := txscript.PayToAddrScript(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := NewUtxoViewpoint()
+	view.Entries()[outpoint] = NewUtxoEntry(wire.NewTxOut(1, nil, script), 1, false)
+	return view
+}
+
+func testEVMCallerFromBTCAddress(address btcutil.Address) evm.EVMAddress {
+	var out evm.EVMAddress
+	hash := btcutil.Hash160([]byte(address.EncodeAddress()))
+	copy(out[:], hash)
+	return out
+}
+
+func testBytes(n int, value byte) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = value
+	}
+	return out
 }
 
 func testEVMResultTx(t *testing.T, status evm.ResultStatus, count uint16) *wire.MsgTx {

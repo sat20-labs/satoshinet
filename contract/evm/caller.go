@@ -5,9 +5,12 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
+
+type PreviousOutputScriptResolver func(outpoint wire.OutPoint) ([]byte, bool)
 
 func EVMAddressFromPublicKey(pubKey []byte) (EVMAddress, error) {
 	var addr EVMAddress
@@ -32,6 +35,42 @@ func LastInputCallerResolver(tx *wire.MsgTx, parsed ParsedTx) (EVMAddress, error
 		return zero, err
 	}
 	return EVMAddressFromPublicKey(pubKey)
+}
+
+func LastInputPreviousOutputCallerResolver(params *chaincfg.Params,
+	resolve PreviousOutputScriptResolver) CallerResolver {
+
+	return func(tx *wire.MsgTx, parsed ParsedTx) (EVMAddress, error) {
+		var zero EVMAddress
+		if tx == nil {
+			return zero, errors.New("missing transaction")
+		}
+		if len(tx.TxIn) == 0 {
+			return zero, errors.New("transaction has no inputs")
+		}
+		if resolve != nil {
+			outpoint := tx.TxIn[len(tx.TxIn)-1].PreviousOutPoint
+			if pkScript, ok := resolve(outpoint); ok {
+				_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, callerChainParams(params))
+				if err != nil {
+					return zero, err
+				}
+				if len(addresses) != 0 {
+					hash := btcutil.Hash160([]byte(addresses[0].EncodeAddress()))
+					copy(zero[:], hash)
+					return zero, nil
+				}
+			}
+		}
+		return zero, errors.New("missing caller previous output address")
+	}
+}
+
+func callerChainParams(params *chaincfg.Params) *chaincfg.Params {
+	if params != nil {
+		return params
+	}
+	return &chaincfg.TestNetParams
 }
 
 func ExtractInputPublicKey(txIn *wire.TxIn) ([]byte, error) {

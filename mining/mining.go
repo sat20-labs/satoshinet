@@ -910,8 +910,7 @@ mempoolLoop:
 	}
 
 	ts := medianAdjustedTime(best, g.timeSource)
-	hasContractWork := contractengine.BlockHasWork(blockTxns[1:], g.chainParams)
-	if g.policy.ContractResultBuilder != nil && hasContractWork {
+	if g.policy.ContractResultBuilder != nil {
 		addedWeight, addedSigOps, resultTxFees, resultTxSigOps,
 			addedFees, addedFeeAssets, err := g.addContractResultsToTemplate(
 			&blockTxns, coinbaseTx, blockUtxos, nextBlockHeight,
@@ -1019,6 +1018,7 @@ func (g *BlkTmplGenerator) addContractResultsToTemplate(blockTxns *[]*btcutil.Tx
 		Height:     nextBlockHeight,
 		PrevHash:   prevHash,
 		Timestamp:  timestamp,
+		UtxoView:   blockUtxos,
 	})
 	if err != nil {
 		return 0, 0, nil, nil, 0, nil, fmt.Errorf("contract result builder: %w", err)

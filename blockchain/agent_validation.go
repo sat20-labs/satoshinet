@@ -77,6 +77,13 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 			continue
 		}
 		if info.Type == agent.TxTypeResult {
+			activity, err := contractResultActivity(tx.MsgTx(), view, v.cfg.ChainParams)
+			if err != nil {
+				return agentBlockRuleError("agent result activity: %v", err)
+			}
+			if !activity.Agent {
+				continue
+			}
 			resultTxs = append(resultTxs, tx.MsgTx())
 			continue
 		}
@@ -90,7 +97,9 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 		RuntimeConfig:  v.cfg.RuntimeConfig,
 		GasConfig:      v.cfg.GasConfig,
 		BlockHeight:    int64(block.Height()),
-		ResolveInvoker: v.cfg.ResolveInvoker,
+		BlockTime:      block.MsgBlock().Header.Timestamp.Unix(),
+		ResolveInvoker: agent.LastInputPreviousOutputInvokerResolver(
+			v.cfg.ChainParams, previousOutputScriptResolver(view)),
 	})
 	if err != nil {
 		return agentBlockRuleError("validate agent block: %v", err)
@@ -106,9 +115,11 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 		return agentBlockRuleError("agent result plan: %v", err)
 	}
 	if len(resultPlans) == 0 {
-		resultTxs = nil
+		if len(resultTxs) != 0 {
+			return agentBlockRuleError("unexpected agent RESULT transaction")
+		}
 	} else if len(resultTxs) > 1 {
-		resultTxs = resultTxs[len(resultTxs)-1:]
+		return agentBlockRuleError("unexpected extra agent RESULT transactions")
 	}
 	if err := v.verifyResults(resultTxs, resultPlans); err != nil {
 		return agentBlockRuleError("agent result: %v", err)
@@ -151,7 +162,8 @@ func (v *AgentBlockExecutionValidator) scanAgentWork(block *btcutil.Block, prefi
 		if err != nil {
 			continue
 		}
-		if info.IsAgent && (info.Type == agent.TxTypeDeploy || info.Type == agent.TxTypeInvoke) {
+		if info.IsAgent && (info.Type == agent.TxTypeDeploy ||
+			info.Type == agent.TxTypeInvoke || info.Type == agent.TxTypeResult) {
 			hasExecution = true
 		}
 	}

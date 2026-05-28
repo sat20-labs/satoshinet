@@ -21,13 +21,17 @@ type PredictionBetRecord struct {
 }
 
 type PredictionConfirmRecord struct {
-	Agent      string `json:"agent"`
-	ResultType string `json:"result_type"`
-	OutcomeID  string `json:"outcome_id,omitempty"`
-	SourceURL  string `json:"source_url"`
-	ResultURL  string `json:"result_url"`
-	ResultHash string `json:"result_hash"`
-	ObservedAt int64  `json:"observed_at"`
+	Agent             string `json:"agent"`
+	ResultType        string `json:"result_type"`
+	OutcomeID         string `json:"outcome_id,omitempty"`
+	SourceURL         string `json:"source_url"`
+	ResultURL         string `json:"result_url"`
+	ResultHash        string `json:"result_hash"`
+	ObservedAt        int64  `json:"observed_at"`
+	AgentVersion      string `json:"agent_version,omitempty"`
+	ModelVersion      string `json:"model_version,omitempty"`
+	CoreNodePubKey    string `json:"core_node_pubkey,omitempty"`
+	CoreNodeSignature string `json:"core_node_signature,omitempty"`
 }
 
 type PredictionRejectRecord struct {

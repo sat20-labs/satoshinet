@@ -71,7 +71,7 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 
 	coinbaseTx := txs[0].MsgTx()
 	prefix := v.contractPrefix()
-	hasRoot, hasExecution, needsCaller, err := v.scanEVMWork(block, prefix)
+	hasRoot, hasExecution, _, err := v.scanEVMWork(block, prefix)
 	if err != nil {
 		return err
 	}
@@ -81,10 +81,6 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 	if hasExecution && !hasRoot {
 		return evmBlockRuleError("missing EVM state root commitment")
 	}
-	if needsCaller && v.cfg.ResolveCaller == nil {
-		return evmBlockRuleError("missing EVM caller resolver")
-	}
-
 	runtime, err := v.runtime(block, view)
 	if err != nil {
 		return evmBlockRuleError("load EVM runtime: %v", err)
@@ -109,7 +105,14 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 			if info.Type != tmplcontract.TxTypeResult {
 				continue
 			}
-			if !resultSpendsAnyOutpoint(tx.MsgTx(), evmFundingOutpoints) {
+			includeResult := resultSpendsAnyOutpoint(tx.MsgTx(), evmFundingOutpoints)
+			if !includeResult {
+				activity, err := contractResultActivity(tx.MsgTx(), view, v.cfg.ChainParams)
+				if err == nil && activity.EVM {
+					includeResult = true
+				}
+			}
+			if !includeResult {
 				continue
 			}
 		}
@@ -121,13 +124,14 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 	}
 
 	req := evm.BlockExecutionRequest{
-		Txs:             blockTxs,
-		CoinbaseTx:      coinbaseTx,
-		Runtime:         runtime,
-		ContractPrefix:  prefix,
-		GasConfig:       v.cfg.GasConfig,
-		Block:           v.blockContext(block),
-		ResolveCaller:   v.cfg.ResolveCaller,
+		Txs:            blockTxs,
+		CoinbaseTx:     coinbaseTx,
+		Runtime:        runtime,
+		ContractPrefix: prefix,
+		GasConfig:      v.cfg.GasConfig,
+		Block:          v.blockContext(block),
+		ResolveCaller: evm.LastInputPreviousOutputCallerResolver(
+			v.cfg.ChainParams, previousOutputScriptResolver(view)),
 		VerifyResult:    v.resultVerifier(prefix, contractOverlay, block.Height()),
 		ResolveTriggers: v.cfg.ResolveTriggers,
 	}
@@ -212,9 +216,12 @@ func (v *EVMBlockExecutionValidator) scanEVMWork(block *btcutil.Block, prefix st
 				"malformed EVM transaction %v at index %d: %v",
 				tx.Hash(), i+1, err)
 		}
-		if info.IsEVM && (info.Type == evm.TxTypeDeploy || info.Type == evm.TxTypeInvoke) {
+		if info.IsEVM && (info.Type == evm.TxTypeDeploy ||
+			info.Type == evm.TxTypeInvoke || info.Type == evm.TxTypeResult) {
 			hasExecution = true
-			needsCaller = true
+			if info.Type == evm.TxTypeDeploy || info.Type == evm.TxTypeInvoke {
+				needsCaller = true
+			}
 		}
 	}
 	return hasRoot, hasExecution, needsCaller, nil

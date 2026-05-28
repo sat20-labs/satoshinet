@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sat20-labs/satoshinet/chaincfg"
+)
 
 func TestRuntimeStoreCodecRoundTrip(t *testing.T) {
 	runtime := newTestRuntime(t)
@@ -23,5 +27,17 @@ func TestRuntimeStoreCodecRoundTrip(t *testing.T) {
 	clone := store.Clone()
 	if clone.StateRoot() != store.StateRoot() {
 		t.Fatalf("state root mismatch after clone")
+	}
+}
+
+func TestRuntimeStoreClonePreservesStateWithChainParamsConfig(t *testing.T) {
+	runtime := newTestRuntime(t)
+	runtime.config.ChainParams = &chaincfg.TestNetParams
+
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	clone := store.Clone()
+	if clone.StateRoot() != store.StateRoot() {
+		t.Fatalf("state root mismatch after clone with chain params")
 	}
 }

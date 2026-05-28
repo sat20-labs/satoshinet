@@ -16,6 +16,7 @@ type BlockExecutionRequest struct {
 	RuntimeConfig  RuntimeConfig
 	GasConfig      GasConfig
 	BlockHeight    int64
+	BlockTime      int64
 	ResolveInvoker InvokerResolver
 }
 
@@ -52,6 +53,7 @@ type BlockExecutor struct {
 	RuntimeConfig  RuntimeConfig
 	GasConfig      GasConfig
 	BlockHeight    int64
+	BlockTime      int64
 	ResolveInvoker InvokerResolver
 
 	records         []ExecutionRecord
@@ -74,6 +76,7 @@ func NewBlockExecutor(req BlockExecutionRequest) *BlockExecutor {
 	if store == nil {
 		store = NewRuntimeStore()
 	}
+	store.ApplyConfig(req.RuntimeConfig)
 	prefix := req.ContractPrefix
 	if prefix == "" {
 		prefix = TestnetContractPrefix
@@ -84,6 +87,7 @@ func NewBlockExecutor(req BlockExecutionRequest) *BlockExecutor {
 		RuntimeConfig:  req.RuntimeConfig,
 		GasConfig:      req.GasConfig,
 		BlockHeight:    req.BlockHeight,
+		BlockTime:      req.BlockTime,
 		ResolveInvoker: req.ResolveInvoker,
 	}
 }
@@ -240,7 +244,7 @@ func (e *BlockExecutor) applyBet(runtime *Runtime, validated InvokeValidation, i
 		Param:     param,
 		AssetName: runtime.Contract().BetAsset,
 		Amount:    amount,
-		TimeValue: e.BlockHeight,
+		TimeValue: e.predictionTimeValue(runtime.Contract()),
 	})
 }
 
@@ -252,9 +256,19 @@ func (e *BlockExecutor) applyConfirm(runtime *Runtime, validated InvokeValidatio
 	settlement, err := runtime.ApplyConfirm(ApplyConfirmRequest{
 		Invoker:   invoker,
 		Param:     param,
-		TimeValue: e.BlockHeight,
+		TimeValue: e.predictionTimeValue(runtime.Contract()),
 	})
 	return settlement, err
+}
+
+func (e *BlockExecutor) predictionTimeValue(contract PredictionContract) int64 {
+	if contract.TimeBase != TimeBaseUnix {
+		return e.BlockHeight
+	}
+	if e.BlockTime != 0 {
+		return e.BlockTime
+	}
+	return e.BlockHeight
 }
 
 func fundingAmount(outputs []ContractOutput, assetName string) (string, error) {

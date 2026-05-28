@@ -63,6 +63,17 @@ func (s *RuntimeStore) StateRoot() [32]byte {
 	return stateRootFromRuntimes(s.runtimes)
 }
 
+func (s *RuntimeStore) ApplyConfig(cfg RuntimeConfig) {
+	if s == nil {
+		return
+	}
+	for _, runtime := range s.runtimes {
+		if runtime != nil {
+			runtime.config = cfg
+		}
+	}
+}
+
 func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
 	keys := s.sortedKeys()
 	out := make([]RuntimeSnapshot, 0, len(keys))

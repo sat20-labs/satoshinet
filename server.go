@@ -2888,10 +2888,23 @@ func (s *server) processAgentContracts() error {
 			observedAt = unixValue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.AgentLLMTimeout+30*time.Second)
+		coreNodePubKey, err := stp.GetPubKey()
+		if err != nil {
+			cancel()
+			delay := s.agentConfirmRecordFailure(contractAddr, err)
+			srvrLog.Warnf("Agent contract %s core node pubkey unavailable: %v, retry_after=%s",
+				contractAddr, err, delay)
+			continue
+		}
 		param, err := corenodeAgent.BuildConfirmParam(ctx, agentcontract.PredictionAgentConfirmRequest{
-			Contract:   candidate.Contract,
-			ResultURL:  resultURL,
-			ObservedAt: observedAt,
+			Contract:            candidate.Contract,
+			ContractAddress:     candidate.Address,
+			ResultURL:           resultURL,
+			ObservedAt:          observedAt,
+			CoreNodePubKey:      coreNodePubKey,
+			SignCoreNodeMessage: stp.SignMsg,
+			AgentVersion:        "satoshinet-agent-v1",
+			ModelVersion:        cfg.AgentLLMModel,
 		})
 		cancel()
 		if err != nil {
@@ -3863,7 +3876,6 @@ func newEVMBlockValidator(db database.DB, params *chaincfg.Params, assetIndexer 
 		ChainParams:         params,
 		GasConfig:           gasConfig,
 		NewRuntime:          stateStore.RuntimeFactory(),
-		ResolveCaller:       evm.LastInputCallerResolver,
 		ContractUTXOs:       evmContractUTXOProvider(assetIndexer),
 		ResolveRecipient:    evmScriptRecipientResolver(params),
 		SkipStateRootVerify: true,
@@ -3881,10 +3893,8 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 	contractUTXOs := evmContractUTXOProvider(assetIndexer)
 	resolveScript := evmResultScriptResolver(params)
 	contractPrefix := evm.TestnetContractPrefix
-	templatePrefix := tmplcontract.TestnetContractPrefix
 	if params != nil {
 		contractPrefix = evm.ContractPrefixForNet(params.Net)
-		templatePrefix = tmplcontract.ContractPrefixForNet(params.Net)
 	}
 	resolveOutput := func(resultTx *wire.MsgTx) ([]evm.ResultOutput, error) {
 		return evm.ResultOutputsFromTx(resultTx, contractPrefix,
@@ -3902,32 +3912,14 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 			return mining.ContractBuildResult{}, err
 		}
 		txs := make([]*wire.MsgTx, 0, len(req.Txs))
-		hasTemplateWork := false
-		resultTxCount := 0
 		for _, tx := range req.Txs {
 			msgTx := tx.MsgTx()
-			templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(msgTx, templatePrefix)
-			if templateErr == nil && templateInfo.IsTemplate {
-				if templateInfo.Type == tmplcontract.TxTypeResult {
-					resultTxCount++
-				} else {
-					hasTemplateWork = true
-				}
+			class, found, err := contractengine.ClassifyTxForBlockOrder(msgTx, params)
+			if err != nil {
+				return mining.ContractBuildResult{}, err
 			}
-		}
-		skipTemplateResult := hasTemplateWork && resultTxCount > 1
-		for _, tx := range req.Txs {
-			msgTx := tx.MsgTx()
-			templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(msgTx, templatePrefix)
-			if templateErr == nil && templateInfo.IsTemplate {
-				if templateInfo.Type != tmplcontract.TxTypeResult {
-					skipTemplateResult = true
-					continue
-				}
-				if skipTemplateResult {
-					skipTemplateResult = false
-					continue
-				}
+			if !found || class.ContractType != contractcommon.ContractTypeEVM {
+				continue
 			}
 			txs = append(txs, msgTx)
 		}
@@ -3942,13 +3934,17 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 				GasLimit:      gasConfig.MaxGasPerBlock,
 				FixedGasPrice: gasConfig.FixedGasPrice,
 			},
-			ResolveCaller: evm.LastInputCallerResolver,
+			ResolveCaller: evm.LastInputPreviousOutputCallerResolver(params,
+				contractBuildPreviousOutputScriptResolver(req.UtxoView)),
 			ContractUTXOs: contractUTXOs,
 			ResolveScript: resolveScript,
 			ResolveOutput: resolveOutput,
 		})
 		if err != nil {
 			return mining.ContractBuildResult{}, err
+		}
+		if len(result.Execution.Records) == 0 {
+			return mining.ContractBuildResult{}, nil
 		}
 		return mining.ContractBuildResult{
 			ResultTxs: result.ResultTxs,
@@ -3976,7 +3972,6 @@ func newTemplateBlockValidator(db database.DB, params *chaincfg.Params,
 		GasConfig:           gasConfig,
 		Registry:            tmplcontract.NewDefaultRegistry(),
 		NewRuntime:          stateStore.RuntimeFactory(),
-		ResolveInvoker:      tmplcontract.LastInputInvokerResolver(params),
 		ResolveOutput:       templateResultOutputResolver(params, contractPrefix),
 		ContractUTXOs:       templateContractUTXOProvider(assetIndexer),
 		SkipStateRootVerify: true,
@@ -4019,9 +4014,10 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 			GasConfig:      gasConfig,
 			ContractUTXOs:  templateContractUTXOProvider(assetIndexer),
 			BlockHeight:    int64(req.Height),
-			ResolveInvoker: tmplcontract.LastInputInvokerResolver(params),
-			ResolveScript:  templateResultScriptResolver(params),
-			ResolveOutput:  resolveOutput,
+			ResolveInvoker: tmplcontract.LastInputPreviousOutputInvokerResolver(params,
+				contractBuildPreviousOutputScriptResolver(req.UtxoView)),
+			ResolveScript: templateResultScriptResolver(params),
+			ResolveOutput: resolveOutput,
 		})
 		if err != nil {
 			return mining.ContractBuildResult{}, err
@@ -4053,7 +4049,6 @@ func newAgentBlockValidator(db database.DB, params *chaincfg.Params,
 		RuntimeConfig:       runtimeConfig,
 		GasConfig:           agentcontract.GasConfig{},
 		NewRuntime:          stateStore.RuntimeFactory(),
-		ResolveInvoker:      agentInvokerResolver(params, assetIndexer),
 		ResolveResultOutput: agentResultOutputResolver(params, contractPrefix),
 		ContractUTXOs:       agentContractUTXOProvider(assetIndexer),
 		SkipStateRootVerify: true,
@@ -4096,9 +4091,11 @@ func newAgentContractResultBuilder(db database.DB, params *chaincfg.Params,
 			GasConfig:      agentcontract.GasConfig{},
 			ContractUTXOs:  agentContractUTXOProvider(assetIndexer),
 			BlockHeight:    int64(req.Height),
-			ResolveInvoker: agentInvokerResolver(params, assetIndexer),
-			ResolveScript:  agentResultScriptResolver(params),
-			ResolveOutput:  resolveOutput,
+			BlockTime:      req.Timestamp.Unix(),
+			ResolveInvoker: agentcontract.LastInputPreviousOutputInvokerResolver(params,
+				contractBuildPreviousOutputScriptResolver(req.UtxoView)),
+			ResolveScript: agentResultScriptResolver(params),
+			ResolveOutput: resolveOutput,
 		})
 		if err != nil {
 			return mining.ContractBuildResult{}, err
@@ -4117,7 +4114,6 @@ func newContractResultBuilder(params *chaincfg.Params, templateBuilder, evmBuild
 		var templateResult mining.ContractBuildResult
 		var err error
 		hasTemplateWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeTemplate)
-		hasEVMWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeEVM)
 		hasAgentWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeAgent)
 		if templateBuilder != nil && hasTemplateWork {
 			templateResult, err = templateBuilder(req)
@@ -4135,7 +4131,7 @@ func newContractResultBuilder(params *chaincfg.Params, templateBuilder, evmBuild
 		}
 
 		var evmResult mining.ContractBuildResult
-		if evmBuilder != nil && hasEVMWork {
+		if evmBuilder != nil {
 			evmResult, err = evmBuilder(evmReq)
 			if err != nil {
 				return mining.ContractBuildResult{}, err
@@ -4182,9 +4178,12 @@ func configuredAgentRuntimeConfig(params *chaincfg.Params) (agentcontract.Runtim
 		return agentcontract.RuntimeConfig{}, err
 	}
 	return agentcontract.RuntimeConfig{
-		CoreNodeAddress:  agentAddress,
-		AgentAddress:     agentAddress,
-		BootstrapAddress: bootstrapAddress,
+		CoreNodeAddress:           agentAddress,
+		CoreNodePubKey:            hex.EncodeToString(agentPubKey),
+		AgentAddress:              agentAddress,
+		BootstrapAddress:          bootstrapAddress,
+		ChainParams:               params,
+		RequireConfirmAttestation: true,
 	}, nil
 }
 
@@ -4420,29 +4419,16 @@ func agentResultOutputResolver(params *chaincfg.Params, contractPrefix string) a
 	}
 }
 
-func agentInvokerResolver(params *chaincfg.Params, assetIndexer *indexer.IndexerMgr) agentcontract.InvokerResolver {
-	base := agentcontract.LastInputInvokerResolver(params)
-	return func(tx *wire.MsgTx, parsed agentcontract.ParsedTx) (string, error) {
-		invoker, err := base(tx, parsed)
-		if err == nil {
-			return invoker, nil
+func contractBuildPreviousOutputScriptResolver(view *blockchain.UtxoViewpoint) func(wire.OutPoint) ([]byte, bool) {
+	return func(outpoint wire.OutPoint) ([]byte, bool) {
+		if view == nil {
+			return nil, false
 		}
-		if tx == nil || len(tx.TxIn) == 0 || assetIndexer == nil {
-			return "", err
+		entry := view.LookupEntry(outpoint)
+		if entry == nil {
+			return nil, false
 		}
-		outpoint := tx.TxIn[len(tx.TxIn)-1].PreviousOutPoint.String()
-		output := assetIndexer.GetTxOutputWithUtxo(outpoint)
-		if output == nil {
-			return "", err
-		}
-		address, ok, scriptErr := agentScriptRecipientResolver(params)(output.OutValue.PkScript)
-		if scriptErr != nil {
-			return "", scriptErr
-		}
-		if !ok || address == "" {
-			return "", err
-		}
-		return address, nil
+		return append([]byte(nil), entry.PkScript()...), true
 	}
 }
 

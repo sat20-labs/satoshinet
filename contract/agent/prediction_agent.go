@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/sat20-labs/satoshinet/btcec"
 )
 
 const DefaultPredictionResultMaxBytes int64 = 1 << 20
@@ -72,9 +74,15 @@ type PredictionResultSearcher interface {
 }
 
 type PredictionAgentConfirmRequest struct {
-	Contract   PredictionContract
-	ResultURL  string
-	ObservedAt int64
+	Contract            PredictionContract
+	ContractAddress     ContractAddress
+	ResultURL           string
+	ObservedAt          int64
+	CoreNodeKey         *btcec.PrivateKey
+	CoreNodePubKey      []byte
+	SignCoreNodeMessage func([]byte) ([]byte, error)
+	AgentVersion        string
+	ModelVersion        string
 }
 
 type PredictionAgentReadyReviewRequest struct {
@@ -214,6 +222,18 @@ func (a *PredictionAgent) resolveFetchedResult(ctx context.Context, req Predicti
 	param, decision, err := a.resolveWithRetry(ctx, resolveReq, resultURL, len(fetched.Text), cleanedBytes)
 	if err != nil {
 		return PredictionConfirmParam{}, err
+	}
+	param.AgentVersion = req.AgentVersion
+	param.ModelVersion = req.ModelVersion
+	if req.CoreNodeKey != nil {
+		if err := SignPredictionConfirmAttestation(req.ContractAddress, &param, req.CoreNodeKey); err != nil {
+			return PredictionConfirmParam{}, err
+		}
+	} else if req.SignCoreNodeMessage != nil {
+		if err := AttachPredictionConfirmAttestation(req.ContractAddress, &param,
+			req.CoreNodePubKey, req.SignCoreNodeMessage); err != nil {
+			return PredictionConfirmParam{}, err
+		}
 	}
 	a.audit(PredictionAgentAuditEvent{Stage: "llm_decision", ResultURL: resultURL, ResultType: param.ResultType, OutcomeID: param.OutcomeID, Reason: decision.Reason, ResultHash: param.ResultHash, TextBytes: len(fetched.Text), CleanedBytes: cleanedBytes})
 	return param, nil

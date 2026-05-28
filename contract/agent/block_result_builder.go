@@ -14,6 +14,7 @@ type BlockResultBuildRequest struct {
 	GasConfig      GasConfig
 	ContractUTXOs  ContractUTXOProvider
 	BlockHeight    int64
+	BlockTime      int64
 	ResolveInvoker InvokerResolver
 	ResolveScript  ResultRecipientScriptResolver
 	ResolveOutput  ResultOutputResolver
@@ -39,6 +40,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		RuntimeConfig:  req.RuntimeConfig,
 		GasConfig:      req.GasConfig,
 		BlockHeight:    req.BlockHeight,
+		BlockTime:      req.BlockTime,
 		ResolveInvoker: req.ResolveInvoker,
 	})
 	for _, tx := range req.Txs {

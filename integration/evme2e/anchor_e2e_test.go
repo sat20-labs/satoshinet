@@ -19,6 +19,7 @@ import (
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/btcutil/hdkeychain"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -37,10 +38,6 @@ const (
 )
 
 func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
-	if os.Getenv("SATOSHINET_EVM_NETWORK_E2E") != "1" {
-		t.Skip("set SATOSHINET_EVM_NETWORK_E2E=1 to run the external-node EVM network E2E")
-	}
-
 	oldEnableTesting := indexercommon.ENABLE_TESTING
 	indexercommon.ENABLE_TESTING = true
 	t.Cleanup(func() {
@@ -84,7 +81,7 @@ func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
 		})
 	bootstrapNode, coreNode := startSatoshiNetNetwork(t, fakeL1)
 	nodes := []*rpctest.Harness{bootstrapNode, coreNode}
-	spendScript := testCallerSpendScript(t)
+	spendScript, spendAddress, redeemScript, controlBlock := testCallerTaprootScript(t, callerKeys[0])
 
 	anchorTx := wire.NewMsgTx(2)
 	anchorTx.AddTxIn(&wire.TxIn{
@@ -114,7 +111,8 @@ func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), verbose.Confirmations)
 
-	deployTx, invokeTxs, contract := buildCounterContractTxs(t, anchorTx, callerKeys, spendScript)
+	deployTx, invokeTxs, contract := buildCounterContractTxs(t, anchorTx, callerKeys,
+		spendScript, spendAddress, redeemScript, controlBlock)
 	deployHash, err := bootstrapNode.Client.SendRawTransaction(deployTx, true)
 	require.NoError(t, err)
 	require.Equal(t, deployTx.TxHash(), *deployHash)
@@ -279,12 +277,12 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 }
 
 func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
-	callerKeys []*btcec.PrivateKey, spendScript []byte) (*wire.MsgTx, []*wire.MsgTx, evm.ContractAddress) {
+	callerKeys []*btcec.PrivateKey, spendScript []byte, spendAddress string,
+	redeemScript, controlBlock []byte) (*wire.MsgTx, []*wire.MsgTx, evm.ContractAddress) {
 
 	t.Helper()
 	require.Len(t, callerKeys, 3)
-	caller, err := evm.EVMAddressFromPublicKey(callerKeys[0].PubKey().SerializeCompressed())
-	require.NoError(t, err)
+	caller := evmAddressFromAddressString(spendAddress)
 	deployTx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
 		ContractPrefix: evm.TestnetContractPrefix,
 		Caller:         caller,
@@ -309,7 +307,7 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 		},
 	})
 	require.NoError(t, err)
-	deployTx.TxIn[0].SignatureScript = publicKeyPushScript(t, callerKeys[0])
+	signTemplateTaprootInputs(t, deployTx, callerKeys[0], redeemScript, controlBlock)
 
 	invokeTxs := make([]*wire.MsgTx, 0, len(callerKeys))
 	for i, key := range callerKeys {
@@ -332,7 +330,7 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 			},
 		})
 		require.NoError(t, err)
-		tx.TxIn[0].SignatureScript = publicKeyPushScript(t, key)
+		signTemplateTaprootInputs(t, tx, key, redeemScript, controlBlock)
 		invokeTxs = append(invokeTxs, tx)
 	}
 	return deployTx, invokeTxs, contract
@@ -355,6 +353,13 @@ func publicKeyPushScript(t *testing.T, key *btcec.PrivateKey) []byte {
 		Script()
 	require.NoError(t, err)
 	return script
+}
+
+func evmAddressFromAddressString(address string) evm.EVMAddress {
+	var out evm.EVMAddress
+	hash := btcutil.Hash160([]byte(address))
+	copy(out[:], hash)
+	return out
 }
 
 func testWireAsset(name string, amount int64) wire.TxAssets {

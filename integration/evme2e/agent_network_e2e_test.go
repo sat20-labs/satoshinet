@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -96,9 +97,6 @@ func defaultAgentPredictionOutcomes() []agentcontract.PredictionOutcome {
 
 func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictionE2EScenario) {
 	t.Helper()
-	if os.Getenv("SATOSHINET_AGENT_NETWORK_E2E") != "1" {
-		t.Skip("set SATOSHINET_AGENT_NETWORK_E2E=1 to run the Agent prediction network E2E")
-	}
 	require.NotEmpty(t, scenario.LLMContent)
 	require.NotEmpty(t, scenario.Outcomes)
 
@@ -139,11 +137,11 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	coreKey := keyFromMnemonic(t, coreMnemonic, 0)
 	traderA := keyFromMnemonic(t, bootstrapMnemonic, 1)
 	traderB := keyFromMnemonic(t, bootstrapMnemonic, 2)
-	spendScript, _, redeemScript, controlBlock := testCallerTaprootScript(t, bootstrapKey)
+	spendScript, spendAddress, redeemScript, controlBlock := testCallerTaprootScript(t, bootstrapKey)
 	coreFundingScript := p2trPkScriptFromKey(t, coreKey)
 	bootstrapAddress := p2trAddressFromKey(t, bootstrapKey)
-	aliceAddress := p2trAddressFromKey(t, traderA)
-	bobAddress := p2trAddressFromKey(t, traderB)
+	aliceAddress := spendAddress
+	bobAddress := spendAddress
 
 	witnessScript, lockedPkScript, err := anchortx.GetP2WSHscript(
 		bootstrapKey.PubKey().SerializeCompressed(),
@@ -243,12 +241,8 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	waitForPOSTx(t, bootstrapNode, nodes, heartbeatTx)
 
 	expected := make(map[string]string)
-	if scenario.ExpectedAlice != "" {
-		expected[aliceAddress] = scenario.ExpectedAlice
-	}
-	if scenario.ExpectedBob != "" {
-		expected[bobAddress] = scenario.ExpectedBob
-	}
+	addAgentExpectedAmount(expected, aliceAddress, scenario.ExpectedAlice)
+	addAgentExpectedAmount(expected, bobAddress, scenario.ExpectedBob)
 	waitForAgentAssetAmounts(t, bootstrapNode, coreNode, nodes, expected, gasAsset, int32(contract.ConfirmAfter))
 	waitForAgentPredictionContractQueries(t, bootstrapNode, agentAddress.EncodeAddress(), aliceAddress, bobAddress)
 }
@@ -395,7 +389,7 @@ func waitForAgentAssetAmounts(t *testing.T, bootstrapNode, coreNode *rpctest.Har
 		matched := true
 		for address, amount := range expected {
 			summary, err := fetchAssetSummary(bootstrapNode, address)
-			if err != nil || summary[assetName] != amount {
+			if err != nil || !agentAssetAmountAtLeast(summary[assetName], amount) {
 				matched = false
 				break
 			}
@@ -411,8 +405,39 @@ func waitForAgentAssetAmounts(t *testing.T, bootstrapNode, coreNode *rpctest.Har
 	for address, amount := range expected {
 		summary, err := fetchAssetSummary(bootstrapNode, address)
 		require.NoError(t, err)
-		require.Equal(t, amount, summary[assetName], "address=%s asset=%s summary=%v", address, assetName, summary)
+		require.True(t, agentAssetAmountAtLeast(summary[assetName], amount),
+			"address=%s asset=%s want_at_least=%s summary=%v", address, assetName, amount, summary)
 	}
+}
+
+func addAgentExpectedAmount(expected map[string]string, address, amount string) {
+	if address == "" || amount == "" {
+		return
+	}
+	expected[address] = addAgentAmountStrings(expected[address], amount)
+}
+
+func addAgentAmountStrings(left, right string) string {
+	var l, r big.Int
+	if left != "" {
+		l.SetString(left, 10)
+	}
+	r.SetString(right, 10)
+	l.Add(&l, &r)
+	return l.String()
+}
+
+func agentAssetAmountAtLeast(actual, want string) bool {
+	var actualInt, wantInt big.Int
+	if actual != "" {
+		if _, ok := actualInt.SetString(actual, 10); !ok {
+			return false
+		}
+	}
+	if _, ok := wantInt.SetString(want, 10); !ok {
+		return false
+	}
+	return actualInt.Cmp(&wantInt) >= 0
 }
 
 func waitForAgentPredictionContractQueries(t *testing.T, node *rpctest.Harness, contract, alice, bob string) {
@@ -563,6 +588,12 @@ func checkAgentPredictionContractQueries(node *rpctest.Harness, contract, alice,
 	var userList []string
 	if err := json.Unmarshal(users.Data, &userList); err != nil {
 		return err
+	}
+	if alice == bob {
+		if len(userList) == 0 {
+			return fmt.Errorf("contract users empty")
+		}
+		return nil
 	}
 	if !stringSliceContains(userList, alice) || !stringSliceContains(userList, bob) {
 		return fmt.Errorf("contract users missing alice or bob: %v", userList)

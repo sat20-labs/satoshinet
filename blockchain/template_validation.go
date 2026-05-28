@@ -78,7 +78,11 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 			continue
 		}
 		if info.Type == template.TxTypeResult {
-			if len(resultTxs) != 0 {
+			activity, err := contractResultActivity(tx.MsgTx(), view, v.cfg.ChainParams)
+			if err != nil {
+				return templateBlockRuleError("template result activity: %v", err)
+			}
+			if !activity.Template {
 				continue
 			}
 			resultTxs = append(resultTxs, tx.MsgTx())
@@ -94,7 +98,8 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 		ContractPrefix: prefix,
 		GasConfig:      v.cfg.GasConfig,
 		BlockHeight:    int64(block.Height()),
-		ResolveInvoker: v.cfg.ResolveInvoker,
+		ResolveInvoker: template.LastInputPreviousOutputInvokerResolver(
+			v.cfg.ChainParams, previousOutputScriptResolver(view)),
 	})
 	if err != nil {
 		return templateBlockRuleError("validate template block: %v", err)
@@ -110,9 +115,11 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 		return templateBlockRuleError("template result plan: %v", err)
 	}
 	if len(resultPlans) == 0 {
-		resultTxs = nil
+		if len(resultTxs) != 0 {
+			return templateBlockRuleError("unexpected template RESULT transaction")
+		}
 	} else if len(resultTxs) > 1 {
-		resultTxs = resultTxs[:1]
+		return templateBlockRuleError("unexpected extra template RESULT transactions")
 	}
 	if err := v.verifyResults(resultTxs, resultPlans); err != nil {
 		return templateBlockRuleError("template result: %v", err)

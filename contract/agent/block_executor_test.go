@@ -82,6 +82,69 @@ func TestBlockExecutorRejectsBetBeforeReady(t *testing.T) {
 	}
 }
 
+func TestBlockExecutorUsesBlockTimeForUnixTimeBase(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm,
+		mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
+	contract := validPredictionContract()
+
+	store := NewRuntimeStore()
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
+		Store:         store,
+		BlockHeight:   1,
+		BlockTime:     contract.BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+			betTx.TxID():   "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock bet failed: %v", err)
+	}
+	_, err = ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   2,
+		BlockTime:     contract.ConfirmAfter + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			confirmTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock confirm failed: %v", err)
+	}
+}
+
+func TestBlockExecutorUsesBlockHeightForHeightTimeBase(t *testing.T) {
+	contract := validPredictionContract()
+	contract.TimeBase = TimeBaseHeight
+	contract.EventTime = 20
+	contract.BetDeadline = 10
+	contract.ConfirmAfter = 30
+	deployTx, addr := testAgentDeployTxForContract(t, contract)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
+		BlockHeight:   contract.BetDeadline,
+		BlockTime:     1_780_306_800,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+			betTx.TxID():   "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock height-base bet failed: %v", err)
+	}
+}
+
 func TestBlockExecutorRejectsNonCoreConfirm(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
