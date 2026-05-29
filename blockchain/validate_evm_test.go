@@ -4,8 +4,10 @@ import (
 	"math"
 	"testing"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -112,5 +114,67 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 	}
 	if ruleErr.ErrorCode != ErrInvalidEVMBlock {
 		t.Fatalf("unexpected error code %v", ruleErr.ErrorCode)
+	}
+}
+
+func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
+	assetName := wire.NewAssetNameFromString(evmcommon.GasAssetName)
+	if assetName == nil {
+		t.Fatal("invalid gas asset name")
+	}
+	deployScript, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
+		GasLimit:    evmcommon.DeployBaseGas,
+		DeployNonce: 1,
+		InitCode:    []byte{0x60, 0x00},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract, err := evm.NewContractAddress(evm.TestnetContractPrefix,
+		evm.AddressVersionV1, evm.ContractTypeEVM, evm.EVMAddress{9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractScript, err := evm.ContractPkScript(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseFee, err := evmcommon.GasFeeAtHeight(evmcommon.DeployBaseGas, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		fee     uint64
+		wantErr bool
+	}{
+		{name: "exact base fee", fee: baseFee},
+		{name: "below base fee", fee: baseFee - 1, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prevOut := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
+			tx := wire.NewMsgTx(2)
+			tx.AddTxIn(wire.NewTxIn(&prevOut, nil, nil))
+			tx.AddTxOut(wire.NewTxOut(0, nil, deployScript))
+			tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
+				Name:   *assetName,
+				Amount: *scommon.NewDefaultDecimal(int64(evmcommon.DeployBaseGas)),
+			}}, contractScript))
+
+			view := NewUtxoViewpoint()
+			view.Entries()[prevOut] = NewUtxoEntry(wire.NewTxOut(0, wire.TxAssets{{
+				Name:   *assetName,
+				Amount: *scommon.NewDefaultDecimal(int64(evmcommon.DeployBaseGas + test.fee)),
+			}}, []byte{txscript.OP_TRUE}), 1, false)
+
+			_, _, err := CheckTransactionInputs(btcutil.NewTx(tx), false, 100, view, &chaincfg.TestNetParams)
+			if test.wantErr && err == nil {
+				t.Fatal("expected missing base fee error")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }

@@ -40,7 +40,7 @@ func TestCanonicalResultVerifier(t *testing.T) {
 	tx.AddTxOut(wire.NewTxOut(0, nil, []byte{0x51}))
 
 	verifier := CanonicalResultVerifier{
-		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 2, ResultPackingFee: 5},
+		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 2, InvokeBaseGas: 10, ResultBaseGas: 5},
 		UTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
 			return available, nil
@@ -51,7 +51,7 @@ func TestCanonicalResultVerifier(t *testing.T) {
 				{
 					To:     contract.MustEncode(),
 					Value:  10,
-					Assets: mustResultOutput(t, contract.MustEncode(), gasAssetName, 75).Assets,
+					Assets: mustResultOutput(t, contract.MustEncode(), gasAssetName, 70).Assets,
 				},
 			}, nil
 		},
@@ -95,7 +95,7 @@ func TestCanonicalResultVerifierDeployUsesFundingUTXO(t *testing.T) {
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: gasHash, Index: 1}, nil, nil))
 	verifier := CanonicalResultVerifier{
-		GasConfig: GasConfig{GasAssetName: "ordx:ft:gas", FixedGasPrice: 1, ResultPackingFee: 1},
+		GasConfig: GasConfig{GasAssetName: "ordx:ft:gas", FixedGasPrice: 1, DeployBaseGas: 10, ResultBaseGas: 1},
 		UTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
 			return []UTXO{
@@ -133,7 +133,7 @@ func TestCanonicalResultVerifierTriggerUsesContractGasUTXO(t *testing.T) {
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: assetHash, Index: 0}, nil, nil))
 
 	verifier := CanonicalResultVerifier{
-		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 2, ResultPackingFee: 5},
+		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 2, TriggerBaseGas: 10, ResultBaseGas: 5},
 		UTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
 			return []UTXO{
@@ -167,7 +167,7 @@ func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
 		{Value: 77, PkScript: []byte{0x51}},
 		{Value: 23, Assets: wire.TxAssets{{
 			Name:   wire.AssetName{Protocol: "ordx", Type: "ft", Ticker: "gas"},
-			Amount: *scommon.NewDefaultDecimal(98953),
+			Amount: *scommon.NewDefaultDecimal(90000),
 		}}, PkScript: testContractScript(contract)},
 	})
 

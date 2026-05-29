@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 
@@ -87,12 +87,12 @@ type ContractListResp struct {
 	Total        int                              `json:"total"`
 	Contracts    []string                         `json:"contracts,omitempty"`
 	ContractURLs []string                         `json:"url,omitempty"`
-	Data         []contractengine.ContractSummary `json:"data"`
+	Data         []contractcommon.ContractSummary `json:"data"`
 }
 
 type ContractHistoryResp struct {
 	indexerwire.BaseResp
 	Total  int                                    `json:"total"`
 	Status string                                 `json:"status,omitempty"`
-	Data   []contractengine.ContractHistoryRecord `json:"data,omitempty"`
+	Data   []contractcommon.ContractHistoryRecord `json:"data,omitempty"`
 }

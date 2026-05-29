@@ -101,10 +101,10 @@ func TestBuildCanonicalResultTxInvoke(t *testing.T) {
 		}},
 	}
 	available := []UTXO{
-		mustUTXO(t, gasInput, contract, gasAssetName, 100, 10),
+		mustUTXO(t, gasInput, contract, gasAssetName, 100000, 10),
 		mustUTXO(t, assetInput, contract, SatoshiAssetName, 80, 11),
 	}
-	gasConfig := GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 2, ResultPackingFee: 5}
+	gasConfig := GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 2, InvokeBaseGas: 10, ResultBaseGas: 5}
 
 	tx, err := BuildCanonicalResultTx(CanonicalResultTxRequest{
 		Status:    ResultStatusSuccess,

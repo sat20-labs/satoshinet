@@ -12,7 +12,7 @@ func TestValidateTemplateDeployTxBasic(t *testing.T) {
 	content, err := contract.Encode()
 	require.NoError(t, err)
 	script, err := DeployNullDataScript(DeployPayload{
-		GasLimit:        1000,
+		GasLimit:        DefaultGasConfig().DeployBaseGas,
 		TemplateName:    TemplateLimitOrder,
 		TemplateVersion: CurrentTemplateVersion,
 		Deployer:        "deployer-address",
@@ -25,9 +25,9 @@ func TestValidateTemplateDeployTxBasic(t *testing.T) {
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 
-	validated, err := ValidateDeployTxBasic(tx, TestnetContractPrefix, nil, GasConfig{MaxGasPerInvoke: 2000})
+	validated, err := ValidateDeployTxBasic(tx, TestnetContractPrefix, nil, DefaultGasConfig())
 	require.NoError(t, err)
-	require.Equal(t, uint64(1000), validated.Payload.GasLimit)
+	require.Equal(t, DefaultGasConfig().DeployBaseGas, validated.Payload.GasLimit)
 	require.Equal(t, TemplateLimitOrder, validated.Runtime.TemplateName())
 	require.Equal(t, validated.Address.EncodeAddress(), validated.Runtime.URL())
 }
@@ -42,7 +42,7 @@ func TestValidateTemplateInvokeTxBasic(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	invokeScript, err := InvokeNullDataScript(InvokePayload{
-		GasLimit:  1000,
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
 		Action:    InvokeAPISwap,
 		Param:     param,
@@ -56,17 +56,17 @@ func TestValidateTemplateInvokeTxBasic(t *testing.T) {
 
 	validated, err := ValidateInvokeTxBasic(tx, testTemplateContractResolver, func(addr ContractAddress) bool {
 		return addr.Equal(contract)
-	}, GasConfig{MaxGasPerInvoke: 2000})
+	}, DefaultGasConfig())
 	require.NoError(t, err)
 	require.True(t, contract.Equal(validated.Contract))
-	require.Equal(t, uint64(1000), validated.Payload.GasLimit)
+	require.Equal(t, DefaultGasConfig().InvokeBaseGas, validated.Payload.GasLimit)
 	require.Equal(t, InvokeAPISwap, validated.Payload.Action)
 	require.Len(t, validated.FundingOutputs, 1)
 }
 
 func TestValidateTemplateInvokeTxBasicRejectsMissingContract(t *testing.T) {
 	contract := testTemplateContract(t)
-	invokeScript, err := InvokeNullDataScript(InvokePayload{GasLimit: 1000, CallNonce: 1, Action: InvokeAPISwap})
+	invokeScript, err := InvokeNullDataScript(InvokePayload{GasLimit: DefaultGasConfig().InvokeBaseGas, CallNonce: 1, Action: InvokeAPISwap})
 	require.NoError(t, err)
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})

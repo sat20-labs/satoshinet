@@ -76,11 +76,6 @@ func (o OutPoint) String() string {
 	return fmt.Sprintf("%s:%d", o.TxID, o.Vout)
 }
 
-type AssetAmount struct {
-	AssetName string
-	Amount    *scommon.Decimal
-}
-
 type UTXO struct {
 	OutPoint       OutPoint
 	Contract       ContractAddress

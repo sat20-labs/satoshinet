@@ -35,6 +35,7 @@ type ExecutionRecord struct {
 	Contract       ContractAddress
 	Status         ResultPayload
 	GasLimit       uint64
+	GasFee         uint64
 	FundingInputs  []OutPoint
 	ItemIDs        []int64
 	RequiresResult bool
@@ -135,6 +136,10 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx) error {
 	if err := validated.Runtime.ApplyFunding(validated.FundingOutputs, e.GasConfig.GasAssetName); err != nil {
 		return err
 	}
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
 	e.Store.Add(validated.Runtime)
 	record := ExecutionRecord{
 		Height:         e.BlockHeight,
@@ -148,6 +153,7 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx) error {
 		FundingInputs:  contractOutputOutPoints(validated.FundingOutputs),
 		RequiresResult: true,
 	}
+	record.GasFee = resultFee
 	e.records = append(e.records, record)
 	return nil
 }
@@ -190,6 +196,10 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 	if err := runtime.ApplyGasFunding(validated.FundingOutputs, e.GasConfig.GasAssetName); err != nil {
 		return err
 	}
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
 	runtime.SetCurrentBlock(e.BlockHeight)
 	runtime.IncrementInvokeCount()
 
@@ -209,6 +219,7 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 		ItemIDs:        []int64{item.ID},
 		RequiresResult: true,
 	}
+	record.GasFee = resultFee
 	e.records = append(e.records, record)
 	return nil
 }

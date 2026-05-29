@@ -19,9 +19,9 @@ func TestBuildDeployTx(t *testing.T) {
 		GasLimit:       100000,
 		DeployNonce:    3,
 		InitCode:       []byte{0x60, 0x00},
-		Funding: TxFunding{Assets: []AssetAmount{{
-			AssetName: "ordx:ft:gas",
-			Amount:    mustDefaultDecimal(t, 100000),
+		Funding: wire.TxOut{Assets: wire.TxAssets{{
+			Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
+			Amount: *mustDefaultDecimal(t, 100000),
 		}}},
 		Inputs: []wire.OutPoint{prev},
 	})
@@ -56,9 +56,9 @@ func TestBuildDeployTxSplitsLargeInitCode(t *testing.T) {
 		GasLimit:       100000,
 		DeployNonce:    4,
 		InitCode:       initCode,
-		Funding: TxFunding{Assets: []AssetAmount{{
-			AssetName: "ordx:ft:gas",
-			Amount:    mustDefaultDecimal(t, 100000),
+		Funding: wire.TxOut{Assets: wire.TxAssets{{
+			Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
+			Amount: *mustDefaultDecimal(t, 100000),
 		}}},
 		Inputs: []wire.OutPoint{{Hash: chainhash.Hash{4}, Index: 0}},
 	})
@@ -81,11 +81,11 @@ func TestBuildInvokeTx(t *testing.T) {
 		GasLimit:  100000,
 		CallNonce: 9,
 		Calldata:  []byte{0xde, 0xad, 0xbe, 0xef},
-		Funding: TxFunding{
+		Funding: wire.TxOut{
 			Value: 77,
-			Assets: []AssetAmount{{
-				AssetName: "ordx:ft:gas",
-				Amount:    mustDefaultDecimal(t, 100000),
+			Assets: wire.TxAssets{{
+				Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
+				Amount: *mustDefaultDecimal(t, 100000),
 			}},
 		},
 		Inputs: []wire.OutPoint{{Hash: chainhash.Hash{2}, Index: 0}},
@@ -108,7 +108,7 @@ func TestBuildEVMTxRejectsInvalidFunding(t *testing.T) {
 		GasLimit:    1,
 		DeployNonce: 1,
 		InitCode:    []byte{0x60, 0x00},
-		Funding:     TxFunding{},
+		Funding:     wire.TxOut{},
 	})
 	require.Error(t, err)
 
@@ -116,9 +116,9 @@ func TestBuildEVMTxRejectsInvalidFunding(t *testing.T) {
 		Contract:  testContract(t),
 		GasLimit:  1,
 		CallNonce: 1,
-		Funding: TxFunding{Assets: []AssetAmount{{
-			AssetName: SatoshiAssetName,
-			Amount:    scommon.NewDefaultDecimal(1),
+		Funding: wire.TxOut{Assets: wire.TxAssets{{
+			Name:   *wire.NewAssetNameFromString(SatoshiAssetName),
+			Amount: *scommon.NewDefaultDecimal(1),
 		}}},
 	})
 	require.Error(t, err)

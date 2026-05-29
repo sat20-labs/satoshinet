@@ -4,11 +4,28 @@ import (
 	"errors"
 	"fmt"
 
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type GasConfig struct {
+	GasAssetName    string
+	DeployBaseGas   uint64
+	InvokeBaseGas   uint64
+	ResultBaseGas   uint64
+	TriggerBaseGas  uint64
 	MaxGasPerInvoke uint64
+}
+
+func DefaultGasConfig() GasConfig {
+	return GasConfig{
+		GasAssetName:    contractcommon.GasAssetName,
+		DeployBaseGas:   contractcommon.DeployBaseGas,
+		InvokeBaseGas:   contractcommon.InvokeBaseGas,
+		ResultBaseGas:   contractcommon.ResultBaseGas,
+		TriggerBaseGas:  contractcommon.TriggerBaseGas,
+		MaxGasPerInvoke: contractcommon.MaxGasPerBlock,
+	}
 }
 
 type ContractExistsFunc func(ContractAddress) bool
@@ -36,6 +53,9 @@ func ValidateDeployTxBasic(tx *wire.MsgTx, prefix string, cfg RuntimeConfig, gas
 	}
 	if parsed.Deploy.GasLimit == 0 {
 		return DeployValidation{}, errors.New("deploy gas limit is zero")
+	}
+	if parsed.Deploy.GasLimit < gasCfg.normalized().DeployBaseGas {
+		return DeployValidation{}, errors.New("deploy gas limit below deploy base gas")
 	}
 	if gasCfg.MaxGasPerInvoke > 0 && parsed.Deploy.GasLimit > gasCfg.MaxGasPerInvoke {
 		return DeployValidation{}, errors.New("deploy gas limit exceeds maximum")
@@ -81,6 +101,9 @@ func ValidateParsedInvokeTxBasic(parsed ParsedTx, exists ContractExistsFunc, gas
 	if parsed.Invoke.GasLimit == 0 {
 		return InvokeValidation{}, errors.New("invoke gas limit is zero")
 	}
+	if parsed.Invoke.GasLimit < gasCfg.normalized().InvokeBaseGas {
+		return InvokeValidation{}, errors.New("invoke gas limit below invoke base gas")
+	}
 	if gasCfg.MaxGasPerInvoke > 0 && parsed.Invoke.GasLimit > gasCfg.MaxGasPerInvoke {
 		return InvokeValidation{}, errors.New("invoke gas limit exceeds maximum")
 	}
@@ -96,4 +119,46 @@ func ValidateParsedInvokeTxBasic(parsed ParsedTx, exists ContractExistsFunc, gas
 		FundingOutputs: parsed.ContractOutputs,
 		Payload:        *parsed.Invoke,
 	}, nil
+}
+
+func (c GasConfig) DeployFee(height int64) (uint64, error) {
+	return c.gasFee(c.normalized().DeployBaseGas, height)
+}
+
+func (c GasConfig) InvokeFee(height int64) (uint64, error) {
+	return c.gasFee(c.normalized().InvokeBaseGas, height)
+}
+
+func (c GasConfig) ResultFee(height int64) (uint64, error) {
+	return c.gasFee(c.normalized().ResultBaseGas, height)
+}
+
+func (c GasConfig) gasFee(gas uint64, height int64) (uint64, error) {
+	if height < 0 {
+		height = 0
+	}
+	return contractcommon.GasFeeAtHeight(gas, uint64(height))
+}
+
+func (c GasConfig) normalized() GasConfig {
+	def := DefaultGasConfig()
+	if c.GasAssetName == "" {
+		c.GasAssetName = def.GasAssetName
+	}
+	if c.DeployBaseGas == 0 {
+		c.DeployBaseGas = def.DeployBaseGas
+	}
+	if c.InvokeBaseGas == 0 {
+		c.InvokeBaseGas = def.InvokeBaseGas
+	}
+	if c.ResultBaseGas == 0 {
+		c.ResultBaseGas = def.ResultBaseGas
+	}
+	if c.TriggerBaseGas == 0 {
+		c.TriggerBaseGas = def.TriggerBaseGas
+	}
+	if c.MaxGasPerInvoke == 0 {
+		c.MaxGasPerInvoke = def.MaxGasPerInvoke
+	}
+	return c
 }

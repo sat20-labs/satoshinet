@@ -324,7 +324,7 @@ func TestBuildBlockResultTxsForDeployAndReady(t *testing.T) {
 	if len(built.Execution.ResultPlans) != 2 {
 		t.Fatalf("result plan count mismatch: %d", len(built.Execution.ResultPlans))
 	}
-	if len(built.ResultTxs[0].TxIn) != 2 {
+	if len(built.ResultTxs[0].TxIn) != 3 {
 		t.Fatalf("result input count mismatch: %d", len(built.ResultTxs[0].TxIn))
 	}
 	if len(built.ResultTxs[0].TxOut) != 1 {
@@ -347,7 +347,7 @@ func testAgentDeployTx(t *testing.T) (*wire.MsgTx, ContractAddress) {
 		t.Fatalf("Encode failed: %v", err)
 	}
 	deploy := DeployPayload{
-		GasLimit:        1000,
+		GasLimit:        DefaultGasConfig().DeployBaseGas,
 		Subtype:         SubtypePrediction,
 		AgentVersion:    CurrentAgentVersion,
 		Deployer:        "deployer",
@@ -372,7 +372,7 @@ func testAgentDeployTx(t *testing.T) (*wire.MsgTx, ContractAddress) {
 func testAgentInvokeTx(t *testing.T, contract ContractAddress, action string, param []byte, value int64, assets wire.TxAssets) *wire.MsgTx {
 	t.Helper()
 	invokeScript, err := InvokeNullDataScript(InvokePayload{
-		GasLimit:  1000,
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
 		Action:    action,
 		Param:     param,

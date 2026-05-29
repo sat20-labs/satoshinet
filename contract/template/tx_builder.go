@@ -4,22 +4,11 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"sort"
 
-	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
-
-type AssetAmount struct {
-	AssetName string
-	Amount    *scommon.Decimal
-}
-
-type TxFunding struct {
-	Value  int64
-	Assets []AssetAmount
-}
 
 type DeployTxBuildRequest struct {
 	ContractPrefix string
@@ -27,7 +16,7 @@ type DeployTxBuildRequest struct {
 	Deployer       string
 	Random         []byte
 	GasLimit       uint64
-	Funding        TxFunding
+	Funding        wire.TxOut
 	Inputs         []wire.OutPoint
 	ChangeOutputs  []*wire.TxOut
 }
@@ -38,7 +27,7 @@ type InvokeTxBuildRequest struct {
 	CallNonce     uint64
 	Action        string
 	Param         []byte
-	Funding       TxFunding
+	Funding       wire.TxOut
 	Inputs        []wire.OutPoint
 	ChangeOutputs []*wire.TxOut
 }
@@ -59,7 +48,7 @@ func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, erro
 	if err != nil {
 		return nil, ContractAddress{}, err
 	}
-	if err := req.Funding.Validate(); err != nil {
+	if err := validateFundingTxOut(req.Funding); err != nil {
 		return nil, ContractAddress{}, err
 	}
 	scripts, err := DeployNullDataScripts(DeployPayload{
@@ -73,7 +62,7 @@ func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, erro
 	if err != nil {
 		return nil, ContractAddress{}, err
 	}
-	contractOut, err := req.Funding.ContractTxOut(contract)
+	contractOut, err := contractTxOutFromFunding(req.Funding, contract)
 	if err != nil {
 		return nil, ContractAddress{}, err
 	}
@@ -88,7 +77,7 @@ func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, erro
 }
 
 func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
-	if err := req.Funding.Validate(); err != nil {
+	if err := validateFundingTxOut(req.Funding); err != nil {
 		return nil, err
 	}
 	scripts, err := InvokeNullDataScripts(InvokePayload{
@@ -100,7 +89,7 @@ func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
 	if err != nil {
 		return nil, err
 	}
-	contractOut, err := req.Funding.ContractTxOut(req.Contract)
+	contractOut, err := contractTxOutFromFunding(req.Funding, req.Contract)
 	if err != nil {
 		return nil, err
 	}
@@ -114,65 +103,14 @@ func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
 	return tx, nil
 }
 
-func (f TxFunding) Validate() error {
-	if f.Value < 0 {
-		return fmt.Errorf("funding value must not be negative")
-	}
-	if f.Value == 0 && len(f.Assets) == 0 {
-		return fmt.Errorf("funding must contain satoshi or asset amount")
-	}
-	for _, asset := range f.Assets {
-		if asset.AssetName == "" || asset.AssetName == SatoshiAssetName {
-			return fmt.Errorf("invalid funding asset name %q", asset.AssetName)
-		}
-		if asset.Amount == nil || asset.Amount.IsZero() {
-			return fmt.Errorf("funding asset %s amount is zero", asset.AssetName)
-		}
-		if wire.NewAssetNameFromString(asset.AssetName) == nil {
-			return fmt.Errorf("invalid funding asset name %q", asset.AssetName)
-		}
-		if asset.Amount.Sign() < 0 {
-			return fmt.Errorf("funding asset %s amount is negative", asset.AssetName)
-		}
-	}
-	return nil
-}
-
-func (f TxFunding) ContractTxOut(contract ContractAddress) (*wire.TxOut, error) {
-	assets, err := f.WireAssets()
-	if err != nil {
-		return nil, err
-	}
-	return NewContractTxOut(f.Value, assets, contract)
-}
-
-func (f TxFunding) WireAssets() (wire.TxAssets, error) {
-	assets := make(wire.TxAssets, 0, len(f.Assets))
-	for _, asset := range f.Assets {
-		name := wire.NewAssetNameFromString(asset.AssetName)
-		if name == nil {
-			return nil, fmt.Errorf("invalid funding asset name %q", asset.AssetName)
-		}
-		if asset.Amount == nil {
-			return nil, fmt.Errorf("funding asset %s amount is nil", asset.AssetName)
-		}
-		assets = append(assets, wire.AssetInfo{
-			Name:   *name,
-			Amount: *asset.Amount.Clone(),
-		})
-	}
-	sort.Slice(assets, func(i, j int) bool {
-		left := assets[i].Name
-		right := assets[j].Name
-		if left.Protocol != right.Protocol {
-			return left.Protocol < right.Protocol
-		}
-		if left.Type != right.Type {
-			return left.Type < right.Type
-		}
-		return left.Ticker < right.Ticker
+func validateFundingTxOut(funding wire.TxOut) error {
+	return contractcommon.ValidateFundingTxOut(funding, contractcommon.FundingValidation{
+		RequireFunding: true,
 	})
-	return assets, nil
+}
+
+func contractTxOutFromFunding(funding wire.TxOut, contract ContractAddress) (*wire.TxOut, error) {
+	return NewContractTxOut(funding.Value, funding.Assets, contract)
 }
 
 func NewContractTxOut(value int64, assets wire.TxAssets, contract ContractAddress) (*wire.TxOut, error) {

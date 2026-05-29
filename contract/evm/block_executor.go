@@ -30,6 +30,7 @@ type BlockExecutionResult struct {
 }
 
 type ExecutionRecord struct {
+	Height         uint64
 	TxID           string
 	Type           TxType
 	Kind           ExecutionKind
@@ -223,6 +224,7 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx, parsed ParsedTx) error {
 		funding = append(funding, output.OutPoint)
 	}
 	record := ExecutionRecord{
+		Height:         e.Block.Number,
 		TxID:           tx.TxID(),
 		Type:           TxTypeDeploy,
 		Kind:           ExecutionKindDeploy,
@@ -264,6 +266,7 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 	intents := cloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
 	requiresResult := result.Status != ResultStatusSuccess || len(intents) > 0
 	record := ExecutionRecord{
+		Height:         e.Block.Number,
 		TxID:           tx.TxID(),
 		Type:           TxTypeInvoke,
 		Kind:           ExecutionKindInvoke,
@@ -311,6 +314,7 @@ func (e *BlockExecutor) ExecuteTrigger(call TriggerCall) error {
 	})
 	intents := cloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
 	record := ExecutionRecord{
+		Height:         e.Block.Number,
 		Kind:           ExecutionKindTrigger,
 		CallID:         callID,
 		TriggerID:      call.Trigger.ID,

@@ -64,21 +64,6 @@ func TestParseTemplateInvokeTxFindsTemplateContractOutputs(t *testing.T) {
 	require.Equal(t, 0, amount.Cmp(scommon.NewDefaultDecimal(20)))
 }
 
-func TestTxFundingWireAssetsAreSortedForLookup(t *testing.T) {
-	assets, err := (TxFunding{Assets: []AssetAmount{
-		{AssetName: "ordx:f:lot", Amount: scommon.NewDefaultDecimal(10)},
-		{AssetName: "ordx:f:gas", Amount: scommon.NewDefaultDecimal(100000)},
-	}}).WireAssets()
-	require.NoError(t, err)
-	require.Len(t, assets, 2)
-	require.Equal(t, "ordx:f:gas", assets[0].Name.String())
-	require.Equal(t, "ordx:f:lot", assets[1].Name.String())
-
-	asset, err := assets.Find(wire.NewAssetNameFromString("ordx:f:lot"))
-	require.NoError(t, err)
-	require.Equal(t, "10", asset.Amount.String())
-}
-
 func TestParseTemplateTxRejectsExternalResult(t *testing.T) {
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})

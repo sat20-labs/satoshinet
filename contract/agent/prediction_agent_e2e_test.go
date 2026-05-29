@@ -363,7 +363,7 @@ func testAgentDeployTxForContract(t *testing.T, contract PredictionContract) (*w
 		t.Fatalf("Encode failed: %v", err)
 	}
 	deploy := DeployPayload{
-		GasLimit:        1000,
+		GasLimit:        DefaultGasConfig().DeployBaseGas,
 		Subtype:         SubtypePrediction,
 		AgentVersion:    CurrentAgentVersion,
 		Deployer:        "deployer",

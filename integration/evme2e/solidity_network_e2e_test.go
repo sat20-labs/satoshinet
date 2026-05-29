@@ -102,10 +102,10 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 	counterDeploy, counterContract, counterChanges := buildSolidityDeployTx(t, callerKeys[0], 1,
 		solidityDeployCode(t, counter, nil),
 		[]wire.OutPoint{{Hash: gasAnchor.TxHash(), Index: 0}},
-		evm.TxFunding{Assets: []evm.AssetAmount{networkGasFunding(t, gasAsset, 3000000)}},
+		wire.TxOut{Assets: wire.TxAssets{networkGasFunding(t, gasAsset, 3000000)}},
 		[]*wire.TxOut{
 			testSpendAssetOutput(gasAsset, 5000000, caller0Script),
-			testSpendAssetOutput(gasAsset, 50000000, caller0Script),
+			testSpendAssetOutput(gasAsset, 49900000, caller0Script),
 			testSpendAssetOutput(gasAsset, 5000000, caller1Script),
 			testSpendAssetOutput(gasAsset, 5000000, caller0Script),
 			testSpendAssetOutput(gasAsset, 5000000, caller1Script),
@@ -119,7 +119,8 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 	erc20Deploy, erc20Contract, _ := buildSolidityDeployTx(t, callerKeys[0], 2,
 		erc20DeployCode,
 		[]wire.OutPoint{counterChanges[0]},
-		evm.TxFunding{Assets: []evm.AssetAmount{networkGasFunding(t, gasAsset, 5000000)}},
+		wire.TxOut{Assets: wire.TxAssets{networkGasFunding(t, gasAsset,
+			5000000-int64(evm.DefaultGasConfig().DeployBaseGas))}},
 		nil)
 	sendAndMineTx(t, bootstrapNode, nodes, erc20Deploy, 3)
 
@@ -131,10 +132,10 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 	vaultDeploy, vaultContract, _ := buildSolidityDeployTx(t, callerKeys[0], 3,
 		vaultDeployCode,
 		[]wire.OutPoint{counterChanges[1]},
-		evm.TxFunding{Assets: []evm.AssetAmount{
+		wire.TxOut{Assets: wire.TxAssets{
 			networkGasFunding(t, gasAsset, 10000000),
 		}},
-		[]*wire.TxOut{testSpendAssetOutput(gasAsset, 40000000, caller0Script)})
+		[]*wire.TxOut{testSpendAssetOutput(gasAsset, 39800000, caller0Script)})
 	sendAndMineTx(t, bootstrapNode, nodes, vaultDeploy, 4)
 
 	vaultDeposit := buildContractAssetDepositTx(t, callerKeys[0],
@@ -362,7 +363,7 @@ func buildNetworkAnchorTx(t *testing.T, lockedUtxo string, lockedValue int64, as
 }
 
 func buildSolidityDeployTx(t *testing.T, signer *btcec.PrivateKey, nonce uint64,
-	initCode []byte, inputs []wire.OutPoint, funding evm.TxFunding,
+	initCode []byte, inputs []wire.OutPoint, funding wire.TxOut,
 	changeOutputs []*wire.TxOut) (*wire.MsgTx, evm.ContractAddress, []wire.OutPoint) {
 
 	t.Helper()
@@ -390,15 +391,15 @@ func buildSolidityInvokeTx(t *testing.T, signer *btcec.PrivateKey, contract evm.
 	t.Helper()
 	return buildSolidityInvokeTxWithFunding(t, signer, contract, nonce, calldata,
 		[]wire.OutPoint{input},
-		evm.TxFunding{Assets: []evm.AssetAmount{{
-			AssetName: gasAsset,
-			Amount:    indexercommon.NewDefaultDecimal(gasAmount),
+		wire.TxOut{Assets: wire.TxAssets{{
+			Name:   *wire.NewAssetNameFromString(gasAsset),
+			Amount: *indexercommon.NewDefaultDecimal(gasAmount - int64(evm.DefaultGasConfig().InvokeBaseGas)),
 		}}},
 		nil)
 }
 
 func buildSolidityInvokeTxWithFunding(t *testing.T, signer *btcec.PrivateKey, contract evm.ContractAddress,
-	nonce uint64, calldata []byte, inputs []wire.OutPoint, funding evm.TxFunding,
+	nonce uint64, calldata []byte, inputs []wire.OutPoint, funding wire.TxOut,
 	changeOutputs []*wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
@@ -565,16 +566,16 @@ func fetchAssetSummary(node *rpctest.Harness, address string) (map[string]string
 	return result, nil
 }
 
-func networkGasFunding(t *testing.T, gasAsset string, amount int64) evm.AssetAmount {
+func networkGasFunding(t *testing.T, gasAsset string, amount int64) wire.AssetInfo {
 	t.Helper()
-	return evm.AssetAmount{AssetName: gasAsset, Amount: indexercommon.NewDefaultDecimal(amount)}
+	return wire.AssetInfo{Name: *wire.NewAssetNameFromString(gasAsset), Amount: *indexercommon.NewDefaultDecimal(amount)}
 }
 
-func networkDecimalFunding(t *testing.T, assetName, amount string, precision int) evm.AssetAmount {
+func networkDecimalFunding(t *testing.T, assetName, amount string, precision int) wire.AssetInfo {
 	t.Helper()
 	decimal, err := indexercommon.NewDecimalFromString(amount, precision)
 	require.NoError(t, err)
-	return evm.AssetAmount{AssetName: assetName, Amount: decimal}
+	return wire.AssetInfo{Name: *wire.NewAssetNameFromString(assetName), Amount: *decimal}
 }
 
 func testSpendAssetOutput(assetName string, amount int64, pkScript []byte) *wire.TxOut {

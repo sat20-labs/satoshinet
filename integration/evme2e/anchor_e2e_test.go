@@ -289,11 +289,11 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 		GasLimit:       300000,
 		DeployNonce:    1,
 		InitCode:       testEVMInitCode(testCounterRuntimeCode()),
-		Funding: evm.TxFunding{
+		Funding: wire.TxOut{
 			Value: 1000,
-			Assets: []evm.AssetAmount{{
-				AssetName: evm.DefaultGasConfig().GasAssetName,
-				Amount:    indexercommon.NewDefaultDecimal(300000),
+			Assets: wire.TxAssets{{
+				Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),
+				Amount: *indexercommon.NewDefaultDecimal(300000),
 			}},
 		},
 		Inputs: []wire.OutPoint{{
@@ -315,10 +315,10 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 			Contract:  contract,
 			GasLimit:  100000,
 			CallNonce: uint64(i + 1),
-			Funding: evm.TxFunding{
-				Assets: []evm.AssetAmount{{
-					AssetName: evm.DefaultGasConfig().GasAssetName,
-					Amount:    indexercommon.NewDefaultDecimal(100000),
+			Funding: wire.TxOut{
+				Assets: wire.TxAssets{{
+					Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),
+					Amount: *indexercommon.NewDefaultDecimal(100000),
 				}},
 			},
 			Inputs: []wire.OutPoint{{
@@ -326,7 +326,8 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 				Index: uint32(2 + i),
 			}},
 			ChangeOutputs: []*wire.TxOut{
-				wire.NewTxOut(1000, testWireAsset(evm.DefaultGasConfig().GasAssetName, 100000), spendScript),
+				wire.NewTxOut(1000, testWireAsset(evm.DefaultGasConfig().GasAssetName,
+					100000-int64(evm.DefaultGasConfig().InvokeBaseGas)), spendScript),
 			},
 		})
 		require.NoError(t, err)

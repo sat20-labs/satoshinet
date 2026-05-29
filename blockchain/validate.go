@@ -12,11 +12,13 @@ import (
 	"math/big"
 	"time"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractengine "github.com/sat20-labs/satoshinet/contract"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -1160,6 +1162,9 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 
 	// feeRanges 是totalInSatsRange减去所有的out后剩余的sats范围
 	feeTxAssets := totalInTxAssets
+	if err := checkContractBaseGasFee(msgTx, feeTxAssets, txHeight, chainParams); err != nil {
+		return 0, nil, err
+	}
 	// rangeSize := RangesSize(feeRanges)
 	// if txFeeInSatoshi != rangeSize {
 	// 	str := fmt.Sprintf("total fee is not match with fee ranges "+
@@ -1167,6 +1172,42 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 	// 	return 0, nil, ruleError(ErrBadFees, str)
 	// }
 	return txFeeInSatoshi, feeTxAssets, nil
+}
+
+func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int32, params *chaincfg.Params) error {
+	class, found, err := contractengine.ClassifyTxForBlockOrder(tx, params)
+	if err != nil || !found || !class.IsWork() {
+		return err
+	}
+	var baseGas uint64
+	switch class.TxType {
+	case contractcommon.TxTypeDeploy:
+		baseGas = contractcommon.DeployBaseGas
+	case contractcommon.TxTypeInvoke:
+		baseGas = contractcommon.InvokeBaseGas
+	default:
+		return nil
+	}
+	if height < 0 {
+		height = 0
+	}
+	required, err := contractcommon.GasFeeAtHeight(baseGas, uint64(height))
+	if err != nil {
+		return ruleError(ErrBadFees, fmt.Sprintf("contract base gas fee error: %v", err))
+	}
+	if required == 0 {
+		return nil
+	}
+	assetName := wire.NewAssetNameFromString(contractcommon.GasAssetName)
+	if assetName == nil {
+		return ruleError(ErrBadFees, fmt.Sprintf("invalid contract gas asset %q", contractcommon.GasAssetName))
+	}
+	asset, err := feeAssets.Find(assetName)
+	if err != nil || asset == nil || asset.Amount.Cmp(scommon.NewDefaultDecimal(int64(required))) < 0 {
+		return ruleError(ErrBadFees, fmt.Sprintf("contract %d requires at least %d %s base gas fee",
+			class.TxType, required, contractcommon.GasAssetName))
+	}
+	return nil
 }
 
 func logTxAssets(desc string, assets wire.TxAssets) {

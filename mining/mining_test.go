@@ -30,7 +30,7 @@ func TestBlockHasEVMWorkIgnoresTemplateTransactions(t *testing.T) {
 		Deployer:       "miner-test",
 		Random:         []byte("miner-template-random"),
 		GasLimit:       1000,
-		Funding: tmplcontract.TxFunding{
+		Funding: wire.TxOut{
 			Value: 1,
 		},
 	})

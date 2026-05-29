@@ -43,6 +43,7 @@ type ExecutionRecord struct {
 	Contract       ContractAddress
 	Status         ResultPayload
 	GasLimit       uint64
+	GasFee         uint64
 	FundingInputs  []OutPoint
 	RequiresResult bool
 }
@@ -118,16 +119,21 @@ func (e *BlockExecutor) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
 }
 
 func (e *BlockExecutor) Finalize() (BlockExecutionResult, error) {
+	resultPlans := AddGasFeesToResultPlans(e.resultPlans, e.records)
 	return BlockExecutionResult{
 		Records:         cloneExecutionRecords(e.records),
 		SettlementPlans: cloneSettlementPlans(e.settlementPlans),
-		ResultPlans:     cloneResultPlans(e.resultPlans),
+		ResultPlans:     cloneResultPlans(resultPlans),
 		StateRoot:       e.Store.StateRoot(),
 	}, nil
 }
 
 func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx) error {
 	validated, err := ValidateDeployTxBasic(tx, e.ContractPrefix, e.RuntimeConfig, e.GasConfig)
+	if err != nil {
+		return err
+	}
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
 		return err
 	}
@@ -146,6 +152,7 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx) error {
 	e.records = append(e.records, record)
 	if resultPlan, ok := stateResultPlan(validated.Address, validated.FundingOutputs); ok {
 		record.RequiresResult = true
+		record.GasFee = resultFee
 		e.records[len(e.records)-1] = record
 		e.resultPlans = append(e.resultPlans, resultPlan)
 	}
@@ -209,8 +216,16 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 		CallID:         DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract),
 		Contract:       validated.Contract,
 		GasLimit:       validated.Payload.GasLimit,
+		GasFee:         0,
 		FundingInputs:  contractOutputOutPoints(validated.FundingOutputs),
 		RequiresResult: requiresResult,
+	}
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
+	if record.RequiresResult {
+		record.GasFee = resultFee
 	}
 	e.records = append(e.records, record)
 	if (validated.Payload.Action == InvokeAPIReady || validated.Payload.Action == InvokeAPIReject) && requiresResult {

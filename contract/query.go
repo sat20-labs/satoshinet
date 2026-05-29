@@ -16,34 +16,8 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-type ContractSummary struct {
-	Address        string                 `json:"address"`
-	ContractType   string                 `json:"contractType"`
-	ContractTypeID byte                   `json:"contractTypeId"`
-	Subtype        string                 `json:"subtype,omitempty"`
-	Name           string                 `json:"name,omitempty"`
-	Version        uint32                 `json:"version,omitempty"`
-	Status         string                 `json:"status,omitempty"`
-	CreatedHeight  int64                  `json:"createdHeight,omitempty"`
-	UpdatedHeight  int64                  `json:"updatedHeight,omitempty"`
-	Details        map[string]interface{} `json:"details,omitempty"`
-}
-
-type ContractHistoryRecord struct {
-	Kind           string                 `json:"kind"`
-	Height         int64                  `json:"height"`
-	TxID           string                 `json:"txid,omitempty"`
-	Contract       string                 `json:"contract"`
-	ContractType   string                 `json:"contractType"`
-	ContractTypeID byte                   `json:"contractTypeId"`
-	Subtype        string                 `json:"subtype,omitempty"`
-	Action         string                 `json:"action,omitempty"`
-	Status         string                 `json:"status,omitempty"`
-	Actor          string                 `json:"actor,omitempty"`
-	GasLimit       uint64                 `json:"gasLimit,omitempty"`
-	Nonce          uint64                 `json:"nonce,omitempty"`
-	Details        map[string]interface{} `json:"details,omitempty"`
-}
+type ContractSummary = contractcommon.ContractSummary
+type ContractHistoryRecord = contractcommon.ContractHistoryRecord
 
 type ContractQueryStore interface {
 	GetContractSummaries(start, limit int) ([]ContractSummary, int)

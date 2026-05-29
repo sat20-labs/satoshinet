@@ -13,7 +13,7 @@ func TestValidateInvokeTxBasic(t *testing.T) {
 	contract := testContract(t)
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
-	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: 1000, CallNonce: 1})
+	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: DefaultGasConfig().InvokeBaseGas, CallNonce: 1})
 	require.NoError(t, err)
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
 	tx.AddTxOut(wire.NewTxOut(7, wire.TxAssets{{
@@ -24,10 +24,10 @@ func TestValidateInvokeTxBasic(t *testing.T) {
 
 	validated, err := ValidateInvokeTxBasic(tx, testContractResolver, func(addr ContractAddress) bool {
 		return addr.Equal(contract)
-	}, GasConfig{MaxGasPerInvoke: 2000})
+	}, DefaultGasConfig())
 	require.NoError(t, err)
 	require.Equal(t, uint64(18), validated.MsgValue)
-	require.Equal(t, uint64(1000), validated.Payload.GasLimit)
+	require.Equal(t, DefaultGasConfig().InvokeBaseGas, validated.Payload.GasLimit)
 	require.True(t, contract.Equal(validated.Contract))
 	require.Len(t, validated.FundingOutputs, 2)
 	gasAmount, err := validated.FundingOutputs[0].AssetAmount("ordx:ft:gas")
@@ -39,7 +39,7 @@ func TestValidateInvokeTxBasicRejectsMissingContract(t *testing.T) {
 	contract := testContract(t)
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
-	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: 1000})
+	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: DefaultGasConfig().InvokeBaseGas})
 	require.NoError(t, err)
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
 	tx.AddTxOut(wire.NewTxOut(7, nil, testContractScript(contract)))
@@ -51,13 +51,13 @@ func TestValidateInvokeTxBasicRejectsMissingContract(t *testing.T) {
 func TestValidateDeployTxBasic(t *testing.T) {
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
-	script, err := evmcommon.DeployNullDataScript(DeployPayload{GasLimit: 1000, DeployNonce: 1, InitCode: []byte{0x60, 0x00}})
+	script, err := evmcommon.DeployNullDataScript(DeployPayload{GasLimit: DefaultGasConfig().DeployBaseGas, DeployNonce: 1, InitCode: []byte{0x60, 0x00}})
 	require.NoError(t, err)
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 
-	validated, err := ValidateDeployTxBasic(tx, GasConfig{MaxGasPerInvoke: 2000})
+	validated, err := ValidateDeployTxBasic(tx, DefaultGasConfig())
 	require.NoError(t, err)
-	require.Equal(t, uint64(1000), validated.Payload.GasLimit)
+	require.Equal(t, DefaultGasConfig().DeployBaseGas, validated.Payload.GasLimit)
 }
 
 func TestValidateResultTxBasic(t *testing.T) {

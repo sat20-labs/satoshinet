@@ -14,8 +14,8 @@ import (
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/contract/evm"
 	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -179,7 +179,7 @@ func TestEVMEndToEndSolidityVaultTriggerAssetSettlement(t *testing.T) {
 	}
 	require.Equal(t, "1.25", index.AssetBalance(recipientAddr, vaultAsset).String())
 	require.Equal(t, "1.25", index.AssetBalance(contract.MustEncode(), vaultAsset).String())
-	gasChange := 2000000 - build.Execution.Records[0].GasUsed - cfg.ResultPackingFee
+	gasChange := 2000000 - cfg.ResultExecutionGas(build.Execution.Records[0]) - cfg.ResultPackingFee
 	require.Equal(t, scommon.NewDefaultDecimal(int64(gasChange)).String(),
 		index.AssetBalance(contract.MustEncode(), gasAsset).String())
 }
@@ -258,9 +258,9 @@ func deployCompiledSolidityTx(t *testing.T, rt *evm.Runtime, caller evm.EVMAddre
 		GasLimit:       block.GasLimit,
 		DeployNonce:    nonce,
 		InitCode:       initCode,
-		Funding: evm.TxFunding{Assets: []evm.AssetAmount{{
-			AssetName: evm.DefaultGasConfig().GasAssetName,
-			Amount:    scommon.NewDefaultDecimal(int64(block.GasLimit)),
+		Funding: wire.TxOut{Assets: wire.TxAssets{{
+			Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),
+			Amount: *scommon.NewDefaultDecimal(int64(block.GasLimit)),
 		}}},
 		Inputs: []wire.OutPoint{{Hash: mustSolidityE2EHash(t, byte(nonce)), Index: 0}},
 	})

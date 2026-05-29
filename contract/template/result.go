@@ -26,6 +26,7 @@ type ResultPlan struct {
 	Contract string         `json:"contract"`
 	Height   int64          `json:"height"`
 	ItemIDs  []int64        `json:"itemIds,omitempty"`
+	GasFee   uint64         `json:"gasFee,omitempty"`
 	Inputs   []OutPoint     `json:"inputs,omitempty"`
 	Outputs  []ResultOutput `json:"outputs,omitempty"`
 }
@@ -123,9 +124,11 @@ func DeriveInvokeCallID(invokeTxID string, vout uint32, contract ContractAddress
 
 func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionRecord) ([]ResultPlan, error) {
 	inputsByItem := make(map[int64][]OutPoint)
+	feesByItem := make(map[int64]uint64)
 	for _, record := range records {
 		for _, itemID := range record.ItemIDs {
 			inputsByItem[itemID] = append(inputsByItem[itemID], record.FundingInputs...)
+			feesByItem[itemID] += record.GasFee
 		}
 	}
 
@@ -137,6 +140,9 @@ func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionReco
 		resultPlan, err := BuildSettlementResultPlan(plan, inputsByItem)
 		if err != nil {
 			return nil, err
+		}
+		for _, itemID := range resultPlan.ItemIDs {
+			resultPlan.GasFee += feesByItem[itemID]
 		}
 		out = append(out, resultPlan)
 	}
@@ -190,6 +196,7 @@ func BuildSettlementResultPlan(plan *SettlementPlan, inputsByItem map[int64][]Ou
 }
 
 func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasConfig, contractUTXOs ContractUTXOProvider) ([]ResultPlan, error) {
+	gasConfig = gasConfig.normalized()
 	out := cloneResultPlans(plans)
 	for i := range out {
 		contract, err := contractcommon.DecodeContractAddress(out[i].Contract)
@@ -220,7 +227,7 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 			if err != nil {
 				return nil, err
 			}
-			change.Assets, err = resultAssetsChange(availableAssets, out[i].Outputs)
+			change.Assets, err = resultAssetsChange(availableAssets, out[i].Outputs, gasConfig.GasAssetName, out[i].GasFee)
 			if err != nil {
 				return nil, err
 			}
@@ -245,7 +252,7 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 	return out, nil
 }
 
-func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput) (wire.TxAssets, error) {
+func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput, gasAssetName string, gasFee uint64) (wire.TxAssets, error) {
 	if len(available) == 0 {
 		return nil, nil
 	}
@@ -261,6 +268,15 @@ func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput) (wire.T
 	change := available.Clone()
 	if err := change.Split(spent); err != nil {
 		return nil, err
+	}
+	if gasFee != 0 {
+		feeAssets, err := newAssetSet(gasAssetName, fmt.Sprintf("%d", gasFee))
+		if err != nil {
+			return nil, err
+		}
+		if err := change.Split(feeAssets); err != nil {
+			return nil, fmt.Errorf("insufficient gas asset for result fee: %w", err)
+		}
 	}
 	if len(change) == 0 {
 		return nil, nil
@@ -361,7 +377,7 @@ func BuildResultTx(req ResultTxBuildRequest) (*wire.MsgTx, error) {
 	tx := wire.NewMsgTx(2)
 	resultCount := 0
 	for _, plan := range req.Plans {
-		resultCount += len(plan.ItemIDs)
+		resultCount += resultPlanCount(plan)
 		for _, input := range plan.Inputs {
 			outpoint, err := resultWireOutPoint(input)
 			if err != nil {
@@ -422,7 +438,7 @@ func (v CanonicalResultVerifier) Verify(resultTx *wire.MsgTx, expected []ResultP
 	expectedInputs := make([]OutPoint, 0)
 	expectedOutputs := make([]ResultOutput, 0)
 	for _, plan := range expected {
-		expectedCount += len(plan.ItemIDs)
+		expectedCount += resultPlanCount(plan)
 		expectedInputs = append(expectedInputs, plan.Inputs...)
 		expectedOutputs = append(expectedOutputs, plan.Outputs...)
 	}
@@ -442,6 +458,13 @@ func (v CanonicalResultVerifier) Verify(resultTx *wire.MsgTx, expected []ResultP
 		}
 	}
 	return nil
+}
+
+func resultPlanCount(plan ResultPlan) int {
+	if len(plan.ItemIDs) != 0 {
+		return len(plan.ItemIDs)
+	}
+	return 1
 }
 
 func ResultPayloadFromTx(tx *wire.MsgTx) (ResultPayload, error) {

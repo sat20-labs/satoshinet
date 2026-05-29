@@ -338,7 +338,10 @@ func testInvokeTx(t *testing.T, contract ContractAddress, payload InvokePayload)
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{2}, Index: 0}})
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	tx.AddTxOut(wire.NewTxOut(0, nil, contractScript))
+	tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
+		Amount: *scommon.NewDefaultDecimal(100000),
+	}}, contractScript))
 	return tx
 }
 

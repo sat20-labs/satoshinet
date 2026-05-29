@@ -16,7 +16,7 @@ func TestClassifyTemplateTxForBlockOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, info.IsTemplate)
 	require.Equal(t, TxTypeDeploy, info.Type)
-	require.Equal(t, uint64(1000), info.GasLimit)
+	require.Equal(t, DefaultGasConfig().DeployBaseGas, info.GasLimit)
 
 	resultTx := wire.NewMsgTx(2)
 	script, err := contractcommon.ResultNullDataScript(ResultPayload{Status: ResultStatusSuccess, ResultCount: 1})

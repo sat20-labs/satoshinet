@@ -89,7 +89,10 @@ func (v CanonicalResultVerifier) BuildPlans(settled []ExecutionRecord) ([]Result
 		funding := make([]OutPoint, 0)
 		for _, record := range group.Records {
 			intents = append(intents, record.AssetIntents...)
-			callFee, err := v.GasConfig.CheckedCallFee(record.GasUsed)
+			callFee, err := v.GasConfig.CheckedCallFeeAtHeight(
+				v.GasConfig.ResultExecutionGas(record),
+				record.Height,
+			)
 			if err != nil {
 				return nil, err
 			}
@@ -98,7 +101,11 @@ func (v CanonicalResultVerifier) BuildPlans(settled []ExecutionRecord) ([]Result
 				return nil, fmt.Errorf("gas fee overflows uint64")
 			}
 			gasFee = next
-			next, overflow = addUint64(gasFee, v.GasConfig.ResultPackingFee)
+			resultFee, err := v.GasConfig.CheckedResultBaseFee(record.Height)
+			if err != nil {
+				return nil, err
+			}
+			next, overflow = addUint64(gasFee, resultFee)
 			if overflow {
 				return nil, fmt.Errorf("result packing fee overflows uint64")
 			}

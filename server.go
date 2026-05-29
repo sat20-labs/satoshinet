@@ -3059,33 +3059,28 @@ func (s *server) submitAgentInvokeTx(contract agentcontract.ContractAddress, act
 	if s.agentInvokeInMempool(contract, action) {
 		return nil, fmt.Errorf("agent %s transaction is already in mempool", action)
 	}
-	funding, err := s.selectAgentConfirmFundingUTXO()
+	gasConfig := agentcontract.DefaultGasConfig()
+	gasFee, err := gasConfig.InvokeFee(int64(s.chain.BestSnapshot().Height + 1))
 	if err != nil {
 		return nil, err
 	}
-	changeScript, err := agentCoreChangeScript(s.chainParams)
+	funding, err := s.selectAgentConfirmFundingUTXOs(gasFee)
 	if err != nil {
 		return nil, err
 	}
-	if funding.OutValue.Value <= agentConfirmTxFee {
-		return nil, fmt.Errorf("agent confirm funding value is too small")
+	changeOutputs := make([]*wire.TxOut, 0, 1)
+	if funding.ChangeOutput != nil {
+		changeOutputs = append(changeOutputs, funding.ChangeOutput)
 	}
-	changeOut := wire.NewTxOut(
-		funding.OutValue.Value-agentConfirmTxFee,
-		funding.OutValue.Assets.Clone(),
-		changeScript,
-	)
 	tx, err := agentcontract.BuildInvokeTx(agentcontract.InvokeTxBuildRequest{
-		Contract:  contract,
-		GasLimit:  1000,
-		CallNonce: uint64(time.Now().UnixNano()),
-		Action:    action,
-		Param:     param,
-		Funding:   agentcontract.TxFunding{},
-		Inputs:    []wire.OutPoint{funding.OutPoint},
-		ChangeOutputs: []*wire.TxOut{
-			changeOut,
-		},
+		Contract:      contract,
+		GasLimit:      gasConfig.InvokeBaseGas,
+		CallNonce:     uint64(time.Now().UnixNano()),
+		Action:        action,
+		Param:         param,
+		Funding:       wire.TxOut{},
+		Inputs:        funding.InputOutPoints(),
+		ChangeOutputs: changeOutputs,
 	})
 	if err != nil {
 		return nil, err
@@ -3094,7 +3089,13 @@ func (s *server) submitAgentInvokeTx(contract agentcontract.ContractAddress, act
 	if err != nil {
 		return nil, err
 	}
-	packet.Inputs[0].WitnessUtxo = cloneTxOut(&funding.OutValue)
+	witnessUtxos := funding.WitnessUtxos()
+	for i := range packet.Inputs {
+		if i >= len(witnessUtxos) {
+			return nil, fmt.Errorf("missing agent confirm witness utxo")
+		}
+		packet.Inputs[i].WitnessUtxo = witnessUtxos[i]
+	}
 	if err := stp.SignPsbt_SatsNet(packet); err != nil {
 		return nil, err
 	}
@@ -3113,52 +3114,61 @@ func (s *server) submitAgentInvokeTx(contract agentcontract.ContractAddress, act
 	return signedTx, nil
 }
 
-type agentConfirmFundingUTXO struct {
-	OutPoint wire.OutPoint
-	OutValue wire.TxOut
-}
-
-func (s *server) selectAgentConfirmFundingUTXO() (agentConfirmFundingUTXO, error) {
+func (s *server) selectAgentConfirmFundingUTXOs(minGasFee uint64) (contractcommon.FundingSelection, error) {
 	pubKey, err := stp.GetPubKey()
 	if err != nil {
-		return agentConfirmFundingUTXO{}, err
+		return contractcommon.FundingSelection{}, err
 	}
 	address, err := sidxcommon.PubKeyBytesToP2TRAddress(pubKey, s.chainParams)
 	if err != nil {
-		return agentConfirmFundingUTXO{}, err
+		return contractcommon.FundingSelection{}, err
 	}
 	expectedScript, err := agentCoreChangeScript(s.chainParams)
 	if err != nil {
-		return agentConfirmFundingUTXO{}, err
+		return contractcommon.FundingSelection{}, err
 	}
 	byAsset := s.assetIndexer.GetAssetUTXOsInAddress(address)
-	plain := byAsset[sidxcommon.ASSET_PLAIN_SAT]
-	sort.SliceStable(plain, func(i, j int) bool {
-		if plain[i].Height() != plain[j].Height() {
-			return plain[i].Height() < plain[j].Height()
-		}
-		return plain[i].OutPointStr < plain[j].OutPointStr
-	})
-	for _, utxo := range plain {
-		if utxo == nil || utxo.OutValue.Value <= agentConfirmTxFee {
-			continue
-		}
-		if !bytes.Equal(utxo.OutValue.PkScript, expectedScript) {
-			continue
-		}
-		outpoint, err := wire.NewOutPointFromString(utxo.OutPointStr)
-		if err != nil {
-			continue
-		}
-		if s.txMemPool.CheckSpend(*outpoint) != nil {
-			continue
-		}
-		return agentConfirmFundingUTXO{
-			OutPoint: *outpoint,
-			OutValue: *cloneTxOut(&utxo.OutValue),
-		}, nil
+	gasAssetName := wire.NewAssetNameFromString(agentcontract.DefaultGasConfig().GasAssetName)
+	if gasAssetName == nil {
+		return contractcommon.FundingSelection{}, fmt.Errorf("invalid agent gas asset name")
 	}
-	return agentConfirmFundingUTXO{}, fmt.Errorf("no spendable corenode funding UTXO")
+	if minGasFee > uint64(math.MaxInt64) {
+		return contractcommon.FundingSelection{}, fmt.Errorf("agent confirm gas fee overflows int64")
+	}
+	available := make([]contractcommon.FundingUTXO, 0)
+	seen := make(map[string]struct{})
+	for _, outputs := range byAsset {
+		for _, utxo := range outputs {
+			if utxo == nil {
+				continue
+			}
+			if _, ok := seen[utxo.OutPointStr]; ok {
+				continue
+			}
+			seen[utxo.OutPointStr] = struct{}{}
+			outpoint, err := wire.NewOutPointFromString(utxo.OutPointStr)
+			if err != nil {
+				continue
+			}
+			available = append(available, contractcommon.FundingUTXO{
+				OutPoint: *outpoint,
+				OutValue: *cloneTxOut(&utxo.OutValue),
+				Height:   int64(utxo.Height()),
+				SortKey:  utxo.OutPointStr,
+			})
+		}
+	}
+	return contractcommon.SelectFundingUTXOs(contractcommon.FundingSelectionRequest{
+		Available:        available,
+		RequiredValue:    agentConfirmTxFee,
+		RequiredAssets:   wire.TxAssets{{Name: *gasAssetName, Amount: *common.NewDefaultDecimal(int64(minGasFee))}},
+		ChangePkScript:   expectedScript,
+		RequiredPkScript: expectedScript,
+		IsSpendable: func(utxo contractcommon.FundingUTXO) bool {
+			outpoint := utxo.OutPoint
+			return s.txMemPool.CheckSpend(outpoint) == nil
+		},
+	})
 }
 
 func (s *server) agentInvokeInMempool(contract agentcontract.ContractAddress, action string) bool {

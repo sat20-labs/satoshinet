@@ -24,6 +24,7 @@ type ResultOutput struct {
 
 type ResultPlan struct {
 	Contract string         `json:"contract"`
+	GasFee   uint64         `json:"gas_fee,omitempty"`
 	Inputs   []OutPoint     `json:"inputs,omitempty"`
 	Outputs  []ResultOutput `json:"outputs,omitempty"`
 }
@@ -174,6 +175,30 @@ func BuildSettlementResultPlans(plans []*PredictionSettlementPlan) ([]ResultPlan
 		out = append(out, result)
 	}
 	return out, nil
+}
+
+func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []ResultPlan {
+	out := cloneResultPlans(plans)
+	index := make(map[string]int)
+	for i, plan := range out {
+		index[plan.Contract] = i
+	}
+	for _, record := range records {
+		if !record.RequiresResult || record.GasFee == 0 {
+			continue
+		}
+		contract := record.Contract.MustEncode()
+		i, ok := index[contract]
+		if !ok {
+			i = len(out)
+			index[contract] = i
+			out = append(out, ResultPlan{Contract: contract})
+		}
+		out[i].GasFee += record.GasFee
+		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
+		out[i].Inputs = uniqueOutPoints(out[i].Inputs)
+	}
+	return out
 }
 
 func AugmentResultPlans(plans []ResultPlan, contractUTXOs ContractUTXOProvider) ([]ResultPlan, error) {

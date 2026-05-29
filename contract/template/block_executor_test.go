@@ -58,10 +58,17 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.Equal(t, "50", parsedSellGas.String())
 
 	store := NewRuntimeStore()
+	gasConfig := GasConfig{
+		GasAssetName:    DefaultGasConfig().GasAssetName,
+		DeployBaseGas:   1,
+		InvokeBaseGas:   1,
+		ResultBaseGas:   1,
+		MaxGasPerInvoke: DefaultGasConfig().MaxGasPerInvoke,
+	}
 	first, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:         []*wire.MsgTx{deployTx, sellTx},
 		Store:       store,
-		GasConfig:   DefaultGasConfig(),
+		GasConfig:   gasConfig,
 		BlockHeight: 100,
 	})
 	require.NoError(t, err)
@@ -91,7 +98,7 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.Equal(t, "50", parsedBuyGas.String())
 	executor := NewBlockExecutor(BlockExecutionRequest{
 		Store:       store,
-		GasConfig:   DefaultGasConfig(),
+		GasConfig:   gasConfig,
 		BlockHeight: 101,
 	})
 	require.NoError(t, executor.ExecuteTx(buyTx))
@@ -107,13 +114,13 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
 	require.Equal(t, "100", state.Running.GasBalance)
-	resultPlans, err := AugmentResultPlans(second.ResultPlans, store, DefaultGasConfig(), nil)
+	resultPlans, err := AugmentResultPlans(second.ResultPlans, store, gasConfig, nil)
 	require.NoError(t, err)
 	requireResultPlanAsset(t, resultPlans[0], "ordx:f:gas", "100")
 	currentOnly := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{sellTx, buyTx}, TestnetContractPrefix)
-	resultPlans, err = AugmentResultPlans(second.ResultPlans, store, DefaultGasConfig(), currentOnly)
+	resultPlans, err = AugmentResultPlans(second.ResultPlans, store, gasConfig, currentOnly)
 	require.NoError(t, err)
-	requireResultPlanAsset(t, resultPlans[0], "ordx:f:gas", "100")
+	requireResultPlanAsset(t, resultPlans[0], "ordx:f:gas", "99")
 }
 
 func TestBlockExecutorRejectsInvokeBeforeDeploy(t *testing.T) {
@@ -138,7 +145,7 @@ func testTemplateDeployTx(t *testing.T, contract Contract) (*wire.MsgTx, Contrac
 	content, err := contract.Encode()
 	require.NoError(t, err)
 	deploy := DeployPayload{
-		GasLimit:        1000,
+		GasLimit:        DefaultGasConfig().DeployBaseGas,
 		TemplateName:    contract.TemplateName(),
 		TemplateVersion: contract.Version(),
 		Deployer:        "deployer-address",
@@ -171,7 +178,7 @@ func testTemplateLimitOrderInvokeTxWithFunding(t *testing.T, contract ContractAd
 	}).Encode()
 	require.NoError(t, err)
 	invokeScript, err := InvokeNullDataScript(InvokePayload{
-		GasLimit:  1000,
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
 		Action:    InvokeAPISwap,
 		Param:     param,

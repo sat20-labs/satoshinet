@@ -14,7 +14,7 @@ func TestClassifyAgentTxForBlockOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClassifyTxForBlockOrder failed: %v", err)
 	}
-	if !info.IsAgent || info.Type != TxTypeDeploy || info.GasLimit != 1000 {
+	if !info.IsAgent || info.Type != TxTypeDeploy || info.GasLimit != DefaultGasConfig().DeployBaseGas {
 		t.Fatalf("unexpected deploy order info: %#v", info)
 	}
 

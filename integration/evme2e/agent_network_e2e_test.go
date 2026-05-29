@@ -157,7 +157,7 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 				Value:    lockedValue,
 				PkScript: lockedPkScript,
 				Assets: []*indexercommon.DisplayAsset{
-					testDisplayAsset(gasAsset, "140000"),
+					testDisplayAsset(gasAsset, "320000"),
 				},
 			},
 		})
@@ -165,17 +165,17 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	nodes := []*rpctest.Harness{bootstrapNode, coreNode}
 
 	anchorTx := buildNetworkAnchorTx(t, lockedUtxo, lockedValue,
-		testWireAsset(gasAsset, 140000), gasAsset+"-140000-0-1",
+		testWireAsset(gasAsset, 320000), gasAsset+"-320000-0-1",
 		witnessScript, bootstrapKey, spendScript)
 	sendTx(t, bootstrapNode, anchorTx)
 	waitForPOSTx(t, bootstrapNode, nodes, anchorTx)
 
 	splitOutputs := []*wire.TxOut{
+		wire.NewTxOut(1000, testWireAsset(gasAsset, 120000), spendScript),
 		wire.NewTxOut(1000, testWireAsset(gasAsset, 10000), spendScript),
-		wire.NewTxOut(1000, testWireAsset(gasAsset, 10000), spendScript),
+		wire.NewTxOut(1000, testWireAsset(gasAsset, 80000), spendScript),
 		wire.NewTxOut(1000, testWireAsset(gasAsset, 60000), spendScript),
-		wire.NewTxOut(1000, testWireAsset(gasAsset, 40000), spendScript),
-		wire.NewTxOut(20000, nil, coreFundingScript),
+		wire.NewTxOut(20000, testWireAsset(gasAsset, 50000), coreFundingScript),
 		wire.NewTxOut(10000, nil, spendScript),
 		wire.NewTxOut(10000, nil, spendScript),
 	}
@@ -335,7 +335,10 @@ func buildAgentDeployTx(t *testing.T, contract agentcontract.PredictionContract,
 		GasLimit:        100000,
 		Inputs:          []wire.OutPoint{input},
 		ChangeOutputs: []*wire.TxOut{
-			wire.NewTxOut(inputOut.Value, inputOut.Assets.Clone(), spendScript),
+			wire.NewTxOut(inputOut.Value, testWireAsset(
+				agentcontract.DefaultGasConfig().GasAssetName,
+				inputOut.Assets[0].Amount.Int64()-int64(agentcontract.DefaultGasConfig().DeployBaseGas),
+			), spendScript),
 		},
 	})
 	require.NoError(t, err)
@@ -346,11 +349,11 @@ func buildAgentInvokeTx(t *testing.T, contract agentcontract.ContractAddress, ac
 	input wire.OutPoint, fundingAssets wire.TxAssets, changeOut *wire.TxOut, spendScript []byte) *wire.MsgTx {
 
 	t.Helper()
-	var funding agentcontract.TxFunding
+	var funding wire.TxOut
 	if fundingAssets != nil {
-		funding.Assets = []agentcontract.AssetAmount{{
-			AssetName: fundingAssets[0].Name.String(),
-			Amount:    fundingAssets[0].Amount.Clone(),
+		funding.Assets = wire.TxAssets{{
+			Name:   *wire.NewAssetNameFromString(fundingAssets[0].Name.String()),
+			Amount: *fundingAssets[0].Amount.Clone(),
 		}}
 	}
 	changeOutputs := []*wire.TxOut(nil)

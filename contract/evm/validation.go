@@ -36,6 +36,9 @@ func ValidateDeployTxBasic(tx *wire.MsgTx, cfg GasConfig) (DeployValidation, err
 	if parsed.Deploy.GasLimit == 0 {
 		return DeployValidation{}, errors.New("deploy gas limit is zero")
 	}
+	if parsed.Deploy.GasLimit < cfg.normalized().DeployBaseGas {
+		return DeployValidation{}, errors.New("deploy gas limit below deploy base gas")
+	}
 	if cfg.MaxGasPerInvoke > 0 && parsed.Deploy.GasLimit > cfg.MaxGasPerInvoke {
 		return DeployValidation{}, errors.New("deploy gas limit exceeds maximum")
 	}
@@ -55,6 +58,9 @@ func ValidateInvokeTxBasic(tx *wire.MsgTx, resolver ContractScriptResolver, exis
 	}
 	if parsed.Invoke.GasLimit == 0 {
 		return InvokeValidation{}, errors.New("invoke gas limit is zero")
+	}
+	if parsed.Invoke.GasLimit < cfg.normalized().InvokeBaseGas {
+		return InvokeValidation{}, errors.New("invoke gas limit below invoke base gas")
 	}
 	if cfg.MaxGasPerInvoke > 0 && parsed.Invoke.GasLimit > cfg.MaxGasPerInvoke {
 		return InvokeValidation{}, errors.New("invoke gas limit exceeds maximum")

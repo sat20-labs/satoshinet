@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sat20-labs/satoshinet/contract/evm"
 	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -347,7 +347,7 @@ func buildDeployTx(args []string) {
 		GasLimit:       *gasLimit,
 		DeployNonce:    *nonce,
 		InitCode:       initCode,
-		Funding:        evm.TxFunding{Value: *fundSats, Assets: assets},
+		Funding:        wire.TxOut{Value: *fundSats, Assets: assets},
 		Inputs:         inputOutpoints,
 	})
 	exitIfErr(err)
@@ -379,7 +379,7 @@ func buildInvokeTx(args []string) {
 		GasLimit:  *gasLimit,
 		CallNonce: *nonce,
 		Calldata:  calldata,
-		Funding:   evm.TxFunding{Value: *fundSats, Assets: parseAssetAmounts(fundAssets)},
+		Funding:   wire.TxOut{Value: *fundSats, Assets: parseAssetAmounts(fundAssets)},
 		Inputs:    parseOutPoints(inputs),
 	})
 	exitIfErr(err)
@@ -435,8 +435,8 @@ func parseOutPoints(values []string) []wire.OutPoint {
 	return outpoints
 }
 
-func parseAssetAmounts(values []string) []evm.AssetAmount {
-	assets := make([]evm.AssetAmount, 0, len(values))
+func parseAssetAmounts(values []string) wire.TxAssets {
+	assets := make(wire.TxAssets, 0, len(values))
 	for _, value := range values {
 		parts := strings.SplitN(value, "=", 2)
 		if len(parts) != 2 {
@@ -444,9 +444,9 @@ func parseAssetAmounts(values []string) []evm.AssetAmount {
 		}
 		decimal, err := evm.ParseDecimalAmountString(parts[1])
 		exitIfErr(err)
-		assets = append(assets, evm.AssetAmount{
-			AssetName: parts[0],
-			Amount:    decimal,
+		assets = append(assets, wire.AssetInfo{
+			Name:   *wire.NewAssetNameFromString(parts[0]),
+			Amount: *decimal,
 		})
 	}
 	return assets
