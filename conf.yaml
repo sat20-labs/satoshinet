@@ -1,9 +1,10 @@
 # server node configuration
 
+env: dev
 chain: testnet
 peers:
-  - b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@192.168.10.104:19529
-  - s@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@192.168.10.104:19529
+  - b@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@192.168.10.101:19529
+  - s@025fb789035bc2f0c74384503401222e53f72eefdebf0886517ff26ac7985f52ad@192.168.10.101:19529
 mode: server
 rpc:
   scheme: http
@@ -12,14 +13,23 @@ rpc:
 
 indexer_layer1:
   scheme: http
-  host: 192.168.10.103:8009
+  host: 192.168.1.101:8019
+  proxy: btc/testnet
+
+slave_indexer_layer1:
+  scheme: http
+  host: 192.168.1.102:8019
+  proxy: btc/testnet
 
 indexer_layer2:
   scheme: http
   host: 127.0.0.1:19528
+  proxy: testnet
 
 log: debug
 
 wallet:
   mode: external
+  # mnemonic: suit pitch annual bar plug pull comic response night debate evoke original
+  # password: 123456
   psfile: ./wallet.password

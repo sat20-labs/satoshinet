@@ -1,0 +1,36 @@
+
+# server node configuration
+
+env: prd
+chain: mainnet
+peers:
+   - b@03ab606f4dffd65965b4a9db957361800f8b03ed16acac11d5a4672801554596d0@192.168.1.102:9529
+   - s@022ab2945f61304f117f55d469c341d606ceb729de436c80c0e6ad7819cdd53ce7@192.168.1.101:9529
+mode: server
+rpc:
+  scheme: https
+  host: 0.0.0.0:9529
+  proxy: mainnet
+
+indexer_layer1:
+  scheme: http
+  host: 192.168.1.101:8009
+  proxy: btc/mainnet
+
+slave_indexer_layer1:
+  scheme: http
+  host: 192.168.1.102:8009
+  proxy: btc/mainnet
+
+indexer_layer2:
+  scheme: http
+  host: 127.0.0.1:9528
+  proxy: mainnet
+
+log: info
+# dbBackupFile: backup.db
+# dbRestoreFile: backup.db
+
+wallet:
+  mode: internal
+  psfile: w.id

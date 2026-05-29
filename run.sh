@@ -3,7 +3,7 @@
 ./build.sh
 
 if [ $# -eq 0 ]; then
-  nohup ./satoshinet --homedir ./data --txindex > ./nohup.log 2>&1 &
+  nohup ./satoshinet --homedir ./data --txindex 1>/dev/null 2>./nohup.log &
   disown
 else
   if [ "$1" = "off" ]; then
