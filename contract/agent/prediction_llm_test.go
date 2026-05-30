@@ -42,6 +42,42 @@ func TestPredictionLLMResolverBuildsConfirmParam(t *testing.T) {
 	}
 }
 
+func TestPredictionLLMResolverInfersMissingOutcomeID(t *testing.T) {
+	client := &fakeLLMClient{response: `{"result_type":"outcome","reason":"Official final result report"}`}
+	resolver := NewPredictionLLMResolver(client)
+	contract := validPredictionContract()
+	param, err := resolver.Resolve(context.Background(), PredictionLLMResolveRequest{
+		Contract:   contract,
+		ResultURL:  "https://example.com/match/result/123",
+		ResultText: "Official final result report. Team A wins the event. This maps to allowed outcome a: Team A wins.",
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "a" {
+		t.Fatalf("decision mismatch: %#v", param)
+	}
+}
+
+func TestPredictionLLMResolverParsesLooseDecision(t *testing.T) {
+	client := &fakeLLMClient{response: "result_type: outcome, outcome_id: a, reason: Team A won"}
+	resolver := NewPredictionLLMResolver(client)
+	contract := validPredictionContract()
+	param, err := resolver.Resolve(context.Background(), PredictionLLMResolveRequest{
+		Contract:   contract,
+		ResultURL:  "https://example.com/match/result/123",
+		ResultText: "Team A won final",
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "a" {
+		t.Fatalf("decision mismatch: %#v", param)
+	}
+}
+
 func TestPredictionLLMResolverRejectsInvalidDecision(t *testing.T) {
 	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"z"}`}
 	resolver := NewPredictionLLMResolver(client)

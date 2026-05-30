@@ -72,6 +72,6 @@ func TestAMMRejectsStakeUnstakeActions(t *testing.T) {
 	require.Error(t, contract.CheckInvoke("stake", param))
 	require.Error(t, contract.CheckInvoke("unstake", param))
 	require.Error(t, contract.CheckInvoke(InvokeAPIAddLiquidity, param))
-	require.NoError(t, contract.CheckInvoke(InvokeAPIRefund, nil))
+	require.Error(t, contract.CheckInvoke(InvokeAPIRefund, nil))
 	require.Error(t, contract.CheckInvoke(InvokeAPIProfit, nil))
 }

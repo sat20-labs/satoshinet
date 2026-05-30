@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	GasAssetName = "ordx:f:gas"
+	GasAssetName = "brc20:f:ooxx"
 
 	DeployBaseGas  uint64 = 100000
 	InvokeBaseGas  uint64 = 20000

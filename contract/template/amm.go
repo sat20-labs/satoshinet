@@ -101,9 +101,6 @@ func (c *AMMContract) CheckInvoke(action string, param []byte) error {
 			return fmt.Errorf("asset name mismatch %s != %s", invokeParam.AssetName, c.AssetName)
 		}
 		return invokeParam.CheckAMMSwap()
-	case InvokeAPIRefund:
-		var refundParam RefundInvokeParam
-		return refundParam.Decode(param)
 	case InvokeAPIAddLiquidity:
 		var invokeParam AddLiquidityInvokeParam
 		if err := invokeParam.Decode(param); err != nil {

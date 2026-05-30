@@ -54,7 +54,8 @@ func (r *PredictionLLMResolver) ResolveDecision(ctx context.Context, req Predict
 			{
 				Role: "system",
 				Content: "You resolve SatoshiNet prediction contracts. Return only compact JSON with " +
-					"result_type, outcome_id, and reason. Do not include markdown.",
+					"result_type, outcome_id, and reason. result_type must be one of outcome, pending, unverifiable, invalid, or cancelled. " +
+					"Use result_type outcome and set outcome_id to the chosen allowed outcome id when the result is clear. Do not include markdown.",
 			},
 			{
 				Role:    "user",
@@ -69,6 +70,7 @@ func (r *PredictionLLMResolver) ResolveDecision(ctx context.Context, req Predict
 	if err != nil {
 		return PredictionConfirmParam{}, predictionLLMDecision{}, err
 	}
+	decision = normalizePredictionLLMDecision(req.Contract, cleaned, decision)
 	if strings.TrimSpace(decision.ResultType) == "pending" {
 		return PredictionConfirmParam{}, decision, ErrPredictionResultPending
 	}
@@ -103,7 +105,7 @@ func (r *PredictionLLMResolver) ReviewContract(ctx context.Context, req Predicti
 		Messages: []LLMMessage{
 			{
 				Role: "system",
-				Content: "You review SatoshiNet prediction contracts before activation. Return only compact JSON with " +
+				Content: "You review SatoshiNet prediction contracts before activation. Review only the contract definition, not the current event result. Return only compact JSON with " +
 					"ready and reason. Do not include markdown.",
 			},
 			{
@@ -141,7 +143,115 @@ func PredictionResultTextHash(cleanedText string) string {
 type predictionLLMDecision struct {
 	ResultType string `json:"result_type"`
 	OutcomeID  string `json:"outcome_id"`
+	Outcome    string `json:"outcome"`
+	ID         string `json:"id"`
 	Reason     string `json:"reason"`
+}
+
+func normalizePredictionLLMDecision(contract PredictionContract, cleanedText string, decision predictionLLMDecision) predictionLLMDecision {
+	decision.ResultType = strings.TrimSpace(decision.ResultType)
+	decision.OutcomeID = strings.TrimSpace(decision.OutcomeID)
+
+	if id, ok := normalizePredictionOutcomeID(contract, decision.OutcomeID); ok {
+		decision.OutcomeID = id
+		return decision
+	}
+	for _, raw := range []string{decision.Outcome, decision.ID} {
+		if id, ok := normalizePredictionOutcomeID(contract, raw); ok {
+			decision.OutcomeID = id
+			return decision
+		}
+	}
+	if decision.ResultType != ResultTypeOutcome {
+		return decision
+	}
+	if id, ok := inferPredictionOutcomeID(contract, cleanedText, decision.Reason); ok {
+		decision.OutcomeID = id
+	}
+	return decision
+}
+
+func normalizePredictionOutcomeID(contract PredictionContract, raw string) (string, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", false
+	}
+	for _, outcome := range contract.Outcomes {
+		if strings.EqualFold(value, strings.TrimSpace(outcome.ID)) {
+			return outcome.ID, true
+		}
+		if strings.EqualFold(value, strings.TrimSpace(outcome.Text)) {
+			return outcome.ID, true
+		}
+	}
+	return "", false
+}
+
+func inferPredictionOutcomeID(contract PredictionContract, texts ...string) (string, bool) {
+	matches := make(map[string]struct{})
+	for _, text := range texts {
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		lowerText := strings.ToLower(text)
+		for _, outcome := range contract.Outcomes {
+			id := strings.TrimSpace(outcome.ID)
+			outcomeText := strings.TrimSpace(outcome.Text)
+			if id != "" && containsPredictionOutcomeID(lowerText, strings.ToLower(id)) {
+				matches[outcome.ID] = struct{}{}
+			}
+			if outcomeText != "" && strings.Contains(lowerText, strings.ToLower(outcomeText)) {
+				matches[outcome.ID] = struct{}{}
+			}
+		}
+	}
+	if len(matches) != 1 {
+		return "", false
+	}
+	for id := range matches {
+		return id, true
+	}
+	return "", false
+}
+
+func containsPredictionOutcomeID(text, id string) bool {
+	if text == "" || id == "" {
+		return false
+	}
+	markers := []string{
+		"outcome " + id,
+		"outcome: " + id,
+		"outcome_id " + id,
+		"outcome_id: " + id,
+		"outcome_id=\"" + id + "\"",
+		"outcome_id='" + id + "'",
+		"allowed outcome " + id,
+	}
+	for _, marker := range markers {
+		if containsPredictionMarker(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPredictionMarker(text, marker string) bool {
+	for {
+		idx := strings.Index(text, marker)
+		if idx < 0 {
+			return false
+		}
+		after := idx + len(marker)
+		if after >= len(text) || !isPredictionIDByte(text[after]) {
+			return true
+		}
+		text = text[after:]
+	}
+}
+
+func isPredictionIDByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b == '-'
 }
 
 type predictionLLMReviewDecision struct {
@@ -151,8 +261,10 @@ type predictionLLMReviewDecision struct {
 
 func predictionReviewPrompt(contract PredictionContract) string {
 	var b strings.Builder
-	b.WriteString("Review this prediction contract. It can enter ready state only if the event, allowed outcomes, timing, source URL, asset, and minimum bet unit are understandable, verifiable, and executable.\n")
-	b.WriteString("Reject it when the event is ambiguous, outcomes are unclear or incomplete, source URL is unsuitable for verification, timing is impossible, or execution rules are inconsistent.\n\n")
+	b.WriteString("Review this prediction contract definition before betting starts. Do not resolve or predict the event result during this review.\n")
+	b.WriteString("Return ready true when the event, allowed outcomes, timing, source URL, asset, and minimum bet unit are understandable, verifiable later, and executable.\n")
+	b.WriteString("Do not reject only because the final result is not available yet, or because the source URL has not published the result yet.\n")
+	b.WriteString("Reject only when the event is ambiguous, outcomes are unclear or incomplete, source URL is unsuitable for later verification, timing is impossible, or execution rules are inconsistent.\n\n")
 	b.WriteString("Title: ")
 	b.WriteString(contract.Title)
 	b.WriteString("\nDescription: ")
@@ -179,7 +291,7 @@ func predictionReviewPrompt(contract PredictionContract) string {
 		b.WriteString(outcome.Text)
 		b.WriteString("\n")
 	}
-	b.WriteString("\nReturn {\"ready\":true,\"reason\":\"...\"} only when it is understandable, verifiable, and executable. Otherwise return {\"ready\":false,\"reason\":\"...\"}.")
+	b.WriteString("\nReturn {\"ready\":true,\"reason\":\"...\"} when the contract definition is understandable, can be verified later, and is executable. Otherwise return {\"ready\":false,\"reason\":\"...\"}.")
 	return b.String()
 }
 
@@ -200,6 +312,7 @@ func predictionResolvePrompt(contract PredictionContract, cleanedText string) st
 	b.WriteString("\nResult text:\n")
 	b.WriteString(cleanedText)
 	b.WriteString("\n\nChoose exactly one allowed outcome when the result is clear. ")
+	b.WriteString("Return result_type outcome and outcome_id equal to the chosen allowed outcome id. ")
 	b.WriteString("Use result_type \"pending\" and empty outcome_id when the event result is not available yet. ")
 	b.WriteString("Use result_type \"unverifiable\" and empty outcome_id when the result cannot be verified. ")
 	b.WriteString("Use result_type \"invalid\" and empty outcome_id when the event or market is invalid.")
@@ -219,9 +332,55 @@ func decodePredictionLLMDecision(content string) (predictionLLMDecision, error) 
 	content = trimLLMJSON(content)
 	var decision predictionLLMDecision
 	if err := json.Unmarshal([]byte(content), &decision); err != nil {
+		if decision, ok := parsePredictionLLMDecisionFields(content); ok {
+			return decision, nil
+		}
 		return predictionLLMDecision{}, fmt.Errorf("decode prediction llm decision: %w", err)
 	}
 	return decision, nil
+}
+
+func parsePredictionLLMDecisionFields(content string) (predictionLLMDecision, bool) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return predictionLLMDecision{}, false
+	}
+	normalized := strings.NewReplacer("\n", ",", "\r", ",", ";", ",", "|", ",").Replace(content)
+	var decision predictionLLMDecision
+	for _, part := range strings.Split(normalized, ",") {
+		key, value, ok := strings.Cut(part, ":")
+		if !ok {
+			key, value, ok = strings.Cut(part, "=")
+		}
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(cleanPredictionLLMField(key))
+		value = cleanPredictionLLMField(value)
+		switch key {
+		case "result_type", "resulttype":
+			decision.ResultType = value
+		case "outcome_id", "outcomeid":
+			decision.OutcomeID = value
+		case "outcome":
+			decision.Outcome = value
+		case "id":
+			decision.ID = value
+		case "reason":
+			decision.Reason = value
+		}
+	}
+	if decision.ResultType == "" && decision.OutcomeID == "" && decision.Outcome == "" && decision.ID == "" {
+		return predictionLLMDecision{}, false
+	}
+	return decision, true
+}
+
+func cleanPredictionLLMField(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "{}[] ")
+	value = strings.Trim(value, "\"'")
+	return strings.TrimSpace(value)
 }
 
 func trimLLMJSON(content string) string {
