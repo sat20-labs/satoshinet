@@ -172,7 +172,7 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 		return errors.New("invoke target contract does not exist")
 	}
 	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
-		return err
+		return nil
 	}
 	invoker := ""
 	if e.ResolveInvoker != nil {

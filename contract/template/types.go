@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	TemplateLimitOrder = "limitorder.tc"
-	TemplateAMM        = "amm.tc"
+	TemplateLimitOrder = contractcommon.TemplateLimitOrder
+	TemplateSwapLegacy = contractcommon.TemplateSwapLegacy
+	TemplateAMM        = contractcommon.TemplateAMM
 )
 
 const (
@@ -20,11 +21,11 @@ const (
 )
 
 const (
-	InvokeAPISwap            = "swap"
-	InvokeAPIRefund          = "refund"
-	InvokeAPIAddLiquidity    = "addliq"
-	InvokeAPIRemoveLiquidity = "removeliq"
-	InvokeAPIProfit          = "profit"
+	InvokeAPISwap            = contractcommon.TemplateInvokeAPISwap
+	InvokeAPIRefund          = contractcommon.TemplateInvokeAPIRefund
+	InvokeAPIAddLiquidity    = contractcommon.TemplateInvokeAPIAddLiquidity
+	InvokeAPIRemoveLiquidity = contractcommon.TemplateInvokeAPIRemoveLiquidity
+	InvokeAPIProfit          = contractcommon.TemplateInvokeAPIProfit
 )
 
 const (

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -129,39 +130,7 @@ func (p *LimitOrderInvokeParam) Check(action string) error {
 	return nil
 }
 
-type RefundInvokeParam struct {
-	ItemIDs []int64 `json:"itemIds,omitempty"`
-}
-
-func (p *RefundInvokeParam) Encode() ([]byte, error) {
-	if p == nil || len(p.ItemIDs) == 0 {
-		return nil, nil
-	}
-	builder := txscript.NewScriptBuilder()
-	for _, itemID := range p.ItemIDs {
-		if itemID < 0 {
-			return nil, fmt.Errorf("invalid refund item id %d", itemID)
-		}
-		builder.AddInt64(itemID)
-	}
-	return builder.Script()
-}
-
-func (p *RefundInvokeParam) Decode(data []byte) error {
-	p.ItemIDs = nil
-	if len(data) == 0 {
-		return nil
-	}
-	tokenizer := txscript.MakeScriptTokenizer(0, data)
-	for tokenizer.Next() {
-		itemID := tokenizer.ExtractInt64()
-		if itemID < 0 {
-			return fmt.Errorf("invalid refund item id %d", itemID)
-		}
-		p.ItemIDs = append(p.ItemIDs, itemID)
-	}
-	return tokenizer.Err()
-}
+type RefundInvokeParam = contractcommon.TemplateRefundInvokeParam
 
 func checkTemplateAssetName(assetName string) error {
 	name := wire.NewAssetNameFromString(assetName)

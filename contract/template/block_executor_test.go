@@ -28,7 +28,8 @@ func TestBlockExecutorDeployThenInvoke(t *testing.T) {
 func TestBlockExecutorSettlesLimitOrdersOnFinalize(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
-	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets("ordx:f:gas", 50, "ordx:f:test", 10))
+	gasAssetName := DefaultGasConfig().GasAssetName
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, 50, "ordx:f:test", 10))
 	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 30, nil)
 
 	result, err := ExecuteBlock(BlockExecutionRequest{
@@ -50,10 +51,11 @@ func TestBlockExecutorSettlesLimitOrdersOnFinalize(t *testing.T) {
 func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
-	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets("ordx:f:gas", 50, "ordx:f:test", 10))
+	gasAssetName := DefaultGasConfig().GasAssetName
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, 50, "ordx:f:test", 10))
 	parsedSell, err := ParseTx(sellTx, testTemplateContractResolver)
 	require.NoError(t, err)
-	parsedSellGas, err := parsedSell.ContractOutputs[0].AssetAmount("ordx:f:gas")
+	parsedSellGas, err := parsedSell.ContractOutputs[0].AssetAmount(gasAssetName)
 	require.NoError(t, err)
 	require.Equal(t, "50", parsedSellGas.String())
 
@@ -89,11 +91,11 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "50", state.Running.GasBalance)
 
-	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 30, testAsset("ordx:f:gas", 50))
+	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 30, testAsset(gasAssetName, 50))
 	parsedBuy, err := ParseTx(buyTx, testTemplateContractResolver)
 	require.NoError(t, err)
 	require.Len(t, parsedBuy.ContractOutputs, 1)
-	parsedBuyGas, err := parsedBuy.ContractOutputs[0].AssetAmount("ordx:f:gas")
+	parsedBuyGas, err := parsedBuy.ContractOutputs[0].AssetAmount(gasAssetName)
 	require.NoError(t, err)
 	require.Equal(t, "50", parsedBuyGas.String())
 	executor := NewBlockExecutor(BlockExecutionRequest{
@@ -116,11 +118,11 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.Equal(t, "100", state.Running.GasBalance)
 	resultPlans, err := AugmentResultPlans(second.ResultPlans, store, gasConfig, nil)
 	require.NoError(t, err)
-	requireResultPlanAsset(t, resultPlans[0], "ordx:f:gas", "100")
+	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "100")
 	currentOnly := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{sellTx, buyTx}, TestnetContractPrefix)
 	resultPlans, err = AugmentResultPlans(second.ResultPlans, store, gasConfig, currentOnly)
 	require.NoError(t, err)
-	requireResultPlanAsset(t, resultPlans[0], "ordx:f:gas", "99")
+	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "99")
 }
 
 func TestBlockExecutorRejectsInvokeBeforeDeploy(t *testing.T) {
@@ -131,13 +133,48 @@ func TestBlockExecutorRejectsInvokeBeforeDeploy(t *testing.T) {
 	require.EqualError(t, err, "invoke target contract does not exist")
 }
 
-func TestBlockExecutorRejectsInvalidInvokeParam(t *testing.T) {
+func TestBlockExecutorSkipsInvalidInvokeParam(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	invokeTx := testTemplateLimitOrderInvokeTx(t, addr, OrderTypeStake)
 
-	_, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, invokeTx}})
-	require.EqualError(t, err, "invalid swap order type 11")
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, invokeTx}, Store: store})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
+	require.Empty(t, result.SettlementPlans)
+	require.Empty(t, result.ResultPlans)
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Empty(t, state.Items)
+	require.Zero(t, state.InvokeCount)
+}
+
+func TestBlockExecutorSkipsUnsupportedAMMRefund(t *testing.T) {
+	contract := NewAMMContract("ordx:f:test", "100", 10, "1000")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	refundTx := testTemplateRefundInvokeTx(t, addr, 1)
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, refundTx}, Store: store})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
+	require.Empty(t, result.SettlementPlans)
+	require.Empty(t, result.ResultPlans)
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Empty(t, state.Items)
+	require.Zero(t, state.InvokeCount)
+	require.Equal(t, "100", state.Running.RequiredAsset)
+	require.Equal(t, int64(10), state.Running.RequiredSat)
+	require.Empty(t, state.Running.AssetAmtInPool)
+	require.Zero(t, state.Running.SatValueInPool)
 }
 
 func testTemplateDeployTx(t *testing.T, contract Contract) (*wire.MsgTx, ContractAddress) {
@@ -188,6 +225,24 @@ func testTemplateLimitOrderInvokeTxWithFunding(t *testing.T, contract ContractAd
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
 	tx.AddTxOut(wire.NewTxOut(value, assets, testTemplateContractScript(contract)))
+	return tx
+}
+
+func testTemplateRefundInvokeTx(t *testing.T, contract ContractAddress, itemID int64) *wire.MsgTx {
+	t.Helper()
+	param, err := (&RefundInvokeParam{ItemIDs: []int64{itemID}}).Encode()
+	require.NoError(t, err)
+	invokeScript, err := InvokeNullDataScript(InvokePayload{
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
+		CallNonce: 1,
+		Action:    InvokeAPIRefund,
+		Param:     param,
+	})
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
+	tx.AddTxOut(wire.NewTxOut(7, nil, testTemplateContractScript(contract)))
 	return tx
 }
 
