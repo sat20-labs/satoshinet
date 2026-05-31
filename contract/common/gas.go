@@ -6,7 +6,17 @@ import (
 )
 
 const (
-	GasAssetName = "brc20:f:ooxx"
+	LegacyGasAssetName = "brc20:f:ooxx"
+	NewGasAssetName    = "brc20:f:sgas"
+
+	// GasAssetSwitchHeight is a planned SatoshiNet height. A value <= 0 keeps the
+	// legacy gas asset active for all heights.
+	GasAssetSwitchHeight int64 = 3532
+
+	// GasAssetName is the default gas asset for code paths that do not have block
+	// height context. Consensus and wallet construction should use
+	// GasAssetNameAtHeight when height is available.
+	GasAssetName = LegacyGasAssetName
 
 	DeployBaseGas  uint64 = 100000
 	InvokeBaseGas  uint64 = 20000
@@ -21,6 +31,17 @@ const (
 	GasPriceDecayDenominator uint64 = 100
 	GasPriceFloorNumerator   uint64 = 10000
 )
+
+func GasAssetNameAtHeight(height int64) string {
+	return GasAssetNameForSwitchHeight(height, GasAssetSwitchHeight)
+}
+
+func GasAssetNameForSwitchHeight(height, switchHeight int64) string {
+	if switchHeight > 0 && height >= switchHeight {
+		return NewGasAssetName
+	}
+	return LegacyGasAssetName
+}
 
 func GasPriceNumeratorAtHeight(height uint64) uint64 {
 	numerator := InitialGasPriceNumerator

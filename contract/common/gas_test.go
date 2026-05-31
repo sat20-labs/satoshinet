@@ -23,3 +23,18 @@ func TestGasFeeAtHeightRoundsUp(t *testing.T) {
 		t.Fatalf("rounded fee got %d want 2", fee)
 	}
 }
+
+func TestGasAssetNameForSwitchHeight(t *testing.T) {
+	if got := GasAssetNameForSwitchHeight(100, 0); got != LegacyGasAssetName {
+		t.Fatalf("disabled switch got %s want %s", got, LegacyGasAssetName)
+	}
+	if got := GasAssetNameForSwitchHeight(99, 100); got != LegacyGasAssetName {
+		t.Fatalf("before switch got %s want %s", got, LegacyGasAssetName)
+	}
+	if got := GasAssetNameForSwitchHeight(100, 100); got != NewGasAssetName {
+		t.Fatalf("at switch got %s want %s", got, NewGasAssetName)
+	}
+	if got := GasAssetNameForSwitchHeight(101, 100); got != NewGasAssetName {
+		t.Fatalf("after switch got %s want %s", got, NewGasAssetName)
+	}
+}

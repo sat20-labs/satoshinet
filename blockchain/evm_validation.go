@@ -90,6 +90,8 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		return evmBlockRuleError("missing EVM runtime")
 	}
 	runtime.ContractPrefix = prefix
+	gasConfig := v.cfg.GasConfig
+	gasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(int64(block.Height()))
 
 	blockTxs := make([]*wire.MsgTx, 0, len(txs)-1)
 	templatePrefix := tmplcontract.TestnetContractPrefix
@@ -129,11 +131,11 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		CoinbaseTx:     coinbaseTx,
 		Runtime:        runtime,
 		ContractPrefix: prefix,
-		GasConfig:      v.cfg.GasConfig,
+		GasConfig:      gasConfig,
 		Block:          v.blockContext(block),
 		ResolveCaller: evm.LastInputPreviousOutputCallerResolver(
 			v.cfg.ChainParams, previousOutputScriptResolver(view)),
-		VerifyResult:    v.resultVerifier(prefix, contractOverlay, block.Height()),
+		VerifyResult:    v.resultVerifier(prefix, contractOverlay, block.Height(), gasConfig),
 		ResolveTriggers: v.cfg.ResolveTriggers,
 	}
 	var result evm.BlockExecutionResult
@@ -307,7 +309,7 @@ func (v *EVMBlockExecutionValidator) blockContext(block *btcutil.Block) evm.Bloc
 }
 
 func (v *EVMBlockExecutionValidator) resultVerifier(prefix string,
-	overlay *evm.ContractUTXOOverlay, height int32) evm.ResultVerifier {
+	overlay *evm.ContractUTXOOverlay, height int32, gasConfig evm.GasConfig) evm.ResultVerifier {
 
 	if v.cfg.VerifyResult != nil {
 		return v.cfg.VerifyResult
@@ -322,7 +324,7 @@ func (v *EVMBlockExecutionValidator) resultVerifier(prefix string,
 		}
 	}
 	verifier := evm.CanonicalResultVerifier{
-		GasConfig:     v.cfg.GasConfig,
+		GasConfig:     gasConfig,
 		UTXOs:         v.cfg.ContractUTXOs,
 		ResolveOutput: resolveOutput,
 	}

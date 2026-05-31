@@ -1198,14 +1198,15 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 	if required == 0 {
 		return nil
 	}
-	assetName := wire.NewAssetNameFromString(contractcommon.GasAssetName)
+	gasAssetName := contractcommon.GasAssetNameAtHeight(int64(height))
+	assetName := wire.NewAssetNameFromString(gasAssetName)
 	if assetName == nil {
-		return ruleError(ErrBadFees, fmt.Sprintf("invalid contract gas asset %q", contractcommon.GasAssetName))
+		return ruleError(ErrBadFees, fmt.Sprintf("invalid contract gas asset %q", gasAssetName))
 	}
 	asset, err := feeAssets.Find(assetName)
 	if err != nil || asset == nil || asset.Amount.Cmp(scommon.NewDefaultDecimal(int64(required))) < 0 {
 		return ruleError(ErrBadFees, fmt.Sprintf("contract %d requires at least %d %s base gas fee",
-			class.TxType, required, contractcommon.GasAssetName))
+			class.TxType, required, gasAssetName))
 	}
 	return nil
 }

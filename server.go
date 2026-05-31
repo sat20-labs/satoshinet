@@ -3933,16 +3933,18 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 			}
 			txs = append(txs, msgTx)
 		}
+		blockGasConfig := gasConfig
+		blockGasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(int64(req.Height))
 		result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 			Txs:            txs,
 			Runtime:        runtime,
 			ContractPrefix: contractPrefix,
-			GasConfig:      gasConfig,
+			GasConfig:      blockGasConfig,
 			Block: evm.BlockContext{
 				Number:        uint64(req.Height),
 				Time:          uint64(req.Timestamp.Unix()),
-				GasLimit:      gasConfig.MaxGasPerBlock,
-				FixedGasPrice: gasConfig.FixedGasPrice,
+				GasLimit:      blockGasConfig.MaxGasPerBlock,
+				FixedGasPrice: blockGasConfig.FixedGasPrice,
 			},
 			ResolveCaller: evm.LastInputPreviousOutputCallerResolver(params,
 				contractBuildPreviousOutputScriptResolver(req.UtxoView)),
@@ -4016,12 +4018,14 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 		for _, tx := range req.Txs {
 			txs = append(txs, tx.MsgTx())
 		}
+		blockGasConfig := gasConfig
+		blockGasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(int64(req.Height))
 		result, err := tmplcontract.BuildBlockResultTxs(tmplcontract.BlockResultBuildRequest{
 			Txs:            txs,
 			Store:          store,
 			Registry:       tmplcontract.NewDefaultRegistry(),
 			ContractPrefix: contractPrefix,
-			GasConfig:      gasConfig,
+			GasConfig:      blockGasConfig,
 			ContractUTXOs:  templateContractUTXOProvider(assetIndexer),
 			BlockHeight:    int64(req.Height),
 			ResolveInvoker: tmplcontract.LastInputPreviousOutputInvokerResolver(params,
