@@ -166,6 +166,14 @@ func (v *CompositeContractBlockValidator) blockActivity(block *btcutil.Block,
 		}
 		if class.IsWork() {
 			markContractActivity(&activity, class.ContractType)
+			defaultTypes, err := contractengine.DefaultInvokeContractTypes(tx.MsgTx(), v.cfg.ChainParams)
+			if err != nil {
+				return activity, ruleError(ErrInvalidEVMBlock,
+					fmt.Sprintf("invalid default contract invoke %v at index %d: %v", tx.Hash(), i+1, err))
+			}
+			for contractType := range defaultTypes {
+				markContractActivity(&activity, contractType)
+			}
 			continue
 		}
 		if class.IsResult() {

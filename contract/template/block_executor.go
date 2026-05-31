@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -92,7 +93,7 @@ func (e *BlockExecutor) ExecuteTx(tx *wire.MsgTx) error {
 func (e *BlockExecutor) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
 	switch parsed.Type {
 	case 0:
-		return nil
+		return e.executeDefaultInvokes(tx)
 	case TxTypeDeploy:
 		return e.executeDeploy(tx)
 	case TxTypeInvoke:
@@ -104,6 +105,119 @@ func (e *BlockExecutor) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
 	default:
 		return fmt.Errorf("unsupported template tx type %d", parsed.Type)
 	}
+}
+
+func (e *BlockExecutor) executeDefaultInvokes(tx *wire.MsgTx) error {
+	outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, e.ContractPrefix, ContractTypeTemplate)
+	if err != nil || len(outputs) == 0 {
+		return err
+	}
+	for _, output := range outputs {
+		converted := templateOutputFromDefault(output)
+		if err := e.executeDefaultInvokeOutput(tx, converted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output ContractOutput) error {
+	if output.Contract.ContractType() != ContractTypeTemplate {
+		return nil
+	}
+	runtime, ok := e.Store.Get(output.Contract)
+	if !ok {
+		return errors.New("default invoke target contract does not exist")
+	}
+	fee, err := e.GasConfig.InvokeFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
+	if err := requireDefaultInvokeGas(output, e.GasConfig.GasAssetName, fee); err != nil {
+		return err
+	}
+	invoker := ""
+	parsed := ParsedTx{Type: TxTypeInvoke, ContractOutputs: []ContractOutput{output}, Inputs: msgTxInputs(tx)}
+	if e.ResolveInvoker != nil {
+		invoker, err = e.ResolveInvoker(tx, parsed)
+		if err != nil {
+			return err
+		}
+	}
+	item, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{
+		Action:         contractcommon.ContractInvokeAPIDefault,
+		CallID:         DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
+		Invoker:        invoker,
+		FundingOutputs: []ContractOutput{output},
+		Height:         e.BlockHeight,
+		Timestamp:      e.BlockHeight,
+	})
+	if err != nil {
+		return err
+	}
+	if item == nil {
+		return nil
+	}
+	if err := runtime.ApplyGasFunding([]ContractOutput{output}, e.GasConfig.GasAssetName); err != nil {
+		return err
+	}
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
+	runtime.SetCurrentBlock(e.BlockHeight)
+	runtime.IncrementInvokeCount()
+	record := ExecutionRecord{
+		Height:         e.BlockHeight,
+		TxID:           tx.TxID(),
+		Type:           TxTypeInvoke,
+		Kind:           ExecutionKindInvoke,
+		CallID:         DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
+		Contract:       output.Contract,
+		GasLimit:       e.GasConfig.normalized().InvokeBaseGas,
+		FundingInputs:  []OutPoint{output.OutPoint},
+		ItemIDs:        []int64{item.ID},
+		RequiresResult: true,
+	}
+	record.GasFee = resultFee
+	e.records = append(e.records, record)
+	return nil
+}
+
+func requireDefaultInvokeGas(output ContractOutput, gasAssetName string, fee uint64) error {
+	if fee == 0 || gasAssetName == "" {
+		return nil
+	}
+	gas, err := output.AssetAmount(gasAssetName)
+	if err != nil {
+		return err
+	}
+	if gas.Int64() < int64(fee) {
+		return fmt.Errorf("default invoke output %s gas %d below required %d", output.OutPoint, gas.Int64(), fee)
+	}
+	return nil
+}
+
+func templateOutputFromDefault(output contractcommon.DefaultInvokeOutput) ContractOutput {
+	return ContractOutput{
+		OutPoint: OutPoint{TxID: output.TxID, Vout: output.Vout},
+		Vout:     output.Vout,
+		Contract: output.Contract,
+		Value:    output.Value,
+		Assets:   output.Assets.Clone(),
+		PkScript: cloneBytes(output.PkScript),
+	}
+}
+
+func msgTxInputs(tx *wire.MsgTx) []OutPoint {
+	inputs := make([]OutPoint, 0, len(tx.TxIn))
+	for _, txIn := range tx.TxIn {
+		if txIn == nil {
+			continue
+		}
+		inputs = append(inputs, WireOutPointToTemplate(txIn.PreviousOutPoint))
+	}
+	return inputs
 }
 
 func (e *BlockExecutor) Finalize() (BlockExecutionResult, error) {

@@ -23,6 +23,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/integration/rpctest"
@@ -78,6 +79,55 @@ func TestNetworkTemplateLimitOrderContract(t *testing.T) {
 
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, contract.MustEncode(), gasAsset)
+	fixture.requireNodesSynced(t)
+}
+
+func TestNetworkTemplateDefaultInvokeLimitOrderBuy(t *testing.T) {
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:lotdef": 1000,
+	})
+
+	const limitAsset = "ordx:f:lotdef"
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+	traderBAddr := fixture.spendAddress
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000}, traderA)
+	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
+		[]int64{10, 1000}, traderA)
+
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		tmplcontract.NewLimitOrderContract(limitAsset),
+		"limit-order-default-e2e",
+		[]byte("limit-order-default-random"),
+		[]wire.OutPoint{gasOuts[0]},
+		wire.TxOut{
+			Value:  1,
+			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
+	sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
+		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
+		wire.TxOut{
+			Value:  tmplcontract.SwapInvokeFee,
+			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
+		})
+	fixture.sendAndWaitTx(t, sellTx)
+
+	defaultBuyTx := buildTemplateDefaultInvokeTx(t, fixture, traderB, contract,
+		[]wire.OutPoint{gasOuts[2]},
+		wire.TxOut{
+			Value:  100,
+			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	require.False(t, txHasContractOpReturn(defaultBuyTx))
+	fixture.sendAndWaitTx(t, defaultBuyTx)
+
+	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
 	fixture.requireNodesSynced(t)
 }
 
@@ -1249,6 +1299,37 @@ func buildTemplateDeployTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 	require.NoError(t, err)
 	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
 	return tx, address
+}
+
+func buildTemplateDefaultInvokeTx(t *testing.T, fixture *templateNetworkFixture, signer *btcec.PrivateKey, contract tmplcontract.ContractAddress,
+	inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
+
+	t.Helper()
+	if fixture != nil {
+		inputs = fixture.selectFundingOutPoints(t, funding)
+	}
+	pkScript, err := contractcommon.ContractPkScript(contract)
+	require.NoError(t, err)
+	funding.PkScript = pkScript
+	tx := wire.NewMsgTx(wire.TxVersion)
+	for _, input := range inputs {
+		tx.AddTxIn(wire.NewTxIn(&input, nil, nil))
+	}
+	tx.AddTxOut(&funding)
+	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
+	return tx
+}
+
+func txHasContractOpReturn(tx *wire.MsgTx) bool {
+	for _, txOut := range tx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		if _, _, err := contractcommon.ReadNullDataScript(txOut.PkScript); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func buildTemplateInvokeTx(t *testing.T, fixture *templateNetworkFixture, signer *btcec.PrivateKey, contract tmplcontract.ContractAddress,

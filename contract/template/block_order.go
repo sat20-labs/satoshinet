@@ -22,8 +22,15 @@ func ContractPrefixForNet(net wire.BitcoinNet) string {
 
 func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string) (TxOrderInfo, error) {
 	parsedType, payload, found, err := classifyTemplatePayload(tx)
-	if err != nil || !found {
+	if err != nil {
 		return TxOrderInfo{}, err
+	}
+	if !found {
+		outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, contractPrefix, ContractTypeTemplate)
+		if err != nil || len(outputs) == 0 {
+			return TxOrderInfo{}, err
+		}
+		return TxOrderInfo{IsTemplate: true, Type: TxTypeInvoke, GasLimit: DefaultGasConfig().InvokeBaseGas}, nil
 	}
 	info := TxOrderInfo{
 		IsTemplate: true,

@@ -68,6 +68,29 @@ func TestBlockExecutorPredictionE2EShape(t *testing.T) {
 	}
 }
 
+func TestBlockExecutorDefaultInvokeNoOp(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	defaultTx := testAgentDefaultInvokeTx(t, addr, 0, wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
+		Amount: *scommon.NewDefaultDecimal(int64(DefaultGasConfig().InvokeBaseGas)),
+	}})
+
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, defaultTx},
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Type != TxTypeDeploy {
+		t.Fatalf("default invoke should be no-op, records=%+v", result.Records)
+	}
+	if len(result.SettlementPlans) != 0 {
+		t.Fatalf("default invoke should not produce settlements: %+v", result.SettlementPlans)
+	}
+}
+
 func TestBlockExecutorRejectsBetBeforeReady(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
@@ -383,6 +406,14 @@ func testAgentInvokeTx(t *testing.T, contract ContractAddress, action string, pa
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
+	tx.AddTxOut(wire.NewTxOut(value, assets, testAgentContractScript(contract)))
+	return tx
+}
+
+func testAgentDefaultInvokeTx(t *testing.T, contract ContractAddress, value int64, assets wire.TxAssets) *wire.MsgTx {
+	t.Helper()
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(value, assets, testAgentContractScript(contract)))
 	return tx
 }

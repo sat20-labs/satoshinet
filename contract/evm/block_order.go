@@ -1,6 +1,9 @@
 package evm
 
-import "github.com/sat20-labs/satoshinet/wire"
+import (
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	"github.com/sat20-labs/satoshinet/wire"
+)
 
 type TxOrderInfo struct {
 	IsEVM    bool
@@ -21,7 +24,11 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string) (TxOrderInfo
 		return TxOrderInfo{}, err
 	}
 	if parsed.Type == 0 {
-		return TxOrderInfo{}, nil
+		outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, contractPrefix, ContractTypeEVM)
+		if err != nil || len(outputs) == 0 {
+			return TxOrderInfo{}, err
+		}
+		return TxOrderInfo{IsEVM: true, Type: TxTypeInvoke, GasLimit: DefaultGasConfig().InvokeBaseGas}, nil
 	}
 
 	info := TxOrderInfo{

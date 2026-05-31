@@ -137,8 +137,39 @@ func BlockHasContractTypeWork(txs []*btcutil.Tx, params *chaincfg.Params, contra
 		if err == nil && found && class.ContractType == contractType && class.IsWork() {
 			return true
 		}
+		if defaultTxHasContractTypeWork(tx.MsgTx(), params, contractType) {
+			return true
+		}
 	}
 	return false
+}
+
+func DefaultInvokeContractTypes(tx *wire.MsgTx, params *chaincfg.Params) (map[byte]struct{}, error) {
+	prefix := contractPrefixForParams(params)
+	out := make(map[byte]struct{})
+	for _, contractType := range []byte{
+		contractcommon.ContractTypeTemplate,
+		contractcommon.ContractTypeEVM,
+		contractcommon.ContractTypeAgent,
+	} {
+		outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, prefix, contractType)
+		if err != nil {
+			return nil, err
+		}
+		if len(outputs) != 0 {
+			out[contractType] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+func defaultTxHasContractTypeWork(tx *wire.MsgTx, params *chaincfg.Params, contractType byte) bool {
+	types, err := DefaultInvokeContractTypes(tx, params)
+	if err != nil {
+		return false
+	}
+	_, ok := types[contractType]
+	return ok
 }
 
 func CheckBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {

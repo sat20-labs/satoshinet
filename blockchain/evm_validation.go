@@ -8,6 +8,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -100,7 +101,7 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		return err
 	}
 	for _, tx := range txs[1:] {
-		if isTemplateContractTx(tx.MsgTx(), v.cfg.ChainParams) {
+		if isTemplateContractTx(tx.MsgTx(), v.cfg.ChainParams) && !hasEVMDefaultInvokeOutput(tx.MsgTx(), prefix) {
 			info, _ := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
 			if info.Type != tmplcontract.TxTypeResult {
 				continue
@@ -207,7 +208,7 @@ func (v *EVMBlockExecutionValidator) scanEVMWork(block *btcutil.Block, prefix st
 	}
 	for i, tx := range txs[1:] {
 		templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx(), templatePrefix)
-		if templateErr == nil && templateInfo.IsTemplate && templateInfo.Type != tmplcontract.TxTypeResult {
+		if templateErr == nil && templateInfo.IsTemplate && templateInfo.Type != tmplcontract.TxTypeResult && !hasEVMDefaultInvokeOutput(tx.MsgTx(), prefix) {
 			continue
 		}
 		info, err := evm.ClassifyTxForBlockOrder(tx.MsgTx(), prefix)
@@ -227,6 +228,11 @@ func (v *EVMBlockExecutionValidator) scanEVMWork(block *btcutil.Block, prefix st
 	return hasRoot, hasExecution, needsCaller, nil
 }
 
+func hasEVMDefaultInvokeOutput(tx *wire.MsgTx, prefix string) bool {
+	outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, prefix, contractcommon.ContractTypeEVM)
+	return err == nil && len(outputs) != 0
+}
+
 func collectEVMFundingOutpoints(txs []*btcutil.Tx, evmPrefix, templatePrefix string) (map[wire.OutPoint]struct{}, error) {
 	outpoints := make(map[wire.OutPoint]struct{})
 	resolver := evm.StandardContractScriptResolver(evmPrefix)
@@ -236,7 +242,7 @@ func collectEVMFundingOutpoints(txs []*btcutil.Tx, evmPrefix, templatePrefix str
 		}
 		msgTx := tx.MsgTx()
 		templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(msgTx, templatePrefix)
-		if templateErr == nil && templateInfo.IsTemplate && templateInfo.Type != tmplcontract.TxTypeResult {
+		if templateErr == nil && templateInfo.IsTemplate && templateInfo.Type != tmplcontract.TxTypeResult && !hasEVMDefaultInvokeOutput(msgTx, evmPrefix) {
 			continue
 		}
 		info, err := evm.ClassifyTxForBlockOrder(msgTx, evmPrefix)

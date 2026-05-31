@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -138,7 +139,7 @@ func (e *BlockExecutor) ExecuteTx(tx *wire.MsgTx) error {
 func (e *BlockExecutor) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
 	switch parsed.Type {
 	case 0:
-		return nil
+		return e.executeDefaultInvokes(tx)
 	case TxTypeDeploy:
 		return e.executeDeploy(tx, parsed)
 	case TxTypeInvoke:
@@ -150,6 +151,103 @@ func (e *BlockExecutor) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
 	default:
 		return fmt.Errorf("unsupported EVM tx type %d", parsed.Type)
 	}
+}
+
+func (e *BlockExecutor) executeDefaultInvokes(tx *wire.MsgTx) error {
+	outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, e.ContractPrefix, ContractTypeEVM)
+	if err != nil || len(outputs) == 0 {
+		return err
+	}
+	for _, output := range outputs {
+		converted := evmOutputFromDefault(output)
+		if err := e.executeDefaultInvokeOutput(tx, converted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output ContractOutput) error {
+	if !e.contractExists(output.Contract) {
+		return errors.New("default invoke target contract does not exist")
+	}
+	if err := requireEVMDefaultInvokeGas(output, e.GasConfig.GasAssetName, e.GasConfig.normalized().InvokeBaseGas); err != nil {
+		return err
+	}
+	parsed := ParsedTx{Type: TxTypeInvoke, ContractOutputs: []ContractOutput{output}, Inputs: msgTxInputs(tx)}
+	caller, err := e.resolveCaller(tx, parsed)
+	if err != nil {
+		return err
+	}
+	callID := DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract)
+	intentStart := len(e.Runtime.AssetIntents)
+	result := e.Runtime.Call(CallRequest{
+		Caller: caller,
+		Target: ContractAddressHash(output.Contract),
+		CallID: callID,
+		Input:  nil,
+		Gas:    e.GasConfig.normalized().InvokeBaseGas,
+		Value:  uint64Value(output.Value),
+		Block:  e.Block,
+	})
+	intents := cloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
+	record := ExecutionRecord{
+		Height:         e.Block.Number,
+		TxID:           tx.TxID(),
+		Type:           TxTypeInvoke,
+		Kind:           ExecutionKindInvoke,
+		CallID:         callID,
+		Contract:       output.Contract,
+		Status:         result.Status,
+		GasUsed:        result.GasUsed,
+		FundingInputs:  []OutPoint{output.OutPoint},
+		AssetIntents:   intents,
+		RequiresResult: result.Status != ResultStatusSuccess || len(intents) > 0,
+	}
+	return e.appendRecord(record)
+}
+
+func requireEVMDefaultInvokeGas(output ContractOutput, gasAssetName string, gasLimit uint64) error {
+	if gasAssetName == "" || gasLimit == 0 {
+		return nil
+	}
+	gas, err := output.AssetAmount(gasAssetName)
+	if err != nil {
+		return err
+	}
+	if gas.Int64() < int64(gasLimit) {
+		return fmt.Errorf("default EVM invoke output %s gas %d below required %d", output.OutPoint, gas.Int64(), gasLimit)
+	}
+	return nil
+}
+
+func evmOutputFromDefault(output contractcommon.DefaultInvokeOutput) ContractOutput {
+	return ContractOutput{
+		OutPoint: OutPoint{TxID: output.TxID, Vout: output.Vout},
+		Vout:     output.Vout,
+		Contract: output.Contract,
+		Value:    output.Value,
+		Assets:   output.Assets.Clone(),
+		PkScript: cloneBytes(output.PkScript),
+	}
+}
+
+func msgTxInputs(tx *wire.MsgTx) []OutPoint {
+	inputs := make([]OutPoint, 0, len(tx.TxIn))
+	for _, txIn := range tx.TxIn {
+		if txIn == nil {
+			continue
+		}
+		inputs = append(inputs, WireOutPointToEVM(txIn.PreviousOutPoint))
+	}
+	return inputs
+}
+
+func uint64Value(value int64) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	return uint64(value)
 }
 
 func (e *BlockExecutor) Finalize() (BlockExecutionResult, error) {

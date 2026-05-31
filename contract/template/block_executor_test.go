@@ -3,6 +3,7 @@ package template
 import (
 	"testing"
 
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -125,6 +126,67 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "99")
 }
 
+func TestBlockExecutorDefaultInvokeLimitOrderNoPriceNoOp(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	defaultTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(DefaultGasConfig().GasAssetName, int64(DefaultGasConfig().InvokeBaseGas)))
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, defaultTx}, Store: store})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Empty(t, state.Items)
+	require.Zero(t, state.InvokeCount)
+}
+
+func TestBlockExecutorDefaultInvokeLimitOrderBuyAtMarketPrice(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	gasAssetName := DefaultGasConfig().GasAssetName
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, int64(DefaultGasConfig().InvokeBaseGas), "ordx:f:test", 10))
+	defaultBuyTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(gasAssetName, int64(DefaultGasConfig().InvokeBaseGas)))
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, sellTx, defaultBuyTx}, Store: store, BlockHeight: 100})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 3)
+	require.Len(t, result.SettlementPlans, 1)
+	require.Len(t, result.SettlementPlans[0].Deals, 1)
+	require.Equal(t, "10", result.SettlementPlans[0].Deals[0].AssetAmt)
+	require.Equal(t, int64(20), result.SettlementPlans[0].Deals[0].SatValue)
+	require.Equal(t, "2", result.SettlementPlans[0].Deals[0].UnitPrice)
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Len(t, state.Items, 2)
+	require.Equal(t, contractcommon.ContractInvokeAPIDefault, state.Items[1].Action)
+	require.Equal(t, OrderTypeBuy, state.Items[1].OrderType)
+}
+
+func TestContractUTXOProviderWithTxOutputsIncludesDefaultInvoke(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	_, addr := testTemplateDeployTx(t, contract)
+	gasAssetName := DefaultGasConfig().GasAssetName
+	defaultTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(gasAssetName, int64(DefaultGasConfig().InvokeBaseGas)))
+
+	provider := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{defaultTx}, TestnetContractPrefix)
+	utxos, err := provider(addr)
+	require.NoError(t, err)
+	require.Len(t, utxos, 1)
+	require.Equal(t, OutPoint{TxID: defaultTx.TxID(), Vout: 0}, utxos[0].OutPoint)
+	require.True(t, addr.Equal(utxos[0].Contract))
+	require.Equal(t, int64(20), utxos[0].Value)
+	asset, err := utxos[0].Assets.Find(wire.NewAssetNameFromString(gasAssetName))
+	require.NoError(t, err)
+	require.Equal(t, testAsset(gasAssetName, int64(DefaultGasConfig().InvokeBaseGas))[0].Amount.String(), asset.Amount.String())
+}
+
 func TestBlockExecutorRejectsInvokeBeforeDeploy(t *testing.T) {
 	contract := testTemplateContract(t)
 	invokeTx := testTemplateLimitOrderInvokeTx(t, contract, OrderTypeBuy)
@@ -224,6 +286,14 @@ func testTemplateLimitOrderInvokeTxWithFunding(t *testing.T, contract ContractAd
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
+	tx.AddTxOut(wire.NewTxOut(value, assets, testTemplateContractScript(contract)))
+	return tx
+}
+
+func testTemplateDefaultInvokeTx(t *testing.T, contract ContractAddress, value int64, assets wire.TxAssets) *wire.MsgTx {
+	t.Helper()
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(value, assets, testTemplateContractScript(contract)))
 	return tx
 }

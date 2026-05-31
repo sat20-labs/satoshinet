@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -104,7 +105,7 @@ func (e *BlockExecutor) ExecuteTx(tx *wire.MsgTx) error {
 func (e *BlockExecutor) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
 	switch parsed.Type {
 	case 0:
-		return nil
+		return e.executeDefaultInvokes(tx)
 	case TxTypeDeploy:
 		return e.executeDeploy(tx)
 	case TxTypeInvoke:
@@ -115,6 +116,59 @@ func (e *BlockExecutor) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported agent tx type %d", parsed.Type)
+	}
+}
+
+func (e *BlockExecutor) executeDefaultInvokes(tx *wire.MsgTx) error {
+	outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, e.ContractPrefix, ContractTypeAgent)
+	if err != nil || len(outputs) == 0 {
+		return err
+	}
+	for _, output := range outputs {
+		converted := agentOutputFromDefault(output)
+		if err := e.executeDefaultInvokeOutput(converted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *BlockExecutor) executeDefaultInvokeOutput(output ContractOutput) error {
+	if !e.Store.Exists(output.Contract) {
+		return errors.New("default invoke target contract does not exist")
+	}
+	fee, err := e.GasConfig.InvokeFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
+	if err := requireAgentDefaultInvokeGas(output, e.GasConfig.GasAssetName, fee); err != nil {
+		return err
+	}
+	return nil
+}
+
+func requireAgentDefaultInvokeGas(output ContractOutput, gasAssetName string, fee uint64) error {
+	if fee == 0 || gasAssetName == "" {
+		return nil
+	}
+	gas, err := output.AssetAmount(gasAssetName)
+	if err != nil {
+		return err
+	}
+	if gas.Int64() < int64(fee) {
+		return fmt.Errorf("default agent invoke output %s gas %d below required %d", output.OutPoint, gas.Int64(), fee)
+	}
+	return nil
+}
+
+func agentOutputFromDefault(output contractcommon.DefaultInvokeOutput) ContractOutput {
+	return ContractOutput{
+		OutPoint: OutPoint{TxID: output.TxID, Vout: output.Vout},
+		Vout:     output.Vout,
+		Contract: output.Contract,
+		Value:    output.Value,
+		Assets:   output.Assets.Clone(),
+		PkScript: cloneBytes(output.PkScript),
 	}
 }
 

@@ -22,8 +22,15 @@ func ContractPrefixForNet(net wire.BitcoinNet) string {
 
 func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string) (TxOrderInfo, error) {
 	parsedType, payload, found, err := classifyAgentPayload(tx)
-	if err != nil || !found {
+	if err != nil {
 		return TxOrderInfo{}, err
+	}
+	if !found {
+		outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, contractPrefix, ContractTypeAgent)
+		if err != nil || len(outputs) == 0 {
+			return TxOrderInfo{}, err
+		}
+		return TxOrderInfo{IsAgent: true, Type: TxTypeInvoke, GasLimit: DefaultGasConfig().InvokeBaseGas}, nil
 	}
 	info := TxOrderInfo{
 		IsAgent: true,

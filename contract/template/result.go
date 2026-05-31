@@ -71,6 +71,19 @@ func ContractUTXOProviderWithTxOutputs(base ContractUTXOProvider, txs []*wire.Ms
 				Assets:   output.Assets.Clone(),
 			})
 		}
+		defaultOutputs, err := contractcommon.FindDefaultInvokeOutputs(tx, prefix, ContractTypeTemplate)
+		if err != nil {
+			continue
+		}
+		for _, output := range defaultOutputs {
+			contract := output.Contract
+			current[contract.EncodeAddress()] = append(current[contract.EncodeAddress()], UTXO{
+				OutPoint: OutPoint{TxID: output.TxID, Vout: output.Vout},
+				Contract: contract,
+				Value:    output.Value,
+				Assets:   output.Assets.Clone(),
+			})
+		}
 	}
 	return func(contract ContractAddress) ([]UTXO, error) {
 		out := make([]UTXO, 0)

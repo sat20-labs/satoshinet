@@ -41,6 +41,35 @@ func TestBlockExecutorDeployResultThenInvokeNoResult(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, executed.StateRoot)
 }
 
+func TestBlockExecutorDefaultInvokeEmptyCall(t *testing.T) {
+	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
+	deployTx := testDeployTx(t, 3, return42InitCode())
+	deployResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
+		{Hash: deployTx.TxHash(), Index: 1},
+	})
+
+	deployed, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, deployResultTx},
+		Runtime:       NewRuntime(nil),
+		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		ResolveCaller: fixedCaller(caller),
+	})
+	require.NoError(t, err)
+	require.Len(t, deployed.Records, 1)
+	defaultTx := testDefaultInvokeTx(t, deployed.Records[0].Contract, 0, 100000)
+
+	executed, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, deployResultTx, defaultTx},
+		Runtime:       NewRuntime(nil),
+		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		ResolveCaller: fixedCaller(caller),
+	})
+	require.NoError(t, err)
+	require.Len(t, executed.Records, 2)
+	require.Equal(t, TxTypeInvoke, executed.Records[1].Type)
+	require.False(t, executed.Records[1].RequiresResult)
+}
+
 func TestBlockExecutorRejectsMissingDeployResult(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	deployTx := testDeployTx(t, 3, return42InitCode())
@@ -341,6 +370,19 @@ func testInvokeTx(t *testing.T, contract ContractAddress, payload InvokePayload)
 	tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
 		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
 		Amount: *scommon.NewDefaultDecimal(100000),
+	}}, contractScript))
+	return tx
+}
+
+func testDefaultInvokeTx(t *testing.T, contract ContractAddress, value int64, gasAmount int64) *wire.MsgTx {
+	t.Helper()
+	contractScript, err := ContractPkScript(contract)
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{3}, Index: 0}})
+	tx.AddTxOut(wire.NewTxOut(value, wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
+		Amount: *scommon.NewDefaultDecimal(gasAmount),
 	}}, contractScript))
 	return tx
 }

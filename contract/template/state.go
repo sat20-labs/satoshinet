@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 )
 
 const runtimeStateKey = "template-runtime-state"
@@ -92,6 +93,150 @@ func (r *RunningData) Apply(item *InvokeItem) {
 	case OrderTypeRefund:
 		r.TotalRefundGas += item.OutValue + item.RemainingValue
 	}
+}
+
+func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeItem, error) {
+	state, err := r.loadRuntimeState()
+	if err != nil {
+		return nil, err
+	}
+	item, err := NewDefaultInvokeItemFromRequest(r.contract, state.NextItemID, state, req)
+	if err != nil || item == nil {
+		return nil, err
+	}
+	state.NextItemID++
+	state.InvokeCount++
+	state.Items = append(state.Items, *item)
+	state.Running.Apply(item)
+	if err := r.saveRuntimeState(state); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state TemplateRuntimeState, req ApplyInvokeRequest) (*InvokeItem, error) {
+	assetName := contractAssetName(contract)
+	inValue, inAmt, inUtxos, err := defaultInvokeFunding(assetName, req.FundingOutputs)
+	if err != nil {
+		return nil, err
+	}
+	orderType, unitPrice := defaultInvokeOrder(contract, state, inValue, inAmt)
+	if orderType == OrderTypeNoSpec {
+		return nil, nil
+	}
+	item := &InvokeItem{
+		ID:             id,
+		CallID:         req.CallID,
+		Action:         contractcommon.ContractInvokeAPIDefault,
+		OrderType:      orderType,
+		Height:         req.Height,
+		OrderTime:      req.Timestamp,
+		AssetName:      assetName,
+		Address:        req.Invoker,
+		InUtxos:        inUtxos,
+		InValue:        inValue,
+		InAmt:          decimalString(inAmt),
+		ServiceFee:     0,
+		UnitPrice:      unitPrice,
+		Reason:         InvokeReasonNormal,
+		Done:           ItemStatusInit,
+		RemainingValue: inValue,
+	}
+	if orderType == OrderTypeSell {
+		item.RemainingAmt = item.InAmt
+		item.RemainingValue = 0
+	}
+	return item, nil
+}
+
+func defaultInvokeFunding(assetName string, outputs []ContractOutput) (int64, *scommon.Decimal, string, error) {
+	inValue := int64(0)
+	inAmt := scommon.NewDefaultDecimal(0)
+	inUtxos := ""
+	for i, output := range outputs {
+		inValue += output.Value
+		if i > 0 {
+			inUtxos += ","
+		}
+		inUtxos += output.OutPoint.String()
+		if assetName != "" {
+			amt, err := output.AssetAmount(assetName)
+			if err != nil {
+				return 0, nil, "", err
+			}
+			inAmt = scommon.DecimalAdd(inAmt, amt)
+		}
+	}
+	return inValue, inAmt, inUtxos, nil
+}
+
+func defaultInvokeOrder(contract Contract, state TemplateRuntimeState, inValue int64, inAmt *scommon.Decimal) (int, string) {
+	hasValue := inValue > 0
+	hasAsset := inAmt != nil && inAmt.Sign() > 0
+	if hasValue == hasAsset {
+		return OrderTypeNoSpec, ""
+	}
+	if _, ok := contract.(*AMMContract); ok {
+		if hasValue {
+			return OrderTypeBuy, ""
+		}
+		return OrderTypeSell, ""
+	}
+	if hasValue {
+		price := lowestActiveSellPrice(state)
+		if price == "" {
+			return OrderTypeNoSpec, ""
+		}
+		return OrderTypeBuy, price
+	}
+	price := highestActiveBuyPrice(state)
+	if price == "" {
+		return OrderTypeNoSpec, ""
+	}
+	return OrderTypeSell, price
+}
+
+func lowestActiveSellPrice(state TemplateRuntimeState) string {
+	var best *scommon.Decimal
+	bestString := ""
+	for i := range state.Items {
+		item := &state.Items[i]
+		if item.Finished() || item.Reason != InvokeReasonNormal || item.OrderType != OrderTypeSell {
+			continue
+		}
+		if parseDecimalOrZero(item.RemainingAmt).Sign() <= 0 {
+			continue
+		}
+		price := parseDecimalOrZero(item.UnitPrice)
+		if price.Sign() <= 0 {
+			continue
+		}
+		if best == nil || price.Cmp(best) < 0 {
+			best = price
+			bestString = item.UnitPrice
+		}
+	}
+	return bestString
+}
+
+func highestActiveBuyPrice(state TemplateRuntimeState) string {
+	var best *scommon.Decimal
+	bestString := ""
+	for i := range state.Items {
+		item := &state.Items[i]
+		if item.Finished() || item.Reason != InvokeReasonNormal || item.OrderType != OrderTypeBuy || item.RemainingValue <= 0 {
+			continue
+		}
+		price := parseDecimalOrZero(item.UnitPrice)
+		if price.Sign() <= 0 {
+			continue
+		}
+		if best == nil || price.Cmp(best) > 0 {
+			best = price
+			bestString = item.UnitPrice
+		}
+	}
+	return bestString
 }
 
 func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeRequest) (*InvokeItem, error) {
