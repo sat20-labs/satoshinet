@@ -23,5 +23,5 @@ func TestRuntimeStoreMarshalRoundTrip(t *testing.T) {
 	state, err := got.RuntimeState()
 	require.NoError(t, err)
 	require.True(t, state.Running.TradingReady)
-	require.Equal(t, "100", state.Running.AssetAmtInPool)
+	requireDecimalString(t, "100", state.Running.AssetAInPool)
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -72,7 +71,7 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 		return templateBlockRuleError("load template runtime: %v", err)
 	}
 	gasConfig := v.cfg.GasConfig
-	gasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(int64(block.Height()))
+	gasConfig.GasAssetName = contractGasAssetNameAtHeight(v.cfg.ChainParams, int64(block.Height()))
 	blockTxs := make([]*wire.MsgTx, 0, len(txs)-1)
 	resultTxs := make([]*wire.MsgTx, 0)
 	for _, tx := range txs[1:] {

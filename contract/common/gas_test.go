@@ -1,6 +1,10 @@
 package common
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sat20-labs/satoshinet/wire"
+)
 
 func TestGasPriceNumeratorAtHeight(t *testing.T) {
 	if got := GasPriceNumeratorAtHeight(0); got != InitialGasPriceNumerator {
@@ -24,17 +28,17 @@ func TestGasFeeAtHeightRoundsUp(t *testing.T) {
 	}
 }
 
-func TestGasAssetNameForSwitchHeight(t *testing.T) {
-	if got := GasAssetNameForSwitchHeight(100, 0); got != LegacyGasAssetName {
-		t.Fatalf("disabled switch got %s want %s", got, LegacyGasAssetName)
+func TestGasAssetNameForNet(t *testing.T) {
+	if got := GasAssetNameForNet(wire.MainNet); got != MainnetGasAssetName {
+		t.Fatalf("mainnet gas asset got %s want %s", got, MainnetGasAssetName)
 	}
-	if got := GasAssetNameForSwitchHeight(99, 100); got != LegacyGasAssetName {
-		t.Fatalf("before switch got %s want %s", got, LegacyGasAssetName)
+	if got := GasAssetNameForNet(wire.TestNet); got != TestnetGasAssetName {
+		t.Fatalf("testnet gas asset got %s want %s", got, TestnetGasAssetName)
 	}
-	if got := GasAssetNameForSwitchHeight(100, 100); got != NewGasAssetName {
-		t.Fatalf("at switch got %s want %s", got, NewGasAssetName)
+	if got := GasAssetNameForNet(wire.SimNet); got != TestnetGasAssetName {
+		t.Fatalf("simnet gas asset got %s want %s", got, TestnetGasAssetName)
 	}
-	if got := GasAssetNameForSwitchHeight(101, 100); got != NewGasAssetName {
-		t.Fatalf("after switch got %s want %s", got, NewGasAssetName)
+	if got := GasAssetNameAtHeight(wire.MainNet, 100); got != MainnetGasAssetName {
+		t.Fatalf("mainnet gas asset at height got %s want %s", got, MainnetGasAssetName)
 	}
 }

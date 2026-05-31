@@ -320,8 +320,20 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 
 	assets := wire.TxAssets{}
 	assetName := contractAssetName(runtime.Contract())
-	if assetName != "" && state.Running.AssetAmtInPool != "" && state.Running.AssetAmtInPool != "0" {
-		poolAssets, err := newAssetSet(assetName, state.Running.AssetAmtInPool)
+	if assetName != "" && state.Running.AssetAInPool != nil && state.Running.AssetAInPool.Sign() > 0 {
+		poolAssets, err := newAssetSet(assetName, state.Running.AssetAInPool.String())
+		if err != nil {
+			return ResultOutput{}, err
+		}
+		if err := assets.Merge(poolAssets); err != nil {
+			return ResultOutput{}, err
+		}
+	}
+	if exchange, ok := runtime.Contract().(*ExchangeContract); ok &&
+		exchange.AssetBName != "" &&
+		state.Running.AssetBInPool != nil &&
+		state.Running.AssetBInPool.Sign() > 0 {
+		poolAssets, err := newAssetSet(exchange.AssetBName, state.Running.AssetBInPool.String())
 		if err != nil {
 			return ResultOutput{}, err
 		}
@@ -333,8 +345,8 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	if gasAssetName == "" {
 		gasAssetName = DefaultGasConfig().GasAssetName
 	}
-	if state.Running.GasBalance != "" && state.Running.GasBalance != "0" {
-		gasAssets, err := newAssetSet(gasAssetName, state.Running.GasBalance)
+	if state.Running.GasBalance > 0 {
+		gasAssets, err := newAssetSet(gasAssetName, fmt.Sprintf("%d", state.Running.GasBalance))
 		if err != nil {
 			return ResultOutput{}, err
 		}
@@ -347,11 +359,22 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	} else if len(availableAssets) != 0 {
 		assets = capAssetsByAvailable(assets, availableAssets)
 	}
+	to := contract.MustEncode()
+	if state.Running.Closed {
+		to = runtime.RuntimeBase().Deployer()
+	}
 	return ResultOutput{
-		To:     contract.MustEncode(),
-		Value:  state.Running.SatValueInPool,
+		To:     to,
+		Value:  contractChangeValue(runtime.Contract(), state.Running.AssetBInPool),
 		Assets: assets,
 	}, nil
+}
+
+func contractChangeValue(contract Contract, assetB *scommon.Decimal) int64 {
+	if _, ok := contract.(*ExchangeContract); ok {
+		return 0
+	}
+	return decimalInt64(assetB)
 }
 
 func capAssetsByAvailable(assets, available wire.TxAssets) wire.TxAssets {

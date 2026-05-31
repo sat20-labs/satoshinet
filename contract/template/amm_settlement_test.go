@@ -3,6 +3,7 @@ package template
 import (
 	"testing"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -42,8 +43,8 @@ func TestSettleAMMBuyUsesConstantProductPool(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, "66.844919786", state.Running.AssetAmtInPool)
-	require.Equal(t, int64(30), state.Running.SatValueInPool)
+	requireDecimalString(t, "66.844919786", state.Running.AssetAInPool)
+	requireDecimalString(t, "30", state.Running.AssetBInPool)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
 }
 
@@ -83,8 +84,8 @@ func TestSettleAMMSellUsesConstantProductPool(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, "200", state.Running.AssetAmtInPool)
-	require.Equal(t, int64(11), state.Running.SatValueInPool)
+	requireDecimalString(t, "200", state.Running.AssetAInPool)
+	requireDecimalString(t, "11", state.Running.AssetBInPool)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
 }
 
@@ -287,7 +288,9 @@ func TestSettleAMMDoesNotRecheckInitialKAfterReady(t *testing.T) {
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
 	require.True(t, state.Running.TradingReady)
-	require.True(t, parseDecimalOrZero(state.Running.AssetAmtInPool).Cmp(parseDecimalOrZero(state.Running.RequiredAsset)) < 0)
+	require.NotNil(t, state.Running.AssetAInPool)
+	require.NotNil(t, state.Running.RequiredAssetA)
+	require.True(t, state.Running.AssetAInPool.Cmp(state.Running.RequiredAssetA) < 0)
 
 	param, err = (&LimitOrderInvokeParam{
 		OrderType: OrderTypeSell,
@@ -348,8 +351,8 @@ func TestSettleAMMAddAndRemoveLiquidity(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, "200", state.Running.AssetAmtInPool)
-	require.Equal(t, int64(40), state.Running.SatValueInPool)
+	requireDecimalString(t, "200", state.Running.AssetAInPool)
+	requireDecimalString(t, "40", state.Running.AssetBInPool)
 	require.NotEmpty(t, state.Running.TotalLPTAmt)
 	aliceLPT := state.Running.LPBalances["alice"]
 	require.NotEmpty(t, aliceLPT)
@@ -357,7 +360,7 @@ func TestSettleAMMAddAndRemoveLiquidity(t *testing.T) {
 	removeParam, err := (&RemoveLiquidityInvokeParam{
 		OrderType: OrderTypeRemoveLiquidity,
 		AssetName: "ordx:f:test",
-		LptAmt:    aliceLPT,
+		LptAmt:    aliceLPT.String(),
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
@@ -383,8 +386,10 @@ func TestSettleAMMAddAndRemoveLiquidity(t *testing.T) {
 
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	require.True(t, parseDecimalOrZero(state.Running.AssetAmtInPool).Cmp(parseDecimalOrZero("200")) < 0)
-	require.Less(t, state.Running.SatValueInPool, int64(40))
+	require.NotNil(t, state.Running.AssetAInPool)
+	require.NotNil(t, state.Running.AssetBInPool)
+	require.True(t, state.Running.AssetAInPool.Cmp(parseDecimalOrZero("200")) < 0)
+	require.True(t, state.Running.AssetBInPool.Cmp(scommon.NewDefaultDecimal(40)) < 0)
 	require.Empty(t, state.Running.LPBalances["alice"])
 }
 
@@ -420,8 +425,8 @@ func TestSettleAMMAddLiquidityUsesDeclaredValueOnly(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, "200", state.Running.AssetAmtInPool)
-	require.Equal(t, int64(40), state.Running.SatValueInPool)
+	requireDecimalString(t, "200", state.Running.AssetAInPool)
+	requireDecimalString(t, "40", state.Running.AssetBInPool)
 	require.Equal(t, int64(40), state.Running.LPCosts["alice"])
 }
 
@@ -445,7 +450,7 @@ func TestSettleAMMRemoveLiquiditySendsProfitShareToFoundation(t *testing.T) {
 	removeParam, err := (&RemoveLiquidityInvokeParam{
 		OrderType: OrderTypeRemoveLiquidity,
 		AssetName: "ordx:f:test",
-		LptAmt:    aliceLPT,
+		LptAmt:    aliceLPT.String(),
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
@@ -485,7 +490,7 @@ func TestSettleAMMEmptyPoolRequiresInitialKBeforeReadyAgain(t *testing.T) {
 	removeParam, err := (&RemoveLiquidityInvokeParam{
 		OrderType: OrderTypeRemoveLiquidity,
 		AssetName: "ordx:f:test",
-		LptAmt:    aliceLPT,
+		LptAmt:    aliceLPT.String(),
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
@@ -558,8 +563,8 @@ func TestSettleAMMRejectsSellSlippage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, InvokeReasonSlippageProtect, state.Items[0].Reason)
 	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
-	require.Equal(t, "100", state.Running.AssetAmtInPool)
-	require.Equal(t, int64(20), state.Running.SatValueInPool)
+	requireDecimalString(t, "100", state.Running.AssetAInPool)
+	requireDecimalString(t, "20", state.Running.AssetBInPool)
 }
 
 func TestSettleAMMProcessesSwapsFIFOAgainstMutatingPool(t *testing.T) {
@@ -582,8 +587,9 @@ func TestSettleAMMProcessesSwapsFIFOAgainstMutatingPool(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
 	require.Equal(t, ItemStatusDealt, state.Items[1].Done)
-	require.Equal(t, int64(40), state.Running.SatValueInPool)
-	require.True(t, parseDecimalOrZero(state.Running.AssetAmtInPool).Cmp(parseDecimalOrZero("100")) < 0)
+	requireDecimalString(t, "40", state.Running.AssetBInPool)
+	require.NotNil(t, state.Running.AssetAInPool)
+	require.True(t, state.Running.AssetAInPool.Cmp(parseDecimalOrZero("100")) < 0)
 }
 
 func TestSettleAMMRemoveLiquidityCapsAtOwnedAmount(t *testing.T) {
@@ -600,7 +606,7 @@ func TestSettleAMMRemoveLiquidityCapsAtOwnedAmount(t *testing.T) {
 	require.NoError(t, err)
 	aliceLPT := state.Running.LPBalances["alice"]
 	require.NotEmpty(t, aliceLPT)
-	removeTooMuch := decimalStringAdd(aliceLPT, aliceLPT)
+	removeTooMuch := scommon.DecimalAdd(aliceLPT, aliceLPT).String()
 	removeParam, err := (&RemoveLiquidityInvokeParam{
 		OrderType: OrderTypeRemoveLiquidity,
 		AssetName: "ordx:f:test",
@@ -632,8 +638,10 @@ func TestSettleAMMRemoveLiquidityCapsAtOwnedAmount(t *testing.T) {
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
 	require.Empty(t, state.Running.LPBalances["alice"])
-	require.True(t, parseDecimalOrZero(state.Running.AssetAmtInPool).Cmp(parseDecimalOrZero("100")) >= 0)
-	require.GreaterOrEqual(t, state.Running.SatValueInPool, int64(20))
+	require.NotNil(t, state.Running.AssetAInPool)
+	require.NotNil(t, state.Running.AssetBInPool)
+	require.True(t, state.Running.AssetAInPool.Cmp(parseDecimalOrZero("100")) >= 0)
+	require.True(t, state.Running.AssetBInPool.Cmp(scommon.NewDefaultDecimal(20)) >= 0)
 }
 
 func TestSettleAMMRemoveLiquidityWithoutBalanceClosesDirectly(t *testing.T) {
@@ -669,8 +677,8 @@ func TestSettleAMMRemoveLiquidityWithoutBalanceClosesDirectly(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ItemStatusClosedDirectly, state.Items[0].Done)
 	require.Equal(t, InvokeReasonNoEnoughAsset, state.Items[0].Reason)
-	require.Equal(t, "100", state.Running.AssetAmtInPool)
-	require.Equal(t, int64(20), state.Running.SatValueInPool)
+	requireDecimalString(t, "100", state.Running.AssetAInPool)
+	requireDecimalString(t, "20", state.Running.AssetBInPool)
 }
 
 func applyAMMSwapInvokeForTest(t *testing.T, runtime *ContractRuntime, addr ContractAddress,

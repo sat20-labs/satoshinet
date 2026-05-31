@@ -1179,6 +1179,15 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 	if err != nil || !found || !class.IsWork() {
 		return err
 	}
+	if class.TxType == contractcommon.TxTypeInvoke {
+		hasPayload, err := contractcommon.HasContractPayload(tx)
+		if err != nil {
+			return err
+		}
+		if !hasPayload {
+			return nil
+		}
+	}
 	var baseGas uint64
 	switch class.TxType {
 	case contractcommon.TxTypeDeploy:
@@ -1198,7 +1207,7 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 	if required == 0 {
 		return nil
 	}
-	gasAssetName := contractcommon.GasAssetNameAtHeight(int64(height))
+	gasAssetName := contractGasAssetNameAtHeight(params, int64(height))
 	assetName := wire.NewAssetNameFromString(gasAssetName)
 	if assetName == nil {
 		return ruleError(ErrBadFees, fmt.Sprintf("invalid contract gas asset %q", gasAssetName))
@@ -1209,6 +1218,14 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 			class.TxType, required, gasAssetName))
 	}
 	return nil
+}
+
+func contractGasAssetNameAtHeight(params *chaincfg.Params, height int64) string {
+	net := wire.TestNet
+	if params != nil {
+		net = params.Net
+	}
+	return contractcommon.GasAssetNameAtHeight(net, height)
 }
 
 func logTxAssets(desc string, assets wire.TxAssets) {

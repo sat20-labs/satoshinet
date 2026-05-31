@@ -131,6 +131,85 @@ func TestNetworkTemplateDefaultInvokeLimitOrderBuy(t *testing.T) {
 	fixture.requireNodesSynced(t)
 }
 
+func TestNetworkTemplateExchangeDefaultFundBuyAndClose(t *testing.T) {
+	fixture := newTemplateNetworkFixture(t, map[string]int64{
+		"ordx:f:excha": 100,
+		"ordx:f:exchb": 24,
+	})
+
+	const (
+		assetA = "ordx:f:excha"
+		assetB = "ordx:f:exchb"
+	)
+	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
+	traderA := fixture.traderA
+	traderB := fixture.traderB
+	deployerAddr := fixture.spendAddress
+	buyerAddr := fixture.spendAddress
+
+	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset,
+		[]int64{1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000}, traderA)
+	assetAOuts := fixture.splitAsset(t, fixture.assetAnchors[assetA], assetA, []int64{100},
+		[]int64{1000}, traderA)
+	assetBOuts := fixture.splitAsset(t, fixture.assetAnchors[assetB], assetB, []int64{24},
+		[]int64{1000}, traderB)
+
+	exchange := tmplcontract.NewExchangeContract(assetA, assetB, tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
+		Threshold: "0",
+		BPerA:     "2",
+	}})
+	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
+		exchange,
+		deployerAddr,
+		[]byte("exchange-random"),
+		[]wire.OutPoint{gasOuts[0]},
+		wire.TxOut{
+			Value:  1,
+			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, deployTx)
+
+	fundTx := buildTemplateDefaultInvokeTx(t, fixture, traderA, contract,
+		[]wire.OutPoint{assetAOuts[0], gasOuts[1]},
+		wire.TxOut{
+			Value: 0,
+			Assets: networkTxAssets(
+				networkTemplateFunding(t, gasAsset, 100000),
+				networkTemplateFunding(t, assetA, 100),
+			),
+		})
+	require.False(t, txHasContractOpReturn(fundTx))
+	fixture.sendAndWaitTx(t, fundTx)
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), assetA, "100")
+
+	buyTx := buildTemplateDefaultInvokeTx(t, fixture, traderB, contract,
+		[]wire.OutPoint{assetBOuts[0], gasOuts[2]},
+		wire.TxOut{
+			Value: 0,
+			Assets: networkTxAssets(
+				networkTemplateFunding(t, gasAsset, 100000),
+				networkTemplateFunding(t, assetB, 24),
+			),
+		})
+	require.False(t, txHasContractOpReturn(buyTx))
+	fixture.sendAndWaitTx(t, buyTx)
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, buyerAddr, assetA, "12")
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), assetA, "88")
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, assetB, "24")
+
+	closeTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPIClose, nil,
+		[]wire.OutPoint{gasOuts[3]},
+		wire.TxOut{
+			Value:  0,
+			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, closeTx)
+	requireAssetSummaryZero(t, fixture.bootstrapNode, contract.MustEncode(), assetA)
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, assetA, "100")
+	fixture.requireNodesSynced(t)
+}
+
 func TestNetworkTemplateLimitOrderLargeBuyFilledBySmallSells(t *testing.T) {
 	fixture := newTemplateNetworkFixture(t, map[string]int64{
 		"ordx:f:lotbuy": 1000,

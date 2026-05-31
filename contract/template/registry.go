@@ -30,6 +30,7 @@ func NewDefaultRegistry() *Registry {
 	r := NewRegistry()
 	mustRegister(r, TemplateLimitOrder, func() Contract { return NewLimitOrderContract("") })
 	mustRegister(r, TemplateAMM, func() Contract { return NewAMMContract("", "", 0, "") })
+	mustRegister(r, TemplateExchange, func() Contract { return NewExchangeContract("", "", "", nil) })
 	return r
 }
 

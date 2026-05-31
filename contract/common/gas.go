@@ -3,20 +3,18 @@ package common
 import (
 	"errors"
 	"math/bits"
+
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
-	LegacyGasAssetName = "brc20:f:ooxx"
-	NewGasAssetName    = "brc20:f:sgas"
+	MainnetGasAssetName = "brc20:f:sgas"
+	TestnetGasAssetName = "brc20:f:sgas"
 
-	// GasAssetSwitchHeight is a planned SatoshiNet height. A value <= 0 keeps the
-	// legacy gas asset active for all heights.
-	GasAssetSwitchHeight int64 = 3532
-
-	// GasAssetName is the default gas asset for code paths that do not have block
-	// height context. Consensus and wallet construction should use
-	// GasAssetNameAtHeight when height is available.
-	GasAssetName = LegacyGasAssetName
+	// GasAssetName is the default gas asset for code paths that do not have
+	// network context. Consensus and block result construction should use
+	// GasAssetNameAtHeight when network context is available.
+	GasAssetName = TestnetGasAssetName
 
 	DeployBaseGas  uint64 = 100000
 	InvokeBaseGas  uint64 = 20000
@@ -32,15 +30,17 @@ const (
 	GasPriceFloorNumerator   uint64 = 10000
 )
 
-func GasAssetNameAtHeight(height int64) string {
-	return GasAssetNameForSwitchHeight(height, GasAssetSwitchHeight)
+func GasAssetNameAtHeight(net wire.BitcoinNet, height int64) string {
+	return GasAssetNameForNet(net)
 }
 
-func GasAssetNameForSwitchHeight(height, switchHeight int64) string {
-	if switchHeight > 0 && height >= switchHeight {
-		return NewGasAssetName
+func GasAssetNameForNet(net wire.BitcoinNet) string {
+	switch net {
+	case wire.MainNet:
+		return MainnetGasAssetName
+	default:
+		return TestnetGasAssetName
 	}
-	return LegacyGasAssetName
 }
 
 func GasPriceNumeratorAtHeight(height uint64) uint64 {

@@ -9,7 +9,6 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractengine "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -71,7 +70,7 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 		return agentBlockRuleError("load agent runtime: %v", err)
 	}
 	gasConfig := v.cfg.GasConfig
-	gasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(int64(block.Height()))
+	gasConfig.GasAssetName = contractGasAssetNameAtHeight(v.cfg.ChainParams, int64(block.Height()))
 	blockTxs := make([]*wire.MsgTx, 0, len(txs)-1)
 	resultTxs := make([]*wire.MsgTx, 0)
 	for _, tx := range txs[1:] {

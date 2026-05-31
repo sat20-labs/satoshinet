@@ -72,10 +72,10 @@ func TestSettleLimitOrdersMatchesByPriceAndTime(t *testing.T) {
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
 	require.Equal(t, int64(20), state.Items[0].OutValue)
 	require.Equal(t, ItemStatusDealt, state.Items[1].Done)
-	require.Equal(t, "10", state.Items[1].OutAmt)
+	requireDecimalString(t, "10", state.Items[1].OutAmt)
 	require.Equal(t, int64(10), state.Items[1].OutValue)
-	require.Equal(t, "10", state.Running.TotalDealAsset)
-	require.Equal(t, int64(30), state.Running.TotalDealGas)
+	requireDecimalString(t, "10", state.Running.TotalDealAssetA)
+	requireDecimalString(t, "30", state.Running.TotalDealAssetB)
 	require.Equal(t, 2, state.Running.TotalDealCount)
 }
 
@@ -170,7 +170,7 @@ func TestSettleLimitOrdersLargeBuyFilledByMultipleSmallSells(t *testing.T) {
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
-	require.Equal(t, "30", state.Items[0].OutAmt)
+	requireDecimalString(t, "30", state.Items[0].OutAmt)
 	require.Equal(t, int64(0), state.Items[0].RemainingValue)
 }
 
@@ -248,7 +248,7 @@ func TestSettleLimitOrdersBuyTakesLowerSellPricesAndLeavesRemainder(t *testing.T
 	require.NoError(t, err)
 	buy := state.Items[3]
 	require.Equal(t, ItemStatusInit, buy.Done)
-	require.Equal(t, "30", buy.OutAmt)
+	requireDecimalString(t, "30", buy.OutAmt)
 	require.Equal(t, int64(130), buy.RemainingValue)
 	require.Equal(t, "10", buy.UnitPrice)
 }
@@ -337,7 +337,7 @@ func TestSettleLimitOrdersRefundsInvokerOpenOrders(t *testing.T) {
 	require.Equal(t, InvokeReasonRefund, state.Items[0].Reason)
 	require.Equal(t, ItemStatusRefunded, state.Items[1].Done)
 	require.Zero(t, state.Running.TotalDealCount)
-	require.Equal(t, int64(20), state.Running.TotalRefundGas)
+	requireDecimalString(t, "20", state.Running.TotalRefundAssetB)
 }
 
 func TestSettleLimitOrdersRefundCanTargetOneOrder(t *testing.T) {
@@ -417,7 +417,7 @@ func TestSettleLimitOrdersSamePriceUsesFIFO(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
 	require.Equal(t, ItemStatusInit, state.Items[1].Done)
-	require.Equal(t, "10", state.Items[1].RemainingAmt)
+	requireDecimalString(t, "10", state.Items[1].RemainingAmt)
 }
 
 func TestSettleLimitOrdersIgnoreFutureHeightOrders(t *testing.T) {

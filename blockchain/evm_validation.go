@@ -91,7 +91,7 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 	}
 	runtime.ContractPrefix = prefix
 	gasConfig := v.cfg.GasConfig
-	gasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(int64(block.Height()))
+	gasConfig.GasAssetName = contractGasAssetNameAtHeight(v.cfg.ChainParams, int64(block.Height()))
 
 	blockTxs := make([]*wire.MsgTx, 0, len(txs)-1)
 	templatePrefix := tmplcontract.TestnetContractPrefix

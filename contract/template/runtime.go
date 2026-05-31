@@ -116,11 +116,17 @@ func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, erro
 }
 
 func (r *ContractRuntime) SettleBlock(height int64) (*SettlementPlan, error) {
+	return r.SettleBlockWithGasConfig(height, DefaultGasConfig())
+}
+
+func (r *ContractRuntime) SettleBlockWithGasConfig(height int64, gasConfig GasConfig) (*SettlementPlan, error) {
 	switch r.contract.(type) {
 	case *LimitOrderContract:
 		return r.settleLimitOrders(height)
 	case *AMMContract:
 		return r.settleAMM(height)
+	case *ExchangeContract:
+		return r.settleExchange(height, gasConfig.normalized())
 	default:
 		addr := r.Address()
 		return &SettlementPlan{

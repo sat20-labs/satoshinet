@@ -6,18 +6,21 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const runtimeStateKey = "template-runtime-state"
 
 type ApplyInvokeRequest struct {
-	Action         string
-	Param          []byte
-	CallID         string
-	Invoker        string
-	FundingOutputs []ContractOutput
-	Height         int64
-	Timestamp      int64
+	Action                string
+	Param                 []byte
+	CallID                string
+	Invoker               string
+	FundingOutputs        []ContractOutput
+	Height                int64
+	Timestamp             int64
+	ResultGasFee          uint64
+	ApplyDefaultRetention bool
 }
 
 type TemplateRuntimeState struct {
@@ -28,6 +31,37 @@ type TemplateRuntimeState struct {
 }
 
 type InvokeItem struct {
+	ID             int64            `json:"id"`
+	CallID         string           `json:"callId"`
+	Action         string           `json:"action"`
+	OrderType      int              `json:"orderType"`
+	Height         int64            `json:"height"`
+	OrderTime      int64            `json:"orderTime"`
+	AssetName      string           `json:"assetName"`
+	ServiceFee     int64            `json:"serviceFee"`
+	UnitPrice      string           `json:"unitPrice,omitempty"`
+	ExpectedAmt    *scommon.Decimal `json:"expectedAmt,omitempty"`
+	Address        string           `json:"address,omitempty"`
+	InUtxos        string           `json:"inUtxos,omitempty"`
+	InValue        int64            `json:"inValue"`
+	InAmt          *scommon.Decimal `json:"inAmt,omitempty"`
+	RetainedAssetA *scommon.Decimal `json:"retainedAssetA,omitempty"`
+	RetainedAssetB *scommon.Decimal `json:"retainedAssetB,omitempty"`
+	RemainingAmt   *scommon.Decimal `json:"remainingAmt,omitempty"`
+	RemainingValue int64            `json:"remainingValue"`
+	OutTxID        string           `json:"outTxId,omitempty"`
+	OutAmt         *scommon.Decimal `json:"outAmt,omitempty"`
+	OutValue       int64            `json:"outValue"`
+	RefundItemIDs  []int64          `json:"refundItemIds,omitempty"`
+	Reason         string           `json:"reason"`
+	Done           int              `json:"done"`
+}
+
+func (i InvokeItem) Finished() bool {
+	return i.Done > ItemStatusInit
+}
+
+type invokeItemJSON struct {
 	ID             int64   `json:"id"`
 	CallID         string  `json:"callId"`
 	Action         string  `json:"action"`
@@ -42,6 +76,8 @@ type InvokeItem struct {
 	InUtxos        string  `json:"inUtxos,omitempty"`
 	InValue        int64   `json:"inValue"`
 	InAmt          string  `json:"inAmt,omitempty"`
+	RetainedAssetA string  `json:"retainedAssetA,omitempty"`
+	RetainedAssetB string  `json:"retainedAssetB,omitempty"`
 	RemainingAmt   string  `json:"remainingAmt,omitempty"`
 	RemainingValue int64   `json:"remainingValue"`
 	OutTxID        string  `json:"outTxId,omitempty"`
@@ -52,46 +88,206 @@ type InvokeItem struct {
 	Done           int     `json:"done"`
 }
 
-func (i InvokeItem) Finished() bool {
-	return i.Done > ItemStatusInit
+func (i InvokeItem) MarshalJSON() ([]byte, error) {
+	return json.Marshal(invokeItemJSON{
+		ID:             i.ID,
+		CallID:         i.CallID,
+		Action:         i.Action,
+		OrderType:      i.OrderType,
+		Height:         i.Height,
+		OrderTime:      i.OrderTime,
+		AssetName:      i.AssetName,
+		ServiceFee:     i.ServiceFee,
+		UnitPrice:      i.UnitPrice,
+		ExpectedAmt:    decimalString(i.ExpectedAmt),
+		Address:        i.Address,
+		InUtxos:        i.InUtxos,
+		InValue:        i.InValue,
+		InAmt:          decimalString(i.InAmt),
+		RetainedAssetA: decimalString(i.RetainedAssetA),
+		RetainedAssetB: decimalString(i.RetainedAssetB),
+		RemainingAmt:   decimalString(i.RemainingAmt),
+		RemainingValue: i.RemainingValue,
+		OutTxID:        i.OutTxID,
+		OutAmt:         decimalString(i.OutAmt),
+		OutValue:       i.OutValue,
+		RefundItemIDs:  i.RefundItemIDs,
+		Reason:         i.Reason,
+		Done:           i.Done,
+	})
+}
+
+func (i *InvokeItem) UnmarshalJSON(data []byte) error {
+	var item invokeItemJSON
+	if err := json.Unmarshal(data, &item); err != nil {
+		return err
+	}
+	i.ID = item.ID
+	i.CallID = item.CallID
+	i.Action = item.Action
+	i.OrderType = item.OrderType
+	i.Height = item.Height
+	i.OrderTime = item.OrderTime
+	i.AssetName = item.AssetName
+	i.ServiceFee = item.ServiceFee
+	i.UnitPrice = item.UnitPrice
+	i.ExpectedAmt = nil
+	if item.ExpectedAmt != "" {
+		i.ExpectedAmt = parseDecimalOrZero(item.ExpectedAmt)
+	}
+	i.Address = item.Address
+	i.InUtxos = item.InUtxos
+	i.InValue = item.InValue
+	i.InAmt = nil
+	if item.InAmt != "" {
+		i.InAmt = parseDecimalOrZero(item.InAmt)
+	}
+	i.RetainedAssetA = nil
+	if item.RetainedAssetA != "" {
+		i.RetainedAssetA = parseDecimalOrZero(item.RetainedAssetA)
+	}
+	i.RetainedAssetB = nil
+	if item.RetainedAssetB != "" {
+		i.RetainedAssetB = parseDecimalOrZero(item.RetainedAssetB)
+	}
+	i.RemainingAmt = nil
+	if item.RemainingAmt != "" {
+		i.RemainingAmt = parseDecimalOrZero(item.RemainingAmt)
+	}
+	i.RemainingValue = item.RemainingValue
+	i.OutTxID = item.OutTxID
+	i.OutAmt = nil
+	if item.OutAmt != "" {
+		i.OutAmt = parseDecimalOrZero(item.OutAmt)
+	}
+	i.OutValue = item.OutValue
+	i.RefundItemIDs = item.RefundItemIDs
+	i.Reason = item.Reason
+	i.Done = item.Done
+	return nil
 }
 
 type RunningData struct {
-	AssetAmtInPool  string            `json:"assetAmtInPool,omitempty"`
-	SatValueInPool  int64             `json:"satValueInPool,omitempty"`
-	RequiredAsset   string            `json:"requiredAsset,omitempty"`
-	RequiredSat     int64             `json:"requiredSat,omitempty"`
-	K               string            `json:"k,omitempty"`
-	TradingReady    bool              `json:"tradingReady,omitempty"`
-	GasBalance      string            `json:"gasBalance,omitempty"`
-	TotalInputAsset string            `json:"totalInputAsset,omitempty"`
-	TotalInputGas   int64             `json:"totalInputGas"`
-	TotalDealAsset  string            `json:"totalDealAsset,omitempty"`
-	TotalDealGas    int64             `json:"totalDealGas"`
-	TotalDealCount  int               `json:"totalDealCount"`
-	TotalRefundGas  int64             `json:"totalRefundGas"`
-	TotalLPTAmt     string            `json:"totalLptAmt,omitempty"`
-	LPBalances      map[string]string `json:"lpBalances,omitempty"`
-	LPCosts         map[string]int64  `json:"lpCosts,omitempty"`
+	AssetAInPool      *scommon.Decimal            `json:"assetAInPool,omitempty"`
+	AssetBInPool      *scommon.Decimal            `json:"assetBInPool,omitempty"`
+	RequiredAssetA    *scommon.Decimal            `json:"requiredAssetA,omitempty"`
+	RequiredAssetB    *scommon.Decimal            `json:"requiredAssetB,omitempty"`
+	K                 *scommon.Decimal            `json:"k,omitempty"`
+	TradingReady      bool                        `json:"tradingReady,omitempty"`
+	GasBalance        int64                       `json:"gasBalance,omitempty"`
+	TotalInputAssetA  *scommon.Decimal            `json:"totalInputAssetA,omitempty"`
+	TotalInputAssetB  *scommon.Decimal            `json:"totalInputAssetB,omitempty"`
+	TotalDealAssetA   *scommon.Decimal            `json:"totalDealAssetA,omitempty"`
+	TotalDealAssetB   *scommon.Decimal            `json:"totalDealAssetB,omitempty"`
+	TotalDealCount    int                         `json:"totalDealCount"`
+	TotalRefundAssetB *scommon.Decimal            `json:"totalRefundAssetB,omitempty"`
+	TotalLPTAmt       *scommon.Decimal            `json:"totalLptAmt,omitempty"`
+	LPBalances        map[string]*scommon.Decimal `json:"lpBalances,omitempty"`
+	LPCosts           map[string]int64            `json:"lpCosts,omitempty"`
+	Closed            bool                        `json:"closed,omitempty"`
 }
 
 func (r *RunningData) Apply(item *InvokeItem) {
 	if item == nil {
 		return
 	}
-	r.TotalInputGas += item.InValue
-	r.TotalInputAsset = decimalStringAdd(r.TotalInputAsset, item.InAmt)
+	r.applyDefaultInvokeRetention(item)
+	switch item.OrderType {
+	case OrderTypeFund:
+		if item.InAmt != nil {
+			if r.TotalInputAssetA == nil {
+				r.TotalInputAssetA = parseDecimalOrZero("0")
+			}
+			if r.AssetAInPool == nil {
+				r.AssetAInPool = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.InAmt)
+			r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.InAmt)
+		}
+		return
+	case OrderTypeExchange:
+		if item.OutAmt != nil {
+			if r.TotalInputAssetA == nil {
+				r.TotalInputAssetA = parseDecimalOrZero("0")
+			}
+			if r.AssetAInPool == nil {
+				r.AssetAInPool = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.OutAmt)
+			r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.OutAmt)
+		}
+		if item.InAmt != nil {
+			if r.TotalInputAssetB == nil {
+				r.TotalInputAssetB = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetB = scommon.DecimalAdd(r.TotalInputAssetB, item.InAmt)
+		}
+		return
+	case OrderTypeClose:
+		if item.InAmt != nil {
+			if r.TotalInputAssetA == nil {
+				r.TotalInputAssetA = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.InAmt)
+		}
+		if item.RemainingAmt != nil {
+			if r.TotalInputAssetB == nil {
+				r.TotalInputAssetB = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetB = scommon.DecimalAdd(r.TotalInputAssetB, item.RemainingAmt)
+		}
+		return
+	}
+	if r.TotalInputAssetB == nil {
+		r.TotalInputAssetB = parseDecimalOrZero("0")
+	}
+	r.TotalInputAssetB = scommon.DecimalAdd(r.TotalInputAssetB, scommon.NewDefaultDecimal(item.InValue))
+	if item.InAmt != nil {
+		if r.TotalInputAssetA == nil {
+			r.TotalInputAssetA = parseDecimalOrZero("0")
+		}
+		r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.InAmt)
+	}
 	switch item.OrderType {
 	case OrderTypeBuy, OrderTypeSell:
 		if item.Done == ItemStatusDealt {
-			r.TotalDealAsset = decimalStringAdd(r.TotalDealAsset, item.OutAmt)
-			r.TotalDealGas += item.OutValue
+			if item.OutAmt != nil {
+				if r.TotalDealAssetA == nil {
+					r.TotalDealAssetA = parseDecimalOrZero("0")
+				}
+				r.TotalDealAssetA = scommon.DecimalAdd(r.TotalDealAssetA, item.OutAmt)
+			}
+			if r.TotalDealAssetB == nil {
+				r.TotalDealAssetB = parseDecimalOrZero("0")
+			}
+			r.TotalDealAssetB = scommon.DecimalAdd(r.TotalDealAssetB, scommon.NewDefaultDecimal(item.OutValue))
 			r.TotalDealCount++
 		} else if item.Done == ItemStatusRefunded || item.Done == ItemStatusCancelled {
-			r.TotalRefundGas += item.OutValue + item.RemainingValue
+			if r.TotalRefundAssetB == nil {
+				r.TotalRefundAssetB = parseDecimalOrZero("0")
+			}
+			r.TotalRefundAssetB = scommon.DecimalAdd(r.TotalRefundAssetB, scommon.NewDefaultDecimal(item.OutValue+item.RemainingValue))
 		}
 	case OrderTypeRefund:
-		r.TotalRefundGas += item.OutValue + item.RemainingValue
+		if r.TotalRefundAssetB == nil {
+			r.TotalRefundAssetB = parseDecimalOrZero("0")
+		}
+		r.TotalRefundAssetB = scommon.DecimalAdd(r.TotalRefundAssetB, scommon.NewDefaultDecimal(item.OutValue+item.RemainingValue))
+	}
+}
+
+func (r *RunningData) applyDefaultInvokeRetention(item *InvokeItem) {
+	if item.RetainedAssetA != nil && item.RetainedAssetA.Sign() > 0 {
+		if r.AssetAInPool == nil {
+			r.AssetAInPool = parseDecimalOrZero("0")
+		}
+		r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.RetainedAssetA)
+	}
+	if item.RetainedAssetB != nil && item.RetainedAssetB.Sign() > 0 {
+		if r.AssetBInPool == nil {
+			r.AssetBInPool = parseDecimalOrZero("0")
+		}
+		r.AssetBInPool = scommon.DecimalAdd(r.AssetBInPool, item.RetainedAssetB)
 	}
 }
 
@@ -100,10 +296,21 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 	if err != nil {
 		return nil, err
 	}
+	retention := defaultInvokeRetention{}
+	if req.ApplyDefaultRetention {
+		var fundingOutputs []ContractOutput
+		retention, fundingOutputs, err = retainDefaultInvokeFunding(r.contract, req.FundingOutputs)
+		if err != nil {
+			return nil, err
+		}
+		req.FundingOutputs = fundingOutputs
+	}
 	item, err := NewDefaultInvokeItemFromRequest(r.contract, state.NextItemID, state, req)
 	if err != nil || item == nil {
 		return nil, err
 	}
+	item.RetainedAssetA = retention.AssetA
+	item.RetainedAssetB = retention.AssetB
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
@@ -114,7 +321,113 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 	return item, nil
 }
 
+type defaultInvokeRetention struct {
+	AssetA *scommon.Decimal
+	AssetB *scommon.Decimal
+}
+
+func retainDefaultInvokeFunding(contract Contract, outputs []ContractOutput) (defaultInvokeRetention, []ContractOutput, error) {
+	assetA, assetB := defaultInvokePoolAssets(contract)
+	retention := defaultInvokeRetention{}
+	adjusted := make([]ContractOutput, 0, len(outputs))
+	for _, output := range outputs {
+		next := output
+		next.Assets = output.Assets.Clone()
+		if assetA != "" {
+			fee, err := retainDefaultInvokeAsset(&next, assetA)
+			if err != nil {
+				return defaultInvokeRetention{}, nil, err
+			}
+			retention.AssetA = decimalAddAllowNil(retention.AssetA, fee)
+		}
+		if assetB == SatoshiAssetName {
+			fee := next.Value / 100
+			if fee > 0 {
+				next.Value -= fee
+				retention.AssetB = decimalAddAllowNil(retention.AssetB, scommon.NewDefaultDecimal(fee))
+			}
+		} else if assetB != "" && assetB != assetA {
+			fee, err := retainDefaultInvokeAsset(&next, assetB)
+			if err != nil {
+				return defaultInvokeRetention{}, nil, err
+			}
+			retention.AssetB = decimalAddAllowNil(retention.AssetB, fee)
+		}
+		adjusted = append(adjusted, next)
+	}
+	return retention, adjusted, nil
+}
+
+func defaultInvokePoolAssets(contract Contract) (string, string) {
+	assetA := contractAssetName(contract)
+	assetB := SatoshiAssetName
+	if c, ok := contract.(*ExchangeContract); ok {
+		assetA = c.AssetAName
+		assetB = c.AssetBName
+	}
+	return assetA, assetB
+}
+
+func retainDefaultInvokeAsset(output *ContractOutput, assetName string) (*scommon.Decimal, error) {
+	amt, err := output.AssetAmount(assetName)
+	if err != nil {
+		return nil, err
+	}
+	if amt == nil || amt.Sign() <= 0 {
+		return nil, nil
+	}
+	fee := defaultInvokeAssetRetainFee(amt)
+	if fee == nil || fee.Sign() <= 0 {
+		return nil, nil
+	}
+	name := wire.NewAssetNameFromString(assetName)
+	if name == nil {
+		return nil, ErrInvalidAsset
+	}
+	if err := output.Assets.Split(wire.TxAssets{{Name: *name, Amount: *fee}}); err != nil {
+		return nil, err
+	}
+	return fee, nil
+}
+
+func defaultInvokeAssetRetainFee(amt *scommon.Decimal) *scommon.Decimal {
+	if amt == nil || amt.Sign() <= 0 {
+		return nil
+	}
+	return scommon.DecimalMulV2(amt, scommon.NewDecimal(1, amt.Precision+2)).
+		Div(scommon.NewDecimal(100, amt.Precision+2))
+}
+
+func decimalAddAllowNil(a, b *scommon.Decimal) *scommon.Decimal {
+	if b == nil || b.Sign() == 0 {
+		return a
+	}
+	if a == nil {
+		return b.Clone()
+	}
+	return scommon.DecimalAdd(a, b)
+}
+
 func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state TemplateRuntimeState, req ApplyInvokeRequest) (*InvokeItem, error) {
+	if c, ok := contract.(*ExchangeContract); ok {
+		inputA, inputB, inUtxos, err := exchangeFundingAmounts(c, req.FundingOutputs)
+		if err != nil {
+			return nil, err
+		}
+		if inputA.Sign() == 0 && inputB.Sign() == 0 {
+			return nil, nil
+		}
+		item := newExchangeItem(id, contractcommon.ContractInvokeAPIDefault, req, inUtxos, c.AssetBName, inputB, "")
+		if inputB.Sign() == 0 {
+			item.OrderType = OrderTypeFund
+			item.AssetName = c.AssetAName
+			item.InAmt = inputA
+			item.RemainingAmt = item.InAmt
+		} else if inputA.Sign() > 0 {
+			item.OutAmt = inputA
+		}
+		return item, nil
+	}
 	assetName := contractAssetName(contract)
 	inValue, inAmt, inUtxos, err := defaultInvokeFunding(assetName, req.FundingOutputs)
 	if err != nil {
@@ -135,7 +448,7 @@ func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state Template
 		Address:        req.Invoker,
 		InUtxos:        inUtxos,
 		InValue:        inValue,
-		InAmt:          decimalString(inAmt),
+		InAmt:          inAmt,
 		ServiceFee:     0,
 		UnitPrice:      unitPrice,
 		Reason:         InvokeReasonNormal,
@@ -151,7 +464,7 @@ func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state Template
 
 func defaultInvokeFunding(assetName string, outputs []ContractOutput) (int64, *scommon.Decimal, string, error) {
 	inValue := int64(0)
-	inAmt := scommon.NewDefaultDecimal(0)
+	inAmt := parseDecimalOrZero("0")
 	inUtxos := ""
 	for i, output := range outputs {
 		inValue += output.Value
@@ -164,8 +477,12 @@ func defaultInvokeFunding(assetName string, outputs []ContractOutput) (int64, *s
 			if err != nil {
 				return 0, nil, "", err
 			}
+			amt = parseDecimalOrZero(amt.String())
 			inAmt = scommon.DecimalAdd(inAmt, amt)
 		}
+	}
+	if inAmt.Sign() == 0 {
+		inAmt = nil
 	}
 	return inValue, inAmt, inUtxos, nil
 }
@@ -204,7 +521,7 @@ func lowestActiveSellPrice(state TemplateRuntimeState) string {
 		if item.Finished() || item.Reason != InvokeReasonNormal || item.OrderType != OrderTypeSell {
 			continue
 		}
-		if parseDecimalOrZero(item.RemainingAmt).Sign() <= 0 {
+		if item.RemainingAmt == nil || item.RemainingAmt.Sign() <= 0 {
 			continue
 		}
 		price := parseDecimalOrZero(item.UnitPrice)
@@ -241,7 +558,7 @@ func highestActiveBuyPrice(state TemplateRuntimeState) string {
 
 func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeRequest) (*InvokeItem, error) {
 	inValue := int64(0)
-	inAmt := scommon.NewDefaultDecimal(0)
+	inAmt := parseDecimalOrZero("0")
 	inUtxos := ""
 	assetName := contractAssetName(contract)
 	for i, output := range req.FundingOutputs {
@@ -255,8 +572,12 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 			if err != nil {
 				return nil, err
 			}
+			amt = parseDecimalOrZero(amt.String())
 			inAmt = scommon.DecimalAdd(inAmt, amt)
 		}
+	}
+	if inAmt.Sign() == 0 {
+		inAmt = nil
 	}
 
 	item := &InvokeItem{
@@ -269,7 +590,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		Address:    req.Invoker,
 		InUtxos:    inUtxos,
 		InValue:    inValue,
-		InAmt:      decimalString(inAmt),
+		InAmt:      inAmt,
 		ServiceFee: SwapInvokeFee,
 		Reason:     InvokeReasonNormal,
 		Done:       ItemStatusInit,
@@ -285,13 +606,17 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		item.OrderType = param.OrderType
 		item.AssetName = firstNonEmpty(param.AssetName, assetName)
 		item.UnitPrice = param.UnitPrice
-		item.ExpectedAmt = param.Amt
+		if param.Amt != "" {
+			item.ExpectedAmt = parseDecimalOrZero(param.Amt)
+		}
 		item.RemainingValue = inValue
 		if item.OrderType == OrderTypeSell {
 			item.RemainingAmt = item.InAmt
 			item.RemainingValue = 0
 		} else {
-			item.RemainingAmt = param.Amt
+			if param.Amt != "" {
+				item.RemainingAmt = parseDecimalOrZero(param.Amt)
+			}
 			if !isAMM {
 				item.ServiceFee = calcSwapFee(calcLimitOrderTradingValue(param.Amt, param.UnitPrice))
 			}
@@ -309,7 +634,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		}
 		item.OrderType = OrderTypeRefund
 		item.AssetName = ""
-		item.InAmt = ""
+		item.InAmt = nil
 		item.RemainingValue = inValue
 		item.RefundItemIDs = append([]int64(nil), param.ItemIDs...)
 	case InvokeAPIAddLiquidity:
@@ -319,8 +644,10 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		}
 		item.OrderType = param.OrderType
 		item.AssetName = firstNonEmpty(param.AssetName, assetName)
-		item.ExpectedAmt = param.Amt
-		item.RemainingAmt = param.Amt
+		if param.Amt != "" {
+			item.ExpectedAmt = parseDecimalOrZero(param.Amt)
+			item.RemainingAmt = parseDecimalOrZero(param.Amt)
+		}
 		item.RemainingValue = param.Value
 	case InvokeAPIRemoveLiquidity:
 		var param RemoveLiquidityInvokeParam
@@ -329,8 +656,53 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		}
 		item.OrderType = param.OrderType
 		item.AssetName = firstNonEmpty(param.AssetName, assetName)
-		item.ExpectedAmt = param.LptAmt
-		item.RemainingAmt = param.LptAmt
+		if param.LptAmt != "" {
+			item.ExpectedAmt = parseDecimalOrZero(param.LptAmt)
+			item.RemainingAmt = parseDecimalOrZero(param.LptAmt)
+		}
+	case InvokeAPIExchange:
+		contract, ok := contract.(*ExchangeContract)
+		if !ok {
+			return nil, fmt.Errorf("exchange action requires exchange contract")
+		}
+		var param ExchangeInvokeParam
+		if err := param.Decode(req.Param); err != nil {
+			return nil, err
+		}
+		inputA, inputB, inUtxos, err := exchangeFundingAmounts(contract, req.FundingOutputs)
+		if err != nil {
+			return nil, err
+		}
+		item = newExchangeItem(id, req.Action, req, inUtxos, contract.AssetBName, inputB, param.MinOutA)
+		if inputA.Sign() > 0 {
+			item.OutAmt = inputA
+		}
+	case InvokeAPIClose:
+		contract, ok := contract.(*ExchangeContract)
+		if !ok {
+			return nil, fmt.Errorf("close action requires exchange contract")
+		}
+		inputA, inputB, inUtxos, err := exchangeFundingAmounts(contract, req.FundingOutputs)
+		if err != nil {
+			return nil, err
+		}
+		item = &InvokeItem{
+			ID:             id,
+			CallID:         req.CallID,
+			Action:         req.Action,
+			OrderType:      OrderTypeClose,
+			Height:         req.Height,
+			OrderTime:      req.Timestamp,
+			AssetName:      contract.AssetAName,
+			Address:        req.Invoker,
+			InUtxos:        inUtxos,
+			InAmt:          inputA,
+			RemainingAmt:   inputB,
+			ServiceFee:     int64(req.ResultGasFee),
+			Reason:         InvokeReasonNormal,
+			Done:           ItemStatusInit,
+			RemainingValue: fundingValue(req.FundingOutputs),
+		}
 	default:
 		return nil, fmt.Errorf("unsupported template action %s", req.Action)
 	}
@@ -355,17 +727,16 @@ func (i *InvokeItem) applySwapFundingValidation(param LimitOrderInvokeParam, isA
 	case OrderTypeSell:
 		if i.InValue < i.ServiceFee {
 			i.Reason = InvokeReasonInvalid
-			i.RemainingAmt = ""
+			i.RemainingAmt = nil
 			return
 		}
-		inAmt := parseDecimalOrZero(i.InAmt)
-		if inAmt.Sign() == 0 {
+		if i.InAmt == nil || i.InAmt.Sign() == 0 {
 			i.Reason = InvokeReasonInvalid
 			return
 		}
-		if !isAMM && inAmt.Cmp(parseDecimalOrZero(param.Amt)) != 0 {
+		if !isAMM && i.InAmt.Cmp(parseDecimalOrZero(param.Amt)) != 0 {
 			i.Reason = InvokeReasonInvalid
-			i.RemainingAmt = ""
+			i.RemainingAmt = nil
 		}
 	}
 }
@@ -388,9 +759,9 @@ func (r *ContractRuntime) initializeRuntimeState() error {
 	case *AMMContract:
 		state := TemplateRuntimeState{
 			Running: RunningData{
-				RequiredAsset: c.AssetAmt,
-				RequiredSat:   c.SatValue,
-				K:             c.K,
+				RequiredAssetA: parseDecimalOrZero(c.AssetAmt),
+				RequiredAssetB: scommon.NewDefaultDecimal(c.SatValue),
+				K:              parseDecimalOrZero(c.K),
 			},
 		}
 		return r.saveRuntimeState(state)
@@ -407,16 +778,32 @@ func (r *ContractRuntime) ApplyFunding(outputs []ContractOutput, gasAssetName st
 	if err != nil {
 		return err
 	}
+	if applier, ok := r.contract.(FundingStateApplier); ok {
+		handled, err := applier.ApplyFundingState(&state, outputs, gasAssetName)
+		if err != nil || handled {
+			if err != nil {
+				return err
+			}
+			return r.saveRuntimeState(state)
+		}
+	}
 	assetName := contractAssetName(r.contract)
 	for _, output := range outputs {
 		if _, ok := r.contract.(*AMMContract); ok {
-			state.Running.SatValueInPool += output.Value
+			if state.Running.AssetBInPool == nil {
+				state.Running.AssetBInPool = parseDecimalOrZero("0")
+			}
+			state.Running.AssetBInPool = scommon.DecimalAdd(state.Running.AssetBInPool, scommon.NewDefaultDecimal(output.Value))
 			if assetName != "" {
 				amt, err := output.AssetAmount(assetName)
 				if err != nil {
 					return err
 				}
-				state.Running.AssetAmtInPool = decimalStringAdd(state.Running.AssetAmtInPool, amt.String())
+				amt = parseDecimalOrZero(amt.String())
+				if state.Running.AssetAInPool == nil {
+					state.Running.AssetAInPool = parseDecimalOrZero("0")
+				}
+				state.Running.AssetAInPool = scommon.DecimalAdd(state.Running.AssetAInPool, amt)
 			}
 		}
 		if gasAssetName != "" {
@@ -424,7 +811,7 @@ func (r *ContractRuntime) ApplyFunding(outputs []ContractOutput, gasAssetName st
 			if err != nil {
 				return err
 			}
-			state.Running.GasBalance = decimalStringAdd(state.Running.GasBalance, gas.String())
+			state.Running.GasBalance += gas.Int64()
 		}
 	}
 	if !state.Running.TradingReady {
@@ -441,12 +828,21 @@ func (r *ContractRuntime) ApplyGasFunding(outputs []ContractOutput, gasAssetName
 	if err != nil {
 		return err
 	}
+	if applier, ok := r.contract.(GasFundingStateApplier); ok {
+		handled, err := applier.ApplyGasFundingState(&state, outputs, gasAssetName)
+		if err != nil || handled {
+			if err != nil {
+				return err
+			}
+			return r.saveRuntimeState(state)
+		}
+	}
 	for _, output := range outputs {
 		gas, err := output.AssetAmount(gasAssetName)
 		if err != nil {
 			return err
 		}
-		state.Running.GasBalance = decimalStringAdd(state.Running.GasBalance, gas.String())
+		state.Running.GasBalance += gas.Int64()
 	}
 	return r.saveRuntimeState(state)
 }
@@ -478,6 +874,8 @@ func contractAssetName(contract Contract) string {
 		return c.AssetName
 	case *AMMContract:
 		return c.AssetName
+	case *ExchangeContract:
+		return c.AssetAName
 	default:
 		return ""
 	}
@@ -499,42 +897,54 @@ func decimalString(d *scommon.Decimal) string {
 	return d.String()
 }
 
-func decimalStringAdd(a, b string) string {
-	da := parseDecimalOrZero(a)
-	db := parseDecimalOrZero(b)
-	return decimalString(scommon.DecimalAdd(da, db))
-}
-
-func decimalStringSub(a, b string) string {
-	da := parseDecimalOrZero(a)
-	db := parseDecimalOrZero(b)
-	return decimalString(scommon.DecimalSub(da, db))
-}
-
 func parseDecimalOrZero(value string) *scommon.Decimal {
 	if value == "" {
-		return scommon.NewDefaultDecimal(0)
+		return scommon.NewDecimal(0, MaxPriceDivisibility)
 	}
 	d, err := scommon.NewDecimalFromString(value, MaxPriceDivisibility)
 	if err != nil {
-		return scommon.NewDefaultDecimal(0)
+		return scommon.NewDecimal(0, MaxPriceDivisibility)
 	}
 	return d
 }
 
+func decimalInt64(value *scommon.Decimal) int64 {
+	if value == nil {
+		return 0
+	}
+	return value.Int64()
+}
+
 func (r RunningData) ammTradingReady() bool {
-	requiredAsset := parseDecimalOrZero(r.RequiredAsset)
-	if requiredAsset.Sign() == 0 {
+	requiredAssetA := r.RequiredAssetA
+	if requiredAssetA == nil {
+		requiredAssetA = parseDecimalOrZero("0")
+	}
+	if requiredAssetA.Sign() == 0 {
 		return true
 	}
-	asset := parseDecimalOrZero(r.AssetAmtInPool)
-	if asset.Cmp(requiredAsset) < 0 || r.SatValueInPool < r.RequiredSat {
+	assetA := r.AssetAInPool
+	if assetA == nil {
+		assetA = parseDecimalOrZero("0")
+	}
+	assetB := r.AssetBInPool
+	if assetB == nil {
+		assetB = parseDecimalOrZero("0")
+	}
+	requiredAssetB := r.RequiredAssetB
+	if requiredAssetB == nil {
+		requiredAssetB = parseDecimalOrZero("0")
+	}
+	if assetA.Cmp(requiredAssetA) < 0 || assetB.Cmp(requiredAssetB) < 0 {
 		return false
 	}
-	k := parseDecimalOrZero(r.K)
+	k := r.K
+	if k == nil {
+		k = parseDecimalOrZero("0")
+	}
 	if k.Sign() == 0 {
 		return true
 	}
-	currentK := scommon.DecimalMul(asset, scommon.NewDefaultDecimal(r.SatValueInPool))
+	currentK := scommon.DecimalMul(assetA, assetB)
 	return currentK.Cmp(k) >= 0
 }

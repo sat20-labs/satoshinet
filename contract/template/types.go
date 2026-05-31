@@ -10,6 +10,7 @@ const (
 	TemplateLimitOrder = contractcommon.TemplateLimitOrder
 	TemplateSwapLegacy = contractcommon.TemplateSwapLegacy
 	TemplateAMM        = contractcommon.TemplateAMM
+	TemplateExchange   = contractcommon.TemplateExchange
 )
 
 const (
@@ -26,6 +27,8 @@ const (
 	InvokeAPIAddLiquidity    = contractcommon.TemplateInvokeAPIAddLiquidity
 	InvokeAPIRemoveLiquidity = contractcommon.TemplateInvokeAPIRemoveLiquidity
 	InvokeAPIProfit          = contractcommon.TemplateInvokeAPIProfit
+	InvokeAPIExchange        = contractcommon.TemplateInvokeAPIExchange
+	InvokeAPIClose           = contractcommon.TemplateInvokeAPIClose
 )
 
 const (
@@ -51,6 +54,7 @@ const (
 	OrderTypeBind            = 19
 	OrderTypeClose           = 20
 	OrderTypeUnused          = 21
+	OrderTypeExchange        = 22
 )
 
 const (

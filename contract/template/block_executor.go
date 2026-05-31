@@ -129,28 +129,40 @@ func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output Contra
 	if !ok {
 		return errors.New("default invoke target contract does not exist")
 	}
-	fee, err := e.GasConfig.InvokeFee(e.BlockHeight)
-	if err != nil {
-		return err
-	}
-	if err := requireDefaultInvokeGas(output, e.GasConfig.GasAssetName, fee); err != nil {
-		return err
-	}
 	invoker := ""
 	parsed := ParsedTx{Type: TxTypeInvoke, ContractOutputs: []ContractOutput{output}, Inputs: msgTxInputs(tx)}
 	if e.ResolveInvoker != nil {
+		var err error
 		invoker, err = e.ResolveInvoker(tx, parsed)
 		if err != nil {
 			return err
 		}
 	}
+	invokeFee, err := e.GasConfig.InvokeFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
+	requiredGas, err := addGasFees(invokeFee, resultFee)
+	if err != nil {
+		return err
+	}
+	hasRequiredGas, err := defaultInvokeHasRequiredGas(output, e.GasConfig.normalized().GasAssetName, requiredGas)
+	if err != nil {
+		return err
+	}
 	item, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{
-		Action:         contractcommon.ContractInvokeAPIDefault,
-		CallID:         DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
-		Invoker:        invoker,
-		FundingOutputs: []ContractOutput{output},
-		Height:         e.BlockHeight,
-		Timestamp:      e.BlockHeight,
+		Action:                contractcommon.ContractInvokeAPIDefault,
+		CallID:                DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
+		Invoker:               invoker,
+		FundingOutputs:        []ContractOutput{output},
+		Height:                e.BlockHeight,
+		Timestamp:             e.BlockHeight,
+		ResultGasFee:          gasFeeIf(hasRequiredGas, resultFee),
+		ApplyDefaultRetention: !hasRequiredGas,
 	})
 	if err != nil {
 		return err
@@ -158,11 +170,7 @@ func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output Contra
 	if item == nil {
 		return nil
 	}
-	if err := runtime.ApplyGasFunding([]ContractOutput{output}, e.GasConfig.GasAssetName); err != nil {
-		return err
-	}
-	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
-	if err != nil {
+	if err := runtime.ApplyGasFunding([]ContractOutput{output}, e.GasConfig.normalized().GasAssetName); err != nil {
 		return err
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
@@ -179,23 +187,41 @@ func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output Contra
 		ItemIDs:        []int64{item.ID},
 		RequiresResult: true,
 	}
-	record.GasFee = resultFee
+	record.GasFee = gasFeeIf(hasRequiredGas, resultFee)
 	e.records = append(e.records, record)
 	return nil
 }
 
-func requireDefaultInvokeGas(output ContractOutput, gasAssetName string, fee uint64) error {
-	if fee == 0 || gasAssetName == "" {
-		return nil
+func addGasFees(a, b uint64) (uint64, error) {
+	if a > ^uint64(0)-b {
+		return 0, errors.New("default invoke gas fee overflows uint64")
 	}
-	gas, err := output.AssetAmount(gasAssetName)
+	return a + b, nil
+}
+
+func gasFeeIf(ok bool, fee uint64) uint64 {
+	if ok {
+		return fee
+	}
+	return 0
+}
+
+func defaultInvokeHasRequiredGas(output ContractOutput, gasAssetName string, required uint64) (bool, error) {
+	if required == 0 {
+		return true, nil
+	}
+	if gasAssetName == "" {
+		return false, nil
+	}
+	const maxInt64AsUint64 = uint64(1<<63 - 1)
+	if required > maxInt64AsUint64 {
+		return false, nil
+	}
+	amount, err := output.AssetAmount(gasAssetName)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if gas.Int64() < int64(fee) {
-		return fmt.Errorf("default invoke output %s gas %d below required %d", output.OutPoint, gas.Int64(), fee)
-	}
-	return nil
+	return amount != nil && amount.Int64() >= int64(required), nil
 }
 
 func templateOutputFromDefault(output contractcommon.DefaultInvokeOutput) ContractOutput {
@@ -221,7 +247,7 @@ func msgTxInputs(tx *wire.MsgTx) []OutPoint {
 }
 
 func (e *BlockExecutor) Finalize() (BlockExecutionResult, error) {
-	plans, err := e.Store.SettleBlock(e.BlockHeight)
+	plans, err := e.Store.SettleBlockWithGasConfig(e.BlockHeight, e.GasConfig.normalized())
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
@@ -288,6 +314,10 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
 		return nil
 	}
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
 	invoker := ""
 	if e.ResolveInvoker != nil {
 		invoker, err = e.ResolveInvoker(tx, parsed)
@@ -303,15 +333,12 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 		FundingOutputs: validated.FundingOutputs,
 		Height:         e.BlockHeight,
 		Timestamp:      e.BlockHeight,
+		ResultGasFee:   resultFee,
 	})
 	if err != nil {
 		return err
 	}
 	if err := runtime.ApplyGasFunding(validated.FundingOutputs, e.GasConfig.GasAssetName); err != nil {
-		return err
-	}
-	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
-	if err != nil {
 		return err
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)

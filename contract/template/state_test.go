@@ -15,6 +15,14 @@ func testAsset(assetName string, amount int64) wire.TxAssets {
 	}}
 }
 
+func requireDecimalString(t *testing.T, expected string, actual *scommon.Decimal) {
+	t.Helper()
+	if actual == nil {
+		actual = scommon.NewDefaultDecimal(0)
+	}
+	require.Equal(t, expected, actual.String())
+}
+
 func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	contract := runtime.Address()
@@ -42,7 +50,7 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), item.ID)
 	require.Equal(t, OrderTypeBuy, item.OrderType)
-	require.Equal(t, "10", item.ExpectedAmt)
+	requireDecimalString(t, "10", item.ExpectedAmt)
 	require.Equal(t, int64(20), item.RemainingValue)
 
 	state, err := runtime.RuntimeState()
@@ -50,7 +58,7 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	require.Equal(t, int64(1), state.NextItemID)
 	require.Equal(t, uint64(1), state.InvokeCount)
 	require.Len(t, state.Items, 1)
-	require.Equal(t, int64(30), state.Running.TotalInputGas)
+	requireDecimalString(t, "30", state.Running.TotalInputAssetB)
 }
 
 func TestApplyInvokeMarksLimitOrderBuyInvalidWhenFundingIsOutsideTolerance(t *testing.T) {
@@ -140,15 +148,15 @@ func TestApplyInvokeRecordsAMMAddLiquidityItem(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, OrderTypeAddLiquidity, item.OrderType)
-	require.Equal(t, "10", item.InAmt)
+	requireDecimalString(t, "10", item.InAmt)
 	require.Equal(t, int64(20), item.RemainingValue)
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Empty(t, state.Running.AssetAmtInPool)
-	require.Zero(t, state.Running.SatValueInPool)
-	require.Equal(t, "10", state.Running.TotalInputAsset)
-	require.Equal(t, int64(25), state.Running.TotalInputGas)
+	require.Empty(t, state.Running.AssetAInPool)
+	require.Zero(t, state.Running.AssetBInPool)
+	requireDecimalString(t, "10", state.Running.TotalInputAssetA)
+	requireDecimalString(t, "25", state.Running.TotalInputAssetB)
 }
 
 func TestApplyInvokeRecordsAMMBuyWithInvokeFeeOnly(t *testing.T) {
@@ -194,9 +202,9 @@ func TestApplyFundingTracksTemplateGasSeparately(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, "50", state.Running.GasBalance)
-	require.Empty(t, state.Running.AssetAmtInPool)
-	require.Zero(t, state.Running.SatValueInPool)
+	require.Equal(t, int64(50), state.Running.GasBalance)
+	require.Empty(t, state.Running.AssetAInPool)
+	require.Zero(t, state.Running.AssetBInPool)
 }
 
 func TestApplyGasFundingDoesNotChangeAMMPool(t *testing.T) {
@@ -214,8 +222,8 @@ func TestApplyGasFundingDoesNotChangeAMMPool(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, "100", state.Running.AssetAmtInPool)
-	require.Equal(t, int64(20), state.Running.SatValueInPool)
+	requireDecimalString(t, "100", state.Running.AssetAInPool)
+	requireDecimalString(t, "20", state.Running.AssetBInPool)
 	require.Empty(t, state.Running.GasBalance)
 	require.True(t, state.Running.TradingReady)
 }

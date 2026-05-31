@@ -12,6 +12,7 @@ const (
 	TemplateLimitOrder = "limitorder.tc"
 	TemplateSwapLegacy = "swap.tc"
 	TemplateAMM        = "amm.tc"
+	TemplateExchange   = "exchange.tc"
 )
 
 const (
@@ -20,6 +21,8 @@ const (
 	TemplateInvokeAPIAddLiquidity    = "addliq"
 	TemplateInvokeAPIRemoveLiquidity = "removeliq"
 	TemplateInvokeAPIProfit          = "profit"
+	TemplateInvokeAPIExchange        = "exchange"
+	TemplateInvokeAPIClose           = "close"
 )
 
 var templateInvokeActions = map[string]map[string]struct{}{
@@ -32,6 +35,10 @@ var templateInvokeActions = map[string]map[string]struct{}{
 		TemplateInvokeAPIAddLiquidity:    {},
 		TemplateInvokeAPIRemoveLiquidity: {},
 	},
+	TemplateExchange: {
+		TemplateInvokeAPIExchange: {},
+		TemplateInvokeAPIClose:    {},
+	},
 }
 
 func NormalizeTemplateName(name string) string {
@@ -40,6 +47,8 @@ func NormalizeTemplateName(name string) string {
 		return TemplateLimitOrder
 	case TemplateAMM:
 		return TemplateAMM
+	case TemplateExchange:
+		return TemplateExchange
 	default:
 		return strings.ToLower(strings.TrimSpace(name))
 	}

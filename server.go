@@ -3934,7 +3934,7 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 			txs = append(txs, msgTx)
 		}
 		blockGasConfig := gasConfig
-		blockGasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(int64(req.Height))
+		blockGasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(params.Net, int64(req.Height))
 		result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 			Txs:            txs,
 			Runtime:        runtime,
@@ -4019,7 +4019,7 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 			txs = append(txs, tx.MsgTx())
 		}
 		blockGasConfig := gasConfig
-		blockGasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(int64(req.Height))
+		blockGasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(params.Net, int64(req.Height))
 		result, err := tmplcontract.BuildBlockResultTxs(tmplcontract.BlockResultBuildRequest{
 			Txs:            txs,
 			Store:          store,

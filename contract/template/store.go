@@ -77,6 +77,10 @@ func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
 }
 
 func (s *RuntimeStore) SettleBlock(height int64) ([]*SettlementPlan, error) {
+	return s.SettleBlockWithGasConfig(height, DefaultGasConfig())
+}
+
+func (s *RuntimeStore) SettleBlockWithGasConfig(height int64, gasConfig GasConfig) ([]*SettlementPlan, error) {
 	if s == nil {
 		return nil, nil
 	}
@@ -88,7 +92,7 @@ func (s *RuntimeStore) SettleBlock(height int64) ([]*SettlementPlan, error) {
 
 	plans := make([]*SettlementPlan, 0)
 	for _, key := range keys {
-		plan, err := s.runtimes[key].SettleBlock(height)
+		plan, err := s.runtimes[key].SettleBlockWithGasConfig(height, gasConfig)
 		if err != nil {
 			return nil, err
 		}
