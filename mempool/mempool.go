@@ -188,14 +188,15 @@ type TxPool struct {
 	// The following variables must only be used atomically.
 	lastUpdated int64 // last time pool was updated
 
-	mtx           sync.RWMutex
-	cfg           Config
-	pool          map[chainhash.Hash]*TxDesc
-	orphans       map[chainhash.Hash]*orphanTx
-	orphansByPrev map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx
-	outpoints     map[wire.OutPoint]*btcutil.Tx
-	pennyTotal    float64 // exponentially decaying total for penny spends.
-	lastPennyUnix int64   // unix time of last ``penny spend''
+	mtx             sync.RWMutex
+	cfg             Config
+	pool            map[chainhash.Hash]*TxDesc
+	orphans         map[chainhash.Hash]*orphanTx
+	orphansByPrev   map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx
+	outpoints       map[wire.OutPoint]*btcutil.Tx
+	anchorOutpoints map[string]*btcutil.Tx
+	pennyTotal      float64 // exponentially decaying total for penny spends.
+	lastPennyUnix   int64   // unix time of last ``penny spend''
 
 	// nextExpireScan is the time after which the orphan pool will be
 	// scanned in order to evict orphans.  This is NOT a hard deadline as
@@ -505,6 +506,14 @@ func (mp *TxPool) removeTransaction(tx *btcutil.Tx, removeRedeemers bool) {
 		for _, txIn := range txDesc.Tx.MsgTx().TxIn {
 			delete(mp.outpoints, txIn.PreviousOutPoint)
 		}
+		if blockchain.IsAnchorTx(txDesc.Tx.MsgTx()) {
+			utxo, err := anchorFundingUtxo(txDesc.Tx)
+			if err != nil {
+				log.Warnf("failed to parse anchor tx %s when removing from mempool: %v", txHash, err)
+			} else if existing, ok := mp.anchorOutpoints[utxo]; ok && existing.Hash().IsEqual(txHash) {
+				delete(mp.anchorOutpoints, utxo)
+			}
+		}
 		delete(mp.pool, *txHash)
 		atomic.StoreInt64(&mp.lastUpdated, time.Now().Unix())
 	}
@@ -566,6 +575,14 @@ func (mp *TxPool) addTransaction(utxoView *blockchain.UtxoViewpoint, tx *btcutil
 	mp.pool[*tx.Hash()] = txD
 	for _, txIn := range tx.MsgTx().TxIn {
 		mp.outpoints[txIn.PreviousOutPoint] = tx
+	}
+	if blockchain.IsAnchorTx(tx.MsgTx()) {
+		utxo, err := anchorFundingUtxo(tx)
+		if err != nil {
+			log.Warnf("failed to parse accepted anchor tx %s: %v", tx.Hash(), err)
+		} else {
+			mp.anchorOutpoints[utxo] = tx
+		}
 	}
 	atomic.StoreInt64(&mp.lastUpdated, time.Now().Unix())
 
@@ -1917,11 +1934,12 @@ func (mp *TxPool) Load(dataDir string) error {
 // transactions until they are mined into a block.
 func New(cfg *Config) *TxPool {
 	return &TxPool{
-		cfg:            *cfg,
-		pool:           make(map[chainhash.Hash]*TxDesc),
-		orphans:        make(map[chainhash.Hash]*orphanTx),
-		orphansByPrev:  make(map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx),
-		nextExpireScan: time.Now().Add(orphanExpireScanInterval),
-		outpoints:      make(map[wire.OutPoint]*btcutil.Tx),
+		cfg:             *cfg,
+		pool:            make(map[chainhash.Hash]*TxDesc),
+		orphans:         make(map[chainhash.Hash]*orphanTx),
+		orphansByPrev:   make(map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx),
+		nextExpireScan:  time.Now().Add(orphanExpireScanInterval),
+		outpoints:       make(map[wire.OutPoint]*btcutil.Tx),
+		anchorOutpoints: make(map[string]*btcutil.Tx),
 	}
 }

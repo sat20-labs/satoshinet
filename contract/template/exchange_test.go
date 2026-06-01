@@ -1,6 +1,7 @@
 package template
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/wire"
@@ -134,6 +135,52 @@ func TestExchangeDefaultInvokeRetainsAssetA(t *testing.T) {
 	requireDecimalString(t, "9.9", state.Running.TotalDealAssetA)
 }
 
+func TestExchangeDefaultBuyWithSatoshiAssetB(t *testing.T) {
+	gas := DefaultGasConfig().GasAssetName
+	contract := NewExchangeContract(gas, SatoshiAssetName, ExchangePriceModeHeight, []ExchangePriceStep{{
+		Threshold: "0",
+		BPerA:     "0.0001",
+	}})
+	require.NoError(t, contract.CheckContent())
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	gasConfig := exchangeTestGasConfig(gas)
+	fundTx := testTemplateDefaultInvokeTx(t, addr, 0, testAsset(gas, 100001))
+	buyTx := testTemplateDefaultInvokeTx(t, addr, 1, nil)
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
+		Store:     store,
+		GasConfig: gasConfig,
+		ResolveInvoker: func(tx *wire.MsgTx, parsed ParsedTx) (string, error) {
+			if tx == buyTx {
+				return "buyer-address", nil
+			}
+			return "funder-address", nil
+		},
+		BlockHeight: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.SettlementPlans, 1)
+	require.Len(t, result.SettlementPlans[0].Transfers, 2)
+	require.Equal(t, gas, result.SettlementPlans[0].Transfers[0].AssetName)
+	require.Equal(t, SatoshiAssetName, result.SettlementPlans[0].Transfers[1].AssetName)
+	require.Equal(t, "1", result.SettlementPlans[0].Transfers[1].AssetAmt)
+
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, 1, state.Running.TotalDealCount)
+	requireDecimalString(t, "10000", state.Running.TotalDealAssetA)
+
+	provider := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	require.NotEmpty(t, plans[0].Outputs)
+}
+
 func TestExchangeSoldAmountPriceTiersWithinSingleInvoke(t *testing.T) {
 	contract := NewExchangeContract("ordx:f:asset_a", "ordx:f:asset_b", ExchangePriceModeSoldA, []ExchangePriceStep{{
 		Threshold: "0",
@@ -216,6 +263,24 @@ func TestExchangeCloseReturnsRemainingAssetAToDeployer(t *testing.T) {
 	requireResultPlanAssetTo(t, plans[0], "deployer-address", contract.AssetAName, "100")
 	requireResultPlanAssetTo(t, plans[0], "deployer-address", gas, "4")
 	requireNoResultPlanOutputTo(t, plans[0], addr.MustEncode())
+}
+
+func TestExchangeRejectsTooManyPriceSteps(t *testing.T) {
+	steps := make([]ExchangePriceStep, MaxExchangePriceSteps+1)
+	for i := range steps {
+		steps[i] = ExchangePriceStep{
+			Threshold: strconv.Itoa(i),
+			BPerA:     "2",
+		}
+	}
+	contract := NewExchangeContract("ordx:f:asset_a", "ordx:f:asset_b", ExchangePriceModeHeight, steps)
+	require.Error(t, contract.CheckContent())
+
+	encoded, err := contract.Encode()
+	require.NoError(t, err)
+
+	var decoded ExchangeContract
+	require.Error(t, decoded.Decode(encoded))
 }
 
 func testExchangeContract() *ExchangeContract {

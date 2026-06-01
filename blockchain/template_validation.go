@@ -98,7 +98,7 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 		Store:          store,
 		Registry:       v.cfg.Registry,
 		ContractPrefix: prefix,
-		GasConfig:      v.cfg.GasConfig,
+		GasConfig:      gasConfig,
 		BlockHeight:    int64(block.Height()),
 		ResolveInvoker: template.LastInputPreviousOutputInvokerResolver(
 			v.cfg.ChainParams, previousOutputScriptResolver(view)),

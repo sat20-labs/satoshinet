@@ -11,6 +11,7 @@ import (
 const (
 	ExchangePriceModeHeight = "height"
 	ExchangePriceModeSoldA  = "sold_a"
+	MaxExchangePriceSteps   = 128
 )
 
 type ExchangePriceStep struct {
@@ -76,6 +77,9 @@ func (c *ExchangeContract) Decode(data []byte) error {
 	if count < 0 {
 		return fmt.Errorf("invalid price step count %d", count)
 	}
+	if count > MaxExchangePriceSteps {
+		return fmt.Errorf("exchange price step count %d exceeds maximum %d", count, MaxExchangePriceSteps)
+	}
 	c.Steps = make([]ExchangePriceStep, 0, count)
 	for i := int64(0); i < count; i++ {
 		if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -100,8 +104,13 @@ func (c *ExchangeContract) CheckContent() error {
 	if err := checkTemplateAssetName(c.AssetAName); err != nil {
 		return fmt.Errorf("invalid asset A: %w", err)
 	}
-	if err := checkTemplateAssetName(c.AssetBName); err != nil {
-		return fmt.Errorf("invalid asset B: %w", err)
+	if c.AssetBName == "" {
+		return fmt.Errorf("invalid asset B %s", c.AssetBName)
+	}
+	if c.AssetBName != SatoshiAssetName {
+		if err := checkTemplateAssetName(c.AssetBName); err != nil {
+			return fmt.Errorf("invalid asset B: %w", err)
+		}
 	}
 	if c.AssetAName == c.AssetBName {
 		return fmt.Errorf("asset A and asset B must be different")
@@ -113,6 +122,9 @@ func (c *ExchangeContract) CheckContent() error {
 	}
 	if len(c.Steps) == 0 {
 		return fmt.Errorf("missing exchange price steps")
+	}
+	if len(c.Steps) > MaxExchangePriceSteps {
+		return fmt.Errorf("exchange price step count %d exceeds maximum %d", len(c.Steps), MaxExchangePriceSteps)
 	}
 	var prevHeight int64 = -1
 	var prevSold *scommon.Decimal

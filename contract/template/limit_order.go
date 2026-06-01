@@ -50,6 +50,8 @@ func (c *LimitOrderContract) CheckInvoke(action string, param []byte) error {
 	case InvokeAPIRefund:
 		var refundParam RefundInvokeParam
 		return refundParam.Decode(param)
+	case InvokeAPIClose:
+		return (&CloseInvokeParam{}).Decode(param)
 	default:
 		return fmt.Errorf("unsupported limit order action %s", action)
 	}

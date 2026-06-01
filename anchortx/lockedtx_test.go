@@ -130,6 +130,50 @@ func TestCheckAnchorTxValidRejectsFakeL1IndexerMismatch(t *testing.T) {
 	require.ErrorContains(t, err, "invalid value")
 }
 
+func TestSameFundingUTXOCanProduceDifferentAnchorTxIDs(t *testing.T) {
+	const utxo = "3333444455556666777788889999aaaabbbbccccddddeeeeffff000011112222:0"
+
+	coreKey, peerKey := testAnchorKeys(t)
+
+	corePub := coreKey.PubKey().SerializeCompressed()
+	peerPub := peerKey.PubKey().SerializeCompressed()
+	witnessScript, lockedPkScript, err := GetP2WSHscript(corePub, peerPub)
+	require.NoError(t, err)
+
+	const value = int64(21000)
+	server := fakeL1IndexerServer(t, map[string]*indexercommon.AssetsInUtxo{
+		utxo: {
+			OutPoint: utxo,
+			Value:    value,
+			PkScript: lockedPkScript,
+		},
+	})
+	t.Cleanup(server.Close)
+	startTestAnchorManager(t, server)
+
+	anchorScript := signedAnchorScript(t, utxo, witnessScript, value, nil, coreKey)
+	tx1 := wire.NewMsgTx(2)
+	tx1.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: wire.AnchorTxOutIndex},
+		SignatureScript:  anchorScript,
+	})
+	tx1.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_TRUE}))
+
+	tx2 := wire.NewMsgTx(2)
+	tx2.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: wire.AnchorTxOutIndex},
+		SignatureScript:  anchorScript,
+	})
+	tx2.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_2}))
+
+	require.NotEqual(t, tx1.TxID(), tx2.TxID())
+	ascend1, err := CheckAnchorTxValid(tx1, true)
+	require.NoError(t, err)
+	ascend2, err := CheckAnchorTxValid(tx2, true)
+	require.NoError(t, err)
+	require.Equal(t, ascend1.Utxo, ascend2.Utxo)
+}
+
 func fakeL1IndexerServer(t *testing.T, utxos map[string]*indexercommon.AssetsInUtxo) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

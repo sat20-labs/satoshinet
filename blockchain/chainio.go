@@ -1175,8 +1175,6 @@ func (b *BlockChain) createChainState() error {
 			return err
 		}
 
-		
-
 		// Store the genesis block into the database.
 		return dbStoreBlock(dbTx, genesisBlock)
 	})
@@ -1616,24 +1614,46 @@ func dbPutAnchorTxInfo(dbTx database.Tx, anchorTxInfo *AnchorTxInfo) error {
 	return anchorTxInfoBucket.Put([]byte(anchorTxInfo.LockedUtxo), serializedData)
 }
 
+func dbDeleteAnchorTxInfo(dbTx database.Tx, lockedUtxo string, anchorTxid string) error {
+	anchorTxInfoBucket := dbTx.Metadata().Bucket(anchorTxInfoBucketName)
+	if anchorTxInfoBucket == nil {
+		return fmt.Errorf("Bucket anchor tx info not found")
+	}
+
+	value := anchorTxInfoBucket.Get([]byte(lockedUtxo))
+	if value == nil {
+		return nil
+	}
+
+	anchorTxInfo, err := deserializeAnchorTxInfo(value)
+	if err != nil {
+		return fmt.Errorf("Failed to deserialize anchor tx info: %v", err)
+	}
+	if anchorTxInfo.AnchorTxid != anchorTxid {
+		return nil
+	}
+
+	return anchorTxInfoBucket.Delete([]byte(lockedUtxo))
+}
+
 // dbFetchAnchorTxInfoByLockedUtxo uses an existing database transaction to retrieve
 // a single anchor tx info by LockedUtxo from the database.
 func dbFetchAnchorTxInfo(dbTx database.Tx, lockedUtxo string) (*AnchorTxInfo, error) {
-    anchorTxInfoBucket := dbTx.Metadata().Bucket(anchorTxInfoBucketName)
-    if anchorTxInfoBucket == nil {
-        return nil, fmt.Errorf("Bucket anchor tx info not found")
-    }
+	anchorTxInfoBucket := dbTx.Metadata().Bucket(anchorTxInfoBucketName)
+	if anchorTxInfoBucket == nil {
+		return nil, fmt.Errorf("Bucket anchor tx info not found")
+	}
 
-    value := anchorTxInfoBucket.Get([]byte(lockedUtxo))
-    if value == nil {
-        return nil, fmt.Errorf("Anchor tx info not found for LockedUtxo: %s", lockedUtxo)
-    }
+	value := anchorTxInfoBucket.Get([]byte(lockedUtxo))
+	if value == nil {
+		return nil, fmt.Errorf("Anchor tx info not found for LockedUtxo: %s", lockedUtxo)
+	}
 
-    anchorTxInfo, err := deserializeAnchorTxInfo(value)
-    if err != nil {
-        return nil, fmt.Errorf("Failed to deserialize anchor tx info: %v", err)
-    }
-    return anchorTxInfo, nil
+	anchorTxInfo, err := deserializeAnchorTxInfo(value)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to deserialize anchor tx info: %v", err)
+	}
+	return anchorTxInfo, nil
 }
 
 // func dbPutAnchorTxInfo(dbTx database.Tx, anchorTxid string, lockedTxid string, pkScript []byte, amount int64) error {

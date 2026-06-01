@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 
 	scommon "github.com/sat20-labs/indexer/common"
@@ -249,7 +250,16 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 				return nil, fmt.Errorf("template result outputs spend %d sats but only %d sats are available", resultOutputsValue(out[i].Outputs), availableValue)
 			}
 			if !resultOutputIsZero(change) {
-				out[i].Outputs = append(out[i].Outputs, change)
+				closed, deployer, err := closedContractChangeRecipient(contract, store)
+				if err != nil {
+					return nil, err
+				}
+				if closed {
+					out[i].Outputs = append(out[i].Outputs,
+						splitClosedProfitChange(change, deployer, gasConfig.BootstrapAddress)...)
+				} else {
+					out[i].Outputs = append(out[i].Outputs, change)
+				}
 			}
 		} else {
 			change, err := contractChangeOutput(contract, store, gasConfig, nil)
@@ -263,6 +273,73 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 		out[i].Inputs = uniqueOutPoints(out[i].Inputs)
 	}
 	return out, nil
+}
+
+func closedContractChangeRecipient(contract ContractAddress, store *RuntimeStore) (bool, string, error) {
+	if store == nil {
+		return false, "", nil
+	}
+	runtime, ok := store.Get(contract)
+	if !ok || runtime == nil {
+		return false, "", nil
+	}
+	state, err := runtime.loadRuntimeState()
+	if err != nil {
+		return false, "", err
+	}
+	return state.Running.Closed, runtime.RuntimeBase().Deployer(), nil
+}
+
+func splitClosedProfitChange(change ResultOutput, deployer, bootstrap string) []ResultOutput {
+	if resultOutputIsZero(change) {
+		return nil
+	}
+	if deployer == "" || bootstrap == "" || deployer == bootstrap {
+		change.To = deployer
+		return []ResultOutput{change}
+	}
+	deployerOut := ResultOutput{To: deployer}
+	bootstrapOut := ResultOutput{To: bootstrap}
+	deployerOut.Value = change.Value * 6 / 10
+	bootstrapOut.Value = change.Value - deployerOut.Value
+	deployerOut.Assets, bootstrapOut.Assets = splitAssetsByBPS(change.Assets, 6000)
+	out := make([]ResultOutput, 0, 2)
+	if !resultOutputIsZero(deployerOut) {
+		out = append(out, deployerOut)
+	}
+	if !resultOutputIsZero(bootstrapOut) {
+		out = append(out, bootstrapOut)
+	}
+	return out
+}
+
+func splitAssetsByBPS(assets wire.TxAssets, deployerBPS int64) (wire.TxAssets, wire.TxAssets) {
+	if len(assets) == 0 {
+		return nil, nil
+	}
+	deployer := make(wire.TxAssets, 0, len(assets))
+	bootstrap := make(wire.TxAssets, 0, len(assets))
+	for _, asset := range assets {
+		deployerAmt := asset.Amount.MulBigInt(big.NewInt(deployerBPS)).DivBigInt(big.NewInt(10000))
+		bootstrapAmt := scommon.DecimalSub(asset.Amount.Clone(), deployerAmt)
+		if deployerAmt.Sign() > 0 {
+			next := asset
+			next.Amount = *deployerAmt
+			deployer = append(deployer, next)
+		}
+		if bootstrapAmt.Sign() > 0 {
+			next := asset
+			next.Amount = *bootstrapAmt
+			bootstrap = append(bootstrap, next)
+		}
+	}
+	if len(deployer) == 0 {
+		deployer = nil
+	}
+	if len(bootstrap) == 0 {
+		bootstrap = nil
+	}
+	return deployer, bootstrap
 }
 
 func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput, gasAssetName string, gasFee uint64) (wire.TxAssets, error) {
@@ -331,6 +408,7 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	}
 	if exchange, ok := runtime.Contract().(*ExchangeContract); ok &&
 		exchange.AssetBName != "" &&
+		exchange.AssetBName != SatoshiAssetName &&
 		state.Running.AssetBInPool != nil &&
 		state.Running.AssetBInPool.Sign() > 0 {
 		poolAssets, err := newAssetSet(exchange.AssetBName, state.Running.AssetBInPool.String())
@@ -371,7 +449,10 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 }
 
 func contractChangeValue(contract Contract, assetB *scommon.Decimal) int64 {
-	if _, ok := contract.(*ExchangeContract); ok {
+	if exchange, ok := contract.(*ExchangeContract); ok {
+		if exchange.AssetBName == SatoshiAssetName {
+			return decimalInt64(assetB)
+		}
 		return 0
 	}
 	return decimalInt64(assetB)
@@ -531,6 +612,18 @@ func ResultPayloadFromTx(tx *wire.MsgTx) (ResultPayload, error) {
 }
 
 func resultOutputFromTransfer(transfer SettlementTransfer) (ResultOutput, error) {
+	if transfer.AssetName == SatoshiAssetName {
+		value := transfer.SatValue
+		if transfer.AssetAmt != "" {
+			value += decimalInt64(parseDecimalOrZero(transfer.AssetAmt))
+		}
+		return ResultOutput{
+			To:        transfer.To,
+			Value:     value,
+			AssetName: transfer.AssetName,
+			AssetAmt:  transfer.AssetAmt,
+		}, nil
+	}
 	assets, err := newAssetSet(transfer.AssetName, transfer.AssetAmt)
 	if err != nil {
 		return ResultOutput{}, err

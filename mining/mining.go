@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -601,6 +602,7 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 		len(sourceTxns))
 
 	contractPrefix := evmContractPrefix(g.chainParams)
+	anchorFundingUtxos := make(map[string]*chainhash.Hash)
 
 mempoolLoop:
 	for _, txDesc := range sourceTxns {
@@ -612,6 +614,17 @@ mempoolLoop:
 			continue
 		}
 		if blockchain.IsAnchorTx(tx.MsgTx()) {
+			lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+			if err != nil {
+				log.Warnf("Skipping invalid anchor tx %s: %v", tx.Hash(), err)
+				continue
+			}
+			if prevHash, ok := anchorFundingUtxos[lockedInfo.Utxo]; ok {
+				log.Warnf("Skipping duplicate anchor tx %s for funding utxo %s, already selected %s",
+					tx.Hash(), lockedInfo.Utxo, prevHash)
+				continue
+			}
+			anchorFundingUtxos[lockedInfo.Utxo] = tx.Hash()
 			log.Debugf("Add anchor tx %s directly", tx.Hash())
 			blockTxns = append(blockTxns, tx)
 			continue

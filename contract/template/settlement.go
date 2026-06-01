@@ -56,7 +56,14 @@ func (r *ContractRuntime) settleLimitOrders(height int64) (*SettlementPlan, erro
 		Contract: addr.EncodeAddress(),
 		Height:   height,
 	}
+	changed := applyInvalidItems(&state, plan, height)
 	applyRefunds(&state, plan, height)
+	if applyCloseItems(r.contract, &state, plan, height, r.base.Deployer()) {
+		if err := r.saveRuntimeState(state); err != nil {
+			return nil, err
+		}
+		return plan, nil
+	}
 	buyIDs, sellIDs := activeLimitOrderIDs(state.Items, height)
 	sortLimitOrders(state.Items, buyIDs, true)
 	sortLimitOrders(state.Items, sellIDs, false)
@@ -98,10 +105,10 @@ func (r *ContractRuntime) settleLimitOrders(height int64) (*SettlementPlan, erro
 			j++
 		}
 	}
-	if !settlementPlanHasChanges(plan) {
+	if !changed && !settlementPlanHasChanges(plan) {
 		return plan, nil
 	}
-	recomputeRunningDataPreserveGas(&state)
+	recomputeRunningDataPreserveGas(r.contract, &state)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err
 	}
@@ -118,8 +125,15 @@ func (r *ContractRuntime) settleAMM(height int64) (*SettlementPlan, error) {
 		Contract: addr.EncodeAddress(),
 		Height:   height,
 	}
+	changed := applyInvalidItems(&state, plan, height)
 	applyRefunds(&state, plan, height)
-	changed := settlementPlanHasChanges(plan)
+	changed = changed || settlementPlanHasChanges(plan)
+	if applyCloseItems(r.contract, &state, plan, height, r.base.Deployer()) {
+		if err := r.saveRuntimeState(state); err != nil {
+			return nil, err
+		}
+		return plan, nil
+	}
 
 	if state.Running.TradingReady {
 		itemIDs := activeAMMItemIDs(state.Items, height)
@@ -213,7 +227,7 @@ func (r *ContractRuntime) settleAMM(height int64) (*SettlementPlan, error) {
 	if !changed {
 		return plan, nil
 	}
-	recomputeRunningDataPreservePool(&state, state.Running.AssetAInPool, state.Running.AssetBInPool)
+	recomputeRunningDataPreservePool(r.contract, &state, state.Running.AssetAInPool, state.Running.AssetBInPool)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err
 	}
@@ -629,6 +643,102 @@ func applyRefunds(state *TemplateRuntimeState, plan *SettlementPlan, height int6
 	}
 }
 
+func applyInvalidItems(state *TemplateRuntimeState, plan *SettlementPlan, height int64) bool {
+	changed := false
+	for i := range state.Items {
+		item := &state.Items[i]
+		if item.Finished() || item.Reason != InvokeReasonInvalid || item.Height > height {
+			continue
+		}
+		addSettlementInputs(plan, item)
+		plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
+		item.Done = ItemStatusClosedDirectly
+		changed = true
+	}
+	return changed
+}
+
+func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64, deployer string) bool {
+	if state == nil || plan == nil || state.Running.Closed {
+		return false
+	}
+	for i := range state.Items {
+		closeItem := &state.Items[i]
+		if closeItem.Finished() || closeItem.Reason != InvokeReasonNormal ||
+			closeItem.OrderType != OrderTypeClose || closeItem.Height > height {
+			continue
+		}
+		addSettlementInputs(plan, closeItem)
+		plan.ItemIDs = appendPlanItemID(plan.ItemIDs, closeItem.ID)
+		if closeItem.Address != deployer {
+			closeItem.Reason = InvokeReasonInvalid
+			closeItem.Done = ItemStatusClosedDirectly
+			return true
+		}
+		for j := range state.Items {
+			item := &state.Items[j]
+			if item.ID == closeItem.ID || item.Finished() || item.Height > height {
+				continue
+			}
+			if item.Reason != InvokeReasonNormal {
+				continue
+			}
+			transfer := refundTransfer(item)
+			if transfer.AssetAmt != "" || transfer.SatValue != 0 {
+				plan.Transfers = append(plan.Transfers, transfer)
+			}
+			item.Reason = InvokeReasonRefund
+			item.Done = ItemStatusRefunded
+			item.OutAmt = nil
+			if transfer.AssetAmt != "" {
+				item.OutAmt = parseDecimalOrZero(transfer.AssetAmt)
+			}
+			item.OutValue = transfer.SatValue
+			item.RemainingAmt = nil
+			item.RemainingValue = 0
+			addSettlementInputs(plan, item)
+			plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
+		}
+		if amm, ok := contract.(*AMMContract); ok {
+			appendAMMLPCloseTransfers(state, plan, closeItem, amm.AssetName)
+		}
+		closeItem.Done = ItemStatusDealt
+		state.Running.Closed = true
+		return true
+	}
+	return false
+}
+
+func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan, item *InvokeItem, assetName string) {
+	if state == nil || plan == nil || state.Running.TotalLPTAmt == nil || state.Running.TotalLPTAmt.Sign() <= 0 {
+		return
+	}
+	poolAsset := state.Running.AssetAInPool
+	if poolAsset == nil {
+		poolAsset = parseDecimalOrZero("0")
+	}
+	poolGas := decimalInt64(state.Running.AssetBInPool)
+	for address, balance := range state.Running.LPBalances {
+		if address == "" || balance == nil || balance.Sign() <= 0 {
+			continue
+		}
+		ratio := scommon.DecimalDiv(balance, state.Running.TotalLPTAmt)
+		assetOut := decimalMulAssetRatio(poolAsset, ratio)
+		gasOut := proportionalInt64(poolGas, balance, state.Running.TotalLPTAmt)
+		if assetOut.Sign() <= 0 && gasOut <= 0 {
+			continue
+		}
+		plan.Transfers = append(plan.Transfers, SettlementTransfer{
+			ItemID:    item.ID,
+			To:        address,
+			AssetName: assetName,
+			AssetAmt:  decimalString(assetOut),
+			SatValue:  gasOut,
+			Reason:    SettlementReasonRefund,
+		})
+	}
+}
+
 func refundMatchesItem(refund *InvokeItem, itemID int64) bool {
 	if refund == nil || len(refund.RefundItemIDs) == 0 {
 		return true
@@ -696,17 +806,17 @@ func appendAMMRefundTransfer(plan *SettlementPlan, item *InvokeItem, transfer Se
 	addSettlementInputs(plan, item)
 }
 
-func recomputeRunningData(state *TemplateRuntimeState) {
+func recomputeRunningData(contract Contract, state *TemplateRuntimeState) {
 	var running RunningData
 	for i := range state.Items {
-		running.Apply(&state.Items[i])
+		running.ApplyForContract(contract, &state.Items[i])
 	}
 	state.Running = running
 }
 
-func recomputeRunningDataPreserveGas(state *TemplateRuntimeState) {
+func recomputeRunningDataPreserveGas(contract Contract, state *TemplateRuntimeState) {
 	gasBalance := state.Running.GasBalance
-	recomputeRunningData(state)
+	recomputeRunningData(contract, state)
 	state.Running.GasBalance = gasBalance
 }
 
@@ -942,7 +1052,7 @@ func splitAMMRemoveLiquidity(asset *scommon.Decimal, gas int64, depositValue int
 		return asset, gas, parseDecimalOrZero("0"), 0
 	}
 	ratio := scommon.NewDecimal(foundationProfit, MaxPriceDivisibility).Div(scommon.NewDecimal(totalValue, MaxPriceDivisibility))
-	foundationAsset := scommon.DecimalMulV2(asset, ratio)
+	foundationAsset := decimalMulAssetRatio(asset, ratio)
 	foundationGas := gas * foundationProfit / totalValue
 	if foundationGas > gas {
 		foundationGas = gas
@@ -960,6 +1070,13 @@ func proportionalInt64(value int64, part, total *scommon.Decimal) int64 {
 		return 0
 	}
 	return scommon.DecimalMul(scommon.NewDefaultDecimal(value), scommon.DecimalDiv(part, total)).Floor()
+}
+
+func decimalMulAssetRatio(asset, ratio *scommon.Decimal) *scommon.Decimal {
+	if asset == nil || ratio == nil {
+		return parseDecimalOrZero("0")
+	}
+	return scommon.DecimalMul(asset, ratio)
 }
 
 func ammPoolEmpty(r RunningData) bool {
@@ -1000,7 +1117,7 @@ func realSwapAmt(amt *scommon.Decimal) *scommon.Decimal {
 		Div(scommon.NewDecimal(1000, amt.Precision+3))
 }
 
-func recomputeRunningDataPreservePool(state *TemplateRuntimeState, assetA *scommon.Decimal, assetB *scommon.Decimal) {
+func recomputeRunningDataPreservePool(contract Contract, state *TemplateRuntimeState, assetA *scommon.Decimal, assetB *scommon.Decimal) {
 	requiredAssetA := state.Running.RequiredAssetA
 	requiredAssetB := state.Running.RequiredAssetB
 	k := state.Running.K
@@ -1009,7 +1126,7 @@ func recomputeRunningDataPreservePool(state *TemplateRuntimeState, assetA *scomm
 	totalLPT := state.Running.TotalLPTAmt
 	lpBalances := cloneLPBalances(state.Running.LPBalances)
 	lpCosts := cloneLPCosts(state.Running.LPCosts)
-	recomputeRunningData(state)
+	recomputeRunningData(contract, state)
 	state.Running.AssetAInPool = assetA
 	state.Running.AssetBInPool = assetB
 	state.Running.RequiredAssetA = requiredAssetA

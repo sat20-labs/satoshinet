@@ -1174,6 +1174,33 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 	return txFeeInSatoshi, feeTxAssets, nil
 }
 
+func (b *BlockChain) checkAnchorTxsUnique(block *btcutil.Block) error {
+	seen := make(map[string]*chainhash.Hash)
+	for _, tx := range block.Transactions() {
+		if !IsAnchorTx(tx.MsgTx()) {
+			continue
+		}
+
+		lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+		if err != nil {
+			str := fmt.Sprintf("invalid anchor tx with %s, %v", tx.Hash(), err)
+			return ruleError(ErrAnchorTXVerifyFailed, str)
+		}
+		if prevHash, ok := seen[lockedInfo.Utxo]; ok {
+			str := fmt.Sprintf("block contains duplicate anchor funding utxo %s in tx %s and %s",
+				lockedInfo.Utxo, prevHash, tx.Hash())
+			return ruleError(ErrAnchorTXVerifyFailed, str)
+		}
+		seen[lockedInfo.Utxo] = tx.Hash()
+
+		if info, _ := b.FetchAnchorTx(lockedInfo.Utxo); info != nil {
+			str := fmt.Sprintf("anchor funding utxo %s already anchored by tx %s", lockedInfo.Utxo, info.AnchorTxid)
+			return ruleError(ErrAnchorTXVerifyFailed, str)
+		}
+	}
+	return nil
+}
+
 func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int32, params *chaincfg.Params) error {
 	class, found, err := contractengine.ClassifyTxForBlockOrder(tx, params)
 	if err != nil || !found || !class.IsWork() {
@@ -1372,6 +1399,9 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 		return err
 	}
 	if err := b.validateContractBlock(block, view); err != nil {
+		return err
+	}
+	if err := b.checkAnchorTxsUnique(block); err != nil {
 		return err
 	}
 

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -873,6 +874,19 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 		// can update themselves accordingly.
 		if b.indexManager != nil {
 			err := b.indexManager.DisconnectBlock(dbTx, block, stxos)
+			if err != nil {
+				return err
+			}
+		}
+		for _, tx := range block.Transactions() {
+			if !IsAnchorTx(tx.MsgTx()) {
+				continue
+			}
+			lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+			if err != nil {
+				return err
+			}
+			err = dbDeleteAnchorTxInfo(dbTx, lockedInfo.Utxo, tx.MsgTx().TxID())
 			if err != nil {
 				return err
 			}

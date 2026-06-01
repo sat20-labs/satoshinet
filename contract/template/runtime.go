@@ -108,7 +108,7 @@ func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, erro
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
-	state.Running.Apply(item)
+	state.Running.ApplyForContract(r.contract, item)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err
 	}

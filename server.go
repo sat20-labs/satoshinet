@@ -3934,7 +3934,7 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 			txs = append(txs, msgTx)
 		}
 		blockGasConfig := gasConfig
-		blockGasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(params.Net, int64(req.Height))
+		blockGasConfig.GasAssetName = contractGasAssetNameForBlock(params, int64(req.Height))
 		result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 			Txs:            txs,
 			Runtime:        runtime,
@@ -3965,6 +3965,29 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 	}, nil
 }
 
+func contractBitcoinNet(params *chaincfg.Params) wire.BitcoinNet {
+	if params == nil {
+		return wire.TestNet
+	}
+	return params.Net
+}
+
+func contractGasAssetNameForBlock(params *chaincfg.Params, height int64) string {
+	return contractcommon.GasAssetNameAtHeight(contractBitcoinNet(params), height)
+}
+
+func templateGasConfigForBlock(base tmplcontract.GasConfig, params *chaincfg.Params, height int64) tmplcontract.GasConfig {
+	cfg := base
+	cfg.GasAssetName = contractGasAssetNameForBlock(params, height)
+	return cfg
+}
+
+func agentGasConfigForBlock(base agentcontract.GasConfig, params *chaincfg.Params, height int64) agentcontract.GasConfig {
+	cfg := base
+	cfg.GasAssetName = contractGasAssetNameForBlock(params, height)
+	return cfg
+}
+
 func newTemplateBlockValidator(db database.DB, params *chaincfg.Params,
 	assetIndexer *indexer.IndexerMgr) (blockchain.TemplateBlockValidator, error) {
 
@@ -3972,12 +3995,18 @@ func newTemplateBlockValidator(db database.DB, params *chaincfg.Params,
 	if err := gasConfig.Validate(); err != nil {
 		return nil, err
 	}
+	bootstrapAddress, err := templateBootstrapAddress(params)
+	if err != nil {
+		return nil, err
+	}
+	gasConfig.BootstrapAddress = bootstrapAddress
 	stateStore := blockchain.NewTemplateStateStore(db)
 	contractPrefix := tmplcontract.TestnetContractPrefix
 	if params != nil {
 		contractPrefix = tmplcontract.ContractPrefixForNet(params.Net)
 	}
-	btcdLog.Infof("Template contract validation is enabled, gas asset=%s", gasConfig.GasAssetName)
+	btcdLog.Infof("Template contract validation is enabled, gas asset=%s",
+		contractGasAssetNameForBlock(params, 0))
 	return blockchain.NewTemplateBlockExecutionValidator(blockchain.TemplateBlockExecutionConfig{
 		ChainParams:         params,
 		ContractPrefix:      contractPrefix,
@@ -3997,6 +4026,11 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 	if err := gasConfig.Validate(); err != nil {
 		return nil, err
 	}
+	bootstrapAddress, err := templateBootstrapAddress(params)
+	if err != nil {
+		return nil, err
+	}
+	gasConfig.BootstrapAddress = bootstrapAddress
 	stateStore := blockchain.NewTemplateStateStore(db)
 	contractPrefix := tmplcontract.TestnetContractPrefix
 	if params != nil {
@@ -4018,8 +4052,7 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 		for _, tx := range req.Txs {
 			txs = append(txs, tx.MsgTx())
 		}
-		blockGasConfig := gasConfig
-		blockGasConfig.GasAssetName = contractcommon.GasAssetNameAtHeight(params.Net, int64(req.Height))
+		blockGasConfig := templateGasConfigForBlock(gasConfig, params, int64(req.Height))
 		result, err := tmplcontract.BuildBlockResultTxs(tmplcontract.BlockResultBuildRequest{
 			Txs:            txs,
 			Store:          store,
@@ -4043,6 +4076,14 @@ func newTemplateContractResultBuilder(db database.DB, params *chaincfg.Params,
 	}, nil
 }
 
+func templateBootstrapAddress(params *chaincfg.Params) (string, error) {
+	bootstrapPubKey, err := hex.DecodeString(common.GetBootstrapPubKey())
+	if err != nil {
+		return "", err
+	}
+	return sidxcommon.PubKeyBytesToP2TRAddress(bootstrapPubKey, params)
+}
+
 func newAgentBlockValidator(db database.DB, params *chaincfg.Params,
 	assetIndexer *indexer.IndexerMgr) (blockchain.AgentBlockValidator, error) {
 
@@ -4050,18 +4091,22 @@ func newAgentBlockValidator(db database.DB, params *chaincfg.Params,
 	if err != nil {
 		return nil, err
 	}
+	gasConfig := agentcontract.DefaultGasConfig()
 	stateStore := blockchain.NewAgentStateStore(db)
 	contractPrefix := agentcontract.TestnetContractPrefix
 	if params != nil {
 		contractPrefix = agentcontract.ContractPrefixForNet(params.Net)
 	}
-	btcdLog.Infof("Agent contract validation is enabled, agent address=%s bootstrap address=%s",
-		runtimeConfig.AgentAddress, runtimeConfig.BootstrapAddress)
+	btcdLog.Infof(
+		"Agent contract validation is enabled, agent address=%s bootstrap address=%s gas asset=%s",
+		runtimeConfig.AgentAddress,
+		runtimeConfig.BootstrapAddress,
+		contractGasAssetNameForBlock(params, 0))
 	return blockchain.NewAgentBlockExecutionValidator(blockchain.AgentBlockExecutionConfig{
 		ChainParams:         params,
 		ContractPrefix:      contractPrefix,
 		RuntimeConfig:       runtimeConfig,
-		GasConfig:           agentcontract.GasConfig{},
+		GasConfig:           gasConfig,
 		NewRuntime:          stateStore.RuntimeFactory(),
 		ResolveResultOutput: agentResultOutputResolver(params, contractPrefix),
 		ContractUTXOs:       agentContractUTXOProvider(assetIndexer),
@@ -4076,6 +4121,7 @@ func newAgentContractResultBuilder(db database.DB, params *chaincfg.Params,
 	if err != nil {
 		return nil, err
 	}
+	gasConfig := agentcontract.DefaultGasConfig()
 	stateStore := blockchain.NewAgentStateStore(db)
 	contractPrefix := agentcontract.TestnetContractPrefix
 	if params != nil {
@@ -4097,12 +4143,13 @@ func newAgentContractResultBuilder(db database.DB, params *chaincfg.Params,
 		for _, tx := range req.Txs {
 			txs = append(txs, tx.MsgTx())
 		}
+		blockGasConfig := agentGasConfigForBlock(gasConfig, params, int64(req.Height))
 		result, err := agentcontract.BuildBlockResultTxs(agentcontract.BlockResultBuildRequest{
 			Txs:            txs,
 			Store:          store,
 			ContractPrefix: contractPrefix,
 			RuntimeConfig:  runtimeConfig,
-			GasConfig:      agentcontract.GasConfig{},
+			GasConfig:      blockGasConfig,
 			ContractUTXOs:  agentContractUTXOProvider(assetIndexer),
 			BlockHeight:    int64(req.Height),
 			BlockTime:      req.Timestamp.Unix(),

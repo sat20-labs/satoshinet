@@ -119,6 +119,8 @@ func (c *AMMContract) CheckInvoke(action string, param []byte) error {
 			return fmt.Errorf("asset name mismatch %s != %s", invokeParam.AssetName, c.AssetName)
 		}
 		return invokeParam.Check()
+	case InvokeAPIClose:
+		return (&CloseInvokeParam{}).Decode(param)
 	default:
 		return fmt.Errorf("unsupported AMM action %s", action)
 	}

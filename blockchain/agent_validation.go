@@ -97,7 +97,7 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 		Store:          store,
 		ContractPrefix: prefix,
 		RuntimeConfig:  v.cfg.RuntimeConfig,
-		GasConfig:      v.cfg.GasConfig,
+		GasConfig:      gasConfig,
 		BlockHeight:    int64(block.Height()),
 		BlockTime:      block.MsgBlock().Header.Timestamp.Unix(),
 		ResolveInvoker: agent.LastInputPreviousOutputInvokerResolver(

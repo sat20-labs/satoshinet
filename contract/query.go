@@ -39,16 +39,92 @@ func NewQueryService(store ContractQueryStore) QueryService {
 }
 
 type TemplateContractAnalytics struct {
-	Address        string                   `json:"address"`
-	TemplateName   string                   `json:"templateName"`
-	Version        uint32                   `json:"version"`
-	UpdatedHeight  int64                    `json:"updatedHeight"`
-	Running        tmplcontract.RunningData `json:"running"`
-	TotalItems     int                      `json:"totalItems"`
-	ActiveItems    int                      `json:"activeItems"`
-	FinishedItems  int                      `json:"finishedItems"`
-	StatusCount    map[int]int              `json:"statusCount"`
-	OrderTypeCount map[int]int              `json:"orderTypeCount"`
+	Address        string                  `json:"address"`
+	TemplateName   string                  `json:"templateName"`
+	Version        uint32                  `json:"version"`
+	UpdatedHeight  int64                   `json:"updatedHeight"`
+	Running        TemplateRunningDataJSON `json:"running"`
+	TotalItems     int                     `json:"totalItems"`
+	ActiveItems    int                     `json:"activeItems"`
+	FinishedItems  int                     `json:"finishedItems"`
+	StatusCount    map[int]int             `json:"statusCount"`
+	OrderTypeCount map[int]int             `json:"orderTypeCount"`
+}
+
+type TemplateRunningDataJSON struct {
+	AssetAInPool      string            `json:"assetAInPool,omitempty"`
+	AssetBInPool      string            `json:"assetBInPool,omitempty"`
+	RequiredAssetA    string            `json:"requiredAssetA,omitempty"`
+	RequiredAssetB    string            `json:"requiredAssetB,omitempty"`
+	K                 string            `json:"k,omitempty"`
+	TradingReady      bool              `json:"tradingReady,omitempty"`
+	GasBalance        int64             `json:"gasBalance,omitempty"`
+	TotalInputAssetA  string            `json:"totalInputAssetA,omitempty"`
+	TotalInputAssetB  string            `json:"totalInputAssetB,omitempty"`
+	TotalDealAssetA   string            `json:"totalDealAssetA,omitempty"`
+	TotalDealAssetB   string            `json:"totalDealAssetB,omitempty"`
+	TotalDealCount    int               `json:"totalDealCount"`
+	TotalRefundAssetB string            `json:"totalRefundAssetB,omitempty"`
+	TotalLPTAmt       string            `json:"totalLptAmt,omitempty"`
+	LPBalances        map[string]string `json:"lpBalances,omitempty"`
+	LPCosts           map[string]int64  `json:"lpCosts,omitempty"`
+	Closed            bool              `json:"closed,omitempty"`
+}
+
+func templateRunningDataJSON(r tmplcontract.RunningData) TemplateRunningDataJSON {
+	return TemplateRunningDataJSON{
+		AssetAInPool:      decimalJSON(r.AssetAInPool),
+		AssetBInPool:      decimalJSON(r.AssetBInPool),
+		RequiredAssetA:    decimalJSON(r.RequiredAssetA),
+		RequiredAssetB:    decimalJSON(r.RequiredAssetB),
+		K:                 decimalJSON(r.K),
+		TradingReady:      r.TradingReady,
+		GasBalance:        r.GasBalance,
+		TotalInputAssetA:  decimalJSON(r.TotalInputAssetA),
+		TotalInputAssetB:  decimalJSON(r.TotalInputAssetB),
+		TotalDealAssetA:   decimalJSON(r.TotalDealAssetA),
+		TotalDealAssetB:   decimalJSON(r.TotalDealAssetB),
+		TotalDealCount:    r.TotalDealCount,
+		TotalRefundAssetB: decimalJSON(r.TotalRefundAssetB),
+		TotalLPTAmt:       decimalJSON(r.TotalLPTAmt),
+		LPBalances:        decimalMapJSON(r.LPBalances),
+		LPCosts:           cloneInt64Map(r.LPCosts),
+		Closed:            r.Closed,
+	}
+}
+
+func decimalJSON(d *scommon.Decimal) string {
+	if d == nil || d.Sign() == 0 {
+		return ""
+	}
+	return d.String()
+}
+
+func decimalMapJSON(in map[string]*scommon.Decimal) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		if text := decimalJSON(value); text != "" {
+			out[key] = text
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneInt64Map(in map[string]int64) map[string]int64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 type TemplateContractUserStatus struct {
@@ -703,7 +779,7 @@ func (q QueryService) templateAnalytics(contractAddress string) (*TemplateContra
 		TemplateName:   contract.TemplateName,
 		Version:        contract.Version,
 		UpdatedHeight:  contract.UpdatedHeight,
-		Running:        contract.RuntimeState.Running,
+		Running:        templateRunningDataJSON(contract.RuntimeState.Running),
 		StatusCount:    make(map[int]int),
 		OrderTypeCount: make(map[int]int),
 	}

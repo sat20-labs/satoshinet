@@ -1,6 +1,7 @@
 package template
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,4 +25,10 @@ func TestRuntimeStoreMarshalRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, state.Running.TradingReady)
 	requireDecimalString(t, "100", state.Running.AssetAInPool)
+}
+
+func TestInvokeItemUnmarshalRejectsInvalidDecimal(t *testing.T) {
+	var item InvokeItem
+	err := json.Unmarshal([]byte(`{"id":1,"inAmt":"not-a-decimal"}`), &item)
+	require.Error(t, err)
 }

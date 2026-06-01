@@ -224,6 +224,30 @@ func defaultInvokeHasRequiredGas(output ContractOutput, gasAssetName string, req
 	return amount != nil && amount.Int64() >= int64(required), nil
 }
 
+func fundingOutputsHaveGas(outputs []ContractOutput, gasAssetName string, required uint64) (bool, error) {
+	if required == 0 {
+		return true, nil
+	}
+	if gasAssetName == "" {
+		return false, nil
+	}
+	const maxInt64AsUint64 = uint64(1<<63 - 1)
+	if required > maxInt64AsUint64 {
+		return false, nil
+	}
+	total := int64(0)
+	for _, output := range outputs {
+		amount, err := output.AssetAmount(gasAssetName)
+		if err != nil {
+			return false, err
+		}
+		if amount != nil {
+			total += amount.Int64()
+		}
+	}
+	return total >= int64(required), nil
+}
+
 func templateOutputFromDefault(output contractcommon.DefaultInvokeOutput) ContractOutput {
 	return ContractOutput{
 		OutPoint: OutPoint{TxID: output.TxID, Vout: output.Vout},
@@ -311,9 +335,6 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 	if !ok {
 		return errors.New("invoke target contract does not exist")
 	}
-	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
-		return nil
-	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
 		return err
@@ -325,10 +346,52 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 			return err
 		}
 	}
+	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
+	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
+		invalidResultFee := uint64(0)
+		hasResultGas, err := fundingOutputsHaveGas(validated.FundingOutputs, e.GasConfig.normalized().GasAssetName, resultFee)
+		if err != nil {
+			return err
+		}
+		if hasResultGas {
+			invalidResultFee = resultFee
+		}
+		item, err := runtime.ApplyInvalidInvoke(ApplyInvokeRequest{
+			Action:         validated.Payload.Action,
+			Param:          validated.Payload.Param,
+			CallID:         callID,
+			Invoker:        invoker,
+			FundingOutputs: validated.FundingOutputs,
+			Height:         e.BlockHeight,
+			Timestamp:      e.BlockHeight,
+			ResultGasFee:   invalidResultFee,
+		}, e.GasConfig.normalized().GasAssetName)
+		if err != nil {
+			return err
+		}
+		runtime.SetCurrentBlock(e.BlockHeight)
+		runtime.IncrementInvokeCount()
+		record := ExecutionRecord{
+			Height:         e.BlockHeight,
+			TxID:           tx.TxID(),
+			Type:           TxTypeInvoke,
+			Kind:           ExecutionKindInvoke,
+			CallID:         callID,
+			Contract:       validated.Contract,
+			Status:         ResultPayload{Status: ResultStatusInvalid},
+			GasLimit:       validated.Payload.GasLimit,
+			GasFee:         invalidResultFee,
+			FundingInputs:  contractOutputOutPoints(validated.FundingOutputs),
+			ItemIDs:        []int64{item.ID},
+			RequiresResult: true,
+		}
+		e.records = append(e.records, record)
+		return nil
+	}
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:         validated.Payload.Action,
 		Param:          validated.Payload.Param,
-		CallID:         DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract),
+		CallID:         callID,
 		Invoker:        invoker,
 		FundingOutputs: validated.FundingOutputs,
 		Height:         e.BlockHeight,
@@ -353,7 +416,7 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 		TxID:           tx.TxID(),
 		Type:           TxTypeInvoke,
 		Kind:           ExecutionKindInvoke,
-		CallID:         DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract),
+		CallID:         callID,
 		Contract:       validated.Contract,
 		GasLimit:       validated.Payload.GasLimit,
 		FundingInputs:  funding,

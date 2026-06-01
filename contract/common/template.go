@@ -29,11 +29,13 @@ var templateInvokeActions = map[string]map[string]struct{}{
 	TemplateLimitOrder: {
 		TemplateInvokeAPISwap:   {},
 		TemplateInvokeAPIRefund: {},
+		TemplateInvokeAPIClose:  {},
 	},
 	TemplateAMM: {
 		TemplateInvokeAPISwap:            {},
 		TemplateInvokeAPIAddLiquidity:    {},
 		TemplateInvokeAPIRemoveLiquidity: {},
+		TemplateInvokeAPIClose:           {},
 	},
 	TemplateExchange: {
 		TemplateInvokeAPIExchange: {},

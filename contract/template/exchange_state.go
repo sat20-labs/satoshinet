@@ -46,6 +46,64 @@ func (c *ExchangeContract) ApplyGasFundingState(state *TemplateRuntimeState, out
 	return true, nil
 }
 
+func (c *ExchangeContract) ApplyRunningData(r *RunningData, item *InvokeItem) bool {
+	if item == nil {
+		return true
+	}
+	r.applyDefaultInvokeRetention(item)
+	if item.Reason == InvokeReasonInvalid {
+		return true
+	}
+	switch item.OrderType {
+	case OrderTypeFund:
+		if item.InAmt != nil {
+			if r.TotalInputAssetA == nil {
+				r.TotalInputAssetA = parseDecimalOrZero("0")
+			}
+			if r.AssetAInPool == nil {
+				r.AssetAInPool = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.InAmt)
+			r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.InAmt)
+		}
+		return true
+	case OrderTypeExchange:
+		if item.OutAmt != nil {
+			if r.TotalInputAssetA == nil {
+				r.TotalInputAssetA = parseDecimalOrZero("0")
+			}
+			if r.AssetAInPool == nil {
+				r.AssetAInPool = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.OutAmt)
+			r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.OutAmt)
+		}
+		if item.InAmt != nil {
+			if r.TotalInputAssetB == nil {
+				r.TotalInputAssetB = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetB = scommon.DecimalAdd(r.TotalInputAssetB, item.InAmt)
+		}
+		return true
+	case OrderTypeClose:
+		if item.InAmt != nil {
+			if r.TotalInputAssetA == nil {
+				r.TotalInputAssetA = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.InAmt)
+		}
+		if item.RemainingAmt != nil {
+			if r.TotalInputAssetB == nil {
+				r.TotalInputAssetB = parseDecimalOrZero("0")
+			}
+			r.TotalInputAssetB = scommon.DecimalAdd(r.TotalInputAssetB, item.RemainingAmt)
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 func exchangeFundingAmounts(contract *ExchangeContract, outputs []ContractOutput) (*scommon.Decimal, *scommon.Decimal, string, error) {
 	inputA := parseDecimalOrZero("0")
 	inputB := parseDecimalOrZero("0")
@@ -60,11 +118,17 @@ func exchangeFundingAmounts(contract *ExchangeContract, outputs []ContractOutput
 			return nil, nil, "", err
 		}
 		amtA = parseDecimalOrZero(amtA.String())
-		amtB, err := output.AssetAmount(contract.AssetBName)
-		if err != nil {
-			return nil, nil, "", err
+		amtB := parseDecimalOrZero("0")
+		if contract.AssetBName == SatoshiAssetName {
+			amtB = scommon.NewDefaultDecimal(output.Value)
+		} else {
+			var err error
+			amtB, err = output.AssetAmount(contract.AssetBName)
+			if err != nil {
+				return nil, nil, "", err
+			}
+			amtB = parseDecimalOrZero(amtB.String())
 		}
-		amtB = parseDecimalOrZero(amtB.String())
 		inputA = scommon.DecimalAdd(inputA, amtA)
 		inputB = scommon.DecimalAdd(inputB, amtB)
 	}

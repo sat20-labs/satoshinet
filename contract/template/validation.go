@@ -9,12 +9,13 @@ import (
 )
 
 type GasConfig struct {
-	GasAssetName    string
-	DeployBaseGas   uint64
-	InvokeBaseGas   uint64
-	ResultBaseGas   uint64
-	TriggerBaseGas  uint64
-	MaxGasPerInvoke uint64
+	GasAssetName     string
+	BootstrapAddress string
+	DeployBaseGas    uint64
+	InvokeBaseGas    uint64
+	ResultBaseGas    uint64
+	TriggerBaseGas   uint64
+	MaxGasPerInvoke  uint64
 }
 
 func DefaultGasConfig() GasConfig {

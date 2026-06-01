@@ -644,6 +644,44 @@ func TestSettleAMMRemoveLiquidityCapsAtOwnedAmount(t *testing.T) {
 	require.True(t, state.Running.AssetBInPool.Cmp(scommon.NewDefaultDecimal(20)) >= 0)
 }
 
+func TestSettleAMMPartialRemoveLiquidityKeepsAssetPrecision(t *testing.T) {
+	state := TemplateRuntimeState{
+		Items: []InvokeItem{{
+			ID:           0,
+			Action:       InvokeAPIRemoveLiquidity,
+			OrderType:    OrderTypeRemoveLiquidity,
+			Reason:       InvokeReasonNormal,
+			Address:      "alice",
+			AssetName:    "ordx:f:test",
+			ExpectedAmt:  parseDecimalOrZero("5"),
+			RemainingAmt: parseDecimalOrZero("5"),
+		}},
+		Running: RunningData{
+			AssetAInPool: parseDecimalOrZero("10"),
+			AssetBInPool: scommon.NewDefaultDecimal(20),
+			TradingReady: true,
+			TotalLPTAmt:  parseDecimalOrZero("12"),
+			LPBalances: map[string]*scommon.Decimal{
+				"alice": parseDecimalOrZero("10"),
+				"bob":   parseDecimalOrZero("2"),
+			},
+			LPCosts: map[string]int64{
+				"alice": 20,
+			},
+		},
+	}
+	plan := &SettlementPlan{}
+
+	changed, err := applyAMMLiquidity(&state, plan, "foundation")
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Len(t, plan.Transfers, 2)
+	for _, transfer := range plan.Transfers {
+		_, err := newAssetSet(transfer.AssetName, transfer.AssetAmt)
+		require.NoError(t, err)
+	}
+}
+
 func TestSettleAMMRemoveLiquidityWithoutBalanceClosesDirectly(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	fundAMMRuntime(t, runtime)
