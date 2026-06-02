@@ -25,11 +25,15 @@ func TestSplitGasFundingInsufficient(t *testing.T) {
 
 func TestGasConfigRequiredInvokeFunding(t *testing.T) {
 	cfg := GasConfig{GasAssetName: "gas", ResultBaseGas: 5}
-	if got := cfg.RequiredInvokeFunding(10, true); got != 15 {
-		t.Fatalf("got %d want 15", got)
+	fee, err := cfg.CheckedRequiredInvokeFundingDecimal(10, true)
+	if err != nil {
+		t.Fatalf("CheckedRequiredInvokeFundingDecimal failed: %v", err)
 	}
-	if got := cfg.RequiredInvokeFunding(10, false); got != 10 {
-		t.Fatalf("got %d want 10", got)
+	if got := fee.String(); got != "0.015" {
+		t.Fatalf("got %s want 0.015", got)
+	}
+	if got := cfg.RequiredInvokeFunding(10, false); got != 1 {
+		t.Fatalf("compat rounded fee got %d want 1", got)
 	}
 }
 
@@ -43,7 +47,7 @@ func TestGasConfigRejectsFeeOverflow(t *testing.T) {
 		GasPriceDecayDenominator: 1,
 		GasPriceFloorNumerator:   1,
 	}
-	_, err := cfg.CheckedCallFeeAtHeight(2, 0)
+	_, err := cfg.CheckedCallFeeAtHeight(1001, 0)
 	if err == nil {
 		t.Fatal("expected overflow")
 	}

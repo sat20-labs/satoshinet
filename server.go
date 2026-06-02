@@ -3114,7 +3114,7 @@ func (s *server) submitAgentInvokeTx(contract agentcontract.ContractAddress, act
 	return signedTx, nil
 }
 
-func (s *server) selectAgentConfirmFundingUTXOs(minGasFee uint64) (contractcommon.FundingSelection, error) {
+func (s *server) selectAgentConfirmFundingUTXOs(minGasFee *common.Decimal) (contractcommon.FundingSelection, error) {
 	pubKey, err := stp.GetPubKey()
 	if err != nil {
 		return contractcommon.FundingSelection{}, err
@@ -3131,9 +3131,6 @@ func (s *server) selectAgentConfirmFundingUTXOs(minGasFee uint64) (contractcommo
 	gasAssetName := wire.NewAssetNameFromString(agentcontract.DefaultGasConfig().GasAssetName)
 	if gasAssetName == nil {
 		return contractcommon.FundingSelection{}, fmt.Errorf("invalid agent gas asset name")
-	}
-	if minGasFee > uint64(math.MaxInt64) {
-		return contractcommon.FundingSelection{}, fmt.Errorf("agent confirm gas fee overflows int64")
 	}
 	available := make([]contractcommon.FundingUTXO, 0)
 	seen := make(map[string]struct{})
@@ -3161,7 +3158,7 @@ func (s *server) selectAgentConfirmFundingUTXOs(minGasFee uint64) (contractcommo
 	return contractcommon.SelectFundingUTXOs(contractcommon.FundingSelectionRequest{
 		Available:        available,
 		RequiredValue:    agentConfirmTxFee,
-		RequiredAssets:   wire.TxAssets{{Name: *gasAssetName, Amount: *common.NewDefaultDecimal(int64(minGasFee))}},
+		RequiredAssets:   wire.TxAssets{{Name: *gasAssetName, Amount: *minGasFee.Clone()}},
 		ChangePkScript:   expectedScript,
 		RequiredPkScript: expectedScript,
 		IsSpendable: func(utxo contractcommon.FundingUTXO) bool {

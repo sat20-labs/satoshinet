@@ -3,6 +3,7 @@ package evm
 import (
 	"fmt"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -85,31 +86,23 @@ func (v CanonicalResultVerifier) BuildPlans(settled []ExecutionRecord) ([]Result
 			return nil, err
 		}
 		intents := make([]AssetIntent, 0)
-		gasFee := uint64(0)
+		var gasFee *scommon.Decimal
 		funding := make([]OutPoint, 0)
 		for _, record := range group.Records {
 			intents = append(intents, record.AssetIntents...)
-			callFee, err := v.GasConfig.CheckedCallFeeAtHeight(
+			callFee, err := v.GasConfig.CheckedCallFeeDecimalAtHeight(
 				v.GasConfig.ResultExecutionGas(record),
 				record.Height,
 			)
 			if err != nil {
 				return nil, err
 			}
-			next, overflow := addUint64(gasFee, callFee)
-			if overflow {
-				return nil, fmt.Errorf("gas fee overflows uint64")
-			}
-			gasFee = next
+			gasFee = decimalAddAllowNil(gasFee, callFee)
 			resultFee, err := v.GasConfig.CheckedResultBaseFee(record.Height)
 			if err != nil {
 				return nil, err
 			}
-			next, overflow = addUint64(gasFee, resultFee)
-			if overflow {
-				return nil, fmt.Errorf("result packing fee overflows uint64")
-			}
-			gasFee = next
+			gasFee = decimalAddAllowNil(gasFee, resultFee)
 			funding = append(funding, record.FundingInputs...)
 		}
 		plan, err := BuildCanonicalResultPlan(ResultPlanRequest{
@@ -126,6 +119,16 @@ func (v CanonicalResultVerifier) BuildPlans(settled []ExecutionRecord) ([]Result
 		plans = append(plans, plan)
 	}
 	return plans, nil
+}
+
+func decimalAddAllowNil(a, b *scommon.Decimal) *scommon.Decimal {
+	if b == nil || b.Sign() == 0 {
+		return a
+	}
+	if a == nil {
+		return b.Clone()
+	}
+	return a.AddAlignPrecision(b)
 }
 
 type canonicalRecordGroup struct {

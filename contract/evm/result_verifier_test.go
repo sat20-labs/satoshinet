@@ -51,7 +51,7 @@ func TestCanonicalResultVerifier(t *testing.T) {
 				{
 					To:     contract.MustEncode(),
 					Value:  10,
-					Assets: mustResultOutput(t, contract.MustEncode(), gasAssetName, 70).Assets,
+					Assets: mustResultOutputWithDecimalAsset(t, contract.MustEncode(), gasAssetName, "99.97").Assets,
 				},
 			}, nil
 		},
@@ -167,7 +167,7 @@ func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
 		{Value: 77, PkScript: []byte{0x51}},
 		{Value: 23, Assets: wire.TxAssets{{
 			Name:   wire.AssetName{Protocol: "ordx", Type: "ft", Ticker: "gas"},
-			Amount: *scommon.NewDefaultDecimal(90000),
+			Amount: *scommon.NewDefaultDecimal(99990),
 		}}, PkScript: testContractScript(contract)},
 	})
 

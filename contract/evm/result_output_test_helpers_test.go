@@ -15,6 +15,23 @@ func mustResultOutput(t *testing.T, to, assetName string, amount uint64) ResultO
 	return output
 }
 
+func mustResultOutputWithDecimalAsset(t *testing.T, to, assetName, amount string) ResultOutput {
+	t.Helper()
+	decimal, err := scommon.NewDecimalFromString(amount, contractGasPrecisionForTest())
+	if err != nil {
+		t.Fatalf("decimal amount: %v", err)
+	}
+	output, err := resultOutputWithAsset(to, assetName, decimal)
+	if err != nil {
+		t.Fatalf("result output: %v", err)
+	}
+	return output
+}
+
+func contractGasPrecisionForTest() int {
+	return 18
+}
+
 func mustUTXO(t *testing.T, outpoint OutPoint, contract ContractAddress, assetName string, amount uint64, height int64) UTXO {
 	t.Helper()
 	utxo := UTXO{

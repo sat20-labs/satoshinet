@@ -58,7 +58,7 @@ type TemplateRunningDataJSON struct {
 	RequiredAssetB    string            `json:"requiredAssetB,omitempty"`
 	K                 string            `json:"k,omitempty"`
 	TradingReady      bool              `json:"tradingReady,omitempty"`
-	GasBalance        int64             `json:"gasBalance,omitempty"`
+	GasBalance        string            `json:"gasBalance,omitempty"`
 	TotalInputAssetA  string            `json:"totalInputAssetA,omitempty"`
 	TotalInputAssetB  string            `json:"totalInputAssetB,omitempty"`
 	TotalDealAssetA   string            `json:"totalDealAssetA,omitempty"`
@@ -79,7 +79,7 @@ func templateRunningDataJSON(r tmplcontract.RunningData) TemplateRunningDataJSON
 		RequiredAssetB:    decimalJSON(r.RequiredAssetB),
 		K:                 decimalJSON(r.K),
 		TradingReady:      r.TradingReady,
-		GasBalance:        r.GasBalance,
+		GasBalance:        decimalJSON(r.GasBalance),
 		TotalInputAssetA:  decimalJSON(r.TotalInputAssetA),
 		TotalInputAssetB:  decimalJSON(r.TotalInputAssetB),
 		TotalDealAssetA:   decimalJSON(r.TotalDealAssetA),

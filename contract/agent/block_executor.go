@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -44,7 +45,7 @@ type ExecutionRecord struct {
 	Contract       ContractAddress
 	Status         ResultPayload
 	GasLimit       uint64
-	GasFee         uint64
+	GasFee         *scommon.Decimal
 	FundingInputs  []OutPoint
 	RequiresResult bool
 }
@@ -147,16 +148,16 @@ func (e *BlockExecutor) executeDefaultInvokeOutput(output ContractOutput) error 
 	return nil
 }
 
-func requireAgentDefaultInvokeGas(output ContractOutput, gasAssetName string, fee uint64) error {
-	if fee == 0 || gasAssetName == "" {
+func requireAgentDefaultInvokeGas(output ContractOutput, gasAssetName string, fee *scommon.Decimal) error {
+	if fee == nil || fee.Sign() == 0 || gasAssetName == "" {
 		return nil
 	}
 	gas, err := output.AssetAmount(gasAssetName)
 	if err != nil {
 		return err
 	}
-	if gas.Int64() < int64(fee) {
-		return fmt.Errorf("default agent invoke output %s gas %d below required %d", output.OutPoint, gas.Int64(), fee)
+	if gas.Cmp(fee) < 0 {
+		return fmt.Errorf("default agent invoke output %s gas %s below required %s", output.OutPoint, gas.String(), fee.String())
 	}
 	return nil
 }
@@ -270,7 +271,6 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 		CallID:         DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract),
 		Contract:       validated.Contract,
 		GasLimit:       validated.Payload.GasLimit,
-		GasFee:         0,
 		FundingInputs:  contractOutputOutPoints(validated.FundingOutputs),
 		RequiresResult: requiresResult,
 	}
@@ -382,6 +382,7 @@ func cloneExecutionRecords(in []ExecutionRecord) []ExecutionRecord {
 	copy(out, in)
 	for i := range out {
 		out[i].FundingInputs = append([]OutPoint(nil), in[i].FundingInputs...)
+		out[i].GasFee = out[i].GasFee.Clone()
 	}
 	return out
 }

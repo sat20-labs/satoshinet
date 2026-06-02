@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 )
 
@@ -17,6 +18,9 @@ type GasConfig struct {
 	GasPriceDecayDenominator uint64
 	GasPriceFloorNumerator   uint64
 
+	// Gas limits and base gas fields are execution gas units, not gas asset
+	// amounts. They are converted to gas asset fees through
+	// contract/common.ExecutionGasUnitsPerGas and the height-dependent gas price.
 	DeployBaseGas   uint64
 	InvokeBaseGas   uint64
 	ResultBaseGas   uint64
@@ -24,7 +28,9 @@ type GasConfig struct {
 	MaxGasPerInvoke uint64
 	MaxGasPerBlock  uint64
 
-	FixedGasPrice    uint64
+	FixedGasPrice uint64
+	// ResultPackingFee is also an execution gas unit amount, not a gas asset
+	// amount.
 	ResultPackingFee uint64
 }
 
@@ -60,25 +66,41 @@ func (c GasConfig) Validate() error {
 }
 
 func (c GasConfig) CallFee(gasUsed uint64) uint64 {
-	fee, _ := c.CheckedCallFeeAtHeight(gasUsed, 0)
+	fee, _ := c.CheckedCallFee(gasUsed)
 	return fee
 }
 
 func (c GasConfig) CheckedCallFee(gasUsed uint64) (uint64, error) {
-	return c.CheckedCallFeeAtHeight(gasUsed, 0)
+	fee, err := c.CheckedCallFeeDecimal(gasUsed)
+	if err != nil {
+		return 0, err
+	}
+	return contractcommon.DecimalCeilUint64(fee)
 }
 
 func (c GasConfig) CheckedCallFeeAtHeight(gasUsed, height uint64) (uint64, error) {
+	fee, err := c.CheckedCallFeeDecimalAtHeight(gasUsed, height)
+	if err != nil {
+		return 0, err
+	}
+	return contractcommon.DecimalCeilUint64(fee)
+}
+
+func (c GasConfig) CheckedCallFeeDecimal(gasUsed uint64) (*scommon.Decimal, error) {
+	return c.CheckedCallFeeDecimalAtHeight(gasUsed, 0)
+}
+
+func (c GasConfig) CheckedCallFeeDecimalAtHeight(gasUsed, height uint64) (*scommon.Decimal, error) {
 	cfg := c.normalized()
-	return contractcommon.GasFee(gasUsed, cfg.GasPriceNumeratorAtHeight(height), cfg.GasPriceDenominator)
+	return contractcommon.GasFeeDecimal(gasUsed, cfg.GasPriceNumeratorAtHeight(height), cfg.GasPriceDenominator)
 }
 
-func (c GasConfig) CheckedExecutionFee(gasUsed, baseGas, height uint64) (uint64, error) {
-	return c.CheckedCallFeeAtHeight(contractcommon.EffectiveGas(gasUsed, baseGas), height)
+func (c GasConfig) CheckedExecutionFee(gasUsed, baseGas, height uint64) (*scommon.Decimal, error) {
+	return c.CheckedCallFeeDecimalAtHeight(contractcommon.EffectiveGas(gasUsed, baseGas), height)
 }
 
-func (c GasConfig) CheckedResultBaseFee(height uint64) (uint64, error) {
-	return c.CheckedCallFeeAtHeight(c.normalized().ResultBaseGas, height)
+func (c GasConfig) CheckedResultBaseFee(height uint64) (*scommon.Decimal, error) {
+	return c.CheckedCallFeeDecimalAtHeight(c.normalized().ResultBaseGas, height)
 }
 
 func (c GasConfig) BaseGasForKind(kind ExecutionKind) uint64 {
@@ -114,22 +136,31 @@ func (c GasConfig) RequiredInvokeFunding(gasLimit uint64, needsResult bool) uint
 }
 
 func (c GasConfig) CheckedRequiredInvokeFunding(gasLimit uint64, needsResult bool) (uint64, error) {
-	fee, err := c.CheckedCallFeeAtHeight(gasLimit, 0)
+	fee, err := c.CheckedRequiredInvokeFundingDecimal(gasLimit, needsResult)
 	if err != nil {
 		return 0, err
 	}
-	if needsResult {
-		resultFee, err := c.CheckedResultBaseFee(0)
-		if err != nil {
-			return 0, err
-		}
-		next, overflow := addUint64(fee, resultFee)
-		if overflow {
-			return 0, errors.New("invoke funding overflows uint64")
-		}
-		fee = next
+	return contractcommon.DecimalCeilUint64(fee)
+}
+
+func (c GasConfig) RequiredInvokeFundingDecimal(gasLimit uint64, needsResult bool) *scommon.Decimal {
+	fee, _ := c.CheckedRequiredInvokeFundingDecimal(gasLimit, needsResult)
+	return fee
+}
+
+func (c GasConfig) CheckedRequiredInvokeFundingDecimal(gasLimit uint64, needsResult bool) (*scommon.Decimal, error) {
+	fee, err := c.CheckedCallFeeDecimalAtHeight(gasLimit, 0)
+	if err != nil {
+		return nil, err
 	}
-	return fee, nil
+	if !needsResult {
+		return fee, nil
+	}
+	resultFee, err := c.CheckedResultBaseFee(0)
+	if err != nil {
+		return nil, err
+	}
+	return fee.AddAlignPrecision(resultFee), nil
 }
 
 func SplitGasFunding(totalGasAsset, callFee, resultPackingFee uint64) (feeToMiner, contractRemainder uint64, err error) {

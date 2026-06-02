@@ -80,7 +80,7 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, int64(50), state.Running.GasBalance)
+	requireDecimalString(t, "50", state.Running.GasBalance)
 
 	encoded, err := store.MarshalBinary()
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.True(t, ok)
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, int64(50), state.Running.GasBalance)
+	requireDecimalString(t, "50", state.Running.GasBalance)
 
 	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 30, testAsset(gasAssetName, 50))
 	parsedBuy, err := ParseTx(buyTx, testTemplateContractResolver)
@@ -107,7 +107,7 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.NoError(t, executor.ExecuteTx(buyTx))
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, int64(100), state.Running.GasBalance)
+	requireDecimalString(t, "100", state.Running.GasBalance)
 
 	second, err := executor.Finalize()
 	require.NoError(t, err)
@@ -116,14 +116,14 @@ func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.Len(t, second.SettlementPlans[0].Deals, 1)
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, int64(100), state.Running.GasBalance)
+	requireDecimalString(t, "100", state.Running.GasBalance)
 	resultPlans, err := AugmentResultPlans(second.ResultPlans, store, gasConfig, nil)
 	require.NoError(t, err)
 	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "100")
 	currentOnly := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{sellTx, buyTx}, TestnetContractPrefix)
 	resultPlans, err = AugmentResultPlans(second.ResultPlans, store, gasConfig, currentOnly)
 	require.NoError(t, err)
-	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "99")
+	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "99.999")
 }
 
 func TestBlockExecutorInvalidInvokeAbsorbsKnownFunding(t *testing.T) {
@@ -159,7 +159,7 @@ func TestBlockExecutorInvalidInvokeAbsorbsKnownFunding(t *testing.T) {
 	require.NoError(t, err)
 	requireDecimalString(t, "10", state.Running.AssetAInPool)
 	requireDecimalString(t, "7", state.Running.AssetBInPool)
-	require.Equal(t, int64(4), state.Running.GasBalance)
+	requireDecimalString(t, "4.999", state.Running.GasBalance)
 
 	provider := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, invokeTx}, TestnetContractPrefix)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
@@ -167,7 +167,7 @@ func TestBlockExecutorInvalidInvokeAbsorbsKnownFunding(t *testing.T) {
 	require.Len(t, plans, 1)
 	require.Equal(t, int64(7), plans[0].Outputs[len(plans[0].Outputs)-1].Value)
 	requireResultPlanAsset(t, plans[0], contract.AssetName, "10")
-	requireResultPlanAsset(t, plans[0], gas, "4")
+	requireResultPlanAsset(t, plans[0], gas, "4.999")
 }
 
 func TestBlockExecutorLimitOrderCloseRefundsOwnersAndSplitsProfit(t *testing.T) {
@@ -211,8 +211,8 @@ func TestBlockExecutorLimitOrderCloseRefundsOwnersAndSplitsProfit(t *testing.T) 
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	requireResultPlanAssetTo(t, plans[0], "seller-address", contract.AssetName, "10")
-	requireResultPlanAssetTo(t, plans[0], "deployer-address", gas, "3")
-	requireResultPlanAssetTo(t, plans[0], "bootstrap-address", gas, "2")
+	requireResultPlanAssetTo(t, plans[0], "deployer-address", gas, "4.1988")
+	requireResultPlanAssetTo(t, plans[0], "bootstrap-address", gas, "2.7992")
 	requireNoResultPlanOutputTo(t, plans[0], addr.MustEncode())
 }
 

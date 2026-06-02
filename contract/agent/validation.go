@@ -4,12 +4,16 @@ import (
 	"errors"
 	"fmt"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type GasConfig struct {
-	GasAssetName    string
+	GasAssetName string
+	// Gas limits and base gas fields are execution gas units, not gas asset
+	// amounts. They are converted to gas asset fees through
+	// contract/common.ExecutionGasUnitsPerGas and the height-dependent gas price.
 	DeployBaseGas   uint64
 	InvokeBaseGas   uint64
 	ResultBaseGas   uint64
@@ -121,23 +125,23 @@ func ValidateParsedInvokeTxBasic(parsed ParsedTx, exists ContractExistsFunc, gas
 	}, nil
 }
 
-func (c GasConfig) DeployFee(height int64) (uint64, error) {
+func (c GasConfig) DeployFee(height int64) (*scommon.Decimal, error) {
 	return c.gasFee(c.normalized().DeployBaseGas, height)
 }
 
-func (c GasConfig) InvokeFee(height int64) (uint64, error) {
+func (c GasConfig) InvokeFee(height int64) (*scommon.Decimal, error) {
 	return c.gasFee(c.normalized().InvokeBaseGas, height)
 }
 
-func (c GasConfig) ResultFee(height int64) (uint64, error) {
+func (c GasConfig) ResultFee(height int64) (*scommon.Decimal, error) {
 	return c.gasFee(c.normalized().ResultBaseGas, height)
 }
 
-func (c GasConfig) gasFee(gas uint64, height int64) (uint64, error) {
+func (c GasConfig) gasFee(gas uint64, height int64) (*scommon.Decimal, error) {
 	if height < 0 {
 		height = 0
 	}
-	return contractcommon.GasFeeAtHeight(gas, uint64(height))
+	return contractcommon.GasFeeDecimalAtHeight(gas, uint64(height))
 }
 
 func (c GasConfig) normalized() GasConfig {

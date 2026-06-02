@@ -74,8 +74,8 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 	if inputB == nil {
 		inputB = parseDecimalOrZero("0")
 	}
-	if item.ServiceFee > 0 && gasAssetName == contract.AssetBName {
-		inputB = scommon.DecimalSub(inputB, scommon.NewDefaultDecimal(item.ServiceFee))
+	if fee := itemGasFee(item); fee.Sign() > 0 && gasAssetName == contract.AssetBName {
+		inputB = inputB.SubAlignPrecision(fee)
 		if inputB.Sign() < 0 {
 			inputB = parseDecimalOrZero("0")
 		}
@@ -275,8 +275,8 @@ func settleExchangeClose(state *TemplateRuntimeState, contract *ExchangeContract
 	if inputB == nil {
 		inputB = parseDecimalOrZero("0")
 	}
-	if gasAssetName == contract.AssetBName && item.ServiceFee > 0 {
-		inputB = scommon.DecimalSub(inputB, scommon.NewDefaultDecimal(item.ServiceFee))
+	if fee := itemGasFee(item); fee.Sign() > 0 && gasAssetName == contract.AssetBName {
+		inputB = inputB.SubAlignPrecision(fee)
 		if inputB.Sign() < 0 {
 			inputB = parseDecimalOrZero("0")
 		}
@@ -304,8 +304,8 @@ func markExchangeRefunded(state *TemplateRuntimeState, item *InvokeItem, plan *S
 	if refundB == nil {
 		refundB = parseDecimalOrZero("0")
 	}
-	if item.ServiceFee > 0 && gasAssetName == contract.AssetBName {
-		refundB = scommon.DecimalSub(refundB, scommon.NewDefaultDecimal(item.ServiceFee))
+	if fee := itemGasFee(item); fee.Sign() > 0 && gasAssetName == contract.AssetBName {
+		refundB = refundB.SubAlignPrecision(fee)
 		if refundB.Sign() < 0 {
 			refundB = parseDecimalOrZero("0")
 		}
@@ -328,10 +328,10 @@ func markExchangeRefunded(state *TemplateRuntimeState, item *InvokeItem, plan *S
 }
 
 func applyExchangeGasFee(state *TemplateRuntimeState, contract *ExchangeContract, item *InvokeItem, gasAssetName string) error {
-	if item.ServiceFee <= 0 || gasAssetName == "" {
+	fee := itemGasFee(item)
+	if fee.Sign() <= 0 || gasAssetName == "" {
 		return nil
 	}
-	fee := scommon.NewDefaultDecimal(item.ServiceFee)
 	switch gasAssetName {
 	case contract.AssetAName:
 		pool := state.Running.AssetAInPool
@@ -341,16 +341,23 @@ func applyExchangeGasFee(state *TemplateRuntimeState, contract *ExchangeContract
 		if pool.Cmp(fee) < 0 {
 			return fmt.Errorf("insufficient exchange asset A for gas fee")
 		}
-		state.Running.AssetAInPool = scommon.DecimalSub(pool, fee)
+		state.Running.AssetAInPool = pool.SubAlignPrecision(fee)
 	case contract.AssetBName:
 		return nil
 	default:
-		if state.Running.GasBalance < item.ServiceFee {
+		if state.Running.GasBalance == nil || state.Running.GasBalance.Cmp(fee) < 0 {
 			return fmt.Errorf("insufficient exchange gas balance")
 		}
-		state.Running.GasBalance -= item.ServiceFee
+		state.Running.GasBalance = state.Running.GasBalance.SubAlignPrecision(fee)
 	}
 	return nil
+}
+
+func itemGasFee(item *InvokeItem) *scommon.Decimal {
+	if item == nil || item.GasFee == nil {
+		return parseDecimalOrZero("0")
+	}
+	return item.GasFee
 }
 
 func exchangePriceAt(contract *ExchangeContract, height int64, soldA string) *scommon.Decimal {

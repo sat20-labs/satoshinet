@@ -24,12 +24,12 @@ type ResultOutput struct {
 }
 
 type ResultPlan struct {
-	Contract string         `json:"contract"`
-	Height   int64          `json:"height"`
-	ItemIDs  []int64        `json:"itemIds,omitempty"`
-	GasFee   uint64         `json:"gasFee,omitempty"`
-	Inputs   []OutPoint     `json:"inputs,omitempty"`
-	Outputs  []ResultOutput `json:"outputs,omitempty"`
+	Contract string           `json:"contract"`
+	Height   int64            `json:"height"`
+	ItemIDs  []int64          `json:"itemIds,omitempty"`
+	GasFee   *scommon.Decimal `json:"gasFee,omitempty"`
+	Inputs   []OutPoint       `json:"inputs,omitempty"`
+	Outputs  []ResultOutput   `json:"outputs,omitempty"`
 }
 
 type UTXO struct {
@@ -138,11 +138,11 @@ func DeriveInvokeCallID(invokeTxID string, vout uint32, contract ContractAddress
 
 func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionRecord) ([]ResultPlan, error) {
 	inputsByItem := make(map[int64][]OutPoint)
-	feesByItem := make(map[int64]uint64)
+	feesByItem := make(map[int64]*scommon.Decimal)
 	for _, record := range records {
 		for _, itemID := range record.ItemIDs {
 			inputsByItem[itemID] = append(inputsByItem[itemID], record.FundingInputs...)
-			feesByItem[itemID] += record.GasFee
+			feesByItem[itemID] = decimalAddAllowNil(feesByItem[itemID], record.GasFee)
 		}
 	}
 
@@ -156,7 +156,7 @@ func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionReco
 			return nil, err
 		}
 		for _, itemID := range resultPlan.ItemIDs {
-			resultPlan.GasFee += feesByItem[itemID]
+			resultPlan.GasFee = decimalAddAllowNil(resultPlan.GasFee, feesByItem[itemID])
 		}
 		out = append(out, resultPlan)
 	}
@@ -173,6 +173,7 @@ func cloneResultPlans(plans []ResultPlan) []ResultPlan {
 
 func cloneResultPlan(plan ResultPlan) ResultPlan {
 	out := plan
+	out.GasFee = plan.GasFee.Clone()
 	out.ItemIDs = append([]int64(nil), plan.ItemIDs...)
 	out.Inputs = append([]OutPoint(nil), plan.Inputs...)
 	out.Outputs = make([]ResultOutput, len(plan.Outputs))
@@ -342,7 +343,7 @@ func splitAssetsByBPS(assets wire.TxAssets, deployerBPS int64) (wire.TxAssets, w
 	return deployer, bootstrap
 }
 
-func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput, gasAssetName string, gasFee uint64) (wire.TxAssets, error) {
+func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput, gasAssetName string, gasFee *scommon.Decimal) (wire.TxAssets, error) {
 	if len(available) == 0 {
 		return nil, nil
 	}
@@ -359,8 +360,8 @@ func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput, gasAsse
 	if err := change.Split(spent); err != nil {
 		return nil, err
 	}
-	if gasFee != 0 {
-		feeAssets, err := newAssetSet(gasAssetName, fmt.Sprintf("%d", gasFee))
+	if gasFee != nil && gasFee.Sign() > 0 {
+		feeAssets, err := newGasAssetSet(gasAssetName, gasFee.String())
 		if err != nil {
 			return nil, err
 		}
@@ -423,8 +424,8 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	if gasAssetName == "" {
 		gasAssetName = DefaultGasConfig().GasAssetName
 	}
-	if state.Running.GasBalance > 0 {
-		gasAssets, err := newAssetSet(gasAssetName, fmt.Sprintf("%d", state.Running.GasBalance))
+	if state.Running.GasBalance != nil && state.Running.GasBalance.Sign() > 0 {
+		gasAssets, err := newGasAssetSet(gasAssetName, state.Running.GasBalance.String())
 		if err != nil {
 			return ResultOutput{}, err
 		}
@@ -638,6 +639,14 @@ func resultOutputFromTransfer(transfer SettlementTransfer) (ResultOutput, error)
 }
 
 func newAssetSet(assetName, amount string) (wire.TxAssets, error) {
+	return newAssetSetWithPrecision(assetName, amount, MaxPriceDivisibility)
+}
+
+func newGasAssetSet(assetName, amount string) (wire.TxAssets, error) {
+	return newAssetSetWithPrecision(assetName, amount, contractcommon.GasFeePrecision)
+}
+
+func newAssetSetWithPrecision(assetName, amount string, maxPrecision int) (wire.TxAssets, error) {
 	if assetName == "" || amount == "" || amount == "0" {
 		return nil, nil
 	}
@@ -645,7 +654,7 @@ func newAssetSet(assetName, amount string) (wire.TxAssets, error) {
 	if name == nil {
 		return nil, ErrInvalidAsset
 	}
-	amt, err := scommon.NewDecimalFromString(amount, MaxPriceDivisibility)
+	amt, err := scommon.NewDecimalFromString(amount, maxPrecision)
 	if err != nil {
 		return nil, err
 	}

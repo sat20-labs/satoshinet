@@ -202,7 +202,7 @@ func TestApplyFundingTracksTemplateGasSeparately(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, int64(50), state.Running.GasBalance)
+	requireDecimalString(t, "50", state.Running.GasBalance)
 	require.Empty(t, state.Running.AssetAInPool)
 	require.Zero(t, state.Running.AssetBInPool)
 }

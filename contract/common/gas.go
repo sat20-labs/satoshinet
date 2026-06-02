@@ -2,8 +2,10 @@ package common
 
 import (
 	"errors"
-	"math/bits"
+	"math"
+	"math/big"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -16,15 +18,24 @@ const (
 	// GasAssetNameAtHeight when network context is available.
 	GasAssetName = TestnetGasAssetName
 
+	// Base gas values are execution gas units, not gas asset amounts. The gas
+	// asset fee is calculated as:
+	//   executionGas * priceNumerator / priceDenominator / ExecutionGasUnitsPerGas
+	// At the initial price, 1000 execution gas units charge 1 gas asset unit.
 	DeployBaseGas  uint64 = 100000
 	InvokeBaseGas  uint64 = 20000
 	ResultBaseGas  uint64 = 10000
 	TriggerBaseGas uint64 = 30000
 	MaxGasPerBlock uint64 = 30000000
 
+	// ExecutionGasUnitsPerGas decouples EVM/template/agent execution gas units
+	// from the protocol gas asset unit.
+	ExecutionGasUnitsPerGas uint64 = 1000
+	GasFeePrecision         int    = 8
+
 	GasPriceDenominator      uint64 = 100000000
 	InitialGasPriceNumerator uint64 = GasPriceDenominator
-	GasPriceDecayInterval    uint64 = 100000
+	GasPriceDecayInterval    uint64 = 100000 // in blocks
 	GasPriceDecayNumerator   uint64 = 95
 	GasPriceDecayDenominator uint64 = 100
 	GasPriceFloorNumerator   uint64 = 10000
@@ -60,28 +71,66 @@ func GasPriceNumeratorAtHeight(height uint64) uint64 {
 }
 
 func GasFeeAtHeight(gas, height uint64) (uint64, error) {
-	return GasFee(gas, GasPriceNumeratorAtHeight(height), GasPriceDenominator)
+	fee, err := GasFeeDecimalAtHeight(gas, height)
+	if err != nil {
+		return 0, err
+	}
+	return DecimalCeilUint64(fee)
 }
 
 func GasFee(gas, priceNumerator, priceDenominator uint64) (uint64, error) {
+	fee, err := GasFeeDecimal(gas, priceNumerator, priceDenominator)
+	if err != nil {
+		return 0, err
+	}
+	return DecimalCeilUint64(fee)
+}
+
+func GasFeeDecimalAtHeight(gas, height uint64) (*scommon.Decimal, error) {
+	return GasFeeDecimal(gas, GasPriceNumeratorAtHeight(height), GasPriceDenominator)
+}
+
+func GasFeeDecimal(gas, priceNumerator, priceDenominator uint64) (*scommon.Decimal, error) {
 	if gas == 0 {
+		return scommon.NewDecimal(0, GasFeePrecision), nil
+	}
+	if priceNumerator == 0 || priceDenominator == 0 || ExecutionGasUnitsPerGas == 0 {
+		return nil, errors.New("invalid gas price")
+	}
+	value := new(big.Int).SetUint64(gas)
+	value.Mul(value, new(big.Int).SetUint64(priceNumerator))
+	if GasFeePrecision > 0 {
+		value.Mul(value, decimalScale(GasFeePrecision))
+	}
+	denominator := new(big.Int).SetUint64(priceDenominator)
+	denominator.Mul(denominator, new(big.Int).SetUint64(ExecutionGasUnitsPerGas))
+	value.Div(value, denominator)
+	return &scommon.Decimal{Precision: GasFeePrecision, Value: value}, nil
+}
+
+func DecimalCeilUint64(d *scommon.Decimal) (uint64, error) {
+	if d == nil || d.Sign() == 0 {
 		return 0, nil
 	}
-	if priceNumerator == 0 || priceDenominator == 0 {
-		return 0, errors.New("invalid gas price")
+	if d.Sign() < 0 {
+		return 0, errors.New("negative gas fee")
 	}
-	hi, lo := bits.Mul64(gas, priceNumerator)
-	if hi >= priceDenominator {
+	scale := decimalScale(d.Precision)
+	quotient, remainder := new(big.Int).QuoRem(d.Value, scale, new(big.Int))
+	if remainder.Sign() != 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if quotient.Cmp(new(big.Int).SetUint64(math.MaxUint64)) > 0 {
 		return 0, errors.New("gas fee overflows uint64")
 	}
-	quotient, remainder := bits.Div64(hi, lo, priceDenominator)
-	if remainder != 0 {
-		if quotient == ^uint64(0) {
-			return 0, errors.New("gas fee overflows uint64")
-		}
-		quotient++
+	return quotient.Uint64(), nil
+}
+
+func decimalScale(precision int) *big.Int {
+	if precision <= 0 {
+		return big.NewInt(1)
 	}
-	return quotient, nil
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(precision)), nil)
 }
 
 func EffectiveGas(used, base uint64) uint64 {

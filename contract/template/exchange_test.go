@@ -84,16 +84,16 @@ func TestExchangeDefaultInvokeRetainsAssetB(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.SettlementPlans, 1)
 	require.Len(t, result.SettlementPlans[0].Transfers, 2)
-	require.Equal(t, "10", result.SettlementPlans[0].Transfers[0].AssetAmt)
-	require.Equal(t, "20", result.SettlementPlans[0].Transfers[1].AssetAmt)
+	require.Equal(t, "10.4995", result.SettlementPlans[0].Transfers[0].AssetAmt)
+	require.Equal(t, "20.999", result.SettlementPlans[0].Transfers[1].AssetAmt)
 
 	runtime, ok := store.Get(addr)
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "90", state.Running.AssetAInPool)
+	requireDecimalString(t, "89.5005", state.Running.AssetAInPool)
 	require.Empty(t, state.Running.AssetBInPool)
-	requireDecimalString(t, "10", state.Running.TotalDealAssetA)
+	requireDecimalString(t, "10.4995", state.Running.TotalDealAssetA)
 }
 
 func TestExchangeDefaultInvokeRetainsAssetA(t *testing.T) {
@@ -130,7 +130,7 @@ func TestExchangeDefaultInvokeRetainsAssetA(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "90.1", state.Running.AssetAInPool)
+	requireDecimalString(t, "91.099", state.Running.AssetAInPool)
 	requireDecimalString(t, "0.2", state.Running.AssetBInPool)
 	requireDecimalString(t, "9.9", state.Running.TotalDealAssetA)
 }
@@ -261,7 +261,7 @@ func TestExchangeCloseReturnsRemainingAssetAToDeployer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	requireResultPlanAssetTo(t, plans[0], "deployer-address", contract.AssetAName, "100")
-	requireResultPlanAssetTo(t, plans[0], "deployer-address", gas, "4")
+	requireResultPlanAssetTo(t, plans[0], "deployer-address", gas, "5.998")
 	requireNoResultPlanOutputTo(t, plans[0], addr.MustEncode())
 }
 

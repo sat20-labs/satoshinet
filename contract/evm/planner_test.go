@@ -19,7 +19,7 @@ func TestBuildCanonicalResultPlan(t *testing.T) {
 		Contract:               contract,
 		Available:              available,
 		GasAssetName:           gasAssetName,
-		GasFee:                 60,
+		GasFee:                 mustDefaultDecimal(t, 60),
 		RequiredGasFundingUTXO: []OutPoint{{TxID: "invoke", Vout: 1}},
 		Intents: []AssetIntent{
 			{

@@ -19,7 +19,7 @@ type ApplyInvokeRequest struct {
 	FundingOutputs        []ContractOutput
 	Height                int64
 	Timestamp             int64
-	ResultGasFee          uint64
+	ResultGasFee          *scommon.Decimal
 	ApplyDefaultRetention bool
 }
 
@@ -39,6 +39,7 @@ type InvokeItem struct {
 	OrderTime      int64            `json:"orderTime"`
 	AssetName      string           `json:"assetName"`
 	ServiceFee     int64            `json:"serviceFee"`
+	GasFee         *scommon.Decimal `json:"gasFee,omitempty"`
 	UnitPrice      string           `json:"unitPrice,omitempty"`
 	ExpectedAmt    *scommon.Decimal `json:"expectedAmt,omitempty"`
 	Address        string           `json:"address,omitempty"`
@@ -70,6 +71,7 @@ type invokeItemJSON struct {
 	OrderTime      int64   `json:"orderTime"`
 	AssetName      string  `json:"assetName"`
 	ServiceFee     int64   `json:"serviceFee"`
+	GasFee         string  `json:"gasFee,omitempty"`
 	UnitPrice      string  `json:"unitPrice,omitempty"`
 	ExpectedAmt    string  `json:"expectedAmt,omitempty"`
 	Address        string  `json:"address,omitempty"`
@@ -98,6 +100,7 @@ func (i InvokeItem) MarshalJSON() ([]byte, error) {
 		OrderTime:      i.OrderTime,
 		AssetName:      i.AssetName,
 		ServiceFee:     i.ServiceFee,
+		GasFee:         decimalString(i.GasFee),
 		UnitPrice:      i.UnitPrice,
 		ExpectedAmt:    decimalString(i.ExpectedAmt),
 		Address:        i.Address,
@@ -130,6 +133,14 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 	i.OrderTime = item.OrderTime
 	i.AssetName = item.AssetName
 	i.ServiceFee = item.ServiceFee
+	i.GasFee = nil
+	if item.GasFee != "" {
+		var err error
+		i.GasFee, err = parseGasStateDecimal("gasFee", item.GasFee)
+		if err != nil {
+			return err
+		}
+	}
 	i.UnitPrice = item.UnitPrice
 	i.ExpectedAmt = nil
 	if item.ExpectedAmt != "" {
@@ -198,7 +209,7 @@ type RunningData struct {
 	RequiredAssetB    *scommon.Decimal            `json:"requiredAssetB,omitempty"`
 	K                 *scommon.Decimal            `json:"k,omitempty"`
 	TradingReady      bool                        `json:"tradingReady,omitempty"`
-	GasBalance        int64                       `json:"gasBalance,omitempty"`
+	GasBalance        *scommon.Decimal            `json:"gasBalance,omitempty"`
 	TotalInputAssetA  *scommon.Decimal            `json:"totalInputAssetA,omitempty"`
 	TotalInputAssetB  *scommon.Decimal            `json:"totalInputAssetB,omitempty"`
 	TotalDealAssetA   *scommon.Decimal            `json:"totalDealAssetA,omitempty"`
@@ -209,6 +220,101 @@ type RunningData struct {
 	LPBalances        map[string]*scommon.Decimal `json:"lpBalances,omitempty"`
 	LPCosts           map[string]int64            `json:"lpCosts,omitempty"`
 	Closed            bool                        `json:"closed,omitempty"`
+}
+
+type runningDataJSON struct {
+	AssetAInPool      string            `json:"assetAInPool,omitempty"`
+	AssetBInPool      string            `json:"assetBInPool,omitempty"`
+	RequiredAssetA    string            `json:"requiredAssetA,omitempty"`
+	RequiredAssetB    string            `json:"requiredAssetB,omitempty"`
+	K                 string            `json:"k,omitempty"`
+	TradingReady      bool              `json:"tradingReady,omitempty"`
+	GasBalance        string            `json:"gasBalance,omitempty"`
+	TotalInputAssetA  string            `json:"totalInputAssetA,omitempty"`
+	TotalInputAssetB  string            `json:"totalInputAssetB,omitempty"`
+	TotalDealAssetA   string            `json:"totalDealAssetA,omitempty"`
+	TotalDealAssetB   string            `json:"totalDealAssetB,omitempty"`
+	TotalDealCount    int               `json:"totalDealCount"`
+	TotalRefundAssetB string            `json:"totalRefundAssetB,omitempty"`
+	TotalLPTAmt       string            `json:"totalLptAmt,omitempty"`
+	LPBalances        map[string]string `json:"lpBalances,omitempty"`
+	LPCosts           map[string]int64  `json:"lpCosts,omitempty"`
+	Closed            bool              `json:"closed,omitempty"`
+}
+
+func (r RunningData) MarshalJSON() ([]byte, error) {
+	return json.Marshal(runningDataJSON{
+		AssetAInPool:      decimalString(r.AssetAInPool),
+		AssetBInPool:      decimalString(r.AssetBInPool),
+		RequiredAssetA:    decimalString(r.RequiredAssetA),
+		RequiredAssetB:    decimalString(r.RequiredAssetB),
+		K:                 decimalString(r.K),
+		TradingReady:      r.TradingReady,
+		GasBalance:        decimalString(r.GasBalance),
+		TotalInputAssetA:  decimalString(r.TotalInputAssetA),
+		TotalInputAssetB:  decimalString(r.TotalInputAssetB),
+		TotalDealAssetA:   decimalString(r.TotalDealAssetA),
+		TotalDealAssetB:   decimalString(r.TotalDealAssetB),
+		TotalDealCount:    r.TotalDealCount,
+		TotalRefundAssetB: decimalString(r.TotalRefundAssetB),
+		TotalLPTAmt:       decimalString(r.TotalLPTAmt),
+		LPBalances:        decimalStringMap(r.LPBalances),
+		LPCosts:           cloneLPCosts(r.LPCosts),
+		Closed:            r.Closed,
+	})
+}
+
+func (r *RunningData) UnmarshalJSON(data []byte) error {
+	var item runningDataJSON
+	if err := json.Unmarshal(data, &item); err != nil {
+		return err
+	}
+	var err error
+	if r.AssetAInPool, err = parseOptionalStateDecimal("assetAInPool", item.AssetAInPool); err != nil {
+		return err
+	}
+	if r.AssetBInPool, err = parseOptionalStateDecimal("assetBInPool", item.AssetBInPool); err != nil {
+		return err
+	}
+	if r.RequiredAssetA, err = parseOptionalStateDecimal("requiredAssetA", item.RequiredAssetA); err != nil {
+		return err
+	}
+	if r.RequiredAssetB, err = parseOptionalStateDecimal("requiredAssetB", item.RequiredAssetB); err != nil {
+		return err
+	}
+	if r.K, err = parseOptionalStateDecimal("k", item.K); err != nil {
+		return err
+	}
+	if r.GasBalance, err = parseOptionalGasStateDecimal("gasBalance", item.GasBalance); err != nil {
+		return err
+	}
+	if r.TotalInputAssetA, err = parseOptionalStateDecimal("totalInputAssetA", item.TotalInputAssetA); err != nil {
+		return err
+	}
+	if r.TotalInputAssetB, err = parseOptionalStateDecimal("totalInputAssetB", item.TotalInputAssetB); err != nil {
+		return err
+	}
+	if r.TotalDealAssetA, err = parseOptionalStateDecimal("totalDealAssetA", item.TotalDealAssetA); err != nil {
+		return err
+	}
+	if r.TotalDealAssetB, err = parseOptionalStateDecimal("totalDealAssetB", item.TotalDealAssetB); err != nil {
+		return err
+	}
+	if r.TotalRefundAssetB, err = parseOptionalStateDecimal("totalRefundAssetB", item.TotalRefundAssetB); err != nil {
+		return err
+	}
+	if r.TotalLPTAmt, err = parseOptionalStateDecimal("totalLptAmt", item.TotalLPTAmt); err != nil {
+		return err
+	}
+	r.TradingReady = item.TradingReady
+	r.TotalDealCount = item.TotalDealCount
+	r.LPBalances, err = parseStateDecimalMap("lpBalances", item.LPBalances)
+	if err != nil {
+		return err
+	}
+	r.LPCosts = cloneLPCosts(item.LPCosts)
+	r.Closed = item.Closed
+	return nil
 }
 
 func (r *RunningData) Apply(item *InvokeItem) {
@@ -335,7 +441,7 @@ func (r *ContractRuntime) ApplyInvalidInvoke(req ApplyInvokeRequest, gasAssetNam
 		InAmt:          inAmt,
 		RetainedAssetA: retention.AssetA,
 		RetainedAssetB: retention.AssetB,
-		ServiceFee:     int64(req.ResultGasFee),
+		GasFee:         req.ResultGasFee.Clone(),
 		Reason:         InvokeReasonInvalid,
 		Done:           ItemStatusInit,
 	}
@@ -343,7 +449,7 @@ func (r *ContractRuntime) ApplyInvalidInvoke(req ApplyInvokeRequest, gasAssetNam
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
 	state.Running.ApplyForContract(r.contract, item)
-	state.Running.GasBalance += gasBalance
+	state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gasBalance)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err
 	}
@@ -387,12 +493,12 @@ func retainDefaultInvokeFunding(contract Contract, outputs []ContractOutput) (de
 	return retention, adjusted, nil
 }
 
-func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetName string, resultGasFee uint64) (
-	defaultInvokeRetention, int64, int64, *scommon.Decimal, string, error) {
+func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetName string, resultGasFee *scommon.Decimal) (
+	defaultInvokeRetention, *scommon.Decimal, int64, *scommon.Decimal, string, error) {
 
 	assetA, assetB := defaultInvokePoolAssets(contract)
 	retention := defaultInvokeRetention{}
-	gasBalance := int64(0)
+	gasBalance := (*scommon.Decimal)(nil)
 	inValue := int64(0)
 	inAmt := parseDecimalOrZero("0")
 	inUtxos := ""
@@ -405,7 +511,7 @@ func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetN
 		if assetA != "" {
 			amt, err := output.AssetAmount(assetA)
 			if err != nil {
-				return defaultInvokeRetention{}, 0, 0, nil, "", err
+				return defaultInvokeRetention{}, nil, 0, nil, "", err
 			}
 			amt = parseDecimalOrZero(amt.String())
 			retention.AssetA = decimalAddAllowNil(retention.AssetA, amt)
@@ -416,7 +522,7 @@ func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetN
 		} else if assetB != "" && assetB != assetA {
 			amt, err := output.AssetAmount(assetB)
 			if err != nil {
-				return defaultInvokeRetention{}, 0, 0, nil, "", err
+				return defaultInvokeRetention{}, nil, 0, nil, "", err
 			}
 			amt = parseDecimalOrZero(amt.String())
 			retention.AssetB = decimalAddAllowNil(retention.AssetB, amt)
@@ -424,31 +530,30 @@ func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetN
 		if gasAssetName != "" && gasAssetName != assetA && gasAssetName != assetB {
 			gas, err := output.AssetAmount(gasAssetName)
 			if err != nil {
-				return defaultInvokeRetention{}, 0, 0, nil, "", err
+				return defaultInvokeRetention{}, nil, 0, nil, "", err
 			}
-			gasBalance += gas.Int64()
+			gasBalance = decimalAddAllowNil(gasBalance, gas)
 		}
 	}
-	if resultGasFee != 0 {
-		fee := scommon.NewDefaultDecimal(int64(resultGasFee))
+	if resultGasFee != nil && resultGasFee.Sign() > 0 {
 		switch gasAssetName {
 		case assetA:
 			var err error
-			retention.AssetA, err = subtractRetainedGasFee("asset A", retention.AssetA, fee)
+			retention.AssetA, err = subtractRetainedGasFee("asset A", retention.AssetA, resultGasFee)
 			if err != nil {
-				return defaultInvokeRetention{}, 0, 0, nil, "", err
+				return defaultInvokeRetention{}, nil, 0, nil, "", err
 			}
 		case assetB:
 			var err error
-			retention.AssetB, err = subtractRetainedGasFee("asset B", retention.AssetB, fee)
+			retention.AssetB, err = subtractRetainedGasFee("asset B", retention.AssetB, resultGasFee)
 			if err != nil {
-				return defaultInvokeRetention{}, 0, 0, nil, "", err
+				return defaultInvokeRetention{}, nil, 0, nil, "", err
 			}
 		default:
-			if gasBalance < int64(resultGasFee) {
-				return defaultInvokeRetention{}, 0, 0, nil, "", fmt.Errorf("insufficient invalid invoke gas balance")
+			if gasBalance == nil || gasBalance.Cmp(resultGasFee) < 0 {
+				return defaultInvokeRetention{}, nil, 0, nil, "", fmt.Errorf("insufficient invalid invoke gas balance")
 			}
-			gasBalance -= int64(resultGasFee)
+			gasBalance = gasBalance.SubAlignPrecision(resultGasFee)
 		}
 	}
 	if inAmt.Sign() == 0 {
@@ -467,7 +572,7 @@ func subtractRetainedGasFee(label string, amt, fee *scommon.Decimal) (*scommon.D
 	if amt.Cmp(fee) < 0 {
 		return nil, fmt.Errorf("insufficient invalid invoke %s for result gas", label)
 	}
-	return scommon.DecimalSub(amt, fee), nil
+	return amt.SubAlignPrecision(fee), nil
 }
 
 func defaultInvokePoolAssets(contract Contract) (string, string) {
@@ -517,7 +622,7 @@ func decimalAddAllowNil(a, b *scommon.Decimal) *scommon.Decimal {
 	if a == nil {
 		return b.Clone()
 	}
-	return scommon.DecimalAdd(a, b)
+	return a.AddAlignPrecision(b)
 }
 
 func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state TemplateRuntimeState, req ApplyInvokeRequest) (*InvokeItem, error) {
@@ -807,7 +912,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 				InUtxos:        inUtxos,
 				InAmt:          inputA,
 				RemainingAmt:   inputB,
-				ServiceFee:     int64(req.ResultGasFee),
+				GasFee:         req.ResultGasFee.Clone(),
 				Reason:         InvokeReasonNormal,
 				Done:           ItemStatusInit,
 				RemainingValue: fundingValue(req.FundingOutputs),
@@ -825,7 +930,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 			Address:        req.Invoker,
 			InUtxos:        inUtxos,
 			InAmt:          inAmt,
-			ServiceFee:     int64(req.ResultGasFee),
+			GasFee:         req.ResultGasFee.Clone(),
 			Reason:         InvokeReasonNormal,
 			Done:           ItemStatusInit,
 			RemainingValue: fundingValue(req.FundingOutputs),
@@ -938,7 +1043,7 @@ func (r *ContractRuntime) ApplyFunding(outputs []ContractOutput, gasAssetName st
 			if err != nil {
 				return err
 			}
-			state.Running.GasBalance += gas.Int64()
+			state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
 		}
 	}
 	if !state.Running.TradingReady {
@@ -969,7 +1074,7 @@ func (r *ContractRuntime) ApplyGasFunding(outputs []ContractOutput, gasAssetName
 		if err != nil {
 			return err
 		}
-		state.Running.GasBalance += gas.Int64()
+		state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
 	}
 	return r.saveRuntimeState(state)
 }
@@ -1041,6 +1146,59 @@ func parseStateDecimal(field, value string) (*scommon.Decimal, error) {
 		return nil, fmt.Errorf("invalid %s decimal %q: %w", field, value, err)
 	}
 	return d, nil
+}
+
+func parseOptionalStateDecimal(field, value string) (*scommon.Decimal, error) {
+	if value == "" {
+		return nil, nil
+	}
+	return parseStateDecimal(field, value)
+}
+
+func parseGasStateDecimal(field, value string) (*scommon.Decimal, error) {
+	d, err := scommon.NewDecimalFromString(value, contractcommon.GasFeePrecision)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s decimal %q: %w", field, value, err)
+	}
+	return d, nil
+}
+
+func parseOptionalGasStateDecimal(field, value string) (*scommon.Decimal, error) {
+	if value == "" {
+		return nil, nil
+	}
+	return parseGasStateDecimal(field, value)
+}
+
+func decimalStringMap(in map[string]*scommon.Decimal) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		if str := decimalString(value); str != "" {
+			out[key] = str
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func parseStateDecimalMap(field string, in map[string]string) (map[string]*scommon.Decimal, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]*scommon.Decimal, len(in))
+	for key, value := range in {
+		parsed, err := parseStateDecimal(field+"."+key, value)
+		if err != nil {
+			return nil, err
+		}
+		out[key] = parsed
+	}
+	return out, nil
 }
 
 func decimalInt64(value *scommon.Decimal) int64 {

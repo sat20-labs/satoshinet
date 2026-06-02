@@ -12,7 +12,6 @@ import (
 	"math/big"
 	"time"
 
-	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -1227,11 +1226,11 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 	if height < 0 {
 		height = 0
 	}
-	required, err := contractcommon.GasFeeAtHeight(baseGas, uint64(height))
+	required, err := contractcommon.GasFeeDecimalAtHeight(baseGas, uint64(height))
 	if err != nil {
 		return ruleError(ErrBadFees, fmt.Sprintf("contract base gas fee error: %v", err))
 	}
-	if required == 0 {
+	if required == nil || required.Sign() == 0 {
 		return nil
 	}
 	gasAssetName := contractGasAssetNameAtHeight(params, int64(height))
@@ -1240,8 +1239,8 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 		return ruleError(ErrBadFees, fmt.Sprintf("invalid contract gas asset %q", gasAssetName))
 	}
 	asset, err := feeAssets.Find(assetName)
-	if err != nil || asset == nil || asset.Amount.Cmp(scommon.NewDefaultDecimal(int64(required))) < 0 {
-		return ruleError(ErrBadFees, fmt.Sprintf("contract %d requires at least %d %s base gas fee",
+	if err != nil || asset == nil || asset.Amount.Cmp(required) < 0 {
+		return ruleError(ErrBadFees, fmt.Sprintf("contract %d requires at least %s %s base gas fee",
 			class.TxType, required, gasAssetName))
 	}
 	return nil

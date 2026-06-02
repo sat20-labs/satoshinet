@@ -18,13 +18,20 @@ func TestGasPriceNumeratorAtHeight(t *testing.T) {
 	}
 }
 
-func TestGasFeeAtHeightRoundsUp(t *testing.T) {
-	fee, err := GasFee(3, 1, 2)
+func TestGasFeeDecimalUsesExecutionScale(t *testing.T) {
+	fee, err := GasFeeDecimal(3, GasPriceDenominator, GasPriceDenominator)
+	if err != nil {
+		t.Fatalf("GasFeeDecimal failed: %v", err)
+	}
+	if got := fee.String(); got != "0.003" {
+		t.Fatalf("decimal fee got %s want 0.003", got)
+	}
+	rounded, err := GasFee(3, GasPriceDenominator, GasPriceDenominator)
 	if err != nil {
 		t.Fatalf("GasFee failed: %v", err)
 	}
-	if fee != 2 {
-		t.Fatalf("rounded fee got %d want 2", fee)
+	if rounded != 1 {
+		t.Fatalf("compat rounded fee got %d want 1", rounded)
 	}
 }
 

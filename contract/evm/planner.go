@@ -14,7 +14,7 @@ type ResultPlanRequest struct {
 	Available              []UTXO
 	Intents                []AssetIntent
 	GasAssetName           string
-	GasFee                 uint64
+	GasFee                 *scommon.Decimal
 	RequiredGasFundingUTXO []OutPoint
 }
 
@@ -32,8 +32,8 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	}
 
 	requiredByAsset := make(map[string]*scommon.Decimal)
-	if req.GasFee > 0 {
-		requiredByAsset[req.GasAssetName] = scommon.NewDefaultDecimal(int64(req.GasFee))
+	if req.GasFee != nil && req.GasFee.Sign() > 0 {
+		requiredByAsset[req.GasAssetName] = req.GasFee.Clone()
 	}
 	for _, intent := range req.Intents {
 		if intent.AssetName == "" || intent.Amount == nil {

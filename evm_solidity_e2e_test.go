@@ -179,9 +179,19 @@ func TestEVMEndToEndSolidityVaultTriggerAssetSettlement(t *testing.T) {
 	}
 	require.Equal(t, "1.25", index.AssetBalance(recipientAddr, vaultAsset).String())
 	require.Equal(t, "1.25", index.AssetBalance(contract.MustEncode(), vaultAsset).String())
-	gasChange := 2000000 - cfg.ResultExecutionGas(build.Execution.Records[0]) - cfg.ResultPackingFee
-	require.Equal(t, scommon.NewDefaultDecimal(int64(gasChange)).String(),
-		index.AssetBalance(contract.MustEncode(), gasAsset).String())
+	triggerBaseGas := cfg.TriggerBaseGas
+	if triggerBaseGas == 0 {
+		triggerBaseGas = evmcommon.TriggerBaseGas
+	}
+	callFee, err := cfg.CheckedCallFeeDecimalAtHeight(
+		evmcommon.EffectiveGas(build.Execution.Records[0].GasUsed, triggerBaseGas),
+		build.Execution.Records[0].Height,
+	)
+	require.NoError(t, err)
+	resultFee, err := cfg.CheckedCallFeeDecimalAtHeight(cfg.ResultPackingFee, build.Execution.Records[0].Height)
+	require.NoError(t, err)
+	gasChange := scommon.NewDefaultDecimal(2000000).SubAlignPrecision(callFee.AddAlignPrecision(resultFee))
+	require.Equal(t, gasChange.String(), index.AssetBalance(contract.MustEncode(), gasAsset).String())
 }
 
 type compiledSolidityContract struct {

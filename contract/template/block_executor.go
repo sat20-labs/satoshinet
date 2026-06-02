@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -36,7 +37,7 @@ type ExecutionRecord struct {
 	Contract       ContractAddress
 	Status         ResultPayload
 	GasLimit       uint64
-	GasFee         uint64
+	GasFee         *scommon.Decimal
 	FundingInputs  []OutPoint
 	ItemIDs        []int64
 	RequiresResult bool
@@ -192,60 +193,58 @@ func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output Contra
 	return nil
 }
 
-func addGasFees(a, b uint64) (uint64, error) {
-	if a > ^uint64(0)-b {
-		return 0, errors.New("default invoke gas fee overflows uint64")
+func addGasFees(a, b *scommon.Decimal) (*scommon.Decimal, error) {
+	if a == nil || a.Sign() == 0 {
+		if b == nil {
+			return nil, nil
+		}
+		return b.Clone(), nil
 	}
-	return a + b, nil
+	if b == nil || b.Sign() == 0 {
+		return a.Clone(), nil
+	}
+	return a.AddAlignPrecision(b), nil
 }
 
-func gasFeeIf(ok bool, fee uint64) uint64 {
+func gasFeeIf(ok bool, fee *scommon.Decimal) *scommon.Decimal {
 	if ok {
-		return fee
+		return fee.Clone()
 	}
-	return 0
+	return nil
 }
 
-func defaultInvokeHasRequiredGas(output ContractOutput, gasAssetName string, required uint64) (bool, error) {
-	if required == 0 {
+func defaultInvokeHasRequiredGas(output ContractOutput, gasAssetName string, required *scommon.Decimal) (bool, error) {
+	if required == nil || required.Sign() == 0 {
 		return true, nil
 	}
 	if gasAssetName == "" {
-		return false, nil
-	}
-	const maxInt64AsUint64 = uint64(1<<63 - 1)
-	if required > maxInt64AsUint64 {
 		return false, nil
 	}
 	amount, err := output.AssetAmount(gasAssetName)
 	if err != nil {
 		return false, err
 	}
-	return amount != nil && amount.Int64() >= int64(required), nil
+	return amount != nil && amount.Cmp(required) >= 0, nil
 }
 
-func fundingOutputsHaveGas(outputs []ContractOutput, gasAssetName string, required uint64) (bool, error) {
-	if required == 0 {
+func fundingOutputsHaveGas(outputs []ContractOutput, gasAssetName string, required *scommon.Decimal) (bool, error) {
+	if required == nil || required.Sign() == 0 {
 		return true, nil
 	}
 	if gasAssetName == "" {
 		return false, nil
 	}
-	const maxInt64AsUint64 = uint64(1<<63 - 1)
-	if required > maxInt64AsUint64 {
-		return false, nil
-	}
-	total := int64(0)
+	total := scommon.NewDecimal(0, required.Precision)
 	for _, output := range outputs {
 		amount, err := output.AssetAmount(gasAssetName)
 		if err != nil {
 			return false, err
 		}
 		if amount != nil {
-			total += amount.Int64()
+			total = total.AddAlignPrecision(amount)
 		}
 	}
-	return total >= int64(required), nil
+	return total.Cmp(required) >= 0, nil
 }
 
 func templateOutputFromDefault(output contractcommon.DefaultInvokeOutput) ContractOutput {
@@ -348,13 +347,13 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 	}
 	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
 	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
-		invalidResultFee := uint64(0)
+		var invalidResultFee *scommon.Decimal
 		hasResultGas, err := fundingOutputsHaveGas(validated.FundingOutputs, e.GasConfig.normalized().GasAssetName, resultFee)
 		if err != nil {
 			return err
 		}
 		if hasResultGas {
-			invalidResultFee = resultFee
+			invalidResultFee = resultFee.Clone()
 		}
 		item, err := runtime.ApplyInvalidInvoke(ApplyInvokeRequest{
 			Action:         validated.Payload.Action,
@@ -442,6 +441,7 @@ func cloneExecutionRecords(in []ExecutionRecord) []ExecutionRecord {
 	for i := range out {
 		out[i].FundingInputs = append([]OutPoint(nil), out[i].FundingInputs...)
 		out[i].ItemIDs = append([]int64(nil), out[i].ItemIDs...)
+		out[i].GasFee = out[i].GasFee.Clone()
 	}
 	return out
 }

@@ -23,7 +23,7 @@ func (c *ExchangeContract) ApplyFundingState(state *TemplateRuntimeState, output
 			if err != nil {
 				return true, err
 			}
-			state.Running.GasBalance += gas.Int64()
+			state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
 		}
 	}
 	return true, nil
@@ -41,7 +41,7 @@ func (c *ExchangeContract) ApplyGasFundingState(state *TemplateRuntimeState, out
 		if err != nil {
 			return true, err
 		}
-		state.Running.GasBalance += gas.Int64()
+		state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
 	}
 	return true, nil
 }
@@ -151,7 +151,7 @@ func newExchangeItem(id int64, action string, req ApplyInvokeRequest, inUtxos, a
 		InAmt:          nil,
 		ExpectedAmt:    nil,
 		RemainingAmt:   nil,
-		ServiceFee:     int64(req.ResultGasFee),
+		GasFee:         req.ResultGasFee.Clone(),
 		Reason:         InvokeReasonNormal,
 		Done:           ItemStatusInit,
 		RemainingValue: 0,

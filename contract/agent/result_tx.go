@@ -23,10 +23,10 @@ type ResultOutput struct {
 }
 
 type ResultPlan struct {
-	Contract string         `json:"contract"`
-	GasFee   uint64         `json:"gas_fee,omitempty"`
-	Inputs   []OutPoint     `json:"inputs,omitempty"`
-	Outputs  []ResultOutput `json:"outputs,omitempty"`
+	Contract string           `json:"contract"`
+	GasFee   *scommon.Decimal `json:"gas_fee,omitempty"`
+	Inputs   []OutPoint       `json:"inputs,omitempty"`
+	Outputs  []ResultOutput   `json:"outputs,omitempty"`
 }
 
 type UTXO struct {
@@ -184,7 +184,7 @@ func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []Re
 		index[plan.Contract] = i
 	}
 	for _, record := range records {
-		if !record.RequiresResult || record.GasFee == 0 {
+		if !record.RequiresResult || record.GasFee == nil || record.GasFee.Sign() == 0 {
 			continue
 		}
 		contract := record.Contract.MustEncode()
@@ -194,11 +194,21 @@ func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []Re
 			index[contract] = i
 			out = append(out, ResultPlan{Contract: contract})
 		}
-		out[i].GasFee += record.GasFee
+		out[i].GasFee = decimalAddAllowNil(out[i].GasFee, record.GasFee)
 		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
 		out[i].Inputs = uniqueOutPoints(out[i].Inputs)
 	}
 	return out
+}
+
+func decimalAddAllowNil(a, b *scommon.Decimal) *scommon.Decimal {
+	if b == nil || b.Sign() == 0 {
+		return a
+	}
+	if a == nil {
+		return b.Clone()
+	}
+	return a.AddAlignPrecision(b)
 }
 
 func AugmentResultPlans(plans []ResultPlan, contractUTXOs ContractUTXOProvider) ([]ResultPlan, error) {
@@ -569,6 +579,7 @@ func cloneResultPlans(plans []ResultPlan) []ResultPlan {
 	out := make([]ResultPlan, len(plans))
 	for i := range plans {
 		out[i] = plans[i]
+		out[i].GasFee = plans[i].GasFee.Clone()
 		out[i].Inputs = append([]OutPoint(nil), plans[i].Inputs...)
 		out[i].Outputs = cloneResultOutputs(plans[i].Outputs)
 	}
