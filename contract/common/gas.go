@@ -127,10 +127,7 @@ func DecimalCeilUint64(d *scommon.Decimal) (uint64, error) {
 }
 
 func decimalScale(precision int) *big.Int {
-	if precision <= 0 {
-		return big.NewInt(1)
-	}
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(precision)), nil)
+	return scommon.DecimalScale(precision)
 }
 
 func EffectiveGas(used, base uint64) uint64 {
