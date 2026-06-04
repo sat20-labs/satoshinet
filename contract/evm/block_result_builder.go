@@ -7,17 +7,18 @@ import (
 )
 
 type BlockResultBuildRequest struct {
-	Txs             []*wire.MsgTx
-	Runtime         *Runtime
-	ContractPrefix  string
-	GasConfig       GasConfig
-	Block           BlockContext
-	ResolveCaller   CallerResolver
-	ContractUTXOs   ContractUTXOProvider
-	ResolveScript   ResultRecipientScriptResolver
-	ResolveOutput   ResultOutputResolver
-	ResolveTriggers TriggerResolver
-	Triggers        []TriggerCall
+	Txs                       []*wire.MsgTx
+	Runtime                   *Runtime
+	ContractPrefix            string
+	GasConfig                 GasConfig
+	Block                     BlockContext
+	ResolveCaller             CallerResolver
+	ResolveGasRefundRecipient GasRefundRecipientResolver
+	ContractUTXOs             ContractUTXOProvider
+	ResolveScript             ResultRecipientScriptResolver
+	ResolveOutput             ResultOutputResolver
+	ResolveTriggers           TriggerResolver
+	Triggers                  []TriggerCall
 }
 
 type BlockResultBuildResult struct {
@@ -49,13 +50,15 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		ResolveOutput: resolveOutput,
 	}
 	executor := NewBlockExecutor(BlockExecutionRequest{
-		Runtime:         runtime,
-		ContractPrefix:  prefix,
-		GasConfig:       req.GasConfig,
-		Block:           req.Block,
-		ResolveCaller:   req.ResolveCaller,
-		VerifyResult:    verifier.Verify,
-		ResolveTriggers: req.ResolveTriggers,
+		Runtime:                   runtime,
+		ContractPrefix:            prefix,
+		GasConfig:                 req.GasConfig,
+		Block:                     req.Block,
+		ResolveCaller:             req.ResolveCaller,
+		ResolveGasRefundRecipient: req.ResolveGasRefundRecipient,
+		VerifyResult:              verifier.Verify,
+		ResolveTriggers:           req.ResolveTriggers,
+		ContractUTXOs:             overlay.Provider,
 	})
 
 	for _, tx := range req.Txs {

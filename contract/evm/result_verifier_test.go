@@ -106,6 +106,116 @@ func TestCanonicalResultVerifierDeployUsesFundingUTXO(t *testing.T) {
 	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
 }
 
+func TestCanonicalResultVerifierInvokeFeeSettlementWithoutAssetIntent(t *testing.T) {
+	contract := testContract(t)
+	gasAssetName := "ordx:ft:gas"
+	gasHash := chainhash.Hash{9}
+	gasInput := OutPoint{TxID: gasHash.String(), Vout: 1}
+	record := ExecutionRecord{
+		Type:           TxTypeInvoke,
+		Kind:           ExecutionKindInvoke,
+		Contract:       contract,
+		Status:         ResultStatusSuccess,
+		GasUsed:        50,
+		FundingInputs:  []OutPoint{gasInput},
+		RequiresResult: true,
+	}
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: gasHash, Index: 1}, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
+		Name:   wire.AssetName{Protocol: "ordx", Type: "ft", Ticker: "gas"},
+		Amount: *mustDefaultDecimal(t, 99960),
+	}}, []byte{0x51}))
+
+	verifier := CanonicalResultVerifier{
+		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 1, InvokeBaseGas: 20, ResultBaseGas: 10},
+		UTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return []UTXO{
+				mustUTXO(t, gasInput, contract, gasAssetName, 100000, 1),
+			}, nil
+		},
+		ResolveOutput: func(*wire.MsgTx) ([]ResultOutput, error) {
+			return []ResultOutput{
+				mustResultOutputWithDecimalAsset(t, contract.MustEncode(), gasAssetName, "99999.96"),
+			}, nil
+		},
+	}
+	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
+}
+
+func TestCanonicalResultVerifierRefundsExplicitInvokeGasEscrowToRecipient(t *testing.T) {
+	contract := testContract(t)
+	gasAssetName := "ordx:ft:gas"
+	refundRecipient := "tb1qrefund"
+	gasHash := chainhash.Hash{11}
+	gasInput := OutPoint{TxID: gasHash.String(), Vout: 1}
+	record := ExecutionRecord{
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		Contract:           contract,
+		Status:             ResultStatusSuccess,
+		GasUsed:            50,
+		FundingInputs:      []OutPoint{gasInput},
+		GasRefundRecipient: refundRecipient,
+		RequiresResult:     true,
+	}
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: gasHash, Index: 1}, nil, nil))
+
+	verifier := CanonicalResultVerifier{
+		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 1, InvokeBaseGas: 20, ResultBaseGas: 10},
+		UTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return []UTXO{
+				mustUTXO(t, gasInput, contract, gasAssetName, 100000, 1),
+			}, nil
+		},
+		ResolveOutput: func(*wire.MsgTx) ([]ResultOutput, error) {
+			return []ResultOutput{
+				mustResultOutputWithDecimalAsset(t, refundRecipient, gasAssetName, "99999.96"),
+			}, nil
+		},
+	}
+	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
+}
+
+func TestCanonicalResultVerifierDefaultInvokeKeepsFundingInContractAddress(t *testing.T) {
+	contract := testContract(t)
+	assetName := "ordx:ft:test"
+	fundingHash := chainhash.Hash{10}
+	funding := OutPoint{TxID: fundingHash.String(), Vout: 0}
+	record := ExecutionRecord{
+		Type:           TxTypeInvoke,
+		Kind:           ExecutionKindInvoke,
+		CallID:         "default-call",
+		Contract:       contract,
+		Status:         ResultStatusSuccess,
+		GasUsed:        20,
+		FundingInputs:  []OutPoint{funding},
+		RequiresResult: true,
+		ResultFeeMode:  ResultFeeModePlainTxFee,
+	}
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: fundingHash, Index: 0}, nil, nil))
+
+	verifier := CanonicalResultVerifier{
+		GasConfig: GasConfig{GasAssetName: "ordx:ft:gas", FixedGasPrice: 1, InvokeBaseGas: 20, ResultBaseGas: 10},
+		UTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return []UTXO{
+				mustUTXOWithValueAndAsset(t, funding, contract, 100, 1, assetName, 200),
+			}, nil
+		},
+		ResolveOutput: func(*wire.MsgTx) ([]ResultOutput, error) {
+			return []ResultOutput{
+				mustResultOutputWithDecimalAssetAndValue(t, contract.MustEncode(), 100, assetName, "200"),
+			}, nil
+		},
+	}
+	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
+}
+
 func TestCanonicalResultVerifierTriggerUsesContractGasUTXO(t *testing.T) {
 	contract := testContract(t)
 	gasAssetName := "ordx:ft:gas"

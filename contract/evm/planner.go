@@ -49,6 +49,20 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	assets := sortedAssetNames(requiredByAsset, req.GasAssetName)
 	inputs := make([]UTXO, 0)
 	selected := make(map[OutPoint]UTXO)
+	for _, out := range req.RequiredGasFundingUTXO {
+		u, ok := findUTXO(req.Available, out)
+		if !ok {
+			return ResultPlan{}, fmt.Errorf("required input %s not available", out)
+		}
+		if !u.Contract.Equal(req.Contract) {
+			return ResultPlan{}, fmt.Errorf("required input %s belongs to a different contract", out)
+		}
+		if _, exists := selected[u.OutPoint]; exists {
+			continue
+		}
+		selected[u.OutPoint] = u
+		inputs = append(inputs, u)
+	}
 	for _, assetName := range assets {
 		required := requiredByAsset[assetName]
 		if required == nil || required.IsZero() {
@@ -63,11 +77,10 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 		}
 		available := filterUnselectedUTXOs(req.Available, selected)
 		selection, err := SelectCanonicalInputs(CanonicalSelectionRequest{
-			Contract:      req.Contract,
-			AssetName:     assetName,
-			Required:      required.SubAlignPrecision(covered),
-			Available:     available,
-			RequiredFirst: requiredFirstForAsset(assetName, req.GasAssetName, req.RequiredGasFundingUTXO),
+			Contract:  req.Contract,
+			AssetName: assetName,
+			Required:  required.SubAlignPrecision(covered),
+			Available: available,
 		})
 		if err != nil {
 			return ResultPlan{}, err
@@ -87,7 +100,10 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	}
 	for assetName, spent := range spentByAsset {
 		required := requiredByAsset[assetName]
-		if required == nil || spent.Cmp(required) <= 0 {
+		if required == nil {
+			required = zeroDecimal()
+		}
+		if spent.Cmp(required) <= 0 {
 			continue
 		}
 		if err := changeBuilder.Add(req.Contract.MustEncode(), assetName, spent.SubAlignPrecision(required), nil); err != nil {

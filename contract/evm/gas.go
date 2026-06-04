@@ -124,10 +124,56 @@ func (c GasConfig) ResultExecutionGas(record ExecutionRecord) uint64 {
 		}
 		return record.GasUsed - baseGas
 	case ExecutionKindTrigger:
-		return contractcommon.EffectiveGas(record.GasUsed, baseGas)
+		return record.GasUsed
 	default:
 		return record.GasUsed
 	}
+}
+
+func (c GasConfig) BaseNetworkFee(kind ExecutionKind, height uint64) (*scommon.Decimal, error) {
+	return c.CheckedCallFeeDecimalAtHeight(c.BaseGasForKind(kind), height)
+}
+
+func (c GasConfig) ExecutionEscrowFee(kind ExecutionKind, gasLimit, height uint64) (*scommon.Decimal, error) {
+	baseGas := c.BaseGasForKind(kind)
+	if kind == ExecutionKindTrigger {
+		return c.CheckedCallFeeDecimalAtHeight(gasLimit, height)
+	}
+	if gasLimit < baseGas {
+		return nil, fmt.Errorf("gas limit %d below base gas %d", gasLimit, baseGas)
+	}
+	return c.CheckedCallFeeDecimalAtHeight(gasLimit-baseGas, height)
+}
+
+func (c GasConfig) ResultBaseEscrowFee(height uint64) (*scommon.Decimal, error) {
+	return c.CheckedResultBaseFee(height)
+}
+
+func (c GasConfig) TotalUserBudgetFee(kind ExecutionKind, gasLimit uint64, needsResult bool, height uint64) (*scommon.Decimal, error) {
+	baseFee, err := c.BaseNetworkFee(kind, height)
+	if err != nil {
+		return nil, err
+	}
+	escrowFee, err := c.ContractFundingFee(kind, gasLimit, needsResult, height)
+	if err != nil {
+		return nil, err
+	}
+	return baseFee.AddAlignPrecision(escrowFee), nil
+}
+
+func (c GasConfig) ContractFundingFee(kind ExecutionKind, gasLimit uint64, needsResult bool, height uint64) (*scommon.Decimal, error) {
+	fee, err := c.ExecutionEscrowFee(kind, gasLimit, height)
+	if err != nil {
+		return nil, err
+	}
+	if !needsResult {
+		return fee, nil
+	}
+	resultFee, err := c.ResultBaseEscrowFee(height)
+	if err != nil {
+		return nil, err
+	}
+	return fee.AddAlignPrecision(resultFee), nil
 }
 
 func (c GasConfig) RequiredInvokeFunding(gasLimit uint64, needsResult bool) uint64 {
@@ -148,19 +194,12 @@ func (c GasConfig) RequiredInvokeFundingDecimal(gasLimit uint64, needsResult boo
 	return fee
 }
 
+// CheckedRequiredInvokeFundingDecimal returns the total user gas budget for a
+// regular EVM invoke: base network fee plus contract funding escrow. New code
+// should use TotalUserBudgetFee or ContractFundingFee when the distinction
+// matters.
 func (c GasConfig) CheckedRequiredInvokeFundingDecimal(gasLimit uint64, needsResult bool) (*scommon.Decimal, error) {
-	fee, err := c.CheckedCallFeeDecimalAtHeight(gasLimit, 0)
-	if err != nil {
-		return nil, err
-	}
-	if !needsResult {
-		return fee, nil
-	}
-	resultFee, err := c.CheckedResultBaseFee(0)
-	if err != nil {
-		return nil, err
-	}
-	return fee.AddAlignPrecision(resultFee), nil
+	return c.TotalUserBudgetFee(ExecutionKindInvoke, gasLimit, needsResult, 0)
 }
 
 func SplitGasFunding(totalGasAsset, callFee, resultPackingFee uint64) (feeToMiner, contractRemainder uint64, err error) {

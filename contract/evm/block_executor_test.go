@@ -10,34 +10,51 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBlockExecutorDeployResultThenInvokeNoResult(t *testing.T) {
+func TestBlockExecutorDeployResultThenInvokeRequiresFeeResult(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
+	refundRecipient := "tb1qrefund"
 	deployTx := testDeployTx(t, 3, return42InitCode())
 	deployResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
 		{Hash: deployTx.TxHash(), Index: 1},
 	})
 
 	executed, err := ExecuteBlock(BlockExecutionRequest{
-		Txs:           []*wire.MsgTx{deployTx, deployResultTx},
-		Runtime:       NewRuntime(nil),
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
-		ResolveCaller: fixedCaller(caller),
+		Txs:                       []*wire.MsgTx{deployTx, deployResultTx},
+		Runtime:                   NewRuntime(nil),
+		Block:                     BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		ResolveCaller:             fixedCaller(caller),
+		ResolveGasRefundRecipient: fixedGasRefundRecipient(refundRecipient),
 	})
 	require.NoError(t, err)
 	require.Len(t, executed.Records, 1)
 	require.Equal(t, TxTypeDeploy, executed.Records[0].Type)
+	require.Equal(t, refundRecipient, executed.Records[0].GasRefundRecipient)
 
 	contract := executed.Records[0].Contract
 	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: 100000, CallNonce: 1})
+	_, err = ExecuteBlock(BlockExecutionRequest{
+		Txs:                       []*wire.MsgTx{deployTx, deployResultTx, invokeTx},
+		Runtime:                   NewRuntime(nil),
+		Block:                     BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		ResolveCaller:             fixedCaller(caller),
+		ResolveGasRefundRecipient: fixedGasRefundRecipient(refundRecipient),
+	})
+	require.Error(t, err)
+
+	invokeResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
+		{Hash: invokeTx.TxHash(), Index: 1},
+	})
 	executed, err = ExecuteBlock(BlockExecutionRequest{
-		Txs:           []*wire.MsgTx{deployTx, deployResultTx, invokeTx},
-		Runtime:       NewRuntime(nil),
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
-		ResolveCaller: fixedCaller(caller),
+		Txs:                       []*wire.MsgTx{deployTx, deployResultTx, invokeTx, invokeResultTx},
+		Runtime:                   NewRuntime(nil),
+		Block:                     BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		ResolveCaller:             fixedCaller(caller),
+		ResolveGasRefundRecipient: fixedGasRefundRecipient(refundRecipient),
 	})
 	require.NoError(t, err)
 	require.Len(t, executed.Records, 2)
-	require.False(t, executed.Records[1].RequiresResult)
+	require.True(t, executed.Records[1].RequiresResult)
+	require.Equal(t, refundRecipient, executed.Records[1].GasRefundRecipient)
 	require.NotEqual(t, [32]byte{}, executed.StateRoot)
 }
 
@@ -56,18 +73,32 @@ func TestBlockExecutorDefaultInvokeEmptyCall(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, deployed.Records, 1)
-	defaultTx := testDefaultInvokeTx(t, deployed.Records[0].Contract, 0, 100000)
+	defaultTx := testDefaultInvokeTx(t, deployed.Records[0].Contract, 100, 100000)
 
-	executed, err := ExecuteBlock(BlockExecutionRequest{
+	_, err = ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, deployResultTx, defaultTx},
 		Runtime:       NewRuntime(nil),
 		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
 		ResolveCaller: fixedCaller(caller),
 	})
+	require.Error(t, err)
+
+	defaultResultTx := testResultTx(t, ResultStatusInvalid, 1, []wire.OutPoint{
+		{Hash: defaultTx.TxHash(), Index: 0},
+	})
+	executed, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:                       []*wire.MsgTx{deployTx, deployResultTx, defaultTx, defaultResultTx},
+		Runtime:                   NewRuntime(nil),
+		Block:                     BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		ResolveCaller:             fixedCaller(caller),
+		ResolveGasRefundRecipient: fixedGasRefundRecipient("tb1qrefund"),
+	})
 	require.NoError(t, err)
 	require.Len(t, executed.Records, 2)
 	require.Equal(t, TxTypeInvoke, executed.Records[1].Type)
-	require.False(t, executed.Records[1].RequiresResult)
+	require.True(t, executed.Records[1].RequiresResult)
+	require.Equal(t, ResultFeeModePlainTxFee, executed.Records[1].ResultFeeMode)
+	require.Empty(t, executed.Records[1].GasRefundRecipient)
 }
 
 func TestBlockExecutorRejectsMissingDeployResult(t *testing.T) {
@@ -188,8 +219,8 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 		GasLimit:  100000,
 		CallNonce: 1,
 	})
-	resultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
-		{Hash: chainhash.Hash{7}, Index: 0},
+	resultTx := testResultTx(t, ResultStatusSuccess, 2, []wire.OutPoint{
+		{Hash: invokeTx.TxHash(), Index: 1},
 	})
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{invokeTx, resultTx},
@@ -209,8 +240,9 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 			}}, nil
 		},
 		VerifyResult: func(resultTx *wire.MsgTx, settled []ExecutionRecord) error {
-			require.Len(t, settled, 1)
-			require.Equal(t, ExecutionKindTrigger, settled[0].Kind)
+			require.Len(t, settled, 2)
+			require.Equal(t, ExecutionKindInvoke, settled[0].Kind)
+			require.Equal(t, ExecutionKindTrigger, settled[1].Kind)
 			return nil
 		},
 	})
@@ -238,8 +270,8 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 		GasLimit:  100000,
 		CallNonce: 1,
 	})
-	resultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
-		{Hash: chainhash.Hash{7}, Index: 0},
+	resultTx := testResultTx(t, ResultStatusSuccess, 2, []wire.OutPoint{
+		{Hash: invokeTx.TxHash(), Index: 1},
 	})
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{invokeTx, resultTx},
@@ -247,8 +279,9 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 		Block:         BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
 		ResolveCaller: fixedCaller(caller),
 		VerifyResult: func(resultTx *wire.MsgTx, settled []ExecutionRecord) error {
-			require.Len(t, settled, 1)
-			require.Equal(t, ExecutionKindTrigger, settled[0].Kind)
+			require.Len(t, settled, 2)
+			require.Equal(t, ExecutionKindInvoke, settled[0].Kind)
+			require.Equal(t, ExecutionKindTrigger, settled[1].Kind)
 			return nil
 		},
 	})
@@ -291,6 +324,38 @@ func TestBlockExecutorTriggerRequiresResultWithoutInvokeFunding(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, executed.Records, 1)
 	require.Equal(t, ExecutionKindTrigger, executed.Records[0].Kind)
+}
+
+func TestBlockExecutorTerminatesTriggerWhenContractGasIsInsufficient(t *testing.T) {
+	contract := testContract(t)
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
+		ID:       "vault-release",
+		Contract: contract,
+		Kind:     TriggerAtHeight,
+		Height:   100,
+		GasLimit: 100000,
+	}))
+
+	executor := NewBlockExecutor(BlockExecutionRequest{
+		Runtime: runtime,
+		GasConfig: GasConfig{
+			GasAssetName:  "ordx:ft:gas",
+			FixedGasPrice: 1,
+			ResultBaseGas: 10,
+		},
+		Block: BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		ContractUTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return nil, nil
+		},
+	})
+	err := executor.ExecuteTrigger(runtime.State.DueTriggerCalls(BlockEnvironment{Height: 100})[0])
+	require.NoError(t, err)
+	require.Empty(t, executor.pending)
+	require.Empty(t, executor.records)
+	require.Empty(t, runtime.State.Triggers())
 }
 
 func TestBlockExecutorVerifiesCoinbaseStateRoot(t *testing.T) {
@@ -427,6 +492,12 @@ func testCanonicalResultTx(t *testing.T, inputs []wire.OutPoint, outputs []wire.
 func fixedCaller(caller EVMAddress) CallerResolver {
 	return func(*wire.MsgTx, ParsedTx) (EVMAddress, error) {
 		return caller, nil
+	}
+}
+
+func fixedGasRefundRecipient(recipient string) GasRefundRecipientResolver {
+	return func(*wire.MsgTx, ParsedTx) (string, bool, error) {
+		return recipient, recipient != "", nil
 	}
 }
 

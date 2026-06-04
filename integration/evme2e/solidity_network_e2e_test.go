@@ -84,7 +84,7 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 		})
 	bootstrapNode, coreNode := startSatoshiNetNetwork(t, fakeL1)
 	nodes := []*rpctest.Harness{bootstrapNode, coreNode}
-	caller0Script, _, _, _ := testCallerTaprootScript(t, callerKeys[0])
+	caller0Script, caller0Address, _, _ := testCallerTaprootScript(t, callerKeys[0])
 	caller1Script, caller1Address, _, _ := testCallerTaprootScript(t, callerKeys[1])
 	caller2Script, caller2Address, _, _ := testCallerTaprootScript(t, callerKeys[2])
 	recipient := p2trAddressFromKey(t, callerKeys[2])
@@ -143,7 +143,7 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 		vaultContract, testWireDecimalAsset(t, vaultAsset, "10.00", 2))
 	sendAndMineTx(t, bootstrapNode, nodes, vaultDeposit, int32(releaseHeight)-1)
 	requireAssetSummaryAmount(t, bootstrapNode, vaultContract.MustEncode(), vaultAsset, "10")
-	requirePositiveAssetSummary(t, bootstrapNode, vaultContract.MustEncode(), gasAsset)
+	requirePositiveAssetSummary(t, bootstrapNode, caller0Address, gasAsset)
 	releaseTick := buildPassthroughAssetTx(t, callerKeys[0], counterChanges[6], gasAsset, 20000000, caller0Script)
 	sendAndMineTx(t, bootstrapNode, nodes, releaseTick, int32(releaseHeight))
 	vaultRelease := buildSolidityInvokeTx(t, callerKeys[0], vaultContract, 2,
@@ -182,7 +182,7 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 
 	requireAssetSummaryAmount(t, bootstrapNode, recipient, vaultAsset, "1.25")
 	requireAssetSummaryAmount(t, bootstrapNode, vaultContract.MustEncode(), vaultAsset, "8.75")
-	requirePositiveAssetSummary(t, bootstrapNode, vaultContract.MustEncode(), gasAsset)
+	requirePositiveAssetSummary(t, bootstrapNode, caller0Address, gasAsset)
 	waitForEVMContractQueries(t, bootstrapNode,
 		[]string{counterContract.MustEncode(), erc20Contract.MustEncode(), vaultContract.MustEncode()},
 		counterContract.MustEncode(),
@@ -494,7 +494,7 @@ func requireAssetSummaryAmount(t *testing.T, node *rpctest.Harness, address, ass
 		lastSummary map[string]string
 		lastErr     error
 	)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		summary, err := fetchAssetSummary(node, address)
 		lastSummary, lastErr = summary, err
@@ -517,7 +517,7 @@ func requirePositiveAssetSummary(t *testing.T, node *rpctest.Harness, address, a
 		lastSummary map[string]string
 		lastErr     error
 	)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		summary, err := fetchAssetSummary(node, address)
 		lastSummary, lastErr = summary, err

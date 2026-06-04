@@ -571,13 +571,44 @@ func (h *Harness) GenerateAndSubmitBlockWithCustomCoinbaseOutputs(
 // default generator which is prone to use colliding ports.
 func generateListeningAddresses() (string, string) {
 	listenPort := NextAvailablePort()
-	rpcPort := NextAvailablePort()
 	// SatoshiNet starts the built-in L2 indexer RPC service on rpcPort+1.
-	// Reserve the next sequential port as well so the following harness node
-	// does not race with that implicit listener.
-	_ = NextAvailablePort()
+	// Allocate a contiguous pair so IndexerURL's rpcPort+1 assumption cannot
+	// point at an unrelated listener when the next sequential port is busy.
+	rpcPort := NextAvailablePortPair()
 	return fmt.Sprintf(ListenerFormat, listenPort),
 		fmt.Sprintf(ListenerFormat, rpcPort)
+}
+
+// NextAvailablePortPair returns the first available port whose next sequential
+// port is also available.  SatoshiNet rpctest nodes bind RPC on the returned
+// port and the built-in L2 indexer on returned+1.
+func NextAvailablePortPair() int {
+	port := atomic.AddUint32(&lastPort, 1)
+	for port < 65534 {
+		if portPairAvailable(int(port)) &&
+			atomic.CompareAndSwapUint32(&lastPort, port, port+1) {
+			return int(port)
+		}
+		port = atomic.AddUint32(&lastPort, 1)
+	}
+
+	panic("no contiguous ports available for listening")
+}
+
+func portPairAvailable(port int) bool {
+	first, err := net.Listen("tcp4", fmt.Sprintf(ListenerFormat, port))
+	if err != nil {
+		return false
+	}
+	defer first.Close()
+
+	second, err := net.Listen("tcp4", fmt.Sprintf(ListenerFormat, port+1))
+	if err != nil {
+		return false
+	}
+	defer second.Close()
+
+	return true
 }
 
 // NextAvailablePort returns the first port that is available for listening by

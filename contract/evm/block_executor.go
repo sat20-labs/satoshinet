@@ -9,20 +9,23 @@ import (
 )
 
 type CallerResolver func(tx *wire.MsgTx, parsed ParsedTx) (EVMAddress, error)
+type GasRefundRecipientResolver func(tx *wire.MsgTx, parsed ParsedTx) (recipient string, ok bool, err error)
 type ResultVerifier func(resultTx *wire.MsgTx, settled []ExecutionRecord) error
 type TriggerResolver func(ctx TriggerResolutionContext) ([]TriggerCall, error)
 
 type BlockExecutionRequest struct {
-	Txs             []*wire.MsgTx
-	CoinbaseTx      *wire.MsgTx
-	Runtime         *Runtime
-	ContractPrefix  string
-	GasConfig       GasConfig
-	Block           BlockContext
-	ResolveCaller   CallerResolver
-	VerifyResult    ResultVerifier
-	ResolveTriggers TriggerResolver
-	Triggers        []TriggerCall
+	Txs                       []*wire.MsgTx
+	CoinbaseTx                *wire.MsgTx
+	Runtime                   *Runtime
+	ContractPrefix            string
+	GasConfig                 GasConfig
+	Block                     BlockContext
+	ResolveCaller             CallerResolver
+	ResolveGasRefundRecipient GasRefundRecipientResolver
+	VerifyResult              ResultVerifier
+	ResolveTriggers           TriggerResolver
+	ContractUTXOs             ContractUTXOProvider
+	Triggers                  []TriggerCall
 }
 
 type BlockExecutionResult struct {
@@ -31,28 +34,32 @@ type BlockExecutionResult struct {
 }
 
 type ExecutionRecord struct {
-	Height         uint64
-	TxID           string
-	Type           TxType
-	Kind           ExecutionKind
-	CallID         string
-	TriggerID      string
-	Contract       ContractAddress
-	Status         ResultStatus
-	GasUsed        uint64
-	FundingInputs  []OutPoint
-	AssetIntents   []AssetIntent
-	RequiresResult bool
+	Height             uint64
+	TxID               string
+	Type               TxType
+	Kind               ExecutionKind
+	CallID             string
+	TriggerID          string
+	Contract           ContractAddress
+	Status             ResultStatus
+	GasUsed            uint64
+	FundingInputs      []OutPoint
+	GasRefundRecipient string
+	AssetIntents       []AssetIntent
+	RequiresResult     bool
+	ResultFeeMode      ResultFeeMode
 }
 
 type BlockExecutor struct {
-	Runtime         *Runtime
-	ContractPrefix  string
-	GasConfig       GasConfig
-	Block           BlockContext
-	ResolveCaller   CallerResolver
-	VerifyResult    ResultVerifier
-	ResolveTriggers TriggerResolver
+	Runtime                   *Runtime
+	ContractPrefix            string
+	GasConfig                 GasConfig
+	Block                     BlockContext
+	ResolveCaller             CallerResolver
+	ResolveGasRefundRecipient GasRefundRecipientResolver
+	VerifyResult              ResultVerifier
+	ResolveTriggers           TriggerResolver
+	ContractUTXOs             ContractUTXOProvider
 
 	records []ExecutionRecord
 	pending []ExecutionRecord
@@ -112,13 +119,15 @@ func NewBlockExecutor(req BlockExecutionRequest) *BlockExecutor {
 	}
 	runtime.ContractPrefix = prefix
 	return &BlockExecutor{
-		Runtime:         runtime,
-		ContractPrefix:  prefix,
-		GasConfig:       req.GasConfig,
-		Block:           req.Block,
-		ResolveCaller:   req.ResolveCaller,
-		VerifyResult:    req.VerifyResult,
-		ResolveTriggers: req.ResolveTriggers,
+		Runtime:                   runtime,
+		ContractPrefix:            prefix,
+		GasConfig:                 req.GasConfig,
+		Block:                     req.Block,
+		ResolveCaller:             req.ResolveCaller,
+		ResolveGasRefundRecipient: req.ResolveGasRefundRecipient,
+		VerifyResult:              req.VerifyResult,
+		ResolveTriggers:           req.ResolveTriggers,
+		ContractUTXOs:             req.ContractUTXOs,
 	}
 }
 
@@ -171,9 +180,6 @@ func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output Contra
 	if !e.contractExists(output.Contract) {
 		return errors.New("default invoke target contract does not exist")
 	}
-	if err := requireEVMDefaultInvokeGas(output, e.GasConfig.GasAssetName, e.GasConfig.normalized().InvokeBaseGas); err != nil {
-		return err
-	}
 	parsed := ParsedTx{Type: TxTypeInvoke, ContractOutputs: []ContractOutput{output}, Inputs: msgTxInputs(tx)}
 	caller, err := e.resolveCaller(tx, parsed)
 	if err != nil {
@@ -202,23 +208,10 @@ func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output Contra
 		GasUsed:        result.GasUsed,
 		FundingInputs:  []OutPoint{output.OutPoint},
 		AssetIntents:   intents,
-		RequiresResult: result.Status != ResultStatusSuccess || len(intents) > 0,
+		RequiresResult: true,
+		ResultFeeMode:  ResultFeeModePlainTxFee,
 	}
 	return e.appendRecord(record)
-}
-
-func requireEVMDefaultInvokeGas(output ContractOutput, gasAssetName string, gasLimit uint64) error {
-	if gasAssetName == "" || gasLimit == 0 {
-		return nil
-	}
-	gas, err := output.AssetAmount(gasAssetName)
-	if err != nil {
-		return err
-	}
-	if gas.Int64() < int64(gasLimit) {
-		return fmt.Errorf("default EVM invoke output %s gas %d below required %d", output.OutPoint, gas.Int64(), gasLimit)
-	}
-	return nil
 }
 
 func evmOutputFromDefault(output contractcommon.DefaultInvokeOutput) ContractOutput {
@@ -291,6 +284,10 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx, parsed ParsedTx) error {
 	if err != nil {
 		return err
 	}
+	gasRefundRecipient, err := e.resolveGasRefundRecipient(tx, parsed)
+	if err != nil {
+		return err
+	}
 	expectedContract, err := DeriveCreateContractAddress(e.ContractPrefix, caller, validated.Payload.DeployNonce)
 	if err != nil {
 		return err
@@ -322,17 +319,18 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx, parsed ParsedTx) error {
 		funding = append(funding, output.OutPoint)
 	}
 	record := ExecutionRecord{
-		Height:         e.Block.Number,
-		TxID:           tx.TxID(),
-		Type:           TxTypeDeploy,
-		Kind:           ExecutionKindDeploy,
-		CallID:         callID,
-		Contract:       result.Contract,
-		Status:         result.Status,
-		GasUsed:        result.GasUsed,
-		FundingInputs:  funding,
-		AssetIntents:   cloneAssetIntents(e.Runtime.AssetIntents[intentStart:]),
-		RequiresResult: true,
+		Height:             e.Block.Number,
+		TxID:               tx.TxID(),
+		Type:               TxTypeDeploy,
+		Kind:               ExecutionKindDeploy,
+		CallID:             callID,
+		Contract:           result.Contract,
+		Status:             result.Status,
+		GasUsed:            result.GasUsed,
+		FundingInputs:      funding,
+		GasRefundRecipient: gasRefundRecipient,
+		AssetIntents:       cloneAssetIntents(e.Runtime.AssetIntents[intentStart:]),
+		RequiresResult:     true,
 	}
 	return e.appendRecord(record)
 }
@@ -343,6 +341,10 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 		return err
 	}
 	caller, err := e.resolveCaller(tx, parsed)
+	if err != nil {
+		return err
+	}
+	gasRefundRecipient, err := e.resolveGasRefundRecipient(tx, parsed)
 	if err != nil {
 		return err
 	}
@@ -362,19 +364,19 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 		Block:  e.Block,
 	})
 	intents := cloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
-	requiresResult := result.Status != ResultStatusSuccess || len(intents) > 0
 	record := ExecutionRecord{
-		Height:         e.Block.Number,
-		TxID:           tx.TxID(),
-		Type:           TxTypeInvoke,
-		Kind:           ExecutionKindInvoke,
-		CallID:         callID,
-		Contract:       validated.Contract,
-		Status:         result.Status,
-		GasUsed:        result.GasUsed,
-		FundingInputs:  funding,
-		AssetIntents:   intents,
-		RequiresResult: requiresResult,
+		Height:             e.Block.Number,
+		TxID:               tx.TxID(),
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		CallID:             callID,
+		Contract:           validated.Contract,
+		Status:             result.Status,
+		GasUsed:            result.GasUsed,
+		FundingInputs:      funding,
+		GasRefundRecipient: gasRefundRecipient,
+		AssetIntents:       intents,
+		RequiresResult:     true,
 	}
 	return e.appendRecord(record)
 }
@@ -398,7 +400,14 @@ func (e *BlockExecutor) ExecuteTrigger(call TriggerCall) error {
 	if !e.contractExists(call.Trigger.Contract) {
 		return errors.New("trigger contract does not exist")
 	}
+	ready, err := e.triggerHasGasBudget(call.Trigger.Contract, call.GasLimit)
+	if err != nil {
+		return err
+	}
 	e.Runtime.State.RemoveTrigger(call.Trigger.Contract, call.Trigger.ID)
+	if !ready {
+		return nil
+	}
 
 	callID := DeriveTriggerCallID(call.Trigger.Contract, call.Trigger.ID, int64(e.Block.Number))
 	intentStart := len(e.Runtime.AssetIntents)
@@ -420,9 +429,41 @@ func (e *BlockExecutor) ExecuteTrigger(call TriggerCall) error {
 		Status:         result.Status,
 		GasUsed:        result.GasUsed,
 		AssetIntents:   intents,
-		RequiresResult: result.Status != ResultStatusSuccess || len(intents) > 0,
+		RequiresResult: true,
 	}
 	return e.appendRecord(record)
+}
+
+func (e *BlockExecutor) triggerHasGasBudget(contract ContractAddress, gasLimit uint64) (bool, error) {
+	if e.ContractUTXOs == nil {
+		return true, nil
+	}
+	required, err := e.GasConfig.ContractFundingFee(ExecutionKindTrigger, gasLimit, true, e.Block.Number)
+	if err != nil {
+		return false, err
+	}
+	if required == nil || required.Sign() <= 0 {
+		return true, nil
+	}
+	utxos, err := e.ContractUTXOs(contract)
+	if err != nil {
+		return false, err
+	}
+	total := zeroDecimal()
+	for _, utxo := range utxos {
+		if !utxo.Contract.Equal(contract) {
+			continue
+		}
+		amount, err := utxo.AssetAmount(e.GasConfig.normalized().GasAssetName)
+		if err != nil {
+			return false, err
+		}
+		total = total.AddAlignPrecision(amount)
+		if total.Cmp(required) >= 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (e *BlockExecutor) executeResult(tx *wire.MsgTx, parsed ParsedTx) error {
@@ -473,6 +514,20 @@ func (e *BlockExecutor) resolveCaller(tx *wire.MsgTx, parsed ParsedTx) (EVMAddre
 		return EVMAddress{}, errors.New("missing EVM caller resolver")
 	}
 	return e.ResolveCaller(tx, parsed)
+}
+
+func (e *BlockExecutor) resolveGasRefundRecipient(tx *wire.MsgTx, parsed ParsedTx) (string, error) {
+	if e.ResolveGasRefundRecipient == nil {
+		return "", nil
+	}
+	recipient, ok, err := e.ResolveGasRefundRecipient(tx, parsed)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", nil
+	}
+	return recipient, nil
 }
 
 func (e *BlockExecutor) contractExists(contract ContractAddress) bool {

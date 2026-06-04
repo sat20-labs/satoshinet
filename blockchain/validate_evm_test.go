@@ -178,3 +178,27 @@ func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckTransactionInputsAllowsEVMDefaultInvokeWithPlainSatsFee(t *testing.T) {
+	contract, err := evm.NewContractAddress(evm.TestnetContractPrefix,
+		evm.AddressVersionV1, evm.ContractTypeEVM, evm.EVMAddress{9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractScript, err := evm.ContractPkScript(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevOut := wire.OutPoint{Hash: chainhash.Hash{2}, Index: 0}
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&prevOut, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(900, nil, contractScript))
+
+	view := NewUtxoViewpoint()
+	view.Entries()[prevOut] = NewUtxoEntry(wire.NewTxOut(1000, nil, []byte{txscript.OP_TRUE}), 1, false)
+
+	_, _, err = CheckTransactionInputs(btcutil.NewTx(tx), false, 100, view, &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatalf("unexpected default invoke fee error: %v", err)
+	}
+}

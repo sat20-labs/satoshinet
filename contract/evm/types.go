@@ -49,6 +49,13 @@ const (
 	ExecutionKindTrigger
 )
 
+type ResultFeeMode byte
+
+const (
+	ResultFeeModeGasAsset ResultFeeMode = iota
+	ResultFeeModePlainTxFee
+)
+
 type ExecutionStatus byte
 
 const (

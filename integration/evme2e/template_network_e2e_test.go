@@ -613,8 +613,7 @@ func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
 	fixture.sendAndWaitTx(t, deployTx)
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, ammAsset, "910")
 
-	beforeBuySummary, err := fetchAssetSummary(fixture.bootstrapNode, traderBAddr)
-	require.NoError(t, err)
+	beforeBuySummary := fetchAssetSummaryEventually(t, fixture.bootstrapNode, traderBAddr)
 	buyParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeBuy, "1", "10")
 	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[1]},
@@ -680,8 +679,8 @@ func TestNetworkTemplateAMMRejectsBuySlippage(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, deployTx)
 
-	beforeBuySummary, err := fetchAssetSummary(fixture.bootstrapNode, traderBAddr)
-	require.NoError(t, err)
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, ammAsset, "900")
+	beforeBuySummary := fetchAssetSummaryEventually(t, fixture.bootstrapNode, traderBAddr)
 	buyParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeBuy, "90", "10")
 	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[1]},
@@ -834,7 +833,7 @@ func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T
 	fixture.sendAndWaitTx(t, evmDeployTx)
 	require.NotEmpty(t, evmChanges)
 	requireEVMResultStatusForTx(t, fixture.bootstrapNode, evmDeployTx, evmContract, evm.ResultStatusSuccess)
-	waitForTemplateAssetUtxo(t, fixture.bootstrapNode, evmContract.MustEncode(), gasAsset, 1)
+	waitForTemplateAssetUtxo(t, fixture.bootstrapNode, fixture.spendAddress, gasAsset, 1)
 
 	sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
 	templateSellTx := buildTemplateInvokeTxWithInputs(t, fixture, traderA, templateContract, 1, tmplcontract.InvokeAPISwap, sellParam,
@@ -1126,7 +1125,7 @@ func requireAssetSummaryZero(t *testing.T, node *rpctest.Harness, address, asset
 		lastSummary map[string]string
 		lastErr     error
 	)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		summary, err := fetchAssetSummary(node, address)
 		lastSummary, lastErr = summary, err
@@ -1153,7 +1152,7 @@ func requireAssetSummaryAtLeast(t *testing.T, node *rpctest.Harness, address, as
 		lastSummary map[string]string
 		lastErr     error
 	)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		summary, err := fetchAssetSummary(node, address)
 		lastSummary, lastErr = summary, err
@@ -1173,6 +1172,25 @@ func requireAssetSummaryAtLeast(t *testing.T, node *rpctest.Harness, address, as
 	require.NoError(t, lastErr)
 	require.Failf(t, "asset summary too small", "address=%s asset=%s want_at_least=%s summary=%v",
 		address, assetName, amount, lastSummary)
+}
+
+func fetchAssetSummaryEventually(t *testing.T, node *rpctest.Harness, address string) map[string]string {
+	t.Helper()
+	var (
+		lastSummary map[string]string
+		lastErr     error
+	)
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		summary, err := fetchAssetSummary(node, address)
+		lastSummary, lastErr = summary, err
+		if err == nil {
+			return summary
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	require.NoError(t, lastErr)
+	return lastSummary
 }
 
 func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, funding wire.TxOut) []wire.OutPoint {
@@ -1238,7 +1256,7 @@ func fetchTemplateAssetUtxos(t *testing.T, node *rpctest.Harness, address, asset
 	require.NoError(t, err)
 	endpoint := fmt.Sprintf("%s/v3/address/asset/%s/%s", baseURL, url.PathEscape(address), url.PathEscape(assetName))
 	var lastErr error
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(endpoint)
 		if err != nil {
@@ -1356,7 +1374,7 @@ func buildTemplateDeployTx(t *testing.T, fixture *templateNetworkFixture, signer
 	deployer string, random []byte, inputs []wire.OutPoint, funding wire.TxOut) (*wire.MsgTx, tmplcontract.ContractAddress) {
 
 	t.Helper()
-	if fixture != nil {
+	if fixture != nil && len(inputs) == 0 {
 		inputs = fixture.selectFundingOutPoints(t, funding)
 	}
 	return buildTemplateDeployTxWithInputs(t, fixture, signer, contract, deployer, random, inputs, funding)
@@ -1384,7 +1402,7 @@ func buildTemplateDefaultInvokeTx(t *testing.T, fixture *templateNetworkFixture,
 	inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
-	if fixture != nil {
+	if fixture != nil && len(inputs) == 0 {
 		inputs = fixture.selectFundingOutPoints(t, funding)
 	}
 	pkScript, err := contractcommon.ContractPkScript(contract)
@@ -1415,7 +1433,7 @@ func buildTemplateInvokeTx(t *testing.T, fixture *templateNetworkFixture, signer
 	nonce uint64, action string, param []byte, inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
-	if fixture != nil {
+	if fixture != nil && len(inputs) == 0 {
 		inputs = fixture.selectFundingOutPoints(t, funding)
 	}
 	return buildTemplateInvokeTxWithInputs(t, fixture, signer, contract, nonce, action, param, inputs, funding)

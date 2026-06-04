@@ -90,19 +90,28 @@ func (v CanonicalResultVerifier) BuildPlans(settled []ExecutionRecord) ([]Result
 		funding := make([]OutPoint, 0)
 		for _, record := range group.Records {
 			intents = append(intents, record.AssetIntents...)
-			callFee, err := v.GasConfig.CheckedCallFeeDecimalAtHeight(
-				v.GasConfig.ResultExecutionGas(record),
-				record.Height,
-			)
-			if err != nil {
-				return nil, err
+			if record.ResultFeeMode != ResultFeeModePlainTxFee {
+				callFee, err := v.GasConfig.CheckedCallFeeDecimalAtHeight(
+					v.GasConfig.ResultExecutionGas(record),
+					record.Height,
+				)
+				if err != nil {
+					return nil, err
+				}
+				resultFee, err := v.GasConfig.CheckedResultBaseFee(record.Height)
+				if err != nil {
+					return nil, err
+				}
+				recordGasFee := decimalAddAllowNil(callFee, resultFee)
+				gasFee = decimalAddAllowNil(gasFee, recordGasFee)
+				refund, err := recordGasRefund(record, available, v.GasConfig.GasAssetName, recordGasFee)
+				if err != nil {
+					return nil, err
+				}
+				if refund != nil {
+					intents = append(intents, *refund)
+				}
 			}
-			gasFee = decimalAddAllowNil(gasFee, callFee)
-			resultFee, err := v.GasConfig.CheckedResultBaseFee(record.Height)
-			if err != nil {
-				return nil, err
-			}
-			gasFee = decimalAddAllowNil(gasFee, resultFee)
 			funding = append(funding, record.FundingInputs...)
 		}
 		plan, err := BuildCanonicalResultPlan(ResultPlanRequest{
@@ -119,6 +128,50 @@ func (v CanonicalResultVerifier) BuildPlans(settled []ExecutionRecord) ([]Result
 		plans = append(plans, plan)
 	}
 	return plans, nil
+}
+
+func recordGasRefund(record ExecutionRecord, available []UTXO, gasAssetName string,
+	recordGasFee *scommon.Decimal) (*AssetIntent, error) {
+
+	if record.GasRefundRecipient == "" || gasAssetName == "" {
+		return nil, nil
+	}
+	fundingGas, err := totalOutpointAsset(available, record.FundingInputs, gasAssetName)
+	if err != nil {
+		return nil, err
+	}
+	if fundingGas == nil || fundingGas.Sign() == 0 {
+		return nil, nil
+	}
+	if recordGasFee == nil {
+		recordGasFee = zeroDecimal()
+	}
+	if fundingGas.Cmp(recordGasFee) <= 0 {
+		return nil, nil
+	}
+	return &AssetIntent{
+		CallID:    record.CallID,
+		From:      record.Contract,
+		To:        record.GasRefundRecipient,
+		AssetName: gasAssetName,
+		Amount:    fundingGas.SubAlignPrecision(recordGasFee),
+	}, nil
+}
+
+func totalOutpointAsset(available []UTXO, outpoints []OutPoint, assetName string) (*scommon.Decimal, error) {
+	total := zeroDecimal()
+	for _, outpoint := range outpoints {
+		utxo, ok := findUTXO(available, outpoint)
+		if !ok {
+			return nil, fmt.Errorf("required input %s not available", outpoint)
+		}
+		amount, err := utxo.AssetAmount(assetName)
+		if err != nil {
+			return nil, err
+		}
+		total = total.AddAlignPrecision(amount)
+	}
+	return total, nil
 }
 
 func decimalAddAllowNil(a, b *scommon.Decimal) *scommon.Decimal {

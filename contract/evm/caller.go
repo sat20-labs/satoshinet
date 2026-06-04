@@ -51,12 +51,12 @@ func LastInputPreviousOutputCallerResolver(params *chaincfg.Params,
 		if resolve != nil {
 			outpoint := tx.TxIn[len(tx.TxIn)-1].PreviousOutPoint
 			if pkScript, ok := resolve(outpoint); ok {
-				_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, callerChainParams(params))
+				address, err := previousOutputAddress(pkScript, params)
 				if err != nil {
 					return zero, err
 				}
-				if len(addresses) != 0 {
-					hash := btcutil.Hash160([]byte(addresses[0].EncodeAddress()))
+				if address != "" {
+					hash := btcutil.Hash160([]byte(address))
 					copy(zero[:], hash)
 					return zero, nil
 				}
@@ -64,6 +64,46 @@ func LastInputPreviousOutputCallerResolver(params *chaincfg.Params,
 		}
 		return zero, errors.New("missing caller previous output address")
 	}
+}
+
+func LastInputPreviousOutputGasRefundRecipientResolver(params *chaincfg.Params,
+	resolve PreviousOutputScriptResolver) GasRefundRecipientResolver {
+
+	return func(tx *wire.MsgTx, parsed ParsedTx) (string, bool, error) {
+		if tx == nil {
+			return "", false, errors.New("missing transaction")
+		}
+		if len(tx.TxIn) == 0 {
+			return "", false, errors.New("transaction has no inputs")
+		}
+		if resolve == nil {
+			return "", false, nil
+		}
+		outpoint := tx.TxIn[len(tx.TxIn)-1].PreviousOutPoint
+		pkScript, ok := resolve(outpoint)
+		if !ok {
+			return "", false, nil
+		}
+		address, err := previousOutputAddress(pkScript, params)
+		if err != nil {
+			return "", false, err
+		}
+		if address == "" {
+			return "", false, nil
+		}
+		return address, true, nil
+	}
+}
+
+func previousOutputAddress(pkScript []byte, params *chaincfg.Params) (string, error) {
+	_, addresses, _, err := txscript.ExtractPkScriptAddrs(pkScript, callerChainParams(params))
+	if err != nil {
+		return "", err
+	}
+	if len(addresses) == 0 {
+		return "", nil
+	}
+	return addresses[0].EncodeAddress(), nil
 }
 
 func callerChainParams(params *chaincfg.Params) *chaincfg.Params {
