@@ -147,6 +147,9 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 	for key, value := range b.utxoIndex.DescendMap {
 		newInst.utxoIndex.DescendMap[key] = value
 	}
+	for key, value := range b.utxoIndex.ChannelLedgerMap {
+		newInst.utxoIndex.ChannelLedgerMap[key] = value
+	}
 	for key, value := range b.utxoIndex.ReferrerMap {
 		newInst.utxoIndex.ReferrerMap[key] = &common.ReferrerInfo{
 			Name:      value.Name,
@@ -476,6 +479,14 @@ func (b *BaseIndexer) UpdateDB() {
 	for _, descend := range b.utxoIndex.DescendMap {
 		key := stp.GetDescendDBKey(descend.NullDataUtxo)
 		err := db.SetDB([]byte(key), descend, wb)
+		if err != nil {
+			common.Log.Panicf("Error setting in db %v", err)
+		}
+	}
+
+	for _, entry := range b.utxoIndex.ChannelLedgerMap {
+		key := stp.GetChannelLedgerDBKey(entry)
+		err := db.SetDB([]byte(key), entry, wb)
 		if err != nil {
 			common.Log.Panicf("Error setting in db %v", err)
 		}
@@ -838,7 +849,7 @@ func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) 
 		common.Log.Errorf("removeMinerNode no unstaking asset info, %v", err)
 		return
 	}
-	
+
 	if name != indexer.GetStakeAssetName(descend.Height) {
 		common.Log.Errorf("removeMinerNode %s invalid staking asset name %s", descend.NullDataUtxo, name)
 		return
@@ -937,6 +948,10 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 				ascend.Height = block.Height
 				ascend.AnchorTxId = tx.Txid
 				b.utxoIndex.AscendMap[ascend.FundingUtxo] = ascend
+				entry := NewAscendingLedgerEntry(ascend)
+				if entry != nil {
+					b.utxoIndex.ChannelLedgerMap[string(stp.GetChannelLedgerDBKey(entry))] = entry
+				}
 
 				b.handleStakeAsset(ascend, nil)
 				// 仅仅是通道地址，有可能是合约控制
@@ -995,6 +1010,10 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 						descend, err = GenDescend(tx, i, block.Height, string(data))
 						if err == nil {
 							b.utxoIndex.DescendMap[descend.NullDataUtxo] = descend
+							entry := NewDescendingLedgerEntry(descend)
+							if entry != nil {
+								b.utxoIndex.ChannelLedgerMap[string(stp.GetChannelLedgerDBKey(entry))] = entry
+							}
 
 							var bindingSatNum int64
 							if len(descend.Assets) > 0 {

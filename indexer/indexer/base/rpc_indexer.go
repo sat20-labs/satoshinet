@@ -364,6 +364,72 @@ func (b *RpcIndexer) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return info
 }
 
+func (b *RpcIndexer) GetChannelLedger(channel string) []*common.ChannelLedgerEntry {
+	b.mutex.RLock()
+	result := make([]*common.ChannelLedgerEntry, 0)
+	for _, entry := range b.utxoIndex.ChannelLedgerMap {
+		if entry.ChannelId == channel {
+			result = append(result, entry)
+		}
+	}
+	b.mutex.RUnlock()
+	seen := make(map[string]bool)
+	for _, entry := range result {
+		seen[string(stp.GetChannelLedgerDBKey(entry))] = true
+	}
+
+	entries, err := stp.GetChannelLedgerFromDB(b.db, channel)
+	if err != nil {
+		common.Log.Errorf("GetChannelLedgerFromDB %s failed, %v", channel, err)
+	} else {
+		for _, entry := range entries {
+			key := string(stp.GetChannelLedgerDBKey(entry))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, entry)
+		}
+	}
+
+	ascends, err := stp.GetAscendsFromDBByChannel(b.db, channel)
+	if err != nil {
+		common.Log.Errorf("GetAscendsFromDBByChannel %s failed, %v", channel, err)
+	} else {
+		for _, ascend := range ascends {
+			entry := NewAscendingLedgerEntry(ascend)
+			key := string(stp.GetChannelLedgerDBKey(entry))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, entry)
+		}
+	}
+
+	descends, err := stp.GetDescendsFromDBByChannel(b.db, channel)
+	if err != nil {
+		common.Log.Errorf("GetDescendsFromDBByChannel %s failed, %v", channel, err)
+	} else {
+		for _, descend := range descends {
+			entry := NewDescendingLedgerEntry(descend)
+			key := string(stp.GetChannelLedgerDBKey(entry))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, entry)
+		}
+	}
+
+	b.mutex.Lock()
+	for _, entry := range result {
+		b.utxoIndex.ChannelLedgerMap[string(stp.GetChannelLedgerDBKey(entry))] = entry
+	}
+	b.mutex.Unlock()
+	return result
+}
+
 // only for RPC interface
 func (b *RpcIndexer) GetReferrer(address string) (*common.ReferrerInfo, error) {
 	b.mutex.RLock()

@@ -2,6 +2,7 @@ package common
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"strings"
@@ -39,9 +40,9 @@ const (
 	CONTENT_TYPE_INVOKERESULT   = txscript.OP_DATA_23
 
 	// 聪网智能合约
-	CONTENT_TYPE_CONTRACT_DEPLOY = txscript.OP_DATA_31
-	CONTENT_TYPE_CONTRACT_INVOKE = txscript.OP_DATA_32
-	CONTENT_TYPE_CONTRACT_RESULT = txscript.OP_DATA_33
+	CONTENT_TYPE_CONTRACT_DEPLOY     = txscript.OP_DATA_31
+	CONTENT_TYPE_CONTRACT_INVOKE     = txscript.OP_DATA_32
+	CONTENT_TYPE_CONTRACT_RESULT     = txscript.OP_DATA_33
 	CONTENT_TYPE_CONTRACT_STATE_ROOT = txscript.OP_DATA_34
 
 	CONTENT_TYPE_EVM_DEPLOY = CONTENT_TYPE_CONTRACT_DEPLOY
@@ -61,6 +62,80 @@ const (
 
 	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 8
 )
+
+const (
+	DESCEND_PAYLOAD_V2_MAGIC_0 = byte('D')
+	DESCEND_PAYLOAD_V2_MAGIC_1 = byte('2')
+
+	DESCEND_OP_UNKNOWN      uint8 = 0
+	DESCEND_OP_SPLICING_OUT uint8 = 1
+	DESCEND_OP_CLOSE        uint8 = 2
+	DESCEND_OP_FORCE_CLOSE  uint8 = 3
+)
+
+type DescendPayload struct {
+	Version             int
+	Operation           uint8
+	L1TxId              string
+	ReturnedOutputVouts []uint32
+	LegacyPayload       string
+}
+
+func EncodeDescendPayloadV2(l1TxId string, operation uint8, returnedOutputVouts []uint32) ([]byte, error) {
+	hash, err := chainhash.NewHashFromStr(l1TxId)
+	if err != nil {
+		return nil, err
+	}
+	if len(returnedOutputVouts) > 9 {
+		return nil, fmt.Errorf("too many returned outputs %d", len(returnedOutputVouts))
+	}
+
+	result := make([]byte, 0, 2+1+32+1+4*len(returnedOutputVouts))
+	result = append(result, DESCEND_PAYLOAD_V2_MAGIC_0, DESCEND_PAYLOAD_V2_MAGIC_1, operation)
+	result = append(result, hash.CloneBytes()...)
+	result = append(result, byte(len(returnedOutputVouts)))
+	for _, vout := range returnedOutputVouts {
+		var buf [4]byte
+		binary.LittleEndian.PutUint32(buf[:], vout)
+		result = append(result, buf[:]...)
+	}
+	if len(result) > MAX_PAYLOAD_LEN {
+		return nil, fmt.Errorf("descending v2 payload too large: %d > %d", len(result), MAX_PAYLOAD_LEN)
+	}
+	return result, nil
+}
+
+func ParseDescendPayload(data []byte) (*DescendPayload, error) {
+	if len(data) >= 36 && data[0] == DESCEND_PAYLOAD_V2_MAGIC_0 && data[1] == DESCEND_PAYLOAD_V2_MAGIC_1 {
+		count := int(data[35])
+		expectedLen := 36 + 4*count
+		if len(data) != expectedLen {
+			return nil, fmt.Errorf("invalid descending v2 payload length %d, expected %d", len(data), expectedLen)
+		}
+		hash, err := chainhash.NewHash(data[3:35])
+		if err != nil {
+			return nil, err
+		}
+		result := &DescendPayload{
+			Version:   2,
+			Operation: data[2],
+			L1TxId:    hash.String(),
+		}
+		offset := 36
+		for i := 0; i < count; i++ {
+			result.ReturnedOutputVouts = append(result.ReturnedOutputVouts, binary.LittleEndian.Uint32(data[offset:offset+4]))
+			offset += 4
+		}
+		return result, nil
+	}
+
+	return &DescendPayload{
+		Version:       1,
+		Operation:     DESCEND_OP_UNKNOWN,
+		L1TxId:        string(data),
+		LegacyPayload: string(data),
+	}, nil
+}
 
 type ContractDeployData struct {
 	ContractPath    string

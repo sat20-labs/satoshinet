@@ -255,6 +255,14 @@ func (s *Model) GetDescend(utxo string) (*common.DescendData, error) {
 	return data, nil
 }
 
+func (s *Model) GetChannelLedger(channel string) ([]*common.ChannelLedgerEntry, error) {
+	data := s.indexer.GetChannelLedger(channel)
+	if data == nil {
+		data = []*common.ChannelLedgerEntry{}
+	}
+	return data, nil
+}
+
 func (s *Model) GetReferrer(address string) (*common.ReferrerInfo, error) {
 	return s.indexer.GetReferrer(address)
 }

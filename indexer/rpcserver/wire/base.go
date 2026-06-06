@@ -23,6 +23,11 @@ type DescendResp struct {
 	Data *common.DescendData `json:"data"`
 }
 
+type ChannelLedgerResp struct {
+	indexerwire.BaseResp
+	Data []*common.ChannelLedgerEntry `json:"data"`
+}
+
 type ReferrerResp struct {
 	indexerwire.BaseResp
 	Data *common.ReferrerInfo `json:"referrer"`

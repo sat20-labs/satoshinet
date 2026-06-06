@@ -337,6 +337,28 @@ func (s *Handle) getDescendData(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (s *Handle) getChannelLedger(c *gin.Context) {
+	resp := &localwire.ChannelLedgerResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: nil,
+	}
+
+	channel := c.Param("channel")
+	result, err := s.model.GetChannelLedger(channel)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	resp.Data = result
+	c.JSON(http.StatusOK, resp)
+}
+
 func (s *Handle) getReferrer(c *gin.Context) {
 	resp := &localwire.ReferrerResp{
 		BaseResp: indexerwire.BaseResp{

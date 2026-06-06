@@ -163,6 +163,10 @@ func (b *IndexerMgr) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return b.rpcService.GetDescendData(nullDataUtxo)
 }
 
+func (b *IndexerMgr) GetChannelLedger(channel string) []*common.ChannelLedgerEntry {
+	return b.rpcService.GetChannelLedger(channel)
+}
+
 func (b *IndexerMgr) GetReferrer(address string) (*common.ReferrerInfo, error) {
 	return b.rpcService.GetReferrer(address)
 }
@@ -182,7 +186,7 @@ func (b *IndexerMgr) GetTickerMap(protocol string) map[string]*common.TickerInfo
 	result := make(map[string]*common.TickerInfo)
 	tickerMap := b.rpcService.GetTickerMap()
 	for k, v := range tickerMap {
-		
+
 		if protocol == "" || protocol == "*" {
 			result[k] = v
 		} else {
@@ -219,7 +223,7 @@ func (b *IndexerMgr) IsCoreNode(pubkey string) bool {
 	return b.compiling.IsCoreNode(pubkey)
 }
 
-func (b *IndexerMgr) GetCoreNodeInfo(pubkey string) (*common.CoreNodeInfo) {
+func (b *IndexerMgr) GetCoreNodeInfo(pubkey string) *common.CoreNodeInfo {
 	return b.rpcService.GetCoreNodeInfo(pubkey)
 }
 
@@ -234,7 +238,7 @@ func (b *IndexerMgr) GetSeqMgr() *common.MiningSequenceMgr {
 	return b.compiling.GetSequenceMgr()
 }
 
-func (b *IndexerMgr) GetMinerInfo(pubkey string) (*common.MinerInfo) {
+func (b *IndexerMgr) GetMinerInfo(pubkey string) *common.MinerInfo {
 	return b.rpcService.GetMinerInfo(pubkey)
 }
 
