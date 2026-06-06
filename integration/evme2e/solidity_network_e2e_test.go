@@ -5,6 +5,7 @@ package evme2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"syscall"
 	"testing"
 	"time"
 
@@ -264,6 +266,8 @@ type networkCompiledSolidityContract struct {
 	Bytecode []byte
 }
 
+const networkSolidityCompileTimeout = 30 * time.Second
+
 func compileNetworkSolidityContract(t *testing.T, source, contractName string) networkCompiledSolidityContract {
 	t.Helper()
 	solc := os.Getenv("SATOSHINET_SOLC")
@@ -289,10 +293,7 @@ func compileNetworkSolidityContract(t *testing.T, source, contractName string) n
 	}
 	encoded, err := json.Marshal(input)
 	require.NoError(t, err)
-	cmd := exec.Command(solc, "--standard-json")
-	cmd.Stdin = bytes.NewReader(encoded)
-	out, err := cmd.CombinedOutput()
-	require.NoErrorf(t, err, "solc failed: %s", string(out))
+	out := runNetworkSolcStandardJSON(t, solc, encoded)
 
 	var decoded struct {
 		Errors []struct {
@@ -597,6 +598,35 @@ func testDisplayAssetWithPrecision(name, amount string, precision int) *indexerc
 		Amount:    amount,
 		Precision: precision,
 	}
+}
+
+func runNetworkSolcStandardJSON(t *testing.T, solc string, encoded []byte) []byte {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), networkSolidityCompileTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, solc, "--standard-json")
+	cmd.Stdin = bytes.NewReader(encoded)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = 5 * time.Second
+
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("solc timed out after %s: %s", networkSolidityCompileTimeout, string(out))
+	}
+	require.NoErrorf(t, err, "solc failed: %s", string(out))
+	return out
 }
 
 func testWitnessAddress(t *testing.T, key *btcec.PrivateKey) string {

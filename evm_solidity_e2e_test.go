@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
 	gethcommon "github.com/ethereum/go-ethereum/common"
@@ -199,6 +202,8 @@ type compiledSolidityContract struct {
 	Bytecode []byte
 }
 
+const solidityCompileTimeout = 30 * time.Second
+
 func compileSolidityContract(t *testing.T, source, contractName string) compiledSolidityContract {
 	t.Helper()
 	solc := os.Getenv("SATOSHINET_SOLC")
@@ -224,10 +229,7 @@ func compileSolidityContract(t *testing.T, source, contractName string) compiled
 	}
 	encoded, err := json.Marshal(input)
 	require.NoError(t, err)
-	cmd := exec.Command(solc, "--standard-json")
-	cmd.Stdin = bytes.NewReader(encoded)
-	out, err := cmd.CombinedOutput()
-	require.NoErrorf(t, err, "solc failed: %s", string(out))
+	out := runSolcStandardJSON(t, solc, encoded)
 
 	var decoded struct {
 		Errors []struct {
@@ -372,6 +374,35 @@ func solidityE2EResultScriptResolver(contract evm.ContractAddress) evm.ResultRec
 		}
 		return []byte{0x51}, nil
 	}
+}
+
+func runSolcStandardJSON(t *testing.T, solc string, encoded []byte) []byte {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), solidityCompileTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, solc, "--standard-json")
+	cmd.Stdin = bytes.NewReader(encoded)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err == syscall.ESRCH {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = 5 * time.Second
+
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("solc timed out after %s: %s", solidityCompileTimeout, string(out))
+	}
+	require.NoErrorf(t, err, "solc failed: %s", string(out))
+	return out
 }
 
 func solidityE2ERecipientResolver(pkScript []byte) (string, bool, error) {
