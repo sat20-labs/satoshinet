@@ -408,7 +408,7 @@ func testDeployTx(t *testing.T, nonce uint64, initCode []byte) *wire.MsgTx {
 	contractScript, err := ContractPkScript(contract)
 	require.NoError(t, err)
 	script, err := evmcommon.DeployNullDataScript(DeployPayload{
-		GasLimit:    200000,
+		GasLimit:    evmcommon.DeployBaseGas,
 		DeployNonce: nonce,
 		InitCode:    initCode,
 	})
@@ -418,7 +418,7 @@ func testDeployTx(t *testing.T, nonce uint64, initCode []byte) *wire.MsgTx {
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 	tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
 		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
-		Amount: *scommon.NewDefaultDecimal(300000),
+		Amount: *scommon.NewDefaultDecimal(int64(evmcommon.DeployBaseGas)),
 	}}, contractScript))
 	return tx
 }

@@ -32,8 +32,8 @@ func TestGasConfigRequiredInvokeFunding(t *testing.T) {
 	if got := fee.String(); got != "0.015" {
 		t.Fatalf("got %s want 0.015", got)
 	}
-	if got := cfg.RequiredInvokeFunding(10, false); got != 1 {
-		t.Fatalf("compat rounded fee got %d want 1", got)
+	if got := cfg.RequiredInvokeFundingDecimal(10, false); got.String() != "0.01" {
+		t.Fatalf("compat rounded fee got %s want 0.01", got)
 	}
 }
 
@@ -66,22 +66,6 @@ func TestGasConfigFundingFeeBreakdown(t *testing.T) {
 	}
 	if got := total.String(); got != "0.11" {
 		t.Fatalf("total budget got %s want 0.11", got)
-	}
-}
-
-func TestGasConfigRejectsFeeOverflow(t *testing.T) {
-	cfg := GasConfig{
-		GasAssetName:             "gas",
-		GasPriceDenominator:      1,
-		InitialGasPriceNumerator: math.MaxUint64,
-		GasPriceDecayInterval:    1,
-		GasPriceDecayNumerator:   1,
-		GasPriceDecayDenominator: 1,
-		GasPriceFloorNumerator:   1,
-	}
-	_, err := cfg.CheckedCallFeeAtHeight(1001, 0)
-	if err == nil {
-		t.Fatal("expected overflow")
 	}
 }
 

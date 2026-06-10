@@ -26,11 +26,12 @@ func TestGasFeeDecimalUsesExecutionScale(t *testing.T) {
 	if got := fee.String(); got != "0.003" {
 		t.Fatalf("decimal fee got %s want 0.003", got)
 	}
-	rounded, err := GasFee(3, GasPriceDenominator, GasPriceDenominator)
+	rounded, err := GasFeeDecimal(3, GasPriceDenominator, GasPriceDenominator)
 	if err != nil {
 		t.Fatalf("GasFee failed: %v", err)
 	}
-	if rounded != 1 {
+	r, _ := DecimalCeilUint64(rounded)
+	if r != 1 {
 		t.Fatalf("compat rounded fee got %d want 1", rounded)
 	}
 }

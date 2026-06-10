@@ -22,23 +22,32 @@ const (
 	// asset fee is calculated as:
 	//   executionGas * priceNumerator / priceDenominator / ExecutionGasUnitsPerGas
 	// At the initial price, 1000 execution gas units charge 1 gas asset unit.
-	DeployBaseGas  uint64 = 100000
-	InvokeBaseGas  uint64 = 20000
-	ResultBaseGas  uint64 = 10000
-	TriggerBaseGas uint64 = 30000
-	MaxGasPerBlock uint64 = 30000000
+	DeployBaseGas  uint64 = 5_000_000
+	InvokeBaseGas  uint64 = 100_000
+	ResultBaseGas  uint64 = 50_000
+	TriggerBaseGas uint64 = 150_000
+	MaxGasPerBlock uint64 = 1_000_000_000
+
+	// 
+	// DeployBaseGas_Template	uint64 = DeployBaseGas/5
+	// DeployBaseGas_Agent		uint64 = DeployBaseGas/2
+	// InvokeBaseGas_Agent 		uint64 = InvokeBaseGas*5
+	// TriggerBaseGas_Agent    	uint64 = InvokeBaseGas_Agent + ResultBaseGas
 
 	// ExecutionGasUnitsPerGas decouples EVM/template/agent execution gas units
 	// from the protocol gas asset unit.
 	ExecutionGasUnitsPerGas uint64 = 1000
 	GasFeePrecision         int    = 8
 
-	GasPriceDenominator      uint64 = 100000000
-	InitialGasPriceNumerator uint64 = GasPriceDenominator
+	// 每 GasPriceDecayInterval 个区块调整一次gas
+	// 调整为 Numerator 当前的 GasPriceDecayNumerator/GasPriceDecayDenominator
+	// 直到分子下降到 GasPriceFloorNumerator
+	GasPriceDenominator      uint64 = 10000 // 分母
+	InitialGasPriceNumerator uint64 = GasPriceDenominator // 分子
+	GasPriceFloorNumerator   uint64 = 1
 	GasPriceDecayInterval    uint64 = 100000 // in blocks
-	GasPriceDecayNumerator   uint64 = 95
+	GasPriceDecayNumerator   uint64 = 90
 	GasPriceDecayDenominator uint64 = 100
-	GasPriceFloorNumerator   uint64 = 10000
 )
 
 func GasAssetNameAtHeight(net wire.BitcoinNet, height int64) string {
@@ -68,22 +77,6 @@ func GasPriceNumeratorAtHeight(height uint64) uint64 {
 		epochs--
 	}
 	return numerator
-}
-
-func GasFeeAtHeight(gas, height uint64) (uint64, error) {
-	fee, err := GasFeeDecimalAtHeight(gas, height)
-	if err != nil {
-		return 0, err
-	}
-	return DecimalCeilUint64(fee)
-}
-
-func GasFee(gas, priceNumerator, priceDenominator uint64) (uint64, error) {
-	fee, err := GasFeeDecimal(gas, priceNumerator, priceDenominator)
-	if err != nil {
-		return 0, err
-	}
-	return DecimalCeilUint64(fee)
 }
 
 func GasFeeDecimalAtHeight(gas, height uint64) (*scommon.Decimal, error) {

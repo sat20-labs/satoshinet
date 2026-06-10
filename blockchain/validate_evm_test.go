@@ -139,17 +139,17 @@ func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseFee, err := evmcommon.GasFeeAtHeight(evmcommon.DeployBaseGas, 100)
+	baseFee, err := evmcommon.GasFeeDecimalAtHeight(evmcommon.DeployBaseGas, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
 		name    string
-		fee     uint64
+		fee     *scommon.Decimal
 		wantErr bool
 	}{
 		{name: "exact base fee", fee: baseFee},
-		{name: "below base fee", fee: baseFee - 1, wantErr: true},
+		{name: "below base fee", fee: baseFee.Sub(scommon.NewDecimal(1, 0)), wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
 			view := NewUtxoViewpoint()
 			view.Entries()[prevOut] = NewUtxoEntry(wire.NewTxOut(0, wire.TxAssets{{
 				Name:   *assetName,
-				Amount: *scommon.NewDefaultDecimal(int64(evmcommon.DeployBaseGas + test.fee)),
+				Amount: *scommon.NewDefaultDecimal(int64(evmcommon.DeployBaseGas + test.fee.UInt64())),
 			}}, []byte{txscript.OP_TRUE}), 1, false)
 
 			_, _, err := CheckTransactionInputs(btcutil.NewTx(tx), false, 100, view, &chaincfg.TestNetParams)

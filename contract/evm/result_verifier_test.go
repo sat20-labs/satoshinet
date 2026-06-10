@@ -277,7 +277,7 @@ func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
 		{Value: 77, PkScript: []byte{0x51}},
 		{Value: 23, Assets: wire.TxAssets{{
 			Name:   wire.AssetName{Protocol: "ordx", Type: "ft", Ticker: "gas"},
-			Amount: *scommon.NewDefaultDecimal(99990),
+			Amount: *scommon.NewDecimal(99950, 8),
 		}}, PkScript: testContractScript(contract)},
 	})
 

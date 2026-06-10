@@ -18,18 +18,18 @@ func TestBuildBlockResultTxsDeployInvoke(t *testing.T) {
 		GasAssetName:     gasAssetName,
 		FixedGasPrice:    1,
 		ResultPackingFee: 5,
-		MaxGasPerInvoke:  300000,
-		MaxGasPerBlock:   1000000,
+		MaxGasPerInvoke:  0,
+		MaxGasPerBlock:   evmcommon.MaxGasPerBlock,
 	}
 	contract, err := DeriveCreateContractAddress(TestnetContractPrefix, caller, 3)
 	require.NoError(t, err)
 
 	deployTx := testDeployTx(t, 3, blockResultInitCode(callAssetPrecompileCode()))
 	invokeTx := blockResultInvokeTx(t, contract, InvokePayload{
-		GasLimit:  100000,
+		GasLimit:  evmcommon.InvokeBaseGas,
 		CallNonce: 1,
 		Calldata:  EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
-	}, gasAssetName, 100000)
+	}, gasAssetName, evmcommon.InvokeBaseGas)
 	assetHash := chainhash.Hash{8}
 	assetInput := OutPoint{TxID: assetHash.String(), Vout: 0}
 
@@ -38,7 +38,7 @@ func TestBuildBlockResultTxsDeployInvoke(t *testing.T) {
 		Runtime:        NewRuntime(nil),
 		ContractPrefix: TestnetContractPrefix,
 		GasConfig:      gasConfig,
-		Block:          BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:          BlockContext{Number: 100, Time: 1, GasLimit: evmcommon.MaxGasPerBlock, FixedGasPrice: 1},
 		ResolveCaller:  fixedCaller(caller),
 		ContractUTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))

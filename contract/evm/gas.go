@@ -65,27 +65,6 @@ func (c GasConfig) Validate() error {
 	return nil
 }
 
-func (c GasConfig) CallFee(gasUsed uint64) uint64 {
-	fee, _ := c.CheckedCallFee(gasUsed)
-	return fee
-}
-
-func (c GasConfig) CheckedCallFee(gasUsed uint64) (uint64, error) {
-	fee, err := c.CheckedCallFeeDecimal(gasUsed)
-	if err != nil {
-		return 0, err
-	}
-	return contractcommon.DecimalCeilUint64(fee)
-}
-
-func (c GasConfig) CheckedCallFeeAtHeight(gasUsed, height uint64) (uint64, error) {
-	fee, err := c.CheckedCallFeeDecimalAtHeight(gasUsed, height)
-	if err != nil {
-		return 0, err
-	}
-	return contractcommon.DecimalCeilUint64(fee)
-}
-
 func (c GasConfig) CheckedCallFeeDecimal(gasUsed uint64) (*scommon.Decimal, error) {
 	return c.CheckedCallFeeDecimalAtHeight(gasUsed, 0)
 }
@@ -174,19 +153,6 @@ func (c GasConfig) ContractFundingFee(kind ExecutionKind, gasLimit uint64, needs
 		return nil, err
 	}
 	return fee.AddAlignPrecision(resultFee), nil
-}
-
-func (c GasConfig) RequiredInvokeFunding(gasLimit uint64, needsResult bool) uint64 {
-	fee, _ := c.CheckedRequiredInvokeFunding(gasLimit, needsResult)
-	return fee
-}
-
-func (c GasConfig) CheckedRequiredInvokeFunding(gasLimit uint64, needsResult bool) (uint64, error) {
-	fee, err := c.CheckedRequiredInvokeFundingDecimal(gasLimit, needsResult)
-	if err != nil {
-		return 0, err
-	}
-	return contractcommon.DecimalCeilUint64(fee)
 }
 
 func (c GasConfig) RequiredInvokeFundingDecimal(gasLimit uint64, needsResult bool) *scommon.Decimal {
