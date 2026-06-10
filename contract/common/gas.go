@@ -63,6 +63,23 @@ func GasAssetNameForNet(net wire.BitcoinNet) string {
 	}
 }
 
+
+func GasFeeAtHeight(gas, height uint64) (uint64, error) {
+	fee, err := GasFeeDecimalAtHeight(gas, height)
+	if err != nil {
+		return 0, err
+	}
+	return DecimalCeilUint64(fee)
+}
+
+func GasFee(gas, priceNumerator, priceDenominator uint64) (uint64, error) {
+	fee, err := GasFeeDecimal(gas, priceNumerator, priceDenominator)
+	if err != nil {
+		return 0, err
+	}
+	return DecimalCeilUint64(fee)
+}
+
 func GasPriceNumeratorAtHeight(height uint64) uint64 {
 	numerator := InitialGasPriceNumerator
 	if GasPriceDecayInterval == 0 {
