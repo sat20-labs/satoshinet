@@ -72,7 +72,7 @@ func TestBlockExecutorDefaultInvokeNoOp(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	defaultTx := testAgentDefaultInvokeTx(t, addr, 0, wire.TxAssets{{
 		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
-		Amount: *scommon.NewDefaultDecimal(int64(DefaultGasConfig().InvokeBaseGas)),
+		Amount: *testAgentGasFee(t, DefaultGasConfig().InvokeBaseGas),
 	}})
 
 	result, err := ExecuteBlock(BlockExecutionRequest{
@@ -416,6 +416,15 @@ func testAgentDefaultInvokeTx(t *testing.T, contract ContractAddress, value int6
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(value, assets, testAgentContractScript(contract)))
 	return tx
+}
+
+func testAgentGasFee(t *testing.T, gas uint64) *scommon.Decimal {
+	t.Helper()
+	fee, err := DefaultGasConfig().gasFee(gas, 0)
+	if err != nil {
+		t.Fatalf("gas fee failed: %v", err)
+	}
+	return fee
 }
 
 func mustEncodeBet(t *testing.T, outcomeID string) []byte {

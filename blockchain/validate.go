@@ -1233,7 +1233,7 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 	if required == nil || required.Sign() == 0 {
 		return nil
 	}
-	gasAssetName := contractGasAssetNameAtHeight(params, int64(height))
+	gasAssetName := contractGasAssetNameForParams(params)
 	assetName := wire.NewAssetNameFromString(gasAssetName)
 	if assetName == nil {
 		return ruleError(ErrBadFees, fmt.Sprintf("invalid contract gas asset %q", gasAssetName))
@@ -1246,12 +1246,12 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 	return nil
 }
 
-func contractGasAssetNameAtHeight(params *chaincfg.Params, height int64) string {
+func contractGasAssetNameForParams(params *chaincfg.Params) string {
 	net := wire.TestNet
 	if params != nil {
 		net = params.Net
 	}
-	return contractcommon.GasAssetNameAtHeight(net, height)
+	return contractcommon.GasAssetNameForNet(net)
 }
 
 func logTxAssets(desc string, assets wire.TxAssets) {

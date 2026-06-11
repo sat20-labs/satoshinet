@@ -10,8 +10,9 @@ func TestGasPriceNumeratorAtHeight(t *testing.T) {
 	if got := GasPriceNumeratorAtHeight(0); got != InitialGasPriceNumerator {
 		t.Fatalf("height 0 price got %d want %d", got, InitialGasPriceNumerator)
 	}
-	if got := GasPriceNumeratorAtHeight(GasPriceDecayInterval); got != 95000000 {
-		t.Fatalf("first decay price got %d want 95000000", got)
+	wantFirstDecay := InitialGasPriceNumerator * GasPriceDecayNumerator / GasPriceDecayDenominator
+	if got := GasPriceNumeratorAtHeight(GasPriceDecayInterval); got != wantFirstDecay {
+		t.Fatalf("first decay price got %d want %d", got, wantFirstDecay)
 	}
 	if got := GasPriceNumeratorAtHeight(GasPriceDecayInterval * 1000); got != GasPriceFloorNumerator {
 		t.Fatalf("floor price got %d want %d", got, GasPriceFloorNumerator)
@@ -45,8 +46,5 @@ func TestGasAssetNameForNet(t *testing.T) {
 	}
 	if got := GasAssetNameForNet(wire.SimNet); got != TestnetGasAssetName {
 		t.Fatalf("simnet gas asset got %s want %s", got, TestnetGasAssetName)
-	}
-	if got := GasAssetNameAtHeight(wire.MainNet, 100); got != MainnetGasAssetName {
-		t.Fatalf("mainnet gas asset at height got %s want %s", got, MainnetGasAssetName)
 	}
 }

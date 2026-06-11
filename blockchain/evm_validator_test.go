@@ -73,7 +73,7 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	executed, err := evm.ExecuteBlock(evm.BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, resultTx},
 		Runtime:       evm.NewRuntime(nil),
-		Block:         evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: evm.DefaultGasConfig().MaxGasPerBlock, FixedGasPrice: 1},
 		ResolveCaller: fixedTestCaller(caller),
 	})
 	if err != nil {
@@ -91,7 +91,7 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	block.SetHeight(100)
 
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
-		GasConfig: evm.GasConfig{GasAssetName: evm.DefaultGasConfig().GasAssetName, FixedGasPrice: 1, MaxGasPerBlock: 1000000},
+		GasConfig: evm.GasConfig{GasAssetName: evm.DefaultGasConfig().GasAssetName, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
 	})
 	if err := validator.ValidateEVMBlock(block, testPreviousOutputView(t,
 		deployTx.TxIn[0].PreviousOutPoint, callerAddr)); err != nil {
@@ -152,6 +152,9 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	runtime.SetCode(evm.ContractAddressHash(contract), []byte{0x00})
 	blockTime := time.Unix(1710000000, 0)
 	triggerGasInput := wire.OutPoint{Hash: chainhash.Hash{9}, Index: 0}
+	gasAsset := evm.DefaultGasConfig().GasAssetName
+	triggerGasFee := testEVMValidatorContractFundingFee(t,
+		evm.ExecutionKindTrigger, evm.DefaultGasConfig().TriggerBaseGas, true, 100)
 	resultTx := testEVMResultTxWithInputs(t, evm.ResultStatusSuccess, 1, []wire.OutPoint{triggerGasInput})
 	contractUTXOs := func(got evm.ContractAddress) ([]evm.UTXO, error) {
 		if !contract.Equal(got) {
@@ -162,8 +165,8 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 				OutPoint: evm.WireOutPointToEVM(triggerGasInput),
 				Contract: contract,
 				Assets: wire.TxAssets{{
-					Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),
-					Amount: *scommon.NewDefaultDecimal(200),
+					Name:   *wire.NewAssetNameFromString(gasAsset),
+					Amount: *triggerGasFee,
 				}},
 			},
 		}, nil
@@ -172,11 +175,11 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	executed, err := evm.ExecuteBlock(evm.BlockExecutionRequest{
 		Txs:     []*wire.MsgTx{resultTx},
 		Runtime: runtime.Clone(),
-		Block:   evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: 1000000, FixedGasPrice: 1},
+		Block:   evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: evm.DefaultGasConfig().MaxGasPerBlock, FixedGasPrice: 1},
 		ResolveTriggers: func(evm.TriggerResolutionContext) ([]evm.TriggerCall, error) {
 			return []evm.TriggerCall{{
 				Trigger:  evm.Trigger{ID: "vault-release", Contract: contract, Kind: evm.TriggerAtHeight, Height: 100},
-				GasLimit: 100000,
+				GasLimit: evm.DefaultGasConfig().TriggerBaseGas,
 			}}, nil
 		},
 		ContractUTXOs: contractUTXOs,
@@ -195,14 +198,14 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	block.SetHeight(100)
 
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
-		GasConfig: evm.GasConfig{GasAssetName: "ordx:ft:gas", FixedGasPrice: 1, MaxGasPerBlock: 1000000},
+		GasConfig: evm.GasConfig{GasAssetName: gasAsset, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
 		NewRuntime: func(*btcutil.Block, *UtxoViewpoint) (*evm.Runtime, error) {
 			return runtime.Clone(), nil
 		},
 		ResolveTriggers: func(evm.TriggerResolutionContext) ([]evm.TriggerCall, error) {
 			return []evm.TriggerCall{{
 				Trigger:  evm.Trigger{ID: "vault-release", Contract: contract, Kind: evm.TriggerAtHeight, Height: 100},
-				GasLimit: 100000,
+				GasLimit: evm.DefaultGasConfig().TriggerBaseGas,
 			}}, nil
 		},
 		ContractUTXOs: contractUTXOs,
@@ -213,8 +216,8 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 		t.Fatal(err)
 	}
 	view.Entries()[triggerGasInput] = NewUtxoEntry(wire.NewTxOut(1, wire.TxAssets{{
-		Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),
-		Amount: *scommon.NewDefaultDecimal(200),
+		Name:   *wire.NewAssetNameFromString(gasAsset),
+		Amount: *triggerGasFee,
 	}}, contractScript), 1, false)
 	if err := validator.ValidateEVMBlock(block, view); err != nil {
 		t.Fatal(err)
@@ -247,7 +250,7 @@ func testEVMDeployTxForCaller(t *testing.T, nonce uint64, initCode []byte, calle
 		t.Fatal(err)
 	}
 	script, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
-		GasLimit:    200000,
+		GasLimit:    evm.DefaultGasConfig().DeployBaseGas,
 		DeployNonce: nonce,
 		InitCode:    initCode,
 	})
@@ -259,9 +262,29 @@ func testEVMDeployTxForCaller(t *testing.T, nonce uint64, initCode []byte, calle
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 	tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
 		Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),
-		Amount: *scommon.NewDefaultDecimal(300000),
+		Amount: *testEVMValidatorGasFee(t, evm.DefaultGasConfig().DeployBaseGas),
 	}}, contractScript))
 	return tx
+}
+
+func testEVMValidatorGasFee(t *testing.T, gas uint64) *scommon.Decimal {
+	t.Helper()
+	fee, err := evmcommon.GasFeeDecimalAtHeight(gas, 0)
+	if err != nil {
+		t.Fatalf("gas fee failed: %v", err)
+	}
+	return fee
+}
+
+func testEVMValidatorContractFundingFee(t *testing.T,
+	kind evm.ExecutionKind, gas uint64, needsResult bool, height uint64) *scommon.Decimal {
+
+	t.Helper()
+	fee, err := evm.DefaultGasConfig().ContractFundingFee(kind, gas, needsResult, height)
+	if err != nil {
+		t.Fatalf("contract funding fee failed: %v", err)
+	}
+	return fee
 }
 
 func testPreviousOutputView(t *testing.T, outpoint wire.OutPoint, address btcutil.Address) *UtxoViewpoint {

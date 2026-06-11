@@ -24,7 +24,7 @@ type GasConfig struct {
 
 func DefaultGasConfig() GasConfig {
 	return GasConfig{
-		GasAssetName:    contractcommon.GasAssetName,
+		GasAssetName:    contractcommon.GetGasAssetName(),
 		DeployBaseGas:   contractcommon.DeployBaseGas,
 		InvokeBaseGas:   contractcommon.InvokeBaseGas,
 		ResultBaseGas:   contractcommon.ResultBaseGas,

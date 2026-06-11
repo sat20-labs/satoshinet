@@ -36,7 +36,7 @@ type GasConfig struct {
 
 func DefaultGasConfig() GasConfig {
 	return GasConfig{
-		GasAssetName: contractcommon.GasAssetName,
+		GasAssetName: contractcommon.GetGasAssetName(),
 
 		GasPriceDenominator:      contractcommon.GasPriceDenominator,
 		InitialGasPriceNumerator: contractcommon.InitialGasPriceNumerator,

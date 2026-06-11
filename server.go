@@ -3441,6 +3441,8 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		assetIndexerRPCDataPath = filepath.Dir(cfg.RPCCert)
 	}
 
+	contractcommon.SetNetworkParam(chainParams.Net)
+
 	// seqMgr 最早初始化
 	assetIndexer, err := indexerEntry.NewIndexerMgr(assetIndexerRPCDataPath, "",
 		assetIndexerRPCPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
@@ -3931,7 +3933,7 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 			txs = append(txs, msgTx)
 		}
 		blockGasConfig := gasConfig
-		blockGasConfig.GasAssetName = contractGasAssetNameForBlock(params, int64(req.Height))
+		blockGasConfig.GasAssetName = contractGasAssetNameForParams(params)
 		result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 			Txs:            txs,
 			Runtime:        runtime,
@@ -3971,19 +3973,19 @@ func contractBitcoinNet(params *chaincfg.Params) wire.BitcoinNet {
 	return params.Net
 }
 
-func contractGasAssetNameForBlock(params *chaincfg.Params, height int64) string {
-	return contractcommon.GasAssetNameAtHeight(contractBitcoinNet(params), height)
+func contractGasAssetNameForParams(params *chaincfg.Params) string {
+	return contractcommon.GasAssetNameForNet(contractBitcoinNet(params))
 }
 
 func templateGasConfigForBlock(base tmplcontract.GasConfig, params *chaincfg.Params, height int64) tmplcontract.GasConfig {
 	cfg := base
-	cfg.GasAssetName = contractGasAssetNameForBlock(params, height)
+	cfg.GasAssetName = contractGasAssetNameForParams(params)
 	return cfg
 }
 
 func agentGasConfigForBlock(base agentcontract.GasConfig, params *chaincfg.Params, height int64) agentcontract.GasConfig {
 	cfg := base
-	cfg.GasAssetName = contractGasAssetNameForBlock(params, height)
+	cfg.GasAssetName = contractGasAssetNameForParams(params)
 	return cfg
 }
 
@@ -4005,7 +4007,7 @@ func newTemplateBlockValidator(db database.DB, params *chaincfg.Params,
 		contractPrefix = tmplcontract.ContractPrefixForNet(params.Net)
 	}
 	btcdLog.Infof("Template contract validation is enabled, gas asset=%s",
-		contractGasAssetNameForBlock(params, 0))
+		contractGasAssetNameForParams(params))
 	return blockchain.NewTemplateBlockExecutionValidator(blockchain.TemplateBlockExecutionConfig{
 		ChainParams:         params,
 		ContractPrefix:      contractPrefix,
@@ -4100,7 +4102,7 @@ func newAgentBlockValidator(db database.DB, params *chaincfg.Params,
 		"Agent contract validation is enabled, agent address=%s bootstrap address=%s gas asset=%s",
 		runtimeConfig.AgentAddress,
 		runtimeConfig.BootstrapAddress,
-		contractGasAssetNameForBlock(params, 0))
+		contractGasAssetNameForParams(params))
 	return blockchain.NewAgentBlockExecutionValidator(blockchain.AgentBlockExecutionConfig{
 		ChainParams:         params,
 		ContractPrefix:      contractPrefix,

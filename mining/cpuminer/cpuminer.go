@@ -6,7 +6,6 @@ package cpuminer
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 	"runtime"
 	"sync"
@@ -344,8 +343,7 @@ out:
 		template, err := m.g.NewBlockTemplate(payToAddr)
 		m.submitBlockLock.Unlock()
 		if err != nil {
-			errStr := fmt.Sprintf("Failed to create new block template: %v", err)
-			log.Errorf(errStr)
+			log.Errorf("Failed to create new block template: %v", err)
 			continue
 		}
 
@@ -597,8 +595,7 @@ func (m *CPUMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 		template, err := m.g.NewBlockTemplate(payToAddr)
 		m.submitBlockLock.Unlock()
 		if err != nil {
-			errStr := fmt.Sprintf("Failed to create new block template: %v", err)
-			log.Errorf(errStr)
+			log.Errorf("Failed to create new block template: %v", err)
 			continue
 		}
 

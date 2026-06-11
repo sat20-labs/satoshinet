@@ -11,13 +11,14 @@ import (
 
 func TestValidateInvokeTxBasic(t *testing.T) {
 	contract := testContract(t)
+	gasAssetName := DefaultGasConfig().GasAssetName
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
 	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: DefaultGasConfig().InvokeBaseGas, CallNonce: 1})
 	require.NoError(t, err)
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
 	tx.AddTxOut(wire.NewTxOut(7, wire.TxAssets{{
-		Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
+		Name:   *wire.NewAssetNameFromString(gasAssetName),
 		Amount: *scommon.NewDefaultDecimal(5),
 	}}, testContractScript(contract)))
 	tx.AddTxOut(wire.NewTxOut(11, nil, testContractScript(contract)))
@@ -30,7 +31,7 @@ func TestValidateInvokeTxBasic(t *testing.T) {
 	require.Equal(t, DefaultGasConfig().InvokeBaseGas, validated.Payload.GasLimit)
 	require.True(t, contract.Equal(validated.Contract))
 	require.Len(t, validated.FundingOutputs, 2)
-	gasAmount, err := validated.FundingOutputs[0].AssetAmount("ordx:ft:gas")
+	gasAmount, err := validated.FundingOutputs[0].AssetAmount(gasAssetName)
 	require.NoError(t, err)
 	require.Equal(t, 0, gasAmount.Cmp(mustDefaultDecimal(t, 5)))
 }

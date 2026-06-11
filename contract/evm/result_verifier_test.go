@@ -262,7 +262,7 @@ func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
-		GasLimit:  100000,
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
 		Calldata:  EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	})
@@ -302,7 +302,7 @@ func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
 	_, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{invokeTx, resultTx},
 		Runtime:       runtime,
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 		VerifyResult:  verifier.Verify,
 	})

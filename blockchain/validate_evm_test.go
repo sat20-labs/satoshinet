@@ -118,7 +118,7 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 }
 
 func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
-	assetName := wire.NewAssetNameFromString(evmcommon.GasAssetName)
+	assetName := wire.NewAssetNameFromString(evmcommon.GasAssetNameForNet(wire.TestNet))
 	if assetName == nil {
 		t.Fatal("invalid gas asset name")
 	}
@@ -149,23 +149,25 @@ func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "exact base fee", fee: baseFee},
-		{name: "below base fee", fee: baseFee.Sub(scommon.NewDecimal(1, 0)), wantErr: true},
+		{name: "below base fee", fee: decimalBelow(t, baseFee), wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			contractFunding := baseFee.Clone()
+			inputAmount := contractFunding.AddAlignPrecision(test.fee)
 			prevOut := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
 			tx := wire.NewMsgTx(2)
 			tx.AddTxIn(wire.NewTxIn(&prevOut, nil, nil))
 			tx.AddTxOut(wire.NewTxOut(0, nil, deployScript))
 			tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
 				Name:   *assetName,
-				Amount: *scommon.NewDefaultDecimal(int64(evmcommon.DeployBaseGas)),
+				Amount: *contractFunding,
 			}}, contractScript))
 
 			view := NewUtxoViewpoint()
 			view.Entries()[prevOut] = NewUtxoEntry(wire.NewTxOut(0, wire.TxAssets{{
 				Name:   *assetName,
-				Amount: *scommon.NewDefaultDecimal(int64(evmcommon.DeployBaseGas + test.fee.UInt64())),
+				Amount: *inputAmount,
 			}}, []byte{txscript.OP_TRUE}), 1, false)
 
 			_, _, err := CheckTransactionInputs(btcutil.NewTx(tx), false, 100, view, &chaincfg.TestNetParams)
@@ -177,6 +179,18 @@ func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
 			}
 		})
 	}
+}
+
+func decimalBelow(t *testing.T, fee *scommon.Decimal) *scommon.Decimal {
+	t.Helper()
+	if fee == nil || fee.Sign() <= 0 {
+		t.Fatal("fee must be positive")
+	}
+	below := fee.SubAlignPrecision(scommon.NewDecimal(1, fee.Precision))
+	if below.Sign() < 0 {
+		return scommon.NewDecimal(0, fee.Precision)
+	}
+	return below
 }
 
 func TestCheckTransactionInputsAllowsEVMDefaultInvokeWithPlainSatsFee(t *testing.T) {

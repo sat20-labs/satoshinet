@@ -21,7 +21,7 @@ func TestBlockExecutorDeployResultThenInvokeRequiresFeeResult(t *testing.T) {
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:                       []*wire.MsgTx{deployTx, deployResultTx},
 		Runtime:                   NewRuntime(nil),
-		Block:                     BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:                     testBlockContext(1),
 		ResolveCaller:             fixedCaller(caller),
 		ResolveGasRefundRecipient: fixedGasRefundRecipient(refundRecipient),
 	})
@@ -31,11 +31,11 @@ func TestBlockExecutorDeployResultThenInvokeRequiresFeeResult(t *testing.T) {
 	require.Equal(t, refundRecipient, executed.Records[0].GasRefundRecipient)
 
 	contract := executed.Records[0].Contract
-	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: 100000, CallNonce: 1})
+	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: DefaultGasConfig().InvokeBaseGas, CallNonce: 1})
 	_, err = ExecuteBlock(BlockExecutionRequest{
 		Txs:                       []*wire.MsgTx{deployTx, deployResultTx, invokeTx},
 		Runtime:                   NewRuntime(nil),
-		Block:                     BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:                     testBlockContext(1),
 		ResolveCaller:             fixedCaller(caller),
 		ResolveGasRefundRecipient: fixedGasRefundRecipient(refundRecipient),
 	})
@@ -47,7 +47,7 @@ func TestBlockExecutorDeployResultThenInvokeRequiresFeeResult(t *testing.T) {
 	executed, err = ExecuteBlock(BlockExecutionRequest{
 		Txs:                       []*wire.MsgTx{deployTx, deployResultTx, invokeTx, invokeResultTx},
 		Runtime:                   NewRuntime(nil),
-		Block:                     BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:                     testBlockContext(1),
 		ResolveCaller:             fixedCaller(caller),
 		ResolveGasRefundRecipient: fixedGasRefundRecipient(refundRecipient),
 	})
@@ -68,17 +68,17 @@ func TestBlockExecutorDefaultInvokeEmptyCall(t *testing.T) {
 	deployed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, deployResultTx},
 		Runtime:       NewRuntime(nil),
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.NoError(t, err)
 	require.Len(t, deployed.Records, 1)
-	defaultTx := testDefaultInvokeTx(t, deployed.Records[0].Contract, 100, 100000)
+	defaultTx := testDefaultInvokeTx(t, deployed.Records[0].Contract, 100, testEVMGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))
 
 	_, err = ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, deployResultTx, defaultTx},
 		Runtime:       NewRuntime(nil),
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.Error(t, err)
@@ -89,7 +89,7 @@ func TestBlockExecutorDefaultInvokeEmptyCall(t *testing.T) {
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:                       []*wire.MsgTx{deployTx, deployResultTx, defaultTx, defaultResultTx},
 		Runtime:                   NewRuntime(nil),
-		Block:                     BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:                     testBlockContext(1),
 		ResolveCaller:             fixedCaller(caller),
 		ResolveGasRefundRecipient: fixedGasRefundRecipient("tb1qrefund"),
 	})
@@ -108,7 +108,7 @@ func TestBlockExecutorRejectsMissingDeployResult(t *testing.T) {
 	_, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx},
 		Runtime:       NewRuntime(nil),
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.Error(t, err)
@@ -125,7 +125,7 @@ func TestBlockExecutorRejectsBlockGasLimitExceeded(t *testing.T) {
 		Txs:           []*wire.MsgTx{deployTx, deployResultTx},
 		Runtime:       NewRuntime(nil),
 		GasConfig:     GasConfig{MaxGasPerBlock: 1},
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.Error(t, err)
@@ -137,7 +137,7 @@ func TestBlockExecutorInvokeRevertRequiresFundingInputResult(t *testing.T) {
 	runtime := NewRuntime(nil)
 	runtime.SetCode(ContractAddressHash(contract), []byte{0x60, 0x00, 0x60, 0x00, 0xfd})
 
-	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: 100000, CallNonce: 1})
+	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: DefaultGasConfig().InvokeBaseGas, CallNonce: 1})
 	resultTx := testResultTx(t, ResultStatusRevert, 1, []wire.OutPoint{
 		{Hash: invokeTx.TxHash(), Index: 1},
 	})
@@ -145,7 +145,7 @@ func TestBlockExecutorInvokeRevertRequiresFundingInputResult(t *testing.T) {
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{invokeTx, resultTx},
 		Runtime:       runtime,
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.NoError(t, err)
@@ -160,7 +160,7 @@ func TestBlockExecutorRejectsResultMissingInvokeFundingInput(t *testing.T) {
 	runtime := NewRuntime(nil)
 	runtime.SetCode(ContractAddressHash(contract), []byte{0x60, 0x00, 0x60, 0x00, 0xfd})
 
-	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: 100000, CallNonce: 1})
+	invokeTx := testInvokeTx(t, contract, InvokePayload{GasLimit: DefaultGasConfig().InvokeBaseGas, CallNonce: 1})
 	resultTx := testResultTx(t, ResultStatusRevert, 1, []wire.OutPoint{
 		{Hash: chainhash.Hash{9, 9, 9}, Index: 0},
 	})
@@ -168,7 +168,7 @@ func TestBlockExecutorRejectsResultMissingInvokeFundingInput(t *testing.T) {
 	_, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{invokeTx, resultTx},
 		Runtime:       runtime,
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.Error(t, err)
@@ -181,7 +181,7 @@ func TestBlockExecutorAssetIntentRequiresResultAndVerifier(t *testing.T) {
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
-		GasLimit:  100000,
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
 		Calldata:  EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	})
@@ -192,7 +192,7 @@ func TestBlockExecutorAssetIntentRequiresResultAndVerifier(t *testing.T) {
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{invokeTx, resultTx},
 		Runtime:       runtime,
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 		VerifyResult: func(resultTx *wire.MsgTx, settled []ExecutionRecord) error {
 			verifierCalled = true
@@ -216,7 +216,7 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
-		GasLimit:  100000,
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
 	})
 	resultTx := testResultTx(t, ResultStatusSuccess, 2, []wire.OutPoint{
@@ -225,7 +225,7 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{invokeTx, resultTx},
 		Runtime:       runtime,
-		Block:         BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(100),
 		ResolveCaller: fixedCaller(caller),
 		ResolveTriggers: func(ctx TriggerResolutionContext) ([]TriggerCall, error) {
 			return []TriggerCall{{
@@ -235,7 +235,7 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 					Kind:     TriggerAtHeight,
 					Height:   100,
 				},
-				GasLimit: 100000,
+				GasLimit: DefaultGasConfig().TriggerBaseGas,
 				Calldata: EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 			}}, nil
 		},
@@ -262,12 +262,12 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 		Contract: contract,
 		Kind:     TriggerAtHeight,
 		Height:   100,
-		GasLimit: 100000,
+		GasLimit: DefaultGasConfig().TriggerBaseGas,
 		Calldata: EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	}))
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
-		GasLimit:  100000,
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
 	})
 	resultTx := testResultTx(t, ResultStatusSuccess, 2, []wire.OutPoint{
@@ -276,7 +276,7 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{invokeTx, resultTx},
 		Runtime:       runtime,
-		Block:         BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(100),
 		ResolveCaller: fixedCaller(caller),
 		VerifyResult: func(resultTx *wire.MsgTx, settled []ExecutionRecord) error {
 			require.Len(t, settled, 2)
@@ -299,7 +299,7 @@ func TestBlockExecutorTriggerRequiresResultWithoutInvokeFunding(t *testing.T) {
 
 	executor := NewBlockExecutor(BlockExecutionRequest{
 		Runtime: runtime,
-		Block:   BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:   testBlockContext(100),
 	})
 	err := executor.ExecuteTrigger(TriggerCall{
 		Trigger: Trigger{
@@ -308,7 +308,7 @@ func TestBlockExecutorTriggerRequiresResultWithoutInvokeFunding(t *testing.T) {
 			Kind:     TriggerAtHeight,
 			Height:   100,
 		},
-		GasLimit: 100000,
+		GasLimit: DefaultGasConfig().TriggerBaseGas,
 		Calldata: EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	})
 	require.NoError(t, err)
@@ -335,7 +335,7 @@ func TestBlockExecutorTerminatesTriggerWhenContractGasIsInsufficient(t *testing.
 		Contract: contract,
 		Kind:     TriggerAtHeight,
 		Height:   100,
-		GasLimit: 100000,
+		GasLimit: DefaultGasConfig().TriggerBaseGas,
 	}))
 
 	executor := NewBlockExecutor(BlockExecutionRequest{
@@ -345,7 +345,7 @@ func TestBlockExecutorTerminatesTriggerWhenContractGasIsInsufficient(t *testing.
 			FixedGasPrice: 1,
 			ResultBaseGas: 10,
 		},
-		Block: BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block: testBlockContext(100),
 		ContractUTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
 			return nil, nil
@@ -369,7 +369,7 @@ func TestBlockExecutorVerifiesCoinbaseStateRoot(t *testing.T) {
 	executed, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, deployResultTx},
 		Runtime:       runtime,
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.NoError(t, err)
@@ -382,7 +382,7 @@ func TestBlockExecutorVerifiesCoinbaseStateRoot(t *testing.T) {
 		Txs:           []*wire.MsgTx{deployTx, deployResultTx},
 		CoinbaseTx:    coinbaseTx,
 		Runtime:       NewRuntime(nil),
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.NoError(t, err)
@@ -394,7 +394,7 @@ func TestBlockExecutorVerifiesCoinbaseStateRoot(t *testing.T) {
 		Txs:           []*wire.MsgTx{deployTx, deployResultTx},
 		CoinbaseTx:    coinbaseTx,
 		Runtime:       NewRuntime(nil),
-		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 	})
 	require.Error(t, err)
@@ -418,7 +418,7 @@ func testDeployTx(t *testing.T, nonce uint64, initCode []byte) *wire.MsgTx {
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 	tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
 		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
-		Amount: *scommon.NewDefaultDecimal(int64(evmcommon.DeployBaseGas)),
+		Amount: *testEVMGasFee(t, evmcommon.DeployBaseGas),
 	}}, contractScript))
 	return tx
 }
@@ -434,7 +434,7 @@ func testInvokeTx(t *testing.T, contract ContractAddress, payload InvokePayload)
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 	tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
 		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
-		Amount: *scommon.NewDefaultDecimal(100000),
+		Amount: *testEVMGasFee(t, payload.GasLimit),
 	}}, contractScript))
 	return tx
 }
@@ -450,6 +450,30 @@ func testDefaultInvokeTx(t *testing.T, contract ContractAddress, value int64, ga
 		Amount: *scommon.NewDefaultDecimal(gasAmount),
 	}}, contractScript))
 	return tx
+}
+
+func testEVMGasFee(t *testing.T, gas uint64) *scommon.Decimal {
+	t.Helper()
+	fee, err := evmcommon.GasFeeDecimalAtHeight(gas, 0)
+	require.NoError(t, err)
+	return fee
+}
+
+func testEVMGasFeeAmount(t *testing.T, gas uint64) int64 {
+	t.Helper()
+	fee, err := evmcommon.GasFeeAtHeight(gas, 0)
+	require.NoError(t, err)
+	require.LessOrEqual(t, fee, uint64(1<<63-1))
+	return int64(fee)
+}
+
+func testBlockContext(number uint64) BlockContext {
+	return BlockContext{
+		Number:        number,
+		Time:          1,
+		GasLimit:      DefaultGasConfig().MaxGasPerBlock,
+		FixedGasPrice: 1,
+	}
 }
 
 func testResultTx(t *testing.T, status ResultStatus, count uint16, inputs []wire.OutPoint) *wire.MsgTx {

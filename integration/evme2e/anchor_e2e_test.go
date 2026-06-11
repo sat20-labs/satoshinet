@@ -286,7 +286,7 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 	deployTx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
 		ContractPrefix: evm.TestnetContractPrefix,
 		Caller:         caller,
-		GasLimit:       300000,
+		GasLimit:       evm.DefaultGasConfig().DeployBaseGas,
 		DeployNonce:    1,
 		InitCode:       testEVMInitCode(testCounterRuntimeCode()),
 		Funding: wire.TxOut{
@@ -313,7 +313,7 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 	for i, key := range callerKeys {
 		tx, err := evm.BuildInvokeTx(evm.InvokeTxBuildRequest{
 			Contract:  contract,
-			GasLimit:  100000,
+			GasLimit:  evm.DefaultGasConfig().InvokeBaseGas,
 			CallNonce: uint64(i + 1),
 			Funding: wire.TxOut{
 				Assets: wire.TxAssets{{
@@ -327,7 +327,7 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 			}},
 			ChangeOutputs: []*wire.TxOut{
 				wire.NewTxOut(1000, testWireAsset(evm.DefaultGasConfig().GasAssetName,
-					100000-int64(evm.DefaultGasConfig().InvokeBaseGas)), spendScript),
+					100000-networkGasFeeAmount(t, evm.DefaultGasConfig().InvokeBaseGas)), spendScript),
 			},
 		})
 		require.NoError(t, err)

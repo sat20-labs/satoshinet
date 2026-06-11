@@ -13,11 +13,6 @@ const (
 	MainnetGasAssetName = "brc20:f:sgas"
 	TestnetGasAssetName = "brc20:f:sgas"
 
-	// GasAssetName is the default gas asset for code paths that do not have
-	// network context. Consensus and block result construction should use
-	// GasAssetNameAtHeight when network context is available.
-	GasAssetName = TestnetGasAssetName
-
 	// Base gas values are execution gas units, not gas asset amounts. The gas
 	// asset fee is calculated as:
 	//   executionGas * priceNumerator / priceDenominator / ExecutionGasUnitsPerGas
@@ -28,7 +23,7 @@ const (
 	TriggerBaseGas uint64 = 150_000
 	MaxGasPerBlock uint64 = 1_000_000_000
 
-	// 
+	//
 	// DeployBaseGas_Template	uint64 = DeployBaseGas/5
 	// DeployBaseGas_Agent		uint64 = DeployBaseGas/2
 	// InvokeBaseGas_Agent 		uint64 = InvokeBaseGas*5
@@ -42,7 +37,7 @@ const (
 	// 每 GasPriceDecayInterval 个区块调整一次gas
 	// 调整为 Numerator 当前的 GasPriceDecayNumerator/GasPriceDecayDenominator
 	// 直到分子下降到 GasPriceFloorNumerator
-	GasPriceDenominator      uint64 = 10000 // 分母
+	GasPriceDenominator      uint64 = 10000               // 分母
 	InitialGasPriceNumerator uint64 = GasPriceDenominator // 分子
 	GasPriceFloorNumerator   uint64 = 1
 	GasPriceDecayInterval    uint64 = 100000 // in blocks
@@ -50,8 +45,19 @@ const (
 	GasPriceDecayDenominator uint64 = 100
 )
 
-func GasAssetNameAtHeight(net wire.BitcoinNet, height int64) string {
-	return GasAssetNameForNet(net)
+var _net wire.BitcoinNet = wire.TestNet
+
+func SetNetworkParam(net wire.BitcoinNet) {
+	_net = net
+}
+
+func GetGasAssetName() string {
+	switch _net {
+	case wire.MainNet:
+		return MainnetGasAssetName
+	default:
+		return TestnetGasAssetName
+	}
 }
 
 func GasAssetNameForNet(net wire.BitcoinNet) string {
@@ -62,7 +68,6 @@ func GasAssetNameForNet(net wire.BitcoinNet) string {
 		return TestnetGasAssetName
 	}
 }
-
 
 func GasFeeAtHeight(gas, height uint64) (uint64, error) {
 	fee, err := GasFeeDecimalAtHeight(gas, height)

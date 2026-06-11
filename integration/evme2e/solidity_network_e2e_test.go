@@ -122,7 +122,7 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 		erc20DeployCode,
 		[]wire.OutPoint{counterChanges[0]},
 		wire.TxOut{Assets: wire.TxAssets{networkGasFunding(t, gasAsset,
-			5000000-int64(evm.DefaultGasConfig().DeployBaseGas))}},
+			5000000-networkGasFeeAmount(t, evm.DefaultGasConfig().DeployBaseGas))}},
 		nil)
 	sendAndMineTx(t, bootstrapNode, nodes, erc20Deploy, 3)
 
@@ -373,7 +373,7 @@ func buildSolidityDeployTx(t *testing.T, signer *btcec.PrivateKey, nonce uint64,
 	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
 		ContractPrefix: evm.TestnetContractPrefix,
 		Caller:         caller,
-		GasLimit:       8000000,
+		GasLimit:       networkEVMDeployGasLimit(),
 		DeployNonce:    nonce,
 		InitCode:       initCode,
 		Funding:        funding,
@@ -394,7 +394,7 @@ func buildSolidityInvokeTx(t *testing.T, signer *btcec.PrivateKey, contract evm.
 		[]wire.OutPoint{input},
 		wire.TxOut{Assets: wire.TxAssets{{
 			Name:   *wire.NewAssetNameFromString(gasAsset),
-			Amount: *indexercommon.NewDefaultDecimal(gasAmount - int64(evm.DefaultGasConfig().InvokeBaseGas)),
+			Amount: *indexercommon.NewDefaultDecimal(gasAmount - networkGasFeeAmount(t, evm.DefaultGasConfig().InvokeBaseGas)),
 		}}},
 		nil)
 }
@@ -406,7 +406,7 @@ func buildSolidityInvokeTxWithFunding(t *testing.T, signer *btcec.PrivateKey, co
 	t.Helper()
 	tx, err := evm.BuildInvokeTx(evm.InvokeTxBuildRequest{
 		Contract:      contract,
-		GasLimit:      5000000,
+		GasLimit:      networkEVMInvokeGasLimit(),
 		CallNonce:     nonce,
 		Calldata:      calldata,
 		Funding:       funding,

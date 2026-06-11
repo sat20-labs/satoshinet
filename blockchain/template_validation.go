@@ -71,7 +71,7 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 		return templateBlockRuleError("load template runtime: %v", err)
 	}
 	gasConfig := v.cfg.GasConfig
-	gasConfig.GasAssetName = contractGasAssetNameAtHeight(v.cfg.ChainParams, int64(block.Height()))
+	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
 	blockTxs := make([]*wire.MsgTx, 0, len(txs)-1)
 	resultTxs := make([]*wire.MsgTx, 0)
 	for _, tx := range txs[1:] {

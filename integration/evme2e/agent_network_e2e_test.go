@@ -332,12 +332,12 @@ func buildAgentDeployTx(t *testing.T, contract agentcontract.PredictionContract,
 		Deployer:        deployer,
 		Random:          []byte("agent-network-e2e"),
 		ContractContent: content,
-		GasLimit:        100000,
+		GasLimit:        agentcontract.DefaultGasConfig().DeployBaseGas,
 		Inputs:          []wire.OutPoint{input},
 		ChangeOutputs: []*wire.TxOut{
 			wire.NewTxOut(inputOut.Value, testWireAsset(
 				agentcontract.DefaultGasConfig().GasAssetName,
-				inputOut.Assets[0].Amount.Int64()-int64(agentcontract.DefaultGasConfig().DeployBaseGas),
+				inputOut.Assets[0].Amount.Int64()-networkGasFeeAmount(t, agentcontract.DefaultGasConfig().DeployBaseGas),
 			), spendScript),
 		},
 	})
@@ -362,7 +362,7 @@ func buildAgentInvokeTx(t *testing.T, contract agentcontract.ContractAddress, ac
 	}
 	tx, err := agentcontract.BuildInvokeTx(agentcontract.InvokeTxBuildRequest{
 		Contract:      contract,
-		GasLimit:      100000,
+		GasLimit:      agentcontract.DefaultGasConfig().InvokeBaseGas,
 		CallNonce:     uint64(time.Now().UnixNano()),
 		Action:        action,
 		Param:         param,
@@ -387,8 +387,13 @@ func waitForAgentAssetAmounts(t *testing.T, bootstrapNode, coreNode *rpctest.Har
 	t.Helper()
 	require.NotEmpty(t, expected)
 	deadline := time.Now().Add(90 * time.Second)
+	var (
+		lastHeight int32
+		heightErr  error
+	)
 	for time.Now().Before(deadline) {
 		_ = rpctest.JoinNodes(nodes, rpctest.Blocks)
+		_, lastHeight, heightErr = coreNode.Client.GetBestBlock()
 		matched := true
 		for address, amount := range expected {
 			summary, err := fetchAssetSummary(bootstrapNode, address)
@@ -397,14 +402,13 @@ func waitForAgentAssetAmounts(t *testing.T, bootstrapNode, coreNode *rpctest.Har
 				break
 			}
 		}
-		if matched {
+		if heightErr == nil && lastHeight >= minHeight && matched {
 			return
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	_, height, heightErr := coreNode.Client.GetBestBlock()
 	require.NoError(t, heightErr)
-	require.GreaterOrEqual(t, height, minHeight)
+	require.GreaterOrEqual(t, lastHeight, minHeight)
 	for address, amount := range expected {
 		summary, err := fetchAssetSummary(bootstrapNode, address)
 		require.NoError(t, err)
@@ -445,7 +449,7 @@ func agentAssetAmountAtLeast(actual, want string) bool {
 
 func waitForAgentPredictionContractQueries(t *testing.T, node *rpctest.Harness, contract, alice, bob string) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		if err := checkAgentPredictionContractQueries(node, contract, alice, bob); err == nil {

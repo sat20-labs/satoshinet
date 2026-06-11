@@ -1389,7 +1389,7 @@ func buildTemplateDeployTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 		Contract:       contract,
 		Deployer:       deployer,
 		Random:         random,
-		GasLimit:       300000,
+		GasLimit:       networkTemplateDeployGasLimit(),
 		Funding:        funding,
 		Inputs:         inputs,
 	})
@@ -1445,7 +1445,7 @@ func buildTemplateInvokeTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 	t.Helper()
 	tx, err := tmplcontract.BuildInvokeTx(tmplcontract.InvokeTxBuildRequest{
 		Contract:  contract,
-		GasLimit:  100000,
+		GasLimit:  networkTemplateInvokeGasLimit(),
 		CallNonce: nonce,
 		Action:    action,
 		Param:     param,
@@ -1464,7 +1464,7 @@ func buildTemplateWitnessEVMDeployTx(t *testing.T, fixture *templateNetworkFixtu
 	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
 		ContractPrefix: evm.TestnetContractPrefix,
 		Caller:         evmAddressFromAddressString(fixture.spendAddress),
-		GasLimit:       8000000,
+		GasLimit:       networkEVMDeployGasLimit(),
 		DeployNonce:    nonce,
 		InitCode:       initCode,
 		Funding:        funding,
@@ -1483,7 +1483,7 @@ func buildTemplateWitnessEVMInvokeTx(t *testing.T, fixture *templateNetworkFixtu
 	t.Helper()
 	tx, err := evm.BuildInvokeTx(evm.InvokeTxBuildRequest{
 		Contract:  contract,
-		GasLimit:  5000000,
+		GasLimit:  networkEVMInvokeGasLimit(),
 		CallNonce: nonce,
 		Calldata:  calldata,
 		Funding:   funding,
@@ -1586,6 +1586,37 @@ func networkEVMGasFunding(t *testing.T, assetName string, amount int64) wire.Ass
 		Name:   *wire.NewAssetNameFromString(assetName),
 		Amount: *indexercommon.NewDefaultDecimal(amount),
 	}
+}
+
+func networkTemplateDeployGasLimit() uint64 {
+	return tmplcontract.DefaultGasConfig().DeployBaseGas
+}
+
+func networkTemplateInvokeGasLimit() uint64 {
+	return tmplcontract.DefaultGasConfig().InvokeBaseGas
+}
+
+func networkEVMDeployGasLimit() uint64 {
+	return maxNetworkGasLimit(evm.DefaultGasConfig().DeployBaseGas, 8_000_000)
+}
+
+func networkEVMInvokeGasLimit() uint64 {
+	return maxNetworkGasLimit(evm.DefaultGasConfig().InvokeBaseGas, 5_000_000)
+}
+
+func maxNetworkGasLimit(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func networkGasFeeAmount(t *testing.T, gas uint64) int64 {
+	t.Helper()
+	amount, err := contractcommon.GasFeeAtHeight(gas, 0)
+	require.NoError(t, err)
+	require.LessOrEqual(t, amount, uint64(1<<63-1))
+	return int64(amount)
 }
 
 func requireTemplateResultBeforeEVMResult(t *testing.T, block *wire.MsgBlock) {

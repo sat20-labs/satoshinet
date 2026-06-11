@@ -219,7 +219,7 @@ func TestBlockExecutorLimitOrderCloseRefundsOwnersAndSplitsProfit(t *testing.T) 
 func TestBlockExecutorDefaultInvokeLimitOrderNoPriceNoOp(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
-	defaultTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(DefaultGasConfig().GasAssetName, int64(DefaultGasConfig().InvokeBaseGas)))
+	defaultTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(DefaultGasConfig().GasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)))
 
 	store := NewRuntimeStore()
 	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, defaultTx}, Store: store})
@@ -238,8 +238,8 @@ func TestBlockExecutorDefaultInvokeLimitOrderBuyAtMarketPrice(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	gasAssetName := DefaultGasConfig().GasAssetName
-	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, int64(DefaultGasConfig().InvokeBaseGas), "ordx:f:test", 10))
-	defaultBuyTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(gasAssetName, int64(DefaultGasConfig().InvokeBaseGas)))
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas), "ordx:f:test", 10))
+	defaultBuyTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)))
 
 	store := NewRuntimeStore()
 	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, sellTx, defaultBuyTx}, Store: store, BlockHeight: 100})
@@ -263,7 +263,7 @@ func TestContractUTXOProviderWithTxOutputsIncludesDefaultInvoke(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	_, addr := testTemplateDeployTx(t, contract)
 	gasAssetName := DefaultGasConfig().GasAssetName
-	defaultTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(gasAssetName, int64(DefaultGasConfig().InvokeBaseGas)))
+	defaultTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)))
 
 	provider := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{defaultTx}, TestnetContractPrefix)
 	utxos, err := provider(addr)
@@ -274,7 +274,7 @@ func TestContractUTXOProviderWithTxOutputsIncludesDefaultInvoke(t *testing.T) {
 	require.Equal(t, int64(20), utxos[0].Value)
 	asset, err := utxos[0].Assets.Find(wire.NewAssetNameFromString(gasAssetName))
 	require.NoError(t, err)
-	require.Equal(t, testAsset(gasAssetName, int64(DefaultGasConfig().InvokeBaseGas))[0].Amount.String(), asset.Amount.String())
+	require.Equal(t, testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))[0].Amount.String(), asset.Amount.String())
 }
 
 func TestBlockExecutorRejectsInvokeBeforeDeploy(t *testing.T) {
@@ -408,6 +408,14 @@ func testTemplateDefaultInvokeTx(t *testing.T, contract ContractAddress, value i
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(value, assets, testTemplateContractScript(contract)))
 	return tx
+}
+
+func testTemplateGasFeeAmount(t *testing.T, gas uint64) int64 {
+	t.Helper()
+	fee, err := contractcommon.GasFeeAtHeight(gas, 0)
+	require.NoError(t, err)
+	require.LessOrEqual(t, fee, uint64(1<<63-1))
+	return int64(fee)
 }
 
 func testTemplateRefundInvokeTx(t *testing.T, contract ContractAddress, itemID int64) *wire.MsgTx {

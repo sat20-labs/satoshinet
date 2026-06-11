@@ -9,7 +9,7 @@ import (
 )
 
 func TestSelectFundingUTXOsCombinesAssetAndValue(t *testing.T) {
-	gasName := *wire.NewAssetNameFromString(GasAssetName)
+	gasName := *wire.NewAssetNameFromString(GasAssetNameForNet(wire.TestNet))
 	changeScript := []byte{0x51, 0x20, 0x01}
 	utxos := []FundingUTXO{
 		testFundingUTXO(1, 0, 5, nil, changeScript),
@@ -48,7 +48,7 @@ func TestSelectFundingUTXOsCombinesAssetAndValue(t *testing.T) {
 }
 
 func TestSelectFundingUTXOsFiltersScriptAndSpendable(t *testing.T) {
-	gasName := *wire.NewAssetNameFromString(GasAssetName)
+	gasName := *wire.NewAssetNameFromString(GasAssetNameForNet(wire.TestNet))
 	changeScript := []byte{0x51, 0x20, 0x01}
 	wrongScript := []byte{0x51, 0x20, 0x02}
 	utxos := []FundingUTXO{
