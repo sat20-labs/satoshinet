@@ -184,7 +184,7 @@ type AgentPredictionUserStatus struct {
 }
 
 func (q QueryService) SupportedContracts() []string {
-	return []string{"evm", "agent:prediction", tmplcontract.TemplateLimitOrder, tmplcontract.TemplateAMM}
+	return []string{"evm", "agent:prediction", tmplcontract.TemplateLimitOrder, tmplcontract.TemplateAMM, tmplcontract.TemplateExchange}
 }
 
 func (q QueryService) DeployedContracts(start, limit int) ([]string, int) {
