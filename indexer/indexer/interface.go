@@ -1,12 +1,15 @@
 package indexer
 
 import (
+	"fmt"
+
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
 )
 
 // interface for RPC
@@ -165,6 +168,25 @@ func (b *IndexerMgr) GetDescendData(nullDataUtxo string) *common.DescendData {
 
 func (b *IndexerMgr) GetChannelLedger(channel string) []*common.ChannelLedgerEntry {
 	return b.rpcService.GetChannelLedger(channel)
+}
+
+func (b *IndexerMgr) GetChannelStateEvents(channel string) []*common.ChannelStateEvent {
+	return b.rpcService.GetChannelStateEvents(channel)
+}
+
+func (b *IndexerMgr) RecordChannelStateEvent(event *common.ChannelStateEvent) error {
+	if b.IsMainnet() {
+		return fmt.Errorf("channel state event report is disabled on mainnet")
+	}
+	if err := b.compiling.RecordChannelStateEvent(event); err != nil {
+		return err
+	}
+	newService := base_indexer.NewRpcIndexer(b.compiling)
+	newService.UpdateServiceInstance()
+	b.mutex.Lock()
+	b.rpcService = newService
+	b.mutex.Unlock()
+	return nil
 }
 
 func (b *IndexerMgr) GetReferrer(address string) (*common.ReferrerInfo, error) {

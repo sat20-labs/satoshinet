@@ -55,20 +55,22 @@ type ReferrerInfo struct {
 }
 
 type UTXOIndex struct {
-	Index            map[string]*Output
-	AscendMap        map[string]*AscendData
-	DescendMap       map[string]*DescendData
-	ChannelLedgerMap map[string]*ChannelLedgerEntry
-	ReferrerMap      map[string]*ReferrerInfo // 被推荐人地址-》推荐人名字
+	Index                map[string]*Output
+	AscendMap            map[string]*AscendData
+	DescendMap           map[string]*DescendData
+	ChannelLedgerMap     map[string]*ChannelLedgerEntry
+	ChannelStateEventMap map[string]*ChannelStateEvent
+	ReferrerMap          map[string]*ReferrerInfo // 被推荐人地址-》推荐人名字
 }
 
 func NewUTXOIndex() *UTXOIndex {
 	return &UTXOIndex{
-		Index:            make(map[string]*Output),
-		AscendMap:        make(map[string]*AscendData),
-		DescendMap:       make(map[string]*DescendData),
-		ChannelLedgerMap: make(map[string]*ChannelLedgerEntry),
-		ReferrerMap:      make(map[string]*ReferrerInfo),
+		Index:                make(map[string]*Output),
+		AscendMap:            make(map[string]*AscendData),
+		DescendMap:           make(map[string]*DescendData),
+		ChannelLedgerMap:     make(map[string]*ChannelLedgerEntry),
+		ChannelStateEventMap: make(map[string]*ChannelStateEvent),
+		ReferrerMap:          make(map[string]*ReferrerInfo),
 	}
 }
 

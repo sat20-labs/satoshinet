@@ -39,6 +39,8 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/ascend/:utxo", s.handle.getAscendData)
 	r.GET(proxy+"/v3/descend/:utxo", s.handle.getDescendData)
 	r.GET(proxy+"/v3/channel/ledger/:channel", s.handle.getChannelLedger)
+	r.GET(proxy+"/v3/channel/state/:channel", s.handle.getChannelStateEvents)
+	r.POST(proxy+"/v3/channel/state", s.handle.recordChannelStateEvent)
 	r.GET(proxy+"/v3/referrer/:address", s.handle.getReferrer)
 	r.GET(proxy+"/v3/referree/:name", s.handle.getReferree)
 	r.GET(proxy+"/v3/corenode/all", s.handle.getAllCoreNode)

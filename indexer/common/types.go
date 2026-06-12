@@ -129,6 +129,33 @@ type ChannelLedgerEntry struct {
 	Legacy                 bool          `json:"legacy"`
 }
 
+const (
+	CHANNEL_EVENT_LATEST_FORCE_CLOSE             = "latest_force_close"
+	CHANNEL_EVENT_REVOKED_COMMITMENT_BROADCASTED = "revoked_commitment_broadcasted"
+	CHANNEL_EVENT_UNKNOWN_CHANNEL_SPEND          = "unknown_channel_spend"
+
+	CHANNEL_EVENT_STATUS_OBSERVED      = "observed"
+	CHANNEL_EVENT_STATUS_PUNISHED      = "punished"
+	CHANNEL_EVENT_STATUS_EXPIRED       = "expired"
+	CHANNEL_EVENT_STATUS_MANUAL_REVIEW = "manual_review"
+)
+
+type ChannelStateEvent struct {
+	ChannelId            string   `json:"channel"`
+	ChannelPoint         string   `json:"channelPoint,omitempty"`
+	EventType            string   `json:"eventType"`
+	Status               string   `json:"status"`
+	ObservedL1TxId       string   `json:"observedL1TxId"`
+	ObservedL1Height     int      `json:"observedL1Height,omitempty"`
+	ObservedCommitHeight int      `json:"observedCommitHeight,omitempty"`
+	CurrentCommitHeight  int      `json:"currentCommitHeight,omitempty"`
+	L2Height             int      `json:"l2Height,omitempty"`
+	Source               string   `json:"source,omitempty"`
+	PunishTxIds          []string `json:"punishTxIds,omitempty"`
+	Message              string   `json:"message,omitempty"`
+	CreatedAt            int64    `json:"createdAt"`
+}
+
 func DescendOperationName(operation uint8) string {
 	switch operation {
 	case DESCEND_OP_SPLICING_OUT:

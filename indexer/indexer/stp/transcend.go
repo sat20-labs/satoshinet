@@ -20,6 +20,7 @@ const (
 	DB_KEY_TICKER_HOLDER  = "th-"
 	DB_KEY_CHANNEL        = "c-" // c-address
 	DB_KEY_CHANNEL_LEDGER = "cl-"
+	DB_KEY_CHANNEL_STATE  = "cs-"
 	DB_KEY_CORENODES      = "cns-all"
 )
 
@@ -58,6 +59,15 @@ func GetChannelLedgerDBPrefix(channel string) []byte {
 func GetChannelLedgerDBKey(entry *common.ChannelLedgerEntry) []byte {
 	return []byte(fmt.Sprintf("%s%s-%09d-%s-%s", DB_KEY_CHANNEL_LEDGER, entry.ChannelId,
 		entry.L2Height, entry.Direction, entry.L2TxId))
+}
+
+func GetChannelStateEventDBPrefix(channel string) []byte {
+	return []byte(DB_KEY_CHANNEL_STATE + channel + "-")
+}
+
+func GetChannelStateEventDBKey(event *common.ChannelStateEvent) []byte {
+	return []byte(fmt.Sprintf("%s%s-%09d-%s-%s", DB_KEY_CHANNEL_STATE, event.ChannelId,
+		event.L2Height, event.EventType, event.ObservedL1TxId))
 }
 
 func GetAllCoreNodeDBKey() []byte {
@@ -314,6 +324,20 @@ func GetChannelLedgerFromDB(ldb indexer.KVDB, channel string) ([]*common.Channel
 			return err
 		}
 		result = append(result, &entry)
+		return nil
+	})
+	return result, err
+}
+
+func GetChannelStateEventsFromDB(ldb indexer.KVDB, channel string) ([]*common.ChannelStateEvent, error) {
+	result := make([]*common.ChannelStateEvent, 0)
+	err := ldb.BatchRead(GetChannelStateEventDBPrefix(channel), false, func(k, v []byte) error {
+		var event common.ChannelStateEvent
+		err := db.DecodeBytes(v, &event)
+		if err != nil {
+			return err
+		}
+		result = append(result, &event)
 		return nil
 	})
 	return result, err

@@ -28,6 +28,16 @@ type ChannelLedgerResp struct {
 	Data []*common.ChannelLedgerEntry `json:"data"`
 }
 
+type ChannelStateEventReq struct {
+	ConfirmUnsafeTestOnly bool                      `json:"confirm_unsafe_test_only"`
+	Data                  *common.ChannelStateEvent `json:"data"`
+}
+
+type ChannelStateEventResp struct {
+	indexerwire.BaseResp
+	Data []*common.ChannelStateEvent `json:"data,omitempty"`
+}
+
 type ReferrerResp struct {
 	indexerwire.BaseResp
 	Data *common.ReferrerInfo `json:"referrer"`

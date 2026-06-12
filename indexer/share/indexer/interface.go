@@ -44,6 +44,8 @@ type Indexer interface {
 	GetAscendData(fundingUtxo string) *common.AscendData
 	GetDescendData(nullDataUtxo string) *common.DescendData
 	GetChannelLedger(channel string) []*common.ChannelLedgerEntry
+	GetChannelStateEvents(channel string) []*common.ChannelStateEvent
+	RecordChannelStateEvent(event *common.ChannelStateEvent) error
 	GetReferrer(address string) (*common.ReferrerInfo, error)
 	GetReferree(name string) map[string]int
 	GetAllCoreNode() map[string]*common.CoreNodeInfo

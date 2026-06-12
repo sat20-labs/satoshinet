@@ -263,6 +263,18 @@ func (s *Model) GetChannelLedger(channel string) ([]*common.ChannelLedgerEntry, 
 	return data, nil
 }
 
+func (s *Model) GetChannelStateEvents(channel string) ([]*common.ChannelStateEvent, error) {
+	data := s.indexer.GetChannelStateEvents(channel)
+	if data == nil {
+		data = []*common.ChannelStateEvent{}
+	}
+	return data, nil
+}
+
+func (s *Model) RecordChannelStateEvent(event *common.ChannelStateEvent) error {
+	return s.indexer.RecordChannelStateEvent(event)
+}
+
 func (s *Model) GetReferrer(address string) (*common.ReferrerInfo, error) {
 	return s.indexer.GetReferrer(address)
 }

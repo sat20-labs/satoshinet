@@ -359,6 +359,65 @@ func (s *Handle) getChannelLedger(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (s *Handle) getChannelStateEvents(c *gin.Context) {
+	resp := &localwire.ChannelStateEventResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: nil,
+	}
+
+	channel := c.Param("channel")
+	result, err := s.model.GetChannelStateEvents(channel)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	resp.Data = result
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) recordChannelStateEvent(c *gin.Context) {
+	resp := &localwire.ChannelStateEventResp{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+	}
+
+	var req localwire.ChannelStateEventReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if !req.ConfirmUnsafeTestOnly {
+		resp.Code = -1
+		resp.Msg = "confirm_unsafe_test_only is required"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if req.Data == nil {
+		resp.Code = -1
+		resp.Msg = "data is required"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if err := s.model.RecordChannelStateEvent(req.Data); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = []*common.ChannelStateEvent{req.Data}
+	c.JSON(http.StatusOK, resp)
+}
+
 func (s *Handle) getReferrer(c *gin.Context) {
 	resp := &localwire.ReferrerResp{
 		BaseResp: indexerwire.BaseResp{

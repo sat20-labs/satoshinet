@@ -150,6 +150,9 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 	for key, value := range b.utxoIndex.ChannelLedgerMap {
 		newInst.utxoIndex.ChannelLedgerMap[key] = value
 	}
+	for key, value := range b.utxoIndex.ChannelStateEventMap {
+		newInst.utxoIndex.ChannelStateEventMap[key] = value
+	}
 	for key, value := range b.utxoIndex.ReferrerMap {
 		newInst.utxoIndex.ReferrerMap[key] = &common.ReferrerInfo{
 			Name:      value.Name,
@@ -487,6 +490,14 @@ func (b *BaseIndexer) UpdateDB() {
 	for _, entry := range b.utxoIndex.ChannelLedgerMap {
 		key := stp.GetChannelLedgerDBKey(entry)
 		err := db.SetDB([]byte(key), entry, wb)
+		if err != nil {
+			common.Log.Panicf("Error setting in db %v", err)
+		}
+	}
+
+	for _, event := range b.utxoIndex.ChannelStateEventMap {
+		key := stp.GetChannelStateEventDBKey(event)
+		err := db.SetDB([]byte(key), event, wb)
 		if err != nil {
 			common.Log.Panicf("Error setting in db %v", err)
 		}
