@@ -132,6 +132,9 @@ func (b *BaseIndexer) reset() {
 // 只保存UpdateDB需要用的数据
 func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 	startTime := time.Now()
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+
 	newInst := NewBaseIndexer(b.db, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 
 	newInst.utxoIndex = common.NewUTXOIndex()
@@ -219,6 +222,9 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 
 // 在 UpdateDB 用到的数据，这里需要先剪去，这些剪去的数据，当作已经备份到数据库
 func (b *BaseIndexer) Subtract(another *BaseIndexer) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
 	// 将已经备份到数据库的数据删除，防止内存中数据增长过快
 	for key := range another.utxoIndex.Index {
 		delete(b.utxoIndex.Index, key)
@@ -661,27 +667,32 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 		return b.handleReorg(block)
 	}
 
-	//localStartTime := time.Now()
-	b.prefetchIndexesFromDB(block)
-	//common.Log.Infof("BaseIndexer.syncBlock-> prefetchIndexesFromDB: cost: %v", time.Since(localStartTime))
-	//localStartTime = time.Now()
-	b.processBlock(block)
-	//common.Log.Infof("BaseIndexer.syncBlock-> assignOrdinals: cost: %v", time.Since(localStartTime))
+	func() {
+		b.mutex.Lock()
+		defer b.mutex.Unlock()
 
-	// Update the sync stats
-	b.stats.ChainTip = tip
-	b.miningAddress = b.seqMgr.GetCurrentMiningAddr() //getMiningAddress(block)
-	b.seqMgr.MoveMiningAddr(block.Height, b.miningAddress)
-	b.lastHeight = block.Height
-	b.lastHash = block.Hash
-	b.prevBlockHashMap[b.lastHeight] = b.lastHash
-	if len(b.prevBlockHashMap) > b.keepBlockHistory {
-		delete(b.prevBlockHashMap, b.lastHeight-b.keepBlockHistory)
-	}
+		// localStartTime := time.Now()
+		b.prefetchIndexesFromDB(block)
+		// common.Log.Infof("BaseIndexer.syncBlock-> prefetchIndexesFromDB: cost: %v", time.Since(localStartTime))
+		// localStartTime = time.Now()
+		b.processBlock(block)
+		// common.Log.Infof("BaseIndexer.syncBlock-> assignOrdinals: cost: %v", time.Since(localStartTime))
 
-	//localStartTime = time.Now()
+		// Update the sync stats
+		b.stats.ChainTip = tip
+		b.miningAddress = b.seqMgr.GetCurrentMiningAddr() //getMiningAddress(block)
+		b.seqMgr.MoveMiningAddr(block.Height, b.miningAddress)
+		b.lastHeight = block.Height
+		b.lastHash = block.Hash
+		b.prevBlockHashMap[b.lastHeight] = b.lastHash
+		if len(b.prevBlockHashMap) > b.keepBlockHistory {
+			delete(b.prevBlockHashMap, b.lastHeight-b.keepBlockHistory)
+		}
+	}()
+
+	// localStartTime = time.Now()
 	b.blockprocCB(block)
-	//common.Log.Infof("BaseIndexer.syncBlock-> blockproc: cost: %v", time.Since(localStartTime))
+	// common.Log.Infof("BaseIndexer.syncBlock-> blockproc: cost: %v", time.Since(localStartTime))
 
 	if updateDB {
 		if (block.Height%b.periodFlushToDB == 0 && tip-block.Height > b.keepBlockHistory) ||
@@ -817,7 +828,6 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 			coreNode := common.NewCoreNodeInfo(ascend)
 			coreNodeKey = hex.EncodeToString(ascend.PubB)
 
-			b.mutex.Lock()
 			b.coreNodeMap[coreNodeKey] = coreNode
 			serverNodeKey := hex.EncodeToString(ascend.PubA)
 			serverNode := b.coreNodeMap[serverNodeKey]
@@ -827,11 +837,9 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 			}
 			b.seqMgr.AddNode(coreNodeKey, serverNodeKey, ascend.Height)
 			b.coreNodeMapUpdated = true
-			b.mutex.Unlock()
 
 			common.Log.Infof("add core node %s at height %d", coreNodeKey, ascend.Height)
 		} else {
-			b.mutex.Lock()
 			coreNodeKey := hex.EncodeToString(ascend.PubA)
 			coreNode, ok := b.coreNodeMap[coreNodeKey]
 			if ok && b.HasMinerEligibility(ascend.Height, ascend.Assets) {
@@ -843,10 +851,8 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 					AscendUtxo:   ascend.FundingUtxo,
 				}
 				b.seqMgr.AddNode(childKey, coreNodeKey, ascend.Height)
-				b.mutex.Unlock()
 				common.Log.Infof("add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
 			} else {
-				b.mutex.Unlock()
 				// 无效的脚本
 				common.Log.Infof("not miner staking tx %s, utxo: %s, %v", ascend.AnchorTxId, ascend.FundingUtxo, ascend.Assets)
 			}
@@ -879,9 +885,6 @@ func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) 
 
 	nodeKey := hex.EncodeToString(channelInfo.PubB)
 	parentKey := hex.EncodeToString(channelInfo.PubA)
-
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
 
 	if coreNode, ok := b.coreNodeMap[nodeKey]; ok {
 		// 如果是core node
@@ -1723,22 +1726,33 @@ func (b *BaseIndexer) GetBaseDB() indexer.KVDB {
 }
 
 func (b *BaseIndexer) GetSyncHeight() int {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
 	return b.stats.SyncHeight
 }
 
 func (b *BaseIndexer) GetSyncBase() *SyncBase {
-	return &b.stats.SyncBase
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	syncBase := b.stats.SyncBase
+	return &syncBase
 }
 
 func (b *BaseIndexer) SetSyncBase(sync *SyncBase) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
 	b.stats.SyncBase = *sync
 }
 
 func (b *BaseIndexer) GetHeight() int {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
 	return b.lastHeight
 }
 
 func (b *BaseIndexer) GetChainTip() int {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
 	return b.stats.ChainTip
 }
 

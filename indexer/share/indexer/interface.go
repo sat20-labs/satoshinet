@@ -16,6 +16,7 @@ type Indexer interface {
 	GetBaseDBVer() string
 	GetChainTip() int
 	GetSyncHeight() int
+	GetInternalSyncHeight() int
 	GetBlockInfo(int) (*common.BlockInfo, error)
 
 	// base indexer

@@ -2694,7 +2694,7 @@ func (s *server) Start() {
 					tip1 := indexerShare.ShareIndexer.GetChainTip()
 					tip2 := s.getTipFromSyncPeer()
 					tip := max(tip1, tip2)
-					height := indexerShare.ShareIndexer.GetSyncHeight()
+					height := indexerShare.ShareIndexer.GetInternalSyncHeight()
 					srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d",
 						height, tip, s.connManager.GetConnCount(), s.connManager.GetAcceptCount())
 					if height != tip {
@@ -2740,7 +2740,7 @@ func (s *server) Start() {
 				tip1 := indexerShare.ShareIndexer.GetChainTip()
 				tip2 := s.getTipFromSyncPeer()
 				tip := max(tip1, tip2)
-				height := indexerShare.ShareIndexer.GetSyncHeight()
+				height := indexerShare.ShareIndexer.GetInternalSyncHeight()
 				srvrLog.Infof("syncHeight %d tip %d", height, tip)
 				if height != tip {
 					time.Sleep(time.Second)
@@ -4290,7 +4290,7 @@ func evmContractUTXOProvider(assetIndexer *indexer.IndexerMgr) evm.ContractUTXOP
 	}
 	return func(contract evm.ContractAddress) ([]evm.UTXO, error) {
 		address := contract.MustEncode()
-		byAsset := assetIndexer.GetAssetUTXOsInAddress(address)
+		byAsset := assetIndexer.GetInternalAssetUTXOsInAddress(address)
 		utxos := make([]evm.UTXO, 0)
 		seen := make(map[string]struct{})
 		for _, outputs := range byAsset {
@@ -4351,7 +4351,7 @@ func templateContractUTXOProvider(assetIndexer *indexer.IndexerMgr) tmplcontract
 	}
 	return func(contract tmplcontract.ContractAddress) ([]tmplcontract.UTXO, error) {
 		address := contract.MustEncode()
-		byAsset := assetIndexer.GetAssetUTXOsInAddress(address)
+		byAsset := assetIndexer.GetInternalAssetUTXOsInAddress(address)
 		utxos := make([]tmplcontract.UTXO, 0)
 		seen := make(map[string]struct{})
 		for _, outputs := range byAsset {
@@ -4419,7 +4419,7 @@ func agentContractUTXOProvider(assetIndexer *indexer.IndexerMgr) agentcontract.C
 	}
 	return func(contract agentcontract.ContractAddress) ([]agentcontract.UTXO, error) {
 		address := contract.MustEncode()
-		byAsset := assetIndexer.GetAssetUTXOsInAddress(address)
+		byAsset := assetIndexer.GetInternalAssetUTXOsInAddress(address)
 		utxos := make([]agentcontract.UTXO, 0)
 		seen := make(map[string]struct{})
 		for _, outputs := range byAsset {
