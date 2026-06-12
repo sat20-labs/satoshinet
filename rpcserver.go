@@ -1005,7 +1005,9 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 		}
 		if runtime, ok := store.Get(contractAddr); ok {
 			state, err := runtime.RuntimeState()
-			return state, nil, err
+			return state, map[string]interface{}{
+				"contract": runtime.Contract(),
+			}, err
 		}
 		return nil, map[string]interface{}{"exists": false}, nil
 	case contractcommon.ContractTypeAgent:
