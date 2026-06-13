@@ -1,12 +1,13 @@
-package contract
+package engine
 
 import (
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	contractapi "github.com/sat20-labs/satoshinet/contract"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -177,7 +178,7 @@ func CheckBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {
 		return nil
 	}
 	coinbaseTx := block.Transactions()[0].MsgTx()
-	if _, _, err := FindCoinbaseStateRoot(coinbaseTx); err != nil {
+	if _, _, err := contractapi.FindCoinbaseStateRoot(coinbaseTx); err != nil {
 		return fmt.Errorf("block contains invalid contract state root in coinbase: %w", err)
 	}
 

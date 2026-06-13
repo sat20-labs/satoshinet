@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 

@@ -15,8 +15,9 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
-	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractapi "github.com/sat20-labs/satoshinet/contract"
+	evmcommon "github.com/sat20-labs/satoshinet/contract"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -339,7 +340,7 @@ func TestAddEVMResultsToTemplateCommitsRootAndFees(t *testing.T) {
 		feeAssets[0].Amount.Cmp(scommon.NewDefaultDecimal(40)) != 0 {
 		t.Fatalf("unexpected EVM fee assets: %v", feeAssets)
 	}
-	if err := contractengine.VerifyCoinbaseStateRoot(coinbaseTx.MsgTx(), stateRoot); err != nil {
+	if err := contractapi.VerifyCoinbaseStateRoot(coinbaseTx.MsgTx(), stateRoot); err != nil {
 		t.Fatal(err)
 	}
 }

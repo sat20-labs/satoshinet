@@ -6,7 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 )
 
 const AddressHashLen = 32

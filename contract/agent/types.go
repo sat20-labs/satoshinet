@@ -1,6 +1,6 @@
 package agent
 
-import contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+import contractcommon "github.com/sat20-labs/satoshinet/contract"
 
 const (
 	SubtypePrediction = "prediction"

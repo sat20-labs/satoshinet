@@ -7,7 +7,7 @@ import (
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/database"
 	_ "github.com/sat20-labs/satoshinet/database/ffldb"

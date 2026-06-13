@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"

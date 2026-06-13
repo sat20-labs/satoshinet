@@ -4,25 +4,24 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
 
 func TestValidateResultContractSpend(t *testing.T) {
-	contract, err := contractcommon.NewContractAddress(
-		contractcommon.TestnetContractPrefix,
-		contractcommon.AddressVersionV1,
-		contractcommon.ContractTypeAgent,
-		contractcommon.EVMAddress{1, 2, 3},
+	contract, err := NewContractAddress(
+		TestnetContractPrefix,
+		AddressVersionV1,
+		ContractTypeAgent,
+		EVMAddress{1, 2, 3},
 	)
 	require.NoError(t, err)
-	contractScript, err := contractcommon.ContractPkScript(contract)
+	contractScript, err := ContractPkScript(contract)
 	require.NoError(t, err)
 
 	prevOut := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
-	resultScript, err := contractcommon.ResultNullDataScript(contractcommon.ResultPayload{
-		Status:      contractcommon.ResultStatusSuccess,
+	resultScript, err := ResultNullDataScript(ResultPayload{
+		Status:      ResultStatusSuccess,
 		ResultCount: 1,
 	})
 	require.NoError(t, err)
@@ -32,9 +31,9 @@ func TestValidateResultContractSpend(t *testing.T) {
 
 	got, err := ValidateResultContractSpend(tx, map[wire.OutPoint][]byte{
 		prevOut: contractScript,
-	}, contractcommon.TestnetContractPrefix)
+	}, TestnetContractPrefix)
 	require.NoError(t, err)
-	require.Equal(t, contractcommon.ResultStatusSuccess, got.Payload.Status)
+	require.Equal(t, ResultStatusSuccess, got.Payload.Status)
 	require.Len(t, got.ContractInputs, 1)
 	require.Equal(t, contract, got.ContractInputs[0].Contract)
 	require.Len(t, got.Contracts, 1)
@@ -48,6 +47,6 @@ func TestValidateResultContractSpendRejectsNonResult(t *testing.T) {
 
 	_, err := ValidateResultContractSpend(tx, map[wire.OutPoint][]byte{
 		prevOut: []byte{0x51},
-	}, contractcommon.TestnetContractPrefix)
+	}, TestnetContractPrefix)
 	require.Error(t, err)
 }

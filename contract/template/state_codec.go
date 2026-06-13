@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 )
 
 type runtimeStoreSnapshot struct {

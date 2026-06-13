@@ -12,7 +12,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	contractengine "github.com/sat20-labs/satoshinet/contract"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )

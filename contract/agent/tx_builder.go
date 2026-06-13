@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 

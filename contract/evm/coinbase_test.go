@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )

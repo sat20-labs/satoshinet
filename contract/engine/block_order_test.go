@@ -1,12 +1,12 @@
-package contract
+package engine
 
 import (
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 )
 
 func TestClassifyAgentWorkAfterOtherContractParsersRejectPayload(t *testing.T) {

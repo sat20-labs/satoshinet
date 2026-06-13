@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 )
 
 type DeployPayload struct {

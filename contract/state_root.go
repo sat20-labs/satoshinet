@@ -1,4 +1,4 @@
-package common
+package contract
 
 import "crypto/sha256"
 

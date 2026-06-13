@@ -1,4 +1,4 @@
-package contract
+package engine
 
 import (
 	"encoding/hex"
@@ -10,8 +10,8 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -23,11 +23,6 @@ type ContractQueryStore interface {
 	GetContractSummaries(start, limit int) ([]ContractSummary, int)
 	GetContractSummary(address string) (ContractSummary, bool)
 	GetContractHistory(address string, start, limit int) ([]ContractHistoryRecord, int)
-}
-
-type TemplateContractQueryStore interface {
-	GetTemplateContract(address string) (*tmplcontract.ContractInfo, bool)
-	GetTemplateContractHistory(address string, start, limit int) ([]tmplcontract.HistoryRecord, int)
 }
 
 type QueryService struct {
@@ -128,12 +123,12 @@ func cloneInt64Map(in map[string]int64) map[string]int64 {
 }
 
 type TemplateContractUserStatus struct {
-	Address       string                    `json:"address"`
-	Contract      string                    `json:"contract"`
-	TotalItems    int                       `json:"totalItems"`
-	ActiveItems   int                       `json:"activeItems"`
-	FinishedItems int                       `json:"finishedItems"`
-	Items         []tmplcontract.InvokeItem `json:"items"`
+	Address       string                  `json:"address"`
+	Contract      string                  `json:"contract"`
+	TotalItems    int                     `json:"totalItems"`
+	ActiveItems   int                     `json:"activeItems"`
+	FinishedItems int                     `json:"finishedItems"`
+	History       []ContractHistoryRecord `json:"history,omitempty"`
 }
 
 type AgentPredictionAnalytics struct {
@@ -315,6 +310,7 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 	if err != nil || !view.IsContract {
 		return nil, nil, err
 	}
+	templateActor, templateFunding := templateIndexDetails(tx, prefix, params)
 	agentActor, agentFunding := agentIndexDetails(tx, prefix, params)
 	outputByType := make(map[byte]string)
 	outputValueByContract := make(map[string]int64)
@@ -328,9 +324,6 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 	summaries := make([]ContractSummary, 0)
 	history := make([]ContractHistoryRecord, 0)
 	for _, op := range view.Ops {
-		if op.ContractTypeID == contractcommon.ContractTypeTemplate {
-			continue
-		}
 		contract := op.Contract
 		if contract == "" {
 			contract = outputByType[op.ContractTypeID]
@@ -342,6 +335,14 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 		enrichDetailsFromPayload(details, op)
 		if value := outputValueByContract[contract]; value != 0 {
 			details["contract_value"] = value
+		}
+		if op.ContractTypeID == contractcommon.ContractTypeTemplate {
+			if templateActor != "" {
+				details["actor"] = templateActor
+			}
+			if len(templateFunding) != 0 {
+				details["funding_outputs"] = templateFunding
+			}
 		}
 		if op.ContractTypeID == contractcommon.ContractTypeAgent {
 			if agentActor != "" {
@@ -386,9 +387,6 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 		if output.Contract == "" {
 			continue
 		}
-		if output.ContractTypeID == contractcommon.ContractTypeTemplate {
-			continue
-		}
 		summaries = append(summaries, ContractSummary{
 			Address:        output.Contract,
 			ContractType:   output.ContractType,
@@ -397,6 +395,33 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 		})
 	}
 	return summaries, history, nil
+}
+
+func templateIndexDetails(tx *wire.MsgTx, prefix string, params *chaincfg.Params) (string, []map[string]interface{}) {
+	parsed, err := tmplcontract.ParseTx(tx, tmplcontract.StandardContractScriptResolver(prefix))
+	if err != nil || parsed.Type != tmplcontract.TxTypeInvoke {
+		return "", nil
+	}
+	actor := ""
+	if params != nil {
+		if resolved, err := tmplcontract.LastInputInvokerResolver(params)(tx, parsed); err == nil {
+			actor = resolved
+		}
+	}
+	funding := make([]map[string]interface{}, 0, len(parsed.ContractOutputs))
+	for _, output := range parsed.ContractOutputs {
+		item := map[string]interface{}{
+			"outpoint": output.OutPoint.String(),
+			"vout":     output.Vout,
+			"value":    output.Value,
+		}
+		if len(output.Assets) != 0 {
+			item["assets"] = output.Assets
+			item["asset_amounts"] = contractAssetAmounts(output.Assets)
+		}
+		funding = append(funding, item)
+	}
+	return actor, funding
 }
 
 func agentIndexDetails(tx *wire.MsgTx, prefix string, params *chaincfg.Params) (string, []map[string]interface{}) {
@@ -498,47 +523,29 @@ func enrichDetailsFromPayload(details map[string]interface{}, op TxOpView) {
 
 func (q QueryService) templateContract(address string) (*tmplcontract.ContractInfo, error) {
 	if q.store == nil {
-		return nil, fmt.Errorf("template contract store is not available")
-	}
-	if store, ok := q.store.(TemplateContractQueryStore); ok {
-		if contract, found := store.GetTemplateContract(address); found && contract != nil {
-			return contract, nil
-		}
+		return nil, fmt.Errorf("contract query store is not available")
 	}
 	summary, ok := q.store.GetContractSummary(address)
-	if !ok || summary.Details == nil {
+	if !ok || summary.ContractTypeID != contractcommon.ContractTypeTemplate {
 		return nil, fmt.Errorf("template contract %s not found", address)
 	}
-	var contract tmplcontract.ContractInfo
-	if !decodeDetail(summary.Details["template"], &contract) {
-		return nil, fmt.Errorf("template contract %s not found", address)
-	}
-	return &contract, nil
+	return &tmplcontract.ContractInfo{
+		Address:       summary.Address,
+		TemplateName:  firstNonEmpty(summary.Subtype, summary.Name),
+		Version:       summary.Version,
+		UpdatedHeight: summary.UpdatedHeight,
+	}, nil
 }
 
-func (q QueryService) templateHistory(address string, start, limit int) ([]tmplcontract.HistoryRecord, int, error) {
+func (q QueryService) templateHistory(address string, start, limit int) ([]ContractHistoryRecord, int, error) {
 	if q.store == nil {
 		return nil, 0, fmt.Errorf("contract query store is not available")
 	}
 	if _, err := q.templateContract(address); err != nil {
 		return nil, 0, err
 	}
-	if store, ok := q.store.(TemplateContractQueryStore); ok {
-		records, total := store.GetTemplateContractHistory(address, start, limit)
-		return records, total, nil
-	}
 	records, total := q.store.GetContractHistory(address, start, limit)
-	out := make([]tmplcontract.HistoryRecord, 0, len(records))
-	for _, record := range records {
-		if record.Details == nil {
-			continue
-		}
-		var templateRecord tmplcontract.HistoryRecord
-		if decodeDetail(record.Details["templateHistory"], &templateRecord) {
-			out = append(out, templateRecord)
-		}
-	}
-	return out, total, nil
+	return records, total, nil
 }
 
 func (q QueryService) agentPredictionAnalytics(contractAddress string) (*AgentPredictionAnalytics, error) {
@@ -712,40 +719,31 @@ func (q QueryService) agentPredictionHistory(contractAddress string, start, limi
 	return records, total, nil
 }
 
-func (q QueryService) templateHistoryByAddress(contractAddress, address string, start, limit int) ([]tmplcontract.HistoryRecord, int, error) {
-	contract, err := q.templateContract(contractAddress)
-	if err != nil {
-		return nil, 0, err
-	}
-	itemAddress := make(map[int64]string)
-	for _, item := range contract.RuntimeState.Items {
-		itemAddress[item.ID] = item.Address
-	}
+func (q QueryService) templateHistoryByAddress(contractAddress, address string, start, limit int) ([]ContractHistoryRecord, int, error) {
 	allHistory, _, err := q.templateHistory(contractAddress, 0, 0)
 	if err != nil {
 		return nil, 0, err
 	}
-	filtered := make([]tmplcontract.HistoryRecord, 0)
+	filtered := make([]ContractHistoryRecord, 0)
 	for _, record := range allHistory {
-		if templateRecordHasAddress(record, itemAddress, address) {
+		if templateRecordHasAddress(record, address) {
 			filtered = append(filtered, record)
 		}
 	}
 	total := len(filtered)
-	return paginateTemplateHistory(filtered, start, limit), total, nil
+	return paginateContractHistory(filtered, start, limit), total, nil
 }
 
 func (q QueryService) templateAllAddresses(contractAddress string, start, limit int) ([]string, int, error) {
-	contract, err := q.templateContract(contractAddress)
+	records, _, err := q.templateHistory(contractAddress, 0, 0)
 	if err != nil {
 		return nil, 0, err
 	}
 	seen := make(map[string]struct{})
-	for _, item := range contract.RuntimeState.Items {
-		if item.Address == "" {
-			continue
+	for _, record := range records {
+		if record.Actor != "" {
+			seen[record.Actor] = struct{}{}
 		}
-		seen[item.Address] = struct{}{}
 	}
 	addresses := make([]string, 0, len(seen))
 	for address := range seen {
@@ -774,20 +772,26 @@ func (q QueryService) templateAnalytics(contractAddress string) (*TemplateContra
 	if err != nil {
 		return nil, err
 	}
+	records, _, err := q.templateHistory(contractAddress, 0, 0)
+	if err != nil {
+		return nil, err
+	}
 	analytics := &TemplateContractAnalytics{
 		Address:        contract.Address,
 		TemplateName:   contract.TemplateName,
 		Version:        contract.Version,
 		UpdatedHeight:  contract.UpdatedHeight,
-		Running:        templateRunningDataJSON(contract.RuntimeState.Running),
 		StatusCount:    make(map[int]int),
 		OrderTypeCount: make(map[int]int),
 	}
-	for _, item := range contract.RuntimeState.Items {
+	for _, record := range records {
+		if record.Kind != "invoke" {
+			continue
+		}
 		analytics.TotalItems++
-		analytics.StatusCount[item.Done]++
-		analytics.OrderTypeCount[item.OrderType]++
-		if item.Finished() {
+		statusKey := templateStatusKey(record.Status)
+		analytics.StatusCount[statusKey]++
+		if statusKey > tmplcontract.ItemStatusInit {
 			analytics.FinishedItems++
 		} else {
 			analytics.ActiveItems++
@@ -797,22 +801,21 @@ func (q QueryService) templateAnalytics(contractAddress string) (*TemplateContra
 }
 
 func (q QueryService) templateUserStatus(contractAddress, address string) (*TemplateContractUserStatus, error) {
-	contract, err := q.templateContract(contractAddress)
+	records, _, err := q.templateHistoryByAddress(contractAddress, address, 0, 0)
 	if err != nil {
 		return nil, err
 	}
 	status := &TemplateContractUserStatus{
 		Address:  address,
 		Contract: contractAddress,
-		Items:    make([]tmplcontract.InvokeItem, 0),
+		History:  records,
 	}
-	for _, item := range contract.RuntimeState.Items {
-		if item.Address != address {
+	for _, record := range records {
+		if record.Kind != "invoke" {
 			continue
 		}
 		status.TotalItems++
-		status.Items = append(status.Items, item)
-		if item.Finished() {
+		if templateStatusKey(record.Status) > tmplcontract.ItemStatusInit {
 			status.FinishedItems++
 		} else {
 			status.ActiveItems++
@@ -821,15 +824,15 @@ func (q QueryService) templateUserStatus(contractAddress, address string) (*Temp
 	return status, nil
 }
 
-func (q QueryService) templateInvokeItemByInUtxo(contractAddress, inUtxo string) (*tmplcontract.InvokeItem, error) {
-	contract, err := q.templateContract(contractAddress)
+func (q QueryService) templateInvokeItemByInUtxo(contractAddress, inUtxo string) (*ContractHistoryRecord, error) {
+	records, _, err := q.templateHistory(contractAddress, 0, 0)
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range contract.RuntimeState.Items {
-		for _, raw := range strings.Split(item.InUtxos, ",") {
-			if strings.TrimSpace(raw) == inUtxo {
-				cloned := item
+	for _, record := range records {
+		for _, output := range fundingOutputsFromRecord(record) {
+			if output.OutPoint == inUtxo {
+				cloned := record
 				return &cloned, nil
 			}
 		}
@@ -837,45 +840,27 @@ func (q QueryService) templateInvokeItemByInUtxo(contractAddress, inUtxo string)
 	return nil, fmt.Errorf("invoke item with input utxo %s not found", inUtxo)
 }
 
-func templateRecordHasAddress(record tmplcontract.HistoryRecord, itemAddress map[int64]string, address string) bool {
-	for _, itemID := range record.ItemIDs {
-		if itemAddress[itemID] == address {
+func templateRecordHasAddress(record ContractHistoryRecord, address string) bool {
+	if record.Actor == address {
+		return true
+	}
+	for _, output := range fundingOutputsFromRecord(record) {
+		if output.Address == address {
 			return true
-		}
-	}
-	if record.Settlement != nil {
-		for _, transfer := range record.Settlement.Transfers {
-			if transfer.To == address {
-				return true
-			}
-		}
-	}
-	if record.Result != nil {
-		for _, output := range record.Result.Outputs {
-			if output.To == address {
-				return true
-			}
 		}
 	}
 	return false
 }
 
-func paginateTemplateHistory(history []tmplcontract.HistoryRecord, start, limit int) []tmplcontract.HistoryRecord {
-	total := len(history)
-	if start < 0 {
-		start = 0
+func templateStatusKey(status string) int {
+	switch status {
+	case "success":
+		return tmplcontract.ItemStatusDealt
+	case "revert", "out_of_gas", "invalid":
+		return tmplcontract.ItemStatusRefunded
+	default:
+		return tmplcontract.ItemStatusInit
 	}
-	if limit <= 0 {
-		limit = total
-	}
-	if start >= total {
-		return nil
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
-	return history[start:end]
 }
 
 func predictionFromSummary(summary ContractSummary) (*agentcontract.PredictionContract, bool) {
@@ -942,6 +927,8 @@ func predictionBetAmount(record ContractHistoryRecord, prediction *agentcontract
 }
 
 type agentFundingOutputView struct {
+	OutPoint     string            `json:"outpoint"`
+	Address      string            `json:"address,omitempty"`
 	AssetAmounts map[string]string `json:"asset_amounts"`
 }
 

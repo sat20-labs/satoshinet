@@ -15,8 +15,9 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractapi "github.com/sat20-labs/satoshinet/contract"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 
@@ -1041,7 +1042,7 @@ func (g *BlkTmplGenerator) addContractResultsToTemplate(blockTxns *[]*btcutil.Tx
 	}
 
 	coinbaseWeightBefore := blockchain.GetTransactionWeight(coinbaseTx)
-	if err := contractengine.UpsertCoinbaseStateRoot(coinbaseTx.MsgTx(), buildResult.StateRoot); err != nil {
+	if err := contractapi.UpsertCoinbaseStateRoot(coinbaseTx.MsgTx(), buildResult.StateRoot); err != nil {
 		return 0, 0, nil, nil, 0, nil, err
 	}
 	coinbaseTx.ClearHashCache()

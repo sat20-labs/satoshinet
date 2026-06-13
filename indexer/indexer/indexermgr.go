@@ -4,10 +4,9 @@ import (
 	"sync"
 	"time"
 
-	contractengine "github.com/sat20-labs/satoshinet/contract"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
+	contract_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/contract"
 
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 
@@ -60,16 +59,8 @@ type IndexerMgr struct {
 	bRunning  bool
 	interrupt <-chan struct{}
 
-	templateIndexMu         sync.RWMutex
-	templateRuntimeStore    *tmplcontract.RuntimeStore
-	templateContractIndex   map[string]*tmplcontract.ContractInfo
-	templateContractHistory map[string][]tmplcontract.HistoryRecord
-	templateContractBackup  *templateContractIndexBuffer
-
-	contractIndexMu sync.RWMutex
-	contractIndex   map[string]*contractengine.ContractSummary
-	contractHistory map[string][]contractengine.ContractHistoryRecord
-	contractBackup  *contractIndexBuffer
+	contractIndexer  *contract_indexer.Indexer
+	contractBackupDB *contract_indexer.Indexer
 }
 
 var instance *IndexerMgr
@@ -97,20 +88,15 @@ func NewIndexerMgr(
 	}
 
 	mgr := &IndexerMgr{
-		cfg:                     cfg,
-		dbDir:                   cfg.DataPath + "/db/indexer/" + chainParam.Name + "/",
-		chaincfgParam:           chainParam,
-		maxIndexHeight:          0,
-		periodFlushToDB:         30,
-		compilingBackupDB:       nil,
-		rpcService:              nil,
-		bRunning:                false,
-		interrupt:               interrupt,
-		templateRuntimeStore:    tmplcontract.NewRuntimeStore(),
-		templateContractIndex:   make(map[string]*tmplcontract.ContractInfo),
-		templateContractHistory: make(map[string][]tmplcontract.HistoryRecord),
-		contractIndex:           make(map[string]*contractengine.ContractSummary),
-		contractHistory:         make(map[string][]contractengine.ContractHistoryRecord),
+		cfg:               cfg,
+		dbDir:             cfg.DataPath + "/db/indexer/" + chainParam.Name + "/",
+		chaincfgParam:     chainParam,
+		maxIndexHeight:    0,
+		periodFlushToDB:   30,
+		compilingBackupDB: nil,
+		rpcService:        nil,
+		bRunning:          false,
+		interrupt:         interrupt,
 	}
 
 	instance = mgr
@@ -124,6 +110,7 @@ func (b *IndexerMgr) Init() {
 	}
 	b.compiling = base_indexer.NewBaseIndexer(b.baseDB, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 	b.compiling.Init()
+	b.contractIndexer = contract_indexer.NewIndexer(b.baseDB, b.chaincfgParam)
 	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
 	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
@@ -135,10 +122,9 @@ func (b *IndexerMgr) Init() {
 	}
 
 	b.rpcService = base_indexer.NewRpcIndexer(b.compiling)
-	b.loadContractIndex()
-	b.loadTemplateContractIndex()
 
 	b.compilingBackupDB = nil
+	b.contractBackupDB = nil
 
 	if b.lastCheckHeight == -1 {
 		b.ConnectBlock(b.chaincfgParam.GenesisBlock, 0, 0)
@@ -222,6 +208,9 @@ func (b *IndexerMgr) closeDB() {
 func (b *IndexerMgr) checkSelf() {
 	start := time.Now()
 	b.compiling.CheckSelf()
+	if b.contractIndexer != nil && !b.contractIndexer.CheckSelf() {
+		common.Log.Panicf("ContractIndexer.CheckSelf failed")
+	}
 
 	common.Log.Infof("IndexerMgr.checkSelf takes %v", time.Since(start))
 }
@@ -229,8 +218,9 @@ func (b *IndexerMgr) checkSelf() {
 func (b *IndexerMgr) forceUpdateDB() {
 	//startTime := time.Now()
 
-	b.prepareContractIndexBuffer(b.compiling.GetSyncHeight())
-	b.persistContractIndexBuffer()
+	if b.contractIndexer != nil {
+		b.contractIndexer.UpdateDB()
+	}
 	//common.Log.Infof("IndexerMgr.forceUpdateDB: takes: %v", time.Since(startTime))
 }
 
@@ -276,20 +266,30 @@ func (b *IndexerMgr) updateDB(height, tip int) {
 }
 
 func (b *IndexerMgr) performUpdateDBInBuffer() {
-	b.cleanDBBuffer() // must before UpdateDB
+	// The live compiling buffers must be trimmed before the backup writes to DB.
+	// Subtract keeps only post-backup deltas in memory while the backup commits
+	// the syncHeight view.
+	b.cleanDBBuffer()
 	b.compilingBackupDB.UpdateDB()
-	b.persistContractIndexBuffer()
+	if b.contractBackupDB != nil {
+		b.contractBackupDB.UpdateDB()
+	}
 	b.compiling.SetSyncBase(b.compilingBackupDB.GetSyncBase())
 }
 
 func (b *IndexerMgr) prepareDBBuffer() {
 	b.compilingBackupDB = b.compiling.Clone(true)
-	b.prepareContractIndexBuffer(b.compilingBackupDB.GetHeight())
+	if b.contractIndexer != nil {
+		b.contractBackupDB = b.contractIndexer.Clone()
+	}
 	common.Log.Infof("backup instance %d cloned", b.compilingBackupDB.GetHeight())
 }
 
 func (b *IndexerMgr) cleanDBBuffer() {
 	b.compiling.Subtract(b.compilingBackupDB)
+	if b.contractIndexer != nil && b.contractBackupDB != nil {
+		b.contractIndexer.Subtract(b.contractBackupDB)
+	}
 }
 
 func (b *IndexerMgr) updateServiceInstance() {

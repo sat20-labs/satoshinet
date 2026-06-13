@@ -1,10 +1,9 @@
 package evm
 
-import "github.com/ethereum/go-ethereum/crypto"
+import evmcommon "github.com/sat20-labs/satoshinet/contract"
 
 func DeriveCreateContractAddress(prefix string, caller EVMAddress, nonce uint64) (ContractAddress, error) {
-	addr := EVMAddressFromGeth(crypto.CreateAddress(GethAddress(caller), nonce))
-	return NewContractAddress(prefix, AddressVersionV1, ContractTypeEVM, addr)
+	return evmcommon.DeriveEVMCreateContractAddress(prefix, caller, nonce)
 }
 
 func MustDeriveCreateContractAddress(prefix string, caller EVMAddress, nonce uint64) ContractAddress {

@@ -6,9 +6,10 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
+	contractapi "github.com/sat20-labs/satoshinet/contract"
 	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -125,7 +126,7 @@ func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil
 		agentRoot = postState.StateRoot()
 	}
 	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot, agentRoot)
-	payload, found, err := contractengine.FindCoinbaseStateRoot(block.Transactions()[0].MsgTx())
+	payload, found, err := contractapi.FindCoinbaseStateRoot(block.Transactions()[0].MsgTx())
 	if err != nil {
 		return ruleError(ErrInvalidEVMBlock, fmt.Sprintf("combined contract state root: %v", err))
 	}

@@ -4,24 +4,19 @@ import (
 	"errors"
 	"fmt"
 
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type ResultSpendValidation struct {
-	Payload        contractcommon.ResultPayload
+	Payload        ResultPayload
 	ContractInputs []ContractInput
-	Contracts      []contractcommon.ContractAddress
+	Contracts      []ContractAddress
 }
 
 type ContractInput struct {
 	OutPoint wire.OutPoint
-	Contract contractcommon.ContractAddress
+	Contract ContractAddress
 	PkScript []byte
-}
-
-func IsContractPkScript(pkScript []byte) bool {
-	return contractcommon.IsContractPkScript(pkScript)
 }
 
 func ValidateResultContractSpend(tx *wire.MsgTx, inputScripts map[wire.OutPoint][]byte,
@@ -32,14 +27,14 @@ func ValidateResultContractSpend(tx *wire.MsgTx, inputScripts map[wire.OutPoint]
 		return ResultSpendValidation{}, err
 	}
 	if prefix == "" {
-		prefix = contractcommon.TestnetContractPrefix
+		prefix = TestnetContractPrefix
 	}
 	if inputScripts == nil {
 		return ResultSpendValidation{}, errors.New("missing input script map")
 	}
 
 	contractInputs := make([]ContractInput, 0)
-	contracts := make([]contractcommon.ContractAddress, 0)
+	contracts := make([]ContractAddress, 0)
 	seenContracts := make(map[string]struct{})
 	for i, txIn := range tx.TxIn {
 		if txIn == nil {
@@ -49,7 +44,7 @@ func ValidateResultContractSpend(tx *wire.MsgTx, inputScripts map[wire.OutPoint]
 		if !ok {
 			return ResultSpendValidation{}, fmt.Errorf("missing input script for %s", txIn.PreviousOutPoint)
 		}
-		contract, ok, err := contractcommon.ParseContractPkScript(pkScript, prefix)
+		contract, ok, err := ParseContractPkScript(pkScript, prefix)
 		if err != nil {
 			return ResultSpendValidation{}, err
 		}
@@ -79,34 +74,34 @@ func ValidateResultContractSpend(tx *wire.MsgTx, inputScripts map[wire.OutPoint]
 	}, nil
 }
 
-func validateResultTxBasic(tx *wire.MsgTx) (contractcommon.ResultPayload, error) {
+func validateResultTxBasic(tx *wire.MsgTx) (ResultPayload, error) {
 	if tx == nil {
-		return contractcommon.ResultPayload{}, errors.New("missing transaction")
+		return ResultPayload{}, errors.New("missing transaction")
 	}
 	txType, found, err := ClassifyTxPayloadType(tx)
 	if err != nil {
-		return contractcommon.ResultPayload{}, err
+		return ResultPayload{}, err
 	}
-	if !found || txType != contractcommon.TxTypeResult {
-		return contractcommon.ResultPayload{}, errors.New("not a CONTRACT_RESULT transaction")
+	if !found || txType != TxTypeResult {
+		return ResultPayload{}, errors.New("not a CONTRACT_RESULT transaction")
 	}
 	for _, txOut := range tx.TxOut {
 		if txOut == nil {
 			continue
 		}
-		payload, err := contractcommon.ReadResultNullDataScript(txOut.PkScript)
+		payload, err := ReadResultNullDataScript(txOut.PkScript)
 		if err != nil {
 			continue
 		}
 		if payload.ResultCount == 0 {
-			return contractcommon.ResultPayload{}, errors.New("result count is zero")
+			return ResultPayload{}, errors.New("result count is zero")
 		}
 		return payload, nil
 	}
-	return contractcommon.ResultPayload{}, errors.New("missing CONTRACT_RESULT payload")
+	return ResultPayload{}, errors.New("missing CONTRACT_RESULT payload")
 }
 
-func resultSpendContractKey(contract contractcommon.ContractAddress) string {
-	hash := contractcommon.ContractAddressHash(contract)
+func resultSpendContractKey(contract ContractAddress) string {
+	hash := ContractAddressHash(contract)
 	return fmt.Sprintf("%d:%d:%x", contract.Version(), contract.ContractType(), hash[:])
 }

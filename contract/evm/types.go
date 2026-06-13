@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	scommon "github.com/sat20-labs/indexer/common"
-	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 

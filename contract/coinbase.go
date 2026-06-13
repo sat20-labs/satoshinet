@@ -3,27 +3,26 @@ package contract
 import (
 	"errors"
 
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-func FindCoinbaseStateRoot(tx *wire.MsgTx) (contractcommon.StateRootPayload, bool, error) {
+func FindCoinbaseStateRoot(tx *wire.MsgTx) (StateRootPayload, bool, error) {
 	if tx == nil {
-		return contractcommon.StateRootPayload{}, false, errors.New("missing coinbase transaction")
+		return StateRootPayload{}, false, errors.New("missing coinbase transaction")
 	}
-	var payload contractcommon.StateRootPayload
+	var payload StateRootPayload
 	found := false
 	for _, txOut := range tx.TxOut {
-		txType, content, err := contractcommon.ReadNullDataScript(txOut.PkScript)
-		if err != nil || txType != contractcommon.TxTypeCoinbaseStateRoot {
+		txType, content, err := ReadNullDataScript(txOut.PkScript)
+		if err != nil || txType != TxTypeCoinbaseStateRoot {
 			continue
 		}
 		if found {
-			return contractcommon.StateRootPayload{}, false, errors.New("multiple contract state roots in coinbase")
+			return StateRootPayload{}, false, errors.New("multiple contract state roots in coinbase")
 		}
-		decoded, err := contractcommon.DecodeStateRootPayload(content)
+		decoded, err := DecodeStateRootPayload(content)
 		if err != nil {
-			return contractcommon.StateRootPayload{}, false, err
+			return StateRootPayload{}, false, err
 		}
 		payload = decoded
 		found = true
@@ -49,14 +48,14 @@ func UpsertCoinbaseStateRoot(tx *wire.MsgTx, root [32]byte) error {
 	if tx == nil {
 		return errors.New("missing coinbase transaction")
 	}
-	script, err := contractcommon.StateRootNullDataScript(contractcommon.StateRootPayload{StateRoot: root})
+	script, err := StateRootNullDataScript(StateRootPayload{StateRoot: root})
 	if err != nil {
 		return err
 	}
 	found := false
 	for _, txOut := range tx.TxOut {
-		txType, _, err := contractcommon.ReadNullDataScript(txOut.PkScript)
-		if err != nil || txType != contractcommon.TxTypeCoinbaseStateRoot {
+		txType, _, err := ReadNullDataScript(txOut.PkScript)
+		if err != nil || txType != TxTypeCoinbaseStateRoot {
 			continue
 		}
 		if found {

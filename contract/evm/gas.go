@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	scommon "github.com/sat20-labs/indexer/common"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 )
 
 type GasConfig struct {
@@ -20,7 +20,7 @@ type GasConfig struct {
 
 	// Gas limits and base gas fields are execution gas units, not gas asset
 	// amounts. They are converted to gas asset fees through
-	// contract/common.ExecutionGasUnitsPerGas and the height-dependent gas price.
+	// contract.ExecutionGasUnitsPerGas and the height-dependent gas price.
 	DeployBaseGas   uint64
 	InvokeBaseGas   uint64
 	ResultBaseGas   uint64

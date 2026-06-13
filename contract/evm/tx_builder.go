@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -32,63 +32,28 @@ type InvokeTxBuildRequest struct {
 }
 
 func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
-	prefix := req.ContractPrefix
-	if prefix == "" {
-		prefix = TestnetContractPrefix
-	}
-	contract, err := DeriveCreateContractAddress(prefix, req.Caller, req.DeployNonce)
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	if err := validateFundingTxOut(req.Funding); err != nil {
-		return nil, ContractAddress{}, err
-	}
-	scripts, err := evmcommon.DeployNullDataScripts(DeployPayload{
-		GasLimit:    req.GasLimit,
-		DeployNonce: req.DeployNonce,
-		InitCode:    req.InitCode,
+	return evmcommon.BuildEVMDeployTx(evmcommon.EVMDeployTxBuildRequest{
+		ContractPrefix: req.ContractPrefix,
+		Caller:         req.Caller,
+		GasLimit:       req.GasLimit,
+		DeployNonce:    req.DeployNonce,
+		InitCode:       req.InitCode,
+		Funding:        req.Funding,
+		Inputs:         req.Inputs,
+		ChangeOutputs:  req.ChangeOutputs,
 	})
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	contractOut, err := contractTxOutFromFunding(req.Funding, contract)
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-
-	tx := newEVMUnsignedTx(req.Inputs)
-	for _, script := range scripts {
-		tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	}
-	tx.AddTxOut(contractOut)
-	addTxOutCopies(tx, req.ChangeOutputs)
-	return tx, contract, nil
 }
 
 func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
-	if err := validateFundingTxOut(req.Funding); err != nil {
-		return nil, err
-	}
-	scripts, err := evmcommon.InvokeNullDataScripts(InvokePayload{
-		GasLimit:  req.GasLimit,
-		CallNonce: req.CallNonce,
-		Calldata:  cloneBytes(req.Calldata),
+	return evmcommon.BuildEVMInvokeTx(evmcommon.EVMInvokeTxBuildRequest{
+		Contract:      req.Contract,
+		GasLimit:      req.GasLimit,
+		CallNonce:     req.CallNonce,
+		Calldata:      req.Calldata,
+		Funding:       req.Funding,
+		Inputs:        req.Inputs,
+		ChangeOutputs: req.ChangeOutputs,
 	})
-	if err != nil {
-		return nil, err
-	}
-	contractOut, err := contractTxOutFromFunding(req.Funding, req.Contract)
-	if err != nil {
-		return nil, err
-	}
-
-	tx := newEVMUnsignedTx(req.Inputs)
-	for _, script := range scripts {
-		tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	}
-	tx.AddTxOut(contractOut)
-	addTxOutCopies(tx, req.ChangeOutputs)
-	return tx, nil
 }
 
 func validateFundingTxOut(funding wire.TxOut) error {

@@ -1,6 +1,7 @@
-package common
+package contract
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -14,13 +15,54 @@ const (
 	ContentTypeContractResult    = txscript.OP_DATA_33
 	ContentTypeContractStateRoot = txscript.OP_DATA_34
 
-	ContentTypeEVMDeploy    = ContentTypeContractDeploy
-	ContentTypeEVMInvoke    = ContentTypeContractInvoke
-	ContentTypeEVMResult    = ContentTypeContractResult
-	ContentTypeEVMStateRoot = ContentTypeContractStateRoot
-
 	MaxNullDataPayloadLen = txscript.MaxDataCarrierSize - 8
 )
+
+var contractScriptMagic = []byte("CT")
+
+func ContractPkScript(contract ContractAddress) ([]byte, error) {
+	payload := contract.ScriptAddress()
+	return txscript.NewScriptBuilder().
+		AddOp(txscript.OP_FALSE).
+		AddOp(txscript.OP_IF).
+		AddData(contractScriptMagic).
+		AddData(payload).
+		AddOp(txscript.OP_ENDIF).
+		AddOp(txscript.OP_FALSE).
+		Script()
+}
+
+func ParseContractPkScript(pkScript []byte, prefix string) (ContractAddress, bool, error) {
+	if len(pkScript) < 11 {
+		return ContractAddress{}, false, nil
+	}
+	if pkScript[0] != txscript.OP_FALSE ||
+		pkScript[1] != txscript.OP_IF ||
+		pkScript[2] != byte(len(contractScriptMagic)) ||
+		!bytes.Equal(pkScript[3:5], contractScriptMagic) {
+		return ContractAddress{}, false, nil
+	}
+	payloadLen := int(pkScript[5])
+	payloadStart := 6
+	payloadEnd := payloadStart + payloadLen
+	if payloadLen < 3 || len(pkScript) != payloadEnd+2 ||
+		pkScript[payloadEnd] != txscript.OP_ENDIF ||
+		pkScript[payloadEnd+1] != txscript.OP_FALSE {
+		return ContractAddress{}, false, nil
+	}
+
+	payload := pkScript[payloadStart:payloadEnd]
+	contract, err := NewContractAddressFromHash(prefix, payload[0], payload[1], payload[2:])
+	if err != nil {
+		return ContractAddress{}, false, fmt.Errorf("invalid contract script payload: %w", err)
+	}
+	return contract, true, nil
+}
+
+func IsContractPkScript(pkScript []byte) bool {
+	_, ok, _ := ParseContractPkScript(pkScript, TestnetContractPrefix)
+	return ok
+}
 
 func NullDataScript(txType TxType, content []byte) ([]byte, error) {
 	if len(content) > MaxNullDataPayloadLen {
@@ -38,7 +80,7 @@ func NullDataScript(txType TxType, content []byte) ([]byte, error) {
 	case TxTypeCoinbaseStateRoot:
 		contentType = ContentTypeContractStateRoot
 	default:
-		return nil, fmt.Errorf("unsupported evm tx type %d", txType)
+		return nil, fmt.Errorf("unsupported contract tx type %d", txType)
 	}
 
 	return txscript.NewScriptBuilder().
@@ -124,7 +166,7 @@ func ReadNullDataScript(script []byte) (TxType, []byte, error) {
 	case ContentTypeContractStateRoot:
 		return TxTypeCoinbaseStateRoot, content, nil
 	default:
-		return 0, nil, fmt.Errorf("not an evm content type %d", contentType)
+		return 0, nil, fmt.Errorf("not a contract content type %d", contentType)
 	}
 }
 
@@ -134,7 +176,7 @@ func ReadDeployNullDataScript(script []byte) (DeployPayload, error) {
 		return DeployPayload{}, err
 	}
 	if txType != TxTypeDeploy {
-		return DeployPayload{}, fmt.Errorf("unexpected evm tx type %d", txType)
+		return DeployPayload{}, fmt.Errorf("unexpected contract tx type %d", txType)
 	}
 	return DecodeDeployPayload(content)
 }
@@ -145,7 +187,7 @@ func ReadInvokeNullDataScript(script []byte) (InvokePayload, error) {
 		return InvokePayload{}, err
 	}
 	if txType != TxTypeInvoke {
-		return InvokePayload{}, fmt.Errorf("unexpected evm tx type %d", txType)
+		return InvokePayload{}, fmt.Errorf("unexpected contract tx type %d", txType)
 	}
 	return DecodeInvokePayload(content)
 }
@@ -156,7 +198,7 @@ func ReadResultNullDataScript(script []byte) (ResultPayload, error) {
 		return ResultPayload{}, err
 	}
 	if txType != TxTypeResult {
-		return ResultPayload{}, fmt.Errorf("unexpected evm tx type %d", txType)
+		return ResultPayload{}, fmt.Errorf("unexpected contract tx type %d", txType)
 	}
 	return DecodeResultPayload(content)
 }
@@ -167,7 +209,7 @@ func ReadStateRootNullDataScript(script []byte) (StateRootPayload, error) {
 		return StateRootPayload{}, err
 	}
 	if txType != TxTypeCoinbaseStateRoot {
-		return StateRootPayload{}, fmt.Errorf("unexpected evm tx type %d", txType)
+		return StateRootPayload{}, fmt.Errorf("unexpected contract tx type %d", txType)
 	}
 	return DecodeStateRootPayload(content)
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )

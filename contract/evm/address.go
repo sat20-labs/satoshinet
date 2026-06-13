@@ -1,6 +1,6 @@
 package evm
 
-import evmcommon "github.com/sat20-labs/satoshinet/contract/common"
+import evmcommon "github.com/sat20-labs/satoshinet/contract"
 
 type ContractAddress = evmcommon.ContractAddress
 

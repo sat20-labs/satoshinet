@@ -36,8 +36,9 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
-	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+	contractapi "github.com/sat20-labs/satoshinet/contract"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/mempool"
@@ -1367,7 +1368,7 @@ func handleGetBlock(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 		Difficulty:    getDifficultyRatio(blockHeader.Bits, params),
 		NextHash:      nextHashString,
 	}
-	if stateRoot, found, err := contractengine.FindCoinbaseStateRoot(blk.Transactions()[0].MsgTx()); err != nil {
+	if stateRoot, found, err := contractapi.FindCoinbaseStateRoot(blk.Transactions()[0].MsgTx()); err != nil {
 		return nil, internalRPCError(err.Error(), "Failed to decode contract state root")
 	} else if found {
 		blockReply.StateRoot = &btcjson.ContractStateRootInfo{

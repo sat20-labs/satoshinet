@@ -1,6 +1,6 @@
 package template
 
-import contractcommon "github.com/sat20-labs/satoshinet/contract/common"
+import contractcommon "github.com/sat20-labs/satoshinet/contract"
 
 func DeployNullDataScripts(payload DeployPayload) ([][]byte, error) {
 	encoded, err := EncodeDeployPayload(payload)
