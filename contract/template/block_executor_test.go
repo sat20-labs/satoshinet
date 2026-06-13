@@ -49,6 +49,30 @@ func TestBlockExecutorSettlesLimitOrdersOnFinalize(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, result.StateRoot)
 }
 
+func TestBlockExecutorMarksInvokeInvalidWhenDeclaredSellAssetMissing(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	gasAssetName := DefaultGasConfig().GasAssetName
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAsset(gasAssetName, 50))
+	store := NewRuntimeStore()
+
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{deployTx, sellTx},
+		Store:       store,
+		BlockHeight: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 2)
+	require.Equal(t, ResultStatusInvalid, result.Records[1].Status.Status)
+
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Len(t, state.Items, 1)
+	require.Equal(t, InvokeReasonInvalid, state.Items[0].Reason)
+}
+
 func TestBlockExecutorSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)

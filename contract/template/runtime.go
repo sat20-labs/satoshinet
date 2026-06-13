@@ -93,6 +93,10 @@ func (r *ContractRuntime) CheckInvoke(action string, param []byte) error {
 	return invokable.CheckInvoke(action, param)
 }
 
+func (r *ContractRuntime) CheckInvokeFunding(action string, param []byte, outputs []ContractOutput) error {
+	return checkInvokeFunding(r.contract, action, param, outputs)
+}
+
 func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, error) {
 	if err := r.CheckInvoke(req.Action, req.Param); err != nil {
 		return nil, err

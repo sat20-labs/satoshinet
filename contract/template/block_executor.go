@@ -347,45 +347,10 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 	}
 	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
 	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
-		var invalidResultFee *scommon.Decimal
-		hasResultGas, err := fundingOutputsHaveGas(validated.FundingOutputs, e.GasConfig.normalized().GasAssetName, resultFee)
-		if err != nil {
-			return err
-		}
-		if hasResultGas {
-			invalidResultFee = resultFee.Clone()
-		}
-		item, err := runtime.ApplyInvalidInvoke(ApplyInvokeRequest{
-			Action:         validated.Payload.Action,
-			Param:          validated.Payload.Param,
-			CallID:         callID,
-			Invoker:        invoker,
-			FundingOutputs: validated.FundingOutputs,
-			Height:         e.BlockHeight,
-			Timestamp:      e.BlockHeight,
-			ResultGasFee:   invalidResultFee,
-		}, e.GasConfig.normalized().GasAssetName)
-		if err != nil {
-			return err
-		}
-		runtime.SetCurrentBlock(e.BlockHeight)
-		runtime.IncrementInvokeCount()
-		record := ExecutionRecord{
-			Height:         e.BlockHeight,
-			TxID:           tx.TxID(),
-			Type:           TxTypeInvoke,
-			Kind:           ExecutionKindInvoke,
-			CallID:         callID,
-			Contract:       validated.Contract,
-			Status:         ResultPayload{Status: ResultStatusInvalid},
-			GasLimit:       validated.Payload.GasLimit,
-			GasFee:         invalidResultFee,
-			FundingInputs:  contractOutputOutPoints(validated.FundingOutputs),
-			ItemIDs:        []int64{item.ID},
-			RequiresResult: true,
-		}
-		e.records = append(e.records, record)
-		return nil
+		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee)
+	}
+	if err := runtime.CheckInvokeFunding(validated.Payload.Action, validated.Payload.Param, validated.FundingOutputs); err != nil {
+		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee)
 	}
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:         validated.Payload.Action,
@@ -423,6 +388,48 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 		RequiresResult: true,
 	}
 	record.GasFee = resultFee
+	e.records = append(e.records, record)
+	return nil
+}
+
+func (e *BlockExecutor) executeInvalidInvoke(tx *wire.MsgTx, runtime *ContractRuntime, validated InvokeValidation, invoker string, callID string, resultFee *scommon.Decimal) error {
+	var invalidResultFee *scommon.Decimal
+	hasResultGas, err := fundingOutputsHaveGas(validated.FundingOutputs, e.GasConfig.normalized().GasAssetName, resultFee)
+	if err != nil {
+		return err
+	}
+	if hasResultGas {
+		invalidResultFee = resultFee.Clone()
+	}
+	item, err := runtime.ApplyInvalidInvoke(ApplyInvokeRequest{
+		Action:         validated.Payload.Action,
+		Param:          validated.Payload.Param,
+		CallID:         callID,
+		Invoker:        invoker,
+		FundingOutputs: validated.FundingOutputs,
+		Height:         e.BlockHeight,
+		Timestamp:      e.BlockHeight,
+		ResultGasFee:   invalidResultFee,
+	}, e.GasConfig.normalized().GasAssetName)
+	if err != nil {
+		return err
+	}
+	runtime.SetCurrentBlock(e.BlockHeight)
+	runtime.IncrementInvokeCount()
+	record := ExecutionRecord{
+		Height:         e.BlockHeight,
+		TxID:           tx.TxID(),
+		Type:           TxTypeInvoke,
+		Kind:           ExecutionKindInvoke,
+		CallID:         callID,
+		Contract:       validated.Contract,
+		Status:         ResultPayload{Status: ResultStatusInvalid},
+		GasLimit:       validated.Payload.GasLimit,
+		GasFee:         invalidResultFee,
+		FundingInputs:  contractOutputOutPoints(validated.FundingOutputs),
+		ItemIDs:        []int64{item.ID},
+		RequiresResult: true,
+	}
 	e.records = append(e.records, record)
 	return nil
 }

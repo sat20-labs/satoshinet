@@ -159,6 +159,36 @@ func TestApplyInvokeRecordsAMMAddLiquidityItem(t *testing.T) {
 	requireDecimalString(t, "25", state.Running.TotalInputAssetB)
 }
 
+func TestApplyInvokeMarksAMMAddLiquidityInvalidWhenDeclaredAssetMissing(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	contract := runtime.Address()
+	param, err := (&AddLiquidityInvokeParam{
+		OrderType: OrderTypeAddLiquidity,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		Value:     20,
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action: InvokeAPIAddLiquidity,
+		Param:  param,
+		CallID: DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "tx", Vout: 1},
+			Vout:     1,
+			Contract: contract,
+			Value:    20,
+		}},
+		Height:    100,
+		Timestamp: 200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, InvokeReasonInvalid, item.Reason)
+	require.Empty(t, item.RemainingAmt)
+	require.Zero(t, item.RemainingValue)
+}
+
 func TestApplyInvokeRecordsAMMBuyWithInvokeFeeOnly(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	contract := runtime.Address()

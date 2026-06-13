@@ -441,9 +441,11 @@ func (r *ContractRuntime) ApplyInvalidInvoke(req ApplyInvokeRequest, gasAssetNam
 		InAmt:          inAmt,
 		RetainedAssetA: retention.AssetA,
 		RetainedAssetB: retention.AssetB,
-		GasFee:         req.ResultGasFee.Clone(),
 		Reason:         InvokeReasonInvalid,
 		Done:           ItemStatusInit,
+	}
+	if req.ResultGasFee != nil {
+		item.GasFee = req.ResultGasFee.Clone()
 	}
 	state.NextItemID++
 	state.InvokeCount++
@@ -866,6 +868,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 			item.RemainingAmt = parseDecimalOrZero(param.Amt)
 		}
 		item.RemainingValue = param.Value
+		item.applyAddLiquidityFundingValidation(param)
 	case InvokeAPIRemoveLiquidity:
 		var param RemoveLiquidityInvokeParam
 		if err := param.Decode(req.Param); err != nil {
@@ -939,6 +942,96 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		return nil, fmt.Errorf("unsupported template action %s", req.Action)
 	}
 	return item, nil
+}
+
+func checkInvokeFunding(contract Contract, action string, param []byte, outputs []ContractOutput) error {
+	assetName := contractAssetName(contract)
+	switch action {
+	case InvokeAPISwap:
+		var invokeParam LimitOrderInvokeParam
+		if err := invokeParam.Decode(param); err != nil {
+			return err
+		}
+		switch invokeParam.OrderType {
+		case OrderTypeBuy:
+			requiredValue := calcLimitOrderTradingValue(invokeParam.Amt, invokeParam.UnitPrice)
+			if _, isAMM := contract.(*AMMContract); isAMM {
+				requiredValue = parseDecimalOrZero(invokeParam.UnitPrice).Int64()
+			} else {
+				requiredValue += calcSwapFee(requiredValue)
+			}
+			if requiredValue <= 0 || fundingValue(outputs) < requiredValue {
+				return fmt.Errorf("invoke funding value %d is less than declared value %d", fundingValue(outputs), requiredValue)
+			}
+		case OrderTypeSell:
+			requiredAsset := firstNonEmpty(invokeParam.AssetName, assetName)
+			if err := requireFundingAsset(outputs, requiredAsset, invokeParam.Amt); err != nil {
+				return err
+			}
+		}
+	case InvokeAPIAddLiquidity:
+		var invokeParam AddLiquidityInvokeParam
+		if err := invokeParam.Decode(param); err != nil {
+			return err
+		}
+		requiredAsset := firstNonEmpty(invokeParam.AssetName, assetName)
+		if err := requireFundingAsset(outputs, requiredAsset, invokeParam.Amt); err != nil {
+			return err
+		}
+		if invokeParam.Value <= 0 || fundingValue(outputs) < invokeParam.Value {
+			return fmt.Errorf("invoke funding value %d is less than declared add liquidity value %d", fundingValue(outputs), invokeParam.Value)
+		}
+	}
+	return nil
+}
+
+func requireFundingAsset(outputs []ContractOutput, assetName string, amount string) error {
+	if assetName == "" {
+		return fmt.Errorf("missing declared funding asset")
+	}
+	required := parseDecimalOrZero(amount)
+	if required.Sign() <= 0 {
+		return fmt.Errorf("missing declared funding amount")
+	}
+	got, err := fundingAssetAmount(outputs, assetName)
+	if err != nil {
+		return err
+	}
+	if got.Cmp(required) < 0 {
+		return fmt.Errorf("invoke funding asset %s amount %s is less than declared amount %s", assetName, got.String(), required.String())
+	}
+	return nil
+}
+
+func fundingAssetAmount(outputs []ContractOutput, assetName string) (*scommon.Decimal, error) {
+	total := parseDecimalOrZero("0")
+	for _, output := range outputs {
+		amount, err := output.AssetAmount(assetName)
+		if err != nil {
+			return nil, err
+		}
+		if amount != nil {
+			total = scommon.DecimalAdd(total, parseDecimalOrZero(amount.String()))
+		}
+	}
+	return total, nil
+}
+
+func (i *InvokeItem) applyAddLiquidityFundingValidation(param AddLiquidityInvokeParam) {
+	if i.Reason != InvokeReasonNormal {
+		return
+	}
+	if i.InAmt == nil || i.InAmt.Cmp(parseDecimalOrZero(param.Amt)) < 0 {
+		i.Reason = InvokeReasonInvalid
+		i.RemainingAmt = nil
+		i.RemainingValue = 0
+		return
+	}
+	if i.InValue < param.Value {
+		i.Reason = InvokeReasonInvalid
+		i.RemainingAmt = nil
+		i.RemainingValue = 0
+	}
 }
 
 func (i *InvokeItem) applySwapFundingValidation(param LimitOrderInvokeParam, isAMM bool) {

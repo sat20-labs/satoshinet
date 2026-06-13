@@ -240,7 +240,7 @@ func (s *Model) GetExistingUtxos(req *indexerwire.UtxosReq) ([]string, error) {
 func (s *Model) GetAscend(utxo string) (*common.AscendData, error) {
 	data := s.indexer.GetAscendData(utxo)
 	if data == nil {
-		return nil, fmt.Errorf("GetAscendData %s failed", utxo)
+		return nil, fmt.Errorf("GetAscendData %s not found", utxo)
 	}
 
 	return data, nil
@@ -249,7 +249,7 @@ func (s *Model) GetAscend(utxo string) (*common.AscendData, error) {
 func (s *Model) GetDescend(utxo string) (*common.DescendData, error) {
 	data := s.indexer.GetDescendData(utxo)
 	if data == nil {
-		return nil, fmt.Errorf("GetDescendData %s failed", utxo)
+		return nil, fmt.Errorf("GetDescendData %s not found", utxo)
 	}
 
 	return data, nil
