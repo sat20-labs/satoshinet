@@ -238,6 +238,13 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 					}
 				}
 			}
+			closed, deployer, err := closedContractChangeRecipient(contract, store)
+			if err != nil {
+				return nil, err
+			}
+			if closed {
+				out[i].Outputs = capClosedResultOutputsByAvailable(out[i].Outputs, availableAssets, availableValue, gasConfig.GasAssetName, out[i].GasFee)
+			}
 			change, err := contractChangeOutput(contract, store, gasConfig, availableAssets)
 			if err != nil {
 				return nil, err
@@ -251,10 +258,6 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 				return nil, fmt.Errorf("template result outputs spend %d sats but only %d sats are available", resultOutputsValue(out[i].Outputs), availableValue)
 			}
 			if !resultOutputIsZero(change) {
-				closed, deployer, err := closedContractChangeRecipient(contract, store)
-				if err != nil {
-					return nil, err
-				}
 				if closed {
 					out[i].Outputs = append(out[i].Outputs,
 						splitClosedProfitChange(change, deployer, gasConfig.BootstrapAddress)...)
@@ -274,6 +277,154 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 		out[i].Inputs = uniqueOutPoints(out[i].Inputs)
 	}
 	return out, nil
+}
+
+func capClosedResultOutputsByAvailable(outputs []ResultOutput, availableAssets wire.TxAssets, availableValue int64, gasAssetName string, gasFee *scommon.Decimal) []ResultOutput {
+	out := cloneResultOutputs(outputs)
+	capResultOutputValuesByAvailable(out, availableValue)
+	capResultOutputAssetsByAvailable(out, availableAssets, gasAssetName, gasFee)
+	return compactResultOutputs(out)
+}
+
+func cloneResultOutputs(outputs []ResultOutput) []ResultOutput {
+	out := make([]ResultOutput, len(outputs))
+	for i := range outputs {
+		out[i] = outputs[i]
+		out[i].Assets = outputs[i].Assets.Clone()
+	}
+	return out
+}
+
+func compactResultOutputs(outputs []ResultOutput) []ResultOutput {
+	out := make([]ResultOutput, 0, len(outputs))
+	for _, output := range outputs {
+		if !resultOutputIsZero(output) {
+			out = append(out, output)
+		}
+	}
+	return out
+}
+
+func capResultOutputValuesByAvailable(outputs []ResultOutput, availableValue int64) {
+	total := resultOutputsValue(outputs)
+	if total <= 0 || availableValue < 0 || total <= availableValue {
+		return
+	}
+	originalValues := make([]int64, len(outputs))
+	remaining := availableValue
+	for i := range outputs {
+		originalValues[i] = outputs[i].Value
+		if outputs[i].Value <= 0 {
+			outputs[i].Value = 0
+			continue
+		}
+		scaled := new(big.Int).Mul(big.NewInt(outputs[i].Value), big.NewInt(availableValue))
+		scaled.Div(scaled, big.NewInt(total))
+		outputs[i].Value = scaled.Int64()
+		remaining -= outputs[i].Value
+	}
+	for i := range outputs {
+		if remaining <= 0 {
+			break
+		}
+		if originalValues[i] <= 0 {
+			continue
+		}
+		outputs[i].Value++
+		remaining--
+	}
+}
+
+func capResultOutputAssetsByAvailable(outputs []ResultOutput, availableAssets wire.TxAssets, gasAssetName string, gasFee *scommon.Decimal) {
+	requested := resultRequestedAssetTotals(outputs)
+	if len(requested) == 0 {
+		return
+	}
+	limits := availableAssetLimits(availableAssets, gasAssetName, gasFee)
+	for i := range outputs {
+		if len(outputs[i].Assets) == 0 {
+			continue
+		}
+		nextAssets := make(wire.TxAssets, 0, len(outputs[i].Assets))
+		for _, asset := range outputs[i].Assets {
+			key := asset.Name.String()
+			limit := limits[key]
+			total := requested[key]
+			if limit == nil || limit.Sign() <= 0 || total == nil || total.Sign() <= 0 {
+				if assetNameKey(outputs[i].AssetName) == key {
+					outputs[i].AssetAmt = ""
+				}
+				continue
+			}
+			amount := asset.Amount.Clone()
+			if total.Cmp(limit) > 0 {
+				amount = decimalMulByFraction(amount, limit, total)
+			}
+			if amount.Sign() <= 0 {
+				if assetNameKey(outputs[i].AssetName) == key {
+					outputs[i].AssetAmt = ""
+				}
+				continue
+			}
+			next := asset
+			next.Amount = *amount
+			nextAssets = append(nextAssets, next)
+			if assetNameKey(outputs[i].AssetName) == key {
+				outputs[i].AssetAmt = amount.String()
+			}
+		}
+		if len(nextAssets) == 0 {
+			outputs[i].Assets = nil
+			outputs[i].AssetName = ""
+			outputs[i].AssetAmt = ""
+		} else {
+			outputs[i].Assets = nextAssets
+		}
+	}
+}
+
+func resultRequestedAssetTotals(outputs []ResultOutput) map[string]*scommon.Decimal {
+	totals := make(map[string]*scommon.Decimal)
+	for _, output := range outputs {
+		for _, asset := range output.Assets {
+			key := asset.Name.String()
+			totals[key] = decimalAddAllowNil(totals[key], asset.Amount.Clone())
+		}
+	}
+	return totals
+}
+
+func decimalMulByFraction(amount, numerator, denominator *scommon.Decimal) *scommon.Decimal {
+	if amount == nil || numerator == nil || denominator == nil || denominator.Sign() <= 0 {
+		return parseDecimalOrZero("0")
+	}
+	return scommon.DecimalMulV2(amount, numerator).Div(denominator)
+}
+
+func availableAssetLimits(availableAssets wire.TxAssets, gasAssetName string, gasFee *scommon.Decimal) map[string]*scommon.Decimal {
+	limits := make(map[string]*scommon.Decimal)
+	for _, asset := range availableAssets {
+		limits[asset.Name.String()] = asset.Amount.Clone()
+	}
+	if gasAssetName != "" && gasFee != nil && gasFee.Sign() > 0 {
+		limit := limits[assetNameKey(gasAssetName)]
+		if limit != nil {
+			limit = limit.SubAlignPrecision(gasFee)
+			if limit.Sign() < 0 {
+				limit = parseDecimalOrZero("0")
+			}
+			limits[assetNameKey(gasAssetName)] = limit
+		}
+	}
+	return limits
+}
+
+func assetNameKey(assetName string) string {
+	name := wire.NewAssetNameFromString(assetName)
+	if name == nil {
+		return assetName
+	}
+	return name.String()
 }
 
 func closedContractChangeRecipient(contract ContractAddress, store *RuntimeStore) (bool, string, error) {

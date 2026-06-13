@@ -110,6 +110,50 @@ func TestCanonicalResultVerifierRejectsInputMismatch(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAugmentClosedAMMCloseOutputsUseActualContractBalance(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	addr := runtime.Address()
+	state := TemplateRuntimeState{
+		Running: RunningData{
+			Closed:       true,
+			AssetAInPool: parseDecimalOrZero("100"),
+			AssetBInPool: parseDecimalOrZero("20"),
+		},
+	}
+	require.NoError(t, runtime.saveRuntimeState(state))
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	provider := func(contract ContractAddress) ([]UTXO, error) {
+		return []UTXO{{
+			OutPoint: OutPoint{TxID: testHash(9), Vout: 0},
+			Contract: contract,
+			Value:    5,
+			Assets:   testAsset("ordx:f:test", 40),
+		}}, nil
+	}
+	plans := []ResultPlan{{
+		Contract: addr.EncodeAddress(),
+		ItemIDs:  []int64{1},
+		Outputs: []ResultOutput{{
+			To:        "lp-address",
+			Value:     20,
+			AssetName: "ordx:f:test",
+			AssetAmt:  "100",
+			Assets:    testAsset("ordx:f:test", 100),
+		}},
+	}}
+
+	augmented, err := AugmentResultPlans(plans, store, DefaultGasConfig(), provider)
+	require.NoError(t, err)
+	require.Len(t, augmented, 1)
+	require.Len(t, augmented[0].Outputs, 1)
+	require.Equal(t, int64(5), augmented[0].Outputs[0].Value)
+	requireResultPlanAssetTo(t, augmented[0], "lp-address", "ordx:f:test", "40")
+
+	_, err = resultAssetsChange(testAsset("ordx:f:test", 40), augmented[0].Outputs, DefaultGasConfig().GasAssetName, nil)
+	require.NoError(t, err)
+}
+
 func testHash(n byte) string {
 	return fmt.Sprintf("%064x", n)
 }
