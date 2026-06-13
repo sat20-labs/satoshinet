@@ -20,40 +20,17 @@ type contractIndexSnapshot struct {
 	History   map[string][]contractengine.ContractHistoryRecord `json:"history"`
 }
 
-func (s *IndexerMgr) indexContracts(block *common.Block) {
-	if block == nil || len(block.Transactions) == 0 {
-		return
-	}
-	prefix := tmplcontract.ContractPrefixForNet(s.chaincfgParam.Net)
-	summaries := make([]contractengine.ContractSummary, 0)
-	history := make([]contractengine.ContractHistoryRecord, 0)
-	for _, tx := range block.Transactions {
-		if tx == nil || tx.MsgTx == nil {
-			continue
-		}
-		txSummaries, txHistory, err := contractengine.BuildContractIndexRecords(tx.MsgTx, int64(block.Height), prefix, s.chaincfgParam)
-		if err != nil {
-			common.Log.Errorf("index contract tx %s at block %d failed: %v", tx.MsgTx.TxID(), block.Height, err)
-			continue
-		}
-		summaries = append(summaries, txSummaries...)
-		history = append(history, txHistory...)
-	}
-	if len(summaries) == 0 && len(history) == 0 {
-		return
-	}
-	s.contractIndexMu.Lock()
-	defer s.contractIndexMu.Unlock()
-	s.ensureContractIndexLocked()
-	for _, summary := range summaries {
-		s.mergeContractSummaryLocked(summary)
-	}
-	for _, record := range history {
-		s.appendContractHistoryLocked(record)
-	}
-	if err := s.persistContractIndexLocked(block.Height); err != nil {
-		common.Log.Errorf("persist contract index at block %d failed: %v", block.Height, err)
-	}
+type templateContractIndexBuffer struct {
+	Height    int
+	Runtime   *tmplcontract.RuntimeStore
+	Contracts map[string]*tmplcontract.ContractInfo
+	History   map[string][]tmplcontract.HistoryRecord
+}
+
+type contractIndexBuffer struct {
+	Height    int
+	Contracts map[string]*contractengine.ContractSummary
+	History   map[string][]contractengine.ContractHistoryRecord
 }
 
 func (s *IndexerMgr) ensureContractIndexLocked() {
@@ -203,19 +180,59 @@ func (s *IndexerMgr) syncTemplateContractSummariesLocked(height int) {
 			},
 		})
 	}
-	if err := s.persistContractIndexLocked(height); err != nil {
-		common.Log.Errorf("persist contract index at block %d failed: %v", height, err)
+}
+
+func (s *IndexerMgr) prepareContractIndexBuffer(height int) {
+	s.templateIndexMu.Lock()
+	s.ensureTemplateContractIndexLocked()
+	s.templateContractBackup = &templateContractIndexBuffer{
+		Height:    height,
+		Runtime:   s.templateRuntimeStore.Clone(),
+		Contracts: cloneTemplateContractInfoMap(s.templateContractIndex),
+		History:   cloneTemplateContractHistoryMap(s.templateContractHistory),
+	}
+	s.templateIndexMu.Unlock()
+
+	s.contractIndexMu.Lock()
+	s.ensureContractIndexLocked()
+	s.contractBackup = &contractIndexBuffer{
+		Height:    height,
+		Contracts: cloneContractSummaryMap(s.contractIndex),
+		History:   cloneContractHistoryMap(s.contractHistory),
+	}
+	s.contractIndexMu.Unlock()
+}
+
+func (s *IndexerMgr) persistContractIndexBuffer() {
+	if s.templateContractBackup != nil {
+		if err := s.persistTemplateContractIndexSnapshot(
+			s.templateContractBackup.Height,
+			s.templateContractBackup.Runtime,
+			s.templateContractBackup.Contracts,
+			s.templateContractBackup.History,
+		); err != nil {
+			common.Log.Errorf("persist template contract index at height %d failed: %v", s.templateContractBackup.Height, err)
+		}
+	}
+	if s.contractBackup != nil {
+		if err := s.persistContractIndexSnapshot(
+			s.contractBackup.Height,
+			s.contractBackup.Contracts,
+			s.contractBackup.History,
+		); err != nil {
+			common.Log.Errorf("persist contract index at height %d failed: %v", s.contractBackup.Height, err)
+		}
 	}
 }
 
-func (s *IndexerMgr) persistContractIndexLocked(height int) error {
+func (s *IndexerMgr) persistContractIndexSnapshot(height int, contracts map[string]*contractengine.ContractSummary, history map[string][]contractengine.ContractHistoryRecord) error {
 	if s.baseDB == nil {
 		return nil
 	}
 	snapshot := contractIndexSnapshot{
 		Height:    height,
-		Contracts: cloneContractSummaryMap(s.contractIndex),
-		History:   cloneContractHistoryMap(s.contractHistory),
+		Contracts: cloneContractSummaryMap(contracts),
+		History:   cloneContractHistoryMap(history),
 	}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {

@@ -64,10 +64,12 @@ type IndexerMgr struct {
 	templateRuntimeStore    *tmplcontract.RuntimeStore
 	templateContractIndex   map[string]*tmplcontract.ContractInfo
 	templateContractHistory map[string][]tmplcontract.HistoryRecord
+	templateContractBackup  *templateContractIndexBuffer
 
 	contractIndexMu sync.RWMutex
 	contractIndex   map[string]*contractengine.ContractSummary
 	contractHistory map[string][]contractengine.ContractHistoryRecord
+	contractBackup  *contractIndexBuffer
 }
 
 var instance *IndexerMgr
@@ -227,6 +229,8 @@ func (b *IndexerMgr) checkSelf() {
 func (b *IndexerMgr) forceUpdateDB() {
 	//startTime := time.Now()
 
+	b.prepareContractIndexBuffer(b.compiling.GetSyncHeight())
+	b.persistContractIndexBuffer()
 	//common.Log.Infof("IndexerMgr.forceUpdateDB: takes: %v", time.Since(startTime))
 }
 
@@ -274,11 +278,13 @@ func (b *IndexerMgr) updateDB(height, tip int) {
 func (b *IndexerMgr) performUpdateDBInBuffer() {
 	b.cleanDBBuffer() // must before UpdateDB
 	b.compilingBackupDB.UpdateDB()
+	b.persistContractIndexBuffer()
 	b.compiling.SetSyncBase(b.compilingBackupDB.GetSyncBase())
 }
 
 func (b *IndexerMgr) prepareDBBuffer() {
 	b.compilingBackupDB = b.compiling.Clone(true)
+	b.prepareContractIndexBuffer(b.compilingBackupDB.GetHeight())
 	common.Log.Infof("backup instance %d cloned", b.compilingBackupDB.GetHeight())
 }
 

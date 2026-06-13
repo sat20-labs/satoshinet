@@ -719,6 +719,40 @@ func TestSettleAMMRemoveLiquidityWithoutBalanceClosesDirectly(t *testing.T) {
 	requireDecimalString(t, "20", state.Running.AssetBInPool)
 }
 
+func TestSettleAMMCloseClearsPoolState(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	fundAMMRuntime(t, runtime)
+	addr := runtime.Address()
+	closeParam, err := (&CloseInvokeParam{}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:  InvokeAPIClose,
+		Param:   closeParam,
+		CallID:  DeriveInvokeCallID("close", 1, addr),
+		Invoker: "deployer-address",
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "close", Vout: 1},
+			Contract: addr,
+			Value:    SwapInvokeFee,
+		}},
+		Height: 2,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlock(2)
+	require.NoError(t, err)
+	require.NotEmpty(t, plan.ItemIDs)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.True(t, state.Running.Closed)
+	require.Empty(t, state.Running.AssetAInPool)
+	require.Empty(t, state.Running.AssetBInPool)
+	require.False(t, state.Running.TradingReady)
+	require.Empty(t, state.Running.TotalLPTAmt)
+	require.Empty(t, state.Running.LPBalances)
+	require.Empty(t, state.Running.LPCosts)
+}
+
 func applyAMMSwapInvokeForTest(t *testing.T, runtime *ContractRuntime, addr ContractAddress,
 	callID, invoker string, orderType int, amt, unitPrice string, value int64, assets wire.TxAssets, height int64) {
 

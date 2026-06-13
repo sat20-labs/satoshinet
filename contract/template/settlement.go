@@ -701,12 +701,25 @@ func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *Settl
 		}
 		if amm, ok := contract.(*AMMContract); ok {
 			appendAMMLPCloseTransfers(state, plan, closeItem, amm.AssetName)
+			clearAMMClosedPool(state)
 		}
 		closeItem.Done = ItemStatusDealt
 		state.Running.Closed = true
 		return true
 	}
 	return false
+}
+
+func clearAMMClosedPool(state *TemplateRuntimeState) {
+	if state == nil {
+		return
+	}
+	state.Running.AssetAInPool = nil
+	state.Running.AssetBInPool = nil
+	state.Running.TradingReady = false
+	state.Running.TotalLPTAmt = nil
+	state.Running.LPBalances = nil
+	state.Running.LPCosts = nil
 }
 
 func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan, item *InvokeItem, assetName string) {

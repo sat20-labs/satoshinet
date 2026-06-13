@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	db "github.com/sat20-labs/indexer/indexer/db"
+	contractengine "github.com/sat20-labs/satoshinet/contract"
 	contractcommon "github.com/sat20-labs/satoshinet/contract/common"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -16,14 +17,15 @@ const templateContractIndexSnapshotKey = "template-contract-index-v1"
 
 func (s *IndexerMgr) processBlock(block *common.Block) {
 	s.indexContracts(block)
-	s.indexTemplateContracts(block)
 }
 
-func (s *IndexerMgr) indexTemplateContracts(block *common.Block) {
+func (s *IndexerMgr) indexContracts(block *common.Block) {
 	if block == nil || len(block.Transactions) == 0 {
 		return
 	}
 	prefix := tmplcontract.ContractPrefixForNet(s.chaincfgParam.Net)
+	summaries := make([]contractengine.ContractSummary, 0)
+	history := make([]contractengine.ContractHistoryRecord, 0)
 	execTxs := make([]*wire.MsgTx, 0)
 	allTxs := make([]*wire.MsgTx, 0, len(block.Transactions))
 	for _, tx := range block.Transactions {
@@ -31,6 +33,15 @@ func (s *IndexerMgr) indexTemplateContracts(block *common.Block) {
 			continue
 		}
 		allTxs = append(allTxs, tx.MsgTx)
+
+		txSummaries, txHistory, err := contractengine.BuildContractIndexRecords(tx.MsgTx, int64(block.Height), prefix, s.chaincfgParam)
+		if err != nil {
+			common.Log.Errorf("index contract tx %s at block %d failed: %v", tx.MsgTx.TxID(), block.Height, err)
+		} else {
+			summaries = append(summaries, txSummaries...)
+			history = append(history, txHistory...)
+		}
+
 		info, err := tmplcontract.ClassifyTxForBlockOrder(tx.MsgTx, prefix)
 		if err != nil || !info.IsTemplate {
 			continue
@@ -39,6 +50,19 @@ func (s *IndexerMgr) indexTemplateContracts(block *common.Block) {
 			execTxs = append(execTxs, tx.MsgTx)
 		}
 	}
+
+	if len(summaries) != 0 || len(history) != 0 {
+		s.contractIndexMu.Lock()
+		s.ensureContractIndexLocked()
+		for _, summary := range summaries {
+			s.mergeContractSummaryLocked(summary)
+		}
+		for _, record := range history {
+			s.appendContractHistoryLocked(record)
+		}
+		s.contractIndexMu.Unlock()
+	}
+
 	if len(execTxs) == 0 {
 		return
 	}
@@ -74,9 +98,6 @@ func (s *IndexerMgr) indexTemplateContracts(block *common.Block) {
 		return
 	}
 	s.syncTemplateContractSummariesLocked(block.Height)
-	if err := s.persistTemplateContractIndexLocked(block.Height); err != nil {
-		common.Log.Errorf("persist template contract index at block %d failed: %v", block.Height, err)
-	}
 }
 
 func (s *IndexerMgr) ensureTemplateContractIndexLocked() {
@@ -108,19 +129,22 @@ func (s *IndexerMgr) updateTemplateContractSnapshotsLocked(height int) error {
 	return nil
 }
 
-func (s *IndexerMgr) persistTemplateContractIndexLocked(height int) error {
+func (s *IndexerMgr) persistTemplateContractIndexSnapshot(height int, runtimeStore *tmplcontract.RuntimeStore, contracts map[string]*tmplcontract.ContractInfo, history map[string][]tmplcontract.HistoryRecord) error {
 	if s.baseDB == nil {
 		return nil
 	}
-	runtime, err := s.templateRuntimeStore.MarshalBinary()
+	if runtimeStore == nil {
+		runtimeStore = tmplcontract.NewRuntimeStore()
+	}
+	runtime, err := runtimeStore.MarshalBinary()
 	if err != nil {
 		return err
 	}
 	snapshot := tmplcontract.IndexSnapshot{
 		Height:    height,
 		Runtime:   runtime,
-		Contracts: cloneTemplateContractInfoMap(s.templateContractIndex),
-		History:   cloneTemplateContractHistoryMap(s.templateContractHistory),
+		Contracts: cloneTemplateContractInfoMap(contracts),
+		History:   cloneTemplateContractHistoryMap(history),
 	}
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
