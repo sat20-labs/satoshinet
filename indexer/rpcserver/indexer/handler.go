@@ -3,10 +3,13 @@ package indexer
 import (
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
@@ -690,10 +693,23 @@ func (s *Handle) getContracts(c *gin.Context) {
 			Msg:  "ok",
 		},
 	}
-	start, limit := parseStartLimit(c)
-	resp.Data, resp.Total = s.model.GetContracts(start, limit)
 	resp.Contracts = s.model.GetSupportedContracts()
-	resp.ContractURLs, _ = s.model.GetDeployedContracts(start, limit)
+
+	query := parseContractListQuery(c)
+	if !query.requiresFullList() {
+		resp.Data, resp.Total = s.model.GetContracts(query.start, query.limit)
+		resp.ContractURLs, _ = s.model.GetDeployedContracts(query.start, query.limit)
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	contracts, _ := s.model.GetContracts(0, 0)
+	contracts = filterContractSummaries(contracts, query)
+	sortContractSummaries(contracts, query)
+
+	resp.Total = len(contracts)
+	resp.Data = paginateContractSummaries(contracts, query.start, query.limit)
+	resp.ContractURLs = contractURLsFromSummaries(resp.Data)
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -784,6 +800,137 @@ func parseStartLimit(c *gin.Context) (int, int) {
 		limit = 100
 	}
 	return start, limit
+}
+
+type contractListQuery struct {
+	start          int
+	limit          int
+	contractTypeID *int
+	contractType   string
+	subtype        string
+	sortBy         string
+	desc           bool
+}
+
+func (q contractListQuery) requiresFullList() bool {
+	return q.contractTypeID != nil || q.contractType != "" || q.subtype != "" || q.sortBy != ""
+}
+
+func parseContractListQuery(c *gin.Context) contractListQuery {
+	start, limit := parseStartLimit(c)
+	query := contractListQuery{
+		start:        start,
+		limit:        limit,
+		contractType: strings.ToLower(strings.TrimSpace(firstQuery(c, "contract_type", "contractType"))),
+		subtype:      strings.ToLower(strings.TrimSpace(firstQuery(c, "subtype", "sub_type", "subType"))),
+		sortBy:       normalizeContractSortField(firstQuery(c, "sort", "sort_by", "sortBy")),
+	}
+
+	if value := firstQuery(c, "contract_type_id", "contractTypeId", "type_id", "typeId"); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			query.contractTypeID = &parsed
+		}
+	}
+
+	order := strings.ToLower(strings.TrimSpace(firstQuery(c, "order", "sort_order", "sortOrder")))
+	query.desc = order == "desc" || order == "-1"
+	return query
+}
+
+func normalizeContractSortField(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "created_height", "createdheight", "deploy_height", "deployheight", "deploy_time", "deploytime":
+		return "created_height"
+	case "updated_height", "updatedheight":
+		return "updated_height"
+	case "address":
+		return "address"
+	case "name":
+		return "name"
+	default:
+		return ""
+	}
+}
+
+func filterContractSummaries(contracts []contractcommon.ContractSummary, query contractListQuery) []contractcommon.ContractSummary {
+	if query.contractTypeID == nil && query.contractType == "" && query.subtype == "" {
+		return contracts
+	}
+
+	filtered := make([]contractcommon.ContractSummary, 0, len(contracts))
+	for _, contract := range contracts {
+		if query.contractTypeID != nil && int(contract.ContractTypeID) != *query.contractTypeID {
+			continue
+		}
+		if query.contractType != "" && strings.ToLower(contract.ContractType) != query.contractType {
+			continue
+		}
+		if query.subtype != "" && strings.ToLower(contract.Subtype) != query.subtype {
+			continue
+		}
+		filtered = append(filtered, contract)
+	}
+	return filtered
+}
+
+func sortContractSummaries(contracts []contractcommon.ContractSummary, query contractListQuery) {
+	if query.sortBy == "" {
+		return
+	}
+
+	sort.SliceStable(contracts, func(i, j int) bool {
+		left := contracts[i]
+		right := contracts[j]
+		less := contractSummaryLess(left, right, query.sortBy)
+		if query.desc {
+			return contractSummaryLess(right, left, query.sortBy)
+		}
+		return less
+	})
+}
+
+func contractSummaryLess(left, right contractcommon.ContractSummary, sortBy string) bool {
+	switch sortBy {
+	case "created_height":
+		if left.CreatedHeight != right.CreatedHeight {
+			return left.CreatedHeight < right.CreatedHeight
+		}
+	case "updated_height":
+		if left.UpdatedHeight != right.UpdatedHeight {
+			return left.UpdatedHeight < right.UpdatedHeight
+		}
+	case "name":
+		if left.Name != right.Name {
+			return left.Name < right.Name
+		}
+	}
+	return left.Address < right.Address
+}
+
+func paginateContractSummaries(contracts []contractcommon.ContractSummary, start, limit int) []contractcommon.ContractSummary {
+	total := len(contracts)
+	if start < 0 {
+		start = 0
+	}
+	if limit <= 0 {
+		limit = total
+	}
+	if start >= total {
+		return nil
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	return contracts[start:end]
+}
+
+func contractURLsFromSummaries(contracts []contractcommon.ContractSummary) []string {
+	urls := make([]string, 0, len(contracts))
+	for _, contract := range contracts {
+		urls = append(urls, contract.Address)
+	}
+	return urls
 }
 
 func parseContractHistoryWindow(c *gin.Context) (int, int, error) {
