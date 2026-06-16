@@ -178,12 +178,12 @@ func (e *BlockExecutor) executeDefaultInvokes(tx *wire.MsgTx) error {
 
 func (e *BlockExecutor) executeDefaultInvokeOutput(tx *wire.MsgTx, output ContractOutput) error {
 	if !e.contractExists(output.Contract) {
-		return errors.New("default invoke target contract does not exist")
+		return nil
 	}
 	parsed := ParsedTx{Type: TxTypeInvoke, ContractOutputs: []ContractOutput{output}, Inputs: msgTxInputs(tx)}
 	caller, err := e.resolveCaller(tx, parsed)
 	if err != nil {
-		return err
+		return nil
 	}
 	callID := DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract)
 	intentStart := len(e.Runtime.AssetIntents)
@@ -278,21 +278,29 @@ func ExecuteBlockAndVerifyStateRoot(req BlockExecutionRequest) (BlockExecutionRe
 func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx, parsed ParsedTx) error {
 	validated, err := ValidateDeployTxBasic(tx, e.GasConfig)
 	if err != nil {
-		return err
+		return nil
 	}
 	caller, err := e.resolveCaller(tx, parsed)
 	if err != nil {
-		return err
+		return nil
 	}
 	gasRefundRecipient, err := e.resolveGasRefundRecipient(tx, parsed)
 	if err != nil {
-		return err
+		return nil
 	}
 	expectedContract, err := DeriveCreateContractAddress(e.ContractPrefix, caller, validated.Payload.DeployNonce)
 	if err != nil {
-		return err
+		return nil
 	}
 	callID := DeriveDeployCallID(tx.TxID(), expectedContract)
+	fundingOutputs, err := FindContractOutputsForContract(tx,
+		StandardContractScriptResolver(e.ContractPrefix), expectedContract)
+	if err != nil {
+		return nil
+	}
+	if len(fundingOutputs) == 0 {
+		return nil
+	}
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Deploy(DeployRequest{
 		Caller:      caller,
@@ -305,14 +313,6 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx, parsed ParsedTx) error {
 	if !result.Contract.Equal(expectedContract) {
 		return fmt.Errorf("deploy contract mismatch: got %s want %s",
 			result.Contract.MustEncode(), expectedContract.MustEncode())
-	}
-	fundingOutputs, err := FindContractOutputsForContract(tx,
-		StandardContractScriptResolver(e.ContractPrefix), expectedContract)
-	if err != nil {
-		return err
-	}
-	if len(fundingOutputs) == 0 {
-		return errors.New("EVM_DEPLOY has no contract funding output")
 	}
 	funding := make([]OutPoint, 0, len(fundingOutputs))
 	for _, output := range fundingOutputs {
@@ -338,15 +338,15 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx, parsed ParsedTx) error {
 func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 	validated, err := ValidateInvokeTxBasic(tx, StandardContractScriptResolver(e.ContractPrefix), e.contractExists, e.GasConfig)
 	if err != nil {
-		return err
+		return nil
 	}
 	caller, err := e.resolveCaller(tx, parsed)
 	if err != nil {
-		return err
+		return nil
 	}
 	gasRefundRecipient, err := e.resolveGasRefundRecipient(tx, parsed)
 	if err != nil {
-		return err
+		return nil
 	}
 	funding := make([]OutPoint, 0, len(validated.FundingOutputs))
 	for _, output := range validated.FundingOutputs {

@@ -112,7 +112,7 @@ func (c AgentPredictionContract) Check() error {
 	if strings.TrimSpace(c.SourceURL) == "" {
 		return fmt.Errorf("source url is empty")
 	}
-	if err := checkTemplateAssetName(c.BetAsset); err != nil {
+	if err := checkAgentPredictionBetAssetName(c.BetAsset); err != nil {
 		return err
 	}
 	if _, err := parsePositiveDecimal("min bet unit", c.MinBetUnit); err != nil {
@@ -132,6 +132,13 @@ func (c AgentPredictionContract) Check() error {
 		seen[outcome.ID] = struct{}{}
 	}
 	return nil
+}
+
+func checkAgentPredictionBetAssetName(assetName string) error {
+	if assetName == SatoshiAssetName {
+		return nil
+	}
+	return checkTemplateAssetName(assetName)
 }
 
 func (p AgentPredictionBetParam) Encode() ([]byte, error) {

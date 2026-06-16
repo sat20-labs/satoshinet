@@ -3,6 +3,7 @@ package evm
 import (
 	"fmt"
 
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -62,12 +63,20 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 	})
 
 	for _, tx := range req.Txs {
+		payloadType, foundPayload, payloadErr := contractcommon.ClassifyTxPayloadType(tx)
+		if payloadErr == nil && foundPayload && payloadType == contractcommon.TxTypeResult {
+			return BlockResultBuildResult{}, fmt.Errorf("EVM input already contains RESULT")
+		}
+		info, err := ClassifyTxForBlockOrder(tx, prefix)
+		if err != nil || !info.IsEVM {
+			continue
+		}
+		if info.Type == TxTypeResult {
+			return BlockResultBuildResult{}, fmt.Errorf("EVM input already contains RESULT")
+		}
 		parsed, err := ParseTx(tx, StandardContractScriptResolver(prefix))
 		if err != nil {
-			return BlockResultBuildResult{}, err
-		}
-		if parsed.Type == TxTypeResult {
-			return BlockResultBuildResult{}, fmt.Errorf("template input already contains EVM_RESULT")
+			continue
 		}
 		if err := executor.ExecuteParsedTx(tx, parsed); err != nil {
 			return BlockResultBuildResult{}, err

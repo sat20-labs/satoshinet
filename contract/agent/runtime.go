@@ -148,7 +148,6 @@ func (r *Runtime) ApplyBet(req ApplyBetRequest) error {
 		return fmt.Errorf("prediction contract is not accepting bets")
 	}
 	if req.TimeValue > r.contract.BetDeadline {
-		r.state.Prediction.Status = PredictionStatusClosedForBet
 		return fmt.Errorf("prediction bet deadline passed")
 	}
 	if req.AssetName != r.contract.BetAsset {
@@ -165,6 +164,22 @@ func (r *Runtime) ApplyBet(req ApplyBetRequest) error {
 	}
 	r.addBet(req.Invoker, req.Param.OutcomeID, req.Amount)
 	return nil
+}
+
+func (r *Runtime) AdvancePredictionStatus(timeValue int64) bool {
+	if r == nil || r.state.Status != StatusReady {
+		return false
+	}
+	changed := false
+	if r.state.Prediction.Status == PredictionStatusBetting && timeValue > r.contract.BetDeadline {
+		r.state.Prediction.Status = PredictionStatusClosedForBet
+		changed = true
+	}
+	if r.state.Prediction.Status == PredictionStatusClosedForBet && timeValue >= r.contract.ConfirmAfter {
+		r.state.Prediction.Status = PredictionStatusPendingResult
+		changed = true
+	}
+	return changed
 }
 
 func (r *Runtime) ApplyConfirm(req ApplyConfirmRequest) (*PredictionSettlementPlan, error) {

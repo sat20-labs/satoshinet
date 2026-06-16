@@ -101,6 +101,26 @@ func TestBlockExecutorDefaultInvokeEmptyCall(t *testing.T) {
 	require.Empty(t, executed.Records[1].GasRefundRecipient)
 }
 
+func TestBlockExecutorIgnoresInvalidDeploy(t *testing.T) {
+	tx := testDeployTx(t, 3, return42InitCode())
+	script, err := evmcommon.DeployNullDataScript(DeployPayload{
+		GasLimit:    0,
+		DeployNonce: 3,
+		InitCode:    return42InitCode(),
+	})
+	require.NoError(t, err)
+	tx.TxOut[0].PkScript = script
+
+	executed, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{tx},
+		Runtime:       NewRuntime(nil),
+		Block:         testBlockContext(1),
+		ResolveCaller: fixedCaller(mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")),
+	})
+	require.NoError(t, err)
+	require.Empty(t, executed.Records)
+}
+
 func TestBlockExecutorRejectsMissingDeployResult(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	deployTx := testDeployTx(t, 3, return42InitCode())

@@ -293,11 +293,11 @@ func (e *BlockExecutor) Records() []ExecutionRecord {
 func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx) error {
 	validated, err := ValidateDeployTxBasic(tx, e.ContractPrefix, e.Registry, e.GasConfig)
 	if err != nil {
-		return err
+		return nil
 	}
 	validated.Runtime.SetCurrentBlock(e.BlockHeight)
 	if err := validated.Runtime.ApplyFunding(validated.FundingOutputs, e.GasConfig.GasAssetName); err != nil {
-		return err
+		return nil
 	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
@@ -328,11 +328,11 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 	}
 	validated, err := ValidateParsedInvokeTxBasic(parsed, e.Store.Exists, e.GasConfig)
 	if err != nil {
-		return err
+		return nil
 	}
 	runtime, ok := e.Store.Get(validated.Contract)
 	if !ok {
-		return errors.New("invoke target contract does not exist")
+		return nil
 	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
@@ -342,7 +342,7 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx) error {
 	if e.ResolveInvoker != nil {
 		invoker, err = e.ResolveInvoker(tx, parsed)
 		if err != nil {
-			return err
+			return nil
 		}
 	}
 	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)

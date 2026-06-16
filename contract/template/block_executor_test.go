@@ -301,12 +301,43 @@ func TestContractUTXOProviderWithTxOutputsIncludesDefaultInvoke(t *testing.T) {
 	require.Equal(t, testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))[0].Amount.String(), asset.Amount.String())
 }
 
-func TestBlockExecutorRejectsInvokeBeforeDeploy(t *testing.T) {
+func TestBlockExecutorIgnoresInvokeBeforeDeploy(t *testing.T) {
 	contract := testTemplateContract(t)
 	invokeTx := testTemplateLimitOrderInvokeTx(t, contract, OrderTypeBuy)
 
-	_, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{invokeTx}})
-	require.EqualError(t, err, "invoke target contract does not exist")
+	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{invokeTx}})
+	require.NoError(t, err)
+	require.Empty(t, result.Records)
+	require.Empty(t, result.ResultPlans)
+}
+
+func TestBlockExecutorIgnoresInvalidDeploy(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	content, err := contract.Encode()
+	require.NoError(t, err)
+	deploy := DeployPayload{
+		GasLimit:        0,
+		TemplateName:    contract.TemplateName(),
+		TemplateVersion: contract.Version(),
+		Deployer:        "deployer-address",
+		Random:          []byte("random"),
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	require.NoError(t, err)
+	script, err := DeployNullDataScript(deploy)
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, nil, testTemplateContractScript(addr)))
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{tx}, Store: store})
+	require.NoError(t, err)
+	require.Empty(t, result.Records)
+	require.Empty(t, result.ResultPlans)
+	require.False(t, store.Exists(addr))
 }
 
 func TestBlockExecutorRecordsInvalidInvokeParam(t *testing.T) {

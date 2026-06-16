@@ -83,6 +83,26 @@ func TestBuildBlockResultTxsDeployInvoke(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, result.Execution.StateRoot)
 }
 
+func TestBuildBlockResultTxsIgnoresInvokeBeforeDeploy(t *testing.T) {
+	contract := testContract(t)
+	invokeTx := blockResultInvokeTx(t, contract, InvokePayload{
+		GasLimit:  evmcommon.InvokeBaseGas,
+		CallNonce: 1,
+	}, DefaultGasConfig().GasAssetName, evmcommon.InvokeBaseGas)
+
+	result, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:            []*wire.MsgTx{invokeTx},
+		Runtime:        NewRuntime(nil),
+		ContractPrefix: TestnetContractPrefix,
+		GasConfig:      DefaultGasConfig(),
+		Block:          testBlockContext(1),
+		ResolveCaller:  fixedCaller(mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")),
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.ResultTxs)
+	require.Empty(t, result.Execution.Records)
+}
+
 func TestContractUTXOOverlayIncludesAndSpendsBlockOutputs(t *testing.T) {
 	contract := testContract(t)
 	tx := blockResultInvokeTx(t, contract, InvokePayload{

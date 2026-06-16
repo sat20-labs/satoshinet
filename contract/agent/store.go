@@ -74,6 +74,24 @@ func (s *RuntimeStore) ApplyConfig(cfg RuntimeConfig) {
 	}
 }
 
+func (s *RuntimeStore) AdvancePredictionStatuses(heightValue, unixValue int64) bool {
+	changed := false
+	for _, key := range s.sortedKeys() {
+		runtime := s.runtimes[key]
+		if runtime == nil {
+			continue
+		}
+		timeValue := heightValue
+		if runtime.contract.TimeBase == TimeBaseUnix && unixValue != 0 {
+			timeValue = unixValue
+		}
+		if runtime.AdvancePredictionStatus(timeValue) {
+			changed = true
+		}
+	}
+	return changed
+}
+
 func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
 	keys := s.sortedKeys()
 	out := make([]RuntimeSnapshot, 0, len(keys))

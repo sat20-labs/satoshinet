@@ -91,17 +91,151 @@ func TestBlockExecutorDefaultInvokeNoOp(t *testing.T) {
 	}
 }
 
-func TestBlockExecutorRejectsBetBeforeReady(t *testing.T) {
+func TestBlockExecutorIgnoresInvalidDeploy(t *testing.T) {
+	contract := validPredictionContract()
+	content, err := contract.Encode()
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	deploy := DeployPayload{
+		GasLimit:        0,
+		Subtype:         SubtypePrediction,
+		AgentVersion:    CurrentAgentVersion,
+		Deployer:        "deployer",
+		Random:          []byte("random"),
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.Subtype, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	if err != nil {
+		t.Fatalf("DeriveContractAddress failed: %v", err)
+	}
+	script, err := DeployNullDataScript(deploy)
+	if err != nil {
+		t.Fatalf("DeployNullDataScript failed: %v", err)
+	}
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, nil, testAgentContractScript(addr)))
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{tx}, Store: store})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 0 || len(result.ResultPlans) != 0 {
+		t.Fatalf("invalid deploy should be no-op, records=%+v plans=%+v", result.Records, result.ResultPlans)
+	}
+	if store.Exists(addr) {
+		t.Fatalf("invalid deploy created runtime")
+	}
+}
+
+func TestBlockExecutorIgnoresBetBeforeReady(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:            []*wire.MsgTx{deployTx, betTx},
+		Store:          store,
 		BlockHeight:    validPredictionContract().BetDeadline,
 		RuntimeConfig:  testRuntimeConfig(),
 		ResolveInvoker: testInvokerResolver(map[string]string{betTx.TxID(): "alice"}),
 	})
-	if err == nil || err.Error() != "agent contract is not ready" {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Type != TxTypeDeploy {
+		t.Fatalf("invalid bet should be no-op, records=%+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusPendingReady || len(state.Prediction.Bets) != 0 {
+		t.Fatalf("invalid bet changed state: %#v", state)
+	}
+}
+
+func TestBlockExecutorIgnoresBetWithoutFundingAmount(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 0, nil)
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+			betTx.TxID():   "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 2 {
+		t.Fatalf("invalid bet should not add an execution record, records=%+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusReady || len(state.Prediction.Bets) != 0 {
+		t.Fatalf("invalid bet changed state: %#v", state)
+	}
+}
+
+func TestBlockExecutorAdvancesPredictionStatusByBlockTime(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	store := NewRuntimeStore()
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ready block failed: %v", err)
+	}
+
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline + 1,
+		RuntimeConfig: testRuntimeConfig(),
+	})
+	if err != nil {
+		t.Fatalf("closed-for-bet advance failed: %v", err)
+	}
+	if len(result.Records) != 0 {
+		t.Fatalf("status advance should not add records: %+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	if runtime.State().Prediction.Status != PredictionStatusClosedForBet {
+		t.Fatalf("status mismatch after deadline: %#v", runtime.State())
+	}
+
+	_, err = ExecuteBlock(BlockExecutionRequest{
+		Store:         store,
+		BlockHeight:   validPredictionContract().ConfirmAfter,
+		RuntimeConfig: testRuntimeConfig(),
+	})
+	if err != nil {
+		t.Fatalf("pending-result advance failed: %v", err)
+	}
+	if runtime.State().Prediction.Status != PredictionStatusPendingResult {
+		t.Fatalf("status mismatch after confirm_after: %#v", runtime.State())
 	}
 }
 
@@ -168,7 +302,7 @@ func TestBlockExecutorUsesBlockHeightForHeightTimeBase(t *testing.T) {
 	}
 }
 
-func TestBlockExecutorRejectsNonCoreConfirm(t *testing.T) {
+func TestBlockExecutorIgnoresNonCoreConfirm(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
 	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
@@ -188,7 +322,7 @@ func TestBlockExecutorRejectsNonCoreConfirm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first block failed: %v", err)
 	}
-	_, err = ExecuteBlock(BlockExecutionRequest{
+	result, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{confirmTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
@@ -197,25 +331,49 @@ func TestBlockExecutorRejectsNonCoreConfirm(t *testing.T) {
 			confirmTx.TxID(): "alice",
 		}),
 	})
-	if err == nil || err.Error() != "invoker is not core node" {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("ExecuteBlock non-core confirm failed: %v", err)
+	}
+	if len(result.Records) != 0 || len(result.SettlementPlans) != 0 {
+		t.Fatalf("invalid confirm should be no-op, records=%+v settlements=%+v", result.Records, result.SettlementPlans)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusReady || state.Prediction.Status != PredictionStatusPendingResult {
+		t.Fatalf("invalid confirm changed state: %#v", state)
 	}
 }
 
-func TestBlockExecutorRejectsNonCoreReady(t *testing.T) {
+func TestBlockExecutorIgnoresNonCoreReady(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
 
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
 		RuntimeConfig: testRuntimeConfig(),
 		ResolveInvoker: testInvokerResolver(map[string]string{
 			readyTx.TxID(): "alice",
 		}),
 	})
-	if err == nil || err.Error() != "invoker is not core node" {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Type != TxTypeDeploy {
+		t.Fatalf("invalid ready should be no-op, records=%+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusPendingReady || state.Prediction.Status != PredictionStatusPendingResult {
+		t.Fatalf("invalid ready changed state: %#v", state)
 	}
 }
 
@@ -252,20 +410,33 @@ func TestBlockExecutorPredictionRejectByCore(t *testing.T) {
 	}
 }
 
-func TestBlockExecutorRejectsNonCoreReject(t *testing.T) {
+func TestBlockExecutorIgnoresNonCoreReject(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	rejectTx := testAgentInvokeTx(t, addr, InvokeAPIReject, mustEncodeReject(t, "ambiguous event"), 0, nil)
 
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, rejectTx},
+		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
 		RuntimeConfig: testRuntimeConfig(),
 		ResolveInvoker: testInvokerResolver(map[string]string{
 			rejectTx.TxID(): "alice",
 		}),
 	})
-	if err == nil || err.Error() != "invoker is not core node" {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Type != TxTypeDeploy {
+		t.Fatalf("invalid reject should be no-op, records=%+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusPendingReady || len(state.Prediction.Rejections) != 0 {
+		t.Fatalf("invalid reject changed state: %#v", state)
 	}
 }
 
@@ -359,6 +530,49 @@ func TestBuildBlockResultTxsForDeployAndReady(t *testing.T) {
 	}
 	if payload.ResultCount != 2 {
 		t.Fatalf("result count mismatch: %d", payload.ResultCount)
+	}
+}
+
+func TestBuildBlockResultTxsIgnoresBetWithoutFundingAmount(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 0, nil)
+
+	store := NewRuntimeStore()
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("initial block failed: %v", err)
+	}
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{betTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			betTx.TxID(): "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs should ignore invalid bet: %v", err)
+	}
+	if len(built.ResultTxs) != 0 || len(built.Execution.Records) != 0 || len(built.Execution.ResultPlans) != 0 {
+		t.Fatalf("invalid bet should be no-op, resultTxs=%d records=%+v plans=%+v", len(built.ResultTxs), built.Execution.Records, built.Execution.ResultPlans)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	if len(runtime.State().Prediction.Bets) != 0 {
+		t.Fatalf("invalid bet changed state: %#v", runtime.State())
 	}
 }
 

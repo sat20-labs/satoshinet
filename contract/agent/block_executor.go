@@ -174,6 +174,7 @@ func agentOutputFromDefault(output contractcommon.DefaultInvokeOutput) ContractO
 }
 
 func (e *BlockExecutor) Finalize() (BlockExecutionResult, error) {
+	e.Store.AdvancePredictionStatuses(e.BlockHeight, e.BlockTime)
 	resultPlans := AddGasFeesToResultPlans(e.resultPlans, e.records)
 	return BlockExecutionResult{
 		Records:         cloneExecutionRecords(e.records),
@@ -186,7 +187,7 @@ func (e *BlockExecutor) Finalize() (BlockExecutionResult, error) {
 func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx) error {
 	validated, err := ValidateDeployTxBasic(tx, e.ContractPrefix, e.RuntimeConfig, e.GasConfig)
 	if err != nil {
-		return err
+		return nil
 	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
@@ -217,17 +218,17 @@ func (e *BlockExecutor) executeDeploy(tx *wire.MsgTx) error {
 func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 	validated, err := ValidateParsedInvokeTxBasic(parsed, e.Store.Exists, e.GasConfig)
 	if err != nil {
-		return err
+		return nil
 	}
 	runtime, ok := e.Store.Get(validated.Contract)
 	if !ok {
-		return errors.New("invoke target contract does not exist")
+		return nil
 	}
 	invoker := ""
 	if e.ResolveInvoker != nil {
 		invoker, err = e.ResolveInvoker(tx, parsed)
 		if err != nil {
-			return err
+			return nil
 		}
 	}
 
@@ -245,7 +246,7 @@ func (e *BlockExecutor) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
 		err = fmt.Errorf("unsupported agent action %s", validated.Payload.Action)
 	}
 	if err != nil {
-		return err
+		return nil
 	}
 	if settlement != nil {
 		e.settlementPlans = append(e.settlementPlans, settlement)

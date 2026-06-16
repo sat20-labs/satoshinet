@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -44,6 +45,10 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		ResolveInvoker: req.ResolveInvoker,
 	})
 	for _, tx := range req.Txs {
+		payloadType, foundPayload, payloadErr := contractcommon.ClassifyTxPayloadType(tx)
+		if payloadErr == nil && foundPayload && payloadType == contractcommon.TxTypeResult {
+			return BlockResultBuildResult{}, fmt.Errorf("agent input already contains RESULT")
+		}
 		info, err := ClassifyTxForBlockOrder(tx, prefix)
 		if err != nil || !info.IsAgent {
 			continue
