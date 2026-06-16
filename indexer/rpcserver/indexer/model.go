@@ -425,6 +425,9 @@ func (s *Model) GetAddressUtxosV3(address string, start, limit int) ([]*indexer.
 	}
 
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].Value == result[j].Value {
+			return result[i].OutPoint < result[j].OutPoint
+		}
 		return result[i].Value > result[j].Value
 	})
 
@@ -447,6 +450,9 @@ func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) 
 	}
 
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].Value == result[j].Value {
+			return result[i].OutPoint < result[j].OutPoint
+		}
 		return result[i].Value > result[j].Value
 	})
 

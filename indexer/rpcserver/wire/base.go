@@ -31,6 +31,8 @@ type ChannelLedgerResp struct {
 type ChannelStateEventReq struct {
 	ConfirmUnsafeTestOnly bool                      `json:"confirm_unsafe_test_only"`
 	Data                  *common.ChannelStateEvent `json:"data"`
+	PubKey                []byte                    `json:"pubkey,omitempty"`
+	Sig                   []byte                    `json:"msgSig,omitempty"`
 }
 
 type ChannelStateEventResp struct {

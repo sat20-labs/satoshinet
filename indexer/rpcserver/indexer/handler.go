@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -408,6 +410,31 @@ func (s *Handle) recordChannelStateEvent(c *gin.Context) {
 	if req.Data == nil {
 		resp.Code = -1
 		resp.Msg = "data is required"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if len(req.PubKey) == 0 || len(req.Sig) == 0 {
+		resp.Code = -1
+		resp.Msg = "pubkey and msgSig are required"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if !s.model.CheckCoreNode(hex.EncodeToString(req.PubKey)) {
+		resp.Code = -1
+		resp.Msg = "only core node can record channel state event"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	msg, err := json.Marshal(req.Data)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if err := indexercommon.VerifySignOfMessage(msg, req.Sig, req.PubKey); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
