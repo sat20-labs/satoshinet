@@ -50,6 +50,8 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/miner/info/:pubkey", s.handle.getMinerInfo)
 
 	r.GET(proxy+"/v3/address/summary/:address", s.handle.getAssetSummaryV3)
+	// 获取某个地址上所有utxo数据列表
+	r.GET(proxy+"/v3/address/utxos/:address", s.handle.getAddressUtxosV3)
 	// 获取某个地址上某个资产的utxo数据列表(utxo包含其他资产), ticker格式：wire.AssetName.String()
 	r.GET(proxy+"/v3/address/asset/:address/:ticker", s.handle.getUtxosWithTickerV3)
 	// 获取utxo的资产信息

@@ -411,6 +411,26 @@ func (s *Model) GetUtxoInfoListV3(req *indexerwire.UtxosReq) ([]*indexer.AssetsI
 	return result, nil
 }
 
+func (s *Model) GetAddressUtxosV3(address string, start, limit int) ([]*indexer.AssetsInUtxo, int, error) {
+	result := make([]*indexer.AssetsInUtxo, 0)
+	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, txOut := range outputMap {
+		if IsSpent(txOut.OutPoint) {
+			continue
+		}
+		result = append(result, txOut)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Value > result[j].Value
+	})
+
+	return result, len(result), nil
+}
+
 // name == * , 返回所有utxo
 func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) ([]*indexer.AssetsInUtxo, int, error) {
 	result := make([]*indexer.AssetsInUtxo, 0)

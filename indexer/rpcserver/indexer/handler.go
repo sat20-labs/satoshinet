@@ -637,6 +637,42 @@ func (s *Handle) getUtxosWithTickerV3(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (s *Handle) getAddressUtxosV3(c *gin.Context) {
+	resp := &indexerwire.UtxosWithAssetRespV3{
+		BaseResp: indexerwire.BaseResp{
+			Code: 0,
+			Msg:  "ok",
+		},
+		Data: nil,
+	}
+
+	address := c.Param("address")
+	start, err := strconv.ParseInt(c.DefaultQuery("start", "0"), 10, 64)
+	if err != nil {
+		start = 0
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", QueryParamDefaultLimit))
+	if err != nil {
+		limit = 100
+	}
+
+	result, total, err := s.model.GetAddressUtxosV3(address, int(start), limit)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	resp.ListResp = indexerwire.ListResp{
+		Total: uint64(total),
+		Start: start,
+	}
+	resp.Data = result
+
+	c.JSON(http.StatusOK, resp)
+}
+
 func (s *Handle) getUtxoInfoV3(c *gin.Context) {
 	resp := &indexerwire.TxOutputRespV3{
 		BaseResp: indexerwire.BaseResp{

@@ -133,9 +133,11 @@ const (
 	CHANNEL_EVENT_LATEST_FORCE_CLOSE             = "latest_force_close"
 	CHANNEL_EVENT_REVOKED_COMMITMENT_BROADCASTED = "revoked_commitment_broadcasted"
 	CHANNEL_EVENT_UNKNOWN_CHANNEL_SPEND          = "unknown_channel_spend"
+	CHANNEL_EVENT_L2_DRAINED                     = "l2_drained"
 
 	CHANNEL_EVENT_STATUS_OBSERVED      = "observed"
 	CHANNEL_EVENT_STATUS_PUNISHED      = "punished"
+	CHANNEL_EVENT_STATUS_DRAINED       = "drained"
 	CHANNEL_EVENT_STATUS_EXPIRED       = "expired"
 	CHANNEL_EVENT_STATUS_MANUAL_REVIEW = "manual_review"
 )
