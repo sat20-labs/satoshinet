@@ -130,6 +130,18 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 	return nil
 }
 
+func (v *TemplateBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
+	view *UtxoViewpoint) (bool, error) {
+
+	if block == nil {
+		return false, templateBlockRuleError("missing block")
+	}
+	if view == nil {
+		return false, templateBlockRuleError("missing UTXO view")
+	}
+	return false, nil
+}
+
 func (v *TemplateBlockExecutionValidator) TemplateBlockPostState(hash *chainhash.Hash) (*template.RuntimeStore, bool) {
 	if hash == nil {
 		return nil, false

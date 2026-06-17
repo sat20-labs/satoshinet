@@ -2858,7 +2858,9 @@ func (s *server) processAgentContracts() error {
 	best := s.chain.BestSnapshot()
 	heightValue := int64(best.Height)
 	unixValue := time.Now().Unix()
-	if !best.MedianTime.IsZero() {
+	if tipBlock, err := s.chain.BlockByHash(&best.Hash); err == nil && tipBlock != nil {
+		unixValue = tipBlock.MsgBlock().Header.Timestamp.Unix()
+	} else if !best.MedianTime.IsZero() {
 		unixValue = best.MedianTime.Unix()
 	}
 	corenodeAgent := agentcontract.NewPredictionAgent(s.agentLLM)
