@@ -76,12 +76,6 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 	if err != nil {
 		return err
 	}
-	if !hasRoot && !hasExecution {
-		return nil
-	}
-	if hasExecution && !hasRoot {
-		return evmBlockRuleError("missing EVM state root commitment")
-	}
 	runtime, err := v.runtime(block, view)
 	if err != nil {
 		return evmBlockRuleError("load EVM runtime: %v", err)
@@ -90,6 +84,17 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		return evmBlockRuleError("missing EVM runtime")
 	}
 	runtime.ContractPrefix = prefix
+	blockCtx := v.blockContext(block)
+	hasDueTrigger, err := v.runtimeHasDueTriggers(runtime, blockCtx, prefix)
+	if err != nil {
+		return err
+	}
+	if !hasRoot && !hasExecution && !hasDueTrigger {
+		return nil
+	}
+	if (hasExecution || hasDueTrigger) && !hasRoot {
+		return evmBlockRuleError("missing EVM state root commitment")
+	}
 	gasConfig := v.cfg.GasConfig
 	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
 
@@ -132,7 +137,7 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		Runtime:        runtime,
 		ContractPrefix: prefix,
 		GasConfig:      gasConfig,
-		Block:          v.blockContext(block),
+		Block:          blockCtx,
 		ResolveCaller: evm.LastInputPreviousOutputCallerResolver(
 			v.cfg.ChainParams, previousOutputScriptResolver(view)),
 		ResolveGasRefundRecipient: evm.LastInputPreviousOutputGasRefundRecipientResolver(
@@ -155,6 +160,44 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		return evmBlockRuleError("post-state root changed after validation")
 	}
 	return nil
+}
+
+func (v *EVMBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
+	view *UtxoViewpoint) (bool, error) {
+
+	if block == nil {
+		return false, evmBlockRuleError("missing block")
+	}
+	runtime, err := v.runtime(block, view)
+	if err != nil {
+		return false, evmBlockRuleError("load EVM runtime: %v", err)
+	}
+	if runtime == nil {
+		return false, evmBlockRuleError("missing EVM runtime")
+	}
+	prefix := v.contractPrefix()
+	runtime.ContractPrefix = prefix
+	return v.runtimeHasDueTriggers(runtime, v.blockContext(block), prefix)
+}
+
+func (v *EVMBlockExecutionValidator) runtimeHasDueTriggers(runtime *evm.Runtime,
+	block evm.BlockContext, prefix string) (bool, error) {
+
+	if len(runtime.DueTriggerCalls(block)) != 0 {
+		return true, nil
+	}
+	if v.cfg.ResolveTriggers == nil {
+		return false, nil
+	}
+	triggers, err := v.cfg.ResolveTriggers(evm.TriggerResolutionContext{
+		Block:          block,
+		Runtime:        runtime,
+		ContractPrefix: prefix,
+	})
+	if err != nil {
+		return false, evmBlockRuleError("resolve EVM triggers: %v", err)
+	}
+	return len(triggers) != 0, nil
 }
 
 func (v *EVMBlockExecutionValidator) blockContractOverlay(

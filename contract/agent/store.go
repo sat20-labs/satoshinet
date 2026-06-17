@@ -92,6 +92,13 @@ func (s *RuntimeStore) AdvancePredictionStatuses(heightValue, unixValue int64) b
 	return changed
 }
 
+func (s *RuntimeStore) HasDuePredictionStatusAdvance(heightValue, unixValue int64) bool {
+	if s == nil {
+		return false
+	}
+	return s.Clone().AdvancePredictionStatuses(heightValue, unixValue)
+}
+
 func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
 	keys := s.sortedKeys()
 	out := make([]RuntimeSnapshot, 0, len(keys))

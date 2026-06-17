@@ -3,13 +3,15 @@ package blockchain
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractengine "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/agent"
-	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -84,6 +86,126 @@ func TestCompositeContractBlockActivityRoutesResultBySpentContractUTXO(t *testin
 	}
 }
 
+func TestCompositeContractBlockActivityIncludesDueEVMTrigger(t *testing.T) {
+	contract := testContractAddressForBlockchain(t)
+	runtime := evm.NewRuntime(nil)
+	runtime.SetCode(evm.ContractAddressHash(contract), []byte{0x00})
+	if err := runtime.State.RegisterTrigger(evm.Trigger{
+		ID:       "height-trigger",
+		Contract: contract,
+		Kind:     evm.TriggerAtHeight,
+		Height:   100,
+		GasLimit: evm.DefaultGasConfig().TriggerBaseGas,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	block := btcutil.NewBlock(&wire.MsgBlock{
+		Header:       wire.BlockHeader{Timestamp: time.Unix(1710000000, 0)},
+		Transactions: []*wire.MsgTx{testEVMCoinbaseTx()},
+	})
+	block.SetHeight(100)
+
+	activity, err := NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
+		ChainParams: &chaincfg.TestNetParams,
+		EVMValidator: NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
+			NewRuntime: func(*btcutil.Block, *UtxoViewpoint) (*evm.Runtime, error) {
+				return runtime.Clone(), nil
+			},
+		}),
+	}).blockActivity(block, NewUtxoViewpoint())
+	if err != nil {
+		t.Fatalf("blockActivity failed: %v", err)
+	}
+	if !activity.EVM || activity.Template || activity.Agent {
+		t.Fatalf("activity mismatch: got %+v", activity)
+	}
+}
+
+func TestCompositeContractBlockActivityIncludesDueAgentHeightTrigger(t *testing.T) {
+	store := testReadyAgentRuntimeStore(t, agent.TimeBaseHeight, 10, 30)
+	block := btcutil.NewBlock(&wire.MsgBlock{
+		Header:       wire.BlockHeader{Timestamp: time.Unix(1710000000, 0)},
+		Transactions: []*wire.MsgTx{testEVMCoinbaseTx()},
+	})
+	block.SetHeight(11)
+
+	activity, err := NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
+		ChainParams: &chaincfg.TestNetParams,
+		AgentValidator: NewAgentBlockExecutionValidator(AgentBlockExecutionConfig{
+			NewRuntime: func(*btcutil.Block, *UtxoViewpoint) (*agent.RuntimeStore, error) {
+				return store.Clone(), nil
+			},
+		}),
+	}).blockActivity(block, NewUtxoViewpoint())
+	if err != nil {
+		t.Fatalf("blockActivity failed: %v", err)
+	}
+	if !activity.Agent || activity.Template || activity.EVM {
+		t.Fatalf("activity mismatch: got %+v", activity)
+	}
+}
+
+func TestAgentValidatorRejectsMissingRootForDueHeightTrigger(t *testing.T) {
+	store := testReadyAgentRuntimeStore(t, agent.TimeBaseHeight, 10, 30)
+	block := btcutil.NewBlock(&wire.MsgBlock{
+		Header:       wire.BlockHeader{Timestamp: time.Unix(1710000000, 0)},
+		Transactions: []*wire.MsgTx{testEVMCoinbaseTx()},
+	})
+	block.SetHeight(11)
+
+	err := NewAgentBlockExecutionValidator(AgentBlockExecutionConfig{
+		ChainParams: &chaincfg.TestNetParams,
+		NewRuntime: func(*btcutil.Block, *UtxoViewpoint) (*agent.RuntimeStore, error) {
+			return store.Clone(), nil
+		},
+	}).ValidateAgentBlock(block, NewUtxoViewpoint())
+	if err == nil || !strings.Contains(err.Error(), "missing agent state root commitment") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAgentValidatorAdvancesDueHeightTriggerWithRoot(t *testing.T) {
+	store := testReadyAgentRuntimeStore(t, agent.TimeBaseHeight, 10, 30)
+	executed, err := agent.ExecuteBlock(agent.BlockExecutionRequest{
+		Store:       store.Clone(),
+		BlockHeight: 11,
+		BlockTime:   time.Unix(1710000000, 0).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coinbase := testEVMCoinbaseTx()
+	if err := contractengine.UpsertCoinbaseStateRoot(coinbase, executed.StateRoot); err != nil {
+		t.Fatal(err)
+	}
+	block := btcutil.NewBlock(&wire.MsgBlock{
+		Header:       wire.BlockHeader{Timestamp: time.Unix(1710000000, 0)},
+		Transactions: []*wire.MsgTx{coinbase},
+	})
+	block.SetHeight(11)
+
+	validator := NewAgentBlockExecutionValidator(AgentBlockExecutionConfig{
+		ChainParams: &chaincfg.TestNetParams,
+		NewRuntime: func(*btcutil.Block, *UtxoViewpoint) (*agent.RuntimeStore, error) {
+			return store.Clone(), nil
+		},
+	})
+	if err := validator.ValidateAgentBlock(block, NewUtxoViewpoint()); err != nil {
+		t.Fatal(err)
+	}
+	postState, ok := validator.AgentBlockPostState(block.Hash())
+	if !ok {
+		t.Fatal("expected agent validator to expose post-state")
+	}
+	snapshots, err := postState.Snapshots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].State.Prediction.Status != agent.PredictionStatusClosedForBet {
+		t.Fatalf("unexpected post-state snapshots: %#v", snapshots)
+	}
+}
+
 func TestPreviousOutputScriptResolverAllowsCurrentBlockSpentEntry(t *testing.T) {
 	prevOut := wire.OutPoint{Hash: chainhash.Hash{7}, Index: 0}
 	txOut := testContractTxOut(t, contractcommon.ContractTypeTemplate)
@@ -143,6 +265,53 @@ func TestAgentValidatorRejectsUnexpectedResultWithoutPlan(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unexpected agent RESULT transaction") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func testReadyAgentRuntimeStore(t *testing.T, timeBase string, betDeadline, confirmAfter int64) *agent.RuntimeStore {
+	t.Helper()
+	contract := agent.PredictionContract{
+		Subtype:      agent.SubtypePrediction,
+		Title:        "height prediction",
+		Description:  "test prediction",
+		TimeBase:     timeBase,
+		EventTime:    confirmAfter - 1,
+		BetDeadline:  betDeadline,
+		ConfirmAfter: confirmAfter,
+		SourceURL:    "https://example.com/match",
+		BetAsset:     agent.SatoshiAssetName,
+		MinBetUnit:   "1000",
+		Outcomes: []agent.PredictionOutcome{
+			{ID: "a", Text: "home wins"},
+			{ID: "b", Text: "away wins"},
+		},
+	}
+	content, err := contract.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy := agent.DeployPayload{
+		GasLimit:        1000,
+		Subtype:         agent.SubtypePrediction,
+		AgentVersion:    agent.CurrentAgentVersion,
+		Deployer:        "deployer",
+		Random:          []byte{1, 2, 3},
+		ContractContent: content,
+	}
+	addr, _, err := agent.DeriveContractAddress(
+		agent.TestnetContractPrefix, deploy.Subtype, content, deploy.Deployer, deploy.Random)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := agent.NewRuntime(addr, deploy, agent.RuntimeConfig{CoreNodeAddress: "core"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ApplyReady(agent.ApplyReadyRequest{Invoker: "core"}); err != nil {
+		t.Fatal(err)
+	}
+	store := agent.NewRuntimeStore()
+	store.Add(runtime)
+	return store
 }
 
 func testCommonResultTx(t *testing.T, prevOut wire.OutPoint) *wire.MsgTx {

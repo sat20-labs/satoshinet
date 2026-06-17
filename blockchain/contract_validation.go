@@ -7,8 +7,8 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractapi "github.com/sat20-labs/satoshinet/contract"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
@@ -31,6 +31,10 @@ type contractBlockActivity struct {
 	Template bool
 	EVM      bool
 	Agent    bool
+}
+
+type ContractBlockActivityProvider interface {
+	HasContractBlockActivity(block *btcutil.Block, view *UtxoViewpoint) (bool, error)
 }
 
 func NewCompositeContractBlockValidator(cfg CompositeContractBlockValidatorConfig) *CompositeContractBlockValidator {
@@ -187,6 +191,33 @@ func (v *CompositeContractBlockValidator) blockActivity(block *btcutil.Block,
 			activity.Template = activity.Template || resultActivity.Template
 			activity.EVM = activity.EVM || resultActivity.EVM
 			activity.Agent = activity.Agent || resultActivity.Agent
+		}
+	}
+	if !activity.Template {
+		if provider, ok := v.cfg.TemplateValidator.(ContractBlockActivityProvider); ok {
+			hasActivity, err := provider.HasContractBlockActivity(block, view)
+			if err != nil {
+				return activity, err
+			}
+			activity.Template = hasActivity
+		}
+	}
+	if !activity.EVM {
+		if provider, ok := v.cfg.EVMValidator.(ContractBlockActivityProvider); ok {
+			hasActivity, err := provider.HasContractBlockActivity(block, view)
+			if err != nil {
+				return activity, err
+			}
+			activity.EVM = hasActivity
+		}
+	}
+	if !activity.Agent {
+		if provider, ok := v.cfg.AgentValidator.(ContractBlockActivityProvider); ok {
+			hasActivity, err := provider.HasContractBlockActivity(block, view)
+			if err != nil {
+				return activity, err
+			}
+			activity.Agent = hasActivity
 		}
 	}
 	return activity, nil

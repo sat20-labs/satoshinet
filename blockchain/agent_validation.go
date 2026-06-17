@@ -58,16 +58,18 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 	if err != nil {
 		return err
 	}
-	if !hasRoot && !hasExecution {
-		return nil
-	}
-	if hasExecution && !hasRoot {
-		return agentBlockRuleError("missing agent state root commitment")
-	}
 
 	store, err := v.runtime(block, view)
 	if err != nil {
 		return agentBlockRuleError("load agent runtime: %v", err)
+	}
+	hasDueTrigger := store.HasDuePredictionStatusAdvance(
+		int64(block.Height()), block.MsgBlock().Header.Timestamp.Unix())
+	if !hasRoot && !hasExecution && !hasDueTrigger {
+		return nil
+	}
+	if (hasExecution || hasDueTrigger) && !hasRoot {
+		return agentBlockRuleError("missing agent state root commitment")
 	}
 	gasConfig := v.cfg.GasConfig
 	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
@@ -128,6 +130,23 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 	}
 	v.rememberPostState(block.Hash(), store.Clone())
 	return nil
+}
+
+func (v *AgentBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
+	view *UtxoViewpoint) (bool, error) {
+
+	if block == nil {
+		return false, agentBlockRuleError("missing block")
+	}
+	if view == nil {
+		return false, agentBlockRuleError("missing UTXO view")
+	}
+	store, err := v.runtime(block, view)
+	if err != nil {
+		return false, agentBlockRuleError("load agent runtime: %v", err)
+	}
+	return store.HasDuePredictionStatusAdvance(
+		int64(block.Height()), block.MsgBlock().Header.Timestamp.Unix()), nil
 }
 
 func (v *AgentBlockExecutionValidator) AgentBlockPostState(hash *chainhash.Hash) (*agent.RuntimeStore, bool) {

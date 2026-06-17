@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,6 +222,80 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	}}, contractScript), 1, false)
 	if err := validator.ValidateEVMBlock(block, view); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEVMBlockExecutionValidatorAdvancesDueTriggerWithoutResult(t *testing.T) {
+	contract := testContractAddressForBlockchain(t)
+	runtime := evm.NewRuntime(nil)
+	runtime.SetCode(evm.ContractAddressHash(contract), []byte{0x00})
+	if err := runtime.State.RegisterTrigger(evm.Trigger{
+		ID:       "height-trigger",
+		Contract: contract,
+		Kind:     evm.TriggerAtHeight,
+		Height:   100,
+		GasLimit: evm.DefaultGasConfig().TriggerBaseGas,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	parentRoot := runtime.State.StateRoot()
+	blockTime := time.Unix(1710000000, 0)
+	gasConfig := evm.DefaultGasConfig()
+	gasConfig.FixedGasPrice = 1
+	contractUTXOs := func(evm.ContractAddress) ([]evm.UTXO, error) {
+		return nil, nil
+	}
+	executed, err := evm.ExecuteBlock(evm.BlockExecutionRequest{
+		Runtime:       runtime.Clone(),
+		GasConfig:     gasConfig,
+		Block:         evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: gasConfig.MaxGasPerBlock, FixedGasPrice: 1},
+		ContractUTXOs: contractUTXOs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(executed.Records) != 0 {
+		t.Fatalf("expected state-only trigger, got records: %#v", executed.Records)
+	}
+	if executed.StateRoot == parentRoot {
+		t.Fatal("expected trigger removal to change state root")
+	}
+
+	missingRootBlock := btcutil.NewBlock(&wire.MsgBlock{
+		Header:       wire.BlockHeader{Timestamp: blockTime},
+		Transactions: []*wire.MsgTx{testEVMCoinbaseTx()},
+	})
+	missingRootBlock.SetHeight(100)
+	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
+		GasConfig: gasConfig,
+		NewRuntime: func(*btcutil.Block, *UtxoViewpoint) (*evm.Runtime, error) {
+			return runtime.Clone(), nil
+		},
+		ContractUTXOs: contractUTXOs,
+	})
+	err = validator.ValidateEVMBlock(missingRootBlock, NewUtxoViewpoint())
+	if err == nil || !strings.Contains(err.Error(), "missing EVM state root commitment") {
+		t.Fatalf("unexpected missing root error: %v", err)
+	}
+
+	coinbase := testEVMCoinbaseTx()
+	if err := evm.UpsertCoinbaseStateRoot(coinbase, executed.StateRoot); err != nil {
+		t.Fatal(err)
+	}
+	block := btcutil.NewBlock(&wire.MsgBlock{
+		Header:       wire.BlockHeader{Timestamp: blockTime},
+		Transactions: []*wire.MsgTx{coinbase},
+	})
+	block.SetHeight(100)
+	if err := validator.ValidateEVMBlock(block, NewUtxoViewpoint()); err != nil {
+		t.Fatal(err)
+	}
+	postState, ok := validator.EVMBlockPostState(block.Hash())
+	if !ok {
+		t.Fatal("expected EVM validator to expose post-state")
+	}
+	if postState.StateRoot() != executed.StateRoot {
+		t.Fatal("unexpected EVM post-state root")
 	}
 }
 

@@ -38,8 +38,8 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
@@ -3920,6 +3920,7 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
+		parentRoot := runtime.State.StateRoot()
 		txs := make([]*wire.MsgTx, 0, len(req.Txs))
 		for _, tx := range req.Txs {
 			msgTx := tx.MsgTx()
@@ -3956,7 +3957,7 @@ func newEVMTemplateResultBuilder(db database.DB, params *chaincfg.Params,
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
-		if len(result.Execution.Records) == 0 {
+		if len(result.Execution.Records) == 0 && result.Execution.StateRoot == parentRoot {
 			return mining.ContractBuildResult{}, nil
 		}
 		return mining.ContractBuildResult{
@@ -4140,6 +4141,7 @@ func newAgentContractResultBuilder(db database.DB, params *chaincfg.Params,
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
+		parentRoot := store.StateRoot()
 		txs := make([]*wire.MsgTx, 0, len(req.Txs))
 		for _, tx := range req.Txs {
 			txs = append(txs, tx.MsgTx())
@@ -4162,6 +4164,10 @@ func newAgentContractResultBuilder(db database.DB, params *chaincfg.Params,
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
+		if len(result.Execution.Records) == 0 && len(result.ResultTxs) == 0 &&
+			result.Execution.StateRoot == parentRoot {
+			return mining.ContractBuildResult{}, nil
+		}
 		return mining.ContractBuildResult{
 			ResultTxs: result.ResultTxs,
 			StateRoot: result.Execution.StateRoot,
@@ -4176,7 +4182,6 @@ func newContractResultBuilder(params *chaincfg.Params, templateBuilder, evmBuild
 		var templateResult mining.ContractBuildResult
 		var err error
 		hasTemplateWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeTemplate)
-		hasAgentWork := contractengine.BlockHasContractTypeWork(req.Txs, params, contractcommon.ContractTypeAgent)
 		if templateBuilder != nil && hasTemplateWork {
 			templateResult, err = templateBuilder(req)
 			if err != nil {
@@ -4201,7 +4206,7 @@ func newContractResultBuilder(params *chaincfg.Params, templateBuilder, evmBuild
 		}
 
 		var agentResult mining.ContractBuildResult
-		if agentBuilder != nil && hasAgentWork {
+		if agentBuilder != nil {
 			agentResult, err = agentBuilder(req)
 			if err != nil {
 				return mining.ContractBuildResult{}, err
