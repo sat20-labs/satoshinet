@@ -49,3 +49,43 @@ func TestAgentPredictionCheckRejectsInvalidBetAsset(t *testing.T) {
 
 	require.ErrorContains(t, contract.Check(), "invalid asset name")
 }
+
+func TestAgentInvokePayloadRoundTrip(t *testing.T) {
+	want := AgentInvokePayload{
+		GasLimit:  12345,
+		CallNonce: 67890,
+		Action:    AgentInvokeAPIConfirm,
+		Param:     []byte("confirm-param"),
+	}
+	encoded, err := EncodeAgentInvokePayload(want)
+	require.NoError(t, err)
+
+	got, err := DecodeAgentInvokePayload(encoded)
+	require.NoError(t, err)
+	require.Equal(t, want.GasLimit, got.GasLimit)
+	require.Equal(t, want.CallNonce, got.CallNonce)
+	require.Equal(t, want.Action, got.Action)
+	require.Equal(t, want.Param, got.Param)
+}
+
+func TestAgentDeployPayloadRoundTrip(t *testing.T) {
+	want := AgentDeployPayload{
+		GasLimit:        43210,
+		Subtype:         SubtypePrediction,
+		AgentVersion:    CurrentAgentVersion,
+		Deployer:        "tb1pdeployer",
+		Random:          []byte("random"),
+		ContractContent: []byte("contract-content"),
+	}
+	encoded, err := EncodeAgentDeployPayload(want)
+	require.NoError(t, err)
+
+	got, err := DecodeAgentDeployPayload(encoded)
+	require.NoError(t, err)
+	require.Equal(t, want.GasLimit, got.GasLimit)
+	require.Equal(t, want.Subtype, got.Subtype)
+	require.Equal(t, want.AgentVersion, got.AgentVersion)
+	require.Equal(t, want.Deployer, got.Deployer)
+	require.Equal(t, want.Random, got.Random)
+	require.Equal(t, want.ContractContent, got.ContractContent)
+}

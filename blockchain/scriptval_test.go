@@ -31,7 +31,7 @@ func TestCheckBlockScripts(t *testing.T) {
 	view := NewUtxoViewpoint()
 
 	scriptFlags := txscript.ScriptBip16
-	err = checkBlockScripts(block, view, scriptFlags, nil, nil)
+	err = checkBlockScripts(block, view, scriptFlags, nil, nil, chain.chainParams)
 	if err != nil {
 		t.Errorf("Transaction script validation failed: %v\n", err)
 		return

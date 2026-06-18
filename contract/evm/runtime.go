@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
 type Runtime struct {
@@ -25,7 +26,7 @@ type BlockContext struct {
 	Coinbase      EVMAddress
 	Number        uint64
 	Time          uint64
-	GasLimit      uint64
+	GasLimit      int64
 	FixedGasPrice uint64
 }
 
@@ -34,15 +35,15 @@ type CallRequest struct {
 	Target EVMAddress
 	CallID string
 	Input  []byte
-	Gas    uint64
-	Value  uint64
+	Gas    int64
+	Value  int64
 	Block  BlockContext
 }
 
 type CallResult struct {
 	ReturnData []byte
-	GasUsed    uint64
-	GasLeft    uint64
+	GasUsed    int64
+	GasLeft    int64
 	Status     ResultStatus
 	Err        error
 }
@@ -51,8 +52,8 @@ type DeployRequest struct {
 	Caller      EVMAddress
 	CallID      string
 	InitCode    []byte
-	Gas         uint64
-	Value       uint64
+	Gas         int64
+	Value       int64
 	DeployNonce uint64
 	Block       BlockContext
 }
@@ -60,8 +61,8 @@ type DeployRequest struct {
 type DeployResult struct {
 	Contract    ContractAddress
 	RuntimeCode []byte
-	GasUsed     uint64
-	GasLeft     uint64
+	GasUsed     int64
+	GasLeft     int64
 	Status      ResultStatus
 	Err         error
 }
@@ -83,7 +84,7 @@ func (r *Runtime) Clone() *Runtime {
 	}
 	cloned := *r
 	cloned.State = r.State.Clone()
-	cloned.AssetIntents = cloneAssetIntents(r.AssetIntents)
+	cloned.AssetIntents = contractframework.CloneAssetIntents(r.AssetIntents)
 	return &cloned
 }
 
@@ -106,6 +107,14 @@ func (r *Runtime) DueTriggerCalls(block BlockContext) []TriggerCall {
 
 func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	r.State.SetNonce(GethAddress(req.Caller), req.DeployNonce, 0)
+	gasLimit, err := contractframework.GasUnitsUint64(req.Gas)
+	if err != nil {
+		return DeployResult{Status: ResultStatusInvalid, Err: err}
+	}
+	value, err := contractframework.SatoshiAmountUint64(req.Value)
+	if err != nil {
+		return DeployResult{Status: ResultStatusInvalid, Err: err}
+	}
 	capturedIntents := make([]AssetIntent, 0)
 	capturedTriggers := make([]Trigger, 0)
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers)
@@ -121,9 +130,9 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	})
 	_, contractAddr, left, err := evm.Create(
 		GethAddress(req.Caller),
-		cloneBytes(req.InitCode),
-		req.Gas,
-		uint256.NewInt(req.Value),
+		contractframework.CloneBytes(req.InitCode),
+		gasLimit,
+		uint256.NewInt(value),
 	)
 	contract := r.contractAddressFromGeth(contractAddr)
 	if err == nil {
@@ -136,17 +145,29 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 			_ = r.State.RegisterTrigger(trigger)
 		}
 	}
+	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
+	if gasLeftErr != nil && err == nil {
+		err = gasLeftErr
+	}
 	return DeployResult{
 		Contract:    contract,
 		RuntimeCode: r.State.GetCode(contractAddr),
-		GasUsed:     gasUsed(req.Gas, left),
-		GasLeft:     left,
+		GasUsed:     gasUsed(req.Gas, gasLeft),
+		GasLeft:     gasLeft,
 		Status:      ResultStatusFromError(err),
 		Err:         err,
 	}
 }
 
 func (r *Runtime) Call(req CallRequest) CallResult {
+	gasLimit, err := contractframework.GasUnitsUint64(req.Gas)
+	if err != nil {
+		return CallResult{Status: ResultStatusInvalid, Err: err}
+	}
+	value, err := contractframework.SatoshiAmountUint64(req.Value)
+	if err != nil {
+		return CallResult{Status: ResultStatusInvalid, Err: err}
+	}
 	capturedIntents := make([]AssetIntent, 0)
 	capturedTriggers := make([]Trigger, 0)
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers)
@@ -163,9 +184,9 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	ret, left, err := evm.Call(
 		GethAddress(req.Caller),
 		GethAddress(req.Target),
-		cloneBytes(req.Input),
-		req.Gas,
-		uint256.NewInt(req.Value),
+		contractframework.CloneBytes(req.Input),
+		gasLimit,
+		uint256.NewInt(value),
 	)
 	if err == nil {
 		for i := range capturedIntents {
@@ -179,10 +200,14 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 			_ = r.State.RegisterTrigger(trigger)
 		}
 	}
+	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
+	if gasLeftErr != nil && err == nil {
+		err = gasLeftErr
+	}
 	return CallResult{
 		ReturnData: ret,
-		GasUsed:    gasUsed(req.Gas, left),
-		GasLeft:    left,
+		GasUsed:    gasUsed(req.Gas, gasLeft),
+		GasLeft:    gasLeft,
 		Status:     ResultStatusFromError(err),
 		Err:        err,
 	}
@@ -201,7 +226,7 @@ func ResultStatusFromError(err error) ResultStatus {
 	}
 }
 
-func gasUsed(initial, left uint64) uint64 {
+func gasUsed(initial, left int64) int64 {
 	if left > initial {
 		return 0
 	}
@@ -233,7 +258,7 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 		frames = append(frames, assetTraceFrame{
 			from:  from,
 			to:    to,
-			input: cloneBytes(input),
+			input: contractframework.CloneBytes(input),
 		})
 	}
 	tracer.OnExit = func(depth int, output []byte, gasUsed uint64, err error, reverted bool) {
@@ -294,6 +319,10 @@ func (r *Runtime) contractAddressFromGeth(addr gethcommon.Address) ContractAddre
 }
 
 func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {
+	gasLimit, err := contractframework.GasUnitsUint64(ctx.GasLimit)
+	if err != nil {
+		gasLimit = 0
+	}
 	return vm.BlockContext{
 		CanTransfer: func(db vm.StateDB, addr gethcommon.Address, amount *uint256.Int) bool {
 			return db.GetBalance(addr).Cmp(amount) >= 0
@@ -304,7 +333,7 @@ func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {
 		},
 		GetHash:     func(uint64) gethcommon.Hash { return gethcommon.Hash{} },
 		Coinbase:    GethAddress(ctx.Coinbase),
-		GasLimit:    ctx.GasLimit,
+		GasLimit:    gasLimit,
 		BlockNumber: new(big.Int).SetUint64(ctx.Number),
 		Time:        ctx.Time,
 		Difficulty:  big.NewInt(0),

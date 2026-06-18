@@ -62,7 +62,7 @@ func TestTriggerPrecompileRegisterHeightABI(t *testing.T) {
 	require.Equal(t, "vault-release", trigger.ID)
 	require.Equal(t, TriggerAtHeight, trigger.Kind)
 	require.Equal(t, int64(100), trigger.Height)
-	require.Equal(t, uint64(50000), trigger.GasLimit)
+	require.Equal(t, int64(50000), trigger.GasLimit)
 	require.Equal(t, []byte{1, 2, 3}, trigger.Calldata)
 
 	ret, err := NewTriggerPrecompile().Run(call)
@@ -90,7 +90,7 @@ func TestRuntimeCapturesTriggerRegistration(t *testing.T) {
 	require.Equal(t, "vault-release", triggers[0].ID)
 	require.True(t, triggers[0].Contract.Equal(contract))
 	require.Equal(t, int64(100), triggers[0].Height)
-	require.Equal(t, uint64(50000), triggers[0].GasLimit)
+	require.Equal(t, int64(50000), triggers[0].GasLimit)
 	require.Equal(t, []byte{1, 2, 3}, triggers[0].Calldata)
 }
 

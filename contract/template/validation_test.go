@@ -28,8 +28,10 @@ func TestValidateTemplateDeployTxBasic(t *testing.T) {
 	validated, err := ValidateDeployTxBasic(tx, TestnetContractPrefix, nil, DefaultGasConfig())
 	require.NoError(t, err)
 	require.Equal(t, DefaultGasConfig().DeployBaseGas, validated.Payload.GasLimit)
-	require.Equal(t, TemplateLimitOrder, validated.Runtime.TemplateName())
-	require.Equal(t, validated.Address.EncodeAddress(), validated.Runtime.URL())
+	runtime, ok := validated.Runtime.(*ContractRuntime)
+	require.True(t, ok)
+	require.Equal(t, TemplateLimitOrder, runtime.TemplateName())
+	require.Equal(t, validated.Address.EncodeAddress(), runtime.URL())
 }
 
 func TestValidateTemplateInvokeTxBasic(t *testing.T) {

@@ -33,7 +33,7 @@ func TestBuildDeployTx(t *testing.T) {
 	parsed, err := ParseTx(tx, StandardContractScriptResolver(TestnetContractPrefix))
 	require.NoError(t, err)
 	require.Equal(t, TxTypeDeploy, parsed.Type)
-	require.Equal(t, uint64(100000), parsed.Deploy.GasLimit)
+	require.Equal(t, int64(100000), parsed.Deploy.GasLimit)
 
 	funding, err := FindContractOutputsForContract(tx,
 		StandardContractScriptResolver(TestnetContractPrefix), contract)
@@ -67,7 +67,7 @@ func TestBuildDeployTxSplitsLargeInitCode(t *testing.T) {
 
 	parsed, err := ParseTx(tx, StandardContractScriptResolver(TestnetContractPrefix))
 	require.NoError(t, err)
-	require.Equal(t, initCode, parsed.Deploy.InitCode)
+	require.Equal(t, initCode, parsed.Deploy.Code)
 	funding, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(TestnetContractPrefix), contract)
 	require.NoError(t, err)
 	require.Len(t, funding, 1)
@@ -99,7 +99,7 @@ func TestBuildInvokeTx(t *testing.T) {
 	require.Len(t, parsed.ContractOutputs, 1)
 	require.True(t, contract.Equal(parsed.ContractOutputs[0].Contract))
 	require.Equal(t, int64(77), parsed.ContractOutputs[0].Value)
-	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, parsed.Invoke.Calldata)
+	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, parsed.Invoke.Data)
 }
 
 func TestBuildEVMTxRejectsInvalidFunding(t *testing.T) {

@@ -6,8 +6,6 @@ import (
 	"fmt"
 
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -26,7 +24,7 @@ type TxOpView struct {
 	ContractTypeID byte                   `json:"contractTypeId,omitempty"`
 	Subtype        string                 `json:"subtype,omitempty"`
 	Action         string                 `json:"action,omitempty"`
-	GasLimit       uint64                 `json:"gasLimit,omitempty"`
+	GasLimit       int64                  `json:"gasLimit,omitempty"`
 	Nonce          uint64                 `json:"nonce,omitempty"`
 	Contract       string                 `json:"contract,omitempty"`
 	Deployer       string                 `json:"deployer,omitempty"`
@@ -203,7 +201,7 @@ func collectContractPayload(tx *wire.MsgTx) ([]byte, contractcommon.TxType, bool
 func fillDeployOp(op *TxOpView, contractType byte, payload []byte, prefix string) {
 	switch contractType {
 	case contractcommon.ContractTypeTemplate:
-		p, err := tmplcontract.DecodeDeployPayload(payload)
+		p, err := contractcommon.DecodeTemplateDeployPayload(payload)
 		if err != nil {
 			op.Details = errorDetails(err)
 			return
@@ -213,7 +211,7 @@ func fillDeployOp(op *TxOpView, contractType byte, payload []byte, prefix string
 		op.TemplateName = p.TemplateName
 		op.Version = p.TemplateVersion
 		op.Deployer = p.Deployer
-		if addr, _, err := tmplcontract.DeriveContractAddress(prefix, p.ContractContent, p.Deployer, p.Random); err == nil {
+		if addr, _, err := contractcommon.DeriveTemplateContractAddress(prefix, p.ContractContent, p.Deployer, p.Random); err == nil {
 			op.Contract = addr.EncodeAddress()
 		}
 		op.Details = map[string]interface{}{
@@ -221,7 +219,7 @@ func fillDeployOp(op *TxOpView, contractType byte, payload []byte, prefix string
 			"content_size": len(p.ContractContent),
 		}
 	case contractcommon.ContractTypeAgent:
-		p, err := agentcontract.DecodeDeployPayload(payload)
+		p, err := contractcommon.DecodeAgentDeployPayload(payload)
 		if err != nil {
 			op.Details = errorDetails(err)
 			return
@@ -230,7 +228,7 @@ func fillDeployOp(op *TxOpView, contractType byte, payload []byte, prefix string
 		op.Subtype = p.Subtype
 		op.Version = p.AgentVersion
 		op.Deployer = p.Deployer
-		if addr, _, err := agentcontract.DeriveContractAddress(prefix, p.Subtype, p.ContractContent, p.Deployer, p.Random); err == nil {
+		if addr, _, err := contractcommon.DeriveAgentContractAddress(prefix, p.Subtype, p.ContractContent, p.Deployer, p.Random); err == nil {
 			op.Contract = addr.EncodeAddress()
 		}
 		op.Details = map[string]interface{}{
@@ -252,7 +250,7 @@ func fillDeployOp(op *TxOpView, contractType byte, payload []byte, prefix string
 func fillInvokeOp(op *TxOpView, contractType byte, payload []byte) {
 	switch contractType {
 	case contractcommon.ContractTypeTemplate:
-		p, err := tmplcontract.DecodeInvokePayload(payload)
+		p, err := contractcommon.DecodeTemplateInvokePayload(payload)
 		if err != nil {
 			op.Details = errorDetails(err)
 			return
@@ -262,7 +260,7 @@ func fillInvokeOp(op *TxOpView, contractType byte, payload []byte) {
 		op.Action = p.Action
 		op.Details = map[string]interface{}{"param_size": len(p.Param)}
 	case contractcommon.ContractTypeAgent:
-		p, err := agentcontract.DecodeInvokePayload(payload)
+		p, err := contractcommon.DecodeAgentInvokePayload(payload)
 		if err != nil {
 			op.Details = errorDetails(err)
 			return

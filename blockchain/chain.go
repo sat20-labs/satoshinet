@@ -15,9 +15,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/contract/agent"
-	"github.com/sat20-labs/satoshinet/contract/evm"
-	"github.com/sat20-labs/satoshinet/contract/template"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -109,10 +107,8 @@ type BlockChain struct {
 	sigCache               *txscript.SigCache
 	indexManager           IndexManager
 	assetIndexerMgr        *indexer.IndexerMgr
-	evmBlockValidator      EVMBlockValidator
-	templateBlockValidator TemplateBlockValidator
-	agentBlockValidator    AgentBlockValidator
 	contractBlockValidator ContractBlockValidator
+	contractStateManager   ContractStateManager
 	hashCache              *txscript.HashCache
 
 	// The following fields are calculated based upon the provided chain
@@ -684,26 +680,10 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 			return err
 		}
 
-		if provider, ok := b.contractStateProvider(evmContractStateProvider).(EVMBlockStateProvider); ok {
-			if postState, ok := provider.EVMBlockPostState(block.Hash()); ok {
-				err = dbStoreEVMBlockState(dbTx, block.Hash(), postState)
-				if err != nil {
-					return err
-				}
-			}
-		}
-		if provider, ok := b.contractStateProvider(templateContractStateProvider).(TemplateBlockStateProvider); ok {
-			if postState, ok := provider.TemplateBlockPostState(block.Hash()); ok {
-				err = dbStoreTemplateBlockState(dbTx, block.Hash(), postState)
-				if err != nil {
-					return err
-				}
-			}
-		}
-		if provider, ok := b.contractStateProvider(agentContractStateProvider).(AgentBlockStateProvider); ok {
-			if postState, ok := provider.AgentBlockPostState(block.Hash()); ok {
-				err = dbStoreAgentBlockState(dbTx, block.Hash(), postState)
-				if err != nil {
+		if b.contractStateManager != nil && b.contractBlockValidator != nil {
+			provider, ok := b.contractBlockValidator.(ContractBlockStateProvider)
+			if ok {
+				if err := b.contractStateManager.StoreContractBlockState(dbTx, block.Hash(), provider); err != nil {
 					return err
 				}
 			}
@@ -856,17 +836,11 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 			return err
 		}
 
-		err = dbDeleteEVMBlockState(dbTx, block.Hash(), &prevNode.hash)
-		if err != nil {
-			return err
-		}
-		err = dbDeleteTemplateBlockState(dbTx, block.Hash(), &prevNode.hash)
-		if err != nil {
-			return err
-		}
-		err = dbDeleteAgentBlockState(dbTx, block.Hash(), &prevNode.hash)
-		if err != nil {
-			return err
+		if b.contractStateManager != nil {
+			err = b.contractStateManager.DeleteContractBlockState(dbTx, block.Hash(), &prevNode.hash)
+			if err != nil {
+				return err
+			}
 		}
 
 		// Allow the index manager to call each of the currently active
@@ -2187,84 +2161,26 @@ type IndexManager interface {
 	DisconnectBlock(database.Tx, *btcutil.Block, []SpentTxOut) error
 }
 
-// EVMBlockValidator validates SatoshiNet EVM execution and settlement for a
-// block after its input UTXOs have been loaded into the view.
-type EVMBlockValidator interface {
-	ValidateEVMBlock(block *btcutil.Block, view *UtxoViewpoint) error
-}
-
-// EVMBlockStateProvider is optionally implemented by an EVMBlockValidator that
-// can expose the post-state generated during block validation.
-type EVMBlockStateProvider interface {
-	EVMBlockPostState(hash *chainhash.Hash) (*evm.MemoryStateDB, bool)
-}
-
-// TemplateBlockValidator validates SatoshiNet template contract execution and
-// settlement for a block after its input UTXOs have been loaded into the view.
-type TemplateBlockValidator interface {
-	ValidateTemplateBlock(block *btcutil.Block, view *UtxoViewpoint) error
-}
-
-// TemplateBlockStateProvider is optionally implemented by a
-// TemplateBlockValidator that can expose the post-state generated during block
-// validation.
-type TemplateBlockStateProvider interface {
-	TemplateBlockPostState(hash *chainhash.Hash) (*template.RuntimeStore, bool)
-}
-
-// AgentBlockValidator validates SatoshiNet Agent contract execution and
-// settlement for a block after its input UTXOs have been loaded into the view.
-type AgentBlockValidator interface {
-	ValidateAgentBlock(block *btcutil.Block, view *UtxoViewpoint) error
-}
-
-// AgentBlockStateProvider is optionally implemented by an AgentBlockValidator
-// that can expose the post-state generated during block validation.
-type AgentBlockStateProvider interface {
-	AgentBlockPostState(hash *chainhash.Hash) (*agent.RuntimeStore, bool)
-}
-
 // ContractBlockValidator validates all enabled contract execution engines for
 // a block after its input UTXOs have been loaded into the view.
 type ContractBlockValidator interface {
 	ValidateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error
 }
 
-type contractStateProviderKind byte
+// ContractBlockStateProvider is optionally implemented by a
+// ContractBlockValidator that can expose post-state generated during block
+// validation without requiring blockchain to know any concrete contract engine
+// store type.
+type ContractBlockStateProvider interface {
+	ContractBlockPostState(module contractframework.ModuleType, hash *chainhash.Hash) (contractframework.EngineState, bool)
+}
 
-const (
-	evmContractStateProvider contractStateProviderKind = iota + 1
-	templateContractStateProvider
-	agentContractStateProvider
-)
-
-func (b *BlockChain) contractStateProvider(kind contractStateProviderKind) interface{} {
-	if b.contractBlockValidator != nil {
-		switch kind {
-		case evmContractStateProvider:
-			if provider, ok := b.contractBlockValidator.(EVMBlockStateProvider); ok {
-				return provider
-			}
-		case templateContractStateProvider:
-			if provider, ok := b.contractBlockValidator.(TemplateBlockStateProvider); ok {
-				return provider
-			}
-		case agentContractStateProvider:
-			if provider, ok := b.contractBlockValidator.(AgentBlockStateProvider); ok {
-				return provider
-			}
-		}
-	}
-	switch kind {
-	case evmContractStateProvider:
-		return b.evmBlockValidator
-	case templateContractStateProvider:
-		return b.templateBlockValidator
-	case agentContractStateProvider:
-		return b.agentBlockValidator
-	default:
-		return nil
-	}
+// ContractStateManager persists and rolls back contract post-state snapshots.
+// The implementation lives outside blockchain so concrete contract engine state
+// codecs stay in the contract package tree.
+type ContractStateManager interface {
+	StoreContractBlockState(database.Tx, *chainhash.Hash, ContractBlockStateProvider) error
+	DeleteContractBlockState(database.Tx, *chainhash.Hash, *chainhash.Hash) error
 }
 
 // Config is a descriptor which specifies the blockchain instance configuration.
@@ -2327,26 +2243,14 @@ type Config struct {
 
 	AssetIndexManager *indexer.IndexerMgr
 
-	// EVMBlockValidator optionally validates EVM execution, Result TX
-	// settlement, and coinbase state-root commitments during block
-	// connection.
-	EVMBlockValidator EVMBlockValidator
-
-	// TemplateBlockValidator optionally validates template contract execution,
-	// Result TX settlement, and coinbase state-root commitments during block
-	// connection.
-	TemplateBlockValidator TemplateBlockValidator
-
-	// AgentBlockValidator optionally validates Agent contract execution,
-	// Result TX settlement, and coinbase state-root commitments during block
-	// connection.
-	AgentBlockValidator AgentBlockValidator
-
 	// ContractBlockValidator optionally validates all contract execution
-	// engines through a single external interface. If nil, a composite
-	// validator is built from EVMBlockValidator, TemplateBlockValidator, and
-	// AgentBlockValidator.
+	// engines through a single external interface.
 	ContractBlockValidator ContractBlockValidator
+
+	// ContractStateManager optionally persists contract post-states generated
+	// by ContractBlockValidator during block connection and removes them during
+	// disconnect.
+	ContractStateManager ContractStateManager
 
 	// HashCache defines a transaction hash mid-state cache to use when
 	// validating transactions. This cache has the potential to greatly
@@ -2399,18 +2303,6 @@ func New(config *Config) (*BlockChain, error) {
 	targetTimespan := int64(params.TargetTimespan / time.Second)
 	targetTimePerBlock := int64(params.TargetTimePerBlock / time.Second)
 	adjustmentFactor := params.RetargetAdjustmentFactor
-	contractBlockValidator := config.ContractBlockValidator
-	if contractBlockValidator == nil &&
-		(config.TemplateBlockValidator != nil || config.EVMBlockValidator != nil ||
-			config.AgentBlockValidator != nil) {
-		contractBlockValidator = NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
-			ChainParams:       params,
-			TemplateValidator: config.TemplateBlockValidator,
-			EVMValidator:      config.EVMBlockValidator,
-			AgentValidator:    config.AgentBlockValidator,
-		})
-	}
-
 	b := BlockChain{
 		checkpoints:            config.Checkpoints,
 		checkpointsByHeight:    checkpointsByHeight,
@@ -2420,10 +2312,8 @@ func New(config *Config) (*BlockChain, error) {
 		sigCache:               config.SigCache,
 		indexManager:           config.IndexManager,
 		assetIndexerMgr:        config.AssetIndexManager,
-		evmBlockValidator:      config.EVMBlockValidator,
-		templateBlockValidator: config.TemplateBlockValidator,
-		agentBlockValidator:    config.AgentBlockValidator,
-		contractBlockValidator: contractBlockValidator,
+		contractBlockValidator: config.ContractBlockValidator,
+		contractStateManager:   config.ContractStateManager,
 		minRetargetTimespan:    targetTimespan / adjustmentFactor,
 		maxRetargetTimespan:    targetTimespan * adjustmentFactor,
 		blocksPerRetarget:      int32(targetTimespan / targetTimePerBlock),

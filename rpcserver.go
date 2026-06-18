@@ -39,6 +39,7 @@ import (
 	contractapi "github.com/sat20-labs/satoshinet/contract"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
+	contractnode "github.com/sat20-labs/satoshinet/contract/node"
 	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/mempool"
@@ -1000,7 +1001,7 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 	}
 	switch contractType {
 	case contractcommon.ContractTypeTemplate:
-		_, store, err := blockchain.NewTemplateStateStore(s.cfg.DB).LoadTip()
+		_, store, err := contractnode.NewTemplateStateStore(s.cfg.DB).LoadTip()
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1012,7 +1013,7 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 		}
 		return nil, map[string]interface{}{"exists": false}, nil
 	case contractcommon.ContractTypeAgent:
-		_, store, err := blockchain.NewAgentStateStore(s.cfg.DB).LoadTip()
+		_, store, err := contractnode.NewAgentStateStore(s.cfg.DB).LoadTip()
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1023,7 +1024,7 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 		}
 		return nil, map[string]interface{}{"exists": false}, nil
 	case contractcommon.ContractTypeEVM:
-		_, state, err := blockchain.NewEVMStateStore(s.cfg.DB).LoadTip()
+		_, state, err := contractnode.NewEVMStateStore(s.cfg.DB).LoadTip()
 		if err != nil {
 			return nil, nil, err
 		}

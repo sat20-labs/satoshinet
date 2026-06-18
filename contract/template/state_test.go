@@ -258,6 +258,38 @@ func TestApplyGasFundingDoesNotChangeAMMPool(t *testing.T) {
 	require.True(t, state.Running.TradingReady)
 }
 
+func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	fundAMMRuntime(t, runtime)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	state.Running.AssetAInPool = parseDecimalOrZero("1")
+	state.Running.AssetBInPool = scommon.NewDefaultDecimal(2)
+	state.Running.GasBalance = parseDecimalOrZero("3")
+	require.NoError(t, runtime.saveRuntimeState(state))
+
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	gasAssetName := DefaultGasConfig().GasAssetName
+	actualAssets := testAssets("ordx:f:test", 77, gasAssetName, 5)
+	err = store.ReconcileAssetCaches(func(contract ContractAddress) ([]UTXO, error) {
+		require.True(t, contract.Equal(runtime.Address()))
+		return []UTXO{{
+			OutPoint: OutPoint{TxID: "actual", Vout: 0},
+			Contract: contract,
+			Value:    33,
+			Assets:   actualAssets,
+		}}, nil
+	}, DefaultGasConfig())
+	require.NoError(t, err)
+
+	state, err = runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "77", state.Running.AssetAInPool)
+	requireDecimalString(t, "33", state.Running.AssetBInPool)
+	requireDecimalString(t, "5", state.Running.GasBalance)
+}
+
 func testLimitOrderRuntime(t *testing.T) *ContractRuntime {
 	t.Helper()
 	contract := NewLimitOrderContract("ordx:f:test")

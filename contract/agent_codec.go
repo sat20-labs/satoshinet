@@ -10,7 +10,8 @@ import (
 const (
 	SubtypePrediction = "prediction"
 
-	CurrentAgentVersion uint32 = 1
+	CurrentAgentVersion           uint32 = 1
+	MaxPredictionDecimalPrecision        = 18
 
 	AgentInvokeAPIReady   = "ready"
 	AgentInvokeAPIBet     = "bet"
@@ -24,6 +25,35 @@ const (
 	ResultTypeCancelled    = "cancelled"
 	ResultTypeInvalid      = "invalid"
 	ResultTypeUnverifiable = "unverifiable"
+)
+
+const (
+	PredictionDeployerFeeBPS = 600
+	PredictionAgentFeeBPS    = 300
+	PredictionBootstrapBPS   = 100
+	PredictionWinnerPoolBPS  = 9000
+	PredictionTotalBPS       = 10000
+)
+
+const (
+	AgentStatusPendingReady = "PendingReady"
+	AgentStatusReady        = "Ready"
+	AgentStatusRejected     = "Rejected"
+	AgentStatusInvalid      = "Invalid"
+	AgentStatusCompleted    = "Completed"
+	AgentStatusFailed       = "Failed"
+	AgentStatusDisputed     = "Disputed"
+	AgentStatusExpired      = "Expired"
+)
+
+const (
+	AgentPredictionStatusBetting       = "Betting"
+	AgentPredictionStatusClosedForBet  = "ClosedForBet"
+	AgentPredictionStatusPendingResult = "PendingResult"
+	AgentPredictionStatusConfirmed     = "Confirmed"
+	AgentPredictionStatusSettled       = "Settled"
+	AgentPredictionStatusRefundable    = "Refundable"
+	AgentPredictionStatusRejected      = "Rejected"
 )
 
 type AgentPredictionContract struct {

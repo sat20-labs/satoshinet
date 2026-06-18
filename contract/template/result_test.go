@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -67,26 +68,32 @@ func TestBuildAndVerifySettlementResultTx(t *testing.T) {
 		return []byte{0x51}, nil
 	}
 
-	tx, err := BuildResultTx(ResultTxBuildRequest{
+	tx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
 		Status:        ResultStatusSuccess,
 		Plans:         plans,
 		ResolveScript: resolveScript,
-	})
+	}, contractframework.ResultTxBuildOptions{PlanCount: resultPlanCount})
 	require.NoError(t, err)
 	require.Len(t, tx.TxIn, 1)
 	require.Len(t, tx.TxOut, 2)
 
-	payload, err := ResultPayloadFromTx(tx)
+	payload, err := contractframework.ResultPayloadFromTx(tx, "template")
 	require.NoError(t, err)
 	require.Equal(t, ResultStatusSuccess, payload.Status)
 	require.Equal(t, uint16(1), payload.ResultCount)
 
-	verifier := CanonicalResultVerifier{
-		ResolveOutput: func(resultTx *wire.MsgTx) ([]ResultOutput, error) {
+	err = contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
+		Label:        "template",
+		ResultTx:     tx,
+		Status:       ResultStatusSuccess,
+		Plans:        plans,
+		PlanCount:    resultPlanCount,
+		CheckPayload: true,
+		Resolve: func(resultTx *wire.MsgTx) ([]ResultOutput, error) {
 			return []ResultOutput{{To: "seller", Value: 20}}, nil
 		},
-	}
-	require.NoError(t, verifier.Verify(tx, plans, ResultStatusSuccess))
+	})
+	require.NoError(t, err)
 }
 
 func TestCanonicalResultVerifierRejectsInputMismatch(t *testing.T) {
@@ -94,7 +101,7 @@ func TestCanonicalResultVerifierRejectsInputMismatch(t *testing.T) {
 		ItemIDs: []int64{1},
 		Inputs:  []OutPoint{{TxID: testHash(1), Vout: 0}},
 	}}
-	tx, err := BuildResultTx(ResultTxBuildRequest{
+	tx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
 		Status: ResultStatusSuccess,
 		Plans: []ResultPlan{{
 			ItemIDs: []int64{1},
@@ -103,10 +110,17 @@ func TestCanonicalResultVerifierRejectsInputMismatch(t *testing.T) {
 		ResolveScript: func(output ResultOutput) ([]byte, error) {
 			return []byte{0x51}, nil
 		},
-	})
+	}, contractframework.ResultTxBuildOptions{PlanCount: resultPlanCount})
 	require.NoError(t, err)
 
-	err = (CanonicalResultVerifier{}).Verify(tx, plans, ResultStatusSuccess)
+	err = contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
+		Label:        "template",
+		ResultTx:     tx,
+		Status:       ResultStatusSuccess,
+		Plans:        plans,
+		PlanCount:    resultPlanCount,
+		CheckPayload: true,
+	})
 	require.Error(t, err)
 }
 

@@ -1,10 +1,9 @@
 package evm
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -28,25 +27,72 @@ type InvokeCallBinding struct {
 	Contract     ContractAddress
 }
 
+type ResultVerifyRequest struct {
+	ResultTxs      []*wire.MsgTx
+	Execution      BlockExecutionResult
+	ContractPrefix string
+	VerifyResult   ResultVerifier
+}
+
+type CanonicalResultVerifier struct {
+	GasConfig     GasConfig
+	UTXOs         ContractUTXOProvider
+	ResolveOutput ResultOutputResolver
+}
+
+func VerifyResultTxs(req ResultVerifyRequest) error {
+	prefix := req.ContractPrefix
+	if prefix == "" {
+		prefix = TestnetContractPrefix
+	}
+	pending := contractframework.CloneExecutionRecords(req.Execution.PendingRecords)
+	for _, resultTx := range req.ResultTxs {
+		parsed, err := ParseTx(resultTx, StandardContractScriptResolver(prefix))
+		if err != nil {
+			return err
+		}
+		pending, err = verifyResultAgainstPending(resultTx, parsed, pending, req.VerifyResult)
+		if err != nil {
+			return err
+		}
+	}
+	if len(pending) != 0 {
+		return fmt.Errorf("%d EVM executions remain unsettled", len(pending))
+	}
+	return nil
+}
+
+func (v CanonicalResultVerifier) Verify(resultTx *wire.MsgTx, settled []ExecutionRecord) error {
+	plans, err := v.BuildPlans(settled)
+	if err != nil {
+		return err
+	}
+	return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
+		Label:        "EVM",
+		ResultTx:     resultTx,
+		Plans:        plans,
+		Resolve:      v.ResolveOutput,
+		UseInputUTXO: true,
+	})
+}
+
+func (v CanonicalResultVerifier) BuildPlans(settled []ExecutionRecord) ([]ResultPlan, error) {
+	return (contractframework.CanonicalResultPlanner{
+		GasConfig: v.GasConfig,
+		UTXOs:     v.UTXOs,
+	}).BuildPlans(settled)
+}
+
 func DeriveInvokeCallID(invokeTxID string, vout uint32, contract ContractAddress) string {
-	encoded := contract.MustEncode()
-	buf := []byte(fmt.Sprintf("invoke:%s:%d:%s", invokeTxID, vout, encoded))
-	sum := sha256.Sum256(buf)
-	return hex.EncodeToString(sum[:])
+	return contractframework.DeriveInvokeCallID("invoke", invokeTxID, vout, contract)
 }
 
 func DeriveDeployCallID(deployTxID string, contract ContractAddress) string {
-	encoded := contract.MustEncode()
-	buf := []byte(fmt.Sprintf("deploy:%s:%s", deployTxID, encoded))
-	sum := sha256.Sum256(buf)
-	return hex.EncodeToString(sum[:])
+	return contractframework.DeriveDeployCallID("deploy", deployTxID, contract)
 }
 
 func DeriveTriggerCallID(contract ContractAddress, triggerID string, height int64) string {
-	encoded := contract.MustEncode()
-	buf := []byte(fmt.Sprintf("trigger:%s:%s:%d", encoded, triggerID, height))
-	sum := sha256.Sum256(buf)
-	return hex.EncodeToString(sum[:])
+	return contractframework.DeriveTriggerCallID("trigger", contract, triggerID, height)
 }
 
 func BindResultInvokes(resultInputs []OutPoint, fundingByOutPoint map[OutPoint]InvokeCallBinding) []InvokeCallBinding {

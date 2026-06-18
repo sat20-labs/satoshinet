@@ -50,3 +50,42 @@ func TestValidateResultContractSpendRejectsNonResult(t *testing.T) {
 	}, TestnetContractPrefix)
 	require.Error(t, err)
 }
+
+func TestValidateResultContractSpendRejectsMixedModules(t *testing.T) {
+	templateContract, err := NewContractAddress(
+		TestnetContractPrefix,
+		AddressVersionV1,
+		ContractTypeTemplate,
+		EVMAddress{1},
+	)
+	require.NoError(t, err)
+	templateScript, err := ContractPkScript(templateContract)
+	require.NoError(t, err)
+	evmContract, err := NewContractAddress(
+		TestnetContractPrefix,
+		AddressVersionV1,
+		ContractTypeEVM,
+		EVMAddress{2},
+	)
+	require.NoError(t, err)
+	evmScript, err := ContractPkScript(evmContract)
+	require.NoError(t, err)
+
+	templateOut := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
+	evmOut := wire.OutPoint{Hash: chainhash.Hash{2}, Index: 0}
+	resultScript, err := ResultNullDataScript(ResultPayload{
+		Status:      ResultStatusSuccess,
+		ResultCount: 1,
+	})
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&templateOut, nil, nil))
+	tx.AddTxIn(wire.NewTxIn(&evmOut, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(0, nil, resultScript))
+
+	_, err = ValidateResultContractSpend(tx, map[wire.OutPoint][]byte{
+		templateOut: templateScript,
+		evmOut:      evmScript,
+	}, TestnetContractPrefix)
+	require.ErrorContains(t, err, "multiple modules")
+}

@@ -63,13 +63,13 @@ func (a EVMAddress) String() string {
 }
 
 type DeployPayload struct {
-	GasLimit    uint64
+	GasLimit    int64
 	DeployNonce uint64
 	InitCode    []byte
 }
 
 type InvokePayload struct {
-	GasLimit  uint64
+	GasLimit  int64
 	CallNonce uint64
 	Calldata  []byte
 }
@@ -109,7 +109,7 @@ type ContractHistoryRecord struct {
 	Action         string                 `json:"action,omitempty"`
 	Status         string                 `json:"status,omitempty"`
 	Actor          string                 `json:"actor,omitempty"`
-	GasLimit       uint64                 `json:"gasLimit,omitempty"`
+	GasLimit       int64                  `json:"gasLimit,omitempty"`
 	Nonce          uint64                 `json:"nonce,omitempty"`
 	Details        map[string]interface{} `json:"details,omitempty"`
 }

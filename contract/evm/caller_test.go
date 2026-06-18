@@ -49,7 +49,7 @@ func TestLastInputCallerResolverUsesLastInput(t *testing.T) {
 	tx.AddTxIn(&wire.TxIn{Witness: wire.TxWitness{[]byte{1}, first}})
 	tx.AddTxIn(&wire.TxIn{Witness: wire.TxWitness{[]byte{1}, last}})
 
-	got, err := LastInputCallerResolver(tx, ParsedTx{})
+	got, err := LastInputCallerResolver(tx, Tx{})
 	require.NoError(t, err)
 	want, err := EVMAddressFromPublicKey(last)
 	require.NoError(t, err)
@@ -80,7 +80,7 @@ func TestLastInputPreviousOutputCallerResolverUsesPreviousOutputAddress(t *testi
 				return nil, false
 			}
 		})
-	got, err := resolver(tx, ParsedTx{})
+	got, err := resolver(tx, Tx{})
 	require.NoError(t, err)
 	require.Equal(t, btcutil.Hash160([]byte(lastAddr.EncodeAddress())), got[:])
 }
@@ -92,7 +92,7 @@ func TestLastInputPreviousOutputCallerResolverRejectsMissingPreviousOutput(t *te
 
 	resolver := LastInputPreviousOutputCallerResolver(&chaincfg.TestNetParams,
 		func(wire.OutPoint) ([]byte, bool) { return nil, false })
-	_, err := resolver(tx, ParsedTx{})
+	_, err := resolver(tx, Tx{})
 	require.ErrorContains(t, err, "missing caller previous output address")
 }
 

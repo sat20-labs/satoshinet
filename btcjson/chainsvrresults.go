@@ -806,7 +806,7 @@ type ContractTxOp struct {
 	ContractTypeID byte                   `json:"contractTypeId,omitempty"`
 	Subtype        string                 `json:"subtype,omitempty"`
 	Action         string                 `json:"action,omitempty"`
-	GasLimit       uint64                 `json:"gasLimit,omitempty"`
+	GasLimit       int64                  `json:"gasLimit,omitempty"`
 	Nonce          uint64                 `json:"nonce,omitempty"`
 	Contract       string                 `json:"contract,omitempty"`
 	Deployer       string                 `json:"deployer,omitempty"`

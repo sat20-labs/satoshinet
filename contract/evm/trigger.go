@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
 type TriggerKind byte
@@ -17,7 +19,7 @@ type Trigger struct {
 	Contract ContractAddress
 	Kind     TriggerKind
 	Height   int64
-	GasLimit uint64
+	GasLimit int64
 	Calldata []byte
 }
 
@@ -60,7 +62,7 @@ func (t Trigger) Due(env BlockEnvironment) bool {
 
 func (t Trigger) Clone() Trigger {
 	out := t
-	out.Calldata = cloneBytes(t.Calldata)
+	out.Calldata = contractframework.CloneBytes(t.Calldata)
 	return out
 }
 
@@ -68,7 +70,7 @@ func (t Trigger) Call() TriggerCall {
 	return TriggerCall{
 		Trigger:  t.Clone(),
 		GasLimit: t.GasLimit,
-		Calldata: cloneBytes(t.Calldata),
+		Calldata: contractframework.CloneBytes(t.Calldata),
 	}
 }
 

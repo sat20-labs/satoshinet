@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
 var (
@@ -24,6 +25,64 @@ var (
 
 type AssetBalanceReader interface {
 	AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error)
+}
+
+type UTXOAssetView struct {
+	UTXOs []UTXO
+}
+
+type ContractUTXOAssetView struct {
+	Prefix   string
+	Provider ContractUTXOProvider
+}
+
+func NewUTXOAssetView(utxos []UTXO) UTXOAssetView {
+	cp := make([]UTXO, len(utxos))
+	copy(cp, utxos)
+	return UTXOAssetView{UTXOs: cp}
+}
+
+func NewContractUTXOAssetView(prefix string, provider ContractUTXOProvider) ContractUTXOAssetView {
+	if prefix == "" {
+		prefix = TestnetContractPrefix
+	}
+	return ContractUTXOAssetView{Prefix: prefix, Provider: provider}
+}
+
+func (v UTXOAssetView) AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error) {
+	if assetName == "" {
+		return nil, ErrInvalidAsset
+	}
+	total := zeroDecimal()
+	for _, u := range v.UTXOs {
+		if ContractAddressHash(u.Contract) != owner {
+			continue
+		}
+		amount, err := u.AssetAmount(assetName)
+		if err != nil {
+			return nil, err
+		}
+		total = total.AddAlignPrecision(amount)
+	}
+	return total, nil
+}
+
+func (v ContractUTXOAssetView) AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error) {
+	if assetName == "" {
+		return nil, ErrInvalidAsset
+	}
+	if v.Provider == nil {
+		return nil, errors.New("contract UTXO provider is not configured")
+	}
+	contractAddr, err := NewContractAddress(v.Prefix, AddressVersionV1, ContractTypeEVM, owner)
+	if err != nil {
+		return nil, err
+	}
+	utxos, err := v.Provider(contractAddr)
+	if err != nil {
+		return nil, err
+	}
+	return contractframework.SumUTXOAssetAmount(utxos, assetName)
 }
 
 type AssetPrecompile struct {
@@ -186,7 +245,7 @@ func DecodeTriggerRegistrationCall(input []byte) (Trigger, error) {
 	}
 }
 
-func EncodeRegisterHeightTriggerCall(id string, height, gasLimit uint64, calldata []byte) []byte {
+func EncodeRegisterHeightTriggerCall(id string, height uint64, gasLimit int64, calldata []byte) []byte {
 	return encodeTriggerRegistrationCall(triggerRegisterHeightSelector, id, height, gasLimit, calldata)
 }
 
@@ -202,7 +261,7 @@ func decodeBalanceOf(args []byte) (EVMAddress, string, error) {
 	return owner, assetName, nil
 }
 
-func decodeTriggerRegistration(args []byte) (string, uint64, uint64, []byte, error) {
+func decodeTriggerRegistration(args []byte) (string, uint64, int64, []byte, error) {
 	id, err := abiReadString(args, 0)
 	if err != nil {
 		return "", 0, 0, nil, err
@@ -215,20 +274,28 @@ func decodeTriggerRegistration(args []byte) (string, uint64, uint64, []byte, err
 	if err != nil {
 		return "", 0, 0, nil, err
 	}
+	gasLimitInt, err := contractframework.GasUnitsInt64(gasLimit)
+	if err != nil {
+		return "", 0, 0, nil, err
+	}
 	calldata, err := abiReadDynamicBytes(args, 3)
 	if err != nil {
 		return "", 0, 0, nil, err
 	}
-	return id, at, gasLimit, calldata, nil
+	return id, at, gasLimitInt, calldata, nil
 }
 
-func encodeTriggerRegistrationCall(selector [4]byte, id string, at, gasLimit uint64, calldata []byte) []byte {
+func encodeTriggerRegistrationCall(selector [4]byte, id string, at uint64, gasLimit int64, calldata []byte) []byte {
+	gasLimitUint, err := contractframework.GasUnitsUint64(gasLimit)
+	if err != nil {
+		gasLimitUint = 0
+	}
 	head := make([]byte, 128)
 	tail := make([]byte, 0)
 	putABIUint64(head[0:32], 128+uint64(len(tail)))
 	tail = append(tail, abiEncodeDynamicBytes([]byte(id))...)
 	putABIUint64(head[32:64], at)
-	putABIUint64(head[64:96], gasLimit)
+	putABIUint64(head[64:96], gasLimitUint)
 	putABIUint64(head[96:128], 128+uint64(len(tail)))
 	tail = append(tail, abiEncodeDynamicBytes(calldata)...)
 	return appendMethod(selector, append(head, tail...))

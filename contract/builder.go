@@ -23,7 +23,7 @@ type TemplateDeployTxBuildRequest struct {
 	Deployer        string
 	Random          []byte
 	ContractContent []byte
-	GasLimit        uint64
+	GasLimit        int64
 	Funding         wire.TxOut
 	Inputs          []wire.OutPoint
 	ChangeOutputs   []*wire.TxOut
@@ -31,7 +31,7 @@ type TemplateDeployTxBuildRequest struct {
 
 type TemplateInvokeTxBuildRequest struct {
 	Contract      ContractAddress
-	GasLimit      uint64
+	GasLimit      int64
 	CallNonce     uint64
 	Action        string
 	Param         []byte
@@ -47,7 +47,7 @@ type AgentDeployTxBuildRequest struct {
 	Deployer        string
 	Random          []byte
 	ContractContent []byte
-	GasLimit        uint64
+	GasLimit        int64
 	Funding         wire.TxOut
 	Inputs          []wire.OutPoint
 	ChangeOutputs   []*wire.TxOut
@@ -55,7 +55,7 @@ type AgentDeployTxBuildRequest struct {
 
 type AgentInvokeTxBuildRequest struct {
 	Contract      ContractAddress
-	GasLimit      uint64
+	GasLimit      int64
 	CallNonce     uint64
 	Action        string
 	Param         []byte
@@ -67,7 +67,7 @@ type AgentInvokeTxBuildRequest struct {
 type EVMDeployTxBuildRequest struct {
 	ContractPrefix string
 	Caller         EVMAddress
-	GasLimit       uint64
+	GasLimit       int64
 	DeployNonce    uint64
 	InitCode       []byte
 	Funding        wire.TxOut
@@ -77,7 +77,7 @@ type EVMDeployTxBuildRequest struct {
 
 type EVMInvokeTxBuildRequest struct {
 	Contract      ContractAddress
-	GasLimit      uint64
+	GasLimit      int64
 	CallNonce     uint64
 	Calldata      []byte
 	Funding       wire.TxOut

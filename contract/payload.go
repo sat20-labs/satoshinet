@@ -9,7 +9,7 @@ import (
 )
 
 type TemplateDeployPayload struct {
-	GasLimit        uint64
+	GasLimit        int64
 	TemplateName    string
 	TemplateVersion uint32
 	Deployer        string
@@ -18,14 +18,14 @@ type TemplateDeployPayload struct {
 }
 
 type TemplateInvokePayload struct {
-	GasLimit  uint64
+	GasLimit  int64
 	CallNonce uint64
 	Action    string
 	Param     []byte
 }
 
 type AgentDeployPayload struct {
-	GasLimit        uint64
+	GasLimit        int64
 	Subtype         string
 	AgentVersion    uint32
 	Deployer        string
@@ -34,7 +34,7 @@ type AgentDeployPayload struct {
 }
 
 type AgentInvokePayload struct {
-	GasLimit  uint64
+	GasLimit  int64
 	CallNonce uint64
 	Action    string
 	Param     []byte
@@ -43,7 +43,7 @@ type AgentInvokePayload struct {
 func EncodeDeployPayload(p DeployPayload) []byte {
 	var buf bytes.Buffer
 	buf.WriteByte(PayloadVersionV1)
-	writeUvarint(&buf, p.GasLimit)
+	writeGasUvarint(&buf, p.GasLimit)
 	writeUvarint(&buf, p.DeployNonce)
 	buf.Write(p.InitCode)
 	return buf.Bytes()
@@ -58,12 +58,16 @@ func DecodeDeployPayload(data []byte) (DeployPayload, error) {
 	if err != nil {
 		return DeployPayload{}, fmt.Errorf("decode deploy gas limit: %w", err)
 	}
+	gasLimitInt, err := readGasInt64(gasLimit)
+	if err != nil {
+		return DeployPayload{}, fmt.Errorf("decode deploy gas limit: %w", err)
+	}
 	nonce, err := r.readUvarint()
 	if err != nil {
 		return DeployPayload{}, fmt.Errorf("decode deploy nonce: %w", err)
 	}
 	return DeployPayload{
-		GasLimit:    gasLimit,
+		GasLimit:    gasLimitInt,
 		DeployNonce: nonce,
 		InitCode:    r.readRemaining(),
 	}, nil
@@ -72,7 +76,7 @@ func DecodeDeployPayload(data []byte) (DeployPayload, error) {
 func EncodeInvokePayload(p InvokePayload) []byte {
 	var buf bytes.Buffer
 	buf.WriteByte(PayloadVersionV1)
-	writeUvarint(&buf, p.GasLimit)
+	writeGasUvarint(&buf, p.GasLimit)
 	writeUvarint(&buf, p.CallNonce)
 	buf.Write(p.Calldata)
 	return buf.Bytes()
@@ -87,12 +91,16 @@ func DecodeInvokePayload(data []byte) (InvokePayload, error) {
 	if err != nil {
 		return InvokePayload{}, fmt.Errorf("decode invoke gas limit: %w", err)
 	}
+	gasLimitInt, err := readGasInt64(gasLimit)
+	if err != nil {
+		return InvokePayload{}, fmt.Errorf("decode invoke gas limit: %w", err)
+	}
 	nonce, err := r.readUvarint()
 	if err != nil {
 		return InvokePayload{}, fmt.Errorf("decode invoke nonce: %w", err)
 	}
 	return InvokePayload{
-		GasLimit:  gasLimit,
+		GasLimit:  gasLimitInt,
 		CallNonce: nonce,
 		Calldata:  r.readRemaining(),
 	}, nil
@@ -191,7 +199,7 @@ func EncodeTemplateDeployPayload(p TemplateDeployPayload) ([]byte, error) {
 
 	var buf bytes.Buffer
 	buf.WriteByte(PayloadVersionV1)
-	writeUvarint(&buf, p.GasLimit)
+	writeGasUvarint(&buf, p.GasLimit)
 	writeString(&buf, p.TemplateName)
 	writeUvarint(&buf, uint64(p.TemplateVersion))
 	writeString(&buf, p.Deployer)
@@ -206,7 +214,7 @@ func EncodeTemplateInvokePayload(p TemplateInvokePayload) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	buf.WriteByte(PayloadVersionV1)
-	writeUvarint(&buf, p.GasLimit)
+	writeGasUvarint(&buf, p.GasLimit)
 	writeUvarint(&buf, p.CallNonce)
 	writeString(&buf, p.Action)
 	writeBytes(&buf, p.Param)
@@ -232,7 +240,7 @@ func EncodeAgentDeployPayload(p AgentDeployPayload) ([]byte, error) {
 
 	var buf bytes.Buffer
 	buf.WriteByte(PayloadVersionV1)
-	writeUvarint(&buf, p.GasLimit)
+	writeGasUvarint(&buf, p.GasLimit)
 	writeString(&buf, p.Subtype)
 	writeUvarint(&buf, uint64(p.AgentVersion))
 	writeString(&buf, p.Deployer)
@@ -247,7 +255,7 @@ func EncodeAgentInvokePayload(p AgentInvokePayload) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	buf.WriteByte(PayloadVersionV1)
-	writeUvarint(&buf, p.GasLimit)
+	writeGasUvarint(&buf, p.GasLimit)
 	writeUvarint(&buf, p.CallNonce)
 	writeString(&buf, p.Action)
 	writeBytes(&buf, p.Param)
@@ -263,6 +271,10 @@ func DecodeTemplateDeployPayload(data []byte) (TemplateDeployPayload, error) {
 	if err != nil {
 		return TemplateDeployPayload{}, fmt.Errorf("decode gas limit: %w", err)
 	}
+	gasLimitInt, err := readGasInt64(gasLimit)
+	if err != nil {
+		return TemplateDeployPayload{}, fmt.Errorf("decode gas limit: %w", err)
+	}
 	templateName, err := r.readString()
 	if err != nil {
 		return TemplateDeployPayload{}, fmt.Errorf("decode template name: %w", err)
@@ -270,6 +282,9 @@ func DecodeTemplateDeployPayload(data []byte) (TemplateDeployPayload, error) {
 	templateVersion, err := r.readUvarint()
 	if err != nil {
 		return TemplateDeployPayload{}, fmt.Errorf("decode template version: %w", err)
+	}
+	if templateVersion == 0 || templateVersion > uint64(^uint32(0)) {
+		return TemplateDeployPayload{}, errors.New("invalid template version")
 	}
 	deployer, err := r.readString()
 	if err != nil {
@@ -287,7 +302,7 @@ func DecodeTemplateDeployPayload(data []byte) (TemplateDeployPayload, error) {
 		return TemplateDeployPayload{}, errors.New("trailing deploy payload bytes")
 	}
 	return TemplateDeployPayload{
-		GasLimit:        gasLimit,
+		GasLimit:        gasLimitInt,
 		TemplateName:    templateName,
 		TemplateVersion: uint32(templateVersion),
 		Deployer:        deployer,
@@ -302,6 +317,10 @@ func DecodeTemplateInvokePayload(data []byte) (TemplateInvokePayload, error) {
 		return TemplateInvokePayload{}, err
 	}
 	gasLimit, err := r.readUvarint()
+	if err != nil {
+		return TemplateInvokePayload{}, fmt.Errorf("decode gas limit: %w", err)
+	}
+	gasLimitInt, err := readGasInt64(gasLimit)
 	if err != nil {
 		return TemplateInvokePayload{}, fmt.Errorf("decode gas limit: %w", err)
 	}
@@ -320,13 +339,107 @@ func DecodeTemplateInvokePayload(data []byte) (TemplateInvokePayload, error) {
 	if r.remaining() != 0 {
 		return TemplateInvokePayload{}, errors.New("trailing invoke payload bytes")
 	}
-	return TemplateInvokePayload{GasLimit: gasLimit, CallNonce: callNonce, Action: action, Param: param}, nil
+	return TemplateInvokePayload{GasLimit: gasLimitInt, CallNonce: callNonce, Action: action, Param: param}, nil
+}
+
+func DecodeAgentInvokePayload(data []byte) (AgentInvokePayload, error) {
+	r, err := newPayloadReader(data)
+	if err != nil {
+		return AgentInvokePayload{}, err
+	}
+	gasLimit, err := r.readUvarint()
+	if err != nil {
+		return AgentInvokePayload{}, fmt.Errorf("decode gas limit: %w", err)
+	}
+	gasLimitInt, err := readGasInt64(gasLimit)
+	if err != nil {
+		return AgentInvokePayload{}, fmt.Errorf("decode gas limit: %w", err)
+	}
+	callNonce, err := r.readUvarint()
+	if err != nil {
+		return AgentInvokePayload{}, fmt.Errorf("decode call nonce: %w", err)
+	}
+	action, err := r.readString()
+	if err != nil {
+		return AgentInvokePayload{}, fmt.Errorf("decode action: %w", err)
+	}
+	param, err := r.readBytes()
+	if err != nil {
+		return AgentInvokePayload{}, fmt.Errorf("decode param: %w", err)
+	}
+	if r.remaining() != 0 {
+		return AgentInvokePayload{}, errors.New("trailing invoke payload bytes")
+	}
+	return AgentInvokePayload{GasLimit: gasLimitInt, CallNonce: callNonce, Action: action, Param: param}, nil
+}
+
+func DecodeAgentDeployPayload(data []byte) (AgentDeployPayload, error) {
+	r, err := newPayloadReader(data)
+	if err != nil {
+		return AgentDeployPayload{}, err
+	}
+	gasLimit, err := r.readUvarint()
+	if err != nil {
+		return AgentDeployPayload{}, fmt.Errorf("decode gas limit: %w", err)
+	}
+	gasLimitInt, err := readGasInt64(gasLimit)
+	if err != nil {
+		return AgentDeployPayload{}, fmt.Errorf("decode gas limit: %w", err)
+	}
+	subtype, err := r.readString()
+	if err != nil {
+		return AgentDeployPayload{}, fmt.Errorf("decode subtype: %w", err)
+	}
+	version, err := r.readUvarint()
+	if err != nil {
+		return AgentDeployPayload{}, fmt.Errorf("decode agent version: %w", err)
+	}
+	if version == 0 || version > uint64(^uint32(0)) {
+		return AgentDeployPayload{}, errors.New("invalid agent version")
+	}
+	deployer, err := r.readString()
+	if err != nil {
+		return AgentDeployPayload{}, fmt.Errorf("decode deployer: %w", err)
+	}
+	random, err := r.readBytes()
+	if err != nil {
+		return AgentDeployPayload{}, fmt.Errorf("decode random: %w", err)
+	}
+	content, err := r.readBytes()
+	if err != nil {
+		return AgentDeployPayload{}, fmt.Errorf("decode contract content: %w", err)
+	}
+	if r.remaining() != 0 {
+		return AgentDeployPayload{}, errors.New("trailing deploy payload bytes")
+	}
+	return AgentDeployPayload{
+		GasLimit:        gasLimitInt,
+		Subtype:         subtype,
+		AgentVersion:    uint32(version),
+		Deployer:        deployer,
+		Random:          random,
+		ContractContent: content,
+	}, nil
 }
 
 func writeUvarint(buf *bytes.Buffer, v uint64) {
 	var tmp [binary.MaxVarintLen64]byte
 	n := binary.PutUvarint(tmp[:], v)
 	buf.Write(tmp[:n])
+}
+
+func writeGasUvarint(buf *bytes.Buffer, v int64) {
+	if v < 0 {
+		v = 0
+	}
+	writeUvarint(buf, uint64(v))
+}
+
+func readGasInt64(v uint64) (int64, error) {
+	if v > uint64(^uint64(0)>>1) {
+		return 0, errors.New("gas limit overflows int64")
+	}
+	return int64(v), nil
 }
 
 func writeString(buf *bytes.Buffer, v string) {

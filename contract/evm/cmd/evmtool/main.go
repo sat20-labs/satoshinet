@@ -161,7 +161,7 @@ func deriveTriggerCallID(args []string) {
 
 func encodeDeploy(args []string) {
 	fs := flag.NewFlagSet("encode-deploy", flag.ExitOnError)
-	gasLimit := fs.Uint64("gas-limit", 0, "deploy gas limit")
+	gasLimit := fs.Int64("gas-limit", 0, "deploy gas limit")
 	nonce := fs.Uint64("nonce", 0, "deploy nonce")
 	initCodeHex := fs.String("init-code", "", "EVM init code hex")
 	_ = fs.Parse(args)
@@ -185,7 +185,7 @@ func decodeDeploy(args []string) {
 
 func encodeInvoke(args []string) {
 	fs := flag.NewFlagSet("encode-invoke", flag.ExitOnError)
-	gasLimit := fs.Uint64("gas-limit", 0, "invoke gas limit")
+	gasLimit := fs.Int64("gas-limit", 0, "invoke gas limit")
 	nonce := fs.Uint64("nonce", 0, "call nonce")
 	calldataHex := fs.String("calldata", "", "EVM calldata hex")
 	_ = fs.Parse(args)
@@ -302,7 +302,7 @@ func encodeTriggerHeight(args []string) {
 	fs := flag.NewFlagSet("encode-trigger-height", flag.ExitOnError)
 	triggerID := fs.String("id", "", "trigger identifier")
 	height := fs.Uint64("height", 0, "trigger block height")
-	gasLimit := fs.Uint64("gas-limit", 0, "trigger execution gas limit")
+	gasLimit := fs.Int64("gas-limit", 0, "trigger execution gas limit")
 	calldataHex := fs.String("calldata", "", "trigger calldata hex")
 	_ = fs.Parse(args)
 	calldata, err := hex.DecodeString(trimHexPrefix(*calldataHex))
@@ -325,7 +325,7 @@ func buildDeployTx(args []string) {
 	fs := flag.NewFlagSet("build-deploy-tx", flag.ExitOnError)
 	prefix := fs.String("prefix", evm.TestnetContractPrefix, "contract address prefix: ca or tc")
 	callerHex := fs.String("caller", "", "20-byte caller EVM address hex")
-	gasLimit := fs.Uint64("gas-limit", 0, "deploy gas limit")
+	gasLimit := fs.Int64("gas-limit", 0, "deploy gas limit")
 	nonce := fs.Uint64("nonce", 0, "deploy nonce")
 	initCodeHex := fs.String("init-code", "", "EVM init code hex")
 	fundSats := fs.Int64("fund-sats", 0, "satoshi amount sent to contract")
@@ -360,7 +360,7 @@ func buildDeployTx(args []string) {
 func buildInvokeTx(args []string) {
 	fs := flag.NewFlagSet("build-invoke-tx", flag.ExitOnError)
 	contractAddress := fs.String("contract", "", "ca/tc contract address")
-	gasLimit := fs.Uint64("gas-limit", 0, "invoke gas limit")
+	gasLimit := fs.Int64("gas-limit", 0, "invoke gas limit")
 	nonce := fs.Uint64("nonce", 0, "call nonce")
 	calldataHex := fs.String("calldata", "", "EVM calldata hex")
 	fundSats := fs.Int64("fund-sats", 0, "satoshi amount sent to contract as msg.value")

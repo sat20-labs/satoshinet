@@ -151,18 +151,18 @@ func TestTxPriorityQueueEVMOrdering(t *testing.T) {
 		priority: 1,
 	}
 	evmHighFee := &txPrioItem{
-		feePerKB: 100000,
-		priority: 100000,
-		evmTx:    true,
-		evmType:  evm.TxTypeInvoke,
-		evmGas:   100000,
+		feePerKB:         100000,
+		priority:         100000,
+		contractTx:       true,
+		contractTxType:   evmcommon.TxTypeInvoke,
+		contractGasLimit: 100000,
 	}
 	evmHigherGas := &txPrioItem{
-		feePerKB: 2,
-		priority: 2,
-		evmTx:    true,
-		evmType:  evm.TxTypeInvoke,
-		evmGas:   200000,
+		feePerKB:         2,
+		priority:         2,
+		contractTx:       true,
+		contractTxType:   evmcommon.TxTypeInvoke,
+		contractGasLimit: 200000,
 	}
 
 	priorityQueue := newTxPriorityQueue(3, true)
@@ -205,18 +205,18 @@ func TestEVMMiningInfo(t *testing.T) {
 	tx.AddTxOut(&wire.TxOut{PkScript: contractScript})
 	tx.AddTxOut(&wire.TxOut{PkScript: invokeScript})
 
-	isEVM, txType, gas := evmMiningInfo(tx, evm.TestnetContractPrefix)
+	isEVM, _, txType, gas := contractMiningInfo(tx, evm.TestnetContractPrefix)
 	if !isEVM {
 		t.Fatalf("expected invoke tx to be classified as EVM")
 	}
-	if txType != evm.TxTypeInvoke {
+	if txType != evmcommon.TxTypeInvoke {
 		t.Fatalf("unexpected tx type %v", txType)
 	}
 	if gas != 123 {
 		t.Fatalf("unexpected gas limit %d", gas)
 	}
 
-	isEVM, _, _ = evmMiningInfo(wire.NewMsgTx(2), evm.TestnetContractPrefix)
+	isEVM, _, _, _ = contractMiningInfo(wire.NewMsgTx(2), evm.TestnetContractPrefix)
 	if isEVM {
 		t.Fatalf("empty non-EVM tx classified as EVM")
 	}
@@ -228,7 +228,7 @@ func TestEVMAssetFeeBypassesSatoshiMinFreeFee(t *testing.T) {
 		TxMinFreeFee:   btcutil.Amount(10),
 	}
 	evmWithAssetFee := &txPrioItem{
-		evmTx: true,
+		contractTx: true,
 		feeAssets: wire.TxAssets{{
 			Name:   wire.AssetName{Protocol: "ordx", Type: "gas", Ticker: "evm"},
 			Amount: *scommon.NewDefaultDecimal(1),
@@ -238,7 +238,7 @@ func TestEVMAssetFeeBypassesSatoshiMinFreeFee(t *testing.T) {
 		t.Fatalf("EVM transaction with asset fee must not be skipped by satoshi min fee")
 	}
 
-	evmWithoutAssetFee := &txPrioItem{evmTx: true}
+	evmWithoutAssetFee := &txPrioItem{contractTx: true}
 	if shouldSkipLowFeeTx(evmWithoutAssetFee, true, 100, policy) {
 		t.Fatalf("EVM transaction must not be skipped by satoshi min fee")
 	}

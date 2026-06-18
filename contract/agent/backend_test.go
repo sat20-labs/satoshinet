@@ -1,0 +1,710 @@
+package agent
+
+import (
+	"testing"
+
+	scommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/wire"
+)
+
+func TestBackendPredictionE2EShape(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betA := mustEncodeBet(t, "a")
+	betBTxParam := mustEncodeBet(t, "b")
+	confirm := mustEncodeConfirm(t, ResultTypeOutcome, "a")
+
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, betA, 60000, nil)
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, betBTxParam, 40000, nil)
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, confirm, 0, nil)
+
+	invokers := map[string]string{
+		readyTx.TxID():    "core",
+		aliceBetTx.TxID(): "alice",
+		bobBetTx.TxID():   "bob",
+		confirmTx.TxID():  "core",
+	}
+	store := NewRuntimeStore()
+	first, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:            []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
+		Store:          store,
+		BlockHeight:    validPredictionContract().BetDeadline,
+		RuntimeConfig:  testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(invokers),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(first.SettlementPlans) != 0 {
+		t.Fatalf("unexpected first block settlement plans")
+	}
+	if len(first.ResultPlans) != 2 {
+		t.Fatalf("first block result plan count mismatch: %d", len(first.ResultPlans))
+	}
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:            []*wire.MsgTx{confirmTx},
+		Store:          store,
+		BlockHeight:    validPredictionContract().ConfirmAfter + 1,
+		RuntimeConfig:  testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(invokers),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock confirm failed: %v", err)
+	}
+	if len(first.Records)+len(result.Records) != 5 {
+		t.Fatalf("record count mismatch: first=%d second=%d", len(first.Records), len(result.Records))
+	}
+	if len(result.SettlementPlans) != 1 {
+		t.Fatalf("settlement plan count mismatch: %d", len(result.SettlementPlans))
+	}
+	plan := result.SettlementPlans[0]
+	assertTransfer(t, plan, "deployer", "6000", "deployer_fee")
+	assertTransfer(t, plan, "agent", "3000", "agent_fee")
+	assertTransfer(t, plan, "bootstrap", "1000", "bootstrap_fee")
+	assertTransfer(t, plan, "alice", "90000", "winner_payout")
+	lastRecord := result.Records[len(result.Records)-1]
+	if len(lastRecord.AssetIntents) != len(plan.Transfers) {
+		t.Fatalf("settlement asset intents were not recorded: records=%+v plan=%+v", result.Records, plan)
+	}
+	if !lastRecord.AssetIntents[0].From.Equal(addr) {
+		t.Fatalf("settlement asset intent source mismatch")
+	}
+	if result.StateRoot == [32]byte{} {
+		t.Fatalf("missing state root")
+	}
+}
+
+func TestBackendDefaultInvokeNoOp(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	defaultTx := testAgentDefaultInvokeTx(t, addr, 0, wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
+		Amount: *testAgentGasFee(t, DefaultGasConfig().InvokeBaseGas),
+	}})
+
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, defaultTx},
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Type != TxTypeDeploy {
+		t.Fatalf("default invoke should be no-op, records=%+v", result.Records)
+	}
+	if len(result.SettlementPlans) != 0 {
+		t.Fatalf("default invoke should not produce settlements: %+v", result.SettlementPlans)
+	}
+}
+
+func TestBackendIgnoresInvalidDeploy(t *testing.T) {
+	contract := validPredictionContract()
+	content, err := contract.Encode()
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	deploy := DeployPayload{
+		GasLimit:        0,
+		Subtype:         SubtypePrediction,
+		AgentVersion:    CurrentAgentVersion,
+		Deployer:        "deployer",
+		Random:          []byte("random"),
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.Subtype, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	if err != nil {
+		t.Fatalf("DeriveContractAddress failed: %v", err)
+	}
+	script, err := DeployNullDataScript(deploy)
+	if err != nil {
+		t.Fatalf("DeployNullDataScript failed: %v", err)
+	}
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, nil, testAgentContractScript(addr)))
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{tx}, Store: store})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 0 || len(result.ResultPlans) != 0 {
+		t.Fatalf("invalid deploy should be no-op, records=%+v plans=%+v", result.Records, result.ResultPlans)
+	}
+	if store.Exists(addr) {
+		t.Fatalf("invalid deploy created runtime")
+	}
+}
+
+func TestBackendIgnoresBetBeforeReady(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:            []*wire.MsgTx{deployTx, betTx},
+		Store:          store,
+		BlockHeight:    validPredictionContract().BetDeadline,
+		RuntimeConfig:  testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{betTx.TxID(): "alice"}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Type != TxTypeDeploy {
+		t.Fatalf("invalid bet should be no-op, records=%+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusPendingReady || len(state.Prediction.Bets) != 0 {
+		t.Fatalf("invalid bet changed state: %#v", state)
+	}
+}
+
+func TestBackendIgnoresBetWithoutFundingAmount(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 0, nil)
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+			betTx.TxID():   "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 2 {
+		t.Fatalf("invalid bet should not add an execution record, records=%+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusReady || len(state.Prediction.Bets) != 0 {
+		t.Fatalf("invalid bet changed state: %#v", state)
+	}
+}
+
+func TestBackendAdvancesPredictionStatusByBlockTime(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	store := NewRuntimeStore()
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ready block failed: %v", err)
+	}
+
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline + 1,
+		RuntimeConfig: testRuntimeConfig(),
+	})
+	if err != nil {
+		t.Fatalf("closed-for-bet advance failed: %v", err)
+	}
+	if len(result.Records) != 0 {
+		t.Fatalf("status advance should not add records: %+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	if runtime.State().Prediction.Status != PredictionStatusClosedForBet {
+		t.Fatalf("status mismatch after deadline: %#v", runtime.State())
+	}
+
+	_, err = ExecuteBlock(BlockExecutionRequest{
+		Store:         store,
+		BlockHeight:   validPredictionContract().ConfirmAfter,
+		RuntimeConfig: testRuntimeConfig(),
+	})
+	if err != nil {
+		t.Fatalf("pending-result advance failed: %v", err)
+	}
+	if runtime.State().Prediction.Status != PredictionStatusPendingResult {
+		t.Fatalf("status mismatch after confirm_after: %#v", runtime.State())
+	}
+}
+
+func TestBackendUsesBlockTimeForUnixTimeBase(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm,
+		mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
+	contract := validPredictionContract()
+
+	store := NewRuntimeStore()
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
+		Store:         store,
+		BlockHeight:   1,
+		BlockTime:     contract.BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+			betTx.TxID():   "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock bet failed: %v", err)
+	}
+	_, err = ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   2,
+		BlockTime:     contract.ConfirmAfter + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			confirmTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock confirm failed: %v", err)
+	}
+}
+
+func TestBackendUsesBlockHeightForHeightTimeBase(t *testing.T) {
+	contract := validPredictionContract()
+	contract.TimeBase = TimeBaseHeight
+	contract.EventTime = 20
+	contract.BetDeadline = 10
+	contract.ConfirmAfter = 30
+	deployTx, addr := testAgentDeployTxForContract(t, contract)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
+		BlockHeight:   contract.BetDeadline,
+		BlockTime:     1_780_306_800,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+			betTx.TxID():   "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock height-base bet failed: %v", err)
+	}
+}
+
+func TestBackendIgnoresNonCoreConfirm(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
+
+	store := NewRuntimeStore()
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+			betTx.TxID():   "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("first block failed: %v", err)
+	}
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			confirmTx.TxID(): "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock non-core confirm failed: %v", err)
+	}
+	if len(result.Records) != 0 || len(result.SettlementPlans) != 0 {
+		t.Fatalf("invalid confirm should be no-op, records=%+v settlements=%+v", result.Records, result.SettlementPlans)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusReady || state.Prediction.Status != PredictionStatusPendingResult {
+		t.Fatalf("invalid confirm changed state: %#v", state)
+	}
+}
+
+func TestBackendIgnoresNonCoreReady(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Type != TxTypeDeploy {
+		t.Fatalf("invalid ready should be no-op, records=%+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusPendingReady || state.Prediction.Status != PredictionStatusPendingResult {
+		t.Fatalf("invalid ready changed state: %#v", state)
+	}
+}
+
+func TestBackendPredictionRejectByCore(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	rejectTx := testAgentInvokeTx(t, addr, InvokeAPIReject, mustEncodeReject(t, "ambiguous event"), 0, nil)
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, rejectTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			rejectTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock reject failed: %v", err)
+	}
+	if len(result.SettlementPlans) != 0 {
+		t.Fatalf("unexpected settlement plans")
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusRejected || state.Prediction.Status != PredictionStatusRejected {
+		t.Fatalf("status mismatch: %#v", state)
+	}
+	if len(state.Prediction.Rejections) != 1 || state.Prediction.Rejections[0].Reason != "ambiguous event" {
+		t.Fatalf("rejection mismatch: %#v", state.Prediction.Rejections)
+	}
+}
+
+func TestBackendIgnoresNonCoreReject(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	rejectTx := testAgentInvokeTx(t, addr, InvokeAPIReject, mustEncodeReject(t, "ambiguous event"), 0, nil)
+
+	store := NewRuntimeStore()
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, rejectTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			rejectTx.TxID(): "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Type != TxTypeDeploy {
+		t.Fatalf("invalid reject should be no-op, records=%+v", result.Records)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusPendingReady || len(state.Prediction.Rejections) != 0 {
+		t.Fatalf("invalid reject changed state: %#v", state)
+	}
+}
+
+func TestBuildBlockResultTxsForConfirm(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000, nil)
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
+
+	store := NewRuntimeStore()
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID():    "core",
+			aliceBetTx.TxID(): "alice",
+			bobBetTx.TxID():   "bob",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("first block failed: %v", err)
+	}
+
+	abnormalTxID := chainhash.Hash{9}.String()
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
+			return []UTXO{{
+				OutPoint: OutPoint{TxID: abnormalTxID, Vout: 0},
+				Contract: contract,
+				Value:    10000,
+			}}, nil
+		}, []*wire.MsgTx{aliceBetTx, bobBetTx}, TestnetContractPrefix, ContractTypeAgent),
+		ResolveScript:  testResultScriptResolver,
+		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.ResultTxs) != 1 {
+		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
+	}
+	if len(built.Execution.ResultPlans) != 1 {
+		t.Fatalf("result plan count mismatch: %d", len(built.Execution.ResultPlans))
+	}
+	if len(built.ResultTxs[0].TxIn) != 4 {
+		t.Fatalf("result input count mismatch: %d", len(built.ResultTxs[0].TxIn))
+	}
+	if len(built.ResultTxs[0].TxOut) != 5 {
+		t.Fatalf("result output count mismatch: %d", len(built.ResultTxs[0].TxOut))
+	}
+	if built.ResultTxs[0].TxOut[0].Value != 6600 || built.ResultTxs[0].TxOut[3].Value != 99000 {
+		t.Fatalf("result outputs did not use full contract pool")
+	}
+}
+
+func TestBuildBlockResultTxsForDeployAndReady(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:            []*wire.MsgTx{deployTx, readyTx},
+		BlockHeight:    validPredictionContract().BetDeadline,
+		RuntimeConfig:  testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{readyTx.TxID(): "core"}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.ResultTxs) != 1 {
+		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
+	}
+	if len(built.Execution.ResultPlans) != 2 {
+		t.Fatalf("result plan count mismatch: %d", len(built.Execution.ResultPlans))
+	}
+	if len(built.ResultTxs[0].TxIn) != 3 {
+		t.Fatalf("result input count mismatch: %d", len(built.ResultTxs[0].TxIn))
+	}
+	if len(built.ResultTxs[0].TxOut) != 1 {
+		t.Fatalf("result output count mismatch: %d", len(built.ResultTxs[0].TxOut))
+	}
+	_, payload, err := contractcommonReadResultPayload(built.ResultTxs[0])
+	if err != nil {
+		t.Fatalf("read result payload failed: %v", err)
+	}
+	if payload.ResultCount != 2 {
+		t.Fatalf("result count mismatch: %d", payload.ResultCount)
+	}
+}
+
+func TestBuildBlockResultTxsIgnoresBetWithoutFundingAmount(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 0, nil)
+
+	store := NewRuntimeStore()
+	_, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("initial block failed: %v", err)
+	}
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{betTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			betTx.TxID(): "alice",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs should ignore invalid bet: %v", err)
+	}
+	if len(built.ResultTxs) != 0 || len(built.Execution.Records) != 0 || len(built.Execution.ResultPlans) != 0 {
+		t.Fatalf("invalid bet should be no-op, resultTxs=%d records=%+v plans=%+v", len(built.ResultTxs), built.Execution.Records, built.Execution.ResultPlans)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	if len(runtime.State().Prediction.Bets) != 0 {
+		t.Fatalf("invalid bet changed state: %#v", runtime.State())
+	}
+}
+
+func testAgentDeployTx(t *testing.T) (*wire.MsgTx, ContractAddress) {
+	t.Helper()
+	contract := validPredictionContract()
+	content, err := contract.Encode()
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	deploy := DeployPayload{
+		GasLimit:        DefaultGasConfig().DeployBaseGas,
+		Subtype:         SubtypePrediction,
+		AgentVersion:    CurrentAgentVersion,
+		Deployer:        "deployer",
+		Random:          []byte("random"),
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.Subtype, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	if err != nil {
+		t.Fatalf("DeriveContractAddress failed: %v", err)
+	}
+	script, err := DeployNullDataScript(deploy)
+	if err != nil {
+		t.Fatalf("DeployNullDataScript failed: %v", err)
+	}
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, nil, testAgentContractScript(addr)))
+	return tx, addr
+}
+
+func testAgentInvokeTx(t *testing.T, contract ContractAddress, action string, param []byte, value int64, assets wire.TxAssets) *wire.MsgTx {
+	t.Helper()
+	invokeScript, err := InvokeNullDataScript(InvokePayload{
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
+		CallNonce: 1,
+		Action:    action,
+		Param:     param,
+	})
+	if err != nil {
+		t.Fatalf("InvokeNullDataScript failed: %v", err)
+	}
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
+	tx.AddTxOut(wire.NewTxOut(value, assets, testAgentContractScript(contract)))
+	return tx
+}
+
+func testAgentDefaultInvokeTx(t *testing.T, contract ContractAddress, value int64, assets wire.TxAssets) *wire.MsgTx {
+	t.Helper()
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(value, assets, testAgentContractScript(contract)))
+	return tx
+}
+
+func testAgentGasFee(t *testing.T, gas int64) *scommon.Decimal {
+	t.Helper()
+	fee, err := contractcommon.GasFeeDecimalAtHeight(gas, 0)
+	if err != nil {
+		t.Fatalf("gas fee failed: %v", err)
+	}
+	return fee
+}
+
+func mustEncodeBet(t *testing.T, outcomeID string) []byte {
+	t.Helper()
+	data, err := (PredictionBetParam{OutcomeID: outcomeID}).Encode()
+	if err != nil {
+		t.Fatalf("PredictionBetParam.Encode failed: %v", err)
+	}
+	return data
+}
+
+func mustEncodeConfirm(t *testing.T, resultType, outcomeID string) []byte {
+	t.Helper()
+	contract := validPredictionContract()
+	data, err := (PredictionConfirmParam{
+		ResultType: resultType,
+		OutcomeID:  outcomeID,
+		SourceURL:  contract.SourceURL,
+		ResultURL:  "https://example.com/match/result/123",
+		ResultHash: "abc123",
+		ObservedAt: contract.EventTime + 1,
+	}).Encode()
+	if err != nil {
+		t.Fatalf("PredictionConfirmParam.Encode failed: %v", err)
+	}
+	return data
+}
+
+func mustEncodeReject(t *testing.T, reason string) []byte {
+	t.Helper()
+	data, err := (PredictionRejectParam{
+		Reason:    reason,
+		CheckedAt: validPredictionContract().BetDeadline,
+	}).Encode()
+	if err != nil {
+		t.Fatalf("PredictionRejectParam.Encode failed: %v", err)
+	}
+	return data
+}
+
+func testRuntimeConfig() RuntimeConfig {
+	return RuntimeConfig{
+		CoreNodeAddress:  "core",
+		AgentAddress:     "agent",
+		BootstrapAddress: "bootstrap",
+	}
+}
+
+func testInvokerResolver(invokers map[string]string) InvokerResolver {
+	return func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+		return invokers[tx.TxID()], nil
+	}
+}
+
+func testAgentAsset(name string, amount int64) wire.TxAssets {
+	return wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(name),
+		Amount: *scommon.NewDefaultDecimal(amount),
+	}}
+}

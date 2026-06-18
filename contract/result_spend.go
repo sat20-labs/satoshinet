@@ -36,6 +36,7 @@ func ValidateResultContractSpend(tx *wire.MsgTx, inputScripts map[wire.OutPoint]
 	contractInputs := make([]ContractInput, 0)
 	contracts := make([]ContractAddress, 0)
 	seenContracts := make(map[string]struct{})
+	var resultContractType byte
 	for i, txIn := range tx.TxIn {
 		if txIn == nil {
 			return ResultSpendValidation{}, fmt.Errorf("nil input %d", i)
@@ -50,6 +51,11 @@ func ValidateResultContractSpend(tx *wire.MsgTx, inputScripts map[wire.OutPoint]
 		}
 		if !ok {
 			continue
+		}
+		if resultContractType == 0 {
+			resultContractType = contract.ContractType()
+		} else if resultContractType != contract.ContractType() {
+			return ResultSpendValidation{}, errors.New("CONTRACT_RESULT spends contract UTXOs from multiple modules")
 		}
 
 		contractInputs = append(contractInputs, ContractInput{

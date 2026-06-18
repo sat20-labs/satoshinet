@@ -6,44 +6,19 @@ import (
 	"strings"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
-type SettlementPlan struct {
-	Contract  string               `json:"contract"`
-	Height    int64                `json:"height"`
-	Deals     []SettlementDeal     `json:"deals,omitempty"`
-	Transfers []SettlementTransfer `json:"transfers,omitempty"`
-	ItemIDs   []int64              `json:"itemIds,omitempty"`
-	Inputs    []OutPoint           `json:"inputs,omitempty"`
-}
-
-type SettlementDeal struct {
-	BuyItemID  int64  `json:"buyItemId"`
-	SellItemID int64  `json:"sellItemId"`
-	AssetAmt   string `json:"assetAmt"`
-	SatValue   int64  `json:"satValue"`
-	UnitPrice  string `json:"unitPrice"`
-}
-
-type SettlementTransfer struct {
-	ItemID    int64  `json:"itemId"`
-	To        string `json:"to,omitempty"`
-	AssetName string `json:"assetName,omitempty"`
-	AssetAmt  string `json:"assetAmt,omitempty"`
-	SatValue  int64  `json:"satValue,omitempty"`
-	Reason    string `json:"reason"`
-}
+type SettlementPlan = contractframework.SettlementPlan
+type SettlementDeal = contractframework.SettlementDeal
+type SettlementTransfer = contractframework.SettlementTransfer
 
 func settlementPlanHasChanges(plan *SettlementPlan) bool {
-	return plan != nil && (len(plan.Deals) != 0 || len(plan.Transfers) != 0 || len(plan.ItemIDs) != 0)
+	return contractframework.SettlementPlanHasChanges(plan)
 }
 
 func cloneSettlementPlans(plans []*SettlementPlan) []*SettlementPlan {
-	out := make([]*SettlementPlan, 0, len(plans))
-	for _, plan := range plans {
-		out = append(out, cloneSettlementPlan(plan))
-	}
-	return out
+	return contractframework.CloneSettlementPlans(plans)
 }
 
 func (r *ContractRuntime) settleLimitOrders(height int64) (*SettlementPlan, error) {
@@ -603,7 +578,7 @@ func addSettlementInputs(plan *SettlementPlan, item *InvokeItem) {
 		}
 		plan.Inputs = append(plan.Inputs, WireOutPointToTemplate(outpoint))
 	}
-	plan.Inputs = uniqueOutPoints(plan.Inputs)
+	plan.Inputs = contractframework.UniqueOutPoints(plan.Inputs)
 }
 
 func applyRefunds(state *TemplateRuntimeState, plan *SettlementPlan, height int64) {

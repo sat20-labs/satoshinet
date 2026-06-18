@@ -8,6 +8,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
 func validPredictionContract() PredictionContract {
@@ -138,7 +139,8 @@ func TestRuntimeConfirmRequiresConfiguredAttestation(t *testing.T) {
 		t.Fatalf("ParseTx failed: %v", err)
 	}
 	key, pubKey, address := testCoreNodeKey(t)
-	runtime, err := NewRuntime(contract, *parsed.Deploy, RuntimeConfig{
+	deployPayload := agentDeployPayloadFromFramework(parsed.Deploy)
+	runtime, err := NewRuntime(contract, *deployPayload, RuntimeConfig{
 		CoreNodeAddress:           address,
 		CoreNodePubKey:            pubKey,
 		AgentAddress:              "agent",
@@ -208,9 +210,9 @@ func testCoreNodeKey(t *testing.T) (*btcec.PrivateKey, string, string) {
 	}
 	priv, pub := btcec.PrivKeyFromBytes(privBytes)
 	pubKeyText := strings.ToLower(hexEncode(pub.SerializeCompressed()))
-	address, err := taprootAddressFromPubKey(pub.SerializeCompressed(), &chaincfg.TestNetParams)
+	address, err := contractframework.TaprootAddressFromPubKey(pub.SerializeCompressed(), &chaincfg.TestNetParams)
 	if err != nil {
-		t.Fatalf("taprootAddressFromPubKey failed: %v", err)
+		t.Fatalf("TaprootAddressFromPubKey failed: %v", err)
 	}
 	return priv, pubKeyText, address
 }

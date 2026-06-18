@@ -130,7 +130,7 @@ func (r *ContractRuntime) SettleBlockWithGasConfig(height int64, gasConfig GasCo
 	case *AMMContract:
 		return r.settleAMM(height)
 	case *ExchangeContract:
-		return r.settleExchange(height, gasConfig.normalized())
+		return r.settleExchange(height, gasConfig.Normalize())
 	default:
 		addr := r.Address()
 		return &SettlementPlan{

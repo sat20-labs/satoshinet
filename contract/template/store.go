@@ -4,6 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"sort"
+
+	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
 type RuntimeStore struct {
@@ -101,6 +104,98 @@ func (s *RuntimeStore) SettleBlockWithGasConfig(height int64, gasConfig GasConfi
 		}
 	}
 	return plans, nil
+}
+
+func (s *RuntimeStore) ReconcileAssetCaches(contractUTXOs ContractUTXOProvider, gasConfig GasConfig) error {
+	if s == nil || contractUTXOs == nil {
+		return nil
+	}
+	gasAssetName := gasConfig.Normalize().GasAssetName
+	for _, key := range s.sortedKeys() {
+		runtime := s.runtimes[key]
+		if runtime == nil {
+			continue
+		}
+		utxos, err := contractUTXOs(runtime.Address())
+		if err != nil {
+			return err
+		}
+		state, err := runtime.loadRuntimeState()
+		if err != nil {
+			return err
+		}
+		if !reconcileRunningAssetCache(runtime.Contract(), &state.Running, utxos, gasAssetName) {
+			continue
+		}
+		if !state.Running.TradingReady {
+			state.Running.TradingReady = state.Running.ammTradingReady()
+		}
+		if err := runtime.saveRuntimeState(state); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func reconcileRunningAssetCache(contract Contract, running *RunningData, utxos []UTXO, gasAssetName string) bool {
+	if running == nil {
+		return false
+	}
+	assetA, assetB, ok := runtimePoolAssets(contract)
+	if !ok {
+		return false
+	}
+	assetAAmount, assetAOK := sumUTXOAssetAmount(utxos, assetA)
+	assetBAmount, assetBOK := sumUTXOAssetAmount(utxos, assetB)
+	changed := false
+	if assetAOK && !decimalEqualAllowNil(running.AssetAInPool, assetAAmount) {
+		running.AssetAInPool = assetAAmount
+		changed = true
+	}
+	if assetBOK && !decimalEqualAllowNil(running.AssetBInPool, assetBAmount) {
+		running.AssetBInPool = assetBAmount
+		changed = true
+	}
+	if gasAssetName != "" && gasAssetName != assetA && gasAssetName != assetB {
+		gasAmount, ok := sumUTXOAssetAmount(utxos, gasAssetName)
+		if ok && !decimalEqualAllowNil(running.GasBalance, gasAmount) {
+			running.GasBalance = gasAmount
+			changed = true
+		}
+	}
+	return changed
+}
+
+func runtimePoolAssets(contract Contract) (assetA, assetB string, ok bool) {
+	switch c := contract.(type) {
+	case *AMMContract:
+		return c.AssetName, SatoshiAssetName, true
+	case *ExchangeContract:
+		return c.AssetAName, c.AssetBName, true
+	default:
+		return "", "", false
+	}
+}
+
+func sumUTXOAssetAmount(utxos []UTXO, assetName string) (*scommon.Decimal, bool) {
+	if assetName == "" {
+		return nil, false
+	}
+	total, err := contractframework.SumUTXOAssetAmount(utxos, assetName)
+	if err != nil {
+		return nil, false
+	}
+	return total, true
+}
+
+func decimalEqualAllowNil(a, b *scommon.Decimal) bool {
+	if a == nil {
+		a = parseDecimalOrZero("0")
+	}
+	if b == nil {
+		b = parseDecimalOrZero("0")
+	}
+	return a.Cmp(b) == 0
 }
 
 func (s *RuntimeStore) StateRoot() [32]byte {

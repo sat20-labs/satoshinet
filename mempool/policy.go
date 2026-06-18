@@ -10,7 +10,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -94,22 +94,24 @@ func calcMinRequiredTxRelayFee(serializedSize int64, minRelayTxFee btcutil.Amoun
 // not perform those checks because the script engine already does this more
 // accurately and concisely via the txscript.ScriptVerifyCleanStack and
 // txscript.ScriptVerifySigPushOnly flags.
-func checkInputsStandard(tx *btcutil.Tx, utxoView *blockchain.UtxoViewpoint) error {
+func checkInputsStandard(tx *btcutil.Tx, utxoView *blockchain.UtxoViewpoint,
+	params *chaincfg.Params) error {
 	// NOTE: The reference implementation also does a coinbase check here,
 	// but coinbases have already been rejected prior to calling this
 	// function so no need to recheck.
 
+	contractPrefix := contractPrefixForParams(params)
 	for i, txIn := range tx.MsgTx().TxIn {
 		// It is safe to elide existence and index checks here since
 		// they have already been checked prior to calling this
 		// function.
 		entry := utxoView.LookupEntry(txIn.PreviousOutPoint)
 		originPkScript := entry.PkScript()
-		if contractengine.IsContractPkScript(originPkScript) {
+		if isContractPkScriptForPrefix(originPkScript, contractPrefix) {
 			inputScripts, err := contractInputScripts(tx.MsgTx(), utxoView)
 			if err == nil {
-				_, err = contractengine.ValidateResultContractSpend(
-					tx.MsgTx(), inputScripts, contractcommon.TestnetContractPrefix)
+				_, err = contractcommon.ValidateResultContractSpend(
+					tx.MsgTx(), inputScripts, contractPrefix)
 			}
 			if err != nil {
 				str := fmt.Sprintf("transaction input #%d spends an "+
@@ -320,6 +322,14 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 	medianTimePast time.Time, minRelayTxFee btcutil.Amount,
 	maxTxVersion int32) error {
 
+	return CheckTransactionStandardWithParams(tx, height, medianTimePast,
+		minRelayTxFee, maxTxVersion, nil)
+}
+
+func CheckTransactionStandardWithParams(tx *btcutil.Tx, height int32,
+	medianTimePast time.Time, minRelayTxFee btcutil.Amount,
+	maxTxVersion int32, params *chaincfg.Params) error {
+
 	// The transaction must be a currently supported version.
 	msgTx := tx.MsgTx()
 	if msgTx.Version > maxTxVersion || msgTx.Version < 1 {
@@ -373,8 +383,9 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 	// be "dust" (except when the script is a null data script).
 	// numNullDataOutputs := 0
 	hasContractOutput := false
+	contractPrefix := contractPrefixForParams(params)
 	for i, txOut := range msgTx.TxOut {
-		if contractengine.IsContractPkScript(txOut.PkScript) {
+		if isContractPkScriptForPrefix(txOut.PkScript, contractPrefix) {
 			hasContractOutput = true
 			continue
 		}
@@ -404,7 +415,7 @@ func CheckTransactionStandard(tx *btcutil.Tx, height int32,
 		// 	return txRuleError(wire.RejectDust, str)
 		// }
 	}
-	payloadType, found, err := contractengine.ClassifyTxPayloadType(msgTx)
+	payloadType, found, err := contractcommon.ClassifyTxPayloadType(msgTx)
 	if err != nil {
 		return txRuleError(wire.RejectNonstandard,
 			fmt.Sprintf("malformed contract transaction: %v", err))
@@ -444,4 +455,16 @@ func GetTxVirtualSize(tx *btcutil.Tx) int64 {
 	// to 4. The division by 4 creates a discount for wit witness data.
 	return (blockchain.GetTransactionWeight(tx) + (blockchain.WitnessScaleFactor - 1)) /
 		blockchain.WitnessScaleFactor
+}
+
+func contractPrefixForParams(params *chaincfg.Params) string {
+	if params == nil || params.Net != wire.MainNet {
+		return contractcommon.TestnetContractPrefix
+	}
+	return contractcommon.MainnetContractPrefix
+}
+
+func isContractPkScriptForPrefix(pkScript []byte, prefix string) bool {
+	_, ok, _ := contractcommon.ParseContractPkScript(pkScript, prefix)
+	return ok
 }

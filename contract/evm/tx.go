@@ -2,208 +2,74 @@ package evm
 
 import (
 	"errors"
-	"fmt"
 
-	scommon "github.com/sat20-labs/indexer/common"
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-type ContractScriptResolver func(pkScript []byte) (ContractAddress, bool, error)
+type ContractScriptResolver = contractframework.ContractScriptResolver
 
-type ParsedTx struct {
-	Type            TxType
-	Payload         []byte
-	EVMOutputIndex  int
-	Deploy          *DeployPayload
-	Invoke          *InvokePayload
-	Result          *ResultPayload
-	StateRoot       *StateRootPayload
-	ContractOutputs []ContractOutput
-	Inputs          []OutPoint
+type ContractOutput = contractframework.ContractOutput
+
+type ContractExistsFunc func(ContractAddress) bool
+
+type DeployValidation = contractframework.DeployValidation
+
+type InvokeValidation = contractframework.InvokeValidation
+
+type ResultValidation struct {
+	Payload ResultPayload
+	Inputs  []OutPoint
 }
 
-type ContractOutput struct {
-	OutPoint OutPoint
-	Vout     uint32
-	Contract ContractAddress
-	Value    int64
-	Assets   wire.TxAssets
-	PkScript []byte
+var ParseTx = contractframework.ParseTxFunc(evmParseSpec)
+
+var FindInvokeContractOutputs = contractframework.FindInvokeContractOutputsFunc(evmParseSpec)
+
+var FindContractOutputsForContract = contractframework.FindContractOutputsForContractFunc()
+
+type DeployTxBuildRequest = evmcommon.EVMDeployTxBuildRequest
+
+type InvokeTxBuildRequest = evmcommon.EVMInvokeTxBuildRequest
+
+func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
+	return evmcommon.BuildEVMDeployTx(req)
 }
 
-func (o ContractOutput) AssetAmount(assetName string) (*scommon.Decimal, error) {
-	if assetName == "" {
-		return nil, ErrInvalidAsset
-	}
-	if assetName == SatoshiAssetName {
-		if o.Value < 0 {
-			return nil, fmt.Errorf("contract output %s has negative value", o.OutPoint)
-		}
-		return scommon.NewDefaultDecimal(o.Value), nil
-	}
-	name := wire.NewAssetNameFromString(assetName)
-	if name == nil {
-		return nil, ErrInvalidAsset
-	}
-	asset, err := o.Assets.Find(name)
-	if err != nil || asset == nil {
-		return zeroDecimal(), nil
-	}
-	return asset.Amount.Clone(), nil
+func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
+	return evmcommon.BuildEVMInvokeTx(req)
 }
 
-func ParseTx(tx *wire.MsgTx, resolver ContractScriptResolver) (ParsedTx, error) {
-	if tx == nil {
-		return ParsedTx{}, errors.New("missing transaction")
-	}
-	parsed := ParsedTx{EVMOutputIndex: -1}
-	for i, txIn := range tx.TxIn {
-		if txIn == nil {
-			return ParsedTx{}, fmt.Errorf("nil input %d", i)
-		}
-		parsed.Inputs = append(parsed.Inputs, WireOutPointToEVM(txIn.PreviousOutPoint))
-	}
-
-	payloadParts := make([][]byte, 0)
-	for i, txOut := range tx.TxOut {
-		if txOut == nil {
-			return ParsedTx{}, fmt.Errorf("nil output %d", i)
-		}
-		txType, payload, err := evmcommon.ReadNullDataScript(txOut.PkScript)
-		if err != nil {
-			continue
-		}
-		if parsed.Type == 0 {
-			parsed.Type = txType
-			parsed.EVMOutputIndex = i
-		} else if parsed.Type != txType {
-			return ParsedTx{}, errors.New("transaction contains mixed EVM OP_RETURN output types")
-		} else if txType != TxTypeDeploy && txType != TxTypeInvoke {
-			return ParsedTx{}, errors.New("transaction contains multiple singleton EVM OP_RETURN outputs")
-		}
-		payloadParts = append(payloadParts, payload)
-	}
-	if parsed.Type == 0 {
-		return parsed, nil
-	}
-	for _, part := range payloadParts {
-		parsed.Payload = append(parsed.Payload, part...)
-	}
-
-	switch parsed.Type {
-	case TxTypeDeploy:
-		payload, err := evmcommon.DecodeDeployPayload(parsed.Payload)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.Deploy = &payload
-	case TxTypeInvoke:
-		payload, err := evmcommon.DecodeInvokePayload(parsed.Payload)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.Invoke = &payload
-		outputs, err := FindInvokeContractOutputs(tx, resolver)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.ContractOutputs = outputs
-	case TxTypeResult:
-		if len(payloadParts) != 1 {
-			return ParsedTx{}, errors.New("EVM_RESULT must use exactly one OP_RETURN")
-		}
-		if parsed.EVMOutputIndex != len(tx.TxOut)-1 {
-			return ParsedTx{}, errors.New("EVM_RESULT OP_RETURN must be the last output")
-		}
-		payload, err := evmcommon.DecodeResultPayload(parsed.Payload)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.Result = &payload
-	case TxTypeCoinbaseStateRoot:
-		if len(payloadParts) != 1 {
-			return ParsedTx{}, errors.New("EVM state root must use exactly one OP_RETURN")
-		}
-		payload, err := evmcommon.DecodeStateRootPayload(parsed.Payload)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.StateRoot = &payload
-	default:
-		return ParsedTx{}, fmt.Errorf("unsupported EVM tx type %d", parsed.Type)
-	}
-	return parsed, nil
-}
-
-func FindInvokeContractOutputs(tx *wire.MsgTx, resolver ContractScriptResolver) ([]ContractOutput, error) {
-	if resolver == nil {
-		return nil, errors.New("missing contract script resolver")
-	}
-	txid := tx.TxID()
-	var contract *ContractAddress
-	outputs := make([]ContractOutput, 0)
-	for i, txOut := range tx.TxOut {
-		if txOut == nil {
-			return nil, fmt.Errorf("nil output %d", i)
-		}
-		addr, ok, err := resolver(txOut.PkScript)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		if contract == nil {
-			cp := addr
-			contract = &cp
-		} else if !contract.Equal(addr) {
-			return nil, errors.New("EVM_INVOKE outputs target multiple contract addresses")
-		}
-		vout := uint32(i)
-		outputs = append(outputs, ContractOutput{
-			OutPoint: OutPoint{TxID: txid, Vout: vout},
-			Vout:     vout,
-			Contract: addr,
-			Value:    txOut.Value,
-			Assets:   txOut.Assets.Clone(),
-			PkScript: cloneBytes(txOut.PkScript),
-		})
-	}
-	if len(outputs) == 0 {
-		return nil, errors.New("EVM_INVOKE has no contract output")
-	}
-	return outputs, nil
-}
-
-func FindContractOutputsForContract(tx *wire.MsgTx, resolver ContractScriptResolver, contract ContractAddress) ([]ContractOutput, error) {
-	if resolver == nil {
-		return nil, errors.New("missing contract script resolver")
-	}
-	txid := tx.TxID()
-	outputs := make([]ContractOutput, 0)
-	for i, txOut := range tx.TxOut {
-		if txOut == nil {
-			return nil, fmt.Errorf("nil output %d", i)
-		}
-		addr, ok, err := resolver(txOut.PkScript)
-		if err != nil {
-			return nil, err
-		}
-		if !ok || !contract.Equal(addr) {
-			continue
-		}
-		vout := uint32(i)
-		outputs = append(outputs, ContractOutput{
-			OutPoint: OutPoint{TxID: txid, Vout: vout},
-			Vout:     vout,
-			Contract: addr,
-			Value:    txOut.Value,
-			Assets:   txOut.Assets.Clone(),
-			PkScript: cloneBytes(txOut.PkScript),
-		})
-	}
-	return outputs, nil
+func evmParseSpec() contractframework.ParseSpec {
+	return contractframework.ParseSpecFromPayloads(contractframework.PayloadParseSpec{
+		ModuleName:   "EVM",
+		ContractType: ContractTypeEVM,
+		DecodeDeploy: func(data []byte) (contractframework.DeployPayload, error) {
+			payload, err := evmcommon.DecodeDeployPayload(data)
+			if err != nil {
+				return contractframework.DeployPayload{}, err
+			}
+			return contractframework.DeployPayload{
+				GasLimit: payload.GasLimit,
+				Nonce:    payload.DeployNonce,
+				Code:     contractframework.CloneBytes(payload.InitCode),
+			}, nil
+		},
+		DecodeInvoke: func(data []byte) (contractframework.InvokePayload, error) {
+			payload, err := evmcommon.DecodeInvokePayload(data)
+			if err != nil {
+				return contractframework.InvokePayload{}, err
+			}
+			return contractframework.InvokePayload{
+				GasLimit:  payload.GasLimit,
+				CallNonce: payload.CallNonce,
+				Data:      contractframework.CloneBytes(payload.Calldata),
+			}, nil
+		},
+		AcceptResult:         true,
+		RequireResultLastOut: true,
+	})
 }
 
 func InvokeCallBindings(tx *wire.MsgTx, resolver ContractScriptResolver) ([]InvokeCallBinding, error) {
@@ -224,9 +90,43 @@ func InvokeCallBindings(tx *wire.MsgTx, resolver ContractScriptResolver) ([]Invo
 	return bindings, nil
 }
 
-func WireOutPointToEVM(out wire.OutPoint) OutPoint {
-	return OutPoint{
-		TxID: out.Hash.String(),
-		Vout: out.Index,
+func ValidateDeployTxBasic(tx *wire.MsgTx, cfg GasConfig) (DeployValidation, error) {
+	parsed, err := contractframework.ParseTx(tx, nil, evmParseSpec())
+	if err != nil {
+		return DeployValidation{}, err
 	}
+	validated, err := contractframework.ValidateParsedDeployBasic(parsed, "EVM", cfg)
+	if err != nil {
+		return DeployValidation{}, err
+	}
+	if len(validated.Payload.Code) == 0 {
+		return DeployValidation{}, errors.New("deploy init code is empty")
+	}
+	return validated, nil
+}
+
+func ValidateInvokeTxBasic(tx *wire.MsgTx, resolver ContractScriptResolver, exists ContractExistsFunc, cfg GasConfig) (InvokeValidation, error) {
+	parsed, err := ParseTx(tx, resolver)
+	if err != nil {
+		return InvokeValidation{}, err
+	}
+	return contractframework.ValidateParsedInvokeBasic(parsed, "EVM", ContractTypeEVM,
+		contractframework.ContractExistsFunc(exists), cfg)
+}
+
+func ValidateResultTxBasic(tx *wire.MsgTx) (ResultValidation, error) {
+	parsed, err := ParseTx(tx, nil)
+	if err != nil {
+		return ResultValidation{}, err
+	}
+	if parsed.Type != TxTypeResult || parsed.Result == nil {
+		return ResultValidation{}, errors.New("not an EVM_RESULT transaction")
+	}
+	if parsed.Result.ResultCount == 0 {
+		return ResultValidation{}, errors.New("result count is zero")
+	}
+	return ResultValidation{
+		Payload: *parsed.Result,
+		Inputs:  parsed.Inputs,
+	}, nil
 }

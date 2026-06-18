@@ -10,6 +10,7 @@ import (
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/holiman/uint256"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
 var stateCodecMagic = []byte("EVMSTATE")
@@ -66,7 +67,7 @@ func (s *MemoryStateDB) MarshalBinary() ([]byte, error) {
 		writeBytes(&buf, []byte(trigger.ID))
 		buf.WriteByte(byte(trigger.Kind))
 		writeVarint64(&buf, trigger.Height)
-		writeUvarint(&buf, trigger.GasLimit)
+		writeGasUvarint(&buf, trigger.GasLimit)
 		writeBytes(&buf, trigger.Calldata)
 	}
 	return buf.Bytes(), nil
@@ -189,6 +190,10 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 			if err != nil {
 				return nil, fmt.Errorf("decode trigger gas limit %d: %w", i, err)
 			}
+			gasLimitInt, err := contractframework.GasUnitsInt64(gasLimit)
+			if err != nil {
+				return nil, fmt.Errorf("decode trigger gas limit %d: %w", i, err)
+			}
 			calldata, err := readBytes(r)
 			if err != nil {
 				return nil, fmt.Errorf("decode trigger calldata %d: %w", i, err)
@@ -202,7 +207,7 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 				Contract: contract,
 				Kind:     TriggerKind(kind),
 				Height:   height,
-				GasLimit: gasLimit,
+				GasLimit: gasLimitInt,
 				Calldata: calldata,
 			}
 			if err := state.RegisterTrigger(trigger); err != nil {
@@ -259,8 +264,21 @@ func writeBytes(w *bytes.Buffer, b []byte) {
 	w.Write(b)
 }
 
+func writeUvarint(w *bytes.Buffer, v uint64) {
+	var tmp [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(tmp[:], v)
+	w.Write(tmp[:n])
+}
+
 func writeVarint64(w *bytes.Buffer, v int64) {
 	writeUvarint(w, uint64(v<<1)^uint64(v>>63))
+}
+
+func writeGasUvarint(w *bytes.Buffer, v int64) {
+	if v < 0 {
+		v = 0
+	}
+	writeUvarint(w, uint64(v))
 }
 
 func readBytes(r *bytes.Reader) ([]byte, error) {

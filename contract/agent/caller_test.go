@@ -30,7 +30,7 @@ func TestLastInputPreviousOutputInvokerResolverUsesPreviousOutputAddress(t *test
 			}
 			return nil, false
 		})
-	got, err := resolver(tx, ParsedTx{})
+	got, err := resolver(tx, Tx{})
 	require.NoError(t, err)
 	require.Equal(t, lastAddr.EncodeAddress(), got)
 }
@@ -41,7 +41,7 @@ func TestLastInputPreviousOutputInvokerResolverRejectsMissingPreviousOutput(t *t
 
 	resolver := LastInputPreviousOutputInvokerResolver(&chaincfg.TestNetParams,
 		func(wire.OutPoint) ([]byte, bool) { return nil, false })
-	_, err := resolver(tx, ParsedTx{})
+	_, err := resolver(tx, Tx{})
 	require.ErrorContains(t, err, "missing agent invoker previous output address")
 }
 

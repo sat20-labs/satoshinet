@@ -1,0 +1,311 @@
+package node
+
+import (
+	"fmt"
+	"math"
+	"sync"
+
+	"github.com/sat20-labs/satoshinet/blockchain"
+	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/wire"
+)
+
+// EVMRuntimeFactory returns the EVM runtime that should be used to replay a
+// block. Production callers are expected to back the runtime StateDB with the
+// persisted EVM state at the parent block.
+type EVMRuntimeFactory func(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*evm.Runtime, error)
+
+// EVMBlockContextBuilder maps a SatoshiNet block to the EVM execution context.
+type EVMBlockContextBuilder func(block *btcutil.Block) evm.BlockContext
+
+// EVMBlockExecutionConfig wires the generic EVM executor into blockchain block
+// validation without hard-coding wallet, address-index, or state-store choices.
+type EVMBlockExecutionConfig struct {
+	ChainParams *chaincfg.Params
+
+	ContractPrefix string
+	GasConfig      evm.GasConfig
+
+	NewRuntime        EVMRuntimeFactory
+	BuildBlockContext EVMBlockContextBuilder
+	ResolveCaller     evm.CallerResolver
+
+	ContractUTXOs       evm.ContractUTXOProvider
+	ResolveRecipient    contractframework.ScriptRecipientResolver
+	ResolveResultOutput evm.ResultOutputResolver
+	ResolveTriggers     evm.TriggerResolver
+	VerifyResult        evm.ResultVerifier
+	SkipStateRootVerify bool
+}
+
+// EVMBlockExecutionValidator validates EVM transaction replay, Result TX
+// settlement, and the coinbase state-root commitment for a block.
+type EVMBlockExecutionValidator struct {
+	cfg EVMBlockExecutionConfig
+
+	postStateMu sync.Mutex
+	postStates  map[chainhash.Hash]*evm.MemoryStateDB
+}
+
+func NewEVMBlockExecutionValidator(cfg EVMBlockExecutionConfig) *EVMBlockExecutionValidator {
+	return &EVMBlockExecutionValidator{
+		cfg:        cfg,
+		postStates: make(map[chainhash.Hash]*evm.MemoryStateDB),
+	}
+}
+
+func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
+	if block == nil {
+		return evmBlockRuleError("missing block")
+	}
+	if view == nil {
+		return evmBlockRuleError("missing UTXO view")
+	}
+	txs := block.Transactions()
+	if len(txs) == 0 {
+		return evmBlockRuleError("missing coinbase transaction")
+	}
+
+	coinbaseTx := txs[0].MsgTx()
+	prefix := v.contractPrefix()
+	hasRoot, split, err := splitBlockContractTxs(block, view, v.cfg.ChainParams, prefix)
+	if err != nil {
+		return evmBlockRuleError("split EVM contract txs: %v", err)
+	}
+	blockTxs := split.WorkTxs[contractframework.ModuleEVM]
+	resultTxs := split.ResultTxs[contractframework.ModuleEVM]
+	hasExecution := len(blockTxs) != 0 || len(resultTxs) != 0
+	runtime, err := v.runtime(block, view)
+	if err != nil {
+		return evmBlockRuleError("load EVM runtime: %v", err)
+	}
+	if runtime == nil {
+		return evmBlockRuleError("missing EVM runtime")
+	}
+	runtime.ContractPrefix = prefix
+	blockCtx := v.blockContext(block)
+	hasDueTrigger, err := v.runtimeHasDueTriggers(runtime, blockCtx, prefix)
+	if err != nil {
+		return err
+	}
+	if !hasRoot && !hasExecution && !hasDueTrigger {
+		return nil
+	}
+	if (hasExecution || hasDueTrigger) && !hasRoot {
+		return evmBlockRuleError("missing EVM state root commitment")
+	}
+	gasConfig := v.cfg.GasConfig
+	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
+
+	contractOverlay, err := v.blockContractOverlay(blockTxs, prefix, block.Height())
+	if err != nil {
+		return err
+	}
+	verifyResult := v.resultVerifier(prefix, contractOverlay, block.Height(), gasConfig)
+
+	req := evm.BlockExecutionRequest{
+		Txs:            blockTxs,
+		CoinbaseTx:     coinbaseTx,
+		Runtime:        runtime,
+		ContractPrefix: prefix,
+		GasConfig:      gasConfig,
+		Block:          blockCtx,
+		ResolveCaller: evm.LastInputPreviousOutputCallerResolver(
+			v.cfg.ChainParams, previousOutputScriptResolver(view)),
+		ResolveGasRefundRecipient: evm.LastInputPreviousOutputGasRefundRecipientResolver(
+			v.cfg.ChainParams, previousOutputScriptResolver(view)),
+		VerifyResult:    verifyResult,
+		ResolveTriggers: v.cfg.ResolveTriggers,
+		ContractUTXOs:   contractOverlay.Provider,
+	}
+	var result evm.BlockExecutionResult
+	if hasRoot && !v.cfg.SkipStateRootVerify {
+		result, err = evm.ExecuteBlockAndVerifyStateRoot(req)
+	} else {
+		result, err = evm.ExecuteBlock(req)
+	}
+	if err != nil {
+		return evmBlockRuleError("validate EVM block: %v", err)
+	}
+	if err := evm.VerifyResultTxs(evm.ResultVerifyRequest{
+		ResultTxs:      resultTxs,
+		Execution:      result,
+		ContractPrefix: prefix,
+		VerifyResult:   verifyResult,
+	}); err != nil {
+		return evmBlockRuleError("validate EVM result: %v", err)
+	}
+	v.rememberPostState(block.Hash(), runtime.State.Clone())
+	if runtime.State.StateRoot() != result.StateRoot {
+		return evmBlockRuleError("post-state root changed after validation")
+	}
+	return nil
+}
+
+func (v *EVMBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (bool, error) {
+
+	if block == nil {
+		return false, evmBlockRuleError("missing block")
+	}
+	runtime, err := v.runtime(block, view)
+	if err != nil {
+		return false, evmBlockRuleError("load EVM runtime: %v", err)
+	}
+	if runtime == nil {
+		return false, evmBlockRuleError("missing EVM runtime")
+	}
+	prefix := v.contractPrefix()
+	runtime.ContractPrefix = prefix
+	return v.runtimeHasDueTriggers(runtime, v.blockContext(block), prefix)
+}
+
+func (v *EVMBlockExecutionValidator) runtimeHasDueTriggers(runtime *evm.Runtime,
+	block evm.BlockContext, prefix string) (bool, error) {
+
+	if len(runtime.DueTriggerCalls(block)) != 0 {
+		return true, nil
+	}
+	if v.cfg.ResolveTriggers == nil {
+		return false, nil
+	}
+	triggers, err := v.cfg.ResolveTriggers(evm.TriggerResolutionContext{
+		Block:          block,
+		Runtime:        runtime,
+		ContractPrefix: prefix,
+	})
+	if err != nil {
+		return false, evmBlockRuleError("resolve EVM triggers: %v", err)
+	}
+	return len(triggers) != 0, nil
+}
+
+func (v *EVMBlockExecutionValidator) blockContractOverlay(
+	txs []*wire.MsgTx, prefix string, height int32) (*contractframework.ContractUTXOOverlay, error) {
+
+	overlay := contractframework.NewContractUTXOOverlay(contractframework.ContractUTXOOverlayConfig{
+		Prefix:       prefix,
+		ContractType: evm.ContractTypeEVM,
+		Base:         v.cfg.ContractUTXOs,
+	})
+	for _, tx := range txs {
+		parsed, err := evm.ParseTx(tx, evm.StandardContractScriptResolver(prefix))
+		if err != nil {
+			return nil, evmBlockRuleError("parse EVM tx for UTXO overlay: %v", err)
+		}
+		if parsed.Type == evm.TxTypeResult {
+			continue
+		}
+		if err := overlay.AddTxOutputs(tx, int64(height)); err != nil {
+			return nil, evmBlockRuleError("build EVM UTXO overlay: %v", err)
+		}
+	}
+	return overlay, nil
+}
+
+func (v *EVMBlockExecutionValidator) EVMBlockPostState(hash *chainhash.Hash) (*evm.MemoryStateDB, bool) {
+	if hash == nil {
+		return nil, false
+	}
+	v.postStateMu.Lock()
+	defer v.postStateMu.Unlock()
+	state, ok := v.postStates[*hash]
+	if !ok {
+		return nil, false
+	}
+	return state.Clone(), true
+}
+
+func (v *EVMBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, state *evm.MemoryStateDB) {
+	if hash == nil || state == nil {
+		return
+	}
+	v.postStateMu.Lock()
+	defer v.postStateMu.Unlock()
+	v.postStates[*hash] = state.Clone()
+}
+
+func (v *EVMBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*evm.Runtime, error) {
+	if v.cfg.NewRuntime != nil {
+		return v.cfg.NewRuntime(block, view)
+	}
+	return evm.NewRuntime(nil), nil
+}
+
+func (v *EVMBlockExecutionValidator) blockContext(block *btcutil.Block) evm.BlockContext {
+	if v.cfg.BuildBlockContext != nil {
+		return v.cfg.BuildBlockContext(block)
+	}
+	height := block.Height()
+	if height < 0 {
+		height = 0
+	}
+	gasLimit := v.cfg.GasConfig.MaxGasPerBlock
+	if gasLimit == 0 {
+		gasLimit = math.MaxInt64
+	}
+	return evm.BlockContext{
+		Number:        uint64(height),
+		Time:          uint64(block.MsgBlock().Header.Timestamp.Unix()),
+		GasLimit:      gasLimit,
+		FixedGasPrice: v.cfg.GasConfig.FixedGasPrice,
+	}
+}
+
+func (v *EVMBlockExecutionValidator) resultVerifier(prefix string,
+	overlay *contractframework.ContractUTXOOverlay, height int32, gasConfig evm.GasConfig) evm.ResultVerifier {
+
+	if v.cfg.VerifyResult != nil {
+		return v.cfg.VerifyResult
+	}
+	if v.cfg.ContractUTXOs == nil {
+		return nil
+	}
+	resolveOutput := v.cfg.ResolveResultOutput
+	if resolveOutput == nil {
+		resolveOutput = func(resultTx *wire.MsgTx) ([]evm.ResultOutput, error) {
+			return contractframework.ResultOutputsFromTx(resultTx, prefix,
+				evm.ParseContractPkScript, v.cfg.ResolveRecipient)
+		}
+	}
+	verifier := evm.CanonicalResultVerifier{
+		GasConfig:     gasConfig,
+		UTXOs:         v.cfg.ContractUTXOs,
+		ResolveOutput: resolveOutput,
+	}
+	if overlay != nil {
+		verifier.UTXOs = overlay.Provider
+	}
+	return func(resultTx *wire.MsgTx, settled []evm.ExecutionRecord) error {
+		if err := verifier.Verify(resultTx, settled); err != nil {
+			return err
+		}
+		if overlay != nil {
+			if err := overlay.ApplyTx(resultTx, int64(height)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func (v *EVMBlockExecutionValidator) contractPrefix() string {
+	if v.cfg.ContractPrefix != "" {
+		return v.cfg.ContractPrefix
+	}
+	if v.cfg.ChainParams != nil {
+		return evm.ContractPrefixForNet(v.cfg.ChainParams.Net)
+	}
+	return evm.TestnetContractPrefix
+}
+
+func evmBlockRuleError(format string, args ...interface{}) error {
+	return blockchain.RuleError{
+		ErrorCode:   blockchain.ErrInvalidEVMBlock,
+		Description: fmt.Sprintf(format, args...),
+	}
+}

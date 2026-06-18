@@ -6,6 +6,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -30,7 +31,8 @@ func TestBuildResultTxFromPredictionSettlementPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyConfirm failed: %v", err)
 	}
-	plans, err := BuildSettlementResultPlans([]*PredictionSettlementPlan{settlement})
+	plans, err := contractframework.BuildSettlementResultPlans(
+		[]*PredictionSettlementPlan{settlement}, agentSettlementResultOptions())
 	if err != nil {
 		t.Fatalf("BuildSettlementResultPlans failed: %v", err)
 	}
@@ -53,11 +55,11 @@ func TestBuildResultTxFromPredictionSettlementPlan(t *testing.T) {
 		t.Fatalf("inputs not sorted canonically: %#v", plans[0].Inputs)
 	}
 
-	resultTx, err := BuildResultTx(ResultTxBuildRequest{
+	resultTx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
 		Status:        ResultStatusSuccess,
 		Plans:         plans,
 		ResolveScript: testResultScriptResolver,
-	})
+	}, contractframework.ResultTxBuildOptions{})
 	if err != nil {
 		t.Fatalf("BuildResultTx failed: %v", err)
 	}
@@ -73,7 +75,13 @@ func TestBuildResultTxFromPredictionSettlementPlan(t *testing.T) {
 	if _, _, err := contractcommonReadResultPayload(resultTx); err != nil {
 		t.Fatalf("missing result payload: %v", err)
 	}
-	if err := (CanonicalResultVerifier{}).Verify(resultTx, plans, ResultStatusSuccess); err != nil {
+	if err := contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
+		Label:        "agent",
+		ResultTx:     resultTx,
+		Status:       ResultStatusSuccess,
+		Plans:        plans,
+		CheckPayload: true,
+	}); err != nil {
 		t.Fatalf("Verify failed: %v", err)
 	}
 	_ = contract

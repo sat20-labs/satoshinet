@@ -73,7 +73,7 @@ func TestBuildContractIndexRecordsIncludesTemplateInvokeFunding(t *testing.T) {
 	require.Equal(t, contractcommon.ContractTypeTemplate, history[0].ContractTypeID)
 	require.Equal(t, "invoke", history[0].Kind)
 	require.Equal(t, tmplcontract.InvokeAPISwap, history[0].Action)
-	require.Equal(t, uint64(2000), history[0].GasLimit)
+	require.Equal(t, int64(2000), history[0].GasLimit)
 	require.Equal(t, uint64(7), history[0].Nonce)
 	require.NotEmpty(t, history[0].Details["funding_outputs"])
 }

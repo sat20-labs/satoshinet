@@ -6,27 +6,11 @@ import (
 	"sort"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
-type PredictionSettlementPlan struct {
-	Contract         string                       `json:"contract"`
-	AssetName        string                       `json:"asset_name"`
-	ResultType       string                       `json:"result_type"`
-	OutcomeID        string                       `json:"outcome_id,omitempty"`
-	Transfers        []PredictionSettlementOutput `json:"transfers,omitempty"`
-	Refund           bool                         `json:"refund"`
-	DeployerFeeBPS   int                          `json:"deployer_fee_bps,omitempty"`
-	AgentFeeBPS      int                          `json:"agent_fee_bps,omitempty"`
-	BootstrapFeeBPS  int                          `json:"bootstrap_fee_bps,omitempty"`
-	WinnerPoolFeeBPS int                          `json:"winner_pool_bps,omitempty"`
-}
-
-type PredictionSettlementOutput struct {
-	To        string `json:"to"`
-	AssetName string `json:"asset_name"`
-	AssetAmt  string `json:"asset_amt"`
-	Reason    string `json:"reason"`
-}
+type PredictionSettlementPlan = contractframework.SettlementPlan
+type PredictionSettlementOutput = contractframework.SettlementTransfer
 
 type predictionWinner struct {
 	Address string

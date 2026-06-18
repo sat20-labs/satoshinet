@@ -36,8 +36,8 @@ func TestParseTemplateDeployTxCombinesMultipleOPReturns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, TxTypeDeploy, parsed.Type)
 	require.NotNil(t, parsed.Deploy)
-	require.Equal(t, uint64(5000), parsed.Deploy.GasLimit)
-	require.Equal(t, content, parsed.Deploy.ContractContent)
+	require.Equal(t, int64(5000), parsed.Deploy.GasLimit)
+	require.Equal(t, content, parsed.Deploy.Code)
 }
 
 func TestParseTemplateInvokeTxFindsTemplateContractOutputs(t *testing.T) {

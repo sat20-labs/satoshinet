@@ -5,6 +5,8 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	evmcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -255,7 +257,7 @@ func TestCanonicalResultVerifierTriggerUsesContractGasUTXO(t *testing.T) {
 	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
 }
 
-func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
+func TestBackendWithCanonicalResultVerifier(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
@@ -291,7 +293,7 @@ func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
 			}, nil
 		},
 		ResolveOutput: func(tx *wire.MsgTx) ([]ResultOutput, error) {
-			return ResultOutputsFromTx(tx, TestnetContractPrefix, func(pkScript []byte) (string, bool, error) {
+			return contractframework.ResultOutputsFromTx(tx, TestnetContractPrefix, evmcommon.ParseContractPkScript, func(pkScript []byte) (string, bool, error) {
 				if len(pkScript) == 1 && pkScript[0] == 0x51 {
 					return "tb1qdest", true, nil
 				}
@@ -299,12 +301,16 @@ func TestBlockExecutorWithCanonicalResultVerifier(t *testing.T) {
 			})
 		},
 	}
-	_, err := ExecuteBlock(BlockExecutionRequest{
-		Txs:           []*wire.MsgTx{invokeTx, resultTx},
+	executed, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{invokeTx},
 		Runtime:       runtime,
 		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
-		VerifyResult:  verifier.Verify,
 	})
 	require.NoError(t, err)
+	require.NoError(t, VerifyResultTxs(ResultVerifyRequest{
+		ResultTxs:    []*wire.MsgTx{resultTx},
+		Execution:    executed,
+		VerifyResult: verifier.Verify,
+	}))
 }

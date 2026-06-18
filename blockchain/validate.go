@@ -18,7 +18,6 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -1214,7 +1213,7 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 			return nil
 		}
 	}
-	var baseGas uint64
+	var baseGas int64
 	switch class.TxType {
 	case contractcommon.TxTypeDeploy:
 		baseGas = contractcommon.DeployBaseGas
@@ -1591,7 +1590,7 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 	// prevent CPU exhaustion attacks.
 	if runScripts {
 		err := checkBlockScripts(block, view, scriptFlags, b.sigCache,
-			b.hashCache)
+			b.hashCache, b.chainParams)
 		if err != nil {
 			return err
 		}
@@ -1649,32 +1648,11 @@ func (b *BlockChain) validateContractBlock(block *btcutil.Block, view *UtxoViewp
 	if b.contractBlockValidator != nil {
 		return b.contractBlockValidator.ValidateContractBlock(block, view)
 	}
-	if b.templateBlockValidator == nil && b.agentBlockValidator == nil && b.evmBlockValidator != nil {
-		return b.evmBlockValidator.ValidateEVMBlock(block, view)
-	}
-	if b.templateBlockValidator != nil || b.evmBlockValidator != nil || b.agentBlockValidator != nil {
-		validator := NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
-			ChainParams:       b.chainParams,
-			TemplateValidator: b.templateBlockValidator,
-			EVMValidator:      b.evmBlockValidator,
-			AgentValidator:    b.agentBlockValidator,
-		})
-		return validator.ValidateContractBlock(block, view)
-	}
 	return nil
 }
 
 func (b *BlockChain) validateEVMBlock(block *btcutil.Block, view *UtxoViewpoint) error {
 	return b.validateContractBlock(block, view)
-}
-
-func isTemplateContractTx(tx *wire.MsgTx, params *chaincfg.Params) bool {
-	prefix := tmplcontract.TestnetContractPrefix
-	if params != nil {
-		prefix = tmplcontract.ContractPrefixForNet(params.Net)
-	}
-	info, err := tmplcontract.ClassifyTxForBlockOrder(tx, prefix)
-	return err == nil && info.IsTemplate
 }
 
 // ChainParams returns the Blockchain's configured chaincfg.Params.

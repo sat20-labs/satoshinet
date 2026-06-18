@@ -9,8 +9,8 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	"github.com/sat20-labs/satoshinet/contract/evm"
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/contract/evm"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -50,7 +50,7 @@ func TestEVMContractInputRequiresResultTx(t *testing.T) {
 	nonResultTx := wire.NewMsgTx(1)
 	nonResultTx.AddTxIn(wire.NewTxIn(&prevOut, nil, nil))
 	nonResultTx.AddTxOut(wire.NewTxOut(1000, nil, []byte{0x51}))
-	if err := checkInputsStandard(btcutil.NewTx(nonResultTx), view); err == nil {
+	if err := checkInputsStandard(btcutil.NewTx(nonResultTx), view, nil); err == nil {
 		t.Fatal("expected non-result spend to be rejected")
 	}
 
@@ -64,7 +64,7 @@ func TestEVMContractInputRequiresResultTx(t *testing.T) {
 		t.Fatal(err)
 	}
 	resultTx.AddTxOut(wire.NewTxOut(0, nil, resultScript))
-	if err := checkInputsStandard(btcutil.NewTx(resultTx), view); err != nil {
+	if err := checkInputsStandard(btcutil.NewTx(resultTx), view, nil); err != nil {
 		t.Fatal(err)
 	}
 }

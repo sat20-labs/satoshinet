@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -95,13 +96,13 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 		Store:         store,
 		BlockHeight:   contract.ConfirmAfter + 1,
 		RuntimeConfig: testRuntimeConfig(),
-		ContractUTXOs: ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
+		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
 			return []UTXO{{
 				OutPoint: OutPoint{TxID: abnormalTxID, Vout: 0},
 				Contract: contract,
 				Value:    10000,
 			}}, nil
-		}, []*wire.MsgTx{aliceBetTx, bobBetTx}, TestnetContractPrefix),
+		}, []*wire.MsgTx{aliceBetTx, bobBetTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 		ResolveScript:  testResultScriptResolver,
 	})

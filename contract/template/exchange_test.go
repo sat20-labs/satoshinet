@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"testing"
 
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +21,7 @@ func TestExchangeDefaultFundAndBuy(t *testing.T) {
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
-		ResolveInvoker: func(tx *wire.MsgTx, parsed ParsedTx) (string, error) {
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -49,7 +50,7 @@ func TestExchangeDefaultFundAndBuy(t *testing.T) {
 	requireDecimalString(t, "11.88", state.Running.TotalDealAssetA)
 	require.Empty(t, state.Running.GasBalance)
 
-	provider := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix)
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
@@ -73,7 +74,7 @@ func TestExchangeDefaultInvokeRetainsAssetB(t *testing.T) {
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
-		ResolveInvoker: func(tx *wire.MsgTx, parsed ParsedTx) (string, error) {
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -112,7 +113,7 @@ func TestExchangeDefaultInvokeRetainsAssetA(t *testing.T) {
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
-		ResolveInvoker: func(tx *wire.MsgTx, parsed ParsedTx) (string, error) {
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -152,7 +153,7 @@ func TestExchangeDefaultBuyWithSatoshiAssetB(t *testing.T) {
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
-		ResolveInvoker: func(tx *wire.MsgTx, parsed ParsedTx) (string, error) {
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -174,7 +175,7 @@ func TestExchangeDefaultBuyWithSatoshiAssetB(t *testing.T) {
 	require.Equal(t, 1, state.Running.TotalDealCount)
 	requireDecimalString(t, "10000", state.Running.TotalDealAssetA)
 
-	provider := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix)
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
@@ -200,7 +201,7 @@ func TestExchangeSoldAmountPriceTiersWithinSingleInvoke(t *testing.T) {
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
-		ResolveInvoker: func(tx *wire.MsgTx, parsed ParsedTx) (string, error) {
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -238,7 +239,7 @@ func TestExchangeCloseReturnsRemainingAssetAToDeployer(t *testing.T) {
 		Txs:       []*wire.MsgTx{deployTx, fundTx, closeTx},
 		Store:     store,
 		GasConfig: gasConfig,
-		ResolveInvoker: func(tx *wire.MsgTx, parsed ParsedTx) (string, error) {
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
 			return "deployer-address", nil
 		},
 		BlockHeight: 10,
@@ -256,7 +257,7 @@ func TestExchangeCloseReturnsRemainingAssetAToDeployer(t *testing.T) {
 	require.True(t, state.Running.Closed)
 	require.Empty(t, state.Running.AssetAInPool)
 
-	provider := ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, closeTx}, TestnetContractPrefix)
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, closeTx}, TestnetContractPrefix, ContractTypeTemplate)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)

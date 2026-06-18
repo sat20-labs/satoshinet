@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	evmcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
@@ -13,13 +15,13 @@ func TestBuildResultTx(t *testing.T) {
 	contract := testContract(t)
 	inputHash := chainhash.Hash{1, 2, 3}
 	plan := ResultPlan{
-		Inputs: []UTXO{mustUTXO(t, OutPoint{TxID: inputHash.String(), Vout: 2}, contract, "ordx:ft:gas", 100, 0)},
+		InputUTXOs: []UTXO{mustUTXO(t, OutPoint{TxID: inputHash.String(), Vout: 2}, contract, "ordx:ft:gas", 100, 0)},
 		Outputs: []ResultOutput{
 			mustResultOutput(t, "tb1qdest", SatoshiAssetName, 70),
 			mustResultOutput(t, contract.MustEncode(), "ordx:ft:gas", 30),
 		},
 	}
-	tx, err := BuildResultTx(ResultTxBuildRequest{
+	tx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
 		Status:      ResultStatusSuccess,
 		ResultCount: 1,
 		Plans:       []ResultPlan{plan},
@@ -29,7 +31,7 @@ func TestBuildResultTx(t *testing.T) {
 			}
 			return []byte{txscript.OP_TRUE}, nil
 		},
-	})
+	}, contractframework.ResultTxBuildOptions{UseInputUTXOs: true})
 	require.NoError(t, err)
 	require.Len(t, tx.TxIn, 1)
 	require.Equal(t, inputHash, tx.TxIn[0].PreviousOutPoint.Hash)
@@ -46,19 +48,19 @@ func TestBuildResultTx(t *testing.T) {
 }
 
 func TestBuildResultTxRejectsUnsupportedExtraData(t *testing.T) {
-	_, err := BuildResultTx(ResultTxBuildRequest{
+	_, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
 		Status:      ResultStatusSuccess,
 		ResultCount: 1,
 		Plans: []ResultPlan{{
 			Outputs: []ResultOutput{{To: "tb1qdest", Value: 1, ExtraData: []byte{1}}},
 		}},
 		ResolveScript: func(ResultOutput) ([]byte, error) { return []byte{txscript.OP_TRUE}, nil },
-	})
+	}, contractframework.ResultTxBuildOptions{UseInputUTXOs: true})
 	require.Error(t, err)
 }
 
 func TestBuildCanonicalResultTxDeployOnly(t *testing.T) {
-	tx, err := BuildCanonicalResultTx(CanonicalResultTxRequest{
+	tx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
 		Status: ResultStatusSuccess,
 		Records: []ExecutionRecord{{
 			Kind:           ExecutionKindDeploy,
@@ -106,7 +108,7 @@ func TestBuildCanonicalResultTxInvoke(t *testing.T) {
 	}
 	gasConfig := GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 2, InvokeBaseGas: 10, ResultBaseGas: 5}
 
-	tx, err := BuildCanonicalResultTx(CanonicalResultTxRequest{
+	tx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
 		Status:    ResultStatusSuccess,
 		Records:   []ExecutionRecord{record},
 		GasConfig: gasConfig,
@@ -136,7 +138,7 @@ func TestBuildCanonicalResultTxInvoke(t *testing.T) {
 			return available, nil
 		},
 		ResolveOutput: func(tx *wire.MsgTx) ([]ResultOutput, error) {
-			return ResultOutputsFromTx(tx, TestnetContractPrefix, func(pkScript []byte) (string, bool, error) {
+			return contractframework.ResultOutputsFromTx(tx, TestnetContractPrefix, evmcommon.ParseContractPkScript, func(pkScript []byte) (string, bool, error) {
 				if len(pkScript) == 1 && pkScript[0] == txscript.OP_TRUE {
 					return "tb1qdest", true, nil
 				}

@@ -15,6 +15,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -305,7 +306,7 @@ func VerifyPredictionConfirmAttestation(contract ContractAddress, param Predicti
 		return fmt.Errorf("parse core node pubkey: %w", err)
 	}
 	if expectedCoreNodeAddress != "" {
-		addr, err := taprootAddressFromPubKey(pubKeyBytes, attestationChainParams(params))
+		addr, err := contractframework.TaprootAddressFromPubKey(pubKeyBytes, attestationChainParams(params))
 		if err != nil {
 			return err
 		}

@@ -7,9 +7,6 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractapi "github.com/sat20-labs/satoshinet/contract"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	"github.com/sat20-labs/satoshinet/contract/evm"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -23,7 +20,7 @@ type TxClass struct {
 	ContractType byte
 	TxType       contractcommon.TxType
 	Priority     int
-	GasLimit     uint64
+	GasLimit     int64
 }
 
 func (c TxClass) IsWork() bool {
@@ -41,49 +38,44 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, params *chaincfg.Params) (TxClass, 
 }
 
 func ClassifyTxForBlockOrderWithPrefix(tx *wire.MsgTx, prefix string) (TxClass, bool, error) {
-	var firstErr error
-	templateInfo, templateErr := tmplcontract.ClassifyTxForBlockOrder(tx, prefix)
-	if templateErr == nil && templateInfo.IsTemplate {
-		return TxClass{
-			ContractType: contractcommon.ContractTypeTemplate,
-			TxType:       contractcommon.TxType(templateInfo.Type),
-			Priority:     PriorityTemplate,
-			GasLimit:     templateInfo.GasLimit,
-		}, true, nil
+	txType, payload, found, err := collectBlockOrderPayload(tx)
+	if err != nil {
+		return TxClass{}, false, err
 	}
-	if templateErr != nil {
-		firstErr = templateErr
+	if !found {
+		return classifyDefaultInvokeForBlockOrder(tx, prefix)
 	}
-
-	info, err := evm.ClassifyTxForBlockOrder(tx, prefix)
-	if err == nil && info.IsEVM {
-		return TxClass{
-			ContractType: contractcommon.ContractTypeEVM,
-			TxType:       contractcommon.TxType(info.Type),
-			Priority:     PriorityEVM,
-			GasLimit:     info.GasLimit,
-		}, true, nil
+	contractType := inferContractTypeFromOutputs(tx, prefix)
+	if contractType == 0 && (txType == contractcommon.TxTypeResult ||
+		txType == contractcommon.TxTypeCoinbaseStateRoot) {
+		contractType = contractcommon.ContractTypeTemplate
 	}
-	if err != nil && firstErr == nil {
-		firstErr = err
+	if contractType == 0 {
+		return TxClass{}, false, nil
 	}
-
-	agentInfo, agentErr := agentcontract.ClassifyTxForBlockOrder(tx, prefix)
-	if agentErr == nil && agentInfo.IsAgent {
-		return TxClass{
-			ContractType: contractcommon.ContractTypeAgent,
-			TxType:       contractcommon.TxType(agentInfo.Type),
-			Priority:     PriorityAgent,
-			GasLimit:     agentInfo.GasLimit,
-		}, true, nil
+	class := TxClass{
+		ContractType: contractType,
+		TxType:       txType,
+		Priority:     priorityForContractType(contractType),
 	}
-	if agentErr != nil && firstErr == nil {
-		firstErr = agentErr
+	switch txType {
+	case contractcommon.TxTypeDeploy:
+		gasLimit, err := deployGasLimit(contractType, payload)
+		if err != nil {
+			return TxClass{}, false, err
+		}
+		class.GasLimit = gasLimit
+	case contractcommon.TxTypeInvoke:
+		gasLimit, err := invokeGasLimit(contractType, payload)
+		if err != nil {
+			return TxClass{}, false, err
+		}
+		class.GasLimit = gasLimit
+	case contractcommon.TxTypeResult, contractcommon.TxTypeCoinbaseStateRoot:
+	default:
+		return TxClass{}, false, fmt.Errorf("unsupported contract tx type %d", txType)
 	}
-	if firstErr != nil {
-		return TxClass{}, false, firstErr
-	}
-	return TxClass{}, false, nil
+	return class, true, nil
 }
 
 func ClassifyTxPayloadType(tx *wire.MsgTx) (contractcommon.TxType, bool, error) {
@@ -114,6 +106,107 @@ func ClassifyTxPayloadType(tx *wire.MsgTx) (contractcommon.TxType, bool, error) 
 		return 0, false, nil
 	}
 	return txType, true, nil
+}
+
+func collectBlockOrderPayload(tx *wire.MsgTx) (contractcommon.TxType, []byte, bool, error) {
+	if tx == nil {
+		return 0, nil, false, fmt.Errorf("missing transaction")
+	}
+	var txType contractcommon.TxType
+	payload := make([]byte, 0)
+	for i, txOut := range tx.TxOut {
+		if txOut == nil {
+			return 0, nil, false, fmt.Errorf("nil output %d", i)
+		}
+		nextType, content, err := contractcommon.ReadNullDataScript(txOut.PkScript)
+		if err != nil {
+			continue
+		}
+		if txType == 0 {
+			txType = nextType
+		} else if txType != nextType {
+			return 0, nil, false, fmt.Errorf("transaction contains mixed contract OP_RETURN output types")
+		} else if txType != contractcommon.TxTypeDeploy && txType != contractcommon.TxTypeInvoke {
+			return 0, nil, false, fmt.Errorf("transaction contains multiple singleton contract OP_RETURN outputs")
+		}
+		payload = append(payload, content...)
+	}
+	return txType, payload, txType != 0, nil
+}
+
+func classifyDefaultInvokeForBlockOrder(tx *wire.MsgTx, prefix string) (TxClass, bool, error) {
+	for _, contractType := range []byte{
+		contractcommon.ContractTypeTemplate,
+		contractcommon.ContractTypeEVM,
+		contractcommon.ContractTypeAgent,
+	} {
+		outputs, err := contractcommon.FindDefaultInvokeOutputs(tx, prefix, contractType)
+		if err != nil {
+			return TxClass{}, false, err
+		}
+		if len(outputs) == 0 {
+			continue
+		}
+		return TxClass{
+			ContractType: contractType,
+			TxType:       contractcommon.TxTypeInvoke,
+			Priority:     priorityForContractType(contractType),
+			GasLimit:     int64(contractcommon.InvokeBaseGas),
+		}, true, nil
+	}
+	return TxClass{}, false, nil
+}
+
+func deployGasLimit(contractType byte, payload []byte) (int64, error) {
+	switch contractType {
+	case contractcommon.ContractTypeTemplate:
+		deploy, err := contractcommon.DecodeTemplateDeployPayload(payload)
+		return gasLimitFromDecoded(deploy.GasLimit, err)
+	case contractcommon.ContractTypeAgent:
+		deploy, err := contractcommon.DecodeAgentDeployPayload(payload)
+		return gasLimitFromDecoded(deploy.GasLimit, err)
+	case contractcommon.ContractTypeEVM:
+		deploy, err := contractcommon.DecodeDeployPayload(payload)
+		return gasLimitFromDecoded(deploy.GasLimit, err)
+	default:
+		return 0, fmt.Errorf("unknown contract type %d", contractType)
+	}
+}
+
+func invokeGasLimit(contractType byte, payload []byte) (int64, error) {
+	switch contractType {
+	case contractcommon.ContractTypeTemplate:
+		invoke, err := contractcommon.DecodeTemplateInvokePayload(payload)
+		return gasLimitFromDecoded(invoke.GasLimit, err)
+	case contractcommon.ContractTypeAgent:
+		invoke, err := contractcommon.DecodeAgentInvokePayload(payload)
+		return gasLimitFromDecoded(invoke.GasLimit, err)
+	case contractcommon.ContractTypeEVM:
+		invoke, err := contractcommon.DecodeInvokePayload(payload)
+		return gasLimitFromDecoded(invoke.GasLimit, err)
+	default:
+		return 0, fmt.Errorf("unknown contract type %d", contractType)
+	}
+}
+
+func gasLimitFromDecoded(gas int64, err error) (int64, error) {
+	if err != nil {
+		return 0, err
+	}
+	return gas, nil
+}
+
+func priorityForContractType(contractType byte) int {
+	switch contractType {
+	case contractcommon.ContractTypeTemplate:
+		return PriorityTemplate
+	case contractcommon.ContractTypeEVM:
+		return PriorityEVM
+	case contractcommon.ContractTypeAgent:
+		return PriorityAgent
+	default:
+		return 0
+	}
 }
 
 func BlockHasWork(txs []*btcutil.Tx, params *chaincfg.Params) bool {

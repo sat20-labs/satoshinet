@@ -34,7 +34,7 @@ func TestBuildEVMDeployTx(t *testing.T) {
 	require.Equal(t, TxTypeDeploy, txType)
 	deploy, err := DecodeDeployPayload(payload)
 	require.NoError(t, err)
-	require.Equal(t, uint64(100000), deploy.GasLimit)
+	require.Equal(t, int64(100000), deploy.GasLimit)
 	require.Equal(t, uint64(3), deploy.DeployNonce)
 	require.Equal(t, []byte{0x60, 0x00}, deploy.InitCode)
 
@@ -102,7 +102,7 @@ func TestBuildEVMInvokeTx(t *testing.T) {
 	require.Equal(t, TxTypeInvoke, txType)
 	invoke, err := DecodeInvokePayload(payload)
 	require.NoError(t, err)
-	require.Equal(t, uint64(100000), invoke.GasLimit)
+	require.Equal(t, int64(100000), invoke.GasLimit)
 	require.Equal(t, uint64(9), invoke.CallNonce)
 	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, invoke.Calldata)
 

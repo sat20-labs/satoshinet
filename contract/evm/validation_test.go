@@ -27,7 +27,7 @@ func TestValidateInvokeTxBasic(t *testing.T) {
 		return addr.Equal(contract)
 	}, DefaultGasConfig())
 	require.NoError(t, err)
-	require.Equal(t, uint64(18), validated.MsgValue)
+	require.Equal(t, int64(18), validated.MsgValue)
 	require.Equal(t, DefaultGasConfig().InvokeBaseGas, validated.Payload.GasLimit)
 	require.True(t, contract.Equal(validated.Contract))
 	require.Len(t, validated.FundingOutputs, 2)

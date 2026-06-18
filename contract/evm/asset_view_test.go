@@ -27,3 +27,18 @@ func TestUTXOAssetViewRejectsEmptyAsset(t *testing.T) {
 	_, err := NewUTXOAssetView(nil).AssetBalance(EVMAddress{}, "")
 	require.ErrorIs(t, err, ErrInvalidAsset)
 }
+
+func TestContractUTXOAssetViewBalanceUsesProvider(t *testing.T) {
+	contract := testContract(t)
+	view := NewContractUTXOAssetView(TestnetContractPrefix, func(got ContractAddress) ([]UTXO, error) {
+		require.True(t, contract.Equal(got))
+		return []UTXO{
+			mustUTXO(t, OutPoint{TxID: "a", Vout: 0}, contract, SatoshiAssetName, 25, 0),
+			mustUTXO(t, OutPoint{TxID: "b", Vout: 0}, contract, SatoshiAssetName, 17, 0),
+		}, nil
+	})
+
+	balance, err := view.AssetBalance(ContractAddressHash(contract), SatoshiAssetName)
+	require.NoError(t, err)
+	require.Equal(t, 0, balance.Cmp(mustDefaultDecimal(t, 42)))
+}

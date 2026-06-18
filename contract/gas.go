@@ -13,14 +13,14 @@ const (
 	MainnetGasAssetName = "brc20:f:sgas"
 	TestnetGasAssetName = "brc20:f:sgas"
 
-	DeployBaseGas  uint64 = 5_000_000
-	InvokeBaseGas  uint64 = 100_000
-	ResultBaseGas  uint64 = 50_000
-	TriggerBaseGas uint64 = 150_000
-	MaxGasPerBlock uint64 = 1_000_000_000
+	DeployBaseGas  int64 = 5_000_000
+	InvokeBaseGas  int64 = 100_000
+	ResultBaseGas  int64 = 50_000
+	TriggerBaseGas int64 = 150_000
+	MaxGasPerBlock int64 = 1_000_000_000
 
-	ExecutionGasUnitsPerGas uint64 = 1000
-	GasFeePrecision         int    = 8
+	ExecutionGasUnitsPerGas int64 = 1000
+	GasFeePrecision         int   = 8
 
 	GasPriceDenominator      uint64 = 10000
 	InitialGasPriceNumerator uint64 = GasPriceDenominator
@@ -54,7 +54,7 @@ func GasAssetNameForNet(net wire.BitcoinNet) string {
 	}
 }
 
-func GasFeeAtHeight(gas, height uint64) (uint64, error) {
+func GasFeeAtHeight(gas int64, height uint64) (uint64, error) {
 	fee, err := GasFeeDecimalAtHeight(gas, height)
 	if err != nil {
 		return 0, err
@@ -62,7 +62,7 @@ func GasFeeAtHeight(gas, height uint64) (uint64, error) {
 	return DecimalCeilUint64(fee)
 }
 
-func GasFee(gas, priceNumerator, priceDenominator uint64) (uint64, error) {
+func GasFee(gas int64, priceNumerator, priceDenominator uint64) (uint64, error) {
 	fee, err := GasFeeDecimal(gas, priceNumerator, priceDenominator)
 	if err != nil {
 		return 0, err
@@ -86,24 +86,27 @@ func GasPriceNumeratorAtHeight(height uint64) uint64 {
 	return numerator
 }
 
-func GasFeeDecimalAtHeight(gas, height uint64) (*indexercommon.Decimal, error) {
+func GasFeeDecimalAtHeight(gas int64, height uint64) (*indexercommon.Decimal, error) {
 	return GasFeeDecimal(gas, GasPriceNumeratorAtHeight(height), GasPriceDenominator)
 }
 
-func GasFeeDecimal(gas, priceNumerator, priceDenominator uint64) (*indexercommon.Decimal, error) {
+func GasFeeDecimal(gas int64, priceNumerator, priceDenominator uint64) (*indexercommon.Decimal, error) {
 	if gas == 0 {
 		return indexercommon.NewDecimal(0, GasFeePrecision), nil
+	}
+	if gas < 0 {
+		return nil, errors.New("negative gas")
 	}
 	if priceNumerator == 0 || priceDenominator == 0 || ExecutionGasUnitsPerGas == 0 {
 		return nil, errors.New("invalid gas price")
 	}
-	value := new(big.Int).SetUint64(gas)
+	value := big.NewInt(gas)
 	value.Mul(value, new(big.Int).SetUint64(priceNumerator))
 	if GasFeePrecision > 0 {
 		value.Mul(value, decimalScale(GasFeePrecision))
 	}
 	denominator := new(big.Int).SetUint64(priceDenominator)
-	denominator.Mul(denominator, new(big.Int).SetUint64(ExecutionGasUnitsPerGas))
+	denominator.Mul(denominator, big.NewInt(ExecutionGasUnitsPerGas))
 	value.Div(value, denominator)
 	return &indexercommon.Decimal{Precision: GasFeePrecision, Value: value}, nil
 }

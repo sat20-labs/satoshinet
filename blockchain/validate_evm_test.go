@@ -8,8 +8,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	evmcommon "github.com/sat20-labs/satoshinet/contract"
-	"github.com/sat20-labs/satoshinet/contract/evm"
+	"github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -26,7 +25,7 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 	ordinary.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0}})
 	ordinary.AddTxOut(&wire.TxOut{PkScript: []byte{txscript.OP_TRUE}})
 
-	deployScript, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
+	deployScript, err := contract.DeployNullDataScript(contract.DeployPayload{
 		GasLimit:    1,
 		DeployNonce: 1,
 		InitCode:    []byte{0x60, 0x00},
@@ -37,11 +36,11 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 	deploy := wire.NewMsgTx(2)
 	deploy.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 1}})
 	deploy.AddTxOut(&wire.TxOut{PkScript: deployScript})
-	contract, err := evm.NewContractAddress(evm.TestnetContractPrefix, evm.AddressVersionV1, evm.ContractTypeEVM, evm.EVMAddress{1})
+	c, err := contract.NewContractAddress(contract.TestnetContractPrefix, contract.AddressVersionV1, contract.ContractTypeEVM, contract.EVMAddress{1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	contractOut, err := evm.NewContractTxOut(0, nil, contract)
+	contractOut, err := contract.NewContractTxOut(0, nil, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +68,7 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 		t.Fatalf("unexpected error code %v", ruleErr.ErrorCode)
 	}
 
-	stateRootScript, err := evmcommon.StateRootNullDataScript(evm.StateRootPayload{})
+	stateRootScript, err := contract.StateRootNullDataScript(contract.StateRootPayload{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +90,8 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 		t.Fatalf("unexpected error code %v", ruleErr.ErrorCode)
 	}
 
-	resultScript, err := evmcommon.ResultNullDataScript(evm.ResultPayload{
-		Status:      evm.ResultStatusSuccess,
+	resultScript, err := contract.ResultNullDataScript(contract.ResultPayload{
+		Status:      contract.ResultStatusSuccess,
 		ResultCount: 1,
 	})
 	if err != nil {
@@ -118,28 +117,28 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 }
 
 func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
-	assetName := wire.NewAssetNameFromString(evmcommon.GasAssetNameForNet(wire.TestNet))
+	assetName := wire.NewAssetNameFromString(contract.GasAssetNameForNet(wire.TestNet))
 	if assetName == nil {
 		t.Fatal("invalid gas asset name")
 	}
-	deployScript, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
-		GasLimit:    evmcommon.DeployBaseGas,
+	deployScript, err := contract.DeployNullDataScript(contract.DeployPayload{
+		GasLimit:    contract.DeployBaseGas,
 		DeployNonce: 1,
 		InitCode:    []byte{0x60, 0x00},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	contract, err := evm.NewContractAddress(evm.TestnetContractPrefix,
-		evm.AddressVersionV1, evm.ContractTypeEVM, evm.EVMAddress{9})
+	c, err := contract.NewContractAddress(contract.TestnetContractPrefix,
+		contract.AddressVersionV1, contract.ContractTypeEVM, contract.EVMAddress{9})
 	if err != nil {
 		t.Fatal(err)
 	}
-	contractScript, err := evm.ContractPkScript(contract)
+	contractScript, err := contract.ContractPkScript(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseFee, err := evmcommon.GasFeeDecimalAtHeight(evmcommon.DeployBaseGas, 100)
+	baseFee, err := contract.GasFeeDecimalAtHeight(contract.DeployBaseGas, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,12 +193,12 @@ func decimalBelow(t *testing.T, fee *scommon.Decimal) *scommon.Decimal {
 }
 
 func TestCheckTransactionInputsAllowsEVMDefaultInvokeWithPlainSatsFee(t *testing.T) {
-	contract, err := evm.NewContractAddress(evm.TestnetContractPrefix,
-		evm.AddressVersionV1, evm.ContractTypeEVM, evm.EVMAddress{9})
+	c, err := contract.NewContractAddress(contract.TestnetContractPrefix,
+		contract.AddressVersionV1, contract.ContractTypeEVM, contract.EVMAddress{9})
 	if err != nil {
 		t.Fatal(err)
 	}
-	contractScript, err := evm.ContractPkScript(contract)
+	contractScript, err := contract.ContractPkScript(c)
 	if err != nil {
 		t.Fatal(err)
 	}

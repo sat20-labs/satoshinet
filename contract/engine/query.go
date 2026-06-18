@@ -9,15 +9,23 @@ import (
 	"strings"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
+	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type ContractSummary = contractcommon.ContractSummary
 type ContractHistoryRecord = contractcommon.ContractHistoryRecord
+type ContractAnalytics = contractframework.ContractAnalytics
+type ContractUserStatus = contractframework.ContractUserStatus
+type ContractOutcomeView = contractframework.ContractOutcomeView
+type ContractTransferView = contractframework.ContractTransferView
+type IndexEvent = contractcommon.IndexEvent
 
 type ContractQueryStore interface {
 	GetContractSummaries(start, limit int) ([]ContractSummary, int)
@@ -33,153 +41,8 @@ func NewQueryService(store ContractQueryStore) QueryService {
 	return QueryService{store: store}
 }
 
-type TemplateContractAnalytics struct {
-	Address        string                  `json:"address"`
-	TemplateName   string                  `json:"templateName"`
-	Version        uint32                  `json:"version"`
-	UpdatedHeight  int64                   `json:"updatedHeight"`
-	Running        TemplateRunningDataJSON `json:"running"`
-	TotalItems     int                     `json:"totalItems"`
-	ActiveItems    int                     `json:"activeItems"`
-	FinishedItems  int                     `json:"finishedItems"`
-	StatusCount    map[int]int             `json:"statusCount"`
-	OrderTypeCount map[int]int             `json:"orderTypeCount"`
-}
-
-type TemplateRunningDataJSON struct {
-	AssetAInPool      string            `json:"assetAInPool,omitempty"`
-	AssetBInPool      string            `json:"assetBInPool,omitempty"`
-	RequiredAssetA    string            `json:"requiredAssetA,omitempty"`
-	RequiredAssetB    string            `json:"requiredAssetB,omitempty"`
-	K                 string            `json:"k,omitempty"`
-	TradingReady      bool              `json:"tradingReady,omitempty"`
-	GasBalance        string            `json:"gasBalance,omitempty"`
-	TotalInputAssetA  string            `json:"totalInputAssetA,omitempty"`
-	TotalInputAssetB  string            `json:"totalInputAssetB,omitempty"`
-	TotalDealAssetA   string            `json:"totalDealAssetA,omitempty"`
-	TotalDealAssetB   string            `json:"totalDealAssetB,omitempty"`
-	TotalDealCount    int               `json:"totalDealCount"`
-	TotalRefundAssetB string            `json:"totalRefundAssetB,omitempty"`
-	TotalLPTAmt       string            `json:"totalLptAmt,omitempty"`
-	LPBalances        map[string]string `json:"lpBalances,omitempty"`
-	LPCosts           map[string]int64  `json:"lpCosts,omitempty"`
-	Closed            bool              `json:"closed,omitempty"`
-}
-
-func templateRunningDataJSON(r tmplcontract.RunningData) TemplateRunningDataJSON {
-	return TemplateRunningDataJSON{
-		AssetAInPool:      decimalJSON(r.AssetAInPool),
-		AssetBInPool:      decimalJSON(r.AssetBInPool),
-		RequiredAssetA:    decimalJSON(r.RequiredAssetA),
-		RequiredAssetB:    decimalJSON(r.RequiredAssetB),
-		K:                 decimalJSON(r.K),
-		TradingReady:      r.TradingReady,
-		GasBalance:        decimalJSON(r.GasBalance),
-		TotalInputAssetA:  decimalJSON(r.TotalInputAssetA),
-		TotalInputAssetB:  decimalJSON(r.TotalInputAssetB),
-		TotalDealAssetA:   decimalJSON(r.TotalDealAssetA),
-		TotalDealAssetB:   decimalJSON(r.TotalDealAssetB),
-		TotalDealCount:    r.TotalDealCount,
-		TotalRefundAssetB: decimalJSON(r.TotalRefundAssetB),
-		TotalLPTAmt:       decimalJSON(r.TotalLPTAmt),
-		LPBalances:        decimalMapJSON(r.LPBalances),
-		LPCosts:           cloneInt64Map(r.LPCosts),
-		Closed:            r.Closed,
-	}
-}
-
-func decimalJSON(d *scommon.Decimal) string {
-	if d == nil || d.Sign() == 0 {
-		return ""
-	}
-	return d.String()
-}
-
-func decimalMapJSON(in map[string]*scommon.Decimal) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		if text := decimalJSON(value); text != "" {
-			out[key] = text
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func cloneInt64Map(in map[string]int64) map[string]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]int64, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-type TemplateContractUserStatus struct {
-	Address       string                  `json:"address"`
-	Contract      string                  `json:"contract"`
-	TotalItems    int                     `json:"totalItems"`
-	ActiveItems   int                     `json:"activeItems"`
-	FinishedItems int                     `json:"finishedItems"`
-	History       []ContractHistoryRecord `json:"history,omitempty"`
-}
-
-type AgentPredictionAnalytics struct {
-	Address       string                                `json:"address"`
-	Title         string                                `json:"title,omitempty"`
-	Status        string                                `json:"status,omitempty"`
-	BetAsset      string                                `json:"betAsset,omitempty"`
-	MinBetUnit    string                                `json:"minBetUnit,omitempty"`
-	TotalBets     int                                   `json:"totalBets"`
-	TotalAmount   string                                `json:"totalAmount,omitempty"`
-	OutcomeBets   map[string]int                        `json:"outcomeBets"`
-	Outcomes      map[string]AgentPredictionOutcomeView `json:"outcomes,omitempty"`
-	Confirmations int                                   `json:"confirmations"`
-	ResultType    string                                `json:"resultType,omitempty"`
-	OutcomeID     string                                `json:"outcomeId,omitempty"`
-	LastConfirm   *agentcontract.PredictionConfirmParam `json:"lastConfirm,omitempty"`
-	Rejections    int                                   `json:"rejections"`
-	LastReject    *agentcontract.PredictionRejectParam  `json:"lastReject,omitempty"`
-	Fees          []AgentPredictionTransferView         `json:"fees,omitempty"`
-	Payouts       []AgentPredictionTransferView         `json:"payouts,omitempty"`
-	Contract      *agentcontract.PredictionContract     `json:"contract,omitempty"`
-	UpdatedHeight int64                                 `json:"updatedHeight,omitempty"`
-}
-
-type AgentPredictionOutcomeView struct {
-	ID     string `json:"id"`
-	Text   string `json:"text,omitempty"`
-	Bets   int    `json:"bets"`
-	Amount string `json:"amount,omitempty"`
-}
-
-type AgentPredictionTransferView struct {
-	Address   string `json:"address"`
-	AssetName string `json:"assetName,omitempty"`
-	Amount    string `json:"amount,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-}
-
-type AgentPredictionUserStatus struct {
-	Address       string                  `json:"address"`
-	Contract      string                  `json:"contract"`
-	TotalBets     int                     `json:"totalBets"`
-	TotalAmount   string                  `json:"totalAmount,omitempty"`
-	OutcomeBets   map[string]int          `json:"outcomeBets"`
-	Bets          []ContractHistoryRecord `json:"bets,omitempty"`
-	Confirmations []ContractHistoryRecord `json:"confirmations,omitempty"`
-	Rejections    []ContractHistoryRecord `json:"rejections,omitempty"`
-}
-
 func (q QueryService) SupportedContracts() []string {
-	return []string{"evm", "agent:prediction", tmplcontract.TemplateLimitOrder, tmplcontract.TemplateAMM, tmplcontract.TemplateExchange}
+	return []string{"evm", "agent:prediction", contractcommon.TemplateLimitOrder, contractcommon.TemplateAMM, contractcommon.TemplateExchange}
 }
 
 func (q QueryService) DeployedContracts(start, limit int) ([]string, int) {
@@ -206,75 +69,44 @@ func (q QueryService) Contract(contractAddress string) (ContractSummary, error) 
 	return summary, nil
 }
 
-func (q QueryService) Analytics(contractAddress string) (any, error) {
+func (q QueryService) Analytics(contractAddress string) (*ContractAnalytics, error) {
 	summary, err := q.requireContractType(contractAddress, "analytics")
 	if err != nil {
 		return nil, err
 	}
-	switch summary.ContractTypeID {
-	case contractcommon.ContractTypeTemplate:
-		return q.templateAnalytics(contractAddress)
-	case contractcommon.ContractTypeAgent:
-		return q.agentPredictionAnalytics(contractAddress)
-	default:
-		return nil, fmt.Errorf("analytics query is not supported for %s contracts", summary.ContractType)
-	}
+	return q.contractAnalytics(summary)
 }
 
-func (q QueryService) InvokeItemByInUtxo(contractAddress, inUtxo string) (any, error) {
-	summary, err := q.requireContractType(contractAddress, "input utxo item")
+func (q QueryService) InvokeItemByInUtxo(contractAddress, inUtxo string) (*ContractHistoryRecord, error) {
+	_, err := q.requireContractType(contractAddress, "input utxo item")
 	if err != nil {
 		return nil, err
 	}
-	if summary.ContractTypeID != contractcommon.ContractTypeTemplate {
-		return nil, fmt.Errorf("input utxo item query is not supported for %s contracts", summary.ContractType)
-	}
-	return q.templateInvokeItemByInUtxo(contractAddress, inUtxo)
+	return q.invokeItemByInUtxo(contractAddress, inUtxo)
 }
 
-func (q QueryService) AllAddresses(contractAddress string, start, limit int) (any, int, error) {
-	summary, err := q.requireContractType(contractAddress, "users")
+func (q QueryService) AllAddresses(contractAddress string, start, limit int) ([]string, int, error) {
+	_, err := q.requireContractType(contractAddress, "users")
 	if err != nil {
 		return nil, 0, err
 	}
-	switch summary.ContractTypeID {
-	case contractcommon.ContractTypeTemplate:
-		return q.templateAllAddresses(contractAddress, start, limit)
-	case contractcommon.ContractTypeAgent:
-		return q.agentPredictionUsers(contractAddress, start, limit)
-	default:
-		return nil, 0, fmt.Errorf("users query is not supported for %s contracts", summary.ContractType)
-	}
+	return q.allAddresses(contractAddress, start, limit)
 }
 
-func (q QueryService) UserStatus(contractAddress, address string) (any, error) {
-	summary, err := q.requireContractType(contractAddress, "user status")
+func (q QueryService) UserStatus(contractAddress, address string) (*ContractUserStatus, error) {
+	_, err := q.requireContractType(contractAddress, "user status")
 	if err != nil {
 		return nil, err
 	}
-	switch summary.ContractTypeID {
-	case contractcommon.ContractTypeTemplate:
-		return q.templateUserStatus(contractAddress, address)
-	case contractcommon.ContractTypeAgent:
-		return q.agentPredictionUserStatus(contractAddress, address)
-	default:
-		return nil, fmt.Errorf("user status query is not supported for %s contracts", summary.ContractType)
-	}
+	return q.userStatus(contractAddress, address)
 }
 
-func (q QueryService) HistoryByAddress(contractAddress, address string, start, limit int) (any, int, error) {
-	summary, err := q.requireContractType(contractAddress, "user history")
+func (q QueryService) HistoryByAddress(contractAddress, address string, start, limit int) ([]ContractHistoryRecord, int, error) {
+	_, err := q.requireContractType(contractAddress, "user history")
 	if err != nil {
 		return nil, 0, err
 	}
-	switch summary.ContractTypeID {
-	case contractcommon.ContractTypeTemplate:
-		return q.templateHistoryByAddress(contractAddress, address, start, limit)
-	case contractcommon.ContractTypeAgent:
-		return q.agentPredictionUserHistory(contractAddress, address, start, limit)
-	default:
-		return nil, 0, fmt.Errorf("user history query is not supported for %s contracts", summary.ContractType)
-	}
+	return q.historyByAddress(contractAddress, address, start, limit)
 }
 
 func (q QueryService) History(contractAddress string, start, limit int) ([]ContractHistoryRecord, int, error) {
@@ -310,8 +142,6 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 	if err != nil || !view.IsContract {
 		return nil, nil, err
 	}
-	templateActor, templateFunding := templateIndexDetails(tx, prefix, params)
-	agentActor, agentFunding := agentIndexDetails(tx, prefix, params)
 	outputByType := make(map[byte]string)
 	outputValueByContract := make(map[string]int64)
 	for _, output := range view.Outputs {
@@ -336,52 +166,34 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 		if value := outputValueByContract[contract]; value != 0 {
 			details["contract_value"] = value
 		}
-		if op.ContractTypeID == contractcommon.ContractTypeTemplate {
-			if templateActor != "" {
-				details["actor"] = templateActor
+		if op.Kind == "invoke" {
+			actor, funding := contractIndexDetails(tx, prefix, params, op.ContractTypeID)
+			if actor != "" {
+				details["actor"] = actor
 			}
-			if len(templateFunding) != 0 {
-				details["funding_outputs"] = templateFunding
-			}
-		}
-		if op.ContractTypeID == contractcommon.ContractTypeAgent {
-			if agentActor != "" {
-				details["actor"] = agentActor
-			}
-			if len(agentFunding) != 0 {
-				details["funding_outputs"] = agentFunding
+			if len(funding) != 0 {
+				details["funding_outputs"] = funding
 			}
 		}
-		summary := ContractSummary{
-			Address:        contract,
-			ContractType:   op.ContractType,
-			ContractTypeID: op.ContractTypeID,
-			Subtype:        firstNonEmpty(op.Subtype, op.TemplateName),
-			Name:           firstNonEmpty(op.TemplateName, op.Subtype),
-			Version:        op.Version,
-			Status:         contractIndexStatus(op),
-			UpdatedHeight:  height,
-			Details:        cloneDetails(details),
-		}
-		if op.Kind == "deploy" {
-			summary.CreatedHeight = height
-		}
-		summaries = append(summaries, summary)
-		history = append(history, ContractHistoryRecord{
-			Kind:           op.Kind,
+		event := IndexEvent{
+			Kind:           contractIndexEventKind(op.Kind),
 			Height:         height,
 			TxID:           view.TxID,
 			Contract:       contract,
 			ContractType:   op.ContractType,
 			ContractTypeID: op.ContractTypeID,
 			Subtype:        firstNonEmpty(op.Subtype, op.TemplateName),
+			Name:           firstNonEmpty(op.TemplateName, op.Subtype),
+			Version:        op.Version,
 			Action:         op.Action,
 			Status:         contractIndexStatus(op),
 			Actor:          actorFromDetails(details),
 			GasLimit:       op.GasLimit,
 			Nonce:          op.Nonce,
 			Details:        details,
-		})
+		}
+		summaries = append(summaries, contractSummaryFromIndexEvent(event))
+		history = append(history, contractHistoryFromIndexEvent(event))
 	}
 	for _, output := range view.Outputs {
 		if output.Contract == "" {
@@ -397,22 +209,83 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 	return summaries, history, nil
 }
 
-func templateIndexDetails(tx *wire.MsgTx, prefix string, params *chaincfg.Params) (string, []map[string]interface{}) {
-	parsed, err := tmplcontract.ParseTx(tx, tmplcontract.StandardContractScriptResolver(prefix))
-	if err != nil || parsed.Type != tmplcontract.TxTypeInvoke {
+func contractIndexEventKind(kind string) contractcommon.IndexEventKind {
+	switch kind {
+	case "deploy":
+		return contractcommon.IndexEventDeploy
+	case "invoke":
+		return contractcommon.IndexEventInvoke
+	case "result":
+		return contractcommon.IndexEventResult
+	case "state_root":
+		return contractcommon.IndexEventStateRoot
+	default:
+		return contractcommon.IndexEventKind(kind)
+	}
+}
+
+func contractSummaryFromIndexEvent(event IndexEvent) ContractSummary {
+	summary := ContractSummary{
+		Address:        event.Contract,
+		ContractType:   event.ContractType,
+		ContractTypeID: event.ContractTypeID,
+		Subtype:        event.Subtype,
+		Name:           event.Name,
+		Version:        event.Version,
+		Status:         event.Status,
+		UpdatedHeight:  event.Height,
+		Details:        cloneDetails(event.Details),
+	}
+	if event.Kind == contractcommon.IndexEventDeploy {
+		summary.CreatedHeight = event.Height
+	}
+	return summary
+}
+
+func contractHistoryFromIndexEvent(event IndexEvent) ContractHistoryRecord {
+	return ContractHistoryRecord{
+		Kind:           string(event.Kind),
+		Height:         event.Height,
+		TxID:           event.TxID,
+		Contract:       event.Contract,
+		ContractType:   event.ContractType,
+		ContractTypeID: event.ContractTypeID,
+		Subtype:        event.Subtype,
+		Action:         event.Action,
+		Status:         event.Status,
+		Actor:          event.Actor,
+		GasLimit:       event.GasLimit,
+		Nonce:          event.Nonce,
+		Details:        event.Details,
+	}
+}
+
+func contractIndexDetails(tx *wire.MsgTx, prefix string, params *chaincfg.Params, contractType byte) (string, []map[string]interface{}) {
+	_, txType, found, err := collectContractPayload(tx)
+	if err != nil || !found || txType != contractcommon.TxTypeInvoke {
 		return "", nil
 	}
 	actor := ""
 	if params != nil {
-		if resolved, err := tmplcontract.LastInputInvokerResolver(params)(tx, parsed); err == nil {
+		if resolved, err := lastInputInvokerAddress(tx, params); err == nil {
 			actor = resolved
 		}
 	}
-	funding := make([]map[string]interface{}, 0, len(parsed.ContractOutputs))
-	for _, output := range parsed.ContractOutputs {
+	txid := tx.TxID()
+	funding := make([]map[string]interface{}, 0)
+	for i, output := range tx.TxOut {
+		if output == nil {
+			continue
+		}
+		addr, ok, err := contractcommon.ParseContractPkScript(output.PkScript, prefix)
+		if err != nil || !ok || addr.ContractType() != contractType {
+			continue
+		}
+		vout := uint32(i)
 		item := map[string]interface{}{
-			"outpoint": output.OutPoint.String(),
-			"vout":     output.Vout,
+			"address":  addr.EncodeAddress(),
+			"outpoint": fmt.Sprintf("%s:%d", txid, vout),
+			"vout":     vout,
 			"value":    output.Value,
 		}
 		if len(output.Assets) != 0 {
@@ -424,31 +297,48 @@ func templateIndexDetails(tx *wire.MsgTx, prefix string, params *chaincfg.Params
 	return actor, funding
 }
 
-func agentIndexDetails(tx *wire.MsgTx, prefix string, params *chaincfg.Params) (string, []map[string]interface{}) {
-	parsed, err := agentcontract.ParseTx(tx, agentcontract.StandardContractScriptResolver(prefix))
-	if err != nil || parsed.Type != agentcontract.TxTypeInvoke {
-		return "", nil
+func lastInputInvokerAddress(tx *wire.MsgTx, params *chaincfg.Params) (string, error) {
+	if tx == nil || len(tx.TxIn) == 0 {
+		return "", fmt.Errorf("missing contract invoker input")
 	}
-	actor := ""
-	if params != nil {
-		if resolved, err := agentcontract.LastInputInvokerResolver(params)(tx, parsed); err == nil {
-			actor = resolved
+	input := tx.TxIn[len(tx.TxIn)-1]
+	pubKey := extractInvokerPubKey(input.SignatureScript)
+	if len(pubKey) == 0 {
+		pubKey = extractInvokerPubKeyFromWitness(input.Witness)
+	}
+	if len(pubKey) == 0 {
+		return "", fmt.Errorf("missing contract invoker public key")
+	}
+	parsedPubKey, err := btcec.ParsePubKey(pubKey)
+	if err != nil {
+		return "", err
+	}
+	tapKey := txscript.ComputeTaprootKeyNoScript(parsedPubKey)
+	addr, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(tapKey), params)
+	if err != nil {
+		return "", err
+	}
+	return addr.EncodeAddress(), nil
+}
+
+func extractInvokerPubKey(script []byte) []byte {
+	tokenizer := txscript.MakeScriptTokenizer(0, script)
+	for tokenizer.Next() {
+		data := tokenizer.Data()
+		if len(data) == 33 || len(data) == 65 {
+			return data
 		}
 	}
-	funding := make([]map[string]interface{}, 0, len(parsed.ContractOutputs))
-	for _, output := range parsed.ContractOutputs {
-		item := map[string]interface{}{
-			"outpoint": output.OutPoint.String(),
-			"vout":     output.Vout,
-			"value":    output.Value,
+	return nil
+}
+
+func extractInvokerPubKeyFromWitness(witness wire.TxWitness) []byte {
+	for _, data := range witness {
+		if len(data) == 33 || len(data) == 65 {
+			return data
 		}
-		if len(output.Assets) != 0 {
-			item["assets"] = output.Assets
-			item["asset_amounts"] = contractAssetAmounts(output.Assets)
-		}
-		funding = append(funding, item)
 	}
-	return actor, funding
+	return nil
 }
 
 func contractAssetAmounts(assets wire.TxAssets) map[string]string {
@@ -467,17 +357,17 @@ func contractIndexStatus(op TxOpView) string {
 		return ""
 	}
 	switch op.Action {
-	case agentcontract.InvokeAPIReady:
-		return agentcontract.StatusReady
-	case agentcontract.InvokeAPIReject:
-		return agentcontract.StatusRejected
-	case agentcontract.InvokeAPIBet:
-		return agentcontract.PredictionStatusBetting
-	case agentcontract.InvokeAPIConfirm:
-		return agentcontract.PredictionStatusConfirmed
+	case contractcommon.AgentInvokeAPIReady:
+		return contractcommon.AgentStatusReady
+	case contractcommon.AgentInvokeAPIReject:
+		return contractcommon.AgentStatusRejected
+	case contractcommon.AgentInvokeAPIBet:
+		return contractcommon.AgentPredictionStatusBetting
+	case contractcommon.AgentInvokeAPIConfirm:
+		return contractcommon.AgentPredictionStatusConfirmed
 	default:
-		if op.Kind == "deploy" && op.Subtype == agentcontract.SubtypePrediction {
-			return agentcontract.StatusPendingReady
+		if op.Kind == "deploy" && op.Subtype == contractcommon.SubtypePrediction {
+			return contractcommon.AgentStatusPendingReady
 		}
 		return ""
 	}
@@ -492,241 +382,262 @@ func enrichDetailsFromPayload(details map[string]interface{}, op TxOpView) {
 		return
 	}
 	if op.ContractTypeID == contractcommon.ContractTypeAgent && op.Kind == "deploy" {
-		deploy, err := agentcontract.DecodeDeployPayload(payload)
-		if err == nil && deploy.Subtype == agentcontract.SubtypePrediction {
-			if prediction, err := agentcontract.DecodePredictionContract(deploy.ContractContent); err == nil {
+		deploy, err := contractcommon.DecodeAgentDeployPayload(payload)
+		if err == nil && deploy.Subtype == contractcommon.SubtypePrediction {
+			if prediction, err := contractcommon.DecodeAgentPredictionContract(deploy.ContractContent); err == nil {
 				details["prediction"] = prediction
 			}
 		}
 	}
 	if op.ContractTypeID == contractcommon.ContractTypeAgent && op.Kind == "invoke" {
-		invoke, err := agentcontract.DecodeInvokePayload(payload)
+		invoke, err := contractcommon.DecodeAgentInvokePayload(payload)
 		if err != nil {
 			return
 		}
 		switch invoke.Action {
-		case agentcontract.InvokeAPIBet:
-			if bet, err := agentcontract.DecodePredictionBetParam(invoke.Param); err == nil {
+		case contractcommon.AgentInvokeAPIBet:
+			if bet, err := contractcommon.DecodeAgentPredictionBetParam(invoke.Param); err == nil {
 				details["bet"] = bet
 			}
-		case agentcontract.InvokeAPIConfirm:
-			if confirm, err := agentcontract.DecodePredictionConfirmParam(invoke.Param); err == nil {
+		case contractcommon.AgentInvokeAPIConfirm:
+			if confirm, err := contractcommon.DecodeAgentPredictionConfirmParam(invoke.Param); err == nil {
 				details["confirm"] = confirm
 			}
-		case agentcontract.InvokeAPIReject:
-			if reject, err := agentcontract.DecodePredictionRejectParam(invoke.Param); err == nil {
+		case contractcommon.AgentInvokeAPIReject:
+			if reject, err := contractcommon.DecodeAgentPredictionRejectParam(invoke.Param); err == nil {
 				details["reject"] = reject
 			}
 		}
 	}
 }
 
-func (q QueryService) templateContract(address string) (*tmplcontract.ContractInfo, error) {
-	if q.store == nil {
-		return nil, fmt.Errorf("contract query store is not available")
-	}
-	summary, ok := q.store.GetContractSummary(address)
-	if !ok || summary.ContractTypeID != contractcommon.ContractTypeTemplate {
-		return nil, fmt.Errorf("template contract %s not found", address)
-	}
-	return &tmplcontract.ContractInfo{
-		Address:       summary.Address,
-		TemplateName:  firstNonEmpty(summary.Subtype, summary.Name),
-		Version:       summary.Version,
-		UpdatedHeight: summary.UpdatedHeight,
-	}, nil
-}
-
-func (q QueryService) templateHistory(address string, start, limit int) ([]ContractHistoryRecord, int, error) {
+func (q QueryService) contractHistory(address string, start, limit int) ([]ContractHistoryRecord, int, error) {
 	if q.store == nil {
 		return nil, 0, fmt.Errorf("contract query store is not available")
-	}
-	if _, err := q.templateContract(address); err != nil {
-		return nil, 0, err
 	}
 	records, total := q.store.GetContractHistory(address, start, limit)
 	return records, total, nil
 }
 
-func (q QueryService) agentPredictionAnalytics(contractAddress string) (*AgentPredictionAnalytics, error) {
-	summary, err := q.requireContractType(contractAddress, "agent prediction analytics")
+func (q QueryService) contractAnalytics(summary ContractSummary) (*ContractAnalytics, error) {
+	records, _, err := q.contractHistory(summary.Address, 0, 0)
 	if err != nil {
 		return nil, err
 	}
-	prediction, _ := predictionFromSummary(summary)
-	analytics := &AgentPredictionAnalytics{
-		Address:       summary.Address,
-		Status:        summary.Status,
-		OutcomeBets:   make(map[string]int),
-		Outcomes:      make(map[string]AgentPredictionOutcomeView),
-		UpdatedHeight: summary.UpdatedHeight,
+	analytics := &ContractAnalytics{
+		Address:        summary.Address,
+		ContractType:   summary.ContractType,
+		ContractTypeID: summary.ContractTypeID,
+		Subtype:        summary.Subtype,
+		Name:           summary.Name,
+		Version:        summary.Version,
+		Status:         summary.Status,
+		UpdatedHeight:  summary.UpdatedHeight,
+		Metrics:        contractRecordMetrics(records),
+		Details:        cloneDetails(summary.Details),
 	}
-	if prediction != nil {
-		analytics.Title = prediction.Title
-		analytics.BetAsset = prediction.BetAsset
-		analytics.MinBetUnit = prediction.MinBetUnit
-		analytics.Contract = prediction
-		for _, outcome := range prediction.Outcomes {
-			analytics.Outcomes[outcome.ID] = AgentPredictionOutcomeView{
-				ID:   outcome.ID,
-				Text: outcome.Text,
-			}
+	mergeMaps(analytics.Metrics, templateMetrics(records))
+	if summary.ContractTypeID == contractcommon.ContractTypeAgent && summary.Subtype == contractcommon.SubtypePrediction {
+		prediction := predictionMetrics(summary, records, analytics.Details)
+		mergeMaps(analytics.Metrics, prediction)
+		applyPredictionAnalytics(analytics, prediction)
+	}
+	return analytics, nil
+}
+
+func applyPredictionAnalytics(analytics *ContractAnalytics, metrics map[string]interface{}) {
+	if analytics == nil || metrics == nil {
+		return
+	}
+	if v, ok := metrics["totalBets"].(int); ok {
+		analytics.TotalBets = v
+	}
+	if v, ok := metrics["totalAmount"].(string); ok {
+		analytics.TotalAmount = v
+	}
+	if v, ok := metrics["outcomeBets"].(map[string]int); ok {
+		analytics.OutcomeBets = v
+	}
+	if v, ok := metrics["confirmations"].(int); ok {
+		analytics.Confirmations = v
+	}
+	if v, ok := metrics["rejections"].(int); ok {
+		analytics.Rejections = v
+	}
+	if v, ok := metrics["resultType"].(string); ok {
+		analytics.ResultType = v
+	}
+	if v, ok := metrics["outcomeId"].(string); ok {
+		analytics.OutcomeID = v
+	}
+}
+
+func contractRecordMetrics(records []ContractHistoryRecord) map[string]interface{} {
+	metrics := map[string]interface{}{
+		"total_records": len(records),
+		"kind_count":    make(map[string]int),
+		"action_count":  make(map[string]int),
+		"status_count":  make(map[string]int),
+	}
+	for _, record := range records {
+		incrementMetricCount(metrics["kind_count"], record.Kind)
+		incrementMetricCount(metrics["action_count"], record.Action)
+		incrementMetricCount(metrics["status_count"], record.Status)
+	}
+	return metrics
+}
+
+func templateMetrics(records []ContractHistoryRecord) map[string]interface{} {
+	totalItems := 0
+	activeItems := 0
+	finishedItems := 0
+	statusCount := make(map[string]int)
+	for _, record := range records {
+		if record.Kind != "invoke" {
+			continue
+		}
+		totalItems++
+		statusKey := templateStatusCategory(record.Status)
+		statusCount[statusKey]++
+		if statusKey == "active" {
+			activeItems++
+		} else {
+			finishedItems++
 		}
 	}
-	records, _, err := q.agentPredictionHistory(contractAddress, 0, 0)
-	if err != nil {
-		return nil, err
+	if totalItems == 0 {
+		return nil
 	}
-	bets := make([]agentPredictionBetView, 0)
+	return map[string]interface{}{
+		"total_items":    totalItems,
+		"active_items":   activeItems,
+		"finished_items": finishedItems,
+		"item_statuses":  statusCount,
+	}
+}
+
+func mergeMaps(dst, src map[string]interface{}) {
+	if dst == nil || len(src) == 0 {
+		return
+	}
+	for key, value := range src {
+		dst[key] = value
+	}
+}
+
+func incrementMetricCount(value interface{}, key string) {
+	if key == "" {
+		key = "unknown"
+	}
+	counts, ok := value.(map[string]int)
+	if !ok {
+		return
+	}
+	counts[key]++
+}
+
+func predictionMetrics(summary ContractSummary, records []ContractHistoryRecord, details map[string]interface{}) map[string]interface{} {
+	prediction, _ := predictionFromSummary(summary)
+	outcomeBets := make(map[string]int)
+	outcomes := make(map[string]ContractOutcomeView)
+	if prediction != nil {
+		for _, outcome := range prediction.Outcomes {
+			outcomes[outcome.ID] = ContractOutcomeView{ID: outcome.ID, Text: outcome.Text}
+		}
+	}
+	bets := make([]predictionBetView, 0)
 	totalAmount := zeroQueryDecimal()
+	confirmations := 0
+	rejections := 0
+	resultType := ""
+	outcomeID := ""
+	var lastConfirm *contractcommon.AgentPredictionConfirmParam
+	var lastReject *contractcommon.AgentPredictionRejectParam
 	for _, record := range records {
 		switch record.Action {
-		case agentcontract.InvokeAPIBet:
+		case contractcommon.AgentInvokeAPIBet:
 			bet, ok := betFromRecord(record)
 			if !ok {
 				continue
 			}
 			amount := predictionBetAmount(record, prediction)
 			totalAmount = scommon.DecimalAdd(totalAmount, amount)
-			bets = append(bets, agentPredictionBetView{
+			bets = append(bets, predictionBetView{
 				Address:   record.Actor,
 				OutcomeID: bet.OutcomeID,
 				Amount:    amount,
 			})
-			analytics.TotalBets++
-			analytics.OutcomeBets[bet.OutcomeID]++
-			outcome := analytics.Outcomes[bet.OutcomeID]
+			outcomeBets[bet.OutcomeID]++
+			outcome := outcomes[bet.OutcomeID]
 			if outcome.ID == "" {
 				outcome.ID = bet.OutcomeID
 			}
-			outcome.Bets++
+			outcome.Count++
 			outcome.Amount = scommon.DecimalAdd(decimalFromString(outcome.Amount), amount).String()
-			analytics.Outcomes[bet.OutcomeID] = outcome
-		case agentcontract.InvokeAPIConfirm:
+			outcomes[bet.OutcomeID] = outcome
+		case contractcommon.AgentInvokeAPIConfirm:
 			confirm, ok := confirmFromRecord(record)
 			if !ok {
 				continue
 			}
-			analytics.Confirmations++
-			analytics.ResultType = confirm.ResultType
-			analytics.OutcomeID = confirm.OutcomeID
+			confirmations++
+			resultType = confirm.ResultType
+			outcomeID = confirm.OutcomeID
 			cp := confirm
-			analytics.LastConfirm = &cp
-		case agentcontract.InvokeAPIReject:
-			analytics.ResultType = agentcontract.StatusRejected
+			lastConfirm = &cp
+		case contractcommon.AgentInvokeAPIReject:
 			reject, ok := rejectFromRecord(record)
 			if !ok {
 				continue
 			}
-			analytics.Rejections++
+			rejections++
+			resultType = contractcommon.AgentStatusRejected
 			cp := reject
-			analytics.LastReject = &cp
+			lastReject = &cp
 		}
 	}
-	analytics.TotalAmount = totalAmount.String()
-	if prediction != nil && analytics.LastConfirm != nil {
-		analytics.Fees, analytics.Payouts = agentPredictionSettlementView(*prediction, bets, *analytics.LastConfirm)
-	}
-	return analytics, nil
-}
-
-func (q QueryService) agentPredictionUsers(contractAddress string, start, limit int) ([]string, int, error) {
-	records, _, err := q.agentPredictionHistory(contractAddress, 0, 0)
-	if err != nil {
-		return nil, 0, err
-	}
-	seen := make(map[string]struct{})
-	for _, record := range records {
-		if record.Actor == "" {
-			continue
+	if details != nil {
+		if lastConfirm != nil {
+			details["last_confirm"] = lastConfirm
 		}
-		if record.Action == agentcontract.InvokeAPIBet || record.Action == agentcontract.InvokeAPIConfirm ||
-			record.Action == agentcontract.InvokeAPIReject {
-			seen[record.Actor] = struct{}{}
+		if lastReject != nil {
+			details["last_reject"] = lastReject
 		}
-	}
-	users := make([]string, 0, len(seen))
-	for user := range seen {
-		users = append(users, user)
-	}
-	sort.Strings(users)
-	total := len(users)
-	return paginateStrings(users, start, limit), total, nil
-}
-
-func (q QueryService) agentPredictionUserStatus(contractAddress, address string) (*AgentPredictionUserStatus, error) {
-	records, _, err := q.agentPredictionHistory(contractAddress, 0, 0)
-	if err != nil {
-		return nil, err
-	}
-	status := &AgentPredictionUserStatus{
-		Address:     address,
-		Contract:    contractAddress,
-		OutcomeBets: make(map[string]int),
-	}
-	summary, _ := q.requireContractType(contractAddress, "agent prediction user status")
-	prediction, _ := predictionFromSummary(summary)
-	totalAmount := zeroQueryDecimal()
-	for _, record := range records {
-		if record.Actor != address {
-			continue
-		}
-		switch record.Action {
-		case agentcontract.InvokeAPIBet:
-			status.TotalBets++
-			totalAmount = scommon.DecimalAdd(totalAmount, predictionBetAmount(record, prediction))
-			if bet, ok := betFromRecord(record); ok {
-				status.OutcomeBets[bet.OutcomeID]++
+		if prediction != nil && lastConfirm != nil {
+			fees, payouts := predictionSettlementView(*prediction, bets, *lastConfirm)
+			if len(fees) != 0 {
+				details["fees"] = fees
 			}
-			status.Bets = append(status.Bets, record)
-		case agentcontract.InvokeAPIConfirm:
-			status.Confirmations = append(status.Confirmations, record)
-		case agentcontract.InvokeAPIReject:
-			status.Rejections = append(status.Rejections, record)
+			if len(payouts) != 0 {
+				details["payouts"] = payouts
+			}
 		}
 	}
-	status.TotalAmount = totalAmount.String()
-	return status, nil
+	metrics := map[string]interface{}{
+		"totalBets":     len(bets),
+		"totalAmount":   totalAmount.String(),
+		"outcomeBets":   outcomeBets,
+		"outcomes":      outcomes,
+		"confirmations": confirmations,
+		"rejections":    rejections,
+	}
+	if resultType != "" {
+		metrics["resultType"] = resultType
+	}
+	if outcomeID != "" {
+		metrics["outcomeId"] = outcomeID
+	}
+	return metrics
 }
 
-func (q QueryService) agentPredictionUserHistory(contractAddress, address string, start, limit int) ([]ContractHistoryRecord, int, error) {
-	records, _, err := q.agentPredictionHistory(contractAddress, 0, 0)
-	if err != nil {
-		return nil, 0, err
-	}
-	filtered := make([]ContractHistoryRecord, 0)
-	for _, record := range records {
-		if record.Actor == address {
-			filtered = append(filtered, record)
-		}
-	}
-	total := len(filtered)
-	return paginateContractHistory(filtered, start, limit), total, nil
-}
-
-func (q QueryService) agentPredictionHistory(contractAddress string, start, limit int) ([]ContractHistoryRecord, int, error) {
-	if q.store == nil {
-		return nil, 0, fmt.Errorf("contract query store is not available")
-	}
-	summary, err := q.requireContractType(contractAddress, "agent prediction history")
-	if err != nil {
-		return nil, 0, err
-	}
-	if summary.ContractTypeID != contractcommon.ContractTypeAgent || summary.Subtype != agentcontract.SubtypePrediction {
-		return nil, 0, fmt.Errorf("agent prediction query is not supported for %s/%s", summary.ContractType, summary.Subtype)
-	}
-	records, total := q.store.GetContractHistory(contractAddress, start, limit)
-	return records, total, nil
-}
-
-func (q QueryService) templateHistoryByAddress(contractAddress, address string, start, limit int) ([]ContractHistoryRecord, int, error) {
-	allHistory, _, err := q.templateHistory(contractAddress, 0, 0)
+func (q QueryService) historyByAddress(contractAddress, address string, start, limit int) ([]ContractHistoryRecord, int, error) {
+	allHistory, _, err := q.contractHistory(contractAddress, 0, 0)
 	if err != nil {
 		return nil, 0, err
 	}
 	filtered := make([]ContractHistoryRecord, 0)
 	for _, record := range allHistory {
-		if templateRecordHasAddress(record, address) {
+		if recordHasAddress(record, address) {
 			filtered = append(filtered, record)
 		}
 	}
@@ -734,8 +645,8 @@ func (q QueryService) templateHistoryByAddress(contractAddress, address string, 
 	return paginateContractHistory(filtered, start, limit), total, nil
 }
 
-func (q QueryService) templateAllAddresses(contractAddress string, start, limit int) ([]string, int, error) {
-	records, _, err := q.templateHistory(contractAddress, 0, 0)
+func (q QueryService) allAddresses(contractAddress string, start, limit int) ([]string, int, error) {
+	records, _, err := q.contractHistory(contractAddress, 0, 0)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -744,6 +655,11 @@ func (q QueryService) templateAllAddresses(contractAddress string, start, limit 
 		if record.Actor != "" {
 			seen[record.Actor] = struct{}{}
 		}
+		for _, output := range fundingOutputsFromRecord(record) {
+			if output.Address != "" {
+				seen[output.Address] = struct{}{}
+			}
+		}
 	}
 	addresses := make([]string, 0, len(seen))
 	for address := range seen {
@@ -751,81 +667,68 @@ func (q QueryService) templateAllAddresses(contractAddress string, start, limit 
 	}
 	sort.Strings(addresses)
 	total := len(addresses)
-	if start < 0 {
-		start = 0
-	}
-	if limit <= 0 {
-		limit = total
-	}
-	if start >= total {
-		return nil, total, nil
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
-	return addresses[start:end], total, nil
+	return paginateStrings(addresses, start, limit), total, nil
 }
 
-func (q QueryService) templateAnalytics(contractAddress string) (*TemplateContractAnalytics, error) {
-	contract, err := q.templateContract(contractAddress)
+func (q QueryService) userStatus(contractAddress, address string) (*ContractUserStatus, error) {
+	records, _, err := q.historyByAddress(contractAddress, address, 0, 0)
 	if err != nil {
 		return nil, err
 	}
-	records, _, err := q.templateHistory(contractAddress, 0, 0)
-	if err != nil {
-		return nil, err
-	}
-	analytics := &TemplateContractAnalytics{
-		Address:        contract.Address,
-		TemplateName:   contract.TemplateName,
-		Version:        contract.Version,
-		UpdatedHeight:  contract.UpdatedHeight,
-		StatusCount:    make(map[int]int),
-		OrderTypeCount: make(map[int]int),
-	}
-	for _, record := range records {
-		if record.Kind != "invoke" {
-			continue
-		}
-		analytics.TotalItems++
-		statusKey := templateStatusKey(record.Status)
-		analytics.StatusCount[statusKey]++
-		if statusKey > tmplcontract.ItemStatusInit {
-			analytics.FinishedItems++
-		} else {
-			analytics.ActiveItems++
-		}
-	}
-	return analytics, nil
-}
-
-func (q QueryService) templateUserStatus(contractAddress, address string) (*TemplateContractUserStatus, error) {
-	records, _, err := q.templateHistoryByAddress(contractAddress, address, 0, 0)
-	if err != nil {
-		return nil, err
-	}
-	status := &TemplateContractUserStatus{
+	status := &ContractUserStatus{
 		Address:  address,
 		Contract: contractAddress,
+		Metrics:  contractRecordMetrics(records),
 		History:  records,
+		Details:  make(map[string]interface{}),
 	}
-	for _, record := range records {
-		if record.Kind != "invoke" {
-			continue
-		}
-		status.TotalItems++
-		if templateStatusKey(record.Status) > tmplcontract.ItemStatusInit {
-			status.FinishedItems++
-		} else {
-			status.ActiveItems++
-		}
+	mergeMaps(status.Metrics, templateMetrics(records))
+	summary, _ := q.requireContractType(contractAddress, "user status")
+	if summary.ContractTypeID == contractcommon.ContractTypeAgent && summary.Subtype == contractcommon.SubtypePrediction {
+		mergeMaps(status.Metrics, predictionUserMetrics(summary, records, status.Details))
 	}
 	return status, nil
 }
 
-func (q QueryService) templateInvokeItemByInUtxo(contractAddress, inUtxo string) (*ContractHistoryRecord, error) {
-	records, _, err := q.templateHistory(contractAddress, 0, 0)
+func predictionUserMetrics(summary ContractSummary, records []ContractHistoryRecord, details map[string]interface{}) map[string]interface{} {
+	prediction, _ := predictionFromSummary(summary)
+	outcomeBets := make(map[string]int)
+	totalAmount := zeroQueryDecimal()
+	totalBets := 0
+	confirmations := make([]ContractHistoryRecord, 0)
+	rejections := make([]ContractHistoryRecord, 0)
+	bets := make([]ContractHistoryRecord, 0)
+	for _, record := range records {
+		switch record.Action {
+		case contractcommon.AgentInvokeAPIBet:
+			totalBets++
+			totalAmount = scommon.DecimalAdd(totalAmount, predictionBetAmount(record, prediction))
+			if bet, ok := betFromRecord(record); ok {
+				outcomeBets[bet.OutcomeID]++
+			}
+			bets = append(bets, record)
+		case contractcommon.AgentInvokeAPIConfirm:
+			confirmations = append(confirmations, record)
+		case contractcommon.AgentInvokeAPIReject:
+			rejections = append(rejections, record)
+		}
+	}
+	if details != nil {
+		details["bets"] = bets
+		details["confirmations"] = confirmations
+		details["rejections"] = rejections
+	}
+	return map[string]interface{}{
+		"totalBets":     totalBets,
+		"totalAmount":   totalAmount.String(),
+		"outcomeBets":   outcomeBets,
+		"confirmations": len(confirmations),
+		"rejections":    len(rejections),
+	}
+}
+
+func (q QueryService) invokeItemByInUtxo(contractAddress, inUtxo string) (*ContractHistoryRecord, error) {
+	records, _, err := q.contractHistory(contractAddress, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -840,7 +743,7 @@ func (q QueryService) templateInvokeItemByInUtxo(contractAddress, inUtxo string)
 	return nil, fmt.Errorf("invoke item with input utxo %s not found", inUtxo)
 }
 
-func templateRecordHasAddress(record ContractHistoryRecord, address string) bool {
+func recordHasAddress(record ContractHistoryRecord, address string) bool {
 	if record.Actor == address {
 		return true
 	}
@@ -852,63 +755,63 @@ func templateRecordHasAddress(record ContractHistoryRecord, address string) bool
 	return false
 }
 
-func templateStatusKey(status string) int {
+func templateStatusCategory(status string) string {
 	switch status {
 	case "success":
-		return tmplcontract.ItemStatusDealt
+		return "finished"
 	case "revert", "out_of_gas", "invalid":
-		return tmplcontract.ItemStatusRefunded
+		return "finished"
 	default:
-		return tmplcontract.ItemStatusInit
+		return "active"
 	}
 }
 
-func predictionFromSummary(summary ContractSummary) (*agentcontract.PredictionContract, bool) {
+func predictionFromSummary(summary ContractSummary) (*contractcommon.AgentPredictionContract, bool) {
 	if summary.Details == nil {
 		return nil, false
 	}
-	var prediction agentcontract.PredictionContract
+	var prediction contractcommon.AgentPredictionContract
 	if !decodeDetail(summary.Details["prediction"], &prediction) {
 		return nil, false
 	}
 	return &prediction, true
 }
 
-func betFromRecord(record ContractHistoryRecord) (agentcontract.PredictionBetParam, bool) {
-	var bet agentcontract.PredictionBetParam
+func betFromRecord(record ContractHistoryRecord) (contractcommon.AgentPredictionBetParam, bool) {
+	var bet contractcommon.AgentPredictionBetParam
 	if record.Details == nil || !decodeDetail(record.Details["bet"], &bet) {
 		return bet, false
 	}
 	return bet, true
 }
 
-func confirmFromRecord(record ContractHistoryRecord) (agentcontract.PredictionConfirmParam, bool) {
-	var confirm agentcontract.PredictionConfirmParam
+func confirmFromRecord(record ContractHistoryRecord) (contractcommon.AgentPredictionConfirmParam, bool) {
+	var confirm contractcommon.AgentPredictionConfirmParam
 	if record.Details == nil || !decodeDetail(record.Details["confirm"], &confirm) {
 		return confirm, false
 	}
 	return confirm, true
 }
 
-func rejectFromRecord(record ContractHistoryRecord) (agentcontract.PredictionRejectParam, bool) {
-	var reject agentcontract.PredictionRejectParam
+func rejectFromRecord(record ContractHistoryRecord) (contractcommon.AgentPredictionRejectParam, bool) {
+	var reject contractcommon.AgentPredictionRejectParam
 	if record.Details == nil || !decodeDetail(record.Details["reject"], &reject) {
 		return reject, false
 	}
 	return reject, true
 }
 
-type agentPredictionBetView struct {
+type predictionBetView struct {
 	Address   string
 	OutcomeID string
 	Amount    *scommon.Decimal
 }
 
-func predictionBetAmount(record ContractHistoryRecord, prediction *agentcontract.PredictionContract) *scommon.Decimal {
+func predictionBetAmount(record ContractHistoryRecord, prediction *contractcommon.AgentPredictionContract) *scommon.Decimal {
 	if prediction == nil {
 		return zeroQueryDecimal()
 	}
-	if prediction.BetAsset == agentcontract.SatoshiAssetName {
+	if prediction.BetAsset == contractcommon.SatoshiAssetName {
 		if value, ok := record.Details["contract_value"].(float64); ok {
 			return scommon.NewDefaultDecimal(int64(value))
 		}
@@ -926,32 +829,33 @@ func predictionBetAmount(record ContractHistoryRecord, prediction *agentcontract
 	return total
 }
 
-type agentFundingOutputView struct {
+type fundingOutputView struct {
 	OutPoint     string            `json:"outpoint"`
 	Address      string            `json:"address,omitempty"`
+	Value        int64             `json:"value,omitempty"`
 	AssetAmounts map[string]string `json:"asset_amounts"`
 }
 
-func fundingOutputsFromRecord(record ContractHistoryRecord) []agentFundingOutputView {
+func fundingOutputsFromRecord(record ContractHistoryRecord) []fundingOutputView {
 	if record.Details == nil {
 		return nil
 	}
-	var outputs []agentFundingOutputView
+	var outputs []fundingOutputView
 	if !decodeDetail(record.Details["funding_outputs"], &outputs) {
 		return nil
 	}
 	return outputs
 }
 
-func agentPredictionSettlementView(contract agentcontract.PredictionContract, bets []agentPredictionBetView,
-	confirm agentcontract.PredictionConfirmParam) ([]AgentPredictionTransferView, []AgentPredictionTransferView) {
+func predictionSettlementView(contract contractcommon.AgentPredictionContract, bets []predictionBetView,
+	confirm contractcommon.AgentPredictionConfirmParam) ([]ContractTransferView, []ContractTransferView) {
 
 	total := zeroQueryDecimal()
 	winnerTotal := zeroQueryDecimal()
-	winners := make([]agentPredictionBetView, 0)
+	winners := make([]predictionBetView, 0)
 	for _, bet := range bets {
 		total = scommon.DecimalAdd(total, bet.Amount)
-		if confirm.ResultType == agentcontract.ResultTypeOutcome && bet.OutcomeID == confirm.OutcomeID {
+		if confirm.ResultType == contractcommon.ResultTypeOutcome && bet.OutcomeID == confirm.OutcomeID {
 			winnerTotal = scommon.DecimalAdd(winnerTotal, bet.Amount)
 			winners = append(winners, bet)
 		}
@@ -959,10 +863,10 @@ func agentPredictionSettlementView(contract agentcontract.PredictionContract, be
 	if total.Sign() == 0 {
 		return nil, nil
 	}
-	if confirm.ResultType != agentcontract.ResultTypeOutcome || len(winners) == 0 {
-		refunds := make([]AgentPredictionTransferView, 0, len(bets))
+	if confirm.ResultType != contractcommon.ResultTypeOutcome || len(winners) == 0 {
+		refunds := make([]ContractTransferView, 0, len(bets))
 		for _, bet := range bets {
-			refunds = append(refunds, AgentPredictionTransferView{
+			refunds = append(refunds, ContractTransferView{
 				Address:   bet.Address,
 				AssetName: contract.BetAsset,
 				Amount:    bet.Amount.String(),
@@ -971,24 +875,24 @@ func agentPredictionSettlementView(contract agentcontract.PredictionContract, be
 		}
 		return nil, refunds
 	}
-	deployerFee := decimalMulBPSQuery(total, agentcontract.PredictionDeployerFeeBPS)
-	agentFee := decimalMulBPSQuery(total, agentcontract.PredictionAgentFeeBPS)
-	bootstrapFee := decimalMulBPSQuery(total, agentcontract.PredictionBootstrapBPS)
+	deployerFee := decimalMulBPSQuery(total, contractcommon.PredictionDeployerFeeBPS)
+	agentFee := decimalMulBPSQuery(total, contractcommon.PredictionAgentFeeBPS)
+	bootstrapFee := decimalMulBPSQuery(total, contractcommon.PredictionBootstrapBPS)
 	winnerPool := scommon.DecimalSub(total, deployerFee)
 	winnerPool = scommon.DecimalSub(winnerPool, agentFee)
 	winnerPool = scommon.DecimalSub(winnerPool, bootstrapFee)
 
-	fees := []AgentPredictionTransferView{
+	fees := []ContractTransferView{
 		{Address: "deployer", AssetName: contract.BetAsset, Amount: deployerFee.String(), Reason: "deployer_fee"},
 		{Address: "agent", AssetName: contract.BetAsset, Amount: agentFee.String(), Reason: "agent_fee"},
 		{Address: "bootstrap", AssetName: contract.BetAsset, Amount: bootstrapFee.String(), Reason: "bootstrap_fee"},
 	}
-	payouts := make([]AgentPredictionTransferView, 0, len(winners))
+	payouts := make([]ContractTransferView, 0, len(winners))
 	for _, winner := range winners {
 		shareValue := new(big.Int).Mul(winnerPool.Value, winner.Amount.Value)
 		shareValue.Div(shareValue, winnerTotal.Value)
 		share := &scommon.Decimal{Precision: winnerPool.Precision, Value: shareValue}
-		payouts = append(payouts, AgentPredictionTransferView{
+		payouts = append(payouts, ContractTransferView{
 			Address:   winner.Address,
 			AssetName: contract.BetAsset,
 			Amount:    share.String(),
@@ -1006,7 +910,7 @@ func decimalFromString(value string) *scommon.Decimal {
 	if strings.TrimSpace(value) == "" {
 		return zeroQueryDecimal()
 	}
-	amount, err := scommon.NewDecimalFromString(value, agentcontract.MaxPredictionDecimalPrecision)
+	amount, err := scommon.NewDecimalFromString(value, contractcommon.MaxPredictionDecimalPrecision)
 	if err != nil {
 		return zeroQueryDecimal()
 	}
@@ -1014,7 +918,7 @@ func decimalFromString(value string) *scommon.Decimal {
 }
 
 func decimalMulBPSQuery(value *scommon.Decimal, bps int) *scommon.Decimal {
-	return value.MulBigInt(big.NewInt(int64(bps))).DivBigInt(big.NewInt(agentcontract.PredictionTotalBPS))
+	return value.MulBigInt(big.NewInt(int64(bps))).DivBigInt(big.NewInt(contractcommon.PredictionTotalBPS))
 }
 
 func cloneDetails(in map[string]interface{}) map[string]interface{} {

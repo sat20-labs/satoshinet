@@ -25,7 +25,7 @@ func TestParseInvokeTxFindsContractOutputs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, TxTypeInvoke, parsed.Type)
 	require.NotNil(t, parsed.Invoke)
-	require.Equal(t, uint64(1000), parsed.Invoke.GasLimit)
+	require.Equal(t, int64(1000), parsed.Invoke.GasLimit)
 	require.Len(t, parsed.ContractOutputs, 1)
 	require.True(t, contract.Equal(parsed.ContractOutputs[0].Contract))
 	require.Equal(t, uint32(1), parsed.ContractOutputs[0].Vout)
@@ -58,9 +58,9 @@ func TestParseDeployTxCombinesMultipleOPReturns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, TxTypeDeploy, parsed.Type)
 	require.NotNil(t, parsed.Deploy)
-	require.Equal(t, uint64(5000), parsed.Deploy.GasLimit)
-	require.Equal(t, uint64(3), parsed.Deploy.DeployNonce)
-	require.Equal(t, initCode, parsed.Deploy.InitCode)
+	require.Equal(t, int64(5000), parsed.Deploy.GasLimit)
+	require.Equal(t, uint64(3), parsed.Deploy.Nonce)
+	require.Equal(t, initCode, parsed.Deploy.Code)
 }
 
 func TestParseInvokeTxRejectsMultipleContracts(t *testing.T) {

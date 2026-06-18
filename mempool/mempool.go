@@ -21,7 +21,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -1689,9 +1689,10 @@ func (mp *TxPool) validateStandardness(tx *btcutil.Tx, nextBlockHeight int32,
 	}
 
 	// Check the transaction standard.
-	err := CheckTransactionStandard(
+	err := CheckTransactionStandardWithParams(
 		tx, nextBlockHeight, medianTimePast,
 		mp.cfg.Policy.MinRelayTxFee, mp.cfg.Policy.MaxTxVersion,
+		mp.cfg.ChainParams,
 	)
 	if err != nil {
 		// Attempt to extract a reject code from the error so it can be
@@ -1708,7 +1709,7 @@ func (mp *TxPool) validateStandardness(tx *btcutil.Tx, nextBlockHeight int32,
 	}
 
 	// Check the inputs standard.
-	err = checkInputsStandard(tx, utxoView)
+	err = checkInputsStandard(tx, utxoView, mp.cfg.ChainParams)
 	if err != nil {
 		// Attempt to extract a reject code from the error so it can be
 		// retained. When not possible, fall back to a non-standard
@@ -1766,7 +1767,7 @@ func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee int64,
 	isNew, rateLimit bool) error {
 
 	txHash := tx.Hash()
-	if mp.isEVMTx(tx) {
+	if mp.isContractTx(tx) {
 		return nil
 	}
 
@@ -1843,9 +1844,25 @@ func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee int64,
 	return nil
 }
 
-func (mp *TxPool) isEVMTx(tx *btcutil.Tx) bool {
-	_, found, err := contractengine.ClassifyTxForBlockOrder(tx.MsgTx(), mp.cfg.ChainParams)
-	return err == nil && found
+func (mp *TxPool) isContractTx(tx *btcutil.Tx) bool {
+	if tx == nil {
+		return false
+	}
+	msgTx := tx.MsgTx()
+	hasPayload, err := contractcommon.HasContractPayload(msgTx)
+	if err == nil && hasPayload {
+		return true
+	}
+	prefix := contractPrefixForParams(mp.cfg.ChainParams)
+	for _, txOut := range msgTx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		if _, ok, err := contractcommon.ParseContractPkScript(txOut.PkScript, prefix); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (mp *TxPool) Save(dataDir string) error {

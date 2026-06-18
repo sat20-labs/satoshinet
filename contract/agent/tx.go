@@ -1,224 +1,119 @@
 package agent
 
 import (
-	"errors"
-	"fmt"
-
-	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-var ErrInvalidAsset = errors.New("invalid asset")
+type ContractOutput = contractframework.ContractOutput
 
-type ParsedTx struct {
-	Type            TxType
-	Payload         []byte
-	AgentIndex      int
-	Deploy          *DeployPayload
-	Invoke          *InvokePayload
-	StateRoot       *StateRootPayload
-	ContractOutputs []ContractOutput
-	Inputs          []OutPoint
+type OutPoint = contractframework.OutPoint
+
+var ParseTx = contractframework.ParseTxFunc(agentParseSpec)
+
+var FindInvokeContractOutputs = contractframework.FindInvokeContractOutputsFunc(agentParseSpec)
+
+var FindContractOutputsForContract = contractframework.FindContractOutputsForContractFunc()
+
+type DeployTxBuildRequest = contractcommon.AgentDeployTxBuildRequest
+
+type InvokeTxBuildRequest = contractcommon.AgentInvokeTxBuildRequest
+
+func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
+	return contractcommon.BuildAgentDeployTx(req)
 }
 
-type ContractOutput struct {
-	OutPoint OutPoint
-	Vout     uint32
-	Contract ContractAddress
-	Value    int64
-	Assets   wire.TxAssets
-	PkScript []byte
+func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
+	return contractcommon.BuildAgentInvokeTx(req)
 }
 
-type OutPoint struct {
-	TxID string
-	Vout uint32
+func agentParseSpec() contractframework.ParseSpec {
+	return contractframework.ParseSpecFromPayloads(contractframework.PayloadParseSpec{
+		ModuleName:   "agent",
+		ContractType: ContractTypeAgent,
+		DecodeDeploy: func(data []byte) (contractframework.DeployPayload, error) {
+			payload, err := DecodeDeployPayload(data)
+			if err != nil {
+				return contractframework.DeployPayload{}, err
+			}
+			return contractframework.DeployPayload{
+				GasLimit: payload.GasLimit,
+				Name:     payload.Subtype,
+				Version:  payload.AgentVersion,
+				Deployer: payload.Deployer,
+				Random:   contractframework.CloneBytes(payload.Random),
+				Code:     contractframework.CloneBytes(payload.ContractContent),
+			}, nil
+		},
+		DecodeInvoke: func(data []byte) (contractframework.InvokePayload, error) {
+			payload, err := DecodeInvokePayload(data)
+			if err != nil {
+				return contractframework.InvokePayload{}, err
+			}
+			return contractframework.InvokePayload{
+				GasLimit:  payload.GasLimit,
+				CallNonce: payload.CallNonce,
+				Action:    payload.Action,
+				Data:      contractframework.CloneBytes(payload.Param),
+			}, nil
+		},
+	})
 }
 
-func (o OutPoint) String() string {
-	return fmt.Sprintf("%s:%d", o.TxID, o.Vout)
-}
-
-func (o ContractOutput) AssetAmount(assetName string) (*scommon.Decimal, error) {
-	if assetName == "" {
-		return nil, ErrInvalidAsset
-	}
-	if assetName == SatoshiAssetName {
-		if o.Value < 0 {
-			return nil, fmt.Errorf("contract output %s has negative value", o.OutPoint)
-		}
-		return scommon.NewDefaultDecimal(o.Value), nil
-	}
-	name := wire.NewAssetNameFromString(assetName)
-	if name == nil {
-		return nil, ErrInvalidAsset
-	}
-	asset, err := o.Assets.Find(name)
-	if err != nil || asset == nil {
-		return scommon.NewDefaultDecimal(0), nil
-	}
-	return asset.Amount.Clone(), nil
-}
-
-func ParseTx(tx *wire.MsgTx, resolver ContractScriptResolver) (ParsedTx, error) {
-	if tx == nil {
-		return ParsedTx{}, errors.New("missing transaction")
-	}
-	parsed := ParsedTx{AgentIndex: -1}
-	for i, txIn := range tx.TxIn {
-		if txIn == nil {
-			return ParsedTx{}, fmt.Errorf("nil input %d", i)
-		}
-		parsed.Inputs = append(parsed.Inputs, WireOutPointToAgent(txIn.PreviousOutPoint))
-	}
-
-	payloadParts := make([][]byte, 0)
-	for i, txOut := range tx.TxOut {
-		if txOut == nil {
-			return ParsedTx{}, fmt.Errorf("nil output %d", i)
-		}
-		txType, payload, err := contractcommon.ReadNullDataScript(txOut.PkScript)
-		if err != nil {
-			continue
-		}
-		if parsed.Type == 0 {
-			parsed.Type = txType
-			parsed.AgentIndex = i
-		} else if parsed.Type != txType {
-			return ParsedTx{}, errors.New("transaction contains mixed agent OP_RETURN output types")
-		} else if txType != TxTypeDeploy && txType != TxTypeInvoke {
-			return ParsedTx{}, errors.New("transaction contains multiple singleton agent OP_RETURN outputs")
-		}
-		payloadParts = append(payloadParts, payload)
-	}
-	if parsed.Type == 0 {
-		return parsed, nil
-	}
-	for _, part := range payloadParts {
-		parsed.Payload = append(parsed.Payload, part...)
-	}
-
-	switch parsed.Type {
-	case TxTypeDeploy:
-		payload, err := DecodeDeployPayload(parsed.Payload)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.Deploy = &payload
-	case TxTypeInvoke:
-		payload, err := DecodeInvokePayload(parsed.Payload)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.Invoke = &payload
-		outputs, err := FindInvokeContractOutputs(tx, resolver)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.ContractOutputs = outputs
-	case TxTypeResult:
-		return ParsedTx{}, errors.New("agent RESULT transactions are built by block execution and are not accepted as external input")
-	case TxTypeCoinbaseStateRoot:
-		if len(payloadParts) != 1 {
-			return ParsedTx{}, errors.New("agent state root must use exactly one OP_RETURN")
-		}
-		payload, err := contractcommon.DecodeStateRootPayload(parsed.Payload)
-		if err != nil {
-			return ParsedTx{}, err
-		}
-		parsed.StateRoot = &payload
-	default:
-		return ParsedTx{}, fmt.Errorf("unsupported agent tx type %d", parsed.Type)
-	}
-	return parsed, nil
-}
-
-func FindInvokeContractOutputs(tx *wire.MsgTx, resolver ContractScriptResolver) ([]ContractOutput, error) {
-	if resolver == nil {
-		return nil, errors.New("missing contract script resolver")
-	}
-	txid := tx.TxID()
-	var contract *ContractAddress
-	outputs := make([]ContractOutput, 0)
-	for i, txOut := range tx.TxOut {
-		if txOut == nil {
-			return nil, fmt.Errorf("nil output %d", i)
-		}
-		addr, ok, err := resolver(txOut.PkScript)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		if addr.ContractType() != ContractTypeAgent {
-			continue
-		}
-		if contract == nil {
-			cp := addr
-			contract = &cp
-		} else if !contract.Equal(addr) {
-			return nil, errors.New("agent INVOKE outputs target multiple contract addresses")
-		}
-		vout := uint32(i)
-		outputs = append(outputs, ContractOutput{
-			OutPoint: OutPoint{TxID: txid, Vout: vout},
-			Vout:     vout,
-			Contract: addr,
-			Value:    txOut.Value,
-			Assets:   txOut.Assets.Clone(),
-			PkScript: cloneBytes(txOut.PkScript),
-		})
-	}
-	if len(outputs) == 0 {
-		return nil, errors.New("agent INVOKE has no contract output")
-	}
-	return outputs, nil
-}
-
-func FindContractOutputsForContract(tx *wire.MsgTx, resolver ContractScriptResolver, contract ContractAddress) ([]ContractOutput, error) {
-	if resolver == nil {
-		return nil, errors.New("missing contract script resolver")
-	}
-	txid := tx.TxID()
-	outputs := make([]ContractOutput, 0)
-	for i, txOut := range tx.TxOut {
-		if txOut == nil {
-			return nil, fmt.Errorf("nil output %d", i)
-		}
-		addr, ok, err := resolver(txOut.PkScript)
-		if err != nil {
-			return nil, err
-		}
-		if !ok || !contract.Equal(addr) {
-			continue
-		}
-		vout := uint32(i)
-		outputs = append(outputs, ContractOutput{
-			OutPoint: OutPoint{TxID: txid, Vout: vout},
-			Vout:     vout,
-			Contract: addr,
-			Value:    txOut.Value,
-			Assets:   txOut.Assets.Clone(),
-			PkScript: cloneBytes(txOut.PkScript),
-		})
-	}
-	return outputs, nil
-}
-
-func WireOutPointToAgent(out wire.OutPoint) OutPoint {
-	return OutPoint{
-		TxID: out.Hash.String(),
-		Vout: out.Index,
-	}
-}
-
-func cloneBytes(src []byte) []byte {
-	if src == nil {
+func agentDeployPayloadFromFramework(payload *contractframework.DeployPayload) *DeployPayload {
+	if payload == nil {
 		return nil
 	}
-	dst := make([]byte, len(src))
-	copy(dst, src)
-	return dst
+	return &DeployPayload{
+		GasLimit:        payload.GasLimit,
+		Subtype:         payload.Name,
+		AgentVersion:    payload.Version,
+		Deployer:        payload.Deployer,
+		Random:          contractframework.CloneBytes(payload.Random),
+		ContractContent: contractframework.CloneBytes(payload.Code),
+	}
+}
+
+func ValidateDeployTxBasic(tx *wire.MsgTx, prefix string, cfg RuntimeConfig, gasCfg GasConfig) (DeployValidation, error) {
+	return contractframework.ValidateDeployWithRuntime(contractframework.DeployValidationRequest{
+		Tx:         tx,
+		Prefix:     prefix,
+		ModuleName: "agent",
+		ParseSpec:  agentParseSpec(),
+		GasConfig:  gasCfg,
+		Resolver:   StandardContractScriptResolver,
+		BuildRuntime: func(payload contractframework.DeployPayload) (ContractAddress, any, error) {
+			addr, _, err := DeriveContractAddress(
+				prefix,
+				payload.Name,
+				payload.Code,
+				payload.Deployer,
+				payload.Random,
+			)
+			if err != nil {
+				return ContractAddress{}, nil, err
+			}
+			deployPayload := agentDeployPayloadFromFramework(&payload)
+			runtime, err := NewRuntime(addr, *deployPayload, cfg)
+			if err != nil {
+				return ContractAddress{}, nil, err
+			}
+			return addr, runtime, nil
+		},
+	})
+}
+
+func ValidateInvokeTxBasic(tx *wire.MsgTx, resolver ContractScriptResolver, exists ContractExistsFunc, gasCfg GasConfig) (InvokeValidation, error) {
+	parsed, err := ParseTx(tx, resolver)
+	if err != nil {
+		return InvokeValidation{}, err
+	}
+	return ValidateParsedInvokeTxBasic(parsed, exists, gasCfg)
+}
+
+func ValidateParsedInvokeTxBasic(parsed ParsedTx, exists ContractExistsFunc, gasCfg GasConfig) (InvokeValidation, error) {
+	return contractframework.ValidateParsedInvokeBasic(
+		parsed, "agent", ContractTypeAgent,
+		contractframework.ContractExistsFunc(exists), gasCfg)
 }

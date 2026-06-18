@@ -43,7 +43,7 @@ func TestParseAgentDeployTxCombinesMultipleOPReturns(t *testing.T) {
 	if parsed.Deploy.GasLimit != 5000 {
 		t.Fatalf("gas limit mismatch: %d", parsed.Deploy.GasLimit)
 	}
-	if string(parsed.Deploy.ContractContent) != string(content) {
+	if string(parsed.Deploy.Code) != string(content) {
 		t.Fatalf("content mismatch")
 	}
 }

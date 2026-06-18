@@ -17,7 +17,7 @@ func (r *ContractRuntime) settleExchange(height int64, gasConfig GasConfig) (*Se
 		return nil, err
 	}
 	addr := r.Address()
-	gasAssetName := gasConfig.normalized().GasAssetName
+	gasAssetName := gasConfig.Normalize().GasAssetName
 	plan := &SettlementPlan{
 		Contract: addr.EncodeAddress(),
 		Height:   height,

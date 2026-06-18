@@ -18,7 +18,7 @@ import (
 	contractapi "github.com/sat20-labs/satoshinet/contract"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
-	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 
 	"github.com/sat20-labs/satoshinet/stp"
@@ -89,15 +89,15 @@ type TxSource interface {
 // transaction to be prioritized and track dependencies on other transactions
 // which have not been mined into a block yet.
 type txPrioItem struct {
-	tx        *btcutil.Tx
-	fee       int64
-	priority  float64
-	feePerKB  int64
-	feeAssets wire.TxAssets
-	evmTx     bool
-	evmFamily int
-	evmType   contractcommon.TxType
-	evmGas    uint64
+	tx               *btcutil.Tx
+	fee              int64
+	priority         float64
+	feePerKB         int64
+	feeAssets        wire.TxAssets
+	contractTx       bool
+	contractPriority int
+	contractTxType   contractcommon.TxType
+	contractGasLimit int64
 
 	// dependsOn holds a map of transaction hashes which this one depends
 	// on.  It will only be set when the transaction references other
@@ -163,7 +163,7 @@ func (pq *txPriorityQueue) SetLessFunc(lessFunc txPriorityQueueLessFunc) {
 // txPQByPriority sorts a txPriorityQueue by transaction priority and then fees
 // per kilobyte.
 func txPQByPriority(pq *txPriorityQueue, i, j int) bool {
-	if less, ok := txPQByEVMOrdering(pq, i, j); ok {
+	if less, ok := txPQByContractOrdering(pq, i, j); ok {
 		return less
 	}
 
@@ -179,7 +179,7 @@ func txPQByPriority(pq *txPriorityQueue, i, j int) bool {
 // txPQByFee sorts a txPriorityQueue by fees per kilobyte and then transaction
 // priority.
 func txPQByFee(pq *txPriorityQueue, i, j int) bool {
-	if less, ok := txPQByEVMOrdering(pq, i, j); ok {
+	if less, ok := txPQByContractOrdering(pq, i, j); ok {
 		return less
 	}
 
@@ -191,30 +191,36 @@ func txPQByFee(pq *txPriorityQueue, i, j int) bool {
 	return pq.items[i].feePerKB > pq.items[j].feePerKB
 }
 
-func txPQByEVMOrdering(pq *txPriorityQueue, i, j int) (bool, bool) {
+func txPQByContractOrdering(pq *txPriorityQueue, i, j int) (bool, bool) {
 	left := pq.items[i]
 	right := pq.items[j]
-	if left.evmTx != right.evmTx {
-		return !left.evmTx, true
-	}
-	if !left.evmTx {
-		return false, false
-	}
-	if left.evmFamily != right.evmFamily {
-		return left.evmFamily < right.evmFamily, true
-	}
-	if left.evmGas != right.evmGas {
-		return left.evmGas > right.evmGas, true
-	}
-	if left.evmType != right.evmType {
-		return left.evmType < right.evmType, true
-	}
 	if left.tx == nil || right.tx == nil {
 		return false, false
 	}
 	leftHash := left.tx.Hash()
 	rightHash := right.tx.Hash()
-	return bytes.Compare(leftHash[:], rightHash[:]) < 0, true
+	var leftClass contractframework.TxClass
+	if left.contractTx {
+		leftClass = contractframework.TxClass{
+			TxType:   left.contractTxType,
+			Priority: left.contractPriority,
+			GasLimit: left.contractGasLimit,
+		}
+	}
+	var rightClass contractframework.TxClass
+	if right.contractTx {
+		rightClass = contractframework.TxClass{
+			TxType:   right.contractTxType,
+			Priority: right.contractPriority,
+			GasLimit: right.contractGasLimit,
+		}
+	}
+	return contractframework.CompareMiningOrder(
+		leftClass,
+		rightClass,
+		*leftHash,
+		*rightHash,
+	)
 }
 
 // newTxPriorityQueue returns a new transaction priority queue that reserves the
@@ -235,19 +241,14 @@ func newTxPriorityQueue(reserve int, sortByFee bool) *txPriorityQueue {
 	return pq
 }
 
-func evmContractPrefix(params *chaincfg.Params) string {
-	if params == nil {
-		return evm.TestnetContractPrefix
+func contractPrefix(params *chaincfg.Params) string {
+	if params == nil || params.Net != wire.MainNet {
+		return contractcommon.TestnetContractPrefix
 	}
-	return evm.ContractPrefixForNet(params.Net)
+	return contractcommon.MainnetContractPrefix
 }
 
-func evmMiningInfo(tx *wire.MsgTx, contractPrefix string) (bool, evm.TxType, uint64) {
-	isContract, _, txType, gas := contractMiningInfo(tx, contractPrefix)
-	return isContract, evm.TxType(txType), gas
-}
-
-func contractMiningInfo(tx *wire.MsgTx, contractPrefix string) (bool, int, contractcommon.TxType, uint64) {
+func contractMiningInfo(tx *wire.MsgTx, contractPrefix string) (bool, int, contractcommon.TxType, int64) {
 	class, found, err := contractengine.ClassifyTxForBlockOrderWithPrefix(tx, contractPrefix)
 	if err == nil && found {
 		return true, class.Priority, class.TxType, class.GasLimit
@@ -259,7 +260,7 @@ func shouldSkipLowFeeTx(prioItem *txPrioItem, sortedByFee bool, blockPlusTxWeigh
 	if !sortedByFee {
 		return false
 	}
-	if prioItem.evmTx {
+	if prioItem.contractTx {
 		return false
 	}
 	return prioItem.fee < int64(policy.TxMinFreeFee) &&
@@ -602,7 +603,7 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 	log.Debugf("Considering %d transactions for inclusion to new block",
 		len(sourceTxns))
 
-	contractPrefix := evmContractPrefix(g.chainParams)
+	contractPrefix := contractPrefix(g.chainParams)
 	anchorFundingUtxos := make(map[string]*chainhash.Hash)
 
 mempoolLoop:
@@ -658,7 +659,7 @@ mempoolLoop:
 		// other transactions in the mempool so they can be properly
 		// ordered below.
 		prioItem := &txPrioItem{tx: tx}
-		prioItem.evmTx, prioItem.evmFamily, prioItem.evmType, prioItem.evmGas = contractMiningInfo(
+		prioItem.contractTx, prioItem.contractPriority, prioItem.contractTxType, prioItem.contractGasLimit = contractMiningInfo(
 			tx.MsgTx(), contractPrefix)
 		for _, txIn := range tx.MsgTx().TxIn {
 			originHash := &txIn.PreviousOutPoint.Hash
@@ -743,11 +744,11 @@ mempoolLoop:
 		// depending on the sort order) transaction.
 		prioItem := heap.Pop(priorityQueue).(*txPrioItem)
 		tx := prioItem.tx
-		if g.policy.ContractResultBuilder != nil && prioItem.evmTx &&
-			prioItem.evmType == contractcommon.TxTypeResult {
+		if g.policy.ContractResultBuilder != nil && prioItem.contractTx &&
+			prioItem.contractTxType == contractcommon.TxTypeResult {
 
 			log.Debugf("Skipping mempool contract RESULT tx %s; "+
-				"template will generate canonical results", tx.Hash())
+				"mining will generate canonical contract results", tx.Hash())
 			continue
 		}
 

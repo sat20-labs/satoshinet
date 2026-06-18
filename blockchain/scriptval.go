@@ -11,8 +11,9 @@ import (
 	"time"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractengine "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -29,13 +30,14 @@ type txValidateItem struct {
 // inputs.  It provides several channels for communication and a processing
 // function that is intended to be in run multiple goroutines.
 type txValidator struct {
-	validateChan chan *txValidateItem
-	quitChan     chan struct{}
-	resultChan   chan error
-	utxoView     *UtxoViewpoint
-	flags        txscript.ScriptFlags
-	sigCache     *txscript.SigCache
-	hashCache    *txscript.HashCache
+	validateChan   chan *txValidateItem
+	quitChan       chan struct{}
+	resultChan     chan error
+	utxoView       *UtxoViewpoint
+	flags          txscript.ScriptFlags
+	sigCache       *txscript.SigCache
+	hashCache      *txscript.HashCache
+	contractPrefix string
 }
 
 // sendResult sends the result of a script pair validation on the internal
@@ -75,11 +77,11 @@ out:
 			sigScript := txIn.SignatureScript
 			witness := txIn.Witness
 			pkScript := utxo.PkScript()
-			if contractengine.IsContractPkScript(pkScript) {
+			if isContractPkScriptForPrefix(pkScript, v.contractPrefix) {
 				inputScripts, err := contractInputScripts(txVI.tx.MsgTx(), v.utxoView)
 				if err == nil {
 					_, err = contractengine.ValidateResultContractSpend(
-						txVI.tx.MsgTx(), inputScripts, contractcommon.TestnetContractPrefix)
+						txVI.tx.MsgTx(), inputScripts, v.contractPrefix)
 				}
 				if err != nil {
 					str := fmt.Sprintf("input %s:%d references invalid "+
@@ -213,16 +215,27 @@ func (v *txValidator) Validate(items []*txValidateItem) error {
 // newTxValidator returns a new instance of txValidator to be used for
 // validating transaction scripts asynchronously.
 func newTxValidator(utxoView *UtxoViewpoint, flags txscript.ScriptFlags,
-	sigCache *txscript.SigCache, hashCache *txscript.HashCache) *txValidator {
-	return &txValidator{
-		validateChan: make(chan *txValidateItem),
-		quitChan:     make(chan struct{}),
-		resultChan:   make(chan error),
-		utxoView:     utxoView,
-		sigCache:     sigCache,
-		hashCache:    hashCache,
-		flags:        flags,
+	sigCache *txscript.SigCache, hashCache *txscript.HashCache,
+	contractPrefix string) *txValidator {
+
+	if contractPrefix == "" {
+		contractPrefix = contractcommon.TestnetContractPrefix
 	}
+	return &txValidator{
+		validateChan:   make(chan *txValidateItem),
+		quitChan:       make(chan struct{}),
+		resultChan:     make(chan error),
+		utxoView:       utxoView,
+		sigCache:       sigCache,
+		hashCache:      hashCache,
+		flags:          flags,
+		contractPrefix: contractPrefix,
+	}
+}
+
+func isContractPkScriptForPrefix(pkScript []byte, prefix string) bool {
+	_, ok, _ := contractcommon.ParseContractPkScript(pkScript, prefix)
+	return ok
 }
 
 // ValidateTransactionScripts validates the scripts for the passed transaction
@@ -273,7 +286,7 @@ func ValidateTransactionScripts(tx *btcutil.Tx, utxoView *UtxoViewpoint,
 	}
 
 	// Validate all of the inputs.
-	validator := newTxValidator(utxoView, flags, sigCache, hashCache)
+	validator := newTxValidator(utxoView, flags, sigCache, hashCache, "")
 	return validator.Validate(txValItems)
 }
 
@@ -281,7 +294,7 @@ func ValidateTransactionScripts(tx *btcutil.Tx, utxoView *UtxoViewpoint,
 // the passed block using multiple goroutines.
 func checkBlockScripts(block *btcutil.Block, utxoView *UtxoViewpoint,
 	scriptFlags txscript.ScriptFlags, sigCache *txscript.SigCache,
-	hashCache *txscript.HashCache) error {
+	hashCache *txscript.HashCache, params *chaincfg.Params) error {
 
 	// First determine if segwit is active according to the scriptFlags. If
 	// it isn't then we don't need to interact with the HashCache.
@@ -341,7 +354,8 @@ func checkBlockScripts(block *btcutil.Block, utxoView *UtxoViewpoint,
 	}
 
 	// Validate all of the inputs.
-	validator := newTxValidator(utxoView, scriptFlags, sigCache, hashCache)
+	validator := newTxValidator(utxoView, scriptFlags, sigCache, hashCache,
+		contractValidationPrefixForParams(params))
 	start := time.Now()
 	if err := validator.Validate(txValItems); err != nil {
 		return err
