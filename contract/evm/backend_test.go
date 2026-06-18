@@ -515,8 +515,7 @@ func testEVMGasFeeAmount(t *testing.T, gas int64) int64 {
 	t.Helper()
 	fee, err := evmcommon.GasFeeAtHeight(gas, 0)
 	require.NoError(t, err)
-	require.LessOrEqual(t, fee, uint64(1<<63-1))
-	return int64(fee)
+	return fee
 }
 
 func testBlockContext(number uint64) BlockContext {

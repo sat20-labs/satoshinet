@@ -54,20 +54,20 @@ func GasAssetNameForNet(net wire.BitcoinNet) string {
 	}
 }
 
-func GasFeeAtHeight(gas int64, height uint64) (uint64, error) {
+func GasFeeAtHeight(gas int64, height uint64) (int64, error) {
 	fee, err := GasFeeDecimalAtHeight(gas, height)
 	if err != nil {
 		return 0, err
 	}
-	return DecimalCeilUint64(fee)
+	return DecimalCeilInt64(fee)
 }
 
-func GasFee(gas int64, priceNumerator, priceDenominator uint64) (uint64, error) {
+func GasFee(gas int64, priceNumerator, priceDenominator uint64) (int64, error) {
 	fee, err := GasFeeDecimal(gas, priceNumerator, priceDenominator)
 	if err != nil {
 		return 0, err
 	}
-	return DecimalCeilUint64(fee)
+	return DecimalCeilInt64(fee)
 }
 
 func GasPriceNumeratorAtHeight(height uint64) uint64 {
@@ -111,7 +111,7 @@ func GasFeeDecimal(gas int64, priceNumerator, priceDenominator uint64) (*indexer
 	return &indexercommon.Decimal{Precision: GasFeePrecision, Value: value}, nil
 }
 
-func DecimalCeilUint64(d *indexercommon.Decimal) (uint64, error) {
+func DecimalCeilInt64(d *indexercommon.Decimal) (int64, error) {
 	if d == nil || d.Sign() == 0 {
 		return 0, nil
 	}
@@ -123,19 +123,12 @@ func DecimalCeilUint64(d *indexercommon.Decimal) (uint64, error) {
 	if remainder.Sign() != 0 {
 		quotient.Add(quotient, big.NewInt(1))
 	}
-	if quotient.Cmp(new(big.Int).SetUint64(math.MaxUint64)) > 0 {
-		return 0, errors.New("gas fee overflows uint64")
+	if quotient.Cmp(big.NewInt(math.MaxInt64)) > 0 {
+		return 0, errors.New("gas fee overflows int64")
 	}
-	return quotient.Uint64(), nil
+	return quotient.Int64(), nil
 }
 
 func decimalScale(precision int) *big.Int {
 	return indexercommon.DecimalScale(precision)
-}
-
-func EffectiveGas(used, base uint64) uint64 {
-	if used < base {
-		return base
-	}
-	return used
 }

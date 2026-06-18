@@ -430,7 +430,7 @@ func TestEVMEndToEndRejectsWrongResultOutput(t *testing.T) {
 	require.Error(t, err)
 }
 
-func e2EDeployTx(t *testing.T, contract evm.ContractAddress, nonce uint64, initCode []byte, gasAmount uint64, gasAsset string) *wire.MsgTx {
+func e2EDeployTx(t *testing.T, contract evm.ContractAddress, nonce uint64, initCode []byte, gasAmount int64, gasAsset string) *wire.MsgTx {
 	t.Helper()
 	contractScript, err := evm.ContractPkScript(contract)
 	require.NoError(t, err)
@@ -448,7 +448,7 @@ func e2EDeployTx(t *testing.T, contract evm.ContractAddress, nonce uint64, initC
 	return tx
 }
 
-func e2EInvokeTx(t *testing.T, contract evm.ContractAddress, payload evm.InvokePayload, gasAmount uint64, gasAsset string) *wire.MsgTx {
+func e2EInvokeTx(t *testing.T, contract evm.ContractAddress, payload evm.InvokePayload, gasAmount int64, gasAsset string) *wire.MsgTx {
 	t.Helper()
 	contractScript, err := evm.ContractPkScript(contract)
 	require.NoError(t, err)
@@ -542,11 +542,11 @@ func e2ECallAssetPrecompileCode() []byte {
 	return code
 }
 
-func e2EAsset(name string, amount uint64) wire.TxAssets {
+func e2EAsset(name string, amount int64) wire.TxAssets {
 	assetName := wire.NewAssetNameFromString(name)
 	return wire.TxAssets{{
 		Name:   *assetName,
-		Amount: *scommon.NewDefaultDecimal(int64(amount)),
+		Amount: *scommon.NewDefaultDecimal(amount),
 	}}
 }
 
