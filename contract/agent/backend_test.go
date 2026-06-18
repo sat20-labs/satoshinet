@@ -10,6 +10,13 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
+func testAgentExecuteBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
+	if req.ResolveInvoker == nil {
+		req.ResolveInvoker = testInvokerResolver(nil)
+	}
+	return ExecuteBlock(req)
+}
+
 func TestBackendPredictionE2EShape(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
@@ -28,7 +35,7 @@ func TestBackendPredictionE2EShape(t *testing.T) {
 		confirmTx.TxID():  "core",
 	}
 	store := NewRuntimeStore()
-	first, err := ExecuteBlock(BlockExecutionRequest{
+	first, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:            []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
 		Store:          store,
 		BlockHeight:    validPredictionContract().BetDeadline,
@@ -44,7 +51,7 @@ func TestBackendPredictionE2EShape(t *testing.T) {
 	if len(first.ResultPlans) != 2 {
 		t.Fatalf("first block result plan count mismatch: %d", len(first.ResultPlans))
 	}
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:            []*wire.MsgTx{confirmTx},
 		Store:          store,
 		BlockHeight:    validPredictionContract().ConfirmAfter + 1,
@@ -84,7 +91,7 @@ func TestBackendDefaultInvokeNoOp(t *testing.T) {
 		Amount: *testAgentGasFee(t, DefaultGasConfig().InvokeBaseGas),
 	}})
 
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, defaultTx},
 		BlockHeight:   validPredictionContract().BetDeadline,
 		RuntimeConfig: testRuntimeConfig(),
@@ -106,15 +113,15 @@ func TestBackendIgnoresInvalidDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
 	}
+	deployer := "deployer"
 	deploy := DeployPayload{
 		GasLimit:        0,
-		Subtype:         SubtypePrediction,
-		AgentVersion:    CurrentAgentVersion,
-		Deployer:        "deployer",
-		Random:          []byte("random"),
+		SubType:         SubtypePrediction,
+		Version:         CurrentAgentVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.Subtype, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.SubType, deploy.ContractContent, deployer, deploy.DeployNonce)
 	if err != nil {
 		t.Fatalf("DeriveContractAddress failed: %v", err)
 	}
@@ -128,7 +135,7 @@ func TestBackendIgnoresInvalidDeploy(t *testing.T) {
 	tx.AddTxOut(wire.NewTxOut(0, nil, testAgentContractScript(addr)))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{tx}, Store: store})
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{tx}, Store: store})
 	if err != nil {
 		t.Fatalf("ExecuteBlock failed: %v", err)
 	}
@@ -144,7 +151,7 @@ func TestBackendIgnoresBetBeforeReady(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:            []*wire.MsgTx{deployTx, betTx},
 		Store:          store,
 		BlockHeight:    validPredictionContract().BetDeadline,
@@ -173,7 +180,7 @@ func TestBackendIgnoresBetWithoutFundingAmount(t *testing.T) {
 	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 0, nil)
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
@@ -203,7 +210,7 @@ func TestBackendAdvancesPredictionStatusByBlockTime(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
 	store := NewRuntimeStore()
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
@@ -216,7 +223,7 @@ func TestBackendAdvancesPredictionStatusByBlockTime(t *testing.T) {
 		t.Fatalf("ready block failed: %v", err)
 	}
 
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline + 1,
 		RuntimeConfig: testRuntimeConfig(),
@@ -235,7 +242,7 @@ func TestBackendAdvancesPredictionStatusByBlockTime(t *testing.T) {
 		t.Fatalf("status mismatch after deadline: %#v", runtime.State())
 	}
 
-	_, err = ExecuteBlock(BlockExecutionRequest{
+	_, err = testAgentExecuteBlock(BlockExecutionRequest{
 		Store:         store,
 		BlockHeight:   validPredictionContract().ConfirmAfter,
 		RuntimeConfig: testRuntimeConfig(),
@@ -257,7 +264,7 @@ func TestBackendUsesBlockTimeForUnixTimeBase(t *testing.T) {
 	contract := validPredictionContract()
 
 	store := NewRuntimeStore()
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
 		Store:         store,
 		BlockHeight:   1,
@@ -271,7 +278,7 @@ func TestBackendUsesBlockTimeForUnixTimeBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteBlock bet failed: %v", err)
 	}
-	_, err = ExecuteBlock(BlockExecutionRequest{
+	_, err = testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{confirmTx},
 		Store:         store,
 		BlockHeight:   2,
@@ -296,7 +303,7 @@ func TestBackendUsesBlockHeightForHeightTimeBase(t *testing.T) {
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
 	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
 
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
 		BlockHeight:   contract.BetDeadline,
 		BlockTime:     1_780_306_800,
@@ -318,7 +325,7 @@ func TestBackendIgnoresNonCoreConfirm(t *testing.T) {
 	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
 
 	store := NewRuntimeStore()
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx, betTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
@@ -331,7 +338,7 @@ func TestBackendIgnoresNonCoreConfirm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first block failed: %v", err)
 	}
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{confirmTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
@@ -361,7 +368,7 @@ func TestBackendIgnoresNonCoreReady(t *testing.T) {
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
@@ -391,7 +398,7 @@ func TestBackendPredictionRejectByCore(t *testing.T) {
 	rejectTx := testAgentInvokeTx(t, addr, InvokeAPIReject, mustEncodeReject(t, "ambiguous event"), 0, nil)
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, rejectTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
@@ -424,7 +431,7 @@ func TestBackendIgnoresNonCoreReject(t *testing.T) {
 	rejectTx := testAgentInvokeTx(t, addr, InvokeAPIReject, mustEncodeReject(t, "ambiguous event"), 0, nil)
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, rejectTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
@@ -457,7 +464,7 @@ func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
 
 	store := NewRuntimeStore()
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
@@ -548,7 +555,7 @@ func TestBuildBlockResultTxsIgnoresBetWithoutFundingAmount(t *testing.T) {
 	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 0, nil)
 
 	store := NewRuntimeStore()
-	_, err := ExecuteBlock(BlockExecutionRequest{
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().BetDeadline,
@@ -592,15 +599,15 @@ func testAgentDeployTx(t *testing.T) (*wire.MsgTx, ContractAddress) {
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
 	}
+	deployer := "deployer"
 	deploy := DeployPayload{
 		GasLimit:        DefaultGasConfig().DeployBaseGas,
-		Subtype:         SubtypePrediction,
-		AgentVersion:    CurrentAgentVersion,
-		Deployer:        "deployer",
-		Random:          []byte("random"),
+		SubType:         SubtypePrediction,
+		Version:         CurrentAgentVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.Subtype, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.SubType, deploy.ContractContent, deployer, deploy.DeployNonce)
 	if err != nil {
 		t.Fatalf("DeriveContractAddress failed: %v", err)
 	}
@@ -698,7 +705,13 @@ func testRuntimeConfig() RuntimeConfig {
 
 func testInvokerResolver(invokers map[string]string) InvokerResolver {
 	return func(tx *wire.MsgTx, contractTx Tx) (string, error) {
-		return invokers[tx.TxID()], nil
+		if invoker := invokers[tx.TxID()]; invoker != "" {
+			return invoker, nil
+		}
+		if contractTx.Kind == TxTypeDeploy {
+			return "deployer", nil
+		}
+		return "", nil
 	}
 }
 

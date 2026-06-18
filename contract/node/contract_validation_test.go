@@ -290,20 +290,20 @@ func testReadyAgentRuntimeStore(t *testing.T, timeBase string, betDeadline, conf
 	if err != nil {
 		t.Fatal(err)
 	}
+	deployer := "deployer"
 	deploy := agent.DeployPayload{
 		GasLimit:        1000,
-		Subtype:         agent.SubtypePrediction,
-		AgentVersion:    agent.CurrentAgentVersion,
-		Deployer:        "deployer",
-		Random:          []byte{1, 2, 3},
+		SubType:         agent.SubtypePrediction,
+		Version:         agent.CurrentAgentVersion,
+		DeployNonce:     3,
 		ContractContent: content,
 	}
 	addr, _, err := agent.DeriveContractAddress(
-		agent.TestnetContractPrefix, deploy.Subtype, content, deploy.Deployer, deploy.Random)
+		agent.TestnetContractPrefix, deploy.SubType, content, deployer, deploy.DeployNonce)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := agent.NewRuntime(addr, deploy, agent.RuntimeConfig{CoreNodeAddress: "core"})
+	runtime, err := agent.NewRuntimeWithDeployer(addr, deploy, agent.RuntimeConfig{CoreNodeAddress: "core"}, deployer)
 	if err != nil {
 		t.Fatal(err)
 	}

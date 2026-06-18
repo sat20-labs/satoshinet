@@ -21,6 +21,7 @@ type RuntimeConfig struct {
 type Runtime struct {
 	address  ContractAddress
 	deploy   DeployPayload
+	deployer string
 	contract PredictionContract
 	config   RuntimeConfig
 	state    RuntimeState
@@ -111,11 +112,15 @@ type ApplyConfirmRequest struct {
 }
 
 func NewRuntime(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig) (*Runtime, error) {
-	if deploy.Subtype != SubtypePrediction {
-		return nil, fmt.Errorf("unsupported agent subtype %s", deploy.Subtype)
+	return NewRuntimeWithDeployer(address, deploy, cfg, "")
+}
+
+func NewRuntimeWithDeployer(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig, deployer string) (*Runtime, error) {
+	if deploy.SubType != SubtypePrediction {
+		return nil, fmt.Errorf("unsupported agent subtype %s", deploy.SubType)
 	}
-	if deploy.AgentVersion != CurrentAgentVersion {
-		return nil, fmt.Errorf("unsupported agent version %d", deploy.AgentVersion)
+	if deploy.Version != CurrentAgentVersion {
+		return nil, fmt.Errorf("unsupported agent version %d", deploy.Version)
 	}
 	contract, err := DecodePredictionContract(deploy.ContractContent)
 	if err != nil {
@@ -124,12 +129,13 @@ func NewRuntime(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig
 	if err := contract.Check(); err != nil {
 		return nil, err
 	}
-	if contract.Subtype != deploy.Subtype {
-		return nil, fmt.Errorf("agent subtype mismatch %s != %s", contract.Subtype, deploy.Subtype)
+	if contract.Subtype != deploy.SubType {
+		return nil, fmt.Errorf("agent subtype mismatch %s != %s", contract.Subtype, deploy.SubType)
 	}
 	return &Runtime{
 		address:  address,
 		deploy:   deploy,
+		deployer: deployer,
 		contract: contract,
 		config:   cfg,
 		state: RuntimeState{

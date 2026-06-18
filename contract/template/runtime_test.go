@@ -10,21 +10,20 @@ import (
 func TestRuntimeBaseURLAndStateRoot(t *testing.T) {
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		TemplateName:    TemplateAMM,
-		TemplateVersion: 1,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateAMM,
+		Version:         1,
+		DeployNonce:     7,
 		ContractContent: []byte{0x01, 0x02, 0x03},
 	}
 	addr, _, err := DeriveContractAddress(
 		contractcommon.TestnetContractPrefix,
 		deploy.ContractContent,
-		deploy.Deployer,
-		deploy.Random,
+		"deployer-address",
+		deploy.DeployNonce,
 	)
 	require.NoError(t, err)
 
-	runtime, err := NewRuntimeBase(addr, deploy)
+	runtime, err := NewRuntimeBase(addr, deploy, "deployer-address")
 	require.NoError(t, err)
 	require.Equal(t, addr.EncodeAddress(), runtime.URL())
 	require.Equal(t, TemplateAMM, runtime.TemplateName())
@@ -50,22 +49,21 @@ func TestRuntimeBaseURLAndStateRoot(t *testing.T) {
 func TestRuntimeBaseStateRootDeterministic(t *testing.T) {
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		TemplateName:    TemplateLimitOrder,
-		TemplateVersion: 1,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateLimitOrder,
+		Version:         1,
+		DeployNonce:     7,
 		ContractContent: []byte{0x01, 0x02, 0x03},
 	}
 	addr, _, err := DeriveContractAddress(
 		contractcommon.TestnetContractPrefix,
 		deploy.ContractContent,
-		deploy.Deployer,
-		deploy.Random,
+		"deployer-address",
+		deploy.DeployNonce,
 	)
 	require.NoError(t, err)
-	a, err := NewRuntimeBase(addr, deploy)
+	a, err := NewRuntimeBase(addr, deploy, "deployer-address")
 	require.NoError(t, err)
-	b, err := NewRuntimeBase(addr, deploy)
+	b, err := NewRuntimeBase(addr, deploy, "deployer-address")
 	require.NoError(t, err)
 
 	a.SetState("b", []byte("2"))

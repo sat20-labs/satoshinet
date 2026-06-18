@@ -113,9 +113,11 @@ func TestEVMAssetFeeBypassesRelaySatoshiFee(t *testing.T) {
 
 func TestEVMDeployRequiresContractFundingOutput(t *testing.T) {
 	deployScript, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
+		Type:        evmcommon.ContractTypeEVM,
+		SubType:     "sol",
 		GasLimit:    1000,
 		DeployNonce: 1,
-		InitCode:    []byte{0x60, 0x00},
+		ContractContent:    []byte{0x60, 0x00},
 	})
 	if err != nil {
 		t.Fatal(err)

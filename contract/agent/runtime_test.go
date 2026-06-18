@@ -9,23 +9,23 @@ func newTestRuntime(t *testing.T) *Runtime {
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
 	}
+	deployer := "deployer"
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		Subtype:         SubtypePrediction,
-		AgentVersion:    CurrentAgentVersion,
-		Deployer:        "deployer",
-		Random:          []byte{1, 2, 3},
+		SubType:         SubtypePrediction,
+		Version:         CurrentAgentVersion,
+		DeployNonce:     3,
 		ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.Subtype, content, deploy.Deployer, deploy.Random)
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.SubType, content, deployer, deploy.DeployNonce)
 	if err != nil {
 		t.Fatalf("DeriveContractAddress failed: %v", err)
 	}
-	runtime, err := NewRuntime(addr, deploy, RuntimeConfig{
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, RuntimeConfig{
 		CoreNodeAddress:  "core",
 		AgentAddress:     "agent",
 		BootstrapAddress: "bootstrap",
-	})
+	}, deployer)
 	if err != nil {
 		t.Fatalf("NewRuntime failed: %v", err)
 	}

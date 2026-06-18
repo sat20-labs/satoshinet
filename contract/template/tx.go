@@ -20,14 +20,14 @@ type DeployTxBuildRequest struct {
 	ContractPrefix string
 	Contract       Contract
 	Deployer       string
-	Random         []byte
+	DeployNonce    uint64
 	GasLimit       int64
 	Funding        wire.TxOut
 	Inputs         []wire.OutPoint
-	ChangeOutputs  []*wire.TxOut
+	ExtraOutputs   []*wire.TxOut
 }
 
-type InvokeTxBuildRequest = contractcommon.TemplateInvokeTxBuildRequest
+type InvokeTxBuildRequest = contractcommon.InvokeTxBuildRequest
 
 func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
 	if req.Contract == nil {
@@ -37,22 +37,23 @@ func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, erro
 	if err != nil {
 		return nil, ContractAddress{}, err
 	}
-	return contractcommon.BuildTemplateDeployTx(contractcommon.TemplateDeployTxBuildRequest{
+	return contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
 		ContractPrefix:  req.ContractPrefix,
-		TemplateName:    req.Contract.TemplateName(),
-		TemplateVersion: req.Contract.Version(),
+		Type:            ContractTypeTemplate,
+		SubType:         req.Contract.TemplateName(),
+		Version:         req.Contract.Version(),
 		Deployer:        req.Deployer,
-		Random:          req.Random,
+		DeployNonce:     req.DeployNonce,
 		ContractContent: encoded,
 		GasLimit:        req.GasLimit,
 		Funding:         req.Funding,
 		Inputs:          req.Inputs,
-		ChangeOutputs:   req.ChangeOutputs,
+		ExtraOutputs:    req.ExtraOutputs,
 	})
 }
 
 func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
-	return contractcommon.BuildTemplateInvokeTx(req)
+	return contractcommon.BuildInvokeTx(req)
 }
 
 func templateParseSpec() contractframework.ParseSpec {
@@ -65,12 +66,12 @@ func templateParseSpec() contractframework.ParseSpec {
 				return contractframework.DeployPayload{}, err
 			}
 			return contractframework.DeployPayload{
-				GasLimit: payload.GasLimit,
-				Name:     payload.TemplateName,
-				Version:  payload.TemplateVersion,
-				Deployer: payload.Deployer,
-				Random:   contractframework.CloneBytes(payload.Random),
-				Code:     contractframework.CloneBytes(payload.ContractContent),
+				Type:            payload.Type,
+				SubType:         payload.SubType,
+				Version:         payload.Version,
+				GasLimit:        payload.GasLimit,
+				DeployNonce:     payload.DeployNonce,
+				ContractContent: contractframework.CloneBytes(payload.ContractContent),
 			}, nil
 		},
 		DecodeInvoke: func(data []byte) (contractframework.InvokePayload, error) {
@@ -82,7 +83,7 @@ func templateParseSpec() contractframework.ParseSpec {
 				GasLimit:  payload.GasLimit,
 				CallNonce: payload.CallNonce,
 				Action:    payload.Action,
-				Data:      contractframework.CloneBytes(payload.Param),
+				Param:     contractframework.CloneBytes(payload.Param),
 			}, nil
 		},
 	})
@@ -93,35 +94,40 @@ func templateDeployPayloadFromFramework(payload *contractframework.DeployPayload
 		return nil
 	}
 	return &DeployPayload{
+		Type:            ContractTypeTemplate,
+		SubType:         payload.SubType,
+		Version:         payload.Version,
 		GasLimit:        payload.GasLimit,
-		TemplateName:    payload.Name,
-		TemplateVersion: payload.Version,
-		Deployer:        payload.Deployer,
-		Random:          contractframework.CloneBytes(payload.Random),
-		ContractContent: contractframework.CloneBytes(payload.Code),
+		DeployNonce:     payload.DeployNonce,
+		ContractContent: contractframework.CloneBytes(payload.ContractContent),
 	}
 }
 
 func ValidateDeployTxBasic(tx *wire.MsgTx, prefix string, registry *Registry, cfg GasConfig) (DeployValidation, error) {
+	return ValidateDeployTxBasicWithActor(tx, prefix, registry, cfg, "")
+}
+
+func ValidateDeployTxBasicWithActor(tx *wire.MsgTx, prefix string, registry *Registry, cfg GasConfig, actor string) (DeployValidation, error) {
 	return contractframework.ValidateDeployWithRuntime(contractframework.DeployValidationRequest{
 		Tx:         tx,
 		Prefix:     prefix,
 		ModuleName: "template",
 		ParseSpec:  templateParseSpec(),
 		GasConfig:  cfg,
+		Actor:      actor,
 		Resolver:   StandardContractScriptResolver,
-		BuildRuntime: func(payload contractframework.DeployPayload) (ContractAddress, any, error) {
+		BuildRuntime: func(payload contractframework.DeployPayload, deployer string) (ContractAddress, any, error) {
 			addr, _, err := DeriveContractAddress(
 				prefix,
-				payload.Code,
-				payload.Deployer,
-				payload.Random,
+				payload.ContractContent,
+				deployer,
+				payload.DeployNonce,
 			)
 			if err != nil {
 				return ContractAddress{}, nil, err
 			}
 			deployPayload := templateDeployPayloadFromFramework(&payload)
-			runtime, err := NewRuntime(addr, *deployPayload, registry)
+			runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, registry, deployer)
 			if err != nil {
 				return ContractAddress{}, nil, err
 			}

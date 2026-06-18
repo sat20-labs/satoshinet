@@ -8,10 +8,9 @@ import (
 func TestDeployPayloadRoundTrip(t *testing.T) {
 	payload := DeployPayload{
 		GasLimit:        1000,
-		Subtype:         SubtypePrediction,
-		AgentVersion:    CurrentAgentVersion,
-		Deployer:        "deployer",
-		Random:          []byte{1, 2, 3},
+		SubType:         SubtypePrediction,
+		Version:         CurrentAgentVersion,
+		DeployNonce:     3,
 		ContractContent: []byte(`{"subtype":"prediction"}`),
 	}
 	encoded, err := EncodeDeployPayload(payload)
@@ -23,11 +22,10 @@ func TestDeployPayloadRoundTrip(t *testing.T) {
 		t.Fatalf("DecodeDeployPayload failed: %v", err)
 	}
 	if decoded.GasLimit != payload.GasLimit ||
-		decoded.Subtype != payload.Subtype ||
-		decoded.AgentVersion != payload.AgentVersion ||
-		decoded.Deployer != payload.Deployer ||
-		!bytes.Equal(decoded.Random, payload.Random) ||
-		!bytes.Equal(decoded.ContractContent, payload.ContractContent) {
+		decoded.SubType != payload.SubType ||
+		decoded.Version != payload.Version ||
+		decoded.DeployNonce != payload.DeployNonce ||
+		string(decoded.ContractContent) != string(payload.ContractContent) {
 		t.Fatalf("decoded payload mismatch: %#v", decoded)
 	}
 }

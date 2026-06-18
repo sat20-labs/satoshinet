@@ -363,15 +363,15 @@ func testAgentDeployTxForContract(t *testing.T, contract PredictionContract) (*w
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
 	}
+	deployer := "deployer"
 	deploy := DeployPayload{
 		GasLimit:        DefaultGasConfig().DeployBaseGas,
-		Subtype:         SubtypePrediction,
-		AgentVersion:    CurrentAgentVersion,
-		Deployer:        "deployer",
-		Random:          []byte("random"),
+		SubType:         SubtypePrediction,
+		Version:         CurrentAgentVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.Subtype, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.SubType, deploy.ContractContent, deployer, deploy.DeployNonce)
 	if err != nil {
 		t.Fatalf("DeriveContractAddress failed: %v", err)
 	}

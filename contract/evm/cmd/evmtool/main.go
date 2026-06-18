@@ -168,9 +168,9 @@ func encodeDeploy(args []string) {
 	initCode, err := hex.DecodeString(trimHexPrefix(*initCodeHex))
 	exitIfErr(err)
 	fmt.Println(hex.EncodeToString(evmcommon.EncodeDeployPayload(evm.DeployPayload{
-		GasLimit:    *gasLimit,
-		DeployNonce: *nonce,
-		InitCode:    initCode,
+		GasLimit:        *gasLimit,
+		DeployNonce:     *nonce,
+		ContractContent: initCode,
 	})))
 }
 
@@ -180,7 +180,7 @@ func decodeDeploy(args []string) {
 	exitIfErr(err)
 	fmt.Printf("gas_limit=%d\n", payload.GasLimit)
 	fmt.Printf("nonce=%d\n", payload.DeployNonce)
-	fmt.Printf("init_code=%x\n", payload.InitCode)
+	fmt.Printf("init_code=%x\n", payload.ContractContent)
 }
 
 func encodeInvoke(args []string) {
@@ -194,7 +194,7 @@ func encodeInvoke(args []string) {
 	fmt.Println(hex.EncodeToString(evmcommon.EncodeInvokePayload(evm.InvokePayload{
 		GasLimit:  *gasLimit,
 		CallNonce: *nonce,
-		Calldata:  calldata,
+		Param:     calldata,
 	})))
 }
 
@@ -204,7 +204,7 @@ func decodeInvoke(args []string) {
 	exitIfErr(err)
 	fmt.Printf("gas_limit=%d\n", payload.GasLimit)
 	fmt.Printf("nonce=%d\n", payload.CallNonce)
-	fmt.Printf("calldata=%x\n", payload.Calldata)
+	fmt.Printf("calldata=%x\n", payload.Param)
 }
 
 func encodeResult(args []string) {
@@ -342,13 +342,13 @@ func buildDeployTx(args []string) {
 	inputOutpoints := parseOutPoints(inputs)
 	assets := parseAssetAmounts(fundAssets)
 	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
-		ContractPrefix: *prefix,
-		Caller:         caller,
-		GasLimit:       *gasLimit,
-		DeployNonce:    *nonce,
-		InitCode:       initCode,
-		Funding:        wire.TxOut{Value: *fundSats, Assets: assets},
-		Inputs:         inputOutpoints,
+		ContractPrefix:  *prefix,
+		Deployer:        caller.String(),
+		GasLimit:        *gasLimit,
+		DeployNonce:     *nonce,
+		ContractContent: initCode,
+		Funding:         wire.TxOut{Value: *fundSats, Assets: assets},
+		Inputs:          inputOutpoints,
 	})
 	exitIfErr(err)
 	txHex, err := evm.MsgTxHex(tx)
@@ -378,7 +378,7 @@ func buildInvokeTx(args []string) {
 		Contract:  contract,
 		GasLimit:  *gasLimit,
 		CallNonce: *nonce,
-		Calldata:  calldata,
+		Param:     calldata,
 		Funding:   wire.TxOut{Value: *fundSats, Assets: parseAssetAmounts(fundAssets)},
 		Inputs:    parseOutPoints(inputs),
 	})

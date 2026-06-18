@@ -50,17 +50,17 @@ func runtimeFromSnapshot(snapshot RuntimeSnapshot) (*Runtime, error) {
 		return nil, err
 	}
 	deploy := DeployPayload{
+		Type:            ContractTypeAgent,
+		SubType:         snapshot.Subtype,
+		Version:         snapshot.Deploy.AgentVersion,
 		GasLimit:        snapshot.Deploy.GasLimit,
-		Subtype:         snapshot.Subtype,
-		AgentVersion:    snapshot.Deploy.AgentVersion,
-		Deployer:        snapshot.Deploy.Deployer,
-		Random:          append([]byte(nil), snapshot.Deploy.Random...),
+		DeployNonce:     snapshot.Deploy.DeployNonce,
 		ContractContent: content,
 	}
-	if deploy.AgentVersion == 0 {
-		deploy.AgentVersion = snapshot.Version
+	if deploy.Version == 0 {
+		deploy.Version = snapshot.Version
 	}
-	runtime, err := NewRuntime(addr, deploy, snapshot.Config)
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, snapshot.Config, snapshot.Deploy.Deployer)
 	if err != nil {
 		return nil, err
 	}

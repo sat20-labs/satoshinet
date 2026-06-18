@@ -17,10 +17,9 @@ func TestParseTemplateDeployTxCombinesMultipleOPReturns(t *testing.T) {
 
 	scripts, err := DeployNullDataScripts(DeployPayload{
 		GasLimit:        5000,
-		TemplateName:    TemplateLimitOrder,
-		TemplateVersion: CurrentTemplateVersion,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateLimitOrder,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	})
 	require.NoError(t, err)
@@ -37,7 +36,7 @@ func TestParseTemplateDeployTxCombinesMultipleOPReturns(t *testing.T) {
 	require.Equal(t, TxTypeDeploy, parsed.Type)
 	require.NotNil(t, parsed.Deploy)
 	require.Equal(t, int64(5000), parsed.Deploy.GasLimit)
-	require.Equal(t, content, parsed.Deploy.Code)
+	require.Equal(t, content, parsed.Deploy.ContractContent)
 }
 
 func TestParseTemplateInvokeTxFindsTemplateContractOutputs(t *testing.T) {

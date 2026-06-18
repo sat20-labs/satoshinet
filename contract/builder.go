@@ -16,247 +16,99 @@ import (
 
 const AddressHashLen = 32
 
-type TemplateDeployTxBuildRequest struct {
+type DeployTxBuildRequest struct {
 	ContractPrefix  string
-	TemplateName    string
-	TemplateVersion uint32
+	Type            byte
+	SubType         string
+	Version         uint32
 	Deployer        string
-	Random          []byte
+	DeployNonce     uint64
 	ContractContent []byte
 	GasLimit        int64
-	Funding         wire.TxOut
 	Inputs          []wire.OutPoint
-	ChangeOutputs   []*wire.TxOut
-}
-
-type TemplateInvokeTxBuildRequest struct {
-	Contract      ContractAddress
-	GasLimit      int64
-	CallNonce     uint64
-	Action        string
-	Param         []byte
-	Funding       wire.TxOut
-	Inputs        []wire.OutPoint
-	ChangeOutputs []*wire.TxOut
-}
-
-type AgentDeployTxBuildRequest struct {
-	ContractPrefix  string
-	Subtype         string
-	AgentVersion    uint32
-	Deployer        string
-	Random          []byte
-	ContractContent []byte
-	GasLimit        int64
 	Funding         wire.TxOut
-	Inputs          []wire.OutPoint
-	ChangeOutputs   []*wire.TxOut
+	ExtraOutputs    []*wire.TxOut
 }
 
-type AgentInvokeTxBuildRequest struct {
-	Contract      ContractAddress
-	GasLimit      int64
-	CallNonce     uint64
-	Action        string
-	Param         []byte
-	Funding       wire.TxOut
-	Inputs        []wire.OutPoint
-	ChangeOutputs []*wire.TxOut
+type InvokeTxBuildRequest struct {
+	Contract     ContractAddress
+	GasLimit     int64
+	CallNonce    uint64
+	Action       string
+	Param        []byte
+	Funding      wire.TxOut
+	Inputs       []wire.OutPoint
+	ExtraOutputs []*wire.TxOut
 }
 
-type EVMDeployTxBuildRequest struct {
-	ContractPrefix string
-	Caller         EVMAddress
-	GasLimit       int64
-	DeployNonce    uint64
-	InitCode       []byte
-	Funding        wire.TxOut
-	Inputs         []wire.OutPoint
-	ChangeOutputs  []*wire.TxOut
-}
-
-type EVMInvokeTxBuildRequest struct {
-	Contract      ContractAddress
-	GasLimit      int64
-	CallNonce     uint64
-	Calldata      []byte
-	Funding       wire.TxOut
-	Inputs        []wire.OutPoint
-	ChangeOutputs []*wire.TxOut
-}
-
-func BuildTemplateDeployTx(req TemplateDeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
+func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
 	prefix := req.ContractPrefix
 	if prefix == "" {
 		prefix = TestnetContractPrefix
 	}
-	templateVersion := req.TemplateVersion
-	if templateVersion == 0 {
-		templateVersion = CurrentTemplateVersion
-	}
-	contract, _, err := DeriveTemplateContractAddress(prefix, req.ContractContent, req.Deployer, req.Random)
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	if err := validateContractFundingTxOut(req.Funding, true); err != nil {
-		return nil, ContractAddress{}, err
-	}
-	encoded, err := EncodeTemplateDeployPayload(TemplateDeployPayload{
-		GasLimit:        req.GasLimit,
-		TemplateName:    NormalizeTemplateName(req.TemplateName),
-		TemplateVersion: templateVersion,
-		Deployer:        req.Deployer,
-		Random:          cloneBytes(req.Random),
-		ContractContent: cloneBytes(req.ContractContent),
-	})
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	scripts, err := NullDataScripts(TxTypeDeploy, encoded)
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	contractOut, err := NewContractTxOut(req.Funding.Value, req.Funding.Assets, contract)
-	if err != nil {
-		return nil, ContractAddress{}, err
+	contractType := req.Type
+	if contractType == 0 {
+		return nil, ContractAddress{}, errors.New("contract type is empty")
 	}
 
-	tx := newUnsignedContractTx(req.Inputs)
-	for _, script := range scripts {
-		tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	}
-	tx.AddTxOut(contractOut)
-	addTxOutCopies(tx, req.ChangeOutputs)
-	return tx, contract, nil
-}
-
-func BuildTemplateInvokeTx(req TemplateInvokeTxBuildRequest) (*wire.MsgTx, error) {
-	if err := validateContractFundingTxOut(req.Funding, true); err != nil {
-		return nil, err
-	}
-	encoded, err := EncodeTemplateInvokePayload(TemplateInvokePayload{
-		GasLimit:  req.GasLimit,
-		CallNonce: req.CallNonce,
-		Action:    req.Action,
-		Param:     cloneBytes(req.Param),
-	})
-	if err != nil {
-		return nil, err
-	}
-	scripts, err := NullDataScripts(TxTypeInvoke, encoded)
-	if err != nil {
-		return nil, err
-	}
-	contractOut, err := NewContractTxOut(req.Funding.Value, req.Funding.Assets, req.Contract)
-	if err != nil {
-		return nil, err
-	}
-
-	tx := newUnsignedContractTx(req.Inputs)
-	for _, script := range scripts {
-		tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	}
-	tx.AddTxOut(contractOut)
-	addTxOutCopies(tx, req.ChangeOutputs)
-	return tx, nil
-}
-
-func BuildAgentDeployTx(req AgentDeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
-	prefix := req.ContractPrefix
-	if prefix == "" {
-		prefix = TestnetContractPrefix
-	}
-	version := req.AgentVersion
-	if version == 0 {
-		version = CurrentAgentVersion
-	}
-	contract, _, err := DeriveAgentContractAddress(prefix, req.Subtype, req.ContractContent, req.Deployer, req.Random)
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	if err := validateContractFundingTxOut(req.Funding, false); err != nil {
-		return nil, ContractAddress{}, err
-	}
-	encoded, err := EncodeAgentDeployPayload(AgentDeployPayload{
-		GasLimit:        req.GasLimit,
-		Subtype:         req.Subtype,
-		AgentVersion:    version,
-		Deployer:        req.Deployer,
-		Random:          cloneBytes(req.Random),
-		ContractContent: cloneBytes(req.ContractContent),
-	})
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	scripts, err := NullDataScripts(TxTypeDeploy, encoded)
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	contractOut, err := NewContractTxOut(req.Funding.Value, req.Funding.Assets, contract)
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-
-	tx := newUnsignedContractTx(req.Inputs)
-	for _, script := range scripts {
-		tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	}
-	tx.AddTxOut(contractOut)
-	addTxOutCopies(tx, req.ChangeOutputs)
-	return tx, contract, nil
-}
-
-func BuildAgentInvokeTx(req AgentInvokeTxBuildRequest) (*wire.MsgTx, error) {
-	if err := validateContractFundingTxOut(req.Funding, false); err != nil {
-		return nil, err
-	}
-	encoded, err := EncodeAgentInvokePayload(AgentInvokePayload{
-		GasLimit:  req.GasLimit,
-		CallNonce: req.CallNonce,
-		Action:    req.Action,
-		Param:     cloneBytes(req.Param),
-	})
-	if err != nil {
-		return nil, err
-	}
-	scripts, err := NullDataScripts(TxTypeInvoke, encoded)
-	if err != nil {
-		return nil, err
-	}
-	contractOut, err := NewContractTxOut(req.Funding.Value, req.Funding.Assets, req.Contract)
-	if err != nil {
-		return nil, err
-	}
-
-	tx := newUnsignedContractTx(req.Inputs)
-	for _, script := range scripts {
-		tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	}
-	tx.AddTxOut(contractOut)
-	addTxOutCopies(tx, req.ChangeOutputs)
-	return tx, nil
-}
-
-func BuildEVMDeployTx(req EVMDeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
-	prefix := req.ContractPrefix
-	if prefix == "" {
-		prefix = TestnetContractPrefix
-	}
-	contract, err := DeriveEVMCreateContractAddress(prefix, req.Caller, req.DeployNonce)
-	if err != nil {
-		return nil, ContractAddress{}, err
-	}
-	if err := validateEVMFundingTxOut(req.Funding); err != nil {
-		return nil, ContractAddress{}, err
+	subtype := req.SubType
+	version := req.Version
+	var contract ContractAddress
+	var err error
+	switch contractType {
+	case ContractTypeTemplate:
+		subtype = NormalizeTemplateName(subtype)
+		if version == 0 {
+			version = CurrentTemplateVersion
+		}
+		contract, _, err = DeriveTemplateContractAddress(prefix, req.ContractContent, req.Deployer, req.DeployNonce)
+		if err != nil {
+			return nil, ContractAddress{}, err
+		}
+		if err := validateContractFundingTxOut(req.Funding, true); err != nil {
+			return nil, ContractAddress{}, err
+		}
+	case ContractTypeAgent:
+		if version == 0 {
+			version = CurrentAgentVersion
+		}
+		contract, _, err = DeriveAgentContractAddress(prefix, subtype, req.ContractContent, req.Deployer, req.DeployNonce)
+		if err != nil {
+			return nil, ContractAddress{}, err
+		}
+		if err := validateContractFundingTxOut(req.Funding, false); err != nil {
+			return nil, ContractAddress{}, err
+		}
+	case ContractTypeEVM:
+		if subtype == "" {
+			subtype = "sol"
+		}
+		caller, err := ParseEVMAddressHex(req.Deployer)
+		if err != nil {
+			return nil, ContractAddress{}, err
+		}
+		contract, err = DeriveEVMCreateContractAddress(prefix, caller, req.DeployNonce)
+		if err != nil {
+			return nil, ContractAddress{}, err
+		}
+		if err := validateEVMFundingTxOut(req.Funding); err != nil {
+			return nil, ContractAddress{}, err
+		}
+	default:
+		return nil, ContractAddress{}, fmt.Errorf("unsupported contract type %d", contractType)
 	}
 	scripts, err := DeployNullDataScripts(DeployPayload{
-		GasLimit:    req.GasLimit,
-		DeployNonce: req.DeployNonce,
-		InitCode:    cloneBytes(req.InitCode),
+		Type:            contractType,
+		SubType:         subtype,
+		Version:         version,
+		GasLimit:        req.GasLimit,
+		DeployNonce:     req.DeployNonce,
+		ContractContent: cloneBytes(req.ContractContent),
 	})
 	if err != nil {
 		return nil, ContractAddress{}, err
 	}
+
 	contractOut, err := NewContractTxOut(req.Funding.Value, req.Funding.Assets, contract)
 	if err != nil {
 		return nil, ContractAddress{}, err
@@ -267,18 +119,39 @@ func BuildEVMDeployTx(req EVMDeployTxBuildRequest) (*wire.MsgTx, ContractAddress
 		tx.AddTxOut(wire.NewTxOut(0, nil, script))
 	}
 	tx.AddTxOut(contractOut)
-	addTxOutCopies(tx, req.ChangeOutputs)
+	addTxOutCopies(tx, req.ExtraOutputs)
 	return tx, contract, nil
 }
 
-func BuildEVMInvokeTx(req EVMInvokeTxBuildRequest) (*wire.MsgTx, error) {
-	if err := validateEVMFundingTxOut(req.Funding); err != nil {
-		return nil, err
+func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
+	switch req.Contract.ContractType() {
+	case ContractTypeTemplate:
+		if err := validateContractFundingTxOut(req.Funding, true); err != nil {
+			return nil, err
+		}
+	case ContractTypeAgent:
+		if err := validateContractFundingTxOut(req.Funding, false); err != nil {
+			return nil, err
+		}
+	case ContractTypeEVM:
+		if err := validateEVMFundingTxOut(req.Funding); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported contract type %d", req.Contract.ContractType())
+	}
+	action := req.Action
+	if req.Contract.ContractType() == ContractTypeEVM && action == "" {
+		action = "call"
+	}
+	if action == "" {
+		return nil, errors.New("invoke action is empty")
 	}
 	scripts, err := InvokeNullDataScripts(InvokePayload{
 		GasLimit:  req.GasLimit,
 		CallNonce: req.CallNonce,
-		Calldata:  cloneBytes(req.Calldata),
+		Action:    action,
+		Param:     cloneBytes(req.Param),
 	})
 	if err != nil {
 		return nil, err
@@ -293,12 +166,12 @@ func BuildEVMInvokeTx(req EVMInvokeTxBuildRequest) (*wire.MsgTx, error) {
 		tx.AddTxOut(wire.NewTxOut(0, nil, script))
 	}
 	tx.AddTxOut(contractOut)
-	addTxOutCopies(tx, req.ChangeOutputs)
+	addTxOutCopies(tx, req.ExtraOutputs)
 	return tx, nil
 }
 
-func DeriveTemplateContractAddress(prefix string, encodedContract []byte, deployer string, random []byte) (ContractAddress, [AddressHashLen]byte, error) {
-	hash, err := deriveTemplateContractHash(encodedContract, deployer, random)
+func DeriveTemplateContractAddress(prefix string, encodedContract []byte, deployer string, deployNonce uint64) (ContractAddress, [AddressHashLen]byte, error) {
+	hash, err := deriveTemplateContractHash(encodedContract, deployer, deployNonce)
 	if err != nil {
 		return ContractAddress{}, [AddressHashLen]byte{}, err
 	}
@@ -309,8 +182,8 @@ func DeriveTemplateContractAddress(prefix string, encodedContract []byte, deploy
 	return addr, hash, nil
 }
 
-func DeriveAgentContractAddress(prefix string, subtype string, content []byte, deployer string, random []byte) (ContractAddress, [AddressHashLen]byte, error) {
-	hash, err := deriveAgentContractHash(subtype, content, deployer, random)
+func DeriveAgentContractAddress(prefix string, subtype string, content []byte, deployer string, deployNonce uint64) (ContractAddress, [AddressHashLen]byte, error) {
+	hash, err := deriveAgentContractHash(subtype, content, deployer, deployNonce)
 	if err != nil {
 		return ContractAddress{}, [AddressHashLen]byte{}, err
 	}
@@ -385,25 +258,21 @@ func validateNonNegativeDecimal(amount indexercommon.Decimal) error {
 	return nil
 }
 
-func deriveTemplateContractHash(encodedContract []byte, deployer string, random []byte) ([AddressHashLen]byte, error) {
+func deriveTemplateContractHash(encodedContract []byte, deployer string, deployNonce uint64) ([AddressHashLen]byte, error) {
 	if len(encodedContract) == 0 {
 		return [AddressHashLen]byte{}, errors.New("template contract content is empty")
 	}
 	if deployer == "" {
 		return [AddressHashLen]byte{}, errors.New("template contract deployer is empty")
 	}
-	if len(random) == 0 {
-		return [AddressHashLen]byte{}, errors.New("template contract random value is empty")
-	}
-
 	var buf bytes.Buffer
 	writeHashBytes(&buf, encodedContract)
 	writeHashBytes(&buf, []byte(deployer))
-	writeHashBytes(&buf, random)
+	writeHashUint64(&buf, deployNonce)
 	return sha256.Sum256(buf.Bytes()), nil
 }
 
-func deriveAgentContractHash(subtype string, content []byte, deployer string, random []byte) ([AddressHashLen]byte, error) {
+func deriveAgentContractHash(subtype string, content []byte, deployer string, deployNonce uint64) ([AddressHashLen]byte, error) {
 	if subtype == "" {
 		return [AddressHashLen]byte{}, errors.New("agent contract subtype is empty")
 	}
@@ -413,16 +282,18 @@ func deriveAgentContractHash(subtype string, content []byte, deployer string, ra
 	if deployer == "" {
 		return [AddressHashLen]byte{}, errors.New("agent contract deployer is empty")
 	}
-	if len(random) == 0 {
-		return [AddressHashLen]byte{}, errors.New("agent contract random value is empty")
-	}
-
 	var buf bytes.Buffer
 	writeHashBytes(&buf, []byte(subtype))
 	writeHashBytes(&buf, content)
 	writeHashBytes(&buf, []byte(deployer))
-	writeHashBytes(&buf, random)
+	writeHashUint64(&buf, deployNonce)
 	return sha256.Sum256(buf.Bytes()), nil
+}
+
+func writeHashUint64(buf *bytes.Buffer, v uint64) {
+	var tmp [8]byte
+	binary.BigEndian.PutUint64(tmp[:], v)
+	buf.Write(tmp[:])
 }
 
 func writeHashBytes(buf *bytes.Buffer, data []byte) {

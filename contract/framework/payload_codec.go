@@ -88,19 +88,3 @@ func WriteBytes(buf *bytes.Buffer, data []byte) {
 func WriteString(buf *bytes.Buffer, s string) {
 	WriteBytes(buf, []byte(s))
 }
-
-type NamedDeployPayload struct {
-	GasLimit        int64
-	Name            string
-	Version         uint32
-	Deployer        string
-	Random          []byte
-	ContractContent []byte
-}
-
-type ActionInvokePayload struct {
-	GasLimit  int64
-	CallNonce uint64
-	Action    string
-	Param     []byte
-}

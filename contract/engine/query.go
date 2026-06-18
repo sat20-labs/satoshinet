@@ -382,15 +382,15 @@ func enrichDetailsFromPayload(details map[string]interface{}, op TxOpView) {
 		return
 	}
 	if op.ContractTypeID == contractcommon.ContractTypeAgent && op.Kind == "deploy" {
-		deploy, err := contractcommon.DecodeAgentDeployPayload(payload)
-		if err == nil && deploy.Subtype == contractcommon.SubtypePrediction {
+		deploy, err := contractcommon.DecodeDeployPayload(payload)
+		if err == nil && deploy.Type == contractcommon.ContractTypeAgent && deploy.SubType == contractcommon.SubtypePrediction {
 			if prediction, err := contractcommon.DecodeAgentPredictionContract(deploy.ContractContent); err == nil {
 				details["prediction"] = prediction
 			}
 		}
 	}
 	if op.ContractTypeID == contractcommon.ContractTypeAgent && op.Kind == "invoke" {
-		invoke, err := contractcommon.DecodeAgentInvokePayload(payload)
+		invoke, err := contractcommon.DecodeInvokePayload(payload)
 		if err != nil {
 			return
 		}

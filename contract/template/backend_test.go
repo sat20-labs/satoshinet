@@ -9,12 +9,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testTemplateExecuteBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
+	if req.ResolveInvoker == nil {
+		req.ResolveInvoker = testTemplateInvokerResolver
+	}
+	return ExecuteBlock(req)
+}
+
+func testTemplateInvokerResolver(tx *wire.MsgTx, contractTx Tx) (string, error) {
+	if contractTx.Kind == TxTypeDeploy {
+		return "deployer-address", nil
+	}
+	return "invoker-address", nil
+}
+
 func TestBackendDeployThenInvoke(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	invokeTx := testTemplateLimitOrderInvokeTx(t, addr, OrderTypeBuy)
 
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:         []*wire.MsgTx{deployTx, invokeTx},
 		BlockHeight: 100,
 	})
@@ -34,7 +48,7 @@ func TestBackendSettlesLimitOrdersOnFinalize(t *testing.T) {
 	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, 50, "ordx:f:test", 10))
 	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 30, nil)
 
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:         []*wire.MsgTx{deployTx, sellTx, buyTx},
 		BlockHeight: 100,
 	})
@@ -58,7 +72,7 @@ func TestBackendMarksInvokeInvalidWhenDeclaredSellAssetMissing(t *testing.T) {
 	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAsset(gasAssetName, 50))
 	store := NewRuntimeStore()
 
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:         []*wire.MsgTx{deployTx, sellTx},
 		Store:       store,
 		BlockHeight: 100,
@@ -94,7 +108,7 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 		ResultBaseGas:   1,
 		MaxGasPerInvoke: DefaultGasConfig().MaxGasPerInvoke,
 	}
-	first, err := ExecuteBlock(BlockExecutionRequest{
+	first, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:         []*wire.MsgTx{deployTx, sellTx},
 		Store:       store,
 		GasConfig:   gasConfig,
@@ -166,7 +180,7 @@ func TestBackendInvalidInvokeAbsorbsKnownFunding(t *testing.T) {
 	invokeTx := testTemplateInvalidInvokeTx(t, addr, 7, testAssets(gas, 5, contract.AssetName, 10))
 	store := NewRuntimeStore()
 
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:         []*wire.MsgTx{deployTx, invokeTx},
 		Store:       store,
 		GasConfig:   gasConfig,
@@ -213,11 +227,14 @@ func TestBackendLimitOrderCloseRefundsOwnersAndSplitsProfit(t *testing.T) {
 	closeTx := testExchangeCloseTx(t, addr, testAsset(gas, 2))
 	store := NewRuntimeStore()
 
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:       []*wire.MsgTx{deployTx, sellTx, closeTx},
 		Store:     store,
 		GasConfig: gasConfig,
 		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			if contractTx.Kind == TxTypeDeploy {
+				return "deployer-address", nil
+			}
 			if tx == closeTx {
 				return "deployer-address", nil
 			}
@@ -248,7 +265,7 @@ func TestBackendDefaultInvokeLimitOrderNoPriceNoOp(t *testing.T) {
 	defaultTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(DefaultGasConfig().GasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, defaultTx}, Store: store})
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, defaultTx}, Store: store})
 	require.NoError(t, err)
 	require.Len(t, result.Records, 1)
 	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
@@ -268,7 +285,7 @@ func TestBackendDefaultInvokeLimitOrderBuyAtMarketPrice(t *testing.T) {
 	defaultBuyTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, sellTx, defaultBuyTx}, Store: store, BlockHeight: 100})
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, sellTx, defaultBuyTx}, Store: store, BlockHeight: 100})
 	require.NoError(t, err)
 	require.Len(t, result.Records, 3)
 	require.Len(t, result.SettlementPlans, 1)
@@ -307,7 +324,7 @@ func TestBackendIgnoresInvokeBeforeDeploy(t *testing.T) {
 	contract := testTemplateContract(t)
 	invokeTx := testTemplateLimitOrderInvokeTx(t, contract, OrderTypeBuy)
 
-	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{invokeTx}})
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{invokeTx}})
 	require.NoError(t, err)
 	require.Empty(t, result.Records)
 	require.Empty(t, result.ResultPlans)
@@ -319,13 +336,12 @@ func TestBackendIgnoresInvalidDeploy(t *testing.T) {
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        0,
-		TemplateName:    contract.TemplateName(),
-		TemplateVersion: contract.Version(),
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         contract.TemplateName(),
+		Version:         contract.Version(),
+		DeployNonce:     7,
 		ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.ContractContent, "deployer-address", deploy.DeployNonce)
 	require.NoError(t, err)
 	script, err := DeployNullDataScript(deploy)
 	require.NoError(t, err)
@@ -335,7 +351,7 @@ func TestBackendIgnoresInvalidDeploy(t *testing.T) {
 	tx.AddTxOut(wire.NewTxOut(0, nil, testTemplateContractScript(addr)))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{tx}, Store: store})
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{tx}, Store: store})
 	require.NoError(t, err)
 	require.Empty(t, result.Records)
 	require.Empty(t, result.ResultPlans)
@@ -348,7 +364,7 @@ func TestBackendRecordsInvalidInvokeParam(t *testing.T) {
 	invokeTx := testTemplateLimitOrderInvokeTx(t, addr, OrderTypeStake)
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, invokeTx}, Store: store})
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, invokeTx}, Store: store})
 	require.NoError(t, err)
 	require.Len(t, result.Records, 2)
 	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
@@ -372,7 +388,7 @@ func TestBackendRecordsUnsupportedAMMRefund(t *testing.T) {
 	refundTx := testTemplateRefundInvokeTx(t, addr, 1)
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, refundTx}, Store: store})
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, refundTx}, Store: store})
 	require.NoError(t, err)
 	require.Len(t, result.Records, 2)
 	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
@@ -399,13 +415,12 @@ func testTemplateDeployTx(t *testing.T, contract Contract) (*wire.MsgTx, Contrac
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        DefaultGasConfig().DeployBaseGas,
-		TemplateName:    contract.TemplateName(),
-		TemplateVersion: contract.Version(),
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         contract.TemplateName(),
+		Version:         contract.Version(),
+		DeployNonce:     7,
 		ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.ContractContent, deploy.Deployer, deploy.Random)
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.ContractContent, "deployer-address", deploy.DeployNonce)
 	require.NoError(t, err)
 	script, err := DeployNullDataScript(deploy)
 	require.NoError(t, err)

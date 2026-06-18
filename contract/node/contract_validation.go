@@ -9,44 +9,25 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractapi "github.com/sat20-labs/satoshinet/contract"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
-	"github.com/sat20-labs/satoshinet/contract/evm"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
-	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type CompositeContractBlockValidatorConfig struct {
 	ChainParams *chaincfg.Params
 
-	TemplateValidator TemplateBlockValidator
-	EVMValidator      EVMBlockValidator
-	AgentValidator    AgentBlockValidator
+	TemplateValidator ContractModuleBlockValidator
+	EVMValidator      ContractModuleBlockValidator
+	AgentValidator    ContractModuleBlockValidator
 }
 
-type EVMBlockValidator interface {
-	ValidateEVMBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error
+type ContractModuleBlockValidator interface {
+	ValidateContractModuleBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error
 }
 
-type EVMBlockStateProvider interface {
-	EVMBlockPostState(hash *chainhash.Hash) (*evm.MemoryStateDB, bool)
-}
-
-type TemplateBlockValidator interface {
-	ValidateTemplateBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error
-}
-
-type TemplateBlockStateProvider interface {
-	TemplateBlockPostState(hash *chainhash.Hash) (*tmplcontract.RuntimeStore, bool)
-}
-
-type AgentBlockValidator interface {
-	ValidateAgentBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error
-}
-
-type AgentBlockStateProvider interface {
-	AgentBlockPostState(hash *chainhash.Hash) (*agentcontract.RuntimeStore, bool)
+type BlockStateProvider interface {
+	BlockPostState(hash *chainhash.Hash) (contractframework.RuntimeStore, bool)
 }
 
 type CompositeContractBlockValidator struct {
@@ -74,17 +55,17 @@ func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.B
 	}
 
 	if v.cfg.TemplateValidator != nil && activity.Template {
-		if err := v.cfg.TemplateValidator.ValidateTemplateBlock(block, view); err != nil {
+		if err := v.cfg.TemplateValidator.ValidateContractModuleBlock(block, view); err != nil {
 			return err
 		}
 	}
 	if v.cfg.EVMValidator != nil && activity.EVM {
-		if err := v.cfg.EVMValidator.ValidateEVMBlock(block, view); err != nil {
+		if err := v.cfg.EVMValidator.ValidateContractModuleBlock(block, view); err != nil {
 			return err
 		}
 	}
 	if v.cfg.AgentValidator != nil && activity.Agent {
-		if err := v.cfg.AgentValidator.ValidateAgentBlock(block, view); err != nil {
+		if err := v.cfg.AgentValidator.ValidateContractModuleBlock(block, view); err != nil {
 			return err
 		}
 	}
@@ -94,93 +75,55 @@ func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.B
 	return nil
 }
 
-func (v *CompositeContractBlockValidator) TemplateBlockPostState(hash *chainhash.Hash) (*tmplcontract.RuntimeStore, bool) {
-	provider, ok := v.cfg.TemplateValidator.(TemplateBlockStateProvider)
-	if !ok {
-		return nil, false
-	}
-	return provider.TemplateBlockPostState(hash)
-}
-
-func (v *CompositeContractBlockValidator) EVMBlockPostState(hash *chainhash.Hash) (*evm.MemoryStateDB, bool) {
-	provider, ok := v.cfg.EVMValidator.(EVMBlockStateProvider)
-	if !ok {
-		return nil, false
-	}
-	return provider.EVMBlockPostState(hash)
-}
-
-func (v *CompositeContractBlockValidator) AgentBlockPostState(hash *chainhash.Hash) (*agentcontract.RuntimeStore, bool) {
-	provider, ok := v.cfg.AgentValidator.(AgentBlockStateProvider)
-	if !ok {
-		return nil, false
-	}
-	return provider.AgentBlockPostState(hash)
-}
-
 func (v *CompositeContractBlockValidator) ContractBlockPostState(
 	module contractframework.ModuleType, hash *chainhash.Hash) (contractframework.EngineState, bool) {
 
 	switch module {
 	case contractframework.ModuleTemplate:
-		state, ok := v.TemplateBlockPostState(hash)
-		if !ok || state == nil {
-			return nil, false
-		}
-		return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
+		return moduleBlockPostState(v.cfg.TemplateValidator, hash)
 	case contractframework.ModuleEVM:
-		state, ok := v.EVMBlockPostState(hash)
-		if !ok || state == nil {
-			return nil, false
-		}
-		return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
+		return moduleBlockPostState(v.cfg.EVMValidator, hash)
 	case contractframework.ModuleAgent:
-		state, ok := v.AgentBlockPostState(hash)
-		if !ok || state == nil {
-			return nil, false
-		}
-		return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
+		return moduleBlockPostState(v.cfg.AgentValidator, hash)
 	default:
 		return nil, false
 	}
 }
 
+func moduleBlockPostState(validator ContractModuleBlockValidator,
+	hash *chainhash.Hash) (contractframework.EngineState, bool) {
+
+	provider, ok := validator.(BlockStateProvider)
+	if !ok {
+		return nil, false
+	}
+	return provider.BlockPostState(hash)
+}
+
 func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil.Block, hasTemplateWork, hasEVMWork, hasAgentWork bool) error {
 	var templateRoot [32]byte
 	if hasTemplateWork {
-		provider, ok := v.cfg.TemplateValidator.(TemplateBlockStateProvider)
-		if !ok {
-			return contractBlockRuleError("template validator cannot expose post-state")
-		}
-		postState, ok := provider.TemplateBlockPostState(block.Hash())
+		postState, ok := moduleBlockPostState(v.cfg.TemplateValidator, block.Hash())
 		if !ok || postState == nil {
 			return contractBlockRuleError("missing template post-state")
 		}
-		templateRoot = postState.StateRoot()
+		templateRoot = postState.Root()
 	}
 	var evmRoot [32]byte
 	if hasEVMWork {
-		provider, ok := v.cfg.EVMValidator.(EVMBlockStateProvider)
-		if !ok {
-			return contractBlockRuleError("EVM validator cannot expose post-state")
-		}
-		postState, ok := provider.EVMBlockPostState(block.Hash())
+		postState, ok := moduleBlockPostState(v.cfg.EVMValidator, block.Hash())
 		if !ok || postState == nil {
 			return contractBlockRuleError("missing EVM post-state")
 		}
-		evmRoot = postState.StateRoot()
+		evmRoot = postState.Root()
 	}
 	var agentRoot [32]byte
 	if hasAgentWork {
-		provider, ok := v.cfg.AgentValidator.(AgentBlockStateProvider)
-		if !ok {
-			return contractBlockRuleError("agent validator cannot expose post-state")
-		}
-		postState, ok := provider.AgentBlockPostState(block.Hash())
+		postState, ok := moduleBlockPostState(v.cfg.AgentValidator, block.Hash())
 		if !ok || postState == nil {
 			return contractBlockRuleError("missing agent post-state")
 		}
-		agentRoot = postState.StateRoot()
+		agentRoot = postState.Root()
 	}
 	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot, agentRoot)
 	payload, found, err := contractapi.FindCoinbaseStateRoot(block.Transactions()[0].MsgTx())

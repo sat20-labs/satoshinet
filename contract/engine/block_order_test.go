@@ -12,10 +12,10 @@ import (
 func TestClassifyAgentWorkAfterOtherContractParsersRejectPayload(t *testing.T) {
 	tx, _, err := agentcontract.BuildDeployTx(agentcontract.DeployTxBuildRequest{
 		ContractPrefix:  agentcontract.TestnetContractPrefix,
-		Subtype:         agentcontract.SubtypePrediction,
-		AgentVersion:    agentcontract.CurrentAgentVersion,
+		SubType:         agentcontract.SubtypePrediction,
+		Version:         agentcontract.CurrentAgentVersion,
 		Deployer:        "agent-miner-test",
-		Random:          []byte("agent-miner-random"),
+		DeployNonce:     7,
 		ContractContent: []byte("agent payload that is not a template or evm payload"),
 		GasLimit:        1000,
 	})

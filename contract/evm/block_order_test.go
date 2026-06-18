@@ -9,9 +9,9 @@ import (
 
 func TestClassifyTxForBlockOrder(t *testing.T) {
 	deployScript, err := evmcommon.DeployNullDataScript(DeployPayload{
-		GasLimit:    456,
-		DeployNonce: 1,
-		InitCode:    []byte{0x60, 0x00},
+		GasLimit:        456,
+		DeployNonce:     1,
+		ContractContent: []byte{0x60, 0x00},
 	})
 	if err != nil {
 		t.Fatal(err)

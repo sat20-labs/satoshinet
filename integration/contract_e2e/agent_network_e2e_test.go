@@ -327,14 +327,14 @@ func buildAgentDeployTx(t *testing.T, contract agentcontract.PredictionContract,
 	require.NoError(t, err)
 	tx, address, err := agentcontract.BuildDeployTx(agentcontract.DeployTxBuildRequest{
 		ContractPrefix:  agentcontract.TestnetContractPrefix,
-		Subtype:         agentcontract.SubtypePrediction,
-		AgentVersion:    agentcontract.CurrentAgentVersion,
+		SubType:         agentcontract.SubtypePrediction,
+		Version:         agentcontract.CurrentAgentVersion,
 		Deployer:        deployer,
-		Random:          []byte("agent-network-e2e"),
+		DeployNonce:     deployNonceFromBytes([]byte("agent-network-e2e")),
 		ContractContent: content,
 		GasLimit:        agentcontract.DefaultGasConfig().DeployBaseGas,
 		Inputs:          []wire.OutPoint{input},
-		ChangeOutputs: []*wire.TxOut{
+		ExtraOutputs: []*wire.TxOut{
 			wire.NewTxOut(inputOut.Value, testWireAsset(
 				agentcontract.DefaultGasConfig().GasAssetName,
 				inputOut.Assets[0].Amount.Int64()-networkGasFeeAmount(t, agentcontract.DefaultGasConfig().DeployBaseGas),
@@ -361,14 +361,14 @@ func buildAgentInvokeTx(t *testing.T, contract agentcontract.ContractAddress, ac
 		changeOutputs = append(changeOutputs, wire.NewTxOut(changeOut.Value, changeOut.Assets.Clone(), spendScript))
 	}
 	tx, err := agentcontract.BuildInvokeTx(agentcontract.InvokeTxBuildRequest{
-		Contract:      contract,
-		GasLimit:      agentcontract.DefaultGasConfig().InvokeBaseGas,
-		CallNonce:     uint64(time.Now().UnixNano()),
-		Action:        action,
-		Param:         param,
-		Funding:       funding,
-		Inputs:        []wire.OutPoint{input},
-		ChangeOutputs: changeOutputs,
+		Contract:     contract,
+		GasLimit:     agentcontract.DefaultGasConfig().InvokeBaseGas,
+		CallNonce:    uint64(time.Now().UnixNano()),
+		Action:       action,
+		Param:        param,
+		Funding:      funding,
+		Inputs:       []wire.OutPoint{input},
+		ExtraOutputs: changeOutputs,
 	})
 	require.NoError(t, err)
 	return tx

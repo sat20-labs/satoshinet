@@ -29,16 +29,17 @@ var FindInvokeContractOutputs = contractframework.FindInvokeContractOutputsFunc(
 
 var FindContractOutputsForContract = contractframework.FindContractOutputsForContractFunc()
 
-type DeployTxBuildRequest = evmcommon.EVMDeployTxBuildRequest
+type DeployTxBuildRequest = evmcommon.DeployTxBuildRequest
 
-type InvokeTxBuildRequest = evmcommon.EVMInvokeTxBuildRequest
+type InvokeTxBuildRequest = evmcommon.InvokeTxBuildRequest
 
 func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
-	return evmcommon.BuildEVMDeployTx(req)
+	req.Type = ContractTypeEVM
+	return evmcommon.BuildDeployTx(req)
 }
 
 func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
-	return evmcommon.BuildEVMInvokeTx(req)
+	return evmcommon.BuildInvokeTx(req)
 }
 
 func evmParseSpec() contractframework.ParseSpec {
@@ -51,9 +52,12 @@ func evmParseSpec() contractframework.ParseSpec {
 				return contractframework.DeployPayload{}, err
 			}
 			return contractframework.DeployPayload{
-				GasLimit: payload.GasLimit,
-				Nonce:    payload.DeployNonce,
-				Code:     contractframework.CloneBytes(payload.InitCode),
+				Type:            payload.Type,
+				SubType:         payload.SubType,
+				Version:         payload.Version,
+				GasLimit:        payload.GasLimit,
+				DeployNonce:     payload.DeployNonce,
+				ContractContent: contractframework.CloneBytes(payload.ContractContent),
 			}, nil
 		},
 		DecodeInvoke: func(data []byte) (contractframework.InvokePayload, error) {
@@ -64,7 +68,8 @@ func evmParseSpec() contractframework.ParseSpec {
 			return contractframework.InvokePayload{
 				GasLimit:  payload.GasLimit,
 				CallNonce: payload.CallNonce,
-				Data:      contractframework.CloneBytes(payload.Calldata),
+				Action:    payload.Action,
+				Param:     contractframework.CloneBytes(payload.Param),
 			}, nil
 		},
 		AcceptResult:         true,
@@ -99,7 +104,7 @@ func ValidateDeployTxBasic(tx *wire.MsgTx, cfg GasConfig) (DeployValidation, err
 	if err != nil {
 		return DeployValidation{}, err
 	}
-	if len(validated.Payload.Code) == 0 {
+	if len(validated.Payload.ContractContent) == 0 {
 		return DeployValidation{}, errors.New("deploy init code is empty")
 	}
 	return validated, nil

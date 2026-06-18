@@ -178,9 +178,6 @@ func (e *Backend) executorConfig() contractframework.ExecutorConfig {
 			GasConfig: e.GasConfig,
 		},
 		ResolveActor: func(tx *wire.MsgTx, contractTx contract.Tx) (string, error) {
-			if contractTx.Kind == TxTypeDeploy {
-				return "", nil
-			}
 			if e.ResolveInvoker == nil {
 				return "", nil
 			}
@@ -203,7 +200,7 @@ func (e *Backend) Priority() int {
 
 func (e *Backend) Deploy(ctx contractframework.ExecutionContext, tx contract.Tx) (contractframework.ExecutionOutcome, error) {
 	before := len(e.records)
-	if err := e.executeDeploy(ctx.RawTx); err != nil {
+	if err := e.executeDeployTx(ctx.RawTx, ctx.ParsedTx, tx); err != nil {
 		return contractframework.ExecutionOutcome{}, err
 	}
 	return e.lastOutcomeSince(before)
@@ -288,11 +285,47 @@ func (e *Backend) Finalize() (BlockExecutionResult, error) {
 }
 
 func (e *Backend) executeDeploy(tx *wire.MsgTx) error {
-	validated, err := ValidateDeployTxBasic(tx, e.ContractPrefix, e.RuntimeConfig, e.GasConfig)
+	parsed, err := ParseTx(tx, StandardContractScriptResolver(e.ContractPrefix))
+	if err != nil {
+		return err
+	}
+	contractTx := contractframework.ContractTxFromParsed(tx, parsed, ContractTypeAgent)
+	if e.ResolveInvoker != nil {
+		actor, err := e.ResolveInvoker(tx, contractTx)
+		if err != nil {
+			return err
+		}
+		contractTx.Actor = actor
+	}
+	return e.executeDeployTx(tx, parsed, contractTx)
+}
+
+func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx contract.Tx) error {
+	validated, err := contractframework.ValidateParsedDeployBasic(parsed, "agent", e.GasConfig)
 	if err != nil {
 		return nil
 	}
-	runtime, err := agentDeployRuntime(validated)
+	deployer := contractTx.Actor
+	if deployer == "" {
+		return errors.New("agent deployer is empty")
+	}
+	deployPayload := agentDeployPayloadFromFramework(&validated.Payload)
+	deployPayload.Type = ContractTypeAgent
+	addr, _, err := DeriveContractAddress(
+		e.ContractPrefix,
+		deployPayload.SubType,
+		deployPayload.ContractContent,
+		deployer,
+		deployPayload.DeployNonce,
+	)
+	if err != nil {
+		return err
+	}
+	runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, e.RuntimeConfig, deployer)
+	if err != nil {
+		return err
+	}
+	fundingOutputs, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(e.ContractPrefix), addr)
 	if err != nil {
 		return err
 	}
@@ -306,14 +339,14 @@ func (e *Backend) executeDeploy(tx *wire.MsgTx) error {
 		TxID:          tx.TxID(),
 		Type:          TxTypeDeploy,
 		Kind:          ExecutionKindDeploy,
-		CallID:        DeriveDeployCallID(tx.TxID(), validated.Address),
-		Contract:      validated.Address,
+		CallID:        DeriveDeployCallID(tx.TxID(), addr),
+		Contract:      addr,
 		Status:        ResultStatusSuccess,
 		GasLimit:      validated.Payload.GasLimit,
-		FundingInputs: contractframework.ContractOutputOutPoints(validated.FundingOutputs),
+		FundingInputs: contractframework.ContractOutputOutPoints(fundingOutputs),
 	}
 	e.appendOutcome(outcome)
-	if resultPlan, ok := stateResultPlan(validated.Address, validated.FundingOutputs); ok {
+	if resultPlan, ok := stateResultPlan(addr, fundingOutputs); ok {
 		outcome.RequiresResult = true
 		outcome.GasFee = resultFee
 		e.records[len(e.records)-1] = outcome.ToRecord()
@@ -417,7 +450,7 @@ func (e *Backend) lastOutcomeSince(before int) (contractframework.ExecutionOutco
 }
 
 func (e *Backend) applyReject(runtime *Runtime, validated InvokeValidation, invoker string) error {
-	param, err := DecodePredictionRejectParam(validated.Payload.Data)
+	param, err := DecodePredictionRejectParam(validated.Payload.Param)
 	if err != nil {
 		return err
 	}
@@ -428,7 +461,7 @@ func (e *Backend) applyReject(runtime *Runtime, validated InvokeValidation, invo
 }
 
 func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker string) (*PredictionSettlementPlan, error) {
-	param, err := DecodePredictionBetParam(validated.Payload.Data)
+	param, err := DecodePredictionBetParam(validated.Payload.Param)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +479,7 @@ func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker
 }
 
 func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, invoker string) (*PredictionSettlementPlan, error) {
-	param, err := DecodePredictionConfirmParam(validated.Payload.Data)
+	param, err := DecodePredictionConfirmParam(validated.Payload.Param)
 	if err != nil {
 		return nil, err
 	}

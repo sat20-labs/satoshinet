@@ -9,15 +9,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildEVMDeployTx(t *testing.T) {
+func TestBuildUnifiedEVMDeployTx(t *testing.T) {
 	caller := mustTestEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	prev := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
-	tx, contract, err := BuildEVMDeployTx(EVMDeployTxBuildRequest{
-		ContractPrefix: TestnetContractPrefix,
-		Caller:         caller,
-		GasLimit:       100000,
-		DeployNonce:    3,
-		InitCode:       []byte{0x60, 0x00},
+	tx, contract, err := BuildDeployTx(DeployTxBuildRequest{
+		ContractPrefix:  TestnetContractPrefix,
+		Type:            ContractTypeEVM,
+		Deployer:        caller.String(),
+		GasLimit:        100000,
+		DeployNonce:     3,
+		ContractContent: []byte{0x60, 0x00},
 		Funding: wire.TxOut{Assets: wire.TxAssets{{
 			Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
 			Amount: *indexercommon.NewDefaultDecimal(100000),
@@ -36,7 +37,7 @@ func TestBuildEVMDeployTx(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(100000), deploy.GasLimit)
 	require.Equal(t, uint64(3), deploy.DeployNonce)
-	require.Equal(t, []byte{0x60, 0x00}, deploy.InitCode)
+	require.Equal(t, []byte{0x60, 0x00}, deploy.ContractContent)
 
 	contractScript, err := ContractPkScript(contract)
 	require.NoError(t, err)
@@ -45,17 +46,18 @@ func TestBuildEVMDeployTx(t *testing.T) {
 	require.Equal(t, "ordx:ft:gas", tx.TxOut[1].Assets[0].Name.String())
 }
 
-func TestBuildEVMDeployTxSplitsLargeInitCode(t *testing.T) {
+func TestBuildUnifiedEVMDeployTxSplitsLargeInitCode(t *testing.T) {
 	caller := mustTestEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	initCode := make([]byte, MaxNullDataPayloadLen+33)
 	for i := range initCode {
 		initCode[i] = byte(i)
 	}
-	tx, _, err := BuildEVMDeployTx(EVMDeployTxBuildRequest{
-		Caller:      caller,
-		GasLimit:    100000,
-		DeployNonce: 4,
-		InitCode:    initCode,
+	tx, _, err := BuildDeployTx(DeployTxBuildRequest{
+		Type:            ContractTypeEVM,
+		Deployer:        caller.String(),
+		GasLimit:        100000,
+		DeployNonce:     4,
+		ContractContent: initCode,
 		Funding: wire.TxOut{Assets: wire.TxAssets{{
 			Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
 			Amount: *indexercommon.NewDefaultDecimal(100000),
@@ -74,17 +76,17 @@ func TestBuildEVMDeployTxSplitsLargeInitCode(t *testing.T) {
 	}
 	deploy, err := DecodeDeployPayload(encoded)
 	require.NoError(t, err)
-	require.Equal(t, initCode, deploy.InitCode)
+	require.Equal(t, initCode, deploy.ContractContent)
 }
 
-func TestBuildEVMInvokeTx(t *testing.T) {
+func TestBuildUnifiedEVMInvokeTx(t *testing.T) {
 	contract, err := NewContractAddress(TestnetContractPrefix, AddressVersionV1, ContractTypeEVM, EVMAddress{1, 2, 3})
 	require.NoError(t, err)
-	tx, err := BuildEVMInvokeTx(EVMInvokeTxBuildRequest{
+	tx, err := BuildInvokeTx(InvokeTxBuildRequest{
 		Contract:  contract,
 		GasLimit:  100000,
 		CallNonce: 9,
-		Calldata:  []byte{0xde, 0xad, 0xbe, 0xef},
+		Param:     []byte{0xde, 0xad, 0xbe, 0xef},
 		Funding: wire.TxOut{
 			Value: 77,
 			Assets: wire.TxAssets{{
@@ -104,7 +106,7 @@ func TestBuildEVMInvokeTx(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(100000), invoke.GasLimit)
 	require.Equal(t, uint64(9), invoke.CallNonce)
-	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, invoke.Calldata)
+	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, invoke.Param)
 
 	contractScript, err := ContractPkScript(contract)
 	require.NoError(t, err)
@@ -114,18 +116,19 @@ func TestBuildEVMInvokeTx(t *testing.T) {
 
 func TestBuildEVMTxRejectsInvalidFunding(t *testing.T) {
 	caller := mustTestEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
-	_, _, err := BuildEVMDeployTx(EVMDeployTxBuildRequest{
-		Caller:      caller,
-		GasLimit:    1,
-		DeployNonce: 1,
-		InitCode:    []byte{0x60, 0x00},
-		Funding:     wire.TxOut{},
+	_, _, err := BuildDeployTx(DeployTxBuildRequest{
+		Type:            ContractTypeEVM,
+		Deployer:        caller.String(),
+		GasLimit:        1,
+		DeployNonce:     1,
+		ContractContent: []byte{0x60, 0x00},
+		Funding:         wire.TxOut{},
 	})
 	require.Error(t, err)
 
 	contract, err := NewContractAddress(TestnetContractPrefix, AddressVersionV1, ContractTypeEVM, EVMAddress{1})
 	require.NoError(t, err)
-	_, err = BuildEVMInvokeTx(EVMInvokeTxBuildRequest{
+	_, err = BuildInvokeTx(InvokeTxBuildRequest{
 		Contract:  contract,
 		GasLimit:  1,
 		CallNonce: 1,

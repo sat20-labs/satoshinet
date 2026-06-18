@@ -16,7 +16,7 @@ type runtimeSnapshot struct {
 	TemplateName    string            `json:"templateName"`
 	TemplateVersion uint32            `json:"templateVersion"`
 	Deployer        string            `json:"deployer"`
-	Random          []byte            `json:"random"`
+	DeployNonce     uint64            `json:"deployNonce"`
 	ContractContent []byte            `json:"contractContent"`
 	CurrentBlock    int64             `json:"currentBlock"`
 	InvokeCount     uint64            `json:"invokeCount"`
@@ -66,7 +66,7 @@ func snapshotRuntime(runtime *ContractRuntime) runtimeSnapshot {
 		TemplateName:    base.templateName,
 		TemplateVersion: base.templateVersion,
 		Deployer:        base.deployer,
-		Random:          append([]byte(nil), base.random...),
+		DeployNonce:     base.deployNonce,
 		ContractContent: append([]byte(nil), base.contractContent...),
 		CurrentBlock:    base.currentBlock,
 		InvokeCount:     base.invokeCount,
@@ -80,14 +80,14 @@ func restoreRuntime(snapshot runtimeSnapshot, registry *Registry) (*ContractRunt
 		return nil, err
 	}
 	deploy := DeployPayload{
+		Type:            ContractTypeTemplate,
+		SubType:         snapshot.TemplateName,
+		Version:         snapshot.TemplateVersion,
 		GasLimit:        1,
-		TemplateName:    snapshot.TemplateName,
-		TemplateVersion: snapshot.TemplateVersion,
-		Deployer:        snapshot.Deployer,
-		Random:          snapshot.Random,
+		DeployNonce:     snapshot.DeployNonce,
 		ContractContent: snapshot.ContractContent,
 	}
-	runtime, err := NewRuntime(address, deploy, registry)
+	runtime, err := NewRuntimeWithDeployer(address, deploy, registry, snapshot.Deployer)
 	if err != nil {
 		return nil, err
 	}

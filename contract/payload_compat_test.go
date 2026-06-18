@@ -17,36 +17,39 @@ func TestPayloadGoldenBytes(t *testing.T) {
 		{
 			name: "evm deploy",
 			got: EncodeDeployPayload(DeployPayload{
-				GasLimit:    21000,
-				DeployNonce: 7,
-				InitCode:    []byte{0x60, 0x00},
+				Type:            ContractTypeEVM,
+				SubType:         "sol",
+				GasLimit:        21000,
+				DeployNonce:     7,
+				ContractContent: []byte{0x60, 0x00},
 			}),
-			want: "0188a401076000",
+			want: "010203736f6c0088a40107026000",
 		},
 		{
 			name: "evm invoke",
 			got: EncodeInvokePayload(InvokePayload{
 				GasLimit:  2,
 				CallNonce: 3,
-				Calldata:  []byte{0xbb, 0xcc},
+				Action:    "call",
+				Param:     []byte{0xbb, 0xcc},
 			}),
-			want: "010203bbcc",
+			want: "0102030463616c6c02bbcc",
 		},
 		{
 			name: "template deploy",
-			got: mustTemplateDeployPayload(t, TemplateDeployPayload{
+			got: EncodeDeployPayload(DeployPayload{
+				Type:            ContractTypeTemplate,
 				GasLimit:        1,
-				TemplateName:    "x",
-				TemplateVersion: 1,
-				Deployer:        "d",
-				Random:          []byte("r"),
+				SubType:         "x",
+				Version:         1,
+				DeployNonce:     7,
 				ContractContent: []byte{0xaa},
 			}),
-			want: "01010178010164017201aa",
+			want: "0101017801010701aa",
 		},
 		{
 			name: "template invoke",
-			got: mustTemplateInvokePayload(t, TemplateInvokePayload{
+			got: EncodeInvokePayload(InvokePayload{
 				GasLimit:  2,
 				CallNonce: 3,
 				Action:    "a",
@@ -56,19 +59,19 @@ func TestPayloadGoldenBytes(t *testing.T) {
 		},
 		{
 			name: "agent deploy",
-			got: mustAgentDeployPayload(t, AgentDeployPayload{
+			got: EncodeDeployPayload(DeployPayload{
+				Type:            ContractTypeAgent,
 				GasLimit:        1,
-				Subtype:         "p",
-				AgentVersion:    1,
-				Deployer:        "d",
-				Random:          []byte("r"),
+				SubType:         "p",
+				Version:         1,
+				DeployNonce:     7,
 				ContractContent: []byte{0xaa},
 			}),
-			want: "01010170010164017201aa",
+			want: "0103017001010701aa",
 		},
 		{
 			name: "agent invoke",
-			got: mustAgentInvokePayload(t, AgentInvokePayload{
+			got: EncodeInvokePayload(InvokePayload{
 				GasLimit:  2,
 				CallNonce: 3,
 				Action:    "a",
@@ -107,32 +110,4 @@ func TestCombineStateRootsGolden(t *testing.T) {
 	combined := CombineStateRoots(templateRoot, evmRoot, agentRoot)
 	manual := sha256.Sum256(append(append(templateRoot[:], evmRoot[:]...), agentRoot[:]...))
 	require.Equal(t, manual, combined)
-}
-
-func mustTemplateDeployPayload(t *testing.T, payload TemplateDeployPayload) []byte {
-	t.Helper()
-	encoded, err := EncodeTemplateDeployPayload(payload)
-	require.NoError(t, err)
-	return encoded
-}
-
-func mustTemplateInvokePayload(t *testing.T, payload TemplateInvokePayload) []byte {
-	t.Helper()
-	encoded, err := EncodeTemplateInvokePayload(payload)
-	require.NoError(t, err)
-	return encoded
-}
-
-func mustAgentDeployPayload(t *testing.T, payload AgentDeployPayload) []byte {
-	t.Helper()
-	encoded, err := EncodeAgentDeployPayload(payload)
-	require.NoError(t, err)
-	return encoded
-}
-
-func mustAgentInvokePayload(t *testing.T, payload AgentInvokePayload) []byte {
-	t.Helper()
-	encoded, err := EncodeAgentInvokePayload(payload)
-	require.NoError(t, err)
-	return encoded
 }

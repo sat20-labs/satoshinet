@@ -284,9 +284,11 @@ func testEVMDeployTxForCaller(t *testing.T, nonce uint64, initCode []byte, calle
 		t.Fatal(err)
 	}
 	script, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
-		GasLimit:    evm.DefaultGasConfig().DeployBaseGas,
-		DeployNonce: nonce,
-		InitCode:    initCode,
+		Type:            evm.ContractTypeEVM,
+		SubType:         "sol",
+		GasLimit:        evm.DefaultGasConfig().DeployBaseGas,
+		DeployNonce:     nonce,
+		ContractContent: initCode,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -8,11 +8,11 @@ import (
 
 func TestDeployPayloadRoundTrip(t *testing.T) {
 	want := DeployPayload{
+		Type:            ContractTypeTemplate,
 		GasLimit:        1000,
-		TemplateName:    TemplateLimitOrder,
-		TemplateVersion: 1,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateLimitOrder,
+		Version:         1,
+		DeployNonce:     7,
 		ContractContent: []byte{0x01, 0x02, 0x03},
 	}
 	encoded, err := EncodeDeployPayload(want)

@@ -29,7 +29,7 @@ func TestBlockHasEVMWorkIgnoresTemplateTransactions(t *testing.T) {
 		ContractPrefix: tmplcontract.TestnetContractPrefix,
 		Contract:       tmplcontract.NewLimitOrderContract("ordx:f:test"),
 		Deployer:       "miner-test",
-		Random:         []byte("miner-template-random"),
+		DeployNonce:    1,
 		GasLimit:       1000,
 		Funding: wire.TxOut{
 			Value: 1,
@@ -195,7 +195,8 @@ func TestEVMMiningInfo(t *testing.T) {
 	invokeScript, err := evmcommon.InvokeNullDataScript(evm.InvokePayload{
 		GasLimit:  123,
 		CallNonce: 1,
-		Calldata:  []byte{0xaa},
+		Action:    "call",
+		Param:     []byte{0xaa},
 	})
 	if err != nil {
 		t.Fatal(err)

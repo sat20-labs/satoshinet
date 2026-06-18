@@ -48,20 +48,19 @@ func (o OutPoint) String() string {
 }
 
 type DeployPayload struct {
-	GasLimit int64
-	Nonce    uint64
-	Name     string
-	Version  uint32
-	Deployer string
-	Random   []byte
-	Code     []byte
+	Type            byte
+	SubType         string
+	Version         uint32
+	GasLimit        int64
+	DeployNonce     uint64
+	ContractContent []byte
 }
 
 type InvokePayload struct {
 	GasLimit  int64
 	CallNonce uint64
 	Action    string
-	Data      []byte
+	Param     []byte
 }
 
 type ParseSpec struct {

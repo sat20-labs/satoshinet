@@ -13,10 +13,9 @@ func TestValidateTemplateDeployTxBasic(t *testing.T) {
 	require.NoError(t, err)
 	script, err := DeployNullDataScript(DeployPayload{
 		GasLimit:        DefaultGasConfig().DeployBaseGas,
-		TemplateName:    TemplateLimitOrder,
-		TemplateVersion: CurrentTemplateVersion,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateLimitOrder,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	})
 	require.NoError(t, err)
@@ -25,7 +24,7 @@ func TestValidateTemplateDeployTxBasic(t *testing.T) {
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 
-	validated, err := ValidateDeployTxBasic(tx, TestnetContractPrefix, nil, DefaultGasConfig())
+	validated, err := ValidateDeployTxBasicWithActor(tx, TestnetContractPrefix, nil, DefaultGasConfig(), "deployer-address")
 	require.NoError(t, err)
 	require.Equal(t, DefaultGasConfig().DeployBaseGas, validated.Payload.GasLimit)
 	runtime, ok := validated.Runtime.(*ContractRuntime)

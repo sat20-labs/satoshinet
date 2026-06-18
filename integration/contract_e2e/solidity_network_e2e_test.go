@@ -371,14 +371,14 @@ func buildSolidityDeployTx(t *testing.T, signer *btcec.PrivateKey, nonce uint64,
 	_, callerAddress, redeemScript, controlBlock := testCallerTaprootScript(t, signer)
 	caller := evmAddressFromAddressString(callerAddress)
 	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
-		ContractPrefix: evm.TestnetContractPrefix,
-		Caller:         caller,
-		GasLimit:       networkEVMDeployGasLimit(),
-		DeployNonce:    nonce,
-		InitCode:       initCode,
-		Funding:        funding,
-		Inputs:         inputs,
-		ChangeOutputs:  changeOutputs,
+		ContractPrefix:  evm.TestnetContractPrefix,
+		Deployer:        caller.String(),
+		GasLimit:        networkEVMDeployGasLimit(),
+		DeployNonce:     nonce,
+		ContractContent: initCode,
+		Funding:         funding,
+		Inputs:          inputs,
+		ExtraOutputs:    changeOutputs,
 	})
 	require.NoError(t, err)
 	signTemplateTaprootInputs(t, tx, signer, redeemScript, controlBlock)
@@ -405,13 +405,13 @@ func buildSolidityInvokeTxWithFunding(t *testing.T, signer *btcec.PrivateKey, co
 
 	t.Helper()
 	tx, err := evm.BuildInvokeTx(evm.InvokeTxBuildRequest{
-		Contract:      contract,
-		GasLimit:      networkEVMInvokeGasLimit(),
-		CallNonce:     nonce,
-		Calldata:      calldata,
-		Funding:       funding,
-		Inputs:        inputs,
-		ChangeOutputs: changeOutputs,
+		Contract:     contract,
+		GasLimit:     networkEVMInvokeGasLimit(),
+		CallNonce:    nonce,
+		Param:        calldata,
+		Funding:      funding,
+		Inputs:       inputs,
+		ExtraOutputs: changeOutputs,
 	})
 	require.NoError(t, err)
 	_, _, redeemScript, controlBlock := testCallerTaprootScript(t, signer)

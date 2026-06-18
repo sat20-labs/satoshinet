@@ -63,15 +63,19 @@ func (a EVMAddress) String() string {
 }
 
 type DeployPayload struct {
-	GasLimit    int64
-	DeployNonce uint64
-	InitCode    []byte
+	Type            byte
+	SubType         string
+	Version         uint32
+	GasLimit        int64
+	DeployNonce     uint64
+	ContractContent []byte
 }
 
 type InvokePayload struct {
 	GasLimit  int64
 	CallNonce uint64
-	Calldata  []byte
+	Action    string
+	Param     []byte
 }
 
 type ResultPayload struct {

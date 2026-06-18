@@ -179,9 +179,6 @@ func (e *Backend) executorConfig() contractframework.ExecutorConfig {
 			GasConfig: e.GasConfig,
 		},
 		ResolveActor: func(tx *wire.MsgTx, contractTx contractcommon.Tx) (string, error) {
-			if contractTx.Kind == TxTypeDeploy {
-				return "", nil
-			}
 			if e.ResolveInvoker == nil {
 				return "", nil
 			}
@@ -204,7 +201,7 @@ func (e *Backend) Priority() int {
 
 func (e *Backend) Deploy(ctx contractframework.ExecutionContext, tx contractcommon.Tx) (contractframework.ExecutionOutcome, error) {
 	before := len(e.records)
-	if err := e.executeDeploy(ctx.RawTx); err != nil {
+	if err := e.executeDeployTx(ctx.RawTx, ctx.ParsedTx, tx); err != nil {
 		return contractframework.ExecutionOutcome{}, err
 	}
 	return e.lastOutcomeSince(before)
@@ -395,16 +392,43 @@ func (e *Backend) recordsWithSettlementAssetIntents(plans []*SettlementPlan) ([]
 }
 
 func (e *Backend) executeDeploy(tx *wire.MsgTx) error {
-	validated, err := ValidateDeployTxBasic(tx, e.ContractPrefix, e.Registry, e.GasConfig)
+	parsed, err := ParseTx(tx, StandardContractScriptResolver(e.ContractPrefix))
+	if err != nil {
+		return err
+	}
+	return e.executeDeployTx(tx, parsed, contractframework.ContractTxFromParsed(tx, parsed, ContractTypeTemplate))
+}
+
+func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx contractcommon.Tx) error {
+	validated, err := contractframework.ValidateParsedDeployBasic(parsed, "template", e.GasConfig)
 	if err != nil {
 		return nil
 	}
-	runtime, err := templateDeployRuntime(validated)
+	deployer := contractTx.Actor
+	if deployer == "" {
+		return errors.New("template deployer is empty")
+	}
+	deployPayload := templateDeployPayloadFromFramework(&validated.Payload)
+	deployPayload.Type = ContractTypeTemplate
+	addr, _, err := DeriveContractAddress(
+		e.ContractPrefix,
+		deployPayload.ContractContent,
+		deployer,
+		deployPayload.DeployNonce,
+	)
+	if err != nil {
+		return err
+	}
+	runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, e.Registry, deployer)
+	if err != nil {
+		return err
+	}
+	fundingOutputs, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(e.ContractPrefix), addr)
 	if err != nil {
 		return err
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
-	if err := runtime.ApplyFunding(validated.FundingOutputs, e.GasConfig.GasAssetName); err != nil {
+	if err := runtime.ApplyFunding(fundingOutputs, e.GasConfig.GasAssetName); err != nil {
 		return nil
 	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
@@ -417,11 +441,11 @@ func (e *Backend) executeDeploy(tx *wire.MsgTx) error {
 		TxID:           tx.TxID(),
 		Type:           TxTypeDeploy,
 		Kind:           ExecutionKindDeploy,
-		CallID:         DeriveDeployCallID(tx.TxID(), validated.Address),
-		Contract:       validated.Address,
+		CallID:         DeriveDeployCallID(tx.TxID(), addr),
+		Contract:       addr,
 		Status:         ResultStatusSuccess,
 		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  contractframework.ContractOutputOutPoints(validated.FundingOutputs),
+		FundingInputs:  contractframework.ContractOutputOutPoints(fundingOutputs),
 		RequiresResult: true,
 	}
 	outcome.GasFee = resultFee
@@ -460,15 +484,15 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		}
 	}
 	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
-	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Data); err != nil {
+	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
 		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee)
 	}
-	if err := runtime.CheckInvokeFunding(validated.Payload.Action, validated.Payload.Data, validated.FundingOutputs); err != nil {
+	if err := runtime.CheckInvokeFunding(validated.Payload.Action, validated.Payload.Param, validated.FundingOutputs); err != nil {
 		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee)
 	}
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:         validated.Payload.Action,
-		Param:          validated.Payload.Data,
+		Param:          validated.Payload.Param,
 		CallID:         callID,
 		Invoker:        invoker,
 		FundingOutputs: validated.FundingOutputs,
@@ -517,7 +541,7 @@ func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, runtime *ContractRuntime,
 	}
 	item, err := runtime.ApplyInvalidInvoke(ApplyInvokeRequest{
 		Action:         validated.Payload.Action,
-		Param:          validated.Payload.Data,
+		Param:          validated.Payload.Param,
 		CallID:         callID,
 		Invoker:        invoker,
 		FundingOutputs: validated.FundingOutputs,

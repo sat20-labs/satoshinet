@@ -52,7 +52,7 @@ func TestValidateInvokeTxBasicRejectsMissingContract(t *testing.T) {
 func TestValidateDeployTxBasic(t *testing.T) {
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
-	script, err := evmcommon.DeployNullDataScript(DeployPayload{GasLimit: DefaultGasConfig().DeployBaseGas, DeployNonce: 1, InitCode: []byte{0x60, 0x00}})
+	script, err := evmcommon.DeployNullDataScript(DeployPayload{GasLimit: DefaultGasConfig().DeployBaseGas, DeployNonce: 1, ContractContent: []byte{0x60, 0x00}})
 	require.NoError(t, err)
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 

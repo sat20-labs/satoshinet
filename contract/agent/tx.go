@@ -16,16 +16,17 @@ var FindInvokeContractOutputs = contractframework.FindInvokeContractOutputsFunc(
 
 var FindContractOutputsForContract = contractframework.FindContractOutputsForContractFunc()
 
-type DeployTxBuildRequest = contractcommon.AgentDeployTxBuildRequest
+type DeployTxBuildRequest = contractcommon.DeployTxBuildRequest
 
-type InvokeTxBuildRequest = contractcommon.AgentInvokeTxBuildRequest
+type InvokeTxBuildRequest = contractcommon.InvokeTxBuildRequest
 
 func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
-	return contractcommon.BuildAgentDeployTx(req)
+	req.Type = ContractTypeAgent
+	return contractcommon.BuildDeployTx(req)
 }
 
 func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
-	return contractcommon.BuildAgentInvokeTx(req)
+	return contractcommon.BuildInvokeTx(req)
 }
 
 func agentParseSpec() contractframework.ParseSpec {
@@ -38,12 +39,12 @@ func agentParseSpec() contractframework.ParseSpec {
 				return contractframework.DeployPayload{}, err
 			}
 			return contractframework.DeployPayload{
-				GasLimit: payload.GasLimit,
-				Name:     payload.Subtype,
-				Version:  payload.AgentVersion,
-				Deployer: payload.Deployer,
-				Random:   contractframework.CloneBytes(payload.Random),
-				Code:     contractframework.CloneBytes(payload.ContractContent),
+				Type:            payload.Type,
+				SubType:         payload.SubType,
+				Version:         payload.Version,
+				GasLimit:        payload.GasLimit,
+				DeployNonce:     payload.DeployNonce,
+				ContractContent: contractframework.CloneBytes(payload.ContractContent),
 			}, nil
 		},
 		DecodeInvoke: func(data []byte) (contractframework.InvokePayload, error) {
@@ -55,7 +56,7 @@ func agentParseSpec() contractframework.ParseSpec {
 				GasLimit:  payload.GasLimit,
 				CallNonce: payload.CallNonce,
 				Action:    payload.Action,
-				Data:      contractframework.CloneBytes(payload.Param),
+				Param:     contractframework.CloneBytes(payload.Param),
 			}, nil
 		},
 	})
@@ -66,36 +67,41 @@ func agentDeployPayloadFromFramework(payload *contractframework.DeployPayload) *
 		return nil
 	}
 	return &DeployPayload{
+		Type:            ContractTypeAgent,
+		SubType:         payload.SubType,
+		Version:         payload.Version,
 		GasLimit:        payload.GasLimit,
-		Subtype:         payload.Name,
-		AgentVersion:    payload.Version,
-		Deployer:        payload.Deployer,
-		Random:          contractframework.CloneBytes(payload.Random),
-		ContractContent: contractframework.CloneBytes(payload.Code),
+		DeployNonce:     payload.DeployNonce,
+		ContractContent: contractframework.CloneBytes(payload.ContractContent),
 	}
 }
 
 func ValidateDeployTxBasic(tx *wire.MsgTx, prefix string, cfg RuntimeConfig, gasCfg GasConfig) (DeployValidation, error) {
+	return ValidateDeployTxBasicWithActor(tx, prefix, cfg, gasCfg, "")
+}
+
+func ValidateDeployTxBasicWithActor(tx *wire.MsgTx, prefix string, cfg RuntimeConfig, gasCfg GasConfig, actor string) (DeployValidation, error) {
 	return contractframework.ValidateDeployWithRuntime(contractframework.DeployValidationRequest{
 		Tx:         tx,
 		Prefix:     prefix,
 		ModuleName: "agent",
 		ParseSpec:  agentParseSpec(),
 		GasConfig:  gasCfg,
+		Actor:      actor,
 		Resolver:   StandardContractScriptResolver,
-		BuildRuntime: func(payload contractframework.DeployPayload) (ContractAddress, any, error) {
+		BuildRuntime: func(payload contractframework.DeployPayload, deployer string) (ContractAddress, any, error) {
 			addr, _, err := DeriveContractAddress(
 				prefix,
-				payload.Name,
-				payload.Code,
-				payload.Deployer,
-				payload.Random,
+				payload.SubType,
+				payload.ContractContent,
+				deployer,
+				payload.DeployNonce,
 			)
 			if err != nil {
 				return ContractAddress{}, nil, err
 			}
 			deployPayload := agentDeployPayloadFromFramework(&payload)
-			runtime, err := NewRuntime(addr, *deployPayload, cfg)
+			runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, cfg, deployer)
 			if err != nil {
 				return ContractAddress{}, nil, err
 			}

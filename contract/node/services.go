@@ -128,7 +128,7 @@ func newBlockValidator(cfg Config) (blockchain.ContractBlockValidator, error) {
 	}), nil
 }
 
-func NewEVMBlockValidator(cfg Config) (EVMBlockValidator, error) {
+func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 	gasConfig := evmGasConfigFromCommon(cfg.GasConfig)
 	if gasConfig == (evm.GasConfig{}) {
 		gasConfig = evm.DefaultGasConfig()
@@ -147,7 +147,7 @@ func NewEVMBlockValidator(cfg Config) (EVMBlockValidator, error) {
 	}), nil
 }
 
-func NewTemplateBlockValidator(cfg Config) (TemplateBlockValidator, error) {
+func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 	gasConfig := templateGasConfigFromCommon(cfg.GasConfig, cfg)
 	if gasConfig == (tmplcontract.GasConfig{}) {
 		gasConfig = tmplcontract.DefaultGasConfig()
@@ -168,7 +168,7 @@ func NewTemplateBlockValidator(cfg Config) (TemplateBlockValidator, error) {
 	}), nil
 }
 
-func NewAgentBlockValidator(cfg Config) (AgentBlockValidator, error) {
+func NewAgentBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 	gasConfig := agentGasConfigFromCommon(cfg.GasConfig)
 	if gasConfig == (agentcontract.GasConfig{}) {
 		gasConfig = agentcontract.DefaultGasConfig()

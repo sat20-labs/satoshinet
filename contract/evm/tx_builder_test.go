@@ -14,11 +14,11 @@ func TestBuildDeployTx(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	prev := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
 	tx, contract, err := BuildDeployTx(DeployTxBuildRequest{
-		ContractPrefix: TestnetContractPrefix,
-		Caller:         caller,
-		GasLimit:       100000,
-		DeployNonce:    3,
-		InitCode:       []byte{0x60, 0x00},
+		ContractPrefix:  TestnetContractPrefix,
+		Deployer:        caller.String(),
+		GasLimit:        100000,
+		DeployNonce:     3,
+		ContractContent: []byte{0x60, 0x00},
 		Funding: wire.TxOut{Assets: wire.TxAssets{{
 			Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
 			Amount: *mustDefaultDecimal(t, 100000),
@@ -51,11 +51,11 @@ func TestBuildDeployTxSplitsLargeInitCode(t *testing.T) {
 		initCode[i] = byte(i)
 	}
 	tx, contract, err := BuildDeployTx(DeployTxBuildRequest{
-		ContractPrefix: TestnetContractPrefix,
-		Caller:         caller,
-		GasLimit:       100000,
-		DeployNonce:    4,
-		InitCode:       initCode,
+		ContractPrefix:  TestnetContractPrefix,
+		Deployer:        caller.String(),
+		GasLimit:        100000,
+		DeployNonce:     4,
+		ContractContent: initCode,
 		Funding: wire.TxOut{Assets: wire.TxAssets{{
 			Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
 			Amount: *mustDefaultDecimal(t, 100000),
@@ -67,7 +67,7 @@ func TestBuildDeployTxSplitsLargeInitCode(t *testing.T) {
 
 	parsed, err := ParseTx(tx, StandardContractScriptResolver(TestnetContractPrefix))
 	require.NoError(t, err)
-	require.Equal(t, initCode, parsed.Deploy.Code)
+	require.Equal(t, initCode, parsed.Deploy.ContractContent)
 	funding, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(TestnetContractPrefix), contract)
 	require.NoError(t, err)
 	require.Len(t, funding, 1)
@@ -80,7 +80,7 @@ func TestBuildInvokeTx(t *testing.T) {
 		Contract:  contract,
 		GasLimit:  100000,
 		CallNonce: 9,
-		Calldata:  []byte{0xde, 0xad, 0xbe, 0xef},
+		Param:     []byte{0xde, 0xad, 0xbe, 0xef},
 		Funding: wire.TxOut{
 			Value: 77,
 			Assets: wire.TxAssets{{
@@ -99,16 +99,16 @@ func TestBuildInvokeTx(t *testing.T) {
 	require.Len(t, parsed.ContractOutputs, 1)
 	require.True(t, contract.Equal(parsed.ContractOutputs[0].Contract))
 	require.Equal(t, int64(77), parsed.ContractOutputs[0].Value)
-	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, parsed.Invoke.Data)
+	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, parsed.Invoke.Param)
 }
 
 func TestBuildEVMTxRejectsInvalidFunding(t *testing.T) {
 	_, _, err := BuildDeployTx(DeployTxBuildRequest{
-		Caller:      mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233"),
-		GasLimit:    1,
-		DeployNonce: 1,
-		InitCode:    []byte{0x60, 0x00},
-		Funding:     wire.TxOut{},
+		Deployer:        mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233").String(),
+		GasLimit:        1,
+		DeployNonce:     1,
+		ContractContent: []byte{0x60, 0x00},
+		Funding:         wire.TxOut{},
 	})
 	require.Error(t, err)
 

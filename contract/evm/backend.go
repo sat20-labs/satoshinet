@@ -580,7 +580,7 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return nil
 	}
-	expectedContract, err := DeriveCreateContractAddress(e.ContractPrefix, caller, validated.Payload.Nonce)
+	expectedContract, err := DeriveCreateContractAddress(e.ContractPrefix, caller, validated.Payload.DeployNonce)
 	if err != nil {
 		return nil
 	}
@@ -597,9 +597,9 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	result := e.Runtime.Deploy(DeployRequest{
 		Caller:      caller,
 		CallID:      callID,
-		InitCode:    validated.Payload.Code,
+		InitCode:    validated.Payload.ContractContent,
 		Gas:         validated.Payload.GasLimit,
-		DeployNonce: validated.Payload.Nonce,
+		DeployNonce: validated.Payload.DeployNonce,
 		Block:       e.Block,
 	})
 	if !result.Contract.Equal(expectedContract) {
@@ -654,7 +654,7 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		Caller: caller,
 		Target: ContractAddressHash(validated.Contract),
 		CallID: callID,
-		Input:  validated.Payload.Data,
+		Input:  validated.Payload.Param,
 		Gas:    validated.Payload.GasLimit,
 		Value:  validated.MsgValue,
 		Block:  e.Block,

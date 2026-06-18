@@ -34,7 +34,7 @@ func ValidateParsedDeployBasic(parsed ParsedTx, moduleName string, cfg GasConfig
 	return DeployValidation{Payload: *parsed.Deploy}, nil
 }
 
-type DeployRuntimeBuilder func(DeployPayload) (contract.ContractAddress, any, error)
+type DeployRuntimeBuilder func(DeployPayload, string) (contract.ContractAddress, any, error)
 
 type DeployValidationRequest struct {
 	Tx           *wire.MsgTx
@@ -42,6 +42,7 @@ type DeployValidationRequest struct {
 	ModuleName   string
 	ParseSpec    ParseSpec
 	GasConfig    GasConfig
+	Actor        string
 	Resolver     func(string) ContractScriptResolver
 	BuildRuntime DeployRuntimeBuilder
 }
@@ -61,7 +62,7 @@ func ValidateDeployWithRuntime(req DeployValidationRequest) (DeployValidation, e
 	if err != nil {
 		return DeployValidation{}, err
 	}
-	addr, runtime, err := req.BuildRuntime(validated.Payload)
+	addr, runtime, err := req.BuildRuntime(validated.Payload, req.Actor)
 	if err != nil {
 		return DeployValidation{}, err
 	}

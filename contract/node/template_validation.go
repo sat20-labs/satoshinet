@@ -121,6 +121,12 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 	return nil
 }
 
+func (v *TemplateBlockExecutionValidator) ValidateContractModuleBlock(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) error {
+
+	return v.ValidateTemplateBlock(block, view)
+}
+
 func (v *TemplateBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
 	view *blockchain.UtxoViewpoint) (bool, error) {
 
@@ -144,6 +150,14 @@ func (v *TemplateBlockExecutionValidator) TemplateBlockPostState(hash *chainhash
 		return nil, false
 	}
 	return state.Clone(), true
+}
+
+func (v *TemplateBlockExecutionValidator) BlockPostState(hash *chainhash.Hash) (contractframework.EngineState, bool) {
+	state, ok := v.TemplateBlockPostState(hash)
+	if !ok || state == nil {
+		return nil, false
+	}
+	return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
 }
 
 func (v *TemplateBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, state *template.RuntimeStore) {

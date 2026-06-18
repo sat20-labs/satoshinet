@@ -111,10 +111,11 @@ func TestContractIndexerCheckSelfRejectsHistoryWithoutSummary(t *testing.T) {
 
 func buildTestTemplateDeployTx(t *testing.T) (*wire.MsgTx, contractcommon.ContractAddress) {
 	t.Helper()
-	tx, addr, err := contractcommon.BuildTemplateDeployTx(contractcommon.TemplateDeployTxBuildRequest{
-		TemplateName:    contractcommon.TemplateLimitOrder,
+	tx, addr, err := contractcommon.BuildDeployTx(contractcommon.DeployTxBuildRequest{
+		Type:            contractcommon.ContractTypeTemplate,
+		SubType:         contractcommon.TemplateLimitOrder,
 		Deployer:        "deployer",
-		Random:          []byte("random"),
+		DeployNonce:     1,
 		ContractContent: []byte(`{"assetName":"ordx:ft:test"}`),
 		GasLimit:        contractcommon.DeployBaseGas,
 		Funding:         wire.TxOut{Value: 1},
@@ -125,7 +126,7 @@ func buildTestTemplateDeployTx(t *testing.T) (*wire.MsgTx, contractcommon.Contra
 
 func buildTestTemplateInvokeTx(t *testing.T, contractAddr contractcommon.ContractAddress) *wire.MsgTx {
 	t.Helper()
-	tx, err := contractcommon.BuildTemplateInvokeTx(contractcommon.TemplateInvokeTxBuildRequest{
+	tx, err := contractcommon.BuildInvokeTx(contractcommon.InvokeTxBuildRequest{
 		Contract:  contractAddr,
 		GasLimit:  contractcommon.InvokeBaseGas,
 		CallNonce: 1,

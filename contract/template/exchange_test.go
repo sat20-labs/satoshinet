@@ -22,6 +22,9 @@ func TestExchangeDefaultFundAndBuy(t *testing.T) {
 		Store:     store,
 		GasConfig: gasConfig,
 		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			if contractTx.Kind == TxTypeDeploy {
+				return "deployer-address", nil
+			}
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -75,6 +78,9 @@ func TestExchangeDefaultInvokeRetainsAssetB(t *testing.T) {
 		Store:     store,
 		GasConfig: gasConfig,
 		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			if contractTx.Kind == TxTypeDeploy {
+				return "deployer-address", nil
+			}
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -114,6 +120,9 @@ func TestExchangeDefaultInvokeRetainsAssetA(t *testing.T) {
 		Store:     store,
 		GasConfig: gasConfig,
 		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			if contractTx.Kind == TxTypeDeploy {
+				return "deployer-address", nil
+			}
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -154,6 +163,9 @@ func TestExchangeDefaultBuyWithSatoshiAssetB(t *testing.T) {
 		Store:     store,
 		GasConfig: gasConfig,
 		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			if contractTx.Kind == TxTypeDeploy {
+				return "deployer-address", nil
+			}
 			if tx == buyTx {
 				return "buyer-address", nil
 			}
@@ -202,6 +214,9 @@ func TestExchangeSoldAmountPriceTiersWithinSingleInvoke(t *testing.T) {
 		Store:     store,
 		GasConfig: gasConfig,
 		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			if contractTx.Kind == TxTypeDeploy {
+				return "deployer-address", nil
+			}
 			if tx == buyTx {
 				return "buyer-address", nil
 			}

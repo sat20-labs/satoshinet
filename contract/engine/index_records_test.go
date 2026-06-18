@@ -15,7 +15,7 @@ func TestBuildContractIndexRecordsIncludesTemplateDeploy(t *testing.T) {
 		ContractPrefix: tmplcontract.TestnetContractPrefix,
 		Contract:       tmplcontract.NewLimitOrderContract("ordx:f:test"),
 		Deployer:       "template-indexer-test",
-		Random:         []byte("template-indexer-random"),
+		DeployNonce:    7,
 		GasLimit:       1000,
 		Funding:        wire.TxOut{Value: 1},
 	})
@@ -52,7 +52,7 @@ func TestBuildContractIndexRecordsIncludesTemplateInvokeFunding(t *testing.T) {
 		ContractPrefix: tmplcontract.TestnetContractPrefix,
 		Contract:       tmplcontract.NewLimitOrderContract("ordx:f:test"),
 		Deployer:       "template-indexer-test",
-		Random:         []byte("template-indexer-random"),
+		DeployNonce:    7,
 		GasLimit:       1000,
 		Funding:        wire.TxOut{Value: 1},
 	})

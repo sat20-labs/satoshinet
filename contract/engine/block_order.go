@@ -160,10 +160,10 @@ func classifyDefaultInvokeForBlockOrder(tx *wire.MsgTx, prefix string) (TxClass,
 func deployGasLimit(contractType byte, payload []byte) (int64, error) {
 	switch contractType {
 	case contractcommon.ContractTypeTemplate:
-		deploy, err := contractcommon.DecodeTemplateDeployPayload(payload)
+		deploy, err := contractcommon.DecodeDeployPayload(payload)
 		return gasLimitFromDecoded(deploy.GasLimit, err)
 	case contractcommon.ContractTypeAgent:
-		deploy, err := contractcommon.DecodeAgentDeployPayload(payload)
+		deploy, err := contractcommon.DecodeDeployPayload(payload)
 		return gasLimitFromDecoded(deploy.GasLimit, err)
 	case contractcommon.ContractTypeEVM:
 		deploy, err := contractcommon.DecodeDeployPayload(payload)
@@ -176,10 +176,10 @@ func deployGasLimit(contractType byte, payload []byte) (int64, error) {
 func invokeGasLimit(contractType byte, payload []byte) (int64, error) {
 	switch contractType {
 	case contractcommon.ContractTypeTemplate:
-		invoke, err := contractcommon.DecodeTemplateInvokePayload(payload)
+		invoke, err := contractcommon.DecodeInvokePayload(payload)
 		return gasLimitFromDecoded(invoke.GasLimit, err)
 	case contractcommon.ContractTypeAgent:
-		invoke, err := contractcommon.DecodeAgentInvokePayload(payload)
+		invoke, err := contractcommon.DecodeInvokePayload(payload)
 		return gasLimitFromDecoded(invoke.GasLimit, err)
 	case contractcommon.ContractTypeEVM:
 		invoke, err := contractcommon.DecodeInvokePayload(payload)

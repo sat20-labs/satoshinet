@@ -7,6 +7,8 @@ type EngineState interface {
 	Snapshot() any
 }
 
+type RuntimeStore = EngineState
+
 type RootEngineState struct {
 	StateRoot     [32]byte
 	StateSnapshot any

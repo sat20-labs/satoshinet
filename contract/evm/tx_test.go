@@ -13,7 +13,7 @@ func TestParseInvokeTxFindsContractOutputs(t *testing.T) {
 	contract := testContract(t)
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
-	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: 1000, CallNonce: 9, Calldata: []byte{1, 2, 3}})
+	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: 1000, CallNonce: 9, Param: []byte{1, 2, 3}})
 	require.NoError(t, err)
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
 	tx.AddTxOut(wire.NewTxOut(10, wire.TxAssets{{
@@ -41,9 +41,9 @@ func TestParseDeployTxCombinesMultipleOPReturns(t *testing.T) {
 		initCode[i] = byte(255 - i)
 	}
 	scripts, err := evmcommon.DeployNullDataScripts(DeployPayload{
-		GasLimit:    5000,
-		DeployNonce: 3,
-		InitCode:    initCode,
+		GasLimit:        5000,
+		DeployNonce:     3,
+		ContractContent: initCode,
 	})
 	require.NoError(t, err)
 	require.Len(t, scripts, 2)
@@ -59,8 +59,8 @@ func TestParseDeployTxCombinesMultipleOPReturns(t *testing.T) {
 	require.Equal(t, TxTypeDeploy, parsed.Type)
 	require.NotNil(t, parsed.Deploy)
 	require.Equal(t, int64(5000), parsed.Deploy.GasLimit)
-	require.Equal(t, uint64(3), parsed.Deploy.Nonce)
-	require.Equal(t, initCode, parsed.Deploy.Code)
+	require.Equal(t, uint64(3), parsed.Deploy.DeployNonce)
+	require.Equal(t, initCode, parsed.Deploy.ContractContent)
 }
 
 func TestParseInvokeTxRejectsMultipleContracts(t *testing.T) {
@@ -83,9 +83,9 @@ func TestParseInvokeTxRejectsMultipleContracts(t *testing.T) {
 func TestParseTxRejectsMixedEVMOPReturns(t *testing.T) {
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
-	deployScript, err := evmcommon.DeployNullDataScript(DeployPayload{GasLimit: 1000, DeployNonce: 1, InitCode: []byte{1}})
+	deployScript, err := evmcommon.DeployNullDataScript(DeployPayload{GasLimit: 1000, DeployNonce: 1, ContractContent: []byte{1}})
 	require.NoError(t, err)
-	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: 1000, CallNonce: 1, Calldata: []byte{2}})
+	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{GasLimit: 1000, CallNonce: 1, Param: []byte{2}})
 	require.NoError(t, err)
 	tx.AddTxOut(wire.NewTxOut(0, nil, deployScript))
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))

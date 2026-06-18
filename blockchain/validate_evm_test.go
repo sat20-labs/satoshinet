@@ -26,9 +26,11 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 	ordinary.AddTxOut(&wire.TxOut{PkScript: []byte{txscript.OP_TRUE}})
 
 	deployScript, err := contract.DeployNullDataScript(contract.DeployPayload{
+		Type:        contract.ContractTypeEVM,
+		SubType:     "sol",
 		GasLimit:    1,
 		DeployNonce: 1,
-		InitCode:    []byte{0x60, 0x00},
+		ContractContent:    []byte{0x60, 0x00},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -122,9 +124,11 @@ func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
 		t.Fatal("invalid gas asset name")
 	}
 	deployScript, err := contract.DeployNullDataScript(contract.DeployPayload{
+		Type:        contract.ContractTypeEVM,
+		SubType:     "sol",
 		GasLimit:    contract.DeployBaseGas,
 		DeployNonce: 1,
-		InitCode:    []byte{0x60, 0x00},
+		ContractContent:    []byte{0x60, 0x00},
 	})
 	if err != nil {
 		t.Fatal(err)

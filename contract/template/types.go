@@ -59,8 +59,8 @@ const (
 	OrderTypeValidate        = 18
 	OrderTypeBind            = 19
 	OrderTypeClose           = 20
-	OrderTypeUnused          = 21
-	OrderTypeExchange        = 22
+	OrderTypeExchange        = 21
+	OrderTypeUnused          = 22
 )
 
 const (
@@ -150,8 +150,8 @@ type ResultOutputResolver = contractframework.ResultOutputResolver
 
 type TxOrderInfo = contractframework.TxOrderInfo
 
-type DeployPayload = contractcommon.TemplateDeployPayload
-type InvokePayload = contractcommon.TemplateInvokePayload
+type DeployPayload = contractcommon.DeployPayload
+type InvokePayload = contractcommon.InvokePayload
 
 const AddressHashLen = 32
 
@@ -203,19 +203,39 @@ func UpsertCoinbaseStateRoot(tx *wire.MsgTx, root [32]byte) error {
 }
 
 func EncodeDeployPayload(p DeployPayload) ([]byte, error) {
-	return contractcommon.EncodeTemplateDeployPayload(p)
+	p.Type = ContractTypeTemplate
+	if p.SubType == "" {
+		return nil, errors.New("template name is empty")
+	}
+	if p.Version == 0 {
+		return nil, errors.New("template version is zero")
+	}
+	if len(p.ContractContent) == 0 {
+		return nil, errors.New("contract content is empty")
+	}
+	return contractcommon.EncodeDeployPayload(p), nil
 }
 
 func DecodeDeployPayload(data []byte) (DeployPayload, error) {
-	return contractcommon.DecodeTemplateDeployPayload(data)
+	payload, err := contractcommon.DecodeDeployPayload(data)
+	if err != nil {
+		return DeployPayload{}, err
+	}
+	if payload.Type != ContractTypeTemplate {
+		return DeployPayload{}, fmt.Errorf("unexpected template deploy contract type %d", payload.Type)
+	}
+	return payload, nil
 }
 
 func EncodeInvokePayload(p InvokePayload) ([]byte, error) {
-	return contractcommon.EncodeTemplateInvokePayload(p)
+	if p.Action == "" {
+		return nil, errors.New("invoke action is empty")
+	}
+	return contractcommon.EncodeInvokePayload(p), nil
 }
 
 func DecodeInvokePayload(data []byte) (InvokePayload, error) {
-	return contractcommon.DecodeTemplateInvokePayload(data)
+	return contractcommon.DecodeInvokePayload(data)
 }
 
 func DeployNullDataScripts(p DeployPayload) ([][]byte, error) {
@@ -274,8 +294,8 @@ func ReadInvokeNullDataScript(script []byte) (InvokePayload, error) {
 	return DecodeInvokePayload(content)
 }
 
-func DeriveContractAddress(prefix string, encodedContract []byte, deployer string, random []byte) (ContractAddress, [AddressHashLen]byte, error) {
-	hash, err := DeriveContractHash(encodedContract, deployer, random)
+func DeriveContractAddress(prefix string, encodedContract []byte, deployer string, deployNonce uint64) (ContractAddress, [AddressHashLen]byte, error) {
+	hash, err := DeriveContractHash(encodedContract, deployer, deployNonce)
 	if err != nil {
 		return ContractAddress{}, [AddressHashLen]byte{}, err
 	}
@@ -291,22 +311,24 @@ func DeriveContractAddress(prefix string, encodedContract []byte, deployer strin
 	return addr, hash, nil
 }
 
-func DeriveContractHash(encodedContract []byte, deployer string, random []byte) ([AddressHashLen]byte, error) {
+func DeriveContractHash(encodedContract []byte, deployer string, deployNonce uint64) ([AddressHashLen]byte, error) {
 	if len(encodedContract) == 0 {
 		return [AddressHashLen]byte{}, errors.New("template contract content is empty")
 	}
 	if deployer == "" {
 		return [AddressHashLen]byte{}, errors.New("template contract deployer is empty")
 	}
-	if len(random) == 0 {
-		return [AddressHashLen]byte{}, errors.New("template contract random value is empty")
-	}
-
 	var buf bytes.Buffer
 	writeHashBytes(&buf, encodedContract)
 	writeHashBytes(&buf, []byte(deployer))
-	writeHashBytes(&buf, random)
+	writeHashUint64(&buf, deployNonce)
 	return sha256.Sum256(buf.Bytes()), nil
+}
+
+func writeHashUint64(buf *bytes.Buffer, v uint64) {
+	var tmp [8]byte
+	binary.BigEndian.PutUint64(tmp[:], v)
+	buf.Write(tmp[:])
 }
 
 func writeHashBytes(buf *bytes.Buffer, data []byte) {

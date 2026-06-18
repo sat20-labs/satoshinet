@@ -36,7 +36,7 @@ func (r *Runtime) buildSettlementPlan(confirm PredictionConfirmParam) (*Predicti
 		r.addRefundTransfers(plan)
 		return plan, nil
 	}
-	if r.deploy.Deployer == "" || r.config.AgentAddress == "" || r.config.BootstrapAddress == "" {
+	if r.deployer == "" || r.config.AgentAddress == "" || r.config.BootstrapAddress == "" {
 		return nil, fmt.Errorf("missing prediction fee recipient")
 	}
 
@@ -53,7 +53,7 @@ func (r *Runtime) buildSettlementPlan(confirm PredictionConfirmParam) (*Predicti
 	plan.BootstrapFeeBPS = PredictionBootstrapBPS
 	plan.WinnerPoolFeeBPS = PredictionWinnerPoolBPS
 	plan.Transfers = append(plan.Transfers,
-		settlementOutput(r.deploy.Deployer, r.contract.BetAsset, deployerFee, "deployer_fee"),
+		settlementOutput(r.deployer, r.contract.BetAsset, deployerFee, "deployer_fee"),
 		settlementOutput(r.config.AgentAddress, r.contract.BetAsset, agentFee, "agent_fee"),
 		settlementOutput(r.config.BootstrapAddress, r.contract.BetAsset, bootstrapFee, "bootstrap_fee"),
 	)

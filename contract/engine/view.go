@@ -201,38 +201,40 @@ func collectContractPayload(tx *wire.MsgTx) ([]byte, contractcommon.TxType, bool
 func fillDeployOp(op *TxOpView, contractType byte, payload []byte, prefix string) {
 	switch contractType {
 	case contractcommon.ContractTypeTemplate:
-		p, err := contractcommon.DecodeTemplateDeployPayload(payload)
+		p, err := contractcommon.DecodeDeployPayload(payload)
 		if err != nil {
 			op.Details = errorDetails(err)
 			return
 		}
-		op.GasLimit = p.GasLimit
-		op.Subtype = p.TemplateName
-		op.TemplateName = p.TemplateName
-		op.Version = p.TemplateVersion
-		op.Deployer = p.Deployer
-		if addr, _, err := contractcommon.DeriveTemplateContractAddress(prefix, p.ContractContent, p.Deployer, p.Random); err == nil {
-			op.Contract = addr.EncodeAddress()
+		if p.Type != contractcommon.ContractTypeTemplate {
+			op.Details = errorDetails(fmt.Errorf("unexpected template deploy contract type %d", p.Type))
+			return
 		}
+		op.GasLimit = p.GasLimit
+		op.Subtype = p.SubType
+		op.TemplateName = p.SubType
+		op.Version = p.Version
+		op.Nonce = p.DeployNonce
 		op.Details = map[string]interface{}{
-			"random":       hex.EncodeToString(p.Random),
+			"deploy_nonce": p.DeployNonce,
 			"content_size": len(p.ContractContent),
 		}
 	case contractcommon.ContractTypeAgent:
-		p, err := contractcommon.DecodeAgentDeployPayload(payload)
+		p, err := contractcommon.DecodeDeployPayload(payload)
 		if err != nil {
 			op.Details = errorDetails(err)
 			return
 		}
-		op.GasLimit = p.GasLimit
-		op.Subtype = p.Subtype
-		op.Version = p.AgentVersion
-		op.Deployer = p.Deployer
-		if addr, _, err := contractcommon.DeriveAgentContractAddress(prefix, p.Subtype, p.ContractContent, p.Deployer, p.Random); err == nil {
-			op.Contract = addr.EncodeAddress()
+		if p.Type != contractcommon.ContractTypeAgent {
+			op.Details = errorDetails(fmt.Errorf("unexpected agent deploy contract type %d", p.Type))
+			return
 		}
+		op.GasLimit = p.GasLimit
+		op.Subtype = p.SubType
+		op.Version = p.Version
+		op.Nonce = p.DeployNonce
 		op.Details = map[string]interface{}{
-			"random":       hex.EncodeToString(p.Random),
+			"deploy_nonce": p.DeployNonce,
 			"content_size": len(p.ContractContent),
 		}
 	default:
@@ -243,14 +245,16 @@ func fillDeployOp(op *TxOpView, contractType byte, payload []byte, prefix string
 		}
 		op.GasLimit = p.GasLimit
 		op.Nonce = p.DeployNonce
-		op.Details = map[string]interface{}{"init_code_size": len(p.InitCode)}
+		op.Subtype = p.SubType
+		op.Version = p.Version
+		op.Details = map[string]interface{}{"init_code_size": len(p.ContractContent)}
 	}
 }
 
 func fillInvokeOp(op *TxOpView, contractType byte, payload []byte) {
 	switch contractType {
 	case contractcommon.ContractTypeTemplate:
-		p, err := contractcommon.DecodeTemplateInvokePayload(payload)
+		p, err := contractcommon.DecodeInvokePayload(payload)
 		if err != nil {
 			op.Details = errorDetails(err)
 			return
@@ -260,7 +264,7 @@ func fillInvokeOp(op *TxOpView, contractType byte, payload []byte) {
 		op.Action = p.Action
 		op.Details = map[string]interface{}{"param_size": len(p.Param)}
 	case contractcommon.ContractTypeAgent:
-		p, err := contractcommon.DecodeAgentInvokePayload(payload)
+		p, err := contractcommon.DecodeInvokePayload(payload)
 		if err != nil {
 			op.Details = errorDetails(err)
 			return
@@ -277,7 +281,8 @@ func fillInvokeOp(op *TxOpView, contractType byte, payload []byte) {
 		}
 		op.GasLimit = p.GasLimit
 		op.Nonce = p.CallNonce
-		op.Details = map[string]interface{}{"calldata_size": len(p.Calldata)}
+		op.Action = p.Action
+		op.Details = map[string]interface{}{"calldata_size": len(p.Param)}
 	}
 }
 

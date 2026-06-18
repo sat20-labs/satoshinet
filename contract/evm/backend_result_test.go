@@ -29,7 +29,7 @@ func TestBuildBlockResultTxsDeployInvoke(t *testing.T) {
 	invokeTx := blockResultInvokeTx(t, contract, InvokePayload{
 		GasLimit:  evmcommon.InvokeBaseGas,
 		CallNonce: 1,
-		Calldata:  EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+		Param:     EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	}, gasAssetName, evmcommon.InvokeBaseGas)
 	assetHash := chainhash.Hash{8}
 	assetInput := OutPoint{TxID: assetHash.String(), Vout: 0}

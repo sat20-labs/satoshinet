@@ -126,9 +126,9 @@ func TestBackendDefaultInvokeEmptyCall(t *testing.T) {
 func TestBackendIgnoresInvalidDeploy(t *testing.T) {
 	tx := testDeployTx(t, 3, return42InitCode())
 	script, err := evmcommon.DeployNullDataScript(DeployPayload{
-		GasLimit:    0,
-		DeployNonce: 3,
-		InitCode:    return42InitCode(),
+		GasLimit:        0,
+		DeployNonce:     3,
+		ContractContent: return42InitCode(),
 	})
 	require.NoError(t, err)
 	tx.TxOut[0].PkScript = script
@@ -239,7 +239,7 @@ func TestBackendAssetIntentRequiresResultAndVerifier(t *testing.T) {
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
 		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
-		Calldata:  EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+		Param:     EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	})
 	resultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
 		{Hash: invokeTx.TxHash(), Index: 1},
@@ -460,9 +460,9 @@ func testDeployTx(t *testing.T, nonce uint64, initCode []byte) *wire.MsgTx {
 	contractScript, err := ContractPkScript(contract)
 	require.NoError(t, err)
 	script, err := evmcommon.DeployNullDataScript(DeployPayload{
-		GasLimit:    evmcommon.DeployBaseGas,
-		DeployNonce: nonce,
-		InitCode:    initCode,
+		GasLimit:        evmcommon.DeployBaseGas,
+		DeployNonce:     nonce,
+		ContractContent: initCode,
 	})
 	require.NoError(t, err)
 	tx := wire.NewMsgTx(2)

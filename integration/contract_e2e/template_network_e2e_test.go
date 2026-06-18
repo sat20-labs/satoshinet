@@ -4,6 +4,8 @@
 package contract_e2e
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -31,6 +33,11 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
+
+func deployNonceFromBytes(seed []byte) uint64 {
+	sum := sha256.Sum256(seed)
+	return binary.BigEndian.Uint64(sum[:8])
+}
 
 func TestNetworkTemplateLimitOrderContract(t *testing.T) {
 	fixture := newTemplateNetworkFixture(t, map[string]int64{
@@ -1388,7 +1395,7 @@ func buildTemplateDeployTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 		ContractPrefix: tmplcontract.TestnetContractPrefix,
 		Contract:       contract,
 		Deployer:       deployer,
-		Random:         random,
+		DeployNonce:    deployNonceFromBytes(random),
 		GasLimit:       networkTemplateDeployGasLimit(),
 		Funding:        funding,
 		Inputs:         inputs,
@@ -1462,14 +1469,14 @@ func buildTemplateWitnessEVMDeployTx(t *testing.T, fixture *templateNetworkFixtu
 
 	t.Helper()
 	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
-		ContractPrefix: evm.TestnetContractPrefix,
-		Caller:         evmAddressFromAddressString(fixture.spendAddress),
-		GasLimit:       networkEVMDeployGasLimit(),
-		DeployNonce:    nonce,
-		InitCode:       initCode,
-		Funding:        funding,
-		Inputs:         inputs,
-		ChangeOutputs:  changeOutputs,
+		ContractPrefix:  evm.TestnetContractPrefix,
+		Deployer:        evmAddressFromAddressString(fixture.spendAddress).String(),
+		GasLimit:        networkEVMDeployGasLimit(),
+		DeployNonce:     nonce,
+		ContractContent: initCode,
+		Funding:         funding,
+		Inputs:          inputs,
+		ExtraOutputs:    changeOutputs,
 	})
 	require.NoError(t, err)
 	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
@@ -1485,7 +1492,7 @@ func buildTemplateWitnessEVMInvokeTx(t *testing.T, fixture *templateNetworkFixtu
 		Contract:  contract,
 		GasLimit:  networkEVMInvokeGasLimit(),
 		CallNonce: nonce,
-		Calldata:  calldata,
+		Param:     calldata,
 		Funding:   funding,
 		Inputs:    inputs,
 	})

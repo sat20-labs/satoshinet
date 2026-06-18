@@ -9,21 +9,21 @@ import (
 
 func TestDeriveContractAddressUsesTemplateTypeAndHash32(t *testing.T) {
 	encoded := []byte{0x01, 0x02, 0x03}
-	random := []byte("random")
+	deployNonce := uint64(7)
 
-	addr, hash, err := DeriveContractAddress(contractcommon.TestnetContractPrefix, encoded, "deployer", random)
+	addr, hash, err := DeriveContractAddress(contractcommon.TestnetContractPrefix, encoded, "deployer", deployNonce)
 	require.NoError(t, err)
 	require.Equal(t, contractcommon.ContractTypeTemplate, addr.ContractType())
 	require.Equal(t, hash[:], contractcommon.ContractAddressHashBytes(addr))
 	require.Len(t, contractcommon.ContractAddressHashBytes(addr), AddressHashLen)
 }
 
-func TestDeriveContractAddressRandomChangesAddress(t *testing.T) {
+func TestDeriveContractAddressDeployNonceChangesAddress(t *testing.T) {
 	encoded := []byte{0x01, 0x02, 0x03}
 
-	addr1, _, err := DeriveContractAddress(contractcommon.TestnetContractPrefix, encoded, "deployer", []byte("random-1"))
+	addr1, _, err := DeriveContractAddress(contractcommon.TestnetContractPrefix, encoded, "deployer", 1)
 	require.NoError(t, err)
-	addr2, _, err := DeriveContractAddress(contractcommon.TestnetContractPrefix, encoded, "deployer", []byte("random-2"))
+	addr2, _, err := DeriveContractAddress(contractcommon.TestnetContractPrefix, encoded, "deployer", 2)
 	require.NoError(t, err)
 	require.False(t, addr1.Equal(addr2))
 }

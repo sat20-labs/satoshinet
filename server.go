@@ -2845,15 +2845,15 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 	if funding.ChangeOutput != nil {
 		changeOutputs = append(changeOutputs, funding.ChangeOutput)
 	}
-	tx, err := contractcommon.BuildAgentInvokeTx(contractcommon.AgentInvokeTxBuildRequest{
-		Contract:      contract,
-		GasLimit:      gasConfig.InvokeBaseGas,
-		CallNonce:     uint64(time.Now().UnixNano()),
-		Action:        action,
-		Param:         param,
-		Funding:       wire.TxOut{},
-		Inputs:        funding.InputOutPoints(),
-		ChangeOutputs: changeOutputs,
+	tx, err := contractcommon.BuildInvokeTx(contractcommon.InvokeTxBuildRequest{
+		Contract:     contract,
+		GasLimit:     gasConfig.InvokeBaseGas,
+		CallNonce:    uint64(time.Now().UnixNano()),
+		Action:       action,
+		Param:        param,
+		Funding:      wire.TxOut{},
+		Inputs:       funding.InputOutPoints(),
+		ExtraOutputs: changeOutputs,
 	})
 	if err != nil {
 		return nil, err
@@ -2963,10 +2963,10 @@ func (s *server) agentInvokeInMempool(contract contractcommon.ContractAddress, a
 	return false
 }
 
-func parseAgentInvokeTx(tx *wire.MsgTx, prefix string) (contractcommon.AgentInvokePayload,
+func parseAgentInvokeTx(tx *wire.MsgTx, prefix string) (contractcommon.InvokePayload,
 	[]contractcommon.ContractAddress, error) {
 
-	var invoke contractcommon.AgentInvokePayload
+	var invoke contractcommon.InvokePayload
 	if tx == nil {
 		return invoke, nil, fmt.Errorf("missing transaction")
 	}
@@ -2997,7 +2997,7 @@ func parseAgentInvokeTx(tx *wire.MsgTx, prefix string) (contractcommon.AgentInvo
 	for _, part := range payloadParts {
 		payload = append(payload, part...)
 	}
-	invoke, err := contractcommon.DecodeAgentInvokePayload(payload)
+	invoke, err := contractcommon.DecodeInvokePayload(payload)
 	return invoke, outputs, err
 }
 

@@ -8,44 +8,15 @@ import (
 	"io"
 )
 
-type TemplateDeployPayload struct {
-	GasLimit        int64
-	TemplateName    string
-	TemplateVersion uint32
-	Deployer        string
-	Random          []byte
-	ContractContent []byte
-}
-
-type TemplateInvokePayload struct {
-	GasLimit  int64
-	CallNonce uint64
-	Action    string
-	Param     []byte
-}
-
-type AgentDeployPayload struct {
-	GasLimit        int64
-	Subtype         string
-	AgentVersion    uint32
-	Deployer        string
-	Random          []byte
-	ContractContent []byte
-}
-
-type AgentInvokePayload struct {
-	GasLimit  int64
-	CallNonce uint64
-	Action    string
-	Param     []byte
-}
-
 func EncodeDeployPayload(p DeployPayload) []byte {
 	var buf bytes.Buffer
 	buf.WriteByte(PayloadVersionV1)
+	buf.WriteByte(p.Type)
+	writeString(&buf, p.SubType)
+	writeUvarint(&buf, uint64(p.Version))
 	writeGasUvarint(&buf, p.GasLimit)
 	writeUvarint(&buf, p.DeployNonce)
-	buf.Write(p.InitCode)
+	writeBytes(&buf, p.ContractContent)
 	return buf.Bytes()
 }
 
@@ -53,6 +24,21 @@ func DecodeDeployPayload(data []byte) (DeployPayload, error) {
 	r, err := newPayloadReader(data)
 	if err != nil {
 		return DeployPayload{}, err
+	}
+	contractType, err := r.readByte()
+	if err != nil {
+		return DeployPayload{}, fmt.Errorf("decode deploy contract type: %w", err)
+	}
+	subtype, err := r.readString()
+	if err != nil {
+		return DeployPayload{}, fmt.Errorf("decode deploy subtype: %w", err)
+	}
+	version, err := r.readUvarint()
+	if err != nil {
+		return DeployPayload{}, fmt.Errorf("decode deploy version: %w", err)
+	}
+	if version > uint64(^uint32(0)) {
+		return DeployPayload{}, errors.New("deploy version overflows uint32")
 	}
 	gasLimit, err := r.readUvarint()
 	if err != nil {
@@ -66,10 +52,20 @@ func DecodeDeployPayload(data []byte) (DeployPayload, error) {
 	if err != nil {
 		return DeployPayload{}, fmt.Errorf("decode deploy nonce: %w", err)
 	}
+	content, err := r.readBytes()
+	if err != nil {
+		return DeployPayload{}, fmt.Errorf("decode deploy contract content: %w", err)
+	}
+	if r.remaining() != 0 {
+		return DeployPayload{}, errors.New("trailing deploy payload bytes")
+	}
 	return DeployPayload{
-		GasLimit:    gasLimitInt,
-		DeployNonce: nonce,
-		InitCode:    r.readRemaining(),
+		Type:            contractType,
+		SubType:         subtype,
+		Version:         uint32(version),
+		GasLimit:        gasLimitInt,
+		DeployNonce:     nonce,
+		ContractContent: content,
 	}, nil
 }
 
@@ -78,7 +74,8 @@ func EncodeInvokePayload(p InvokePayload) []byte {
 	buf.WriteByte(PayloadVersionV1)
 	writeGasUvarint(&buf, p.GasLimit)
 	writeUvarint(&buf, p.CallNonce)
-	buf.Write(p.Calldata)
+	writeString(&buf, p.Action)
+	writeBytes(&buf, p.Param)
 	return buf.Bytes()
 }
 
@@ -99,10 +96,22 @@ func DecodeInvokePayload(data []byte) (InvokePayload, error) {
 	if err != nil {
 		return InvokePayload{}, fmt.Errorf("decode invoke nonce: %w", err)
 	}
+	action, err := r.readString()
+	if err != nil {
+		return InvokePayload{}, fmt.Errorf("decode invoke action: %w", err)
+	}
+	param, err := r.readBytes()
+	if err != nil {
+		return InvokePayload{}, fmt.Errorf("decode invoke param: %w", err)
+	}
+	if r.remaining() != 0 {
+		return InvokePayload{}, errors.New("trailing invoke payload bytes")
+	}
 	return InvokePayload{
 		GasLimit:  gasLimitInt,
 		CallNonce: nonce,
-		Calldata:  r.readRemaining(),
+		Action:    action,
+		Param:     param,
 	}, nil
 }
 
@@ -178,248 +187,6 @@ func DecodeStateRootPayload(data []byte) (StateRootPayload, error) {
 		return StateRootPayload{}, errors.New("trailing state root payload bytes")
 	}
 	return StateRootPayload{StateRoot: root}, nil
-}
-
-func EncodeTemplateDeployPayload(p TemplateDeployPayload) ([]byte, error) {
-	if p.TemplateName == "" {
-		return nil, errors.New("template name is empty")
-	}
-	if p.TemplateVersion == 0 {
-		return nil, errors.New("template version is zero")
-	}
-	if p.Deployer == "" {
-		return nil, errors.New("deployer is empty")
-	}
-	if len(p.Random) == 0 {
-		return nil, errors.New("random value is empty")
-	}
-	if len(p.ContractContent) == 0 {
-		return nil, errors.New("contract content is empty")
-	}
-
-	var buf bytes.Buffer
-	buf.WriteByte(PayloadVersionV1)
-	writeGasUvarint(&buf, p.GasLimit)
-	writeString(&buf, p.TemplateName)
-	writeUvarint(&buf, uint64(p.TemplateVersion))
-	writeString(&buf, p.Deployer)
-	writeBytes(&buf, p.Random)
-	writeBytes(&buf, p.ContractContent)
-	return buf.Bytes(), nil
-}
-
-func EncodeTemplateInvokePayload(p TemplateInvokePayload) ([]byte, error) {
-	if p.Action == "" {
-		return nil, errors.New("invoke action is empty")
-	}
-	var buf bytes.Buffer
-	buf.WriteByte(PayloadVersionV1)
-	writeGasUvarint(&buf, p.GasLimit)
-	writeUvarint(&buf, p.CallNonce)
-	writeString(&buf, p.Action)
-	writeBytes(&buf, p.Param)
-	return buf.Bytes(), nil
-}
-
-func EncodeAgentDeployPayload(p AgentDeployPayload) ([]byte, error) {
-	if p.Subtype == "" {
-		return nil, errors.New("agent subtype is empty")
-	}
-	if p.AgentVersion == 0 {
-		return nil, errors.New("agent version is zero")
-	}
-	if p.Deployer == "" {
-		return nil, errors.New("deployer is empty")
-	}
-	if len(p.Random) == 0 {
-		return nil, errors.New("random value is empty")
-	}
-	if len(p.ContractContent) == 0 {
-		return nil, errors.New("contract content is empty")
-	}
-
-	var buf bytes.Buffer
-	buf.WriteByte(PayloadVersionV1)
-	writeGasUvarint(&buf, p.GasLimit)
-	writeString(&buf, p.Subtype)
-	writeUvarint(&buf, uint64(p.AgentVersion))
-	writeString(&buf, p.Deployer)
-	writeBytes(&buf, p.Random)
-	writeBytes(&buf, p.ContractContent)
-	return buf.Bytes(), nil
-}
-
-func EncodeAgentInvokePayload(p AgentInvokePayload) ([]byte, error) {
-	if p.Action == "" {
-		return nil, errors.New("invoke action is empty")
-	}
-	var buf bytes.Buffer
-	buf.WriteByte(PayloadVersionV1)
-	writeGasUvarint(&buf, p.GasLimit)
-	writeUvarint(&buf, p.CallNonce)
-	writeString(&buf, p.Action)
-	writeBytes(&buf, p.Param)
-	return buf.Bytes(), nil
-}
-
-func DecodeTemplateDeployPayload(data []byte) (TemplateDeployPayload, error) {
-	r, err := newPayloadReader(data)
-	if err != nil {
-		return TemplateDeployPayload{}, err
-	}
-	gasLimit, err := r.readUvarint()
-	if err != nil {
-		return TemplateDeployPayload{}, fmt.Errorf("decode gas limit: %w", err)
-	}
-	gasLimitInt, err := readGasInt64(gasLimit)
-	if err != nil {
-		return TemplateDeployPayload{}, fmt.Errorf("decode gas limit: %w", err)
-	}
-	templateName, err := r.readString()
-	if err != nil {
-		return TemplateDeployPayload{}, fmt.Errorf("decode template name: %w", err)
-	}
-	templateVersion, err := r.readUvarint()
-	if err != nil {
-		return TemplateDeployPayload{}, fmt.Errorf("decode template version: %w", err)
-	}
-	if templateVersion == 0 || templateVersion > uint64(^uint32(0)) {
-		return TemplateDeployPayload{}, errors.New("invalid template version")
-	}
-	deployer, err := r.readString()
-	if err != nil {
-		return TemplateDeployPayload{}, fmt.Errorf("decode deployer: %w", err)
-	}
-	random, err := r.readBytes()
-	if err != nil {
-		return TemplateDeployPayload{}, fmt.Errorf("decode random: %w", err)
-	}
-	content, err := r.readBytes()
-	if err != nil {
-		return TemplateDeployPayload{}, fmt.Errorf("decode contract content: %w", err)
-	}
-	if r.remaining() != 0 {
-		return TemplateDeployPayload{}, errors.New("trailing deploy payload bytes")
-	}
-	return TemplateDeployPayload{
-		GasLimit:        gasLimitInt,
-		TemplateName:    templateName,
-		TemplateVersion: uint32(templateVersion),
-		Deployer:        deployer,
-		Random:          random,
-		ContractContent: content,
-	}, nil
-}
-
-func DecodeTemplateInvokePayload(data []byte) (TemplateInvokePayload, error) {
-	r, err := newPayloadReader(data)
-	if err != nil {
-		return TemplateInvokePayload{}, err
-	}
-	gasLimit, err := r.readUvarint()
-	if err != nil {
-		return TemplateInvokePayload{}, fmt.Errorf("decode gas limit: %w", err)
-	}
-	gasLimitInt, err := readGasInt64(gasLimit)
-	if err != nil {
-		return TemplateInvokePayload{}, fmt.Errorf("decode gas limit: %w", err)
-	}
-	callNonce, err := r.readUvarint()
-	if err != nil {
-		return TemplateInvokePayload{}, fmt.Errorf("decode call nonce: %w", err)
-	}
-	action, err := r.readString()
-	if err != nil {
-		return TemplateInvokePayload{}, fmt.Errorf("decode action: %w", err)
-	}
-	param, err := r.readBytes()
-	if err != nil {
-		return TemplateInvokePayload{}, fmt.Errorf("decode param: %w", err)
-	}
-	if r.remaining() != 0 {
-		return TemplateInvokePayload{}, errors.New("trailing invoke payload bytes")
-	}
-	return TemplateInvokePayload{GasLimit: gasLimitInt, CallNonce: callNonce, Action: action, Param: param}, nil
-}
-
-func DecodeAgentInvokePayload(data []byte) (AgentInvokePayload, error) {
-	r, err := newPayloadReader(data)
-	if err != nil {
-		return AgentInvokePayload{}, err
-	}
-	gasLimit, err := r.readUvarint()
-	if err != nil {
-		return AgentInvokePayload{}, fmt.Errorf("decode gas limit: %w", err)
-	}
-	gasLimitInt, err := readGasInt64(gasLimit)
-	if err != nil {
-		return AgentInvokePayload{}, fmt.Errorf("decode gas limit: %w", err)
-	}
-	callNonce, err := r.readUvarint()
-	if err != nil {
-		return AgentInvokePayload{}, fmt.Errorf("decode call nonce: %w", err)
-	}
-	action, err := r.readString()
-	if err != nil {
-		return AgentInvokePayload{}, fmt.Errorf("decode action: %w", err)
-	}
-	param, err := r.readBytes()
-	if err != nil {
-		return AgentInvokePayload{}, fmt.Errorf("decode param: %w", err)
-	}
-	if r.remaining() != 0 {
-		return AgentInvokePayload{}, errors.New("trailing invoke payload bytes")
-	}
-	return AgentInvokePayload{GasLimit: gasLimitInt, CallNonce: callNonce, Action: action, Param: param}, nil
-}
-
-func DecodeAgentDeployPayload(data []byte) (AgentDeployPayload, error) {
-	r, err := newPayloadReader(data)
-	if err != nil {
-		return AgentDeployPayload{}, err
-	}
-	gasLimit, err := r.readUvarint()
-	if err != nil {
-		return AgentDeployPayload{}, fmt.Errorf("decode gas limit: %w", err)
-	}
-	gasLimitInt, err := readGasInt64(gasLimit)
-	if err != nil {
-		return AgentDeployPayload{}, fmt.Errorf("decode gas limit: %w", err)
-	}
-	subtype, err := r.readString()
-	if err != nil {
-		return AgentDeployPayload{}, fmt.Errorf("decode subtype: %w", err)
-	}
-	version, err := r.readUvarint()
-	if err != nil {
-		return AgentDeployPayload{}, fmt.Errorf("decode agent version: %w", err)
-	}
-	if version == 0 || version > uint64(^uint32(0)) {
-		return AgentDeployPayload{}, errors.New("invalid agent version")
-	}
-	deployer, err := r.readString()
-	if err != nil {
-		return AgentDeployPayload{}, fmt.Errorf("decode deployer: %w", err)
-	}
-	random, err := r.readBytes()
-	if err != nil {
-		return AgentDeployPayload{}, fmt.Errorf("decode random: %w", err)
-	}
-	content, err := r.readBytes()
-	if err != nil {
-		return AgentDeployPayload{}, fmt.Errorf("decode contract content: %w", err)
-	}
-	if r.remaining() != 0 {
-		return AgentDeployPayload{}, errors.New("trailing deploy payload bytes")
-	}
-	return AgentDeployPayload{
-		GasLimit:        gasLimitInt,
-		Subtype:         subtype,
-		AgentVersion:    uint32(version),
-		Deployer:        deployer,
-		Random:          random,
-		ContractContent: content,
-	}, nil
 }
 
 func writeUvarint(buf *bytes.Buffer, v uint64) {

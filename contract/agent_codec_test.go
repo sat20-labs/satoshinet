@@ -50,17 +50,16 @@ func TestAgentPredictionCheckRejectsInvalidBetAsset(t *testing.T) {
 	require.ErrorContains(t, contract.Check(), "invalid asset name")
 }
 
-func TestAgentInvokePayloadRoundTrip(t *testing.T) {
-	want := AgentInvokePayload{
+func TestUnifiedAgentInvokeEnvelopeRoundTrip(t *testing.T) {
+	want := InvokePayload{
 		GasLimit:  12345,
 		CallNonce: 67890,
 		Action:    AgentInvokeAPIConfirm,
 		Param:     []byte("confirm-param"),
 	}
-	encoded, err := EncodeAgentInvokePayload(want)
-	require.NoError(t, err)
+	encoded := EncodeInvokePayload(want)
 
-	got, err := DecodeAgentInvokePayload(encoded)
+	got, err := DecodeInvokePayload(encoded)
 	require.NoError(t, err)
 	require.Equal(t, want.GasLimit, got.GasLimit)
 	require.Equal(t, want.CallNonce, got.CallNonce)
@@ -68,24 +67,23 @@ func TestAgentInvokePayloadRoundTrip(t *testing.T) {
 	require.Equal(t, want.Param, got.Param)
 }
 
-func TestAgentDeployPayloadRoundTrip(t *testing.T) {
-	want := AgentDeployPayload{
+func TestUnifiedAgentDeployEnvelopeRoundTrip(t *testing.T) {
+	want := DeployPayload{
+		Type:            ContractTypeAgent,
 		GasLimit:        43210,
-		Subtype:         SubtypePrediction,
-		AgentVersion:    CurrentAgentVersion,
-		Deployer:        "tb1pdeployer",
-		Random:          []byte("random"),
+		SubType:         SubtypePrediction,
+		Version:         CurrentAgentVersion,
+		DeployNonce:     7,
 		ContractContent: []byte("contract-content"),
 	}
-	encoded, err := EncodeAgentDeployPayload(want)
-	require.NoError(t, err)
+	encoded := EncodeDeployPayload(want)
 
-	got, err := DecodeAgentDeployPayload(encoded)
+	got, err := DecodeDeployPayload(encoded)
 	require.NoError(t, err)
+	require.Equal(t, want.Type, got.Type)
 	require.Equal(t, want.GasLimit, got.GasLimit)
-	require.Equal(t, want.Subtype, got.Subtype)
-	require.Equal(t, want.AgentVersion, got.AgentVersion)
-	require.Equal(t, want.Deployer, got.Deployer)
-	require.Equal(t, want.Random, got.Random)
+	require.Equal(t, want.SubType, got.SubType)
+	require.Equal(t, want.Version, got.Version)
+	require.Equal(t, want.DeployNonce, got.DeployNonce)
 	require.Equal(t, want.ContractContent, got.ContractContent)
 }

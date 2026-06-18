@@ -297,15 +297,14 @@ func testLimitOrderRuntime(t *testing.T) *ContractRuntime {
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		TemplateName:    TemplateLimitOrder,
-		TemplateVersion: CurrentTemplateVersion,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateLimitOrder,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, deploy.Deployer, deploy.Random)
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, "deployer-address", deploy.DeployNonce)
 	require.NoError(t, err)
-	runtime, err := NewRuntime(addr, deploy, nil)
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, nil, "deployer-address")
 	require.NoError(t, err)
 	return runtime
 }
@@ -329,15 +328,14 @@ func testAMMRuntime(t *testing.T) *ContractRuntime {
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		TemplateName:    TemplateAMM,
-		TemplateVersion: CurrentTemplateVersion,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateAMM,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, deploy.Deployer, deploy.Random)
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, "deployer-address", deploy.DeployNonce)
 	require.NoError(t, err)
-	runtime, err := NewRuntime(addr, deploy, nil)
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, nil, "deployer-address")
 	require.NoError(t, err)
 	return runtime
 }

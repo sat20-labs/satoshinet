@@ -28,7 +28,7 @@ type RuntimeSnapshot struct {
 type DeployPayloadHeader struct {
 	GasLimit     int64  `json:"gas_limit"`
 	Deployer     string `json:"deployer"`
-	Random       []byte `json:"random"`
+	DeployNonce  uint64 `json:"deploy_nonce"`
 	ContentHash  []byte `json:"content_hash"`
 	AgentVersion uint32 `json:"agent_version"`
 }
@@ -61,10 +61,10 @@ func (s *RuntimeStore) Exists(contract ContractAddress) bool {
 func (r *Runtime) StateRoot() [32]byte {
 	h := sha256.New()
 	writeLengthPrefixed(h, []byte(r.address.EncodeAddress()))
-	writeLengthPrefixed(h, []byte(r.deploy.Subtype))
-	writeUint32(h, r.deploy.AgentVersion)
-	writeLengthPrefixed(h, []byte(r.deploy.Deployer))
-	writeLengthPrefixed(h, r.deploy.Random)
+	writeLengthPrefixed(h, []byte(r.deploy.SubType))
+	writeUint32(h, r.deploy.Version)
+	writeLengthPrefixed(h, []byte(r.deployer))
+	writeUint64(h, r.deploy.DeployNonce)
 	writeLengthPrefixed(h, r.deploy.ContractContent)
 	stateJSON, _ := r.StateJSON()
 	writeLengthPrefixed(h, stateJSON)
@@ -83,6 +83,12 @@ func writeLengthPrefixed(buf byteWriter, data []byte) {
 func writeUint32(buf byteWriter, v uint32) {
 	var tmp [4]byte
 	binary.BigEndian.PutUint32(tmp[:], v)
+	buf.Write(tmp[:])
+}
+
+func writeUint64(buf byteWriter, v uint64) {
+	var tmp [8]byte
+	binary.BigEndian.PutUint64(tmp[:], v)
 	buf.Write(tmp[:])
 }
 
@@ -160,17 +166,17 @@ func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
 		contentHash := sha256.Sum256(runtime.deploy.ContractContent)
 		out = append(out, RuntimeSnapshot{
 			Address:  runtimeAddressString(runtime),
-			Subtype:  runtime.deploy.Subtype,
-			Version:  runtime.deploy.AgentVersion,
+			Subtype:  runtime.deploy.SubType,
+			Version:  runtime.deploy.Version,
 			Contract: runtime.Contract(),
 			State:    runtime.State(),
 			Config:   runtime.config,
 			Deploy: DeployPayloadHeader{
 				GasLimit:     runtime.deploy.GasLimit,
-				Deployer:     runtime.deploy.Deployer,
-				Random:       append([]byte(nil), runtime.deploy.Random...),
+				Deployer:     runtime.deployer,
+				DeployNonce:  runtime.deploy.DeployNonce,
 				ContentHash:  contentHash[:],
-				AgentVersion: runtime.deploy.AgentVersion,
+				AgentVersion: runtime.deploy.Version,
 			},
 		})
 	}

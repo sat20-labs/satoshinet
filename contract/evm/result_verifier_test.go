@@ -266,7 +266,7 @@ func TestBackendWithCanonicalResultVerifier(t *testing.T) {
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
 		GasLimit:  DefaultGasConfig().InvokeBaseGas,
 		CallNonce: 1,
-		Calldata:  EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+		Param:     EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	})
 	funding := OutPoint{TxID: invokeTx.TxID(), Vout: 1}
 	assetHash := chainhash.Hash{8}

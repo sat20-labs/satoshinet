@@ -21,17 +21,18 @@ func ContractTxFromParsed(tx *wire.MsgTx, parsed ParsedTx, contractType byte) co
 		out.Contract = parsed.ContractOutputs[0].Contract
 	}
 	if parsed.Deploy != nil {
-		out.Subtype = parsed.Deploy.Name
+		out.ContractType = parsed.Deploy.Type
+		out.Subtype = parsed.Deploy.SubType
 		out.Version = parsed.Deploy.Version
 		out.GasLimit = parsed.Deploy.GasLimit
-		out.Nonce = parsed.Deploy.Nonce
-		out.Payload = CloneBytes(parsed.Deploy.Code)
+		out.Nonce = parsed.Deploy.DeployNonce
+		out.Payload = CloneBytes(parsed.Deploy.ContractContent)
 	}
 	if parsed.Invoke != nil {
 		out.Action = parsed.Invoke.Action
 		out.GasLimit = parsed.Invoke.GasLimit
 		out.Nonce = parsed.Invoke.CallNonce
-		out.Payload = CloneBytes(parsed.Invoke.Data)
+		out.Payload = CloneBytes(parsed.Invoke.Param)
 	}
 	if parsed.Result != nil {
 		cp := *parsed.Result

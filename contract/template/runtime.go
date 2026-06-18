@@ -14,7 +14,11 @@ type ContractRuntime struct {
 }
 
 func NewRuntime(address ContractAddress, deploy DeployPayload, registry *Registry) (*ContractRuntime, error) {
-	base, err := NewRuntimeBase(address, deploy)
+	return NewRuntimeWithDeployer(address, deploy, registry, "")
+}
+
+func NewRuntimeWithDeployer(address ContractAddress, deploy DeployPayload, registry *Registry, deployer string) (*ContractRuntime, error) {
+	base, err := NewRuntimeBase(address, deploy, deployer)
 	if err != nil {
 		return nil, err
 	}
@@ -22,18 +26,18 @@ func NewRuntime(address ContractAddress, deploy DeployPayload, registry *Registr
 		registry = NewDefaultRegistry()
 	}
 
-	contract, err := registry.NewContract(deploy.TemplateName)
+	contract, err := registry.NewContract(deploy.SubType)
 	if err != nil {
 		return nil, err
 	}
 	if err := contract.Decode(deploy.ContractContent); err != nil {
 		return nil, fmt.Errorf("decode template contract content: %w", err)
 	}
-	if contract.TemplateName() != deploy.TemplateName {
-		return nil, fmt.Errorf("template name mismatch %s != %s", contract.TemplateName(), deploy.TemplateName)
+	if contract.TemplateName() != deploy.SubType {
+		return nil, fmt.Errorf("template name mismatch %s != %s", contract.TemplateName(), deploy.SubType)
 	}
-	if contract.Version() != deploy.TemplateVersion {
-		return nil, fmt.Errorf("template version mismatch %d != %d", contract.Version(), deploy.TemplateVersion)
+	if contract.Version() != deploy.Version {
+		return nil, fmt.Errorf("template version mismatch %d != %d", contract.Version(), deploy.Version)
 	}
 	if err := contract.CheckContent(); err != nil {
 		return nil, err
@@ -173,25 +177,19 @@ type RuntimeBase struct {
 	templateName    string
 	templateVersion uint32
 	deployer        string
-	random          []byte
+	deployNonce     uint64
 	contractContent []byte
 	currentBlock    int64
 	invokeCount     uint64
 	state           map[string][]byte
 }
 
-func NewRuntimeBase(address ContractAddress, deploy DeployPayload) (*RuntimeBase, error) {
-	if deploy.TemplateName == "" {
+func NewRuntimeBase(address ContractAddress, deploy DeployPayload, deployer string) (*RuntimeBase, error) {
+	if deploy.SubType == "" {
 		return nil, errors.New("template name is empty")
 	}
-	if deploy.TemplateVersion == 0 {
+	if deploy.Version == 0 {
 		return nil, errors.New("template version is zero")
-	}
-	if deploy.Deployer == "" {
-		return nil, errors.New("deployer is empty")
-	}
-	if len(deploy.Random) == 0 {
-		return nil, errors.New("random value is empty")
 	}
 	if len(deploy.ContractContent) == 0 {
 		return nil, errors.New("contract content is empty")
@@ -199,10 +197,10 @@ func NewRuntimeBase(address ContractAddress, deploy DeployPayload) (*RuntimeBase
 
 	return &RuntimeBase{
 		address:         address,
-		templateName:    deploy.TemplateName,
-		templateVersion: deploy.TemplateVersion,
-		deployer:        deploy.Deployer,
-		random:          append([]byte(nil), deploy.Random...),
+		templateName:    deploy.SubType,
+		templateVersion: deploy.Version,
+		deployer:        deployer,
+		deployNonce:     deploy.DeployNonce,
 		contractContent: append([]byte(nil), deploy.ContractContent...),
 		state:           make(map[string][]byte),
 	}, nil
@@ -265,7 +263,7 @@ func (r *RuntimeBase) StateRoot() [32]byte {
 	writeLengthPrefixed(h, []byte(r.templateName))
 	writeUint32(h, r.templateVersion)
 	writeLengthPrefixed(h, []byte(r.deployer))
-	writeLengthPrefixed(h, r.random)
+	writeUint64(h, r.deployNonce)
 	writeLengthPrefixed(h, r.contractContent)
 	writeUint64(h, uint64(r.currentBlock))
 	writeUint64(h, r.invokeCount)

@@ -14,10 +14,9 @@ func TestParseAgentDeployTxCombinesMultipleOPReturns(t *testing.T) {
 
 	scripts, err := DeployNullDataScripts(DeployPayload{
 		GasLimit:        5000,
-		Subtype:         SubtypePrediction,
-		AgentVersion:    CurrentAgentVersion,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         SubtypePrediction,
+		Version:         CurrentAgentVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	})
 	if err != nil {
@@ -43,7 +42,7 @@ func TestParseAgentDeployTxCombinesMultipleOPReturns(t *testing.T) {
 	if parsed.Deploy.GasLimit != 5000 {
 		t.Fatalf("gas limit mismatch: %d", parsed.Deploy.GasLimit)
 	}
-	if string(parsed.Deploy.Code) != string(content) {
+	if string(parsed.Deploy.ContractContent) != string(content) {
 		t.Fatalf("content mismatch")
 	}
 }

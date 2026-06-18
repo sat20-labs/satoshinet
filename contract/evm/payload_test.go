@@ -11,9 +11,9 @@ import (
 
 func TestDeployPayloadRoundTrip(t *testing.T) {
 	want := DeployPayload{
-		GasLimit:    21000,
-		DeployNonce: 7,
-		InitCode:    []byte{0x60, 0x2a, 0x60, 0x00},
+		GasLimit:        21000,
+		DeployNonce:     7,
+		ContractContent: []byte{0x60, 0x2a, 0x60, 0x00},
 	}
 
 	got, err := evmcommon.DecodeDeployPayload(evmcommon.EncodeDeployPayload(want))
@@ -25,7 +25,7 @@ func TestInvokePayloadRoundTrip(t *testing.T) {
 	want := InvokePayload{
 		GasLimit:  50000,
 		CallNonce: 9,
-		Calldata:  []byte{0xde, 0xad, 0xbe, 0xef},
+		Param:     []byte{0xde, 0xad, 0xbe, 0xef},
 	}
 
 	got, err := evmcommon.DecodeInvokePayload(evmcommon.EncodeInvokePayload(want))

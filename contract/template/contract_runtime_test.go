@@ -13,17 +13,16 @@ func TestNewRuntimeDecodesLimitOrderContract(t *testing.T) {
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		TemplateName:    TemplateLimitOrder,
-		TemplateVersion: CurrentTemplateVersion,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateLimitOrder,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
 	addr, _, err := DeriveContractAddress(
 		contractcommon.TestnetContractPrefix,
 		deploy.ContractContent,
-		deploy.Deployer,
-		deploy.Random,
+		"deployer-address",
+		deploy.DeployNonce,
 	)
 	require.NoError(t, err)
 
@@ -53,17 +52,16 @@ func TestNewRuntimeDecodesAMMContract(t *testing.T) {
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		TemplateName:    TemplateAMM,
-		TemplateVersion: CurrentTemplateVersion,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateAMM,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
 	addr, _, err := DeriveContractAddress(
 		contractcommon.TestnetContractPrefix,
 		deploy.ContractContent,
-		deploy.Deployer,
-		deploy.Random,
+		"deployer-address",
+		deploy.DeployNonce,
 	)
 	require.NoError(t, err)
 
@@ -93,17 +91,16 @@ func TestNewRuntimeRejectsMismatchedTemplateVersion(t *testing.T) {
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		TemplateName:    TemplateLimitOrder,
-		TemplateVersion: CurrentTemplateVersion + 1,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateLimitOrder,
+		Version:         CurrentTemplateVersion + 1,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
 	addr, _, err := DeriveContractAddress(
 		contractcommon.TestnetContractPrefix,
 		deploy.ContractContent,
-		deploy.Deployer,
-		deploy.Random,
+		"deployer-address",
+		deploy.DeployNonce,
 	)
 	require.NoError(t, err)
 
@@ -117,17 +114,16 @@ func TestNewRuntimeRejectsContentForWrongTemplate(t *testing.T) {
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        1000,
-		TemplateName:    TemplateAMM,
-		TemplateVersion: CurrentTemplateVersion,
-		Deployer:        "deployer-address",
-		Random:          []byte("random"),
+		SubType:         TemplateAMM,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
 		ContractContent: content,
 	}
 	addr, _, err := DeriveContractAddress(
 		contractcommon.TestnetContractPrefix,
 		deploy.ContractContent,
-		deploy.Deployer,
-		deploy.Random,
+		"deployer-address",
+		deploy.DeployNonce,
 	)
 	require.NoError(t, err)
 

@@ -146,6 +146,12 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 	return nil
 }
 
+func (v *EVMBlockExecutionValidator) ValidateContractModuleBlock(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) error {
+
+	return v.ValidateEVMBlock(block, view)
+}
+
 func (v *EVMBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
 	view *blockchain.UtxoViewpoint) (bool, error) {
 
@@ -218,6 +224,14 @@ func (v *EVMBlockExecutionValidator) EVMBlockPostState(hash *chainhash.Hash) (*e
 		return nil, false
 	}
 	return state.Clone(), true
+}
+
+func (v *EVMBlockExecutionValidator) BlockPostState(hash *chainhash.Hash) (contractframework.EngineState, bool) {
+	state, ok := v.EVMBlockPostState(hash)
+	if !ok || state == nil {
+		return nil, false
+	}
+	return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
 }
 
 func (v *EVMBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, state *evm.MemoryStateDB) {

@@ -117,6 +117,12 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 	return nil
 }
 
+func (v *AgentBlockExecutionValidator) ValidateContractModuleBlock(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) error {
+
+	return v.ValidateAgentBlock(block, view)
+}
+
 func (v *AgentBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
 	view *blockchain.UtxoViewpoint) (bool, error) {
 
@@ -145,6 +151,14 @@ func (v *AgentBlockExecutionValidator) AgentBlockPostState(hash *chainhash.Hash)
 		return nil, false
 	}
 	return state.Clone(), true
+}
+
+func (v *AgentBlockExecutionValidator) BlockPostState(hash *chainhash.Hash) (contractframework.EngineState, bool) {
+	state, ok := v.AgentBlockPostState(hash)
+	if !ok || state == nil {
+		return nil, false
+	}
+	return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
 }
 
 func (v *AgentBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, state *agent.RuntimeStore) {

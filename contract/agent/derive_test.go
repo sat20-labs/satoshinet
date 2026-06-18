@@ -8,7 +8,7 @@ func TestDeriveContractAddressUsesAgentType(t *testing.T) {
 		SubtypePrediction,
 		[]byte(`{"subtype":"prediction"}`),
 		"deployer",
-		[]byte{1, 2, 3},
+		3,
 	)
 	if err != nil {
 		t.Fatalf("DeriveContractAddress failed: %v", err)
