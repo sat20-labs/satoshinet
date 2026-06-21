@@ -103,8 +103,12 @@ func (c *BlockCoordinator) BuildResults(req ResultCoordinatorBuildRequest) (Resu
 			}
 			resultTxs = append(resultTxs, result.ResultTxs...)
 			executions[module.Type()] = exec
+			stateRoot := result.StateRoot
+			if stateRoot == ([32]byte{}) && moduleParticipated(split, module.Type()) {
+				stateRoot = module.StateRoot(exec)
+			}
 			state.SetEngine(module.Type(), RootEngineState{
-				StateRoot:     result.StateRoot,
+				StateRoot:     stateRoot,
 				StateSnapshot: exec.PostState,
 			})
 			continue
@@ -140,6 +144,10 @@ func (c *BlockCoordinator) BuildResults(req ResultCoordinatorBuildRequest) (Resu
 		CombinedRoot:  state.CombinedRoot(),
 		ContractSplit: split,
 	}, nil
+}
+
+func moduleParticipated(split BlockContractSplit, moduleType ModuleType) bool {
+	return len(split.WorkTxs[moduleType]) != 0 || len(split.ResultTxs[moduleType]) != 0
 }
 
 func (c *BlockCoordinator) contractPrefix() string {

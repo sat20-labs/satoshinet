@@ -2,6 +2,7 @@ package template
 
 import (
 	"errors"
+	"fmt"
 
 	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -426,6 +427,9 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	fundingOutputs, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(e.ContractPrefix), addr)
 	if err != nil {
 		return err
+	}
+	if len(fundingOutputs) == 0 {
+		return fmt.Errorf("template DEPLOY output does not match derived contract %s", addr.MustEncode())
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
 	if err := runtime.ApplyFunding(fundingOutputs, e.GasConfig.GasAssetName); err != nil {

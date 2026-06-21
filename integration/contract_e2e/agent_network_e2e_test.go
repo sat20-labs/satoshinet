@@ -139,7 +139,6 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	traderB := keyFromMnemonic(t, bootstrapMnemonic, 2)
 	spendScript, spendAddress, redeemScript, controlBlock := testCallerTaprootScript(t, bootstrapKey)
 	coreFundingScript := p2trPkScriptFromKey(t, coreKey)
-	bootstrapAddress := p2trAddressFromKey(t, bootstrapKey)
 	aliceAddress := spendAddress
 	bobAddress := spendAddress
 
@@ -200,7 +199,7 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 		MinBetUnit:   "10000",
 		Outcomes:     scenario.Outcomes,
 	}
-	deployTx, agentAddress := buildAgentDeployTx(t, contract, bootstrapAddress, agentInputs[0], splitOutputs[0], spendScript)
+	deployTx, agentAddress := buildAgentDeployTx(t, contract, spendAddress, agentInputs[0], splitOutputs[0], spendScript)
 	signTemplateTaprootInputs(t, deployTx, bootstrapKey, redeemScript, controlBlock)
 	sendTx(t, bootstrapNode, deployTx)
 	waitForPOSTx(t, bootstrapNode, nodes, deployTx)

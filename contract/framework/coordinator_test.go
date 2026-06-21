@@ -58,6 +58,17 @@ func (m singlePassBuildModule) BuildBlockResults(req ResultBuildRequest) (Result
 		ExecutionResult{ModuleType: m.Type(), StateRoot: m.root}, nil
 }
 
+type foldedRootSinglePassModule struct {
+	recordingModule
+}
+
+func (m foldedRootSinglePassModule) BuildBlockResults(req ResultBuildRequest) (ResultBuildResult, ExecutionResult, error) {
+	*m.calls = append(*m.calls, m.Name()+":build-block")
+	*m.workSeen = append(*m.workSeen, req.Txs...)
+	return ResultBuildResult{},
+		ExecutionResult{ModuleType: m.Type(), StateRoot: m.root}, nil
+}
+
 func TestBlockCoordinatorValidationSplitsByModule(t *testing.T) {
 	templateWork := testWorkTx(t, contract.TxTypeInvoke, testContractAddress(t, ModuleTemplate, 1))
 	evmWork := testWorkTx(t, contract.TxTypeInvoke, testContractAddress(t, ModuleEVM, 2))
@@ -212,6 +223,32 @@ func TestBlockCoordinatorBuildResultsUsesSinglePassModule(t *testing.T) {
 	require.Equal(t, []string{"template:build-block"}, calls)
 	require.Equal(t, []*wire.MsgTx{templateWork}, templateWorkSeen)
 	require.Equal(t, []*wire.MsgTx{templateResult}, got.ResultTxs)
+	require.Equal(t, contract.CombineStateRoots(testRoot(1), [32]byte{}, [32]byte{}), got.CombinedRoot)
+}
+
+func TestBlockCoordinatorBuildResultsCommitsParticipatingModuleRoot(t *testing.T) {
+	templateWork := testWorkTx(t, contract.TxTypeInvoke, testContractAddress(t, ModuleTemplate, 1))
+	var calls []string
+	var templateWorkSeen, noResults []*wire.MsgTx
+	coordinator := BlockCoordinator{
+		Prefix: contract.TestnetContractPrefix,
+		Modules: []Module{
+			foldedRootSinglePassModule{recordingModule{
+				stubModule: stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
+				calls:      &calls,
+				workSeen:   &templateWorkSeen,
+				resultSeen: &noResults,
+				root:       testRoot(1),
+			}},
+		},
+	}
+	got, err := coordinator.BuildResults(ResultCoordinatorBuildRequest{
+		Txs: []*wire.MsgTx{templateWork},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"template:build-block"}, calls)
+	require.Equal(t, []*wire.MsgTx{templateWork}, templateWorkSeen)
+	require.Empty(t, got.ResultTxs)
 	require.Equal(t, contract.CombineStateRoots(testRoot(1), [32]byte{}, [32]byte{}), got.CombinedRoot)
 }
 

@@ -329,6 +329,9 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
+	if len(fundingOutputs) == 0 {
+		return fmt.Errorf("agent DEPLOY output does not match derived contract %s", addr.MustEncode())
+	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
 		return err

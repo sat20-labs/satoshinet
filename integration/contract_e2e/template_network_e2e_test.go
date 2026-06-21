@@ -1391,6 +1391,9 @@ func buildTemplateDeployTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 	deployer string, random []byte, inputs []wire.OutPoint, funding wire.TxOut) (*wire.MsgTx, tmplcontract.ContractAddress) {
 
 	t.Helper()
+	if fixture != nil {
+		deployer = fixture.spendAddress
+	}
 	tx, address, err := tmplcontract.BuildDeployTx(tmplcontract.DeployTxBuildRequest{
 		ContractPrefix: tmplcontract.TestnetContractPrefix,
 		Contract:       contract,
@@ -1622,8 +1625,7 @@ func networkGasFeeAmount(t *testing.T, gas int64) int64 {
 	t.Helper()
 	amount, err := contractcommon.GasFeeAtHeight(gas, 0)
 	require.NoError(t, err)
-	require.LessOrEqual(t, amount, uint64(1<<63-1))
-	return int64(amount)
+	return amount
 }
 
 func requireTemplateResultBeforeEVMResult(t *testing.T, block *wire.MsgBlock) {
