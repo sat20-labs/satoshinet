@@ -81,6 +81,8 @@ var (
 	ContractPkScript      = evmcommon.ContractPkScript
 	ParseContractPkScript = evmcommon.ParseContractPkScript
 	IsContractPkScript    = evmcommon.IsContractPkScript
+
+	ValidateTriggerGasLimit = contractframework.ValidateTriggerGasLimit
 )
 
 type DeployPayload = evmcommon.DeployPayload

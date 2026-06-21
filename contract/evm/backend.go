@@ -330,6 +330,7 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 		prefix = TestnetContractPrefix
 	}
 	runtime.ContractPrefix = prefix
+	runtime.GasConfig = req.GasConfig
 	if req.ContractUTXOs != nil {
 		runtime.AssetBalances = NewContractUTXOAssetView(prefix, req.ContractUTXOs)
 	}
@@ -691,8 +692,8 @@ func (e *Backend) ExecuteTrigger(call TriggerCall) error {
 		return errors.New("trigger gas limit is zero")
 	}
 	callGasLimit := call.GasLimit
-	if e.GasConfig.MaxGasPerInvoke > 0 && callGasLimit > e.GasConfig.MaxGasPerInvoke {
-		return errors.New("trigger gas limit exceeds maximum")
+	if err := contractframework.ValidateTriggerGasLimit(callGasLimit, e.GasConfig); err != nil {
+		return err
 	}
 	if !e.contractExists(call.Trigger.Contract) {
 		return errors.New("trigger contract does not exist")

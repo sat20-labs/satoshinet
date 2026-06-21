@@ -16,6 +16,7 @@ type Runtime struct {
 	State       *MemoryStateDB
 	ChainConfig *params.ChainConfig
 	Config      vm.Config
+	GasConfig   GasConfig
 
 	ContractPrefix string
 	AssetBalances  AssetBalanceReader
@@ -136,14 +137,10 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	)
 	contract := r.contractAddressFromGeth(contractAddr)
 	if err == nil {
-		for i := range capturedIntents {
-			capturedIntents[i].IntentIndex = uint32(len(r.AssetIntents) + i)
+		for i := range capturedTriggers {
+			capturedTriggers[i].Contract = contract
 		}
-		r.AssetIntents = append(r.AssetIntents, capturedIntents...)
-		for _, trigger := range capturedTriggers {
-			trigger.Contract = contract
-			_ = r.State.RegisterTrigger(trigger)
-		}
+		err = r.commitCapturedEffects(capturedIntents, capturedTriggers)
 	}
 	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
 	if gasLeftErr != nil && err == nil {
@@ -189,16 +186,12 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		uint256.NewInt(value),
 	)
 	if err == nil {
-		for i := range capturedIntents {
-			capturedIntents[i].IntentIndex = uint32(len(r.AssetIntents) + i)
-		}
-		r.AssetIntents = append(r.AssetIntents, capturedIntents...)
-		for _, trigger := range capturedTriggers {
-			if ContractAddressHash(trigger.Contract) == (EVMAddress{}) {
-				trigger.Contract = r.contractAddressFromGeth(GethAddress(req.Target))
+		for i := range capturedTriggers {
+			if ContractAddressHash(capturedTriggers[i].Contract) == (EVMAddress{}) {
+				capturedTriggers[i].Contract = r.contractAddressFromGeth(GethAddress(req.Target))
 			}
-			_ = r.State.RegisterTrigger(trigger)
 		}
+		err = r.commitCapturedEffects(capturedIntents, capturedTriggers)
 	}
 	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
 	if gasLeftErr != nil && err == nil {
@@ -231,6 +224,24 @@ func gasUsed(initial, left int64) int64 {
 		return 0
 	}
 	return initial - left
+}
+
+func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedTriggers []Trigger) error {
+	for _, trigger := range capturedTriggers {
+		if err := contractframework.ValidateTriggerGasLimit(trigger.GasLimit, r.GasConfig); err != nil {
+			return err
+		}
+	}
+	for i := range capturedIntents {
+		capturedIntents[i].IntentIndex = uint32(len(r.AssetIntents) + i)
+	}
+	r.AssetIntents = append(r.AssetIntents, capturedIntents...)
+	for _, trigger := range capturedTriggers {
+		if err := r.State.RegisterTrigger(trigger); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type assetTraceFrame struct {

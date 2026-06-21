@@ -411,6 +411,26 @@ func TestBackendTerminatesTriggerWhenContractGasIsInsufficient(t *testing.T) {
 	require.Empty(t, runtime.State.Triggers())
 }
 
+func TestBackendRejectsOverLimitTriggerExecution(t *testing.T) {
+	contract := testContract(t)
+	executor := NewBackend(BlockExecutionRequest{
+		GasConfig: GasConfig{MaxGasPerTrigger: 10},
+		Block:     testBlockContext(100),
+	})
+	err := executor.ExecuteTrigger(TriggerCall{
+		Trigger: Trigger{
+			ID:       "vault-release",
+			Contract: contract,
+			Kind:     TriggerAtHeight,
+			Height:   100,
+		},
+		GasLimit: 11,
+	})
+	require.ErrorContains(t, err, "trigger gas limit exceeds maximum")
+	require.Empty(t, executor.pending)
+	require.Empty(t, executor.records)
+}
+
 func TestBackendVerifiesCoinbaseStateRoot(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	deployTx := testDeployTx(t, 3, return42InitCode())

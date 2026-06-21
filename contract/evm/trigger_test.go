@@ -50,3 +50,21 @@ func TestMemoryStateDBTriggerRegistry(t *testing.T) {
 		t.Fatalf("trigger should be removed: %v", got)
 	}
 }
+
+func TestMemoryStateDBRejectsNonPositiveTriggerGas(t *testing.T) {
+	state := NewMemoryStateDB()
+	contract := testContract(t)
+	trigger := Trigger{
+		ID:       "vault-release",
+		Contract: contract,
+		Kind:     TriggerAtHeight,
+		Height:   100,
+	}
+	if err := state.RegisterTrigger(trigger); err == nil {
+		t.Fatal("zero trigger gas limit should fail")
+	}
+	trigger.GasLimit = -1
+	if err := state.RegisterTrigger(trigger); err == nil {
+		t.Fatal("negative trigger gas limit should fail")
+	}
+}

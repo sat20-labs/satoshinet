@@ -878,6 +878,7 @@ func evmGasConfigFromCommon(base GasConfig) evm.GasConfig {
 		ResultBaseGas:            base.ResultBaseGas,
 		TriggerBaseGas:           base.TriggerBaseGas,
 		MaxGasPerInvoke:          base.MaxGasPerInvoke,
+		MaxGasPerTrigger:         base.MaxGasPerTrigger,
 		MaxGasPerBlock:           base.MaxGasPerBlock,
 		FixedGasPrice:            base.FixedGasPrice,
 		ResultPackingFee:         base.ResultPackingFee,

@@ -13,11 +13,13 @@ const (
 	MainnetGasAssetName = "brc20:f:sgas"
 	TestnetGasAssetName = "brc20:f:sgas"
 
-	DeployBaseGas  int64 = 5_000_000
-	InvokeBaseGas  int64 = 100_000
-	ResultBaseGas  int64 = 50_000
-	TriggerBaseGas int64 = 150_000
-	MaxGasPerBlock int64 = 1_000_000_000
+	DeployBaseGas    int64 = 5_000_000
+	InvokeBaseGas    int64 = 100_000
+	ResultBaseGas    int64 = 50_000
+	TriggerBaseGas   int64 = 150_000
+	MaxGasPerInvoke  int64 = 50_000_000
+	MaxGasPerTrigger int64 = 5_000_000
+	MaxGasPerBlock   int64 = 1_000_000_000
 
 	ExecutionGasUnitsPerGas int64 = 1000
 	GasFeePrecision         int   = 8

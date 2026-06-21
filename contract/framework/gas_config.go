@@ -19,35 +19,38 @@ type GasConfig struct {
 	GasPriceDecayDenominator uint64
 	GasPriceFloorNumerator   uint64
 
-	DeployBaseGas   int64
-	InvokeBaseGas   int64
-	ResultBaseGas   int64
-	TriggerBaseGas  int64
-	MaxGasPerInvoke int64
-	MaxGasPerBlock  int64
+	DeployBaseGas    int64
+	InvokeBaseGas    int64
+	ResultBaseGas    int64
+	TriggerBaseGas   int64
+	MaxGasPerInvoke  int64
+	MaxGasPerTrigger int64
+	MaxGasPerBlock   int64
 
 	FixedGasPrice    uint64
 	ResultPackingFee int64
 }
 
 type BaseGasConfig struct {
-	GasAssetName    string
-	DeployBaseGas   int64
-	InvokeBaseGas   int64
-	ResultBaseGas   int64
-	TriggerBaseGas  int64
-	MaxGasPerInvoke int64
+	GasAssetName     string
+	DeployBaseGas    int64
+	InvokeBaseGas    int64
+	ResultBaseGas    int64
+	TriggerBaseGas   int64
+	MaxGasPerInvoke  int64
+	MaxGasPerTrigger int64
 }
 
 func DefaultBaseGasConfig() BaseGasConfig {
 	cfg := DefaultGasConfig()
 	return BaseGasConfig{
-		GasAssetName:    cfg.GasAssetName,
-		DeployBaseGas:   cfg.DeployBaseGas,
-		InvokeBaseGas:   cfg.InvokeBaseGas,
-		ResultBaseGas:   cfg.ResultBaseGas,
-		TriggerBaseGas:  cfg.TriggerBaseGas,
-		MaxGasPerInvoke: cfg.MaxGasPerInvoke,
+		GasAssetName:     cfg.GasAssetName,
+		DeployBaseGas:    cfg.DeployBaseGas,
+		InvokeBaseGas:    cfg.InvokeBaseGas,
+		ResultBaseGas:    cfg.ResultBaseGas,
+		TriggerBaseGas:   cfg.TriggerBaseGas,
+		MaxGasPerInvoke:  cfg.MaxGasPerInvoke,
+		MaxGasPerTrigger: cfg.MaxGasPerTrigger,
 	}
 }
 
@@ -71,6 +74,9 @@ func NormalizeBaseGasConfig(cfg BaseGasConfig) BaseGasConfig {
 	if cfg.MaxGasPerInvoke == 0 {
 		cfg.MaxGasPerInvoke = def.MaxGasPerInvoke
 	}
+	if cfg.MaxGasPerTrigger == 0 {
+		cfg.MaxGasPerTrigger = def.MaxGasPerTrigger
+	}
 	return cfg
 }
 
@@ -78,12 +84,13 @@ func BaseGasConfigFromFields(gasAssetName string, deployBaseGas, invokeBaseGas,
 	resultBaseGas, triggerBaseGas, maxGasPerInvoke int64) BaseGasConfig {
 
 	return BaseGasConfig{
-		GasAssetName:    gasAssetName,
-		DeployBaseGas:   deployBaseGas,
-		InvokeBaseGas:   invokeBaseGas,
-		ResultBaseGas:   resultBaseGas,
-		TriggerBaseGas:  triggerBaseGas,
-		MaxGasPerInvoke: maxGasPerInvoke,
+		GasAssetName:     gasAssetName,
+		DeployBaseGas:    deployBaseGas,
+		InvokeBaseGas:    invokeBaseGas,
+		ResultBaseGas:    resultBaseGas,
+		TriggerBaseGas:   triggerBaseGas,
+		MaxGasPerInvoke:  maxGasPerInvoke,
+		MaxGasPerTrigger: maxGasPerInvoke,
 	}
 }
 
@@ -98,11 +105,13 @@ func DefaultGasConfig() GasConfig {
 		GasPriceDecayDenominator: contract.GasPriceDecayDenominator,
 		GasPriceFloorNumerator:   contract.GasPriceFloorNumerator,
 
-		DeployBaseGas:  int64(contract.DeployBaseGas),
-		InvokeBaseGas:  int64(contract.InvokeBaseGas),
-		ResultBaseGas:  int64(contract.ResultBaseGas),
-		TriggerBaseGas: int64(contract.TriggerBaseGas),
-		MaxGasPerBlock: int64(contract.MaxGasPerBlock),
+		DeployBaseGas:    int64(contract.DeployBaseGas),
+		InvokeBaseGas:    int64(contract.InvokeBaseGas),
+		ResultBaseGas:    int64(contract.ResultBaseGas),
+		TriggerBaseGas:   int64(contract.TriggerBaseGas),
+		MaxGasPerInvoke:  int64(contract.MaxGasPerInvoke),
+		MaxGasPerTrigger: int64(contract.MaxGasPerTrigger),
+		MaxGasPerBlock:   int64(contract.MaxGasPerBlock),
 
 		FixedGasPrice: 1,
 	}
@@ -153,6 +162,12 @@ func NormalizeGasConfig(cfg GasConfig) GasConfig {
 	}
 	if cfg.TriggerBaseGas == 0 {
 		cfg.TriggerBaseGas = def.TriggerBaseGas
+	}
+	if cfg.MaxGasPerInvoke == 0 {
+		cfg.MaxGasPerInvoke = def.MaxGasPerInvoke
+	}
+	if cfg.MaxGasPerTrigger == 0 {
+		cfg.MaxGasPerTrigger = def.MaxGasPerTrigger
 	}
 	if cfg.MaxGasPerBlock == 0 {
 		cfg.MaxGasPerBlock = def.MaxGasPerBlock
@@ -318,6 +333,17 @@ func ValidateInvokeGasLimit(gasLimit int64, cfg GasConfig) error {
 	}
 	if normalized.MaxGasPerInvoke > 0 && gasLimit > normalized.MaxGasPerInvoke {
 		return fmt.Errorf("invoke gas limit exceeds maximum")
+	}
+	return nil
+}
+
+func ValidateTriggerGasLimit(gasLimit int64, cfg GasConfig) error {
+	if gasLimit <= 0 {
+		return fmt.Errorf("trigger gas limit must be positive")
+	}
+	normalized := cfg.Normalize()
+	if normalized.MaxGasPerTrigger > 0 && gasLimit > normalized.MaxGasPerTrigger {
+		return fmt.Errorf("trigger gas limit exceeds maximum")
 	}
 	return nil
 }

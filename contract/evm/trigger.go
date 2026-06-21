@@ -78,7 +78,7 @@ func (s *MemoryStateDB) RegisterTrigger(trigger Trigger) error {
 	if err := trigger.Validate(); err != nil {
 		return err
 	}
-	if trigger.GasLimit == 0 {
+	if trigger.GasLimit <= 0 {
 		return fmt.Errorf("missing trigger gas limit")
 	}
 	if s.triggers == nil {

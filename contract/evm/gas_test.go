@@ -69,6 +69,38 @@ func TestGasConfigFundingFeeBreakdown(t *testing.T) {
 	}
 }
 
+func TestDefaultGasConfigSetsExecutionLimits(t *testing.T) {
+	cfg := DefaultGasConfig()
+	if cfg.MaxGasPerInvoke != 50_000_000 {
+		t.Fatalf("MaxGasPerInvoke got %d want 50000000", cfg.MaxGasPerInvoke)
+	}
+	if cfg.MaxGasPerTrigger != 5_000_000 {
+		t.Fatalf("MaxGasPerTrigger got %d want 5000000", cfg.MaxGasPerTrigger)
+	}
+	if cfg.MaxGasPerTrigger > cfg.MaxGasPerInvoke {
+		t.Fatalf("trigger limit %d exceeds invoke limit %d", cfg.MaxGasPerTrigger, cfg.MaxGasPerInvoke)
+	}
+	if cfg.MaxGasPerInvoke < cfg.DeployBaseGas {
+		t.Fatalf("invoke limit %d below deploy base gas %d", cfg.MaxGasPerInvoke, cfg.DeployBaseGas)
+	}
+}
+
+func TestValidateTriggerGasLimit(t *testing.T) {
+	cfg := GasConfig{MaxGasPerTrigger: 10}
+	if err := ValidateTriggerGasLimit(10, cfg); err != nil {
+		t.Fatalf("valid trigger gas limit failed: %v", err)
+	}
+	if err := ValidateTriggerGasLimit(0, cfg); err == nil {
+		t.Fatal("zero trigger gas limit should fail")
+	}
+	if err := ValidateTriggerGasLimit(-1, cfg); err == nil {
+		t.Fatal("negative trigger gas limit should fail")
+	}
+	if err := ValidateTriggerGasLimit(11, cfg); err == nil {
+		t.Fatal("over-limit trigger gas limit should fail")
+	}
+}
+
 func TestSplitGasFundingRejectsOverflow(t *testing.T) {
 	_, _, err := SplitGasFunding(math.MaxUint64, math.MaxUint64, 1)
 	if err == nil {

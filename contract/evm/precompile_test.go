@@ -94,6 +94,45 @@ func TestRuntimeCapturesTriggerRegistration(t *testing.T) {
 	require.Equal(t, []byte{1, 2, 3}, triggers[0].Calldata)
 }
 
+func TestRuntimeRejectsOverLimitTriggerRegistration(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	runtime := NewRuntime(nil)
+	runtime.GasConfig = GasConfig{MaxGasPerTrigger: 10}
+	runtime.SetCode(ContractAddressHash(contract), callTriggerPrecompileCode())
+
+	result := runtime.Call(CallRequest{
+		Caller: caller,
+		Target: ContractAddressHash(contract),
+		CallID: "call-1",
+		Input:  EncodeRegisterHeightTriggerCall("vault-release", 100, 11, nil),
+		Gas:    100000,
+		Block:  BlockContext{GasLimit: 1000000},
+	})
+	require.ErrorContains(t, result.Err, "trigger gas limit exceeds maximum")
+	require.Equal(t, ResultStatusInvalid, result.Status)
+	require.Empty(t, runtime.State.Triggers())
+}
+
+func TestRuntimeRejectsZeroTriggerRegistration(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callTriggerPrecompileCode())
+
+	result := runtime.Call(CallRequest{
+		Caller: caller,
+		Target: ContractAddressHash(contract),
+		CallID: "call-1",
+		Input:  EncodeRegisterHeightTriggerCall("vault-release", 100, 0, nil),
+		Gas:    100000,
+		Block:  BlockContext{GasLimit: 1000000},
+	})
+	require.ErrorContains(t, result.Err, "trigger gas limit must be positive")
+	require.Equal(t, ResultStatusInvalid, result.Status)
+	require.Empty(t, runtime.State.Triggers())
+}
+
 func TestRuntimeDiscardsTriggerRegistrationOnOuterRevert(t *testing.T) {
 	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
 	contract := testContract(t)
