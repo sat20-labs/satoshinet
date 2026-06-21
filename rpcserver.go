@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -38,6 +39,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractapi "github.com/sat20-labs/satoshinet/contract"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	contractnode "github.com/sat20-labs/satoshinet/contract/node"
 	"github.com/sat20-labs/satoshinet/database"
@@ -163,6 +165,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getcontract":            handleGetContract,
 	"getcontracthistory":     handleGetContractHistory,
 	"getcontractstate":       handleGetContractState,
+	"reviewpredictionready":  handleReviewPredictionReady,
 	"getcurrentnet":          handleGetCurrentNet,
 	"getdifficulty":          handleGetDifficulty,
 	"getgenerate":            handleGetGenerate,
@@ -964,6 +967,72 @@ func handleGetContractState(s *rpcServer, cmd interface{}, closeChan <-chan stru
 		State:          state,
 		Details:        details,
 	}, nil
+}
+
+func handleReviewPredictionReady(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	c := cmd.(*btcjson.ReviewPredictionReadyCmd)
+	var contract agentcontract.PredictionContract
+	if err := json.Unmarshal([]byte(c.ContractJSON), &contract); err != nil {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, err.Error())
+	}
+	checkedAt := int64(0)
+	if c.CheckedAt != nil {
+		checkedAt = *c.CheckedAt
+	}
+	if checkedAt <= 0 {
+		checkedAt = int64(s.cfg.Chain.BestSnapshot().Height)
+		if contract.TimeBase == agentcontract.TimeBaseUnix {
+			checkedAt = s.cfg.TimeSource.AdjustedTime().Unix()
+		}
+	}
+	client, err := newPredictionReadyReviewLLMClient()
+	if err != nil {
+		return nil, internalRPCError(err.Error(), "Failed to initialize prediction ready reviewer")
+	}
+	if client == nil {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCMisc, "agent LLM access is disabled")
+	}
+	agent := agentcontract.NewPredictionAgent(client)
+	timeout := cfg.AgentLLMTimeout + 30*time.Second
+	if timeout <= 30*time.Second {
+		timeout = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	result, err := agent.ReviewReadyResult(ctx, agentcontract.PredictionAgentReadyReviewRequest{
+		Contract:  contract,
+		CheckedAt: checkedAt,
+	})
+	if err != nil {
+		return nil, internalRPCError(err.Error(), "Failed to review prediction ready")
+	}
+	return btcjson.PredictionReadyReviewResult{
+		Ready:        result.Ready,
+		URLReachable: result.URLReachable,
+		SourceURL:    result.SourceURL,
+		FinalURL:     result.FinalURL,
+		Reason:       result.Reason,
+		TextBytes:    result.TextBytes,
+		CleanedBytes: result.CleanedBytes,
+		CheckedAt:    checkedAt,
+	}, nil
+}
+
+func newPredictionReadyReviewLLMClient() (agentcontract.LLMClient, error) {
+	llmCfg := agentcontract.LLMConfig{
+		Provider:    cfg.AgentLLMProvider,
+		Endpoint:    cfg.AgentLLMEndpoint,
+		Model:       cfg.AgentLLMModel,
+		APIKey:      cfg.AgentLLMAPIKey,
+		Timeout:     cfg.AgentLLMTimeout,
+		Temperature: cfg.AgentLLMTemperature,
+		MaxTokens:   cfg.AgentLLMMaxTokens,
+	}
+	normalized, err := llmCfg.Normalized()
+	if err != nil {
+		return nil, err
+	}
+	return agentcontract.NewLLMClient(normalized)
 }
 
 func handleGetContractHistory(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {

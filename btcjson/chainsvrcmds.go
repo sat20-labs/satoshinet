@@ -701,6 +701,16 @@ func NewGetContractStateCmd(address string) *GetContractStateCmd {
 	return &GetContractStateCmd{Address: address}
 }
 
+// ReviewPredictionReadyCmd defines the reviewpredictionready JSON-RPC command.
+type ReviewPredictionReadyCmd struct {
+	ContractJSON string
+	CheckedAt    *int64 `jsonrpcdefault:"0"`
+}
+
+func NewReviewPredictionReadyCmd(contractJSON string, checkedAt *int64) *ReviewPredictionReadyCmd {
+	return &ReviewPredictionReadyCmd{ContractJSON: contractJSON, CheckedAt: checkedAt}
+}
+
 // GetContractHistoryCmd defines the getcontracthistory JSON-RPC command.
 type GetContractHistoryCmd struct {
 	Address string
@@ -1212,6 +1222,7 @@ func init() {
 	MustRegisterCmd("getcontract", (*GetContractCmd)(nil), flags)
 	MustRegisterCmd("getcontracthistory", (*GetContractHistoryCmd)(nil), flags)
 	MustRegisterCmd("getcontractstate", (*GetContractStateCmd)(nil), flags)
+	MustRegisterCmd("reviewpredictionready", (*ReviewPredictionReadyCmd)(nil), flags)
 	MustRegisterCmd("getdescriptorinfo", (*GetDescriptorInfoCmd)(nil), flags)
 	MustRegisterCmd("getdifficulty", (*GetDifficultyCmd)(nil), flags)
 	MustRegisterCmd("getgenerate", (*GetGenerateCmd)(nil), flags)

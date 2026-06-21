@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -10,17 +9,11 @@ import (
 	"strings"
 
 	scommon "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/satoshinet/btcec"
-	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
-	"github.com/sat20-labs/satoshinet/btcec/schnorr"
-	"github.com/sat20-labs/satoshinet/chaincfg"
-	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const MaxPredictionDecimalPrecision = 18
-const PredictionConfirmAttestationDomain = "satoshinet.agent.prediction.confirm.v1"
+const MaxPredictionConfirmResultLen = 128
 
 var outcomeIDPattern = regexp.MustCompile(`^[a-z]+$`)
 
@@ -48,29 +41,12 @@ type PredictionBetParam struct {
 }
 
 type PredictionConfirmParam struct {
-	ResultType        string `json:"result_type"`
-	OutcomeID         string `json:"outcome_id,omitempty"`
-	SourceURL         string `json:"source_url"`
-	ResultURL         string `json:"result_url"`
-	ResultHash        string `json:"result_hash"`
-	ObservedAt        int64  `json:"observed_at"`
-	AgentVersion      string `json:"agent_version,omitempty"`
-	ModelVersion      string `json:"model_version,omitempty"`
-	CoreNodePubKey    string `json:"core_node_pubkey,omitempty"`
-	CoreNodeSignature string `json:"core_node_signature,omitempty"`
-}
-
-type PredictionConfirmAttestationPayload struct {
-	Domain       string `json:"domain"`
-	Contract     string `json:"contract"`
-	Action       string `json:"action"`
 	ResultType   string `json:"result_type"`
 	OutcomeID    string `json:"outcome_id,omitempty"`
-	SourceURL    string `json:"source_url"`
+	Result       string `json:"result"`
 	ResultURL    string `json:"result_url"`
-	ResultHash   string `json:"result_hash"`
 	ObservedAt   int64  `json:"observed_at"`
-	AgentVersion string `json:"agent_version,omitempty"`
+	AgentVersion uint32 `json:"agent_version,omitempty"`
 	ModelVersion string `json:"model_version,omitempty"`
 }
 
@@ -197,155 +173,20 @@ func (p PredictionConfirmParam) Check(contract PredictionContract) error {
 	default:
 		return fmt.Errorf("invalid prediction result type %s", p.ResultType)
 	}
-	if p.SourceURL != contract.SourceURL {
-		return fmt.Errorf("source url mismatch")
-	}
 	if !ResultURLAllowed(contract.SourceURL, p.ResultURL) {
 		return fmt.Errorf("result url is outside source site")
 	}
-	if strings.TrimSpace(p.ResultHash) == "" {
-		return fmt.Errorf("result hash is empty")
+	result := strings.TrimSpace(p.Result)
+	if result == "" {
+		return fmt.Errorf("prediction result is empty")
+	}
+	if len(result) > MaxPredictionConfirmResultLen {
+		return fmt.Errorf("prediction result is too long: %d > %d", len(result), MaxPredictionConfirmResultLen)
 	}
 	if p.ObservedAt <= 0 {
 		return fmt.Errorf("invalid observed_at %d", p.ObservedAt)
 	}
 	return nil
-}
-
-func PredictionConfirmAttestationMessage(contract ContractAddress,
-	param PredictionConfirmParam) ([]byte, error) {
-
-	payload := PredictionConfirmAttestationPayload{
-		Domain:       PredictionConfirmAttestationDomain,
-		Contract:     contract.EncodeAddress(),
-		Action:       InvokeAPIConfirm,
-		ResultType:   param.ResultType,
-		OutcomeID:    param.OutcomeID,
-		SourceURL:    param.SourceURL,
-		ResultURL:    param.ResultURL,
-		ResultHash:   param.ResultHash,
-		ObservedAt:   param.ObservedAt,
-		AgentVersion: param.AgentVersion,
-		ModelVersion: param.ModelVersion,
-	}
-	return json.Marshal(payload)
-}
-
-func PredictionConfirmAttestationDigest(contract ContractAddress,
-	param PredictionConfirmParam) ([]byte, error) {
-
-	msg, err := PredictionConfirmAttestationMessage(contract, param)
-	if err != nil {
-		return nil, err
-	}
-	return chainhash.HashB(msg), nil
-}
-
-func SignPredictionConfirmAttestation(contract ContractAddress,
-	param *PredictionConfirmParam, privKey *btcec.PrivateKey) error {
-
-	if param == nil {
-		return fmt.Errorf("missing prediction confirm param")
-	}
-	if privKey == nil {
-		return fmt.Errorf("missing core node private key")
-	}
-	param.CoreNodePubKey = hex.EncodeToString(privKey.PubKey().SerializeCompressed())
-	param.CoreNodeSignature = ""
-	digest, err := PredictionConfirmAttestationDigest(contract, *param)
-	if err != nil {
-		return err
-	}
-	sig := ecdsa.Sign(privKey, digest)
-	param.CoreNodeSignature = hex.EncodeToString(sig.Serialize())
-	return nil
-}
-
-func AttachPredictionConfirmAttestation(contract ContractAddress, param *PredictionConfirmParam,
-	coreNodePubKey []byte, signMessage func([]byte) ([]byte, error)) error {
-
-	if param == nil {
-		return fmt.Errorf("missing prediction confirm param")
-	}
-	if len(coreNodePubKey) == 0 {
-		return fmt.Errorf("missing core node pubkey")
-	}
-	if signMessage == nil {
-		return fmt.Errorf("missing core node signer")
-	}
-	param.CoreNodePubKey = hex.EncodeToString(coreNodePubKey)
-	param.CoreNodeSignature = ""
-	msg, err := PredictionConfirmAttestationMessage(contract, *param)
-	if err != nil {
-		return err
-	}
-	sig, err := signMessage(msg)
-	if err != nil {
-		return err
-	}
-	param.CoreNodeSignature = hex.EncodeToString(sig)
-	return nil
-}
-
-func VerifyPredictionConfirmAttestation(contract ContractAddress, param PredictionConfirmParam,
-	expectedCoreNodePubKey, expectedCoreNodeAddress string, params *chaincfg.Params) error {
-
-	pubKeyText := strings.TrimSpace(param.CoreNodePubKey)
-	if pubKeyText == "" {
-		return fmt.Errorf("missing core node pubkey")
-	}
-	if expectedCoreNodePubKey != "" && !strings.EqualFold(pubKeyText, expectedCoreNodePubKey) {
-		return fmt.Errorf("core node pubkey mismatch")
-	}
-	pubKeyBytes, err := hex.DecodeString(pubKeyText)
-	if err != nil {
-		return fmt.Errorf("decode core node pubkey: %w", err)
-	}
-	pubKey, err := btcec.ParsePubKey(pubKeyBytes)
-	if err != nil {
-		return fmt.Errorf("parse core node pubkey: %w", err)
-	}
-	if expectedCoreNodeAddress != "" {
-		addr, err := contractframework.TaprootAddressFromPubKey(pubKeyBytes, attestationChainParams(params))
-		if err != nil {
-			return err
-		}
-		if addr != expectedCoreNodeAddress {
-			return fmt.Errorf("core node pubkey address mismatch")
-		}
-	}
-	sigText := strings.TrimSpace(param.CoreNodeSignature)
-	if sigText == "" {
-		return fmt.Errorf("missing core node signature")
-	}
-	sigBytes, err := hex.DecodeString(sigText)
-	if err != nil {
-		return fmt.Errorf("decode core node signature: %w", err)
-	}
-	digest, err := PredictionConfirmAttestationDigest(contract, param)
-	if err != nil {
-		return err
-	}
-	if sig, err := ecdsa.ParseDERSignature(sigBytes); err == nil {
-		if sig.Verify(digest, pubKey) {
-			return nil
-		}
-		return fmt.Errorf("core node signature verification failed")
-	}
-	if sig, err := schnorr.ParseSignature(sigBytes); err == nil {
-		if sig.Verify(digest, pubKey) {
-			return nil
-		}
-		return fmt.Errorf("core node signature verification failed")
-	}
-	return fmt.Errorf("parse core node signature")
-}
-
-func attestationChainParams(params *chaincfg.Params) *chaincfg.Params {
-	if params != nil {
-		return params
-	}
-	return &chaincfg.TestNetParams
 }
 
 func (p PredictionRejectParam) Encode() ([]byte, error) {

@@ -672,9 +672,8 @@ func mustEncodeConfirm(t *testing.T, resultType, outcomeID string) []byte {
 	data, err := (PredictionConfirmParam{
 		ResultType: resultType,
 		OutcomeID:  outcomeID,
-		SourceURL:  contract.SourceURL,
+		Result:     "Team A 101, Team B 98",
 		ResultURL:  "https://example.com/match/result/123",
-		ResultHash: "abc123",
 		ObservedAt: contract.EventTime + 1,
 	}).Encode()
 	if err != nil {

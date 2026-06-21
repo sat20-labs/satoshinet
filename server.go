@@ -3393,12 +3393,10 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		TipContext: func() (contractoracle.TipContext, error) {
 			return s.agentOracleTipContext()
 		},
-		CoreNodePubKey:      stp.GetPubKey,
-		SignCoreNodeMessage: stp.SignMsg,
-		SubmitInvoke:        s.submitAgentInvokeTx,
-		Infof:               btcdLog.Infof,
-		Warnf:               srvrLog.Warnf,
-		Debugf:              srvrLog.Debugf,
+		SubmitInvoke: s.submitAgentInvokeTx,
+		Infof:        btcdLog.Infof,
+		Warnf:        srvrLog.Warnf,
+		Debugf:       srvrLog.Debugf,
 	})
 	if err != nil {
 		return nil, err

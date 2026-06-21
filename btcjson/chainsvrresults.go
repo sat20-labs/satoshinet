@@ -848,6 +848,17 @@ type ContractHistoryResult struct {
 	History []interface{} `json:"history"`
 }
 
+type PredictionReadyReviewResult struct {
+	Ready        bool   `json:"ready"`
+	URLReachable bool   `json:"urlReachable"`
+	SourceURL    string `json:"sourceUrl,omitempty"`
+	FinalURL     string `json:"finalUrl,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	TextBytes    int    `json:"textBytes,omitempty"`
+	CleanedBytes int    `json:"cleanedBytes,omitempty"`
+	CheckedAt    int64  `json:"checkedAt,omitempty"`
+}
+
 // ValidateAddressChainResult models the data returned by the chain server
 // validateaddress command.
 //

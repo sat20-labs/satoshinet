@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 		if got := last["content"].(string); got == "" {
 			t.Fatalf("missing prompt content")
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"result_type\":\"outcome\",\"outcome_id\":\"a\",\"reason\":\"Team A won\"}"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"result_type\":\"outcome\",\"outcome_id\":\"a\",\"result\":\"Team A 101, Team B 98\",\"reason\":\"Team A won\"}"}}]}`))
 	}))
 	defer llmServer.Close()
 
@@ -81,8 +82,8 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConfirmParam failed: %v", err)
 	}
-	if confirmParam.ResultHash != PredictionResultTextHash("Final Team A 101, Team B 98.") {
-		t.Fatalf("result hash mismatch: %s", confirmParam.ResultHash)
+	if confirmParam.Result != "Team A 101, Team B 98" {
+		t.Fatalf("result mismatch: %s", confirmParam.Result)
 	}
 	encodedConfirm, err := confirmParam.Encode()
 	if err != nil {
@@ -144,7 +145,7 @@ func TestPredictionAgentUsesFinalRedirectURL(t *testing.T) {
 	}))
 	defer resultServer.Close()
 
-	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"a"}`}
+	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"a","result":"Team A wins"}`}
 	contract := predictionContractForResultServer(resultServer.URL)
 	corenodeAgent := NewPredictionAgent(client)
 	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
@@ -179,7 +180,7 @@ func TestPredictionAgentSearchesSameSiteResultLinkWhenSourcePending(t *testing.T
 
 	client := &sequenceLLMClient{responses: []string{
 		`{"result_type":"pending","reason":"preview page has no final score"}`,
-		`{"result_type":"outcome","outcome_id":"a","reason":"Team A won"}`,
+		`{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`,
 	}}
 	contract := predictionContractForResultServer(resultServer.URL)
 	corenodeAgent := NewPredictionAgent(client)
@@ -206,6 +207,10 @@ func TestPredictionAgentReadyReviewRejectsAmbiguousContract(t *testing.T) {
 	client := &fakeLLMClient{response: `{"ready":false,"reason":"event source is not verifiable"}`}
 	contract := predictionContractForResultServer("https://example.com")
 	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = &retryPredictionFetcher{result: PredictionResultFetchResult{
+		FinalURL: contract.SourceURL,
+		Text:     "England vs Croatia fixture page",
+	}}
 
 	reject, ready, err := corenodeAgent.ReviewReady(context.Background(), PredictionAgentReadyReviewRequest{
 		Contract:  contract,
@@ -219,6 +224,28 @@ func TestPredictionAgentReadyReviewRejectsAmbiguousContract(t *testing.T) {
 	}
 	if reject.Reason != "event source is not verifiable" || reject.CheckedAt != contract.BetDeadline {
 		t.Fatalf("reject mismatch: %#v", reject)
+	}
+}
+
+func TestPredictionAgentReadyReviewRejectsUnreachableSourceURL(t *testing.T) {
+	client := &fakeLLMClient{response: `{"ready":true,"reason":"ok"}`}
+	contract := predictionContractForResultServer("https://example.com")
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.RetryAttempts = 1
+	corenodeAgent.Fetcher = &retryPredictionFetcher{failures: 1}
+
+	result, err := corenodeAgent.ReviewReadyResult(context.Background(), PredictionAgentReadyReviewRequest{
+		Contract:  contract,
+		CheckedAt: contract.BetDeadline,
+	})
+	if err != nil {
+		t.Fatalf("ReviewReadyResult failed: %v", err)
+	}
+	if result.Ready || result.URLReachable {
+		t.Fatalf("unexpected ready result: %#v", result)
+	}
+	if !strings.Contains(result.Reason, "source url is not reachable") {
+		t.Fatalf("unexpected reject reason: %s", result.Reason)
 	}
 }
 
@@ -237,7 +264,7 @@ func (c *sequenceLLMClient) Complete(ctx context.Context, req LLMCompletionReque
 }
 
 func TestPredictionAgentRetriesFetchAndAudits(t *testing.T) {
-	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"a","reason":"Team A won"}`}
+	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`}
 	contract := predictionContractForResultServer("https://example.com")
 	fetcher := &retryPredictionFetcher{failures: 1, result: PredictionResultFetchResult{
 		FinalURL: "https://example.com/match/result/123",
@@ -270,7 +297,7 @@ func TestPredictionAgentRetriesFetchAndAudits(t *testing.T) {
 func TestPredictionAgentRetriesLLMAndAudits(t *testing.T) {
 	client := &retryLLMClient{
 		failures: 1,
-		response: `{"result_type":"outcome","outcome_id":"a","reason":"Team A won"}`,
+		response: `{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`,
 	}
 	contract := predictionContractForResultServer("https://example.com")
 	corenodeAgent := NewPredictionAgent(client)

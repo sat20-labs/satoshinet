@@ -11,8 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/sat20-labs/satoshinet/btcec"
 )
 
 const DefaultPredictionResultMaxBytes int64 = 1 << 20
@@ -29,8 +27,8 @@ type PredictionAgentAuditEvent struct {
 	FinalURL       string
 	ResultType     string
 	OutcomeID      string
+	Result         string
 	Reason         string
-	ResultHash     string
 	TextBytes      int
 	CleanedBytes   int
 	Attempt        int
@@ -74,20 +72,27 @@ type PredictionResultSearcher interface {
 }
 
 type PredictionAgentConfirmRequest struct {
-	Contract            PredictionContract
-	ContractAddress     ContractAddress
-	ResultURL           string
-	ObservedAt          int64
-	CoreNodeKey         *btcec.PrivateKey
-	CoreNodePubKey      []byte
-	SignCoreNodeMessage func([]byte) ([]byte, error)
-	AgentVersion        string
-	ModelVersion        string
+	Contract     PredictionContract
+	ResultURL    string
+	ObservedAt   int64
+	AgentVersion uint32
+	ModelVersion string
 }
 
 type PredictionAgentReadyReviewRequest struct {
 	Contract  PredictionContract
 	CheckedAt int64
+}
+
+type PredictionAgentReadyReviewResult struct {
+	Ready        bool                  `json:"ready"`
+	Reject       PredictionRejectParam `json:"reject,omitempty"`
+	Reason       string                `json:"reason,omitempty"`
+	URLReachable bool                  `json:"urlReachable"`
+	SourceURL    string                `json:"sourceUrl,omitempty"`
+	FinalURL     string                `json:"finalUrl,omitempty"`
+	TextBytes    int                   `json:"textBytes,omitempty"`
+	CleanedBytes int                   `json:"cleanedBytes,omitempty"`
 }
 
 func NewPredictionAgent(client LLMClient) *PredictionAgent {
@@ -101,37 +106,100 @@ func NewPredictionAgent(client LLMClient) *PredictionAgent {
 }
 
 func (a *PredictionAgent) ReviewReady(ctx context.Context, req PredictionAgentReadyReviewRequest) (PredictionRejectParam, bool, error) {
+	result, err := a.ReviewReadyResult(ctx, req)
+	return result.Reject, result.Ready, err
+}
+
+func (a *PredictionAgent) ReviewReadyResult(ctx context.Context, req PredictionAgentReadyReviewRequest) (PredictionAgentReadyReviewResult, error) {
 	if a == nil || a.Resolver == nil {
-		return PredictionRejectParam{}, false, fmt.Errorf("missing prediction agent resolver")
+		return PredictionAgentReadyReviewResult{}, fmt.Errorf("missing prediction agent resolver")
 	}
 	if err := req.Contract.Check(); err != nil {
-		return PredictionRejectParam{}, false, err
+		return PredictionAgentReadyReviewResult{}, err
+	}
+	if req.CheckedAt <= 0 {
+		return PredictionAgentReadyReviewResult{}, fmt.Errorf("invalid checked_at %d", req.CheckedAt)
+	}
+
+	fetcher := a.Fetcher
+	if fetcher == nil {
+		fetcher = HTTPPredictionResultTextFetcher{}
+	}
+	fetched, err := a.fetchWithRetry(ctx, fetcher, req.Contract.SourceURL)
+	if err != nil {
+		reject := PredictionRejectParam{
+			Reason:    "source url is not reachable: " + err.Error(),
+			CheckedAt: req.CheckedAt,
+		}
+		return PredictionAgentReadyReviewResult{
+			Ready:        false,
+			Reject:       reject,
+			Reason:       reject.Reason,
+			URLReachable: false,
+			SourceURL:    req.Contract.SourceURL,
+		}, nil
+	}
+	cleaned := CleanPredictionResultText(fetched.Text)
+	if cleaned == "" {
+		reject := PredictionRejectParam{
+			Reason:    "source url text is empty",
+			CheckedAt: req.CheckedAt,
+		}
+		return PredictionAgentReadyReviewResult{
+			Ready:        false,
+			Reject:       reject,
+			Reason:       reject.Reason,
+			URLReachable: true,
+			SourceURL:    req.Contract.SourceURL,
+			FinalURL:     fetched.FinalURL,
+			TextBytes:    len(fetched.Text),
+		}, nil
 	}
 	attempts := a.retryAttempts()
 	backoff := a.retryBackoff()
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		reject, ready, err := a.Resolver.ReviewContract(ctx, PredictionLLMReviewRequest{
-			Contract:  req.Contract,
-			CheckedAt: req.CheckedAt,
+			Contract:   req.Contract,
+			CheckedAt:  req.CheckedAt,
+			SourceURL:  fetched.FinalURL,
+			SourceText: cleaned,
 		})
 		if err == nil {
 			stage := "ready_decision"
 			if !ready {
 				stage = "ready_reject"
 			}
-			a.audit(PredictionAgentAuditEvent{Stage: stage, Reason: reject.Reason, Attempt: attempt})
-			return reject, ready, nil
+			a.audit(PredictionAgentAuditEvent{
+				Stage:        stage,
+				Reason:       reject.Reason,
+				ResultURL:    req.Contract.SourceURL,
+				FinalURL:     fetched.FinalURL,
+				Attempt:      attempt,
+				TextBytes:    len(fetched.Text),
+				CleanedBytes: len(cleaned),
+			})
+			reason := strings.TrimSpace(reject.Reason)
+			return PredictionAgentReadyReviewResult{
+				Ready:        ready,
+				Reject:       reject,
+				Reason:       reason,
+				URLReachable: true,
+				SourceURL:    req.Contract.SourceURL,
+				FinalURL:     fetched.FinalURL,
+				TextBytes:    len(fetched.Text),
+				CleanedBytes: len(cleaned),
+			}, nil
 		}
 		lastErr = err
 		a.audit(PredictionAgentAuditEvent{Stage: "ready_error", Attempt: attempt, Error: err.Error()})
 		if attempt < attempts {
 			if err := sleepWithContext(ctx, backoff*time.Duration(attempt)); err != nil {
-				return PredictionRejectParam{}, false, err
+				return PredictionAgentReadyReviewResult{}, err
 			}
 		}
 	}
-	return PredictionRejectParam{}, false, lastErr
+	return PredictionAgentReadyReviewResult{}, lastErr
 }
 
 func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionAgentConfirmRequest) (PredictionConfirmParam, error) {
@@ -225,17 +293,7 @@ func (a *PredictionAgent) resolveFetchedResult(ctx context.Context, req Predicti
 	}
 	param.AgentVersion = req.AgentVersion
 	param.ModelVersion = req.ModelVersion
-	if req.CoreNodeKey != nil {
-		if err := SignPredictionConfirmAttestation(req.ContractAddress, &param, req.CoreNodeKey); err != nil {
-			return PredictionConfirmParam{}, err
-		}
-	} else if req.SignCoreNodeMessage != nil {
-		if err := AttachPredictionConfirmAttestation(req.ContractAddress, &param,
-			req.CoreNodePubKey, req.SignCoreNodeMessage); err != nil {
-			return PredictionConfirmParam{}, err
-		}
-	}
-	a.audit(PredictionAgentAuditEvent{Stage: "llm_decision", ResultURL: resultURL, ResultType: param.ResultType, OutcomeID: param.OutcomeID, Reason: decision.Reason, ResultHash: param.ResultHash, TextBytes: len(fetched.Text), CleanedBytes: cleanedBytes})
+	a.audit(PredictionAgentAuditEvent{Stage: "llm_decision", ResultURL: resultURL, ResultType: param.ResultType, OutcomeID: param.OutcomeID, Result: param.Result, Reason: decision.Reason, TextBytes: len(fetched.Text), CleanedBytes: cleanedBytes})
 	return param, nil
 }
 

@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,8 +19,10 @@ type PredictionLLMResolveRequest struct {
 }
 
 type PredictionLLMReviewRequest struct {
-	Contract  PredictionContract
-	CheckedAt int64
+	Contract   PredictionContract
+	CheckedAt  int64
+	SourceURL  string
+	SourceText string
 }
 
 type PredictionLLMResolver struct {
@@ -54,7 +54,7 @@ func (r *PredictionLLMResolver) ResolveDecision(ctx context.Context, req Predict
 			{
 				Role: "system",
 				Content: "You resolve SatoshiNet prediction contracts. Return only compact JSON with " +
-					"result_type, outcome_id, and reason. result_type must be one of outcome, pending, unverifiable, invalid, or cancelled. " +
+					"result_type, outcome_id, result, and reason. result_type must be one of outcome, pending, unverifiable, invalid, or cancelled. " +
 					"Use result_type outcome and set outcome_id to the chosen allowed outcome id when the result is clear. Do not include markdown.",
 			},
 			{
@@ -77,13 +77,9 @@ func (r *PredictionLLMResolver) ResolveDecision(ctx context.Context, req Predict
 	param := PredictionConfirmParam{
 		ResultType: strings.TrimSpace(decision.ResultType),
 		OutcomeID:  strings.TrimSpace(decision.OutcomeID),
-		SourceURL:  req.SourceURL,
+		Result:     compactPredictionResult(decision),
 		ResultURL:  req.ResultURL,
-		ResultHash: PredictionResultTextHash(cleaned),
 		ObservedAt: req.ObservedAt,
-	}
-	if param.SourceURL == "" {
-		param.SourceURL = req.Contract.SourceURL
 	}
 	if err := param.Check(req.Contract); err != nil {
 		return PredictionConfirmParam{}, decision, err
@@ -105,12 +101,12 @@ func (r *PredictionLLMResolver) ReviewContract(ctx context.Context, req Predicti
 		Messages: []LLMMessage{
 			{
 				Role: "system",
-				Content: "You review SatoshiNet prediction contracts before activation. Review only the contract definition, not the current event result. Return only compact JSON with " +
+				Content: "You review SatoshiNet prediction contracts before activation. Review the contract definition and source page evidence, not the current event result. Return only compact JSON with " +
 					"ready and reason. Do not include markdown.",
 			},
 			{
 				Role:    "user",
-				Content: predictionReviewPrompt(req.Contract),
+				Content: predictionReviewPrompt(req),
 			},
 		},
 	})
@@ -135,17 +131,41 @@ func CleanPredictionResultText(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
-func PredictionResultTextHash(cleanedText string) string {
-	sum := sha256.Sum256([]byte(CleanPredictionResultText(cleanedText)))
-	return hex.EncodeToString(sum[:])
-}
-
 type predictionLLMDecision struct {
 	ResultType string `json:"result_type"`
 	OutcomeID  string `json:"outcome_id"`
 	Outcome    string `json:"outcome"`
 	ID         string `json:"id"`
+	Result     string `json:"result"`
 	Reason     string `json:"reason"`
+}
+
+func compactPredictionResult(decision predictionLLMDecision) string {
+	result := strings.TrimSpace(decision.Result)
+	if result == "" {
+		result = strings.TrimSpace(decision.Reason)
+	}
+	if len(result) <= MaxPredictionConfirmResultLen {
+		return result
+	}
+	return strings.TrimSpace(truncateUTF8Bytes(result, MaxPredictionConfirmResultLen))
+}
+
+func truncateUTF8Bytes(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	end := 0
+	for idx := range s {
+		if idx > maxBytes {
+			break
+		}
+		end = idx
+	}
+	if end == 0 {
+		return ""
+	}
+	return s[:end]
 }
 
 func normalizePredictionLLMDecision(contract PredictionContract, cleanedText string, decision predictionLLMDecision) predictionLLMDecision {
@@ -176,15 +196,35 @@ func normalizePredictionOutcomeID(contract PredictionContract, raw string) (stri
 	if value == "" {
 		return "", false
 	}
+	candidates := predictionOutcomeIDCandidates(value)
 	for _, outcome := range contract.Outcomes {
-		if strings.EqualFold(value, strings.TrimSpace(outcome.ID)) {
-			return outcome.ID, true
-		}
-		if strings.EqualFold(value, strings.TrimSpace(outcome.Text)) {
-			return outcome.ID, true
+		for _, candidate := range candidates {
+			if strings.EqualFold(candidate, strings.TrimSpace(outcome.ID)) {
+				return outcome.ID, true
+			}
+			if strings.EqualFold(candidate, strings.TrimSpace(outcome.Text)) {
+				return outcome.ID, true
+			}
 		}
 	}
 	return "", false
+}
+
+func predictionOutcomeIDCandidates(value string) []string {
+	candidates := []string{value}
+	for _, sep := range []string{":", "：", "-", "—", " ", "\t"} {
+		before, after, ok := strings.Cut(value, sep)
+		if !ok {
+			continue
+		}
+		if before = strings.TrimSpace(before); before != "" {
+			candidates = append(candidates, before)
+		}
+		if after = strings.TrimSpace(after); after != "" {
+			candidates = append(candidates, after)
+		}
+	}
+	return candidates
 }
 
 func inferPredictionOutcomeID(contract PredictionContract, texts ...string) (string, bool) {
@@ -259,7 +299,8 @@ type predictionLLMReviewDecision struct {
 	Reason string `json:"reason"`
 }
 
-func predictionReviewPrompt(contract PredictionContract) string {
+func predictionReviewPrompt(req PredictionLLMReviewRequest) string {
+	contract := req.Contract
 	var b strings.Builder
 	b.WriteString("Review this prediction contract definition before betting starts. Do not resolve or predict the event result during this review.\n")
 	b.WriteString("Return ready true when the event, allowed outcomes, timing, source URL, asset, and minimum bet unit are understandable, verifiable later, and executable.\n")
@@ -279,6 +320,10 @@ func predictionReviewPrompt(contract PredictionContract) string {
 	b.WriteString(fmt.Sprint(contract.ConfirmAfter))
 	b.WriteString("\nSource URL: ")
 	b.WriteString(contract.SourceURL)
+	if req.SourceURL != "" && req.SourceURL != contract.SourceURL {
+		b.WriteString("\nFetched final URL: ")
+		b.WriteString(req.SourceURL)
+	}
 	b.WriteString("\nBet asset: ")
 	b.WriteString(contract.BetAsset)
 	b.WriteString("\nMin bet unit: ")
@@ -289,6 +334,11 @@ func predictionReviewPrompt(contract PredictionContract) string {
 		b.WriteString(outcome.ID)
 		b.WriteString(": ")
 		b.WriteString(outcome.Text)
+		b.WriteString("\n")
+	}
+	if text := strings.TrimSpace(req.SourceText); text != "" {
+		b.WriteString("\nSource page text excerpt:\n")
+		b.WriteString(truncateUTF8Bytes(text, 4000))
 		b.WriteString("\n")
 	}
 	b.WriteString("\nReturn {\"ready\":true,\"reason\":\"...\"} when the contract definition is understandable, can be verified later, and is executable. Otherwise return {\"ready\":false,\"reason\":\"...\"}.")
@@ -313,6 +363,7 @@ func predictionResolvePrompt(contract PredictionContract, cleanedText string) st
 	b.WriteString(cleanedText)
 	b.WriteString("\n\nChoose exactly one allowed outcome when the result is clear. ")
 	b.WriteString("Return result_type outcome and outcome_id equal to the chosen allowed outcome id. ")
+	b.WriteString("Set result to a short factual final result, such as the final score, limited to 128 bytes. ")
 	b.WriteString("Use result_type \"pending\" and empty outcome_id when the event result is not available yet. ")
 	b.WriteString("Use result_type \"unverifiable\" and empty outcome_id when the result cannot be verified. ")
 	b.WriteString("Use result_type \"invalid\" and empty outcome_id when the event or market is invalid.")

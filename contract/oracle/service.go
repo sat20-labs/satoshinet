@@ -2,7 +2,6 @@ package oracle
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -44,10 +43,8 @@ type Config struct {
 
 	LLM LLMConfig
 
-	TipContext          func() (TipContext, error)
-	CoreNodePubKey      func() ([]byte, error)
-	SignCoreNodeMessage func([]byte) ([]byte, error)
-	SubmitInvoke        func(contractcommon.ContractAddress, string, []byte) (*wire.MsgTx, error)
+	TipContext   func() (TipContext, error)
+	SubmitInvoke func(contractcommon.ContractAddress, string, []byte) (*wire.MsgTx, error)
 
 	Infof  func(string, ...interface{})
 	Warnf  func(string, ...interface{})
@@ -156,22 +153,12 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LLM.Timeout+30*time.Second)
 	defer cancel()
-	coreNodePubKey, err := s.coreNodePubKey()
-	if err != nil {
-		delay := s.recordFailure(contractAddr, err)
-		s.warnf("Agent contract %s core node pubkey unavailable: %v, retry_after=%s",
-			contractAddr, err, delay)
-		return
-	}
 	param, err := corenodeAgent.BuildConfirmParam(ctx, agentcontract.PredictionAgentConfirmRequest{
-		Contract:            candidate.Contract,
-		ContractAddress:     candidate.Address,
-		ResultURL:           candidate.Contract.SourceURL,
-		ObservedAt:          observedAt,
-		CoreNodePubKey:      coreNodePubKey,
-		SignCoreNodeMessage: s.cfg.SignCoreNodeMessage,
-		AgentVersion:        "satoshinet-agent-v1",
-		ModelVersion:        s.cfg.LLM.Model,
+		Contract:     candidate.Contract,
+		ResultURL:    candidate.Contract.SourceURL,
+		ObservedAt:   observedAt,
+		AgentVersion: agentcontract.CurrentAgentVersion,
+		ModelVersion: s.cfg.LLM.Model,
 	})
 	if err != nil {
 		delay := s.recordFailure(contractAddr, err)
@@ -189,9 +176,9 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 		return
 	}
 	s.clearFailure(contractAddr)
-	s.infof("Agent contract %s confirm submitted: tx=%s result_type=%s outcome=%s result_url=%s result_hash=%s",
+	s.infof("Agent contract %s confirm submitted: tx=%s result_type=%s outcome=%s result=%s result_url=%s",
 		contractAddr, tx.TxID(), param.ResultType, param.OutcomeID,
-		param.ResultURL, param.ResultHash)
+		truncate(param.Result, 120), param.ResultURL)
 }
 
 func (s *Service) processReadyContracts(runtimeStore *agentcontract.RuntimeStore,
@@ -276,13 +263,6 @@ func (s *Service) submitInvoke(contract contractcommon.ContractAddress, action s
 	return s.cfg.SubmitInvoke(contract, action, param)
 }
 
-func (s *Service) coreNodePubKey() ([]byte, error) {
-	if s.cfg.CoreNodePubKey == nil {
-		return nil, fmt.Errorf("missing core node pubkey provider")
-	}
-	return s.cfg.CoreNodePubKey()
-}
-
 func (s *Service) shouldAttempt(contractAddr string, now time.Time) bool {
 	s.retryMu.Lock()
 	defer s.retryMu.Unlock()
@@ -317,9 +297,10 @@ func (s *Service) clearFailure(contractAddr string) {
 func (s *Service) audit(contractAddr string, event agentcontract.PredictionAgentAuditEvent) {
 	msg := truncate(event.Error, 180)
 	reason := truncate(event.Reason, 180)
-	s.infof("Agent contract %s audit stage=%s url=%s final_url=%s result_type=%s outcome=%s attempt=%d text_bytes=%d cleaned_bytes=%d candidates=%d result_hash=%s reason=%s error=%s",
+	result := truncate(event.Result, 120)
+	s.infof("Agent contract %s audit stage=%s url=%s final_url=%s result_type=%s outcome=%s attempt=%d text_bytes=%d cleaned_bytes=%d candidates=%d result=%s reason=%s error=%s",
 		contractAddr, event.Stage, event.ResultURL, event.FinalURL, event.ResultType, event.OutcomeID,
-		event.Attempt, event.TextBytes, event.CleanedBytes, event.CandidateCount, event.ResultHash, reason, msg)
+		event.Attempt, event.TextBytes, event.CleanedBytes, event.CandidateCount, result, reason, msg)
 }
 
 func newLLMClient(cfg LLMConfig, infof func(string, ...interface{})) (agentcontract.LLMClient, error) {
@@ -400,11 +381,9 @@ func AgentRuntimeConfig(params *chaincfg.Params, agentPubKey, bootstrapPubKey []
 		return agentcontract.RuntimeConfig{}, err
 	}
 	return agentcontract.RuntimeConfig{
-		CoreNodeAddress:           agentAddress,
-		CoreNodePubKey:            hex.EncodeToString(agentPubKey),
-		AgentAddress:              agentAddress,
-		BootstrapAddress:          bootstrapAddress,
-		ChainParams:               params,
-		RequireConfirmAttestation: true,
+		CoreNodeAddress:  agentAddress,
+		AgentAddress:     agentAddress,
+		BootstrapAddress: bootstrapAddress,
+		ChainParams:      params,
 	}, nil
 }

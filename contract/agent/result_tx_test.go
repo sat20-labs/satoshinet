@@ -21,9 +21,8 @@ func TestBuildResultTxFromPredictionSettlementPlan(t *testing.T) {
 		Param: PredictionConfirmParam{
 			ResultType: ResultTypeOutcome,
 			OutcomeID:  "a",
-			SourceURL:  runtime.Contract().SourceURL,
+			Result:     "Team A 101, Team B 98",
 			ResultURL:  "https://example.com/match/result/123",
-			ResultHash: "abc123",
 			ObservedAt: runtime.Contract().EventTime + 1,
 		},
 		TimeValue: runtime.Contract().ConfirmAfter + 1,

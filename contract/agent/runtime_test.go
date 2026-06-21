@@ -79,9 +79,8 @@ func TestRuntimeConfirmSettlesWinnersAndFees(t *testing.T) {
 		Param: PredictionConfirmParam{
 			ResultType: ResultTypeOutcome,
 			OutcomeID:  "a",
-			SourceURL:  runtime.Contract().SourceURL,
+			Result:     "Team A 101, Team B 98",
 			ResultURL:  "https://example.com/match/result/123",
-			ResultHash: "abc123",
 			ObservedAt: runtime.Contract().EventTime + 1,
 		},
 		TimeValue: runtime.Contract().ConfirmAfter + 100,
@@ -108,9 +107,8 @@ func TestRuntimeConfirmRequiresConfirmAfter(t *testing.T) {
 		Param: PredictionConfirmParam{
 			ResultType: ResultTypeOutcome,
 			OutcomeID:  "a",
-			SourceURL:  runtime.Contract().SourceURL,
+			Result:     "Team A 101, Team B 98",
 			ResultURL:  "https://example.com/match/result/123",
-			ResultHash: "abc123",
 			ObservedAt: runtime.Contract().EventTime + 1,
 		},
 		TimeValue: runtime.Contract().ConfirmAfter - 1,
@@ -131,9 +129,8 @@ func TestRuntimeConfirmRefundsWhenNoWinner(t *testing.T) {
 		Param: PredictionConfirmParam{
 			ResultType: ResultTypeOutcome,
 			OutcomeID:  "b",
-			SourceURL:  runtime.Contract().SourceURL,
+			Result:     "Team A 101, Team B 98",
 			ResultURL:  "https://example.com/match/result/123",
-			ResultHash: "abc123",
 			ObservedAt: runtime.Contract().EventTime + 1,
 		},
 		TimeValue: runtime.Contract().ConfirmAfter + 100,
@@ -157,9 +154,8 @@ func TestRuntimeConfirmRefundsCancelledResult(t *testing.T) {
 		Invoker: "core",
 		Param: PredictionConfirmParam{
 			ResultType: ResultTypeCancelled,
-			SourceURL:  runtime.Contract().SourceURL,
+			Result:     "Team A 101, Team B 98",
 			ResultURL:  "https://example.com/match/result/123",
-			ResultHash: "abc123",
 			ObservedAt: runtime.Contract().EventTime + 1,
 		},
 		TimeValue: runtime.Contract().ConfirmAfter + 100,

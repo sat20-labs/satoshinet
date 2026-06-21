@@ -10,12 +10,10 @@ import (
 )
 
 type RuntimeConfig struct {
-	CoreNodeAddress           string
-	CoreNodePubKey            string
-	AgentAddress              string
-	BootstrapAddress          string
-	ChainParams               *chaincfg.Params `json:"-"`
-	RequireConfirmAttestation bool
+	CoreNodeAddress  string
+	AgentAddress     string
+	BootstrapAddress string
+	ChainParams      *chaincfg.Params `json:"-"`
 }
 
 type Runtime struct {
@@ -46,17 +44,14 @@ type PredictionBetRecord struct {
 }
 
 type PredictionConfirmRecord struct {
-	Agent             string `json:"agent"`
-	ResultType        string `json:"result_type"`
-	OutcomeID         string `json:"outcome_id,omitempty"`
-	SourceURL         string `json:"source_url"`
-	ResultURL         string `json:"result_url"`
-	ResultHash        string `json:"result_hash"`
-	ObservedAt        int64  `json:"observed_at"`
-	AgentVersion      string `json:"agent_version,omitempty"`
-	ModelVersion      string `json:"model_version,omitempty"`
-	CoreNodePubKey    string `json:"core_node_pubkey,omitempty"`
-	CoreNodeSignature string `json:"core_node_signature,omitempty"`
+	Agent        string `json:"agent"`
+	ResultType   string `json:"result_type"`
+	OutcomeID    string `json:"outcome_id,omitempty"`
+	Result       string `json:"result"`
+	ResultURL    string `json:"result_url"`
+	ObservedAt   int64  `json:"observed_at"`
+	AgentVersion uint32 `json:"agent_version,omitempty"`
+	ModelVersion string `json:"model_version,omitempty"`
 }
 
 type PredictionRejectRecord struct {
@@ -266,26 +261,16 @@ func (r *Runtime) ApplyConfirm(req ApplyConfirmRequest) (*PredictionSettlementPl
 	if err := req.Param.Check(r.contract); err != nil {
 		return nil, err
 	}
-	if r.config.RequireConfirmAttestation || r.config.CoreNodePubKey != "" ||
-		req.Param.CoreNodePubKey != "" || req.Param.CoreNodeSignature != "" {
-		if err := VerifyPredictionConfirmAttestation(r.address, req.Param,
-			r.config.CoreNodePubKey, r.config.CoreNodeAddress, r.config.ChainParams); err != nil {
-			return nil, err
-		}
-	}
 	r.state.Prediction.Status = PredictionStatusConfirmed
 	r.state.Prediction.Confirmations = append(r.state.Prediction.Confirmations, PredictionConfirmRecord{
-		Agent:             req.Invoker,
-		ResultType:        req.Param.ResultType,
-		OutcomeID:         req.Param.OutcomeID,
-		SourceURL:         req.Param.SourceURL,
-		ResultURL:         req.Param.ResultURL,
-		ResultHash:        req.Param.ResultHash,
-		ObservedAt:        req.Param.ObservedAt,
-		AgentVersion:      req.Param.AgentVersion,
-		ModelVersion:      req.Param.ModelVersion,
-		CoreNodePubKey:    req.Param.CoreNodePubKey,
-		CoreNodeSignature: req.Param.CoreNodeSignature,
+		Agent:        req.Invoker,
+		ResultType:   req.Param.ResultType,
+		OutcomeID:    req.Param.OutcomeID,
+		Result:       req.Param.Result,
+		ResultURL:    req.Param.ResultURL,
+		ObservedAt:   req.Param.ObservedAt,
+		AgentVersion: req.Param.AgentVersion,
+		ModelVersion: req.Param.ModelVersion,
 	})
 	plan, err := r.buildSettlementPlan(req.Param)
 	if err != nil {

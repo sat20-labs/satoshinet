@@ -759,14 +759,8 @@ func (s *Handle) getContracts(c *gin.Context) {
 	resp.Contracts = s.model.GetSupportedContracts()
 
 	query := parseContractListQuery(c)
-	if !query.requiresFullList() {
-		resp.Data, resp.Total = s.model.GetContracts(query.start, query.limit)
-		resp.ContractURLs, _ = s.model.GetDeployedContracts(query.start, query.limit)
-		c.JSON(http.StatusOK, resp)
-		return
-	}
-
 	contracts, _ := s.model.GetContracts(0, 0)
+	contracts = filterRuntimeExistingContractSummaries(contracts, query)
 	contracts = filterContractSummaries(contracts, query)
 	sortContractSummaries(contracts, query)
 
@@ -783,6 +777,55 @@ func (s *Handle) getContract(c *gin.Context) {
 
 func (s *Handle) getContractState(c *gin.Context) {
 	s.contractRPC(c, "getcontractstate", []interface{}{c.Param("contract")})
+}
+
+func (s *Handle) reviewPredictionReady(c *gin.Context) {
+	resp := &localwire.ContractResp{
+		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
+	}
+	var req struct {
+		ContractJSON string          `json:"contractJson"`
+		Content      string          `json:"content"`
+		Contract     json.RawMessage `json:"contract"`
+		Prediction   json.RawMessage `json:"prediction"`
+		CheckedAt    *int64          `json:"checkedAt"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	contractJSON := strings.TrimSpace(req.ContractJSON)
+	if contractJSON == "" {
+		contractJSON = strings.TrimSpace(req.Content)
+	}
+	if contractJSON == "" && len(req.Contract) > 0 {
+		contractJSON = string(req.Contract)
+	}
+	if contractJSON == "" && len(req.Prediction) > 0 {
+		contractJSON = string(req.Prediction)
+	}
+	if contractJSON == "" {
+		resp.Code = -1
+		resp.Msg = "missing prediction contract json"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	params := []interface{}{contractJSON}
+	if req.CheckedAt != nil && *req.CheckedAt > 0 {
+		params = append(params, *req.CheckedAt)
+	}
+	result, err := contractStateCall("reviewpredictionready", params)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = result
+	resp.Status = string(result)
+	c.JSON(http.StatusOK, resp)
 }
 
 func (s *Handle) getContractHistory(c *gin.Context) {
@@ -873,10 +916,7 @@ type contractListQuery struct {
 	subtype        string
 	sortBy         string
 	desc           bool
-}
-
-func (q contractListQuery) requiresFullList() bool {
-	return q.contractTypeID != nil || q.contractType != "" || q.subtype != "" || q.sortBy != ""
+	includeInvalid bool
 }
 
 func parseContractListQuery(c *gin.Context) contractListQuery {
@@ -888,6 +928,7 @@ func parseContractListQuery(c *gin.Context) contractListQuery {
 		subtype:      strings.ToLower(strings.TrimSpace(firstQuery(c, "subtype", "sub_type", "subType"))),
 		sortBy:       normalizeContractSortField(firstQuery(c, "sort", "sort_by", "sortBy")),
 	}
+	query.includeInvalid = parseBoolQuery(c, "include_invalid", "includeInvalid", "all")
 
 	if value := firstQuery(c, "contract_type_id", "contractTypeId", "type_id", "typeId"); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil {
@@ -898,6 +939,61 @@ func parseContractListQuery(c *gin.Context) contractListQuery {
 	order := strings.ToLower(strings.TrimSpace(firstQuery(c, "order", "sort_order", "sortOrder")))
 	query.desc = order == "desc" || order == "-1"
 	return query
+}
+
+var contractStateCall = satsnet_rpc.Call
+
+func filterRuntimeExistingContractSummaries(contracts []contractcommon.ContractSummary, query contractListQuery) []contractcommon.ContractSummary {
+	if query.includeInvalid {
+		return contracts
+	}
+
+	filtered := make([]contractcommon.ContractSummary, 0, len(contracts))
+	for _, contract := range contracts {
+		exists, err := contractRuntimeExists(contract.Address)
+		if err != nil || exists {
+			filtered = append(filtered, contract)
+		}
+	}
+	return filtered
+}
+
+func contractRuntimeExists(address string) (bool, error) {
+	if strings.TrimSpace(address) == "" {
+		return true, nil
+	}
+
+	result, err := contractStateCall("getcontractstate", []interface{}{address})
+	if err != nil {
+		return true, err
+	}
+	return contractStateResponseExists(result)
+}
+
+func contractStateResponseExists(result []byte) (bool, error) {
+	var state struct {
+		Details map[string]interface{} `json:"details"`
+	}
+	if err := json.Unmarshal(result, &state); err != nil {
+		return true, err
+	}
+	exists, ok := state.Details["exists"]
+	if !ok {
+		return true, nil
+	}
+	if value, ok := exists.(bool); ok {
+		return value, nil
+	}
+	return true, nil
+}
+
+func parseBoolQuery(c *gin.Context, names ...string) bool {
+	switch strings.ToLower(strings.TrimSpace(firstQuery(c, names...))) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeContractSortField(value string) string {
