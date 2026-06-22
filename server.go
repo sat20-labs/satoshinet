@@ -2736,9 +2736,7 @@ func (s *server) Start() {
 	}
 
 	if s.agentOracle != nil && s.agentOracle.Enabled() {
-		s.wg.Add(1)
 		go func() {
-			defer s.wg.Done()
 			s.agentOracle.Run(s.quit)
 		}()
 	}

@@ -439,7 +439,7 @@ func (f HTTPPredictionResultTextFetcher) FetchResultText(ctx context.Context, re
 func (f HTTPPredictionResultTextFetcher) FetchPredictionResult(ctx context.Context, resultURL string) (PredictionResultFetchResult, error) {
 	client := f.Client
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	maxBytes := f.MaxBytes
 	if maxBytes <= 0 {
@@ -490,59 +490,49 @@ func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context
 	}
 	client := s.Client
 	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+		client = &http.Client{Timeout: 5 * time.Second}
 	}
 	maxBytes := s.MaxBytes
 	if maxBytes <= 0 {
 		maxBytes = DefaultPredictionSearchMaxBytes
 	}
+
+	endpoints := s.endpoints()
+	if len(endpoints) == 1 {
+		urls, _, err := s.searchPredictionResultEndpoint(ctx, client, maxBytes, searchDomain, contract, endpoints[0])
+		return urls, err
+	}
+
+	searchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type endpointResult struct {
+		urls     []string
+		searchOK bool
+		err      error
+	}
+	results := make(chan endpointResult, len(endpoints))
+	for _, endpoint := range endpoints {
+		endpoint := endpoint
+		go func() {
+			urls, searchOK, err := s.searchPredictionResultEndpoint(searchCtx, client, maxBytes, searchDomain, contract, endpoint)
+			results <- endpointResult{urls: urls, searchOK: searchOK, err: err}
+		}()
+	}
+
 	var lastErr error
 	searchOK := false
-	for _, endpoint := range s.endpoints() {
-		for _, searchQuery := range buildPredictionSearchQueries(searchDomain, contract) {
-			searchURL, err := url.Parse(endpoint)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			query := searchURL.Query()
-			query.Set("q", searchQuery)
-			if query.Get("num") == "" {
-				query.Set("num", fmt.Sprintf("%d", s.maxResults()))
-			}
-			if query.Get("count") == "" {
-				query.Set("count", fmt.Sprintf("%d", s.maxResults()))
-			}
-			if query.Get("hl") == "" {
-				query.Set("hl", "zh-CN")
-			}
-			searchURL.RawQuery = query.Encode()
-
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL.String(), nil)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; SatoshiNetPredictionAgent/1.0)")
-			resp, err := client.Do(req)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			raw, readErr := readLimitedAndClose(resp, maxBytes)
-			if readErr != nil {
-				lastErr = readErr
-				continue
-			}
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				lastErr = fmt.Errorf("prediction search status %d", resp.StatusCode)
-				continue
-			}
+	for range endpoints {
+		result := <-results
+		if len(result.urls) > 0 {
+			cancel()
+			return result.urls, nil
+		}
+		if result.searchOK {
 			searchOK = true
-			urls := extractPredictionSearchURLs(string(raw), contract.SourceURL, s.maxResults())
-			if len(urls) > 0 {
-				return urls, nil
-			}
+		}
+		if result.err != nil {
+			lastErr = result.err
 		}
 	}
 	if searchOK {
@@ -552,6 +542,60 @@ func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context
 		return nil, lastErr
 	}
 	return nil, nil
+}
+
+func (s HTTPPredictionResultSearcher) searchPredictionResultEndpoint(ctx context.Context,
+	client *http.Client, maxBytes int64, searchDomain string, contract PredictionContract,
+	endpoint string) ([]string, bool, error) {
+
+	var lastErr error
+	searchOK := false
+	for _, searchQuery := range buildPredictionSearchQueries(searchDomain, contract) {
+		searchURL, err := url.Parse(endpoint)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		query := searchURL.Query()
+		query.Set("q", searchQuery)
+		if query.Get("num") == "" {
+			query.Set("num", fmt.Sprintf("%d", s.maxResults()))
+		}
+		if query.Get("count") == "" {
+			query.Set("count", fmt.Sprintf("%d", s.maxResults()))
+		}
+		if query.Get("hl") == "" {
+			query.Set("hl", "zh-CN")
+		}
+		searchURL.RawQuery = query.Encode()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL.String(), nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; SatoshiNetPredictionAgent/1.0)")
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		raw, readErr := readLimitedAndClose(resp, maxBytes)
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("prediction search status %d", resp.StatusCode)
+			continue
+		}
+		searchOK = true
+		urls := extractPredictionSearchURLs(string(raw), contract.SourceURL, s.maxResults())
+		if len(urls) > 0 {
+			return urls, true, nil
+		}
+	}
+	return nil, searchOK, lastErr
 }
 
 func (s HTTPPredictionResultSearcher) maxResults() int {

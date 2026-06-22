@@ -69,7 +69,7 @@ const (
 	defaultMaxOrphanTxSize       = 100000
 	defaultSigCacheMaxSize       = 100000
 	defaultUtxoCacheMaxSizeMiB   = 250
-	defaultAgentLLMTimeout       = time.Second * 60
+	defaultAgentLLMTimeout       = time.Second * 15
 	defaultAgentCheckInterval    = time.Minute
 	sampleConfigFilename         = "sample-satsnet.conf"
 	defaultTxIndex               = true

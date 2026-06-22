@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -326,6 +327,47 @@ func TestHTTPPredictionResultSearcherBuildsSiteQuery(t *testing.T) {
 	}
 }
 
+func TestHTTPPredictionResultSearcherUsesFirstEndpointWithResults(t *testing.T) {
+	contract := validPredictionContract()
+	contract.SourceURL = "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			body := `<html><body></body></html>`
+			if req.URL.Host == "www.google.com" {
+				select {
+				case <-time.After(300 * time.Millisecond):
+				case <-req.Context().Done():
+					return nil, req.Context().Err()
+				}
+			}
+			if req.URL.Host == "www.bing.com" {
+				body = `<html><body>
+					<a href="https://worldcup.cctv.com/2026/match/22920322/index.shtml">match</a>
+				</body></html>`
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	start := time.Now()
+	searcher := HTTPPredictionResultSearcher{Client: client, MaxResults: 5}
+	urls, err := searcher.SearchPredictionResult(context.Background(), contract)
+	if err != nil {
+		t.Fatalf("SearchPredictionResult failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
+		t.Fatalf("search fallback was not concurrent, elapsed=%s", elapsed)
+	}
+	if len(urls) != 1 || urls[0] != "https://worldcup.cctv.com/2026/match/22920322/index.shtml" {
+		t.Fatalf("search urls mismatch: %#v", urls)
+	}
+}
+
 func TestPredictionAgentReadyReviewRejectsAmbiguousContract(t *testing.T) {
 	client := &fakeLLMClient{response: `{"ready":false,"reason":"event source is not verifiable"}`}
 	contract := predictionContractForResultServer("https://example.com")
@@ -502,6 +544,12 @@ func (c *retryLLMClient) Complete(ctx context.Context, req LLMCompletionRequest)
 		return LLMCompletionResponse{}, errors.New("temporary llm failure")
 	}
 	return LLMCompletionResponse{Content: c.response}, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func auditStageSeen(events []PredictionAgentAuditEvent, stage string) bool {

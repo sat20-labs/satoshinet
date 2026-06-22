@@ -161,7 +161,7 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 	if candidate.Contract.TimeBase == agentcontract.TimeBaseUnix {
 		observedAt = tip.Unix
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LLM.Timeout+30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LLM.Timeout)
 	defer cancel()
 	param, err := corenodeAgent.BuildConfirmParam(ctx, agentcontract.PredictionAgentConfirmRequest{
 		Contract:     candidate.Contract,
@@ -210,7 +210,7 @@ func (s *Service) processReadyContracts(quit <-chan struct{}, runtimeStore *agen
 		corenodeAgent.Audit = func(event agentcontract.PredictionAgentAuditEvent) {
 			s.audit(contractAddr, event)
 		}
-		reviewCtx, cancel := context.WithTimeout(context.Background(), s.cfg.LLM.Timeout+30*time.Second)
+		reviewCtx, cancel := context.WithTimeout(context.Background(), s.cfg.LLM.Timeout)
 		reject, ready, err := corenodeAgent.ReviewReady(reviewCtx, agentcontract.PredictionAgentReadyReviewRequest{
 			Contract:  candidate.Contract,
 			CheckedAt: checkedAt,
