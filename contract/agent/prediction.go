@@ -254,7 +254,18 @@ func ResultURLAllowed(sourceURL, resultURL string) bool {
 func hostInScope(sourceHost, resultHost string) bool {
 	sourceHost = strings.TrimSuffix(strings.ToLower(sourceHost), ".")
 	resultHost = strings.TrimSuffix(strings.ToLower(resultHost), ".")
-	return resultHost == sourceHost || strings.HasSuffix(resultHost, "."+sourceHost)
+	if resultHost == sourceHost || strings.HasSuffix(resultHost, "."+sourceHost) {
+		return true
+	}
+	sourceDomain, err := siteSearchDomain(sourceHost)
+	if err != nil {
+		return false
+	}
+	resultDomain, err := siteSearchDomain(resultHost)
+	if err != nil {
+		return false
+	}
+	return sourceDomain == resultDomain
 }
 
 func checkOutcome(outcome PredictionOutcome) error {

@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 const DefaultPredictionResultMaxBytes int64 = 1 << 20
@@ -19,6 +21,9 @@ const (
 	DefaultPredictionAgentRetryAttempts = 2
 	DefaultPredictionAgentRetryBackoff  = 2 * time.Second
 	DefaultPredictionAgentMaxCandidates = 8
+	DefaultPredictionSearchMaxResults   = 8
+	DefaultPredictionSearchMaxBytes     = 1 << 20
+	DefaultPredictionSearchEndpoint     = "https://www.google.com/search"
 )
 
 type PredictionAgentAuditEvent struct {
@@ -55,6 +60,13 @@ type PredictionResultFetcher interface {
 type HTTPPredictionResultTextFetcher struct {
 	Client   *http.Client
 	MaxBytes int64
+}
+
+type HTTPPredictionResultSearcher struct {
+	Client     *http.Client
+	Endpoint   string
+	MaxBytes   int64
+	MaxResults int
 }
 
 type PredictionAgent struct {
@@ -99,6 +111,7 @@ func NewPredictionAgent(client LLMClient) *PredictionAgent {
 	return &PredictionAgent{
 		Resolver:         NewPredictionLLMResolver(client),
 		Fetcher:          HTTPPredictionResultTextFetcher{},
+		Searcher:         HTTPPredictionResultSearcher{},
 		RetryAttempts:    DefaultPredictionAgentRetryAttempts,
 		RetryBackoff:     DefaultPredictionAgentRetryBackoff,
 		MaxCandidateURLs: DefaultPredictionAgentMaxCandidates,
@@ -224,25 +237,22 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 	if err == nil {
 		return param, nil
 	}
-	if !errors.Is(err, ErrPredictionResultPending) {
-		return PredictionConfirmParam{}, err
-	}
 	candidateURLs := a.candidateResultURLs(ctx, req.Contract, fetched.Links)
 	a.audit(PredictionAgentAuditEvent{Stage: "candidate_urls", CandidateCount: len(candidateURLs)})
+	lastErr := err
 	for _, candidateURL := range candidateURLs {
 		next, fetchErr := a.fetchWithRetry(ctx, fetcher, candidateURL)
 		if fetchErr != nil {
+			lastErr = fetchErr
 			continue
 		}
 		param, resolveErr := a.resolveFetchedResult(ctx, req, next, candidateURL)
 		if resolveErr == nil {
 			return param, nil
 		}
-		if !errors.Is(resolveErr, ErrPredictionResultPending) {
-			return PredictionConfirmParam{}, resolveErr
-		}
+		lastErr = resolveErr
 	}
-	return PredictionConfirmParam{}, ErrPredictionResultPending
+	return PredictionConfirmParam{}, lastErr
 }
 
 func (a *PredictionAgent) fetchWithRetry(ctx context.Context, fetcher PredictionResultFetcher, resultURL string) (PredictionResultFetchResult, error) {
@@ -373,6 +383,7 @@ func (a *PredictionAgent) searchResultURLs(ctx context.Context, contract Predict
 		a.audit(PredictionAgentAuditEvent{Stage: "search_error", Error: err.Error()})
 		return nil
 	}
+	a.audit(PredictionAgentAuditEvent{Stage: "search_results", CandidateCount: len(urls)})
 	return urls
 }
 
@@ -455,35 +466,130 @@ func (f HTTPPredictionResultTextFetcher) FetchPredictionResult(ctx context.Conte
 	}, nil
 }
 
+func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context, contract PredictionContract) ([]string, error) {
+	if err := contract.Check(); err != nil {
+		return nil, err
+	}
+	source, err := parseHTTPURL(contract.SourceURL)
+	if err != nil {
+		return nil, err
+	}
+	searchDomain, err := siteSearchDomain(source.Hostname())
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimSpace(s.Endpoint)
+	if endpoint == "" {
+		endpoint = DefaultPredictionSearchEndpoint
+	}
+	searchURL, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	query := searchURL.Query()
+	query.Set("q", buildPredictionSearchQuery(searchDomain, contract))
+	if query.Get("num") == "" {
+		query.Set("num", fmt.Sprintf("%d", s.maxResults()))
+	}
+	if query.Get("hl") == "" {
+		query.Set("hl", "zh-CN")
+	}
+	searchURL.RawQuery = query.Encode()
+
+	client := s.Client
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; SatoshiNetPredictionAgent/1.0)")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("prediction search status %d", resp.StatusCode)
+	}
+	maxBytes := s.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = DefaultPredictionSearchMaxBytes
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > maxBytes {
+		return nil, fmt.Errorf("prediction search text exceeds max bytes %d", maxBytes)
+	}
+	return extractPredictionSearchURLs(string(raw), contract.SourceURL, s.maxResults()), nil
+}
+
+func (s HTTPPredictionResultSearcher) maxResults() int {
+	if s.MaxResults > 0 {
+		return s.MaxResults
+	}
+	return DefaultPredictionSearchMaxResults
+}
+
 var (
-	htmlScriptPattern = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
-	htmlStylePattern  = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
-	htmlTagPattern    = regexp.MustCompile(`(?is)<[^>]+>`)
-	htmlLinkPattern   = regexp.MustCompile(`(?is)<a\s+[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>`)
+	htmlScriptPattern     = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	htmlJSONScriptPattern = regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script>`)
+	htmlStylePattern      = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	htmlTagPattern        = regexp.MustCompile(`(?is)<[^>]+>`)
+	htmlURLAttrPattern    = regexp.MustCompile(`(?is)<(a|iframe|frame|link)\b[^>]*(href|src)=["']([^"']+)["'][^>]*>`)
+	searchHrefPattern     = regexp.MustCompile(`(?is)href=["']([^"']+)["']`)
+	rawHTTPURLPattern     = regexp.MustCompile(`https?://[^\s"'<>\\]+`)
 )
 
 func ExtractPredictionResultText(raw string) string {
+	dataText := ExtractPredictionEmbeddedDataText(raw)
 	raw = htmlScriptPattern.ReplaceAllString(raw, " ")
 	raw = htmlStylePattern.ReplaceAllString(raw, " ")
 	raw = htmlTagPattern.ReplaceAllString(raw, " ")
 	raw = html.UnescapeString(raw)
-	return strings.Join(strings.Fields(raw), " ")
+	visibleText := strings.Join(strings.Fields(raw), " ")
+	if dataText == "" {
+		return visibleText
+	}
+	if visibleText == "" {
+		return dataText
+	}
+	return visibleText + "\nEmbedded data:\n" + dataText
+}
+
+func ExtractPredictionEmbeddedDataText(raw string) string {
+	matches := htmlJSONScriptPattern.FindAllStringSubmatch(raw, -1)
+	parts := make([]string, 0)
+	for _, match := range matches {
+		if len(match) < 3 || !predictionScriptContainsData(match[1]) {
+			continue
+		}
+		text := html.UnescapeString(strings.TrimSpace(match[2]))
+		if text == "" {
+			continue
+		}
+		parts = append(parts, strings.Join(strings.Fields(text), " "))
+	}
+	return truncateUTF8Bytes(strings.Join(parts, "\n"), 16000)
 }
 
 func ExtractPredictionResultLinks(raw string, base *url.URL) []string {
-	matches := htmlLinkPattern.FindAllStringSubmatch(raw, -1)
+	matches := htmlURLAttrPattern.FindAllStringSubmatch(raw, -1)
 	out := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, match := range matches {
-		if len(match) < 3 {
+		tag, rawURL, linkText := predictionURLAttrMatch(match)
+		if rawURL == "" {
 			continue
 		}
-		href := html.UnescapeString(strings.TrimSpace(match[1]))
-		text := strings.ToLower(ExtractPredictionResultText(match[2]))
-		if !predictionResultLinkLooksRelevant(href, text) {
+		text := strings.ToLower(ExtractPredictionResultText(linkText))
+		if !predictionResultURLLooksRelevant(tag, rawURL, text) {
 			continue
 		}
-		parsed, err := url.Parse(href)
+		parsed, err := url.Parse(rawURL)
 		if err != nil {
 			continue
 		}
@@ -503,12 +609,115 @@ func ExtractPredictionResultLinks(raw string, base *url.URL) []string {
 	return out
 }
 
-func predictionResultLinkLooksRelevant(href, text string) bool {
-	value := strings.ToLower(href + " " + text)
+func predictionScriptContainsData(attrs string) bool {
+	attrs = strings.ToLower(attrs)
+	return strings.Contains(attrs, "application/json") ||
+		strings.Contains(attrs, "application/ld+json") ||
+		strings.Contains(attrs, "__next_data__") ||
+		strings.Contains(attrs, "__nuxt_data__")
+}
+
+func predictionURLAttrMatch(match []string) (string, string, string) {
+	if len(match) >= 4 && match[1] != "" {
+		return strings.ToLower(match[1]), html.UnescapeString(strings.TrimSpace(match[3])), ""
+	}
+	return "", "", ""
+}
+
+func predictionResultURLLooksRelevant(tag, rawURL, text string) bool {
+	if tag == "iframe" || tag == "frame" {
+		return true
+	}
+	value := strings.ToLower(rawURL + " " + text)
 	for _, token := range []string{"result", "final", "score", "boxscore", "recap", "match", "game"} {
 		if strings.Contains(value, token) {
 			return true
 		}
 	}
 	return false
+}
+
+func buildPredictionSearchQuery(domain string, contract PredictionContract) string {
+	parts := []string{"site:" + domain, contract.Title, contract.Description}
+	for _, outcome := range contract.Outcomes {
+		parts = append(parts, outcome.Text)
+	}
+	return strings.Join(nonEmptyStrings(parts), " ")
+}
+
+func extractPredictionSearchURLs(raw, sourceURL string, limit int) []string {
+	if limit <= 0 {
+		limit = DefaultPredictionSearchMaxResults
+	}
+	out := make([]string, 0, limit)
+	seen := make(map[string]struct{})
+	appendURL := func(candidate string) {
+		if len(out) >= limit {
+			return
+		}
+		normalized := normalizePredictionSearchURL(candidate)
+		if normalized == "" || !ResultURLAllowed(sourceURL, normalized) {
+			return
+		}
+		if _, ok := seen[normalized]; ok {
+			return
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	for _, match := range searchHrefPattern.FindAllStringSubmatch(raw, -1) {
+		if len(match) >= 2 {
+			appendURL(html.UnescapeString(match[1]))
+		}
+	}
+	for _, match := range rawHTTPURLPattern.FindAllString(raw, -1) {
+		appendURL(html.UnescapeString(match))
+	}
+	return out
+}
+
+func normalizePredictionSearchURL(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return ""
+	}
+	if strings.HasPrefix(candidate, "/url?") || strings.HasPrefix(candidate, "https://www.google.com/url?") ||
+		strings.HasPrefix(candidate, "http://www.google.com/url?") {
+		parsed, err := url.Parse(candidate)
+		if err == nil {
+			if target := parsed.Query().Get("q"); target != "" {
+				candidate = target
+			} else if target := parsed.Query().Get("url"); target != "" {
+				candidate = target
+			}
+		}
+	}
+	parsed, err := url.Parse(candidate)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ""
+	}
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func nonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func siteSearchDomain(sourceHost string) (string, error) {
+	sourceHost = strings.TrimSuffix(strings.ToLower(sourceHost), ".")
+	if sourceHost == "" {
+		return "", fmt.Errorf("source host is empty")
+	}
+	if domain, err := publicsuffix.EffectiveTLDPlusOne(sourceHost); err == nil {
+		return domain, nil
+	}
+	return sourceHost, nil
 }

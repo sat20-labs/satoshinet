@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -203,6 +204,125 @@ func TestPredictionAgentSearchesSameSiteResultLinkWhenSourcePending(t *testing.T
 	}
 }
 
+func TestPredictionAgentSearchesSiteWhenSourceHasNoResultLink(t *testing.T) {
+	var resultServer *httptest.Server
+	resultServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/match/preview/123":
+			_, _ = w.Write([]byte(`<html><body><h1>Upcoming game</h1></body></html>`))
+		case "/match/result/123":
+			_, _ = w.Write([]byte(`<html><body>Final: Team A 101, Team B 98.</body></html>`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer resultServer.Close()
+
+	client := &sequenceLLMClient{responses: []string{
+		`{"result_type":"outcome","outcome_id":"unknown","result":"no reliable source in page shell"}`,
+		`{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`,
+	}}
+	contract := predictionContractForResultServer(resultServer.URL)
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.RetryAttempts = 1
+	corenodeAgent.Searcher = staticPredictionSearcher{urls: []string{resultServer.URL + "/match/result/123"}}
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.ResultURL != resultServer.URL+"/match/result/123" || param.OutcomeID != "a" {
+		t.Fatalf("unexpected confirm param: %#v", param)
+	}
+	if client.calls != 2 {
+		t.Fatalf("llm call count mismatch: %d", client.calls)
+	}
+}
+
+func TestPredictionResultURLAllowedSameRegisteredDomain(t *testing.T) {
+	source := "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	if !ResultURLAllowed(source, "https://cbs-u.sports.cctv.com/pc/game/season_game_list") {
+		t.Fatalf("expected same registered domain URL to be allowed")
+	}
+	if ResultURLAllowed(source, "https://evilcctv.com/pc/game/season_game_list") {
+		t.Fatalf("expected lookalike domain to be rejected")
+	}
+	if ResultURLAllowed(source, "http://cbs-u.sports.cctv.com/pc/game/season_game_list") {
+		t.Fatalf("expected scheme downgrade to be rejected")
+	}
+}
+
+func TestPredictionResultFetcherExtractsIframeAndEmbeddedData(t *testing.T) {
+	raw := `<html><body>
+		<h1>Fixture shell</h1>
+		<iframe src="//cbs.sports.cctv.com/worldcup2026_schedule_tabs.html"></iframe>
+		<script type="application/ld+json">{"name":"Team A vs Team B","score":"101-98"}</script>
+	</body></html>`
+	base, err := url.Parse("https://worldcup.cctv.com/2026/schedule/index.shtml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := ExtractPredictionResultLinks(raw, base)
+	if len(links) != 1 || links[0] != "https://cbs.sports.cctv.com/worldcup2026_schedule_tabs.html" {
+		t.Fatalf("iframe links mismatch: %#v", links)
+	}
+	text := ExtractPredictionResultText(raw)
+	if !strings.Contains(text, "Fixture shell") || !strings.Contains(text, `"score":"101-98"`) {
+		t.Fatalf("extracted text missing evidence: %s", text)
+	}
+}
+
+func TestPredictionSearchExtractsGoogleResultURLs(t *testing.T) {
+	source := "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	raw := `<html><body>
+		<a href="/url?q=https%3A%2F%2Fworldcup.cctv.com%2F2026%2Fmatch%2F22920322%2Findex.shtml&sa=U">match</a>
+		<a href="/url?q=https%3A%2F%2Fevilcctv.com%2Ffake&sa=U">fake</a>
+		<a href="https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400">api</a>
+	</body></html>`
+	urls := extractPredictionSearchURLs(raw, source, 5)
+	if len(urls) != 2 {
+		t.Fatalf("search urls mismatch: %#v", urls)
+	}
+	if urls[0] != "https://worldcup.cctv.com/2026/match/22920322/index.shtml" {
+		t.Fatalf("first search url mismatch: %s", urls[0])
+	}
+	if urls[1] != "https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400" {
+		t.Fatalf("second search url mismatch: %s", urls[1])
+	}
+}
+
+func TestHTTPPredictionResultSearcherBuildsSiteQuery(t *testing.T) {
+	var gotQuery string
+	searchServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("q")
+		_, _ = w.Write([]byte(`<html><body>
+			<a href="/url?q=https%3A%2F%2Fworldcup.cctv.com%2F2026%2Fmatch%2F22920322%2Findex.shtml&sa=U">match</a>
+			<a href="/url?q=https%3A%2F%2Fexample.com%2Fwrong&sa=U">wrong</a>
+		</body></html>`))
+	}))
+	defer searchServer.Close()
+
+	contract := validPredictionContract()
+	contract.Title = "比利时vs伊朗"
+	contract.Description = "2026世界杯第二轮"
+	contract.SourceURL = "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	searcher := HTTPPredictionResultSearcher{Endpoint: searchServer.URL, MaxResults: 5}
+	urls, err := searcher.SearchPredictionResult(context.Background(), contract)
+	if err != nil {
+		t.Fatalf("SearchPredictionResult failed: %v", err)
+	}
+	if !strings.Contains(gotQuery, "site:cctv.com") || !strings.Contains(gotQuery, contract.Title) ||
+		!strings.Contains(gotQuery, contract.Description) {
+		t.Fatalf("query missing contract scope: %s", gotQuery)
+	}
+	if len(urls) != 1 || urls[0] != "https://worldcup.cctv.com/2026/match/22920322/index.shtml" {
+		t.Fatalf("search urls mismatch: %#v", urls)
+	}
+}
+
 func TestPredictionAgentReadyReviewRejectsAmbiguousContract(t *testing.T) {
 	client := &fakeLLMClient{response: `{"ready":false,"reason":"event source is not verifiable"}`}
 	contract := predictionContractForResultServer("https://example.com")
@@ -261,6 +381,18 @@ func (c *sequenceLLMClient) Complete(ctx context.Context, req LLMCompletionReque
 	response := c.responses[c.calls]
 	c.calls++
 	return LLMCompletionResponse{Content: response}, nil
+}
+
+type staticPredictionSearcher struct {
+	urls []string
+	err  error
+}
+
+func (s staticPredictionSearcher) SearchPredictionResult(ctx context.Context, contract PredictionContract) ([]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.urls, nil
 }
 
 func TestPredictionAgentRetriesFetchAndAudits(t *testing.T) {
