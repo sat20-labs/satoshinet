@@ -22,7 +22,7 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 			t.Fatalf("unexpected result path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html><body><h1>Final</h1><p>Team A 101, Team B 98.</p></body></html>`))
+		_, _ = w.Write([]byte(`<html><body><h1>Team A vs Team B Final</h1><p>Team A 101, Team B 98.</p></body></html>`))
 	}))
 	defer resultServer.Close()
 
@@ -139,7 +139,7 @@ func TestPredictionAgentUsesFinalRedirectURL(t *testing.T) {
 		case "/match/preview/123":
 			http.Redirect(w, r, resultServer.URL+"/match/result/123", http.StatusFound)
 		case "/match/result/123":
-			_, _ = w.Write([]byte(`<html><body>Final: Team A wins.</body></html>`))
+			_, _ = w.Write([]byte(`<html><body>Team A vs Team B Final: Team A wins.</body></html>`))
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -168,11 +168,11 @@ func TestPredictionAgentSearchesSameSiteResultLinkWhenSourcePending(t *testing.T
 		switch r.URL.Path {
 		case "/match/preview/123":
 			_, _ = w.Write([]byte(`<html><body>
-				<h1>Upcoming game</h1>
-				<a href="/match/result/123">Final score</a>
-			</body></html>`))
+					<h1>Team A vs Team B upcoming game</h1>
+					<a href="/match/result/123">Final score</a>
+				</body></html>`))
 		case "/match/result/123":
-			_, _ = w.Write([]byte(`<html><body>Final: Team A 101, Team B 98.</body></html>`))
+			_, _ = w.Write([]byte(`<html><body>Team A vs Team B Final: Team A 101, Team B 98.</body></html>`))
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -211,7 +211,7 @@ func TestPredictionAgentSearchesSiteWhenSourceHasNoResultLink(t *testing.T) {
 		case "/match/preview/123":
 			_, _ = w.Write([]byte(`<html><body><h1>Upcoming game</h1></body></html>`))
 		case "/match/result/123":
-			_, _ = w.Write([]byte(`<html><body>Final: Team A 101, Team B 98.</body></html>`))
+			_, _ = w.Write([]byte(`<html><body>Team A vs Team B Final: Team A 101, Team B 98.</body></html>`))
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -219,7 +219,6 @@ func TestPredictionAgentSearchesSiteWhenSourceHasNoResultLink(t *testing.T) {
 	defer resultServer.Close()
 
 	client := &sequenceLLMClient{responses: []string{
-		`{"result_type":"outcome","outcome_id":"unknown","result":"no reliable source in page shell"}`,
 		`{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`,
 	}}
 	contract := predictionContractForResultServer(resultServer.URL)
@@ -237,7 +236,7 @@ func TestPredictionAgentSearchesSiteWhenSourceHasNoResultLink(t *testing.T) {
 	if param.ResultURL != resultServer.URL+"/match/result/123" || param.OutcomeID != "a" {
 		t.Fatalf("unexpected confirm param: %#v", param)
 	}
-	if client.calls != 2 {
+	if client.calls != 1 {
 		t.Fatalf("llm call count mismatch: %d", client.calls)
 	}
 }
@@ -279,18 +278,22 @@ func TestPredictionSearchExtractsGoogleResultURLs(t *testing.T) {
 	source := "https://worldcup.cctv.com/2026/schedule/index.shtml"
 	raw := `<html><body>
 		<a href="/url?q=https%3A%2F%2Fworldcup.cctv.com%2F2026%2Fmatch%2F22920322%2Findex.shtml&sa=U">match</a>
+		<a href="/url?q=https%3A%2F%2Fworldcup.cctv.cn%2F2026%2Fmatch%2F22920323%2Findex.shtml&sa=U">mirror</a>
 		<a href="/url?q=https%3A%2F%2Fevilcctv.com%2Ffake&sa=U">fake</a>
 		<a href="https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400">api</a>
 	</body></html>`
 	urls := extractPredictionSearchURLs(raw, source, 5)
-	if len(urls) != 2 {
+	if len(urls) != 3 {
 		t.Fatalf("search urls mismatch: %#v", urls)
 	}
 	if urls[0] != "https://worldcup.cctv.com/2026/match/22920322/index.shtml" {
 		t.Fatalf("first search url mismatch: %s", urls[0])
 	}
-	if urls[1] != "https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400" {
-		t.Fatalf("second search url mismatch: %s", urls[1])
+	if urls[1] != "https://worldcup.cctv.com/2026/match/22920323/index.shtml" {
+		t.Fatalf("mirrored search url mismatch: %s", urls[1])
+	}
+	if urls[2] != "https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400" {
+		t.Fatalf("third search url mismatch: %s", urls[2])
 	}
 }
 
@@ -400,7 +403,7 @@ func TestPredictionAgentRetriesFetchAndAudits(t *testing.T) {
 	contract := predictionContractForResultServer("https://example.com")
 	fetcher := &retryPredictionFetcher{failures: 1, result: PredictionResultFetchResult{
 		FinalURL: "https://example.com/match/result/123",
-		Text:     "Final: Team A 101, Team B 98.",
+		Text:     "Team A vs Team B Final: Team A 101, Team B 98.",
 	}}
 	events := make([]PredictionAgentAuditEvent, 0)
 	corenodeAgent := NewPredictionAgent(client)
@@ -435,7 +438,7 @@ func TestPredictionAgentRetriesLLMAndAudits(t *testing.T) {
 	corenodeAgent := NewPredictionAgent(client)
 	corenodeAgent.Fetcher = &retryPredictionFetcher{result: PredictionResultFetchResult{
 		FinalURL: "https://example.com/match/result/123",
-		Text:     "Final: Team A 101, Team B 98.",
+		Text:     "Team A vs Team B Final: Team A 101, Team B 98.",
 	}}
 	corenodeAgent.RetryAttempts = 2
 	corenodeAgent.RetryBackoff = time.Nanosecond
@@ -512,6 +515,8 @@ func auditStageSeen(events []PredictionAgentAuditEvent, stage string) bool {
 
 func predictionContractForResultServer(serverURL string) PredictionContract {
 	contract := validPredictionContract()
+	contract.Title = "Team A vs Team B"
+	contract.Description = "Predict the Team A vs Team B result"
 	contract.SourceURL = serverURL + "/match/preview/123"
 	return contract
 }

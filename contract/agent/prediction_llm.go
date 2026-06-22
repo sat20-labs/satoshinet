@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
 var ErrPredictionResultPending = errors.New("prediction result is pending")
+
+var predictionDrawScorePattern = regexp.MustCompile(`(^|[^\d])(\d{1,2})\s*[-:：]\s*(\d{1,2})([^\d]|$)`)
 
 type PredictionLLMResolveRequest struct {
 	Contract   PredictionContract
@@ -172,6 +175,12 @@ func normalizePredictionLLMDecision(contract PredictionContract, cleanedText str
 	decision.ResultType = strings.TrimSpace(decision.ResultType)
 	decision.OutcomeID = strings.TrimSpace(decision.OutcomeID)
 
+	if decision.ResultType == ResultTypeOutcome {
+		if id, ok := inferPredictionDrawOutcomeID(contract, cleanedText, decision.Result, decision.Reason); ok {
+			decision.OutcomeID = id
+			return decision
+		}
+	}
 	if id, ok := normalizePredictionOutcomeID(contract, decision.OutcomeID); ok {
 		decision.OutcomeID = id
 		return decision
@@ -185,7 +194,7 @@ func normalizePredictionLLMDecision(contract PredictionContract, cleanedText str
 	if decision.ResultType != ResultTypeOutcome {
 		return decision
 	}
-	if id, ok := inferPredictionOutcomeID(contract, cleanedText, decision.Reason); ok {
+	if id, ok := inferPredictionOutcomeID(contract, cleanedText, decision.Result, decision.Reason, decision.Outcome); ok {
 		decision.OutcomeID = id
 	}
 	return decision
@@ -247,12 +256,72 @@ func inferPredictionOutcomeID(contract PredictionContract, texts ...string) (str
 		}
 	}
 	if len(matches) != 1 {
-		return "", false
+		return inferPredictionDrawOutcomeID(contract, texts...)
 	}
 	for id := range matches {
 		return id, true
 	}
 	return "", false
+}
+
+func inferPredictionDrawOutcomeID(contract PredictionContract, texts ...string) (string, bool) {
+	drawEvidence := false
+	for _, text := range texts {
+		if predictionTextIndicatesDraw(text) {
+			drawEvidence = true
+			break
+		}
+	}
+	if !drawEvidence {
+		return "", false
+	}
+	return predictionDrawOutcomeID(contract)
+}
+
+func predictionDrawOutcomeID(contract PredictionContract) (string, bool) {
+	var matched string
+	for _, outcome := range contract.Outcomes {
+		if !predictionOutcomeTextIndicatesDraw(outcome.Text) {
+			continue
+		}
+		if matched != "" {
+			return "", false
+		}
+		matched = outcome.ID
+	}
+	if strings.TrimSpace(matched) == "" {
+		return "", false
+	}
+	return matched, true
+}
+
+func predictionOutcomeTextIndicatesDraw(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	for _, word := range []string{"draw", "tie", "tied", "平", "平局", "战平"} {
+		if strings.Contains(text, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func predictionTextIndicatesDraw(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	if predictionOutcomeTextIndicatesDraw(text) {
+		return true
+	}
+	for _, match := range predictionDrawScorePattern.FindAllStringSubmatch(text, -1) {
+		if len(match) >= 4 && match[2] == match[3] {
+			return true
+		}
+	}
+	return false
 }
 
 func containsPredictionOutcomeID(text, id string) bool {
