@@ -91,7 +91,7 @@ func (s *Service) Run(quit <-chan struct{}) {
 
 	s.infof("Agent oracle started, interval=%s", s.cfg.Interval)
 	for {
-		if err := s.ProcessOnce(); err != nil {
+		if err := s.processOnce(quit); err != nil {
 			s.warnf("Agent oracle: %v", err)
 		}
 		select {
@@ -104,7 +104,14 @@ func (s *Service) Run(quit <-chan struct{}) {
 }
 
 func (s *Service) ProcessOnce() error {
+	return s.processOnce(nil)
+}
+
+func (s *Service) processOnce(quit <-chan struct{}) error {
 	if !s.Enabled() || s.cfg.DB == nil {
+		return nil
+	}
+	if isQuit(quit) {
 		return nil
 	}
 	store := contractnode.NewAgentStateStore(s.cfg.DB)
@@ -123,7 +130,7 @@ func (s *Service) ProcessOnce() error {
 		return err
 	}
 	corenodeAgent := agentcontract.NewPredictionAgent(s.client)
-	if err := s.processReadyContracts(runtimeStore, corenodeAgent, tip.Unix); err != nil {
+	if err := s.processReadyContracts(quit, runtimeStore, corenodeAgent, tip.Unix); err != nil {
 		return err
 	}
 	candidates, err := runtimeStore.PendingPredictionConfirms(tip.Height, tip.Unix)
@@ -131,6 +138,9 @@ func (s *Service) ProcessOnce() error {
 		return err
 	}
 	for _, candidate := range candidates {
+		if isQuit(quit) {
+			return nil
+		}
 		s.processConfirmCandidate(corenodeAgent, candidate, tip)
 	}
 	return nil
@@ -181,7 +191,7 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 		truncate(param.Result, 120), param.ResultURL)
 }
 
-func (s *Service) processReadyContracts(runtimeStore *agentcontract.RuntimeStore,
+func (s *Service) processReadyContracts(quit <-chan struct{}, runtimeStore *agentcontract.RuntimeStore,
 	corenodeAgent *agentcontract.PredictionAgent, checkedAt int64) error {
 
 	candidates, err := runtimeStore.PendingPredictionReady()
@@ -189,6 +199,9 @@ func (s *Service) processReadyContracts(runtimeStore *agentcontract.RuntimeStore
 		return err
 	}
 	for _, candidate := range candidates {
+		if isQuit(quit) {
+			return nil
+		}
 		contractAddr := candidate.Address.EncodeAddress()
 		if !s.shouldAttempt(contractAddr, time.Now()) {
 			s.debugf("Agent contract %s ready skipped by retry backoff", contractAddr)
@@ -197,8 +210,8 @@ func (s *Service) processReadyContracts(runtimeStore *agentcontract.RuntimeStore
 		corenodeAgent.Audit = func(event agentcontract.PredictionAgentAuditEvent) {
 			s.audit(contractAddr, event)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LLM.Timeout+30*time.Second)
-		reject, ready, err := corenodeAgent.ReviewReady(ctx, agentcontract.PredictionAgentReadyReviewRequest{
+		reviewCtx, cancel := context.WithTimeout(context.Background(), s.cfg.LLM.Timeout+30*time.Second)
+		reject, ready, err := corenodeAgent.ReviewReady(reviewCtx, agentcontract.PredictionAgentReadyReviewRequest{
 			Contract:  candidate.Contract,
 			CheckedAt: checkedAt,
 		})
@@ -228,6 +241,18 @@ func (s *Service) processReadyContracts(runtimeStore *agentcontract.RuntimeStore
 		}
 	}
 	return nil
+}
+
+func isQuit(quit <-chan struct{}) bool {
+	if quit == nil {
+		return false
+	}
+	select {
+	case <-quit:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) submitReady(candidate agentcontract.PredictionReadyCandidate) (*wire.MsgTx, error) {

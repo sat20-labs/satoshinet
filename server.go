@@ -2768,6 +2768,10 @@ func (s *server) Stop() error {
 		s.saveMempoolCache()
 	}
 
+	// Signal background services before releasing STP. STP shutdown can wait for
+	// callbacks that depend on server-managed services observing quit.
+	close(s.quit)
+
 	stp.ReleaseSTP()
 
 	s.assetIndexer.Stop()
@@ -2789,8 +2793,6 @@ func (s *server) Stop() error {
 		return nil
 	})
 
-	// Signal the remaining goroutines to quit.
-	close(s.quit)
 	return nil
 }
 
