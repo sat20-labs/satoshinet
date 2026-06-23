@@ -148,7 +148,7 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		pkScript, err = indexer.AddressToPkScript(addr, b.IsMainnet())
+		pkScript, err = addressToPkScript(addr, b.IsMainnet())
 		if err != nil {
 			return nil, err
 		}

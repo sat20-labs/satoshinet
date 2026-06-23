@@ -592,6 +592,56 @@ func TestBuildBlockResultTxsIgnoresBetWithoutFundingAmount(t *testing.T) {
 	}
 }
 
+func TestBuildBlockResultTxsIgnoresUnfundedConfirm(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000, nil)
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
+
+	store := NewRuntimeStore()
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID():    "core",
+			aliceBetTx.TxID(): "alice",
+			bobBetTx.TxID():   "bob",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("initial block failed: %v", err)
+	}
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ContractUTXOs: func(contract ContractAddress) ([]UTXO, error) {
+			return nil, nil
+		},
+		ResolveScript:  testResultScriptResolver,
+		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs should ignore unfunded confirm: %v", err)
+	}
+	if len(built.ResultTxs) != 0 || len(built.Execution.Records) != 0 || len(built.Execution.ResultPlans) != 0 {
+		t.Fatalf("unfunded confirm should be no-op, resultTxs=%d records=%+v plans=%+v", len(built.ResultTxs), built.Execution.Records, built.Execution.ResultPlans)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Status != StatusReady || state.Prediction.Status == PredictionStatusSettled || len(state.Prediction.Confirmations) != 0 {
+		t.Fatalf("unfunded confirm changed settlement state: %#v", state)
+	}
+}
+
 func testAgentDeployTx(t *testing.T) (*wire.MsgTx, ContractAddress) {
 	t.Helper()
 	contract := validPredictionContract()

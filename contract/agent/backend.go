@@ -30,6 +30,7 @@ type BlockExecutionRequest struct {
 	ContractPrefix string
 	RuntimeConfig  RuntimeConfig
 	GasConfig      GasConfig
+	ContractUTXOs  ContractUTXOProvider
 	BlockHeight    int64
 	BlockTime      int64
 	ResolveInvoker InvokerResolver
@@ -58,6 +59,7 @@ type Backend struct {
 	ContractPrefix string
 	RuntimeConfig  RuntimeConfig
 	GasConfig      GasConfig
+	ContractUTXOs  ContractUTXOProvider
 	BlockHeight    int64
 	BlockTime      int64
 	ResolveInvoker InvokerResolver
@@ -84,16 +86,17 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 	if store == nil {
 		store = NewRuntimeStore()
 	}
+	contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(req.ContractUTXOs, req.Txs, prefix, ContractTypeAgent)
 	executor := NewBackend(BlockExecutionRequest{
 		Store:          store,
 		ContractPrefix: prefix,
 		RuntimeConfig:  req.RuntimeConfig,
 		GasConfig:      req.GasConfig,
+		ContractUTXOs:  contractUTXOs,
 		BlockHeight:    req.BlockHeight,
 		BlockTime:      req.BlockTime,
 		ResolveInvoker: req.ResolveInvoker,
 	})
-	contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(req.ContractUTXOs, req.Txs, prefix, ContractTypeAgent)
 	result, err := contractframework.BuildSingleResultTxBlock(contractframework.SingleResultBlockRequest[BlockExecutionResult]{
 		ModuleName: "agent",
 		Txs:        req.Txs,
@@ -151,6 +154,7 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 		ContractPrefix: prefix,
 		RuntimeConfig:  req.RuntimeConfig,
 		GasConfig:      req.GasConfig,
+		ContractUTXOs:  req.ContractUTXOs,
 		BlockHeight:    req.BlockHeight,
 		BlockTime:      req.BlockTime,
 		ResolveInvoker: req.ResolveInvoker,
@@ -486,12 +490,38 @@ func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, inv
 	if err != nil {
 		return nil, err
 	}
-	settlement, err := runtime.ApplyConfirm(ApplyConfirmRequest{
+	probe := runtime.Clone()
+	settlement, err := probe.ApplyConfirm(ApplyConfirmRequest{
 		Invoker:   invoker,
 		Param:     param,
 		TimeValue: e.predictionTimeValue(runtime.Contract()),
 	})
-	return settlement, err
+	if err != nil {
+		return nil, err
+	}
+	if err := e.checkSettlementFunding(settlement); err != nil {
+		return nil, err
+	}
+	if _, err := contractframework.BuildSettlementAssetIntents(settlement, agentSettlementResultOptions()); err != nil {
+		return nil, err
+	}
+	return runtime.ApplyConfirm(ApplyConfirmRequest{
+		Invoker:   invoker,
+		Param:     param,
+		TimeValue: e.predictionTimeValue(runtime.Contract()),
+	})
+}
+
+func (e *Backend) checkSettlementFunding(settlement *PredictionSettlementPlan) error {
+	if settlement == nil || e.ContractUTXOs == nil {
+		return nil
+	}
+	plan, err := contractframework.BuildSettlementResultPlan(settlement, agentSettlementResultOptions())
+	if err != nil {
+		return err
+	}
+	_, err = AugmentResultPlans([]ResultPlan{plan}, e.ContractUTXOs)
+	return err
 }
 
 func (e *Backend) predictionTimeValue(contract PredictionContract) int64 {

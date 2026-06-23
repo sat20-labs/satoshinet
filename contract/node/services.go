@@ -568,12 +568,15 @@ func newAgentMiningModule(cfg Config, req mining.ContractBuildRequest) (contract
 		ModuleDescriptor: agentModuleDescriptor(),
 		ExecuteWorkBlockFunc: func(work contractframework.WorkExecutionRequest) (contractframework.ExecutionResult, error) {
 			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
+			overlay := contractframework.ContractUTXOProviderWithTxOutputs(
+				contractUTXOs, work.Txs, prefix, agentcontract.ContractTypeAgent)
 			executed, err := agentcontract.ExecuteBlock(agentcontract.BlockExecutionRequest{
 				Txs:            work.Txs,
 				Store:          store,
 				ContractPrefix: prefix,
 				RuntimeConfig:  cfg.AgentRuntime,
 				GasConfig:      blockGasConfig,
+				ContractUTXOs:  overlay,
 				BlockHeight:    blockHeight,
 				BlockTime:      blockTime,
 				ResolveInvoker: resolveInvoker,
@@ -581,8 +584,6 @@ func newAgentMiningModule(cfg Config, req mining.ContractBuildRequest) (contract
 			if err != nil {
 				return contractframework.ExecutionResult{}, err
 			}
-			overlay := contractframework.ContractUTXOProviderWithTxOutputs(
-				contractUTXOs, work.Txs, prefix, agentcontract.ContractTypeAgent)
 			resultPlans, err := agentcontract.AugmentResultPlans(executed.ResultPlans, overlay)
 			if err != nil {
 				return contractframework.ExecutionResult{}, err

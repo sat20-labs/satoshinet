@@ -173,5 +173,5 @@ func (b *BaseIndexer) pkScriptForStoredUtxo(output *common.UtxoValueInDB) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	return indexer.AddressToPkScript(addr, b.IsMainnet())
+	return addressToPkScript(addr, b.IsMainnet())
 }

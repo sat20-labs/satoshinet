@@ -143,6 +143,16 @@ func NewRuntimeWithDeployer(address ContractAddress, deploy DeployPayload, cfg R
 	}, nil
 }
 
+func (r *Runtime) Clone() *Runtime {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	out.deploy.ContractContent = append([]byte(nil), r.deploy.ContractContent...)
+	out.state = r.state.Clone()
+	return &out
+}
+
 func (r *Runtime) Address() ContractAddress {
 	return r.address
 }
