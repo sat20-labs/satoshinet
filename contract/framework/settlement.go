@@ -71,7 +71,7 @@ func CloneSettlementPlan(plan *SettlementPlan) *SettlementPlan {
 
 type SettlementResultOptions struct {
 	SatoshiAssetName      string
-	MaxPrecision          int
+	Precision             AssetPrecisionPolicy
 	InvalidAsset          error
 	RequireIntegerSatoshi bool
 	IntegerSatoshiError   string
@@ -135,7 +135,7 @@ func ResultOutputFromSettlementTransfer(transfer SettlementTransfer, opts Settle
 		SatValue:              transfer.SatValue,
 		SatoshiAssetName:      opts.SatoshiAssetName,
 		Reason:                transfer.Reason,
-		MaxPrecision:          opts.MaxPrecision,
+		Precision:             opts.Precision,
 		InvalidAsset:          opts.InvalidAsset,
 		RequireIntegerSatoshi: opts.RequireIntegerSatoshi,
 		IntegerSatoshiError:   opts.IntegerSatoshiError,
@@ -226,7 +226,7 @@ func ScaleResultOutputsToPool(outputs []ResultOutput, assetName string, pool *sc
 		if output.AssetName != assetName {
 			continue
 		}
-		amount, err := parseTransferAmount(output.AssetAmt, opts.MaxPrecision,
+		amount, err := parseTransferAmount(output.AssetAmt, opts.Precision.ParsePrecision(),
 			opts.RequireIntegerSatoshi && output.AssetName == opts.SatoshiAssetName,
 			opts.IntegerSatoshiError)
 		if err != nil {
@@ -234,7 +234,7 @@ func ScaleResultOutputsToPool(outputs []ResultOutput, assetName string, pool *sc
 		}
 		total = total.AddAlignPrecision(amount)
 	}
-	if pool == nil || pool.Cmp(total) == 0 {
+	if pool == nil {
 		return out, nil
 	}
 	if total.Sign() == 0 {
@@ -247,46 +247,51 @@ func ScaleResultOutputsToPool(outputs []ResultOutput, assetName string, pool *sc
 		return nil, fmt.Errorf("result outputs spend %s but only %s is available", total.String(), pool.String())
 	}
 
-	extra := scommon.DecimalSub(pool, total)
 	precision := pool.Precision
-	if total.Precision > precision {
+	if outputPrecision, ok := opts.resultAssetPrecision(assetName); ok {
+		precision = outputPrecision
+	} else if total.Precision > precision {
 		precision = total.Precision
+	}
+	weightPrecision := precision
+	if total.Precision > weightPrecision {
+		weightPrecision = total.Precision
 	}
 	amounts := make([]*scommon.Decimal, len(out))
 	for i, output := range out {
 		if output.AssetName != assetName {
 			continue
 		}
-		amount, err := parseTransferAmount(output.AssetAmt, opts.MaxPrecision,
+		amount, err := parseTransferAmount(output.AssetAmt, opts.Precision.ParsePrecision(),
 			opts.RequireIntegerSatoshi && output.AssetName == opts.SatoshiAssetName,
 			opts.IntegerSatoshiError)
 		if err != nil {
 			return nil, err
 		}
 		amounts[i] = amount
-		if amount.Precision > precision {
+		if amount.Precision > weightPrecision {
+			weightPrecision = amount.Precision
+		}
+		if _, ok := opts.resultAssetPrecision(assetName); !ok && amount.Precision > precision {
 			precision = amount.Precision
 		}
 	}
 
-	extraValue := extra.NewPrecision(precision).Value
-	totalValue := total.NewPrecision(precision).Value
-	if extraValue.Sign() == 0 {
-		return out, nil
-	}
+	poolValue := pool.NewPrecision(precision).Value
+	totalValue := total.NewPrecision(weightPrecision).Value
 	shares := make([]*big.Int, len(out))
 	sum := big.NewInt(0)
 	for i, amount := range amounts {
 		if amount == nil {
 			continue
 		}
-		amount = amount.NewPrecision(precision)
-		share := new(big.Int).Mul(extraValue, amount.Value)
+		amount = amount.NewPrecision(weightPrecision)
+		share := new(big.Int).Mul(poolValue, amount.Value)
 		share.Div(share, totalValue)
 		shares[i] = share
 		sum.Add(sum, share)
 	}
-	remainder := new(big.Int).Sub(extraValue, sum)
+	remainder := new(big.Int).Sub(poolValue, sum)
 	for i := range out {
 		if remainder.Sign() == 0 {
 			break
@@ -302,17 +307,20 @@ func ScaleResultOutputsToPool(outputs []ResultOutput, assetName string, pool *sc
 	}
 
 	for i := range out {
-		if out[i].AssetName != assetName || shares[i] == nil || shares[i].Sign() == 0 {
+		if out[i].AssetName != assetName {
 			continue
 		}
-		amount := amounts[i].NewPrecision(precision)
-		amount.Value.Add(amount.Value, shares[i])
+		value := big.NewInt(0)
+		if shares[i] != nil {
+			value = new(big.Int).Set(shares[i])
+		}
+		amount := &scommon.Decimal{Precision: precision, Value: value}
 		out[i].AssetAmt = amount.String()
 		if err := RebuildResultOutputAsset(&out[i], opts); err != nil {
 			return nil, err
 		}
 	}
-	return out, nil
+	return CompactResultOutputs(out), nil
 }
 
 func RebuildResultOutputAsset(output *ResultOutput, opts SettlementResultOptions) error {
@@ -320,7 +328,7 @@ func RebuildResultOutputAsset(output *ResultOutput, opts SettlementResultOptions
 		return nil
 	}
 	if output.AssetName == opts.SatoshiAssetName {
-		amt, err := parseTransferAmount(output.AssetAmt, opts.MaxPrecision,
+		amt, err := parseTransferAmount(output.AssetAmt, opts.Precision.ParsePrecision(),
 			opts.RequireIntegerSatoshi, opts.IntegerSatoshiError)
 		if err != nil {
 			return err
@@ -330,10 +338,13 @@ func RebuildResultOutputAsset(output *ResultOutput, opts SettlementResultOptions
 		output.Assets = nil
 		return nil
 	}
-	assets, err := NewAssetSetWithPrecision(output.AssetName, output.AssetAmt,
-		opts.MaxPrecision, opts.InvalidAsset)
+	assets, err := NewAssetSetWithPrecisionPolicy(output.AssetName, output.AssetAmt,
+		opts.Precision, opts.InvalidAsset)
 	if err != nil {
 		return err
+	}
+	if len(assets) != 0 {
+		output.AssetAmt = assets[0].Amount.String()
 	}
 	output.Value = 0
 	output.Assets = assets
@@ -350,9 +361,16 @@ func assetIntentsFromSettlementTransfer(contractAddr contract.ContractAddress,
 		AssetAmt:              transfer.AssetAmt,
 		SatValue:              transfer.SatValue,
 		SatoshiAssetName:      opts.SatoshiAssetName,
-		MaxPrecision:          opts.MaxPrecision,
+		Precision:             opts.Precision,
 		IntentIndex:           index,
 		RequireIntegerSatoshi: opts.RequireIntegerSatoshi,
 		IntegerSatoshiError:   opts.IntegerSatoshiError,
 	})
+}
+
+func (opts SettlementResultOptions) resultAssetPrecision(assetName string) (int, bool) {
+	if assetName == "" || assetName == opts.SatoshiAssetName {
+		return 0, false
+	}
+	return opts.Precision.AssetPrecision(assetName)
 }

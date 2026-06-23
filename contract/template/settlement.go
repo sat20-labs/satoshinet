@@ -31,7 +31,7 @@ func (r *ContractRuntime) settleLimitOrders(height int64) (*SettlementPlan, erro
 		Contract: addr.EncodeAddress(),
 		Height:   height,
 	}
-	changed := applyInvalidItems(&state, plan, height)
+	changed := applyInvalidItems(r.contract, &state, plan, height)
 	applyRefunds(&state, plan, height)
 	if applyCloseItems(r.contract, &state, plan, height, r.base.Deployer()) {
 		if err := r.saveRuntimeState(state); err != nil {
@@ -100,7 +100,7 @@ func (r *ContractRuntime) settleAMM(height int64) (*SettlementPlan, error) {
 		Contract: addr.EncodeAddress(),
 		Height:   height,
 	}
-	changed := applyInvalidItems(&state, plan, height)
+	changed := applyInvalidItems(r.contract, &state, plan, height)
 	applyRefunds(&state, plan, height)
 	changed = changed || settlementPlanHasChanges(plan)
 	if applyCloseItems(r.contract, &state, plan, height, r.base.Deployer()) {
@@ -618,7 +618,7 @@ func applyRefunds(state *TemplateRuntimeState, plan *SettlementPlan, height int6
 	}
 }
 
-func applyInvalidItems(state *TemplateRuntimeState, plan *SettlementPlan, height int64) bool {
+func applyInvalidItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64) bool {
 	changed := false
 	for i := range state.Items {
 		item := &state.Items[i]
@@ -626,11 +626,48 @@ func applyInvalidItems(state *TemplateRuntimeState, plan *SettlementPlan, height
 			continue
 		}
 		addSettlementInputs(plan, item)
+		plan.Transfers = append(plan.Transfers, invalidRefundTransfers(contract, item)...)
 		plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
-		item.Done = ItemStatusClosedDirectly
+		item.Done = ItemStatusRefunded
 		changed = true
 	}
 	return changed
+}
+
+func invalidRefundTransfers(contract Contract, item *InvokeItem) []SettlementTransfer {
+	if item == nil {
+		return nil
+	}
+	assetA, assetB := defaultInvokePoolAssets(contract)
+	out := make([]SettlementTransfer, 0, 2)
+	if item.RetainedAssetA != nil && item.RetainedAssetA.Sign() > 0 && assetA != "" {
+		out = append(out, SettlementTransfer{
+			ItemID:    item.ID,
+			To:        item.Address,
+			AssetName: assetA,
+			AssetAmt:  item.RetainedAssetA.String(),
+			Reason:    SettlementReasonRefund,
+		})
+	}
+	if item.RetainedAssetB != nil && item.RetainedAssetB.Sign() > 0 && assetB != "" {
+		if assetB == SatoshiAssetName {
+			out = append(out, SettlementTransfer{
+				ItemID:   item.ID,
+				To:       item.Address,
+				SatValue: decimalInt64(item.RetainedAssetB),
+				Reason:   SettlementReasonRefund,
+			})
+		} else if assetB != assetA {
+			out = append(out, SettlementTransfer{
+				ItemID:    item.ID,
+				To:        item.Address,
+				AssetName: assetB,
+				AssetAmt:  item.RetainedAssetB.String(),
+				Reason:    SettlementReasonRefund,
+			})
+		}
+	}
+	return out
 }
 
 func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64, deployer string) bool {

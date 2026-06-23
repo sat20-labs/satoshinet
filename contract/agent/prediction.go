@@ -12,7 +12,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const MaxPredictionDecimalPrecision = 18
+const MaxPredictionDecimalPrecision = 10
 const MaxPredictionConfirmResultLen = 128
 
 var outcomeIDPattern = regexp.MustCompile(`^[a-z]+$`)

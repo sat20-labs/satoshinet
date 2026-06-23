@@ -3411,6 +3411,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		EVMContractUTXOs:         evmContractUTXOProvider(assetIndexer),
 		TemplateContractUTXOs:    templateContractUTXOProvider(assetIndexer),
 		AgentContractUTXOs:       agentContractUTXOProvider(assetIndexer),
+		AssetPrecision:           contractAssetPrecisionResolver(assetIndexer),
 		EVMResolveRecipient:      evmScriptRecipientResolver(s.chainParams),
 		TemplateResolveRecipient: templateScriptRecipientResolver(s.chainParams),
 		AgentResolveRecipient:    agentScriptRecipientResolver(s.chainParams),
@@ -3884,6 +3885,23 @@ func agentContractUTXOProvider(assetIndexer *indexer.IndexerMgr) contractnode.Co
 			}
 		}
 		return utxos, nil
+	}
+}
+
+func contractAssetPrecisionResolver(assetIndexer *indexer.IndexerMgr) contractnode.AssetPrecisionResolver {
+	if assetIndexer == nil {
+		return nil
+	}
+	return func(assetName string) (int, bool) {
+		name := wire.NewAssetNameFromString(assetName)
+		if name == nil {
+			return 0, false
+		}
+		info := assetIndexer.GetTickerInfo(name)
+		if info == nil {
+			return 0, false
+		}
+		return info.Divisibility, true
 	}
 }
 

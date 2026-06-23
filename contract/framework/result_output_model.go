@@ -153,12 +153,38 @@ func ResultOutputIsZero(output ResultOutput) bool {
 
 func CompactResultOutputs(outputs []ResultOutput) []ResultOutput {
 	out := make([]ResultOutput, 0, len(outputs))
+	index := make(map[string]int)
 	for _, output := range outputs {
-		if !ResultOutputIsZero(output) {
-			out = append(out, output)
+		output = NormalizeResultOutput(output)
+		if ResultOutputIsZero(output) {
+			continue
 		}
+		key, ok := compactResultOutputKey(output)
+		if !ok {
+			out = append(out, output)
+			continue
+		}
+		if existing, found := index[key]; found {
+			out[existing].Value += output.Value
+			if len(output.Assets) != 0 {
+				builder := scommon.NewTxAssetsBuilder(len(out[existing].Assets) + len(output.Assets))
+				builder.AddSlice(out[existing].Assets)
+				builder.AddSlice(output.Assets)
+				out[existing].Assets = builder.Build()
+			}
+			continue
+		}
+		index[key] = len(out)
+		out = append(out, output)
 	}
 	return out
+}
+
+func compactResultOutputKey(output ResultOutput) (string, bool) {
+	if len(output.ExtraData) != 0 || output.AssetName != "" || output.AssetAmt != "" || output.Reason != "" {
+		return "", false
+	}
+	return output.To, true
 }
 
 func UniqueOutPoints(in []OutPoint) []OutPoint {

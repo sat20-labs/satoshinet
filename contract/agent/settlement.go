@@ -40,7 +40,8 @@ func (r *Runtime) buildSettlementPlan(confirm PredictionConfirmParam) (*Predicti
 		return nil, fmt.Errorf("missing prediction fee recipient")
 	}
 
-	total := r.totalBetAmount()
+	precision := r.betAssetPrecision()
+	total := r.totalBetAmount().NewPrecision(precision)
 	deployerFee := decimalMulBPS(total, PredictionDeployerFeeBPS)
 	agentFee := decimalMulBPS(total, PredictionAgentFeeBPS)
 	bootstrapFee := decimalMulBPS(total, PredictionBootstrapBPS)
@@ -99,6 +100,17 @@ func (r *Runtime) totalBetAmount() *scommon.Decimal {
 		total = scommon.DecimalAdd(total, parseDecimalOrZero(bet.Amount))
 	}
 	return total
+}
+
+func (r *Runtime) betAssetPrecision() int {
+	if r == nil || r.config.AssetPrecision == nil {
+		return MaxPredictionDecimalPrecision
+	}
+	precision, ok := r.config.AssetPrecision(r.contract.BetAsset)
+	if !ok || precision < 0 {
+		return MaxPredictionDecimalPrecision
+	}
+	return precision
 }
 
 func distributeWinnerPool(assetName string, winnerPool *scommon.Decimal, winners []predictionWinner) []PredictionSettlementOutput {

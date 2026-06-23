@@ -459,15 +459,20 @@ func TestBackendIgnoresNonCoreReject(t *testing.T) {
 func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
-	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
-	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000, nil)
-	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
+	resultGas := testAgentGasFee(t, DefaultGasConfig().ResultBaseGas).Int64()
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0,
+		testAgentAsset(DefaultGasConfig().GasAssetName, 100))
 
 	store := NewRuntimeStore()
 	_, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
 		Store:         store,
-		BlockHeight:   validPredictionContract().BetDeadline,
+		BlockHeight:   1,
+		BlockTime:     validPredictionContract().BetDeadline,
 		RuntimeConfig: testRuntimeConfig(),
 		ResolveInvoker: testInvokerResolver(map[string]string{
 			readyTx.TxID():    "core",
@@ -483,7 +488,8 @@ func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
 		Txs:           []*wire.MsgTx{confirmTx},
 		Store:         store,
-		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
+		BlockHeight:   2,
+		BlockTime:     validPredictionContract().ConfirmAfter + 1,
 		RuntimeConfig: testRuntimeConfig(),
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
 			return []UTXO{{
@@ -491,7 +497,7 @@ func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 				Contract: contract,
 				Value:    10000,
 			}}, nil
-		}, []*wire.MsgTx{aliceBetTx, bobBetTx}, TestnetContractPrefix, ContractTypeAgent),
+		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 	})
@@ -507,11 +513,104 @@ func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 	if len(built.ResultTxs[0].TxIn) != 4 {
 		t.Fatalf("result input count mismatch: %d", len(built.ResultTxs[0].TxIn))
 	}
-	if len(built.ResultTxs[0].TxOut) != 5 {
+	if len(built.ResultTxs[0].TxOut) != 7 {
 		t.Fatalf("result output count mismatch: %d", len(built.ResultTxs[0].TxOut))
 	}
-	if built.ResultTxs[0].TxOut[0].Value != 6600 || built.ResultTxs[0].TxOut[3].Value != 99000 {
-		t.Fatalf("result outputs did not use full contract pool")
+	if built.ResultTxs[0].TxOut[0].Value != 6000 || built.ResultTxs[0].TxOut[3].Value != 90000 {
+		t.Fatalf("result outputs used more than settlement pool")
+	}
+}
+
+func TestBuildBlockResultTxsForConfirmWithGasBetAsset(t *testing.T) {
+	contract := validPredictionContract()
+	contract.BetAsset = DefaultGasConfig().GasAssetName
+	contract.TimeBase = TimeBaseHeight
+	contract.BetDeadline = 10
+	contract.EventTime = 11
+	contract.ConfirmAfter = 12
+	deployTx, addr := testAgentDeployTxForContract(t, contract)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	resultGas := testAgentGasFeeAtHeight(t, DefaultGasConfig().ResultBaseGas, contract.BetDeadline).Int64()
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 0,
+		testAgentAsset(DefaultGasConfig().GasAssetName, 60000+resultGas))
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 0,
+		testAgentAsset(DefaultGasConfig().GasAssetName, 40000+resultGas))
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0,
+		testAgentAsset(DefaultGasConfig().GasAssetName, 100))
+
+	store := NewRuntimeStore()
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
+		BlockHeight:   contract.BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ready block failed: %v", err)
+	}
+	parsedAlice, err := ParseTx(aliceBetTx, StandardContractScriptResolver(TestnetContractPrefix))
+	if err != nil {
+		t.Fatalf("parse alice bet failed: %v", err)
+	}
+	validatedAlice, err := ValidateParsedInvokeTxBasic(parsedAlice, store.Exists, DefaultGasConfig())
+	if err != nil {
+		t.Fatalf("validate alice bet failed: %v", err)
+	}
+	amount, gasAmount, err := betAndGasFundingAmount(validatedAlice.FundingOutputs,
+		contract.BetAsset, DefaultGasConfig().GasAssetName, testAgentGasFee(t, DefaultGasConfig().ResultBaseGas))
+	if err != nil {
+		t.Fatalf("split alice bet funding failed: %v", err)
+	}
+	if amount != "60000" || gasAmount != "50" {
+		t.Fatalf("alice funding split mismatch: amount=%s gas=%s", amount, gasAmount)
+	}
+	_, err = testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{aliceBetTx, bobBetTx},
+		Store:         store,
+		BlockHeight:   contract.BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			aliceBetTx.TxID(): "alice",
+			bobBetTx.TxID():   "bob",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("bet block failed: %v", err)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if len(state.Prediction.Bets) != 2 {
+		t.Fatalf("gas-as-bet calls were not recorded: %#v", state.Prediction)
+	}
+	if state.Prediction.GasBalance != "100" {
+		t.Fatalf("gas balance mismatch: %s", state.Prediction.GasBalance)
+	}
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   contract.ConfirmAfter + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
+			return nil, nil
+		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
+		ResolveScript:  testResultScriptResolver,
+		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.ResultTxs) != 1 {
+		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
+	}
+	if len(built.ResultTxs[0].TxOut) != 7 {
+		t.Fatalf("result output count mismatch: %d", len(built.ResultTxs[0].TxOut))
 	}
 }
 
@@ -644,32 +743,7 @@ func TestBuildBlockResultTxsIgnoresUnfundedConfirm(t *testing.T) {
 
 func testAgentDeployTx(t *testing.T) (*wire.MsgTx, ContractAddress) {
 	t.Helper()
-	contract := validPredictionContract()
-	content, err := contract.Encode()
-	if err != nil {
-		t.Fatalf("Encode failed: %v", err)
-	}
-	deployer := "deployer"
-	deploy := DeployPayload{
-		GasLimit:        DefaultGasConfig().DeployBaseGas,
-		SubType:         SubtypePrediction,
-		Version:         CurrentAgentVersion,
-		DeployNonce:     7,
-		ContractContent: content,
-	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.SubType, deploy.ContractContent, deployer, deploy.DeployNonce)
-	if err != nil {
-		t.Fatalf("DeriveContractAddress failed: %v", err)
-	}
-	script, err := DeployNullDataScript(deploy)
-	if err != nil {
-		t.Fatalf("DeployNullDataScript failed: %v", err)
-	}
-	tx := wire.NewMsgTx(1)
-	tx.AddTxIn(&wire.TxIn{})
-	tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	tx.AddTxOut(wire.NewTxOut(0, nil, testAgentContractScript(addr)))
-	return tx, addr
+	return testAgentDeployTxForContract(t, validPredictionContract())
 }
 
 func testAgentInvokeTx(t *testing.T, contract ContractAddress, action string, param []byte, value int64, assets wire.TxAssets) *wire.MsgTx {
@@ -700,7 +774,12 @@ func testAgentDefaultInvokeTx(t *testing.T, contract ContractAddress, value int6
 
 func testAgentGasFee(t *testing.T, gas int64) *scommon.Decimal {
 	t.Helper()
-	fee, err := contractcommon.GasFeeDecimalAtHeight(gas, 0)
+	return testAgentGasFeeAtHeight(t, gas, 0)
+}
+
+func testAgentGasFeeAtHeight(t *testing.T, gas int64, height int64) *scommon.Decimal {
+	t.Helper()
+	fee, err := contractcommon.GasFeeDecimalAtHeight(gas, uint64(height))
 	if err != nil {
 		t.Fatalf("gas fee failed: %v", err)
 	}

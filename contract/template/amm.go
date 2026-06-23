@@ -27,6 +27,10 @@ func (c *AMMContract) TemplateName() string {
 	return TemplateAMM
 }
 
+func (c *AMMContract) ApplyRunningData(running *RunningData, item *InvokeItem) bool {
+	return false
+}
+
 func (c *AMMContract) Encode() ([]byte, error) {
 	base, err := c.LimitOrderContract.Encode()
 	if err != nil {

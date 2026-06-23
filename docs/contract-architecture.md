@@ -212,7 +212,25 @@ type EngineState interface {
 
 ## 资产状态边界
 
-合约状态不应保存合约地址上的实时资产余额。合约地址上的 satoshi、ORDX、Runes、BRC20 或其他可由 UTXO 表达的资产余额，在共识执行路径中以 blockchain UTXO view 加当前区块 overlay 的统计结果为准。
+合约执行同时看到两组资产数据：
+
+1. 合约地址上的物理资产数据，由 blockchain UTXO view 加当前区块 overlay 统计得到。
+2. 合约 runtime state 中的 managed assets，由合约业务规则登记，表示合约已经接受并承诺处置的资产。
+
+这两组数据用途不同。物理资产数据回答“合约地址实际有什么”；managed assets 回答“合约状态机承认并准备按业务规则结算什么”。合约不能把 runtime state 中的 managed assets 当成合约地址真实余额，也不能只看物理余额来绕过业务状态约束。
+
+有效调用进入合约后，合约应把需要管理的资产登记到 managed assets 中，包括业务资产和合约交互过程中积累的 gas 资产。无效调用最多扣除必要 gas 后退款；剩余 gas 可以作为合约管理 gas 积累，其他未被业务承认的资产不进入 managed assets。
+
+生成 result tx 时，统一 result 层应同时使用这两组数据：
+
+1. 先按 engine 输出的 intent/result plan 处置 managed assets。
+2. result gas 从合约管理 gas 中扣除。
+3. managed assets 在正常结算后如有剩余，按合约利润规则分配。
+4. 合约地址物理资产中超出 managed assets 和 result gas 约束的部分，视为合约管理之外的资产，按统一策略转给 bootstrap 后续处理。
+
+框架可以提供默认处理模板；具体 engine 仍可以在明确业务语义下决定如何使用物理资产数据和 managed assets。
+
+合约地址上的 satoshi、ORDX、Runes、BRC20 或其他可由 UTXO 表达的资产余额，在共识执行路径中以 blockchain UTXO view 加当前区块 overlay 的统计结果为准。
 
 indexer 的索引结果基于已经确认并连接的区块，适合作为提交后的查询视图，不适合作为候选区块构造或区块验证时的共识输入。候选区块中的 funding output、result tx 输出和同区块内花费关系尚未进入 confirmed indexer 结果，必须由 blockchain 的 UTXO view 和 block overlay 表达。
 
@@ -224,14 +242,14 @@ engine state 只保存业务状态和无法从 UTXO 集合直接推导的协议�
 4. nonce、版本、权限、状态机阶段。
 5. 需要参与 state root 的业务证明或摘要。
 
-engine state 不应保存以下内容作为事实来源：
+engine state 不应保存以下内容作为物理余额事实来源：
 
 1. 合约地址当前资产总余额。
 2. 合约地址当前 satoshi 总余额。
 3. 可由合约 UTXO 集合统计得到的资产池余额。
 4. 可由 committed Result TX 和 UTXO 变更推导得到的资产进出账。
 
-如果某类合约需要判断资金池是否 ready、库存是否足够、gas 是否足够或 `address(this).balance`，必须通过 `ContractAssetView` 读取合约地址资产统计。若 engine 内部为了计算方便维护缓存或快照，该缓存不得作为共识事实来源，必须能由 UTXO view 加当前区块 overlay 校验或重建。
+如果某类合约需要判断资金池是否 ready、库存是否足够、gas 是否足够或 `address(this).balance`，必须通过 `ContractAssetView` 读取合约地址资产统计。若 engine 内部为了计算方便维护缓存、承诺余额或结算池，该状态只能表达 managed assets 或业务约束，不得替代 UTXO view 的物理余额事实来源。
 
 这一边界的原因是：资产归属已经由 SatoshiNet UTXO 模型确定，合约 runtime state 再保存一份余额会形成双来源，容易在 Result TX、reorg、索引恢复或跨 engine 查询时产生不一致。indexer 应消费提交后的 state/events/UTXO 结果来服务查询，而不是反向参与合约共识执行。
 

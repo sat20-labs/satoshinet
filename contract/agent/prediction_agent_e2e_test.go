@@ -55,14 +55,18 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 
 	deployTx, addr := testAgentDeployTxForContract(t, predictionContractForResultServer(resultServer.URL))
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
-	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
-	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000, nil)
+	resultGas := testAgentGasFee(t, DefaultGasConfig().ResultBaseGas).Int64()
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
 
 	store := NewRuntimeStore()
 	_, err = ExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
 		Store:         store,
-		BlockHeight:   validPredictionContract().BetDeadline,
+		BlockHeight:   1,
+		BlockTime:     validPredictionContract().BetDeadline,
 		RuntimeConfig: testRuntimeConfig(),
 		ResolveInvoker: testInvokerResolver(map[string]string{
 			readyTx.TxID():    "core",
@@ -91,13 +95,15 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirm encode failed: %v", err)
 	}
-	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, encodedConfirm, 0, nil)
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, encodedConfirm, 0,
+		testAgentAsset(DefaultGasConfig().GasAssetName, 100))
 
 	abnormalTxID := chainhash.Hash{9}.String()
 	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
 		Txs:           []*wire.MsgTx{confirmTx},
 		Store:         store,
-		BlockHeight:   contract.ConfirmAfter + 1,
+		BlockHeight:   2,
+		BlockTime:     contract.ConfirmAfter + 1,
 		RuntimeConfig: testRuntimeConfig(),
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
 			return []UTXO{{
@@ -105,7 +111,7 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 				Contract: contract,
 				Value:    10000,
 			}}, nil
-		}, []*wire.MsgTx{aliceBetTx, bobBetTx}, TestnetContractPrefix, ContractTypeAgent),
+		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 		ResolveScript:  testResultScriptResolver,
 	})
@@ -118,10 +124,10 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 	if len(built.ResultTxs[0].TxIn) != 4 {
 		t.Fatalf("result input count mismatch: %d", len(built.ResultTxs[0].TxIn))
 	}
-	if got := built.ResultTxs[0].TxOut[0].Value; got != 6600 {
+	if got := built.ResultTxs[0].TxOut[0].Value; got != 6000 {
 		t.Fatalf("deployer fee mismatch: %d", got)
 	}
-	if got := built.ResultTxs[0].TxOut[3].Value; got != 99000 {
+	if got := built.ResultTxs[0].TxOut[3].Value; got != 90000 {
 		t.Fatalf("winner payout mismatch: %d", got)
 	}
 	runtime, ok := store.Get(addr)

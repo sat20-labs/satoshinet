@@ -37,7 +37,7 @@ func TestBuildSettlementResultPlansUsesSettledItemFunding(t *testing.T) {
 		}},
 	}}
 
-	resultPlans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, records)
+	resultPlans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, records, nil)
 	require.NoError(t, err)
 	require.Len(t, resultPlans, 1)
 	require.Equal(t, []int64{1, 2}, resultPlans[0].ItemIDs)
@@ -124,7 +124,7 @@ func TestCanonicalResultVerifierRejectsInputMismatch(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestAugmentClosedAMMCloseOutputsUseActualContractBalance(t *testing.T) {
+func TestAugmentClosedAMMCloseOutputsRejectInsufficientContractBalance(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	addr := runtime.Address()
 	state := TemplateRuntimeState{
@@ -157,15 +157,8 @@ func TestAugmentClosedAMMCloseOutputsUseActualContractBalance(t *testing.T) {
 		}},
 	}}
 
-	augmented, err := AugmentResultPlans(plans, store, DefaultGasConfig(), provider)
-	require.NoError(t, err)
-	require.Len(t, augmented, 1)
-	require.Len(t, augmented[0].Outputs, 1)
-	require.Equal(t, int64(5), augmented[0].Outputs[0].Value)
-	requireResultPlanAssetTo(t, augmented[0], "lp-address", "ordx:f:test", "40")
-
-	_, err = resultAssetsChange(testAsset("ordx:f:test", 40), augmented[0].Outputs, DefaultGasConfig().GasAssetName, nil)
-	require.NoError(t, err)
+	_, err := AugmentResultPlans(plans, store, DefaultGasConfig(), provider, nil)
+	require.ErrorContains(t, err, "only 5 sats are available")
 }
 
 func testHash(n byte) string {

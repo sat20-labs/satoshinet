@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contract "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
@@ -31,6 +32,7 @@ type BlockExecutionRequest struct {
 	RuntimeConfig  RuntimeConfig
 	GasConfig      GasConfig
 	ContractUTXOs  ContractUTXOProvider
+	AssetPrecision contractframework.AssetPrecisionResolver
 	BlockHeight    int64
 	BlockTime      int64
 	ResolveInvoker InvokerResolver
@@ -45,6 +47,7 @@ type BlockResultBuildRequest struct {
 	RuntimeConfig  RuntimeConfig
 	GasConfig      GasConfig
 	ContractUTXOs  ContractUTXOProvider
+	AssetPrecision contractframework.AssetPrecisionResolver
 	BlockHeight    int64
 	BlockTime      int64
 	ResolveInvoker InvokerResolver
@@ -60,6 +63,7 @@ type Backend struct {
 	RuntimeConfig  RuntimeConfig
 	GasConfig      GasConfig
 	ContractUTXOs  ContractUTXOProvider
+	AssetPrecision contractframework.AssetPrecisionResolver
 	BlockHeight    int64
 	BlockTime      int64
 	ResolveInvoker InvokerResolver
@@ -93,6 +97,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		RuntimeConfig:  req.RuntimeConfig,
 		GasConfig:      req.GasConfig,
 		ContractUTXOs:  contractUTXOs,
+		AssetPrecision: req.AssetPrecision,
 		BlockHeight:    req.BlockHeight,
 		BlockTime:      req.BlockTime,
 		ResolveInvoker: req.ResolveInvoker,
@@ -122,7 +127,8 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 			ResolveScript: req.ResolveScript,
 			ResolveOutput: req.ResolveOutput,
 			Augment: func(plans []ResultPlan) ([]ResultPlan, error) {
-				return AugmentResultPlans(plans, contractUTXOs)
+				return AugmentResultPlans(plans, contractUTXOs, executor.Store, req.AssetPrecision,
+					req.GasConfig.Normalize().GasAssetName, req.RuntimeConfig.BootstrapAddress)
 			},
 		},
 	})
@@ -144,6 +150,7 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 	if store == nil {
 		store = NewRuntimeStore()
 	}
+	req.RuntimeConfig.AssetPrecision = req.AssetPrecision
 	store.ApplyConfig(req.RuntimeConfig)
 	prefix := req.ContractPrefix
 	if prefix == "" {
@@ -155,6 +162,7 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 		RuntimeConfig:  req.RuntimeConfig,
 		GasConfig:      req.GasConfig,
 		ContractUTXOs:  req.ContractUTXOs,
+		AssetPrecision: req.AssetPrecision,
 		BlockHeight:    req.BlockHeight,
 		BlockTime:      req.BlockTime,
 		ResolveInvoker: req.ResolveInvoker,
@@ -404,11 +412,11 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	}
 	if settlement != nil {
 		e.settlementPlans = append(e.settlementPlans, settlement)
-		resultPlan, err := contractframework.BuildSettlementResultPlan(settlement, agentSettlementResultOptions())
+		resultPlan, err := contractframework.BuildSettlementResultPlan(settlement, e.settlementResultOptions())
 		if err != nil {
 			return err
 		}
-		settlementIntents, err = contractframework.BuildSettlementAssetIntents(settlement, agentSettlementResultOptions())
+		settlementIntents, err = contractframework.BuildSettlementAssetIntents(settlement, e.settlementResultOptions())
 		if err != nil {
 			return err
 		}
@@ -472,7 +480,16 @@ func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker
 	if err != nil {
 		return nil, err
 	}
-	amount, err := fundingAmount(validated.FundingOutputs, runtime.Contract().BetAsset)
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return nil, err
+	}
+	amount, gasAmount, err := betAndGasFundingAmount(
+		validated.FundingOutputs,
+		runtime.Contract().BetAsset,
+		e.GasConfig.Normalize().GasAssetName,
+		resultFee,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -481,6 +498,7 @@ func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker
 		Param:     param,
 		AssetName: runtime.Contract().BetAsset,
 		Amount:    amount,
+		GasAmount: gasAmount,
 		TimeValue: e.predictionTimeValue(runtime.Contract()),
 	})
 }
@@ -502,7 +520,7 @@ func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, inv
 	if err := e.checkSettlementFunding(settlement); err != nil {
 		return nil, err
 	}
-	if _, err := contractframework.BuildSettlementAssetIntents(settlement, agentSettlementResultOptions()); err != nil {
+	if _, err := contractframework.BuildSettlementAssetIntents(settlement, e.settlementResultOptions()); err != nil {
 		return nil, err
 	}
 	return runtime.ApplyConfirm(ApplyConfirmRequest{
@@ -516,12 +534,22 @@ func (e *Backend) checkSettlementFunding(settlement *PredictionSettlementPlan) e
 	if settlement == nil || e.ContractUTXOs == nil {
 		return nil
 	}
-	plan, err := contractframework.BuildSettlementResultPlan(settlement, agentSettlementResultOptions())
+	plan, err := contractframework.BuildSettlementResultPlan(settlement, e.settlementResultOptions())
 	if err != nil {
 		return err
 	}
-	_, err = AugmentResultPlans([]ResultPlan{plan}, e.ContractUTXOs)
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
+	plan.GasFee = resultFee
+	_, err = AugmentResultPlans([]ResultPlan{plan}, e.ContractUTXOs, e.Store, e.AssetPrecision,
+		e.GasConfig.Normalize().GasAssetName, e.RuntimeConfig.BootstrapAddress)
 	return err
+}
+
+func (e *Backend) settlementResultOptions() contractframework.SettlementResultOptions {
+	return agentSettlementResultOptions(e.AssetPrecision)
 }
 
 func (e *Backend) predictionTimeValue(contract PredictionContract) int64 {
@@ -552,6 +580,36 @@ func fundingAmount(outputs []ContractOutput, assetName string) (string, error) {
 		total = decimalAdd(total, amount)
 	}
 	return total.String(), nil
+}
+
+func betAndGasFundingAmount(outputs []ContractOutput, betAssetName, gasAssetName string,
+	requiredGas *scommon.Decimal) (string, string, error) {
+
+	betTotalText, err := fundingAmount(outputs, betAssetName)
+	if err != nil {
+		return "", "", err
+	}
+	gasTotalText := ""
+	if gasAssetName != "" {
+		gasTotalText, err = fundingAmount(outputs, gasAssetName)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if betAssetName == "" || betAssetName != gasAssetName {
+		return betTotalText, gasTotalText, nil
+	}
+
+	betTotal := parseDecimalOrZero(betTotalText)
+	gasReserve := zeroDecimal()
+	if requiredGas != nil && requiredGas.Sign() > 0 {
+		gasReserve = requiredGas.Clone()
+	}
+	if betTotal.Cmp(gasReserve) < 0 {
+		return "", "", fmt.Errorf("prediction bet funding %s is below required gas %s",
+			betTotal.String(), gasReserve.String())
+	}
+	return betTotal.SubAlignPrecision(gasReserve).String(), gasReserve.String(), nil
 }
 
 func stateResultPlan(contract ContractAddress, outputs []ContractOutput) (ResultPlan, bool) {

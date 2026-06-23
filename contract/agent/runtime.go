@@ -7,13 +7,15 @@ import (
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
 type RuntimeConfig struct {
 	CoreNodeAddress  string
 	AgentAddress     string
 	BootstrapAddress string
-	ChainParams      *chaincfg.Params `json:"-"`
+	AssetPrecision   contractframework.AssetPrecisionResolver `json:"-"`
+	ChainParams      *chaincfg.Params                         `json:"-"`
 }
 
 type Runtime struct {
@@ -33,6 +35,7 @@ type RuntimeState struct {
 type PredictionRuntimeState struct {
 	Status        string                         `json:"status"`
 	Bets          map[string]PredictionBetRecord `json:"bets,omitempty"`
+	GasBalance    string                         `json:"gasBalance,omitempty"`
 	Confirmations []PredictionConfirmRecord      `json:"confirmations,omitempty"`
 	Rejections    []PredictionRejectRecord       `json:"rejections,omitempty"`
 }
@@ -97,6 +100,7 @@ type ApplyBetRequest struct {
 	Param     PredictionBetParam
 	AssetName string
 	Amount    string
+	GasAmount string
 	TimeValue int64
 }
 
@@ -236,6 +240,7 @@ func (r *Runtime) ApplyBet(req ApplyBetRequest) error {
 		return fmt.Errorf("prediction bet invoker is empty")
 	}
 	r.addBet(req.Invoker, req.Param.OutcomeID, req.Amount)
+	r.addGasBalance(req.GasAmount)
 	return nil
 }
 
@@ -303,6 +308,18 @@ func (r *Runtime) addBet(address, outcomeID, amount string) {
 	}
 	record.Amount = decimalStringAdd(record.Amount, amount)
 	r.state.Prediction.Bets[key] = record
+}
+
+func (r *Runtime) addGasBalance(amount string) {
+	if amount == "" {
+		return
+	}
+	next := decimalStringAdd(r.state.Prediction.GasBalance, amount)
+	if parseDecimalOrZero(next).Sign() == 0 {
+		r.state.Prediction.GasBalance = ""
+		return
+	}
+	r.state.Prediction.GasBalance = next
 }
 
 func (r *Runtime) requireCoreNode(invoker string) error {

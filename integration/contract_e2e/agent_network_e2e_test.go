@@ -188,8 +188,8 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	require.NoError(t, err)
 	contract := agentcontract.PredictionContract{
 		Subtype:      agentcontract.SubtypePrediction,
-		Title:        "Agent E2E basketball prediction",
-		Description:  "Team A vs Team B final score",
+		Title:        "Team A vs Team B",
+		Description:  "Agent E2E basketball prediction final score",
 		TimeBase:     agentcontract.TimeBaseHeight,
 		BetDeadline:  int64(bestHeight) + 4,
 		EventTime:    int64(bestHeight) + 5,
@@ -211,16 +211,17 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 
 	waitForAgentPredictionReady(t, bootstrapNode, agentAddress.EncodeAddress())
 
+	resultGas := networkGasFeeAmount(t, agentcontract.DefaultGasConfig().ResultBaseGas)
 	aliceBet := mustAgentBetParam(t, "a")
 	aliceTx := buildAgentInvokeTx(t, agentAddress, agentcontract.InvokeAPIBet, aliceBet,
-		agentInputs[2], testWireAsset(gasAsset, 60000), nil, spendScript)
+		agentInputs[2], testWireAsset(gasAsset, 60000+resultGas), nil, spendScript)
 	signTemplateTaprootInputs(t, aliceTx, traderA, redeemScript, controlBlock)
 	sendTx(t, bootstrapNode, aliceTx)
 	waitForPOSTx(t, bootstrapNode, nodes, aliceTx)
 
 	bobBet := mustAgentBetParam(t, "b")
 	bobTx := buildAgentInvokeTx(t, agentAddress, agentcontract.InvokeAPIBet, bobBet,
-		agentInputs[3], testWireAsset(gasAsset, 40000), nil, spendScript)
+		agentInputs[3], testWireAsset(gasAsset, 40000+resultGas), nil, spendScript)
 	signTemplateTaprootInputs(t, bobTx, traderB, redeemScript, controlBlock)
 	sendTx(t, bootstrapNode, bobTx)
 	waitForPOSTx(t, bootstrapNode, nodes, bobTx)
@@ -243,7 +244,7 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	addAgentExpectedAmount(expected, aliceAddress, scenario.ExpectedAlice)
 	addAgentExpectedAmount(expected, bobAddress, scenario.ExpectedBob)
 	waitForAgentAssetAmounts(t, bootstrapNode, coreNode, nodes, expected, gasAsset, int32(contract.ConfirmAfter))
-	waitForAgentPredictionContractQueries(t, bootstrapNode, agentAddress.EncodeAddress(), aliceAddress, bobAddress)
+	waitForAgentPredictionContractQueries(t, bootstrapNode, coreNode, agentAddress.EncodeAddress(), aliceAddress, bobAddress)
 }
 
 func llmRequestContains(req map[string]interface{}, needle string) bool {
@@ -446,7 +447,7 @@ func agentAssetAmountAtLeast(actual, want string) bool {
 	return actualInt.Cmp(&wantInt) >= 0
 }
 
-func waitForAgentPredictionContractQueries(t *testing.T, node *rpctest.Harness, contract, alice, bob string) {
+func waitForAgentPredictionContractQueries(t *testing.T, node, coreNode *rpctest.Harness, contract, alice, bob string) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
 	var lastErr error
@@ -457,6 +458,18 @@ func waitForAgentPredictionContractQueries(t *testing.T, node *rpctest.Harness, 
 			lastErr = err
 		}
 		time.Sleep(300 * time.Millisecond)
+	}
+	if logPath := node.LogFile(); logPath != "" {
+		if data, err := os.ReadFile(logPath); err == nil {
+			t.Logf("agent query timeout log:\n%s", filterAgentLogLines(string(data), 12000))
+		}
+	}
+	if coreNode != nil {
+		if logPath := coreNode.LogFile(); logPath != "" {
+			if data, err := os.ReadFile(logPath); err == nil {
+				t.Logf("agent core timeout log:\n%s", filterAgentLogLines(string(data), 12000))
+			}
+		}
 	}
 	require.NoError(t, lastErr)
 }
@@ -550,19 +563,24 @@ func checkAgentPredictionContractQueries(node *rpctest.Harness, contract, alice,
 	if history.Code != 0 {
 		return fmt.Errorf("contract history code %d: %s", history.Code, history.Msg)
 	}
-	var deploys, bets, confirms int
+	var deploys, bets int
 	for _, record := range history.Data {
 		switch {
 		case record.Kind == "deploy":
 			deploys++
 		case record.Action == agentcontract.InvokeAPIBet:
 			bets++
-		case record.Action == agentcontract.InvokeAPIConfirm:
-			confirms++
 		}
 	}
-	if deploys == 0 || bets < 2 || confirms == 0 {
-		return fmt.Errorf("incomplete contract history: deploys=%d bets=%d confirms=%d total=%d", deploys, bets, confirms, history.Total)
+	if deploys == 0 || bets < 2 {
+		return fmt.Errorf("incomplete contract history: deploys=%d bets=%d total=%d", deploys, bets, history.Total)
+	}
+	state, err := fetchAgentPredictionState(baseURL, contract)
+	if err != nil {
+		return err
+	}
+	if len(state.State.Prediction.Confirmations) == 0 {
+		return fmt.Errorf("missing prediction runtime confirmation: %+v", state.State.Prediction)
 	}
 
 	var analytics localwire.ContractResp
@@ -580,7 +598,7 @@ func checkAgentPredictionContractQueries(node *rpctest.Harness, contract, alice,
 	if err := json.Unmarshal(analytics.Data, &analyticsData); err != nil {
 		return err
 	}
-	if analyticsData.TotalBets < 2 || analyticsData.Confirmations == 0 || analyticsData.OutcomeBets["a"] == 0 || analyticsData.OutcomeBets["b"] == 0 {
+	if analyticsData.TotalBets < 2 || analyticsData.OutcomeBets["a"] == 0 || analyticsData.OutcomeBets["b"] == 0 {
 		return fmt.Errorf("unexpected analytics: %+v", analyticsData)
 	}
 
@@ -607,6 +625,36 @@ func checkAgentPredictionContractQueries(node *rpctest.Harness, contract, alice,
 	return nil
 }
 
+type agentPredictionStateResp struct {
+	State struct {
+		Status     string `json:"status"`
+		Prediction struct {
+			Status        string            `json:"status"`
+			Confirmations []json.RawMessage `json:"confirmations,omitempty"`
+			Rejections    []json.RawMessage `json:"rejections,omitempty"`
+		} `json:"prediction"`
+	} `json:"state"`
+	Details map[string]interface{} `json:"details,omitempty"`
+}
+
+func fetchAgentPredictionState(baseURL, contract string) (agentPredictionStateResp, error) {
+	var resp localwire.ContractResp
+	var out agentPredictionStateResp
+	if err := getIndexerJSON(baseURL+"/v3/contracts/"+contract+"/state", &resp); err != nil {
+		return out, err
+	}
+	if resp.Code != 0 {
+		return out, fmt.Errorf("contract state code %d: %s", resp.Code, resp.Msg)
+	}
+	if len(resp.Data) == 0 {
+		return out, fmt.Errorf("empty contract state")
+	}
+	if err := json.Unmarshal(resp.Data, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 func getIndexerJSON(url string, out interface{}) error {
 	resp, err := http.Get(url)
 	if err != nil {
@@ -626,6 +674,28 @@ func stringSliceContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func tailString(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return value[len(value)-max:]
+}
+
+func filterAgentLogLines(value string, max int) string {
+	needles := []string{"Agent", "agent", "confirm", "audit", "error", "warning"}
+	lines := strings.Split(value, "\n")
+	out := make([]string, 0)
+	for _, line := range lines {
+		for _, needle := range needles {
+			if strings.Contains(line, needle) {
+				out = append(out, line)
+				break
+			}
+		}
+	}
+	return tailString(strings.Join(out, "\n"), max)
 }
 
 func p2trAddressFromKey(t *testing.T, key *btcec.PrivateKey) string {

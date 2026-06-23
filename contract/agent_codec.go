@@ -11,7 +11,7 @@ const (
 	SubtypePrediction = "prediction"
 
 	CurrentAgentVersion           uint32 = 1
-	MaxPredictionDecimalPrecision        = 18
+	MaxPredictionDecimalPrecision        = 10
 
 	AgentInvokeAPIReady   = "ready"
 	AgentInvokeAPIBet     = "bet"

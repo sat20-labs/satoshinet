@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -54,7 +55,7 @@ func TestExchangeDefaultFundAndBuy(t *testing.T) {
 	require.Empty(t, state.Running.GasBalance)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
-	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	requireResultPlanAsset(t, plans[0], contract.AssetAName, "88.12")
@@ -188,7 +189,7 @@ func TestExchangeDefaultBuyWithSatoshiAssetB(t *testing.T) {
 	requireDecimalString(t, "10000", state.Running.TotalDealAssetA)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
-	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	require.NotEmpty(t, plans[0].Outputs)
@@ -273,12 +274,67 @@ func TestExchangeCloseReturnsRemainingAssetAToDeployer(t *testing.T) {
 	require.Empty(t, state.Running.AssetAInPool)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, closeTx}, TestnetContractPrefix, ContractTypeTemplate)
-	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	requireResultPlanAssetTo(t, plans[0], "deployer-address", contract.AssetAName, "100")
 	requireResultPlanAssetTo(t, plans[0], "deployer-address", gas, "5.998")
 	requireNoResultPlanOutputTo(t, plans[0], addr.MustEncode())
+}
+
+func TestExchangeBuyThenClosePaysManagedAssetsOnly(t *testing.T) {
+	contract := testExchangeContract()
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	gas := DefaultGasConfig().GasAssetName
+	gasConfig := exchangeTestGasConfig(gas)
+	fundTx := testTemplateDefaultInvokeTx(t, addr, 0, testAssets(gas, 5, contract.AssetAName, 100))
+	buyTx := testTemplateDefaultInvokeTx(t, addr, 0, testAssets(gas, 5, contract.AssetBName, 24))
+	closeTx := testExchangeCloseTx(t, addr, testAsset(gas, 1))
+
+	store := NewRuntimeStore()
+	first, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
+		Store:     store,
+		GasConfig: gasConfig,
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			if contractTx.Kind == TxTypeDeploy || tx == closeTx {
+				return "deployer-address", nil
+			}
+			if tx == buyTx {
+				return "buyer-address", nil
+			}
+			return "funder-address", nil
+		},
+		BlockHeight: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.SettlementPlans, 1)
+	firstStore := store.Clone()
+
+	second, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:       []*wire.MsgTx{closeTx},
+		Store:     store,
+		GasConfig: gasConfig,
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			return "deployer-address", nil
+		},
+		BlockHeight: 11,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.SettlementPlans, 1)
+
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil,
+		[]*wire.MsgTx{deployTx, fundTx, buyTx, closeTx}, TestnetContractPrefix, ContractTypeTemplate)
+	firstPlans, err := AugmentResultPlans(first.ResultPlans, firstStore, gasConfig, provider, nil)
+	require.NoError(t, err)
+	require.Len(t, firstPlans, 1)
+	provider = contractframework.ContractUTXOProviderWithTxOutputs(provider,
+		[]*wire.MsgTx{mustBuildTemplateResultTx(t, firstPlans)}, TestnetContractPrefix, ContractTypeTemplate)
+	secondPlans, err := AugmentResultPlans(second.ResultPlans, store, gasConfig, provider, nil)
+	require.NoError(t, err)
+	require.Len(t, secondPlans, 1)
+	requireResultPlanAssetTo(t, secondPlans[0], "deployer-address", contract.AssetAName, "88")
+	requireResultPlanAssetTo(t, secondPlans[0], "deployer-address", gas, "10.997")
 }
 
 func TestExchangeRejectsTooManyPriceSteps(t *testing.T) {
@@ -355,4 +411,20 @@ func requireNoResultPlanOutputTo(t *testing.T, plan ResultPlan, to string) {
 	for _, output := range plan.Outputs {
 		require.NotEqual(t, to, output.To, "unexpected result output to %s: %+v", to, output)
 	}
+}
+
+func mustBuildTemplateResultTx(t *testing.T, plans []ResultPlan) *wire.MsgTx {
+	t.Helper()
+	tx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
+		Status: ResultStatusSuccess,
+		Plans:  plans,
+		ResolveScript: func(output ResultOutput) ([]byte, error) {
+			if contract, err := DecodeContractAddress(output.To); err == nil {
+				return ContractPkScript(contract)
+			}
+			return txscript.NewScriptBuilder().AddOp(txscript.OP_TRUE).Script()
+		},
+	}, contractframework.ResultTxBuildOptions{PlanCount: resultPlanCount})
+	require.NoError(t, err)
+	return tx
 }

@@ -10,6 +10,36 @@ import (
 
 var ErrInvalidAsset = errors.New("invalid asset")
 
+type AssetPrecisionResolver func(assetName string) (int, bool)
+
+type AssetPrecisionPolicy struct {
+	Fallback int
+	Resolve  AssetPrecisionResolver
+}
+
+func (p AssetPrecisionPolicy) ParsePrecision() int {
+	return p.Fallback
+}
+
+func (p AssetPrecisionPolicy) AssetPrecision(assetName string) (int, bool) {
+	if assetName == "" || p.Resolve == nil {
+		return 0, false
+	}
+	precision, ok := p.Resolve(assetName)
+	return precision, ok && precision >= 0
+}
+
+func (p AssetPrecisionPolicy) Normalize(assetName string, amount *scommon.Decimal) *scommon.Decimal {
+	if amount == nil {
+		return nil
+	}
+	precision, ok := p.AssetPrecision(assetName)
+	if !ok || amount.Precision == precision {
+		return amount
+	}
+	return amount.NewPrecision(precision)
+}
+
 func OutputAssetAmount(outpoint OutPoint, value int64, assets wire.TxAssets,
 	satoshiAssetName, assetName string, invalidAsset error) (*scommon.Decimal, error) {
 
@@ -41,6 +71,21 @@ func SatoshiAmountUint64(value int64) (uint64, error) {
 }
 
 func NewAssetSetWithPrecision(assetName, amount string, maxPrecision int, invalidAsset error) (wire.TxAssets, error) {
+	return NewAssetSetWithAssetPrecision(assetName, amount, maxPrecision, invalidAsset, nil)
+}
+
+func NewAssetSetWithAssetPrecision(assetName, amount string, maxPrecision int,
+	invalidAsset error, assetPrecision AssetPrecisionResolver) (wire.TxAssets, error) {
+
+	return NewAssetSetWithPrecisionPolicy(assetName, amount, AssetPrecisionPolicy{
+		Fallback: maxPrecision,
+		Resolve:  assetPrecision,
+	}, invalidAsset)
+}
+
+func NewAssetSetWithPrecisionPolicy(assetName, amount string, policy AssetPrecisionPolicy,
+	invalidAsset error) (wire.TxAssets, error) {
+
 	if assetName == "" || amount == "" || amount == "0" {
 		return nil, nil
 	}
@@ -51,10 +96,11 @@ func NewAssetSetWithPrecision(assetName, amount string, maxPrecision int, invali
 		}
 		return nil, ErrInvalidAsset
 	}
-	amt, err := scommon.NewDecimalFromString(amount, maxPrecision)
+	amt, err := scommon.NewDecimalFromString(amount, policy.ParsePrecision())
 	if err != nil {
 		return nil, err
 	}
+	amt = policy.Normalize(assetName, amt)
 	if amt.Sign() <= 0 {
 		return nil, nil
 	}

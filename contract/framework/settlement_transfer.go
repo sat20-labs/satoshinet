@@ -14,7 +14,7 @@ type TransferOutputRequest struct {
 	SatValue              int64
 	SatoshiAssetName      string
 	Reason                string
-	MaxPrecision          int
+	Precision             AssetPrecisionPolicy
 	InvalidAsset          error
 	RequireIntegerSatoshi bool
 	IntegerSatoshiError   string
@@ -24,11 +24,12 @@ func ResultOutputFromTransferFields(req TransferOutputRequest) (ResultOutput, er
 	if req.AssetName == req.SatoshiAssetName {
 		value := req.SatValue
 		if req.AssetAmt != "" {
-			amt, err := parseTransferAmount(req.AssetAmt, req.MaxPrecision,
+			amt, err := parseTransferAmount(req.AssetAmt, req.Precision.ParsePrecision(),
 				req.RequireIntegerSatoshi, req.IntegerSatoshiError)
 			if err != nil {
 				return ResultOutput{}, err
 			}
+			amt = req.Precision.Normalize(req.AssetName, amt)
 			value += amt.Int64()
 		}
 		return ResultOutput{
@@ -39,7 +40,8 @@ func ResultOutputFromTransferFields(req TransferOutputRequest) (ResultOutput, er
 			Reason:    req.Reason,
 		}, nil
 	}
-	assets, err := NewAssetSetWithPrecision(req.AssetName, req.AssetAmt, req.MaxPrecision, req.InvalidAsset)
+	assets, err := NewAssetSetWithPrecisionPolicy(req.AssetName, req.AssetAmt,
+		req.Precision, req.InvalidAsset)
 	if err != nil {
 		return ResultOutput{}, err
 	}
@@ -60,7 +62,7 @@ type TransferIntentRequest struct {
 	AssetAmt              string
 	SatValue              int64
 	SatoshiAssetName      string
-	MaxPrecision          int
+	Precision             AssetPrecisionPolicy
 	IntentIndex           uint32
 	RequireIntegerSatoshi bool
 	IntegerSatoshiError   string
@@ -69,11 +71,14 @@ type TransferIntentRequest struct {
 func AssetIntentsFromTransferFields(req TransferIntentRequest) ([]AssetIntent, error) {
 	out := make([]AssetIntent, 0, 2)
 	if req.AssetName != "" && req.AssetAmt != "" {
-		amount, err := parseTransferAmount(req.AssetAmt, req.MaxPrecision,
+		amount, err := parseTransferAmount(req.AssetAmt, req.Precision.ParsePrecision(),
 			req.RequireIntegerSatoshi && req.AssetName == req.SatoshiAssetName,
 			req.IntegerSatoshiError)
 		if err != nil {
 			return nil, err
+		}
+		if req.AssetName != req.SatoshiAssetName {
+			amount = req.Precision.Normalize(req.AssetName, amount)
 		}
 		if amount.Sign() > 0 {
 			out = append(out, AssetIntent{

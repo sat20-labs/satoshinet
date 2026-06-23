@@ -32,6 +32,7 @@ type BlockExecutionRequest struct {
 	ContractPrefix string
 	GasConfig      GasConfig
 	ContractUTXOs  ContractUTXOProvider
+	AssetPrecision contractframework.AssetPrecisionResolver
 	BlockHeight    int64
 	ResolveInvoker InvokerResolver
 }
@@ -45,6 +46,7 @@ type BlockResultBuildRequest struct {
 	ContractPrefix string
 	GasConfig      GasConfig
 	ContractUTXOs  ContractUTXOProvider
+	AssetPrecision contractframework.AssetPrecisionResolver
 	BlockHeight    int64
 	ResolveInvoker InvokerResolver
 	ResolveScript  ResultRecipientScriptResolver
@@ -59,6 +61,7 @@ type Backend struct {
 	ContractPrefix string
 	GasConfig      GasConfig
 	ContractUTXOs  ContractUTXOProvider
+	AssetPrecision contractframework.AssetPrecisionResolver
 	BlockHeight    int64
 	ResolveInvoker InvokerResolver
 
@@ -89,6 +92,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		ContractPrefix: prefix,
 		GasConfig:      req.GasConfig,
 		ContractUTXOs:  contractUTXOs,
+		AssetPrecision: req.AssetPrecision,
 		BlockHeight:    req.BlockHeight,
 		ResolveInvoker: req.ResolveInvoker,
 	})
@@ -122,7 +126,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 				if augmentStore != nil {
 					augmentStore = augmentStore.Clone()
 				}
-				return AugmentResultPlans(plans, augmentStore, req.GasConfig, contractUTXOs)
+				return AugmentResultPlans(plans, augmentStore, req.GasConfig, contractUTXOs, req.AssetPrecision)
 			},
 		},
 	})
@@ -154,6 +158,7 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 		ContractPrefix: prefix,
 		GasConfig:      req.GasConfig,
 		ContractUTXOs:  req.ContractUTXOs,
+		AssetPrecision: req.AssetPrecision,
 		BlockHeight:    req.BlockHeight,
 		ResolveInvoker: req.ResolveInvoker,
 	}
@@ -349,10 +354,11 @@ func (e *Backend) Finalize() (BlockExecutionResult, error) {
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
-	resultPlans, err := BuildSettlementResultPlans(plans, e.records)
+	resultPlans, err := BuildSettlementResultPlans(plans, e.records, e.AssetPrecision)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
+	resultPlans = AddMissingGasResultPlans(resultPlans, e.records)
 	records, err := e.recordsWithSettlementAssetIntents(plans)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -373,7 +379,7 @@ func (e *Backend) recordsWithSettlementAssetIntents(plans []*SettlementPlan) ([]
 	records := contractframework.CloneExecutionRecords(e.records)
 	intentsByItem := make(map[int64][]AssetIntent)
 	for _, plan := range plans {
-		planIntents, err := BuildSettlementAssetIntentsByItem(plan)
+		planIntents, err := BuildSettlementAssetIntentsByItem(plan, e.AssetPrecision)
 		if err != nil {
 			return nil, err
 		}
@@ -567,11 +573,11 @@ func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, runtime *ContractRuntime,
 		Contract:       validated.Contract,
 		Status:         ResultStatusInvalid,
 		GasLimit:       validated.Payload.GasLimit,
-		GasFee:         invalidResultFee,
 		FundingInputs:  contractframework.ContractOutputOutPoints(validated.FundingOutputs),
 		ItemIDs:        []int64{item.ID},
 		RequiresResult: true,
 	}
+	outcome.GasFee = invalidResultFee
 	e.appendOutcome(outcome)
 	return nil
 }

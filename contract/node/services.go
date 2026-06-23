@@ -29,6 +29,7 @@ type Services struct {
 type GasConfig = contractframework.GasConfig
 type AgentRuntimeConfig = agentcontract.RuntimeConfig
 type ScriptRecipientResolver = contractframework.ScriptRecipientResolver
+type AssetPrecisionResolver = contractframework.AssetPrecisionResolver
 
 type ContractUTXO struct {
 	OutPoint       wire.OutPoint
@@ -57,6 +58,7 @@ type Config struct {
 	EVMContractUTXOs      ContractUTXOProvider
 	TemplateContractUTXOs ContractUTXOProvider
 	AgentContractUTXOs    ContractUTXOProvider
+	AssetPrecision        AssetPrecisionResolver
 
 	EVMResolveRecipient      ScriptRecipientResolver
 	TemplateResolveRecipient ScriptRecipientResolver
@@ -164,6 +166,7 @@ func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error)
 		NewRuntime:          stateStore.RuntimeFactory(),
 		ResolveOutput:       templateResultOutputResolver(cfg),
 		ContractUTXOs:       templateContractUTXOProvider(cfg.TemplateContractUTXOs),
+		AssetPrecision:      cfg.AssetPrecision,
 		SkipStateRootVerify: cfg.SkipStateRootVerify,
 	}), nil
 }
@@ -182,6 +185,7 @@ func NewAgentBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 		NewRuntime:          stateStore.RuntimeFactory(),
 		ResolveResultOutput: agentResultOutputResolver(cfg),
 		ContractUTXOs:       agentContractUTXOProvider(cfg.AgentContractUTXOs),
+		AssetPrecision:      cfg.AssetPrecision,
 		SkipStateRootVerify: cfg.SkipStateRootVerify,
 	}), nil
 }
@@ -444,6 +448,7 @@ func newTemplateMiningModule(cfg Config, req mining.ContractBuildRequest) (contr
 				GasConfig:      blockGasConfig,
 				ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(
 					contractUTXOs, work.Txs, prefix, tmplcontract.ContractTypeTemplate),
+				AssetPrecision: cfg.AssetPrecision,
 				BlockHeight:    int64(req.Height),
 				ResolveInvoker: resolveInvoker,
 			})
@@ -452,7 +457,7 @@ func newTemplateMiningModule(cfg Config, req mining.ContractBuildRequest) (contr
 			}
 			overlay := contractframework.ContractUTXOProviderWithTxOutputs(
 				contractUTXOs, work.Txs, prefix, tmplcontract.ContractTypeTemplate)
-			resultPlans, err := tmplcontract.AugmentResultPlans(executed.ResultPlans, store, blockGasConfig, overlay)
+			resultPlans, err := tmplcontract.AugmentResultPlans(executed.ResultPlans, store, blockGasConfig, overlay, cfg.AssetPrecision)
 			if err != nil {
 				return contractframework.ExecutionResult{}, err
 			}
@@ -478,6 +483,7 @@ func newTemplateMiningModule(cfg Config, req mining.ContractBuildRequest) (contr
 				ContractPrefix: contractPrefixForRequest(work.Prefix, contractPrefix),
 				GasConfig:      blockGasConfig,
 				ContractUTXOs:  contractUTXOs,
+				AssetPrecision: cfg.AssetPrecision,
 				BlockHeight:    int64(req.Height),
 				ResolveInvoker: resolveInvoker,
 				ResolveScript:  resolveScript,
@@ -511,6 +517,7 @@ func newTemplateMiningModule(cfg Config, req mining.ContractBuildRequest) (contr
 				ContractPrefix: contractPrefixForRequest(work.Prefix, contractPrefix),
 				GasConfig:      blockGasConfig,
 				ContractUTXOs:  contractUTXOs,
+				AssetPrecision: cfg.AssetPrecision,
 				BlockHeight:    int64(req.Height),
 				ResolveInvoker: resolveInvoker,
 				ResolveScript:  resolveScript,
@@ -577,6 +584,7 @@ func newAgentMiningModule(cfg Config, req mining.ContractBuildRequest) (contract
 				RuntimeConfig:  cfg.AgentRuntime,
 				GasConfig:      blockGasConfig,
 				ContractUTXOs:  overlay,
+				AssetPrecision: cfg.AssetPrecision,
 				BlockHeight:    blockHeight,
 				BlockTime:      blockTime,
 				ResolveInvoker: resolveInvoker,
@@ -584,7 +592,8 @@ func newAgentMiningModule(cfg Config, req mining.ContractBuildRequest) (contract
 			if err != nil {
 				return contractframework.ExecutionResult{}, err
 			}
-			resultPlans, err := agentcontract.AugmentResultPlans(executed.ResultPlans, overlay)
+			resultPlans, err := agentcontract.AugmentResultPlans(executed.ResultPlans, overlay, store, cfg.AssetPrecision,
+				blockGasConfig.Normalize().GasAssetName, cfg.AgentRuntime.BootstrapAddress)
 			if err != nil {
 				return contractframework.ExecutionResult{}, err
 			}
@@ -610,6 +619,7 @@ func newAgentMiningModule(cfg Config, req mining.ContractBuildRequest) (contract
 				RuntimeConfig:  cfg.AgentRuntime,
 				GasConfig:      blockGasConfig,
 				ContractUTXOs:  contractUTXOs,
+				AssetPrecision: cfg.AssetPrecision,
 				BlockHeight:    blockHeight,
 				BlockTime:      blockTime,
 				ResolveInvoker: resolveInvoker,
@@ -644,6 +654,7 @@ func newAgentMiningModule(cfg Config, req mining.ContractBuildRequest) (contract
 				RuntimeConfig:  cfg.AgentRuntime,
 				GasConfig:      blockGasConfig,
 				ContractUTXOs:  contractUTXOs,
+				AssetPrecision: cfg.AssetPrecision,
 				BlockHeight:    blockHeight,
 				BlockTime:      blockTime,
 				ResolveInvoker: resolveInvoker,
@@ -767,6 +778,7 @@ func NewTemplateResultBuilder(cfg Config) (mining.ContractResultBuilder, error) 
 			ContractPrefix: contractPrefix,
 			GasConfig:      blockGasConfig,
 			ContractUTXOs:  templateContractUTXOProvider(cfg.TemplateContractUTXOs),
+			AssetPrecision: cfg.AssetPrecision,
 			BlockHeight:    int64(req.Height),
 			ResolveInvoker: tmplcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams,
 				previousOutputScriptResolver(req.UtxoView)),
@@ -806,6 +818,7 @@ func NewAgentResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
 			RuntimeConfig:  cfg.AgentRuntime,
 			GasConfig:      blockGasConfig,
 			ContractUTXOs:  agentContractUTXOProvider(cfg.AgentContractUTXOs),
+			AssetPrecision: cfg.AssetPrecision,
 			BlockHeight:    int64(req.Height),
 			BlockTime:      req.Timestamp.Unix(),
 			ResolveInvoker: agentcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams,

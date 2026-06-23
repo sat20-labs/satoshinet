@@ -321,10 +321,10 @@ func (r *RunningData) Apply(item *InvokeItem) {
 	if item == nil {
 		return
 	}
-	r.applyDefaultInvokeRetention(item)
 	if item.Reason == InvokeReasonInvalid {
 		return
 	}
+	r.applyDefaultInvokeRetention(item)
 	switch item.OrderType {
 	}
 	if r.TotalInputAssetB == nil {
@@ -363,6 +363,33 @@ func (r *RunningData) Apply(item *InvokeItem) {
 		}
 		r.TotalRefundAssetB = scommon.DecimalAdd(r.TotalRefundAssetB, scommon.NewDefaultDecimal(item.OutValue+item.RemainingValue))
 	}
+}
+
+func (c *LimitOrderContract) ApplyRunningData(r *RunningData, item *InvokeItem) bool {
+	if r == nil {
+		return true
+	}
+	r.Apply(item)
+	if item == nil || item.Reason == InvokeReasonInvalid {
+		return true
+	}
+	switch item.OrderType {
+	case OrderTypeBuy:
+		if item.RemainingValue > 0 {
+			if r.AssetBInPool == nil {
+				r.AssetBInPool = parseDecimalOrZero("0")
+			}
+			r.AssetBInPool = scommon.DecimalAdd(r.AssetBInPool, scommon.NewDefaultDecimal(item.RemainingValue))
+		}
+	case OrderTypeSell:
+		if item.RemainingAmt != nil && item.RemainingAmt.Sign() > 0 {
+			if r.AssetAInPool == nil {
+				r.AssetAInPool = parseDecimalOrZero("0")
+			}
+			r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.RemainingAmt)
+		}
+	}
+	return true
 }
 
 func (r *RunningData) ApplyForContract(contract Contract, item *InvokeItem) {
@@ -450,7 +477,6 @@ func (r *ContractRuntime) ApplyInvalidInvoke(req ApplyInvokeRequest, gasAssetNam
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
-	state.Running.ApplyForContract(r.contract, item)
 	state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gasBalance)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err

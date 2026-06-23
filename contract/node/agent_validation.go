@@ -24,6 +24,7 @@ type AgentBlockExecutionConfig struct {
 	NewRuntime          AgentRuntimeFactory
 	ResolveInvoker      agent.InvokerResolver
 	ContractUTXOs       agent.ContractUTXOProvider
+	AssetPrecision      contractframework.AssetPrecisionResolver
 	ResolveRecipient    agent.ResultRecipientScriptResolver
 	ResolveResultOutput agent.ResultOutputResolver
 	SkipStateRootVerify bool
@@ -85,6 +86,7 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 		ContractPrefix: prefix,
 		RuntimeConfig:  v.cfg.RuntimeConfig,
 		GasConfig:      gasConfig,
+		AssetPrecision: v.cfg.AssetPrecision,
 		BlockHeight:    int64(block.Height()),
 		BlockTime:      block.MsgBlock().Header.Timestamp.Unix(),
 		ResolveInvoker: agent.LastInputPreviousOutputInvokerResolver(
@@ -99,7 +101,8 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 		}
 	}
 	contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(v.cfg.ContractUTXOs, blockTxs, prefix, agent.ContractTypeAgent)
-	resultPlans, err := agent.AugmentResultPlans(executed.ResultPlans, contractUTXOs)
+	resultPlans, err := agent.AugmentResultPlans(executed.ResultPlans, contractUTXOs, store, v.cfg.AssetPrecision,
+		v.cfg.GasConfig.Normalize().GasAssetName, v.cfg.RuntimeConfig.BootstrapAddress)
 	if err != nil {
 		return agentBlockRuleError("agent result plan: %v", err)
 	}

@@ -26,6 +26,7 @@ type TemplateBlockExecutionConfig struct {
 	ResolveInvoker      template.InvokerResolver
 	ResolveOutput       template.ResultOutputResolver
 	ContractUTXOs       template.ContractUTXOProvider
+	AssetPrecision      contractframework.AssetPrecisionResolver
 	VerifyResult        func(resultTx *wire.MsgTx, expected []template.ResultPlan, status template.ResultStatus) error
 	SkipStateRootVerify bool
 }
@@ -87,6 +88,7 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 		ContractPrefix: prefix,
 		GasConfig:      gasConfig,
 		ContractUTXOs:  contractUTXOs,
+		AssetPrecision: v.cfg.AssetPrecision,
 		BlockHeight:    int64(block.Height()),
 		ResolveInvoker: template.LastInputPreviousOutputInvokerResolver(
 			v.cfg.ChainParams, previousOutputScriptResolver(view)),
@@ -100,7 +102,7 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 		}
 	}
 	augmentStore := store.Clone()
-	resultPlans, err := template.AugmentResultPlans(executed.ResultPlans, augmentStore, gasConfig, contractUTXOs)
+	resultPlans, err := template.AugmentResultPlans(executed.ResultPlans, augmentStore, gasConfig, contractUTXOs, v.cfg.AssetPrecision)
 	if err != nil {
 		return templateBlockRuleError("template result plan: %v", err)
 	}

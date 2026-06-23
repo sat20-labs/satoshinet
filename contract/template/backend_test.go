@@ -115,7 +115,12 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 		BlockHeight: 100,
 	})
 	require.NoError(t, err)
-	require.Empty(t, first.ResultPlans)
+	require.Len(t, first.ResultPlans, 1)
+	firstProvider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, sellTx}, TestnetContractPrefix, ContractTypeTemplate)
+	firstPlans, err := AugmentResultPlans(first.ResultPlans, store, gasConfig, firstProvider, nil)
+	require.NoError(t, err)
+	requireResultPlanAsset(t, firstPlans[0], gasAssetName, "49.999")
+	requireResultPlanAsset(t, firstPlans[0], contract.AssetName, "10")
 	runtime, ok := store.Get(addr)
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
@@ -157,11 +162,11 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
 	requireDecimalString(t, "100", state.Running.GasBalance)
-	resultPlans, err := AugmentResultPlans(second.ResultPlans, store, gasConfig, nil)
+	resultPlans, err := AugmentResultPlans(second.ResultPlans, store, gasConfig, nil, nil)
 	require.NoError(t, err)
 	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "100")
 	currentOnly := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{sellTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
-	resultPlans, err = AugmentResultPlans(second.ResultPlans, store, gasConfig, currentOnly)
+	resultPlans, err = AugmentResultPlans(second.ResultPlans, store, gasConfig, currentOnly, nil)
 	require.NoError(t, err)
 	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "99.999")
 }
@@ -197,16 +202,16 @@ func TestBackendInvalidInvokeAbsorbsKnownFunding(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "10", state.Running.AssetAInPool)
-	requireDecimalString(t, "7", state.Running.AssetBInPool)
+	require.Empty(t, state.Running.AssetAInPool)
+	require.Zero(t, state.Running.AssetBInPool)
 	requireDecimalString(t, "4.999", state.Running.GasBalance)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, invokeTx}, TestnetContractPrefix, ContractTypeTemplate)
-	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
-	require.Equal(t, int64(7), plans[0].Outputs[len(plans[0].Outputs)-1].Value)
-	requireResultPlanAsset(t, plans[0], contract.AssetName, "10")
+	requireResultPlanValueTo(t, plans[0], "invoker-address", 7)
+	requireResultPlanAssetTo(t, plans[0], "invoker-address", contract.AssetName, "10")
 	requireResultPlanAsset(t, plans[0], gas, "4.999")
 }
 
@@ -250,7 +255,7 @@ func TestBackendLimitOrderCloseRefundsOwnersAndSplitsProfit(t *testing.T) {
 	require.True(t, state.Running.Closed)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, sellTx, closeTx}, TestnetContractPrefix, ContractTypeTemplate)
-	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	requireResultPlanAssetTo(t, plans[0], "seller-address", contract.AssetName, "10")
@@ -377,9 +382,9 @@ func TestBackendRecordsInvalidInvokeParam(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, state.Items, 1)
 	require.Equal(t, InvokeReasonInvalid, state.Items[0].Reason)
-	require.Equal(t, ItemStatusClosedDirectly, state.Items[0].Done)
+	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
 	require.Equal(t, uint64(1), state.InvokeCount)
-	requireDecimalString(t, "7", state.Running.AssetBInPool)
+	require.Zero(t, state.Running.AssetBInPool)
 }
 
 func TestBackendRecordsUnsupportedAMMRefund(t *testing.T) {
@@ -401,12 +406,12 @@ func TestBackendRecordsUnsupportedAMMRefund(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, state.Items, 1)
 	require.Equal(t, InvokeReasonInvalid, state.Items[0].Reason)
-	require.Equal(t, ItemStatusClosedDirectly, state.Items[0].Done)
+	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
 	require.Equal(t, uint64(1), state.InvokeCount)
 	requireDecimalString(t, "100", state.Running.RequiredAssetA)
 	requireDecimalString(t, "10", state.Running.RequiredAssetB)
 	requireDecimalString(t, "0", state.Running.AssetAInPool)
-	requireDecimalString(t, "7", state.Running.AssetBInPool)
+	requireDecimalString(t, "0", state.Running.AssetBInPool)
 }
 
 func testTemplateDeployTx(t *testing.T, contract Contract) (*wire.MsgTx, ContractAddress) {
@@ -518,6 +523,16 @@ func requireResultPlanAsset(t *testing.T, plan ResultPlan, assetName, amount str
 		}
 	}
 	t.Fatalf("result plan missing asset %s amount %s: %+v", assetName, amount, plan.Outputs)
+}
+
+func requireResultPlanValueTo(t *testing.T, plan ResultPlan, to string, value int64) {
+	t.Helper()
+	for _, output := range plan.Outputs {
+		if output.To == to && output.Value == value {
+			return
+		}
+	}
+	t.Fatalf("result plan missing value %d to %s: %+v", value, to, plan.Outputs)
 }
 
 func templateRecordsHaveAssetIntents(records []ExecutionRecord) bool {

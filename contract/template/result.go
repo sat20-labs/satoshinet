@@ -14,7 +14,9 @@ func DeriveInvokeCallID(invokeTxID string, vout uint32, contract ContractAddress
 	return contractframework.DeriveInvokeCallID("template-invoke", invokeTxID, vout, contract)
 }
 
-func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionRecord) ([]ResultPlan, error) {
+func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionRecord,
+	assetPrecision contractframework.AssetPrecisionResolver) ([]ResultPlan, error) {
+
 	inputsByItem := make(map[int64][]OutPoint)
 	feesByItem := make(map[int64]*scommon.Decimal)
 	for _, record := range records {
@@ -25,26 +27,87 @@ func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionReco
 	}
 
 	return contractframework.BuildSettlementResultPlans(plans, templateSettlementResultOptions(
-		inputsByItem, feesByItem))
+		inputsByItem, feesByItem, assetPrecision))
 }
 
-func BuildSettlementAssetIntentsByItem(plan *SettlementPlan) (map[int64][]AssetIntent, error) {
-	return contractframework.BuildSettlementAssetIntentsByItem(plan, templateSettlementResultOptions(nil, nil))
+func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []ResultPlan {
+	out := contractframework.CloneResultPlans(plans)
+	coveredItems := make(map[int64]struct{})
+	planByContract := make(map[string]int)
+	for i := range out {
+		planByContract[out[i].Contract] = i
+		for _, itemID := range out[i].ItemIDs {
+			coveredItems[itemID] = struct{}{}
+		}
+	}
+	for _, record := range records {
+		if !record.RequiresResult || record.GasFee == nil || record.GasFee.Sign() == 0 {
+			continue
+		}
+		if len(record.ItemIDs) == 0 {
+			continue
+		}
+		if executionRecordItemsCovered(record, coveredItems) {
+			continue
+		}
+		contract := record.Contract.MustEncode()
+		i, ok := planByContract[contract]
+		if !ok {
+			i = len(out)
+			planByContract[contract] = i
+			out = append(out, ResultPlan{Contract: contract, Height: record.Height})
+		}
+		out[i].GasFee = contractframework.DecimalAddAllowNil(out[i].GasFee, record.GasFee)
+		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
+		out[i].Inputs = contractframework.UniqueOutPoints(out[i].Inputs)
+		out[i].ItemIDs = appendMissingItemIDs(out[i].ItemIDs, record.ItemIDs)
+	}
+	return out
+}
+
+func executionRecordItemsCovered(record ExecutionRecord, covered map[int64]struct{}) bool {
+	if len(record.ItemIDs) == 0 {
+		return false
+	}
+	for _, itemID := range record.ItemIDs {
+		if _, ok := covered[itemID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func appendMissingItemIDs(ids []int64, more []int64) []int64 {
+	for _, id := range more {
+		ids = appendPlanItemID(ids, id)
+	}
+	return ids
+}
+
+func BuildSettlementAssetIntentsByItem(plan *SettlementPlan,
+	assetPrecision contractframework.AssetPrecisionResolver) (map[int64][]AssetIntent, error) {
+
+	return contractframework.BuildSettlementAssetIntentsByItem(plan, templateSettlementResultOptions(nil, nil, assetPrecision))
 }
 
 func templateSettlementResultOptions(inputsByItem map[int64][]OutPoint,
-	feesByItem map[int64]*scommon.Decimal) contractframework.SettlementResultOptions {
+	feesByItem map[int64]*scommon.Decimal,
+	assetPrecision contractframework.AssetPrecisionResolver) contractframework.SettlementResultOptions {
 
 	return contractframework.SettlementResultOptions{
 		SatoshiAssetName: SatoshiAssetName,
-		MaxPrecision:     MaxPriceDivisibility,
+		Precision:        contractframework.AssetPrecisionPolicy{Fallback: MaxPriceDivisibility, Resolve: assetPrecision},
 		InvalidAsset:     ErrInvalidAsset,
 		InputsByItem:     inputsByItem,
 		FeesByItem:       feesByItem,
 	}
 }
 
-func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasConfig, contractUTXOs ContractUTXOProvider) ([]ResultPlan, error) {
+func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasConfig,
+	contractUTXOs ContractUTXOProvider,
+	assetPrecision contractframework.AssetPrecisionResolver) ([]ResultPlan, error) {
+
+	_ = assetPrecision
 	gasConfig = gasConfig.Normalize()
 	out := contractframework.CloneResultPlans(plans)
 	for i := range out {
@@ -58,30 +121,33 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 			if err != nil {
 				return nil, err
 			}
+			retain, err := contractChangeOutput(contract, store, gasConfig, view.Assets)
+			if err != nil {
+				return nil, err
+			}
+			mode := contractframework.ResultSurplusToBootstrap
+			managedMode := contractframework.ResultSurplusToContract
 			if closed {
-				out[i].Outputs = capClosedResultOutputsByAvailable(out[i].Outputs, view.Assets, view.Value, gasConfig.GasAssetName, out[i].GasFee)
+				mode = contractframework.ResultSurplusAsProfit
+				managedMode = contractframework.ResultSurplusAsProfit
 			}
-			change, err := contractChangeOutput(contract, store, gasConfig, view.Assets)
+			augmented, err := contractframework.AugmentResultPlanWithManagedState(
+				contractframework.ManagedResultAugmentRequest{
+					Plan:             out[i],
+					View:             view,
+					ManagedAssets:    retain,
+					GasAssetName:     gasConfig.GasAssetName,
+					GasFee:           out[i].GasFee,
+					ManagedGasPaid:   templateManagedGasPaid(contract, store, out[i]),
+					DeployerAddress:  deployer,
+					BootstrapAddress: gasConfig.BootstrapAddress,
+					ManagedMode:      managedMode,
+					SurplusMode:      mode,
+				})
 			if err != nil {
 				return nil, err
 			}
-			change.Assets, err = resultAssetsChange(view.Assets, out[i].Outputs, gasConfig.GasAssetName, out[i].GasFee)
-			if err != nil {
-				return nil, err
-			}
-			out[i].Inputs = view.Inputs
-			change.Value = view.Value - resultOutputsValue(out[i].Outputs)
-			if change.Value < 0 {
-				return nil, fmt.Errorf("template result outputs spend %d sats but only %d sats are available", resultOutputsValue(out[i].Outputs), view.Value)
-			}
-			if !contractframework.ResultOutputIsZero(change) {
-				if closed {
-					out[i].Outputs = append(out[i].Outputs,
-						splitClosedProfitChange(change, deployer, gasConfig.BootstrapAddress)...)
-				} else {
-					out[i].Outputs = append(out[i].Outputs, change)
-				}
-			}
+			out[i] = augmented
 		} else {
 			change, err := contractChangeOutput(contract, store, gasConfig, nil)
 			if err != nil {
@@ -94,6 +160,37 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 		out[i].Inputs = contractframework.UniqueOutPoints(out[i].Inputs)
 	}
 	return out, nil
+}
+
+func templateManagedGasPaid(contract ContractAddress, store *RuntimeStore, plan ResultPlan) bool {
+	if store == nil {
+		return false
+	}
+	runtime, ok := store.Get(contract)
+	if !ok || runtime == nil {
+		return false
+	}
+	if _, ok := runtime.Contract().(*ExchangeContract); ok {
+		return true
+	}
+	if len(plan.ItemIDs) == 0 {
+		return false
+	}
+	state, err := runtime.RuntimeState()
+	if err != nil {
+		return false
+	}
+	ids := make(map[int64]struct{}, len(plan.ItemIDs))
+	for _, id := range plan.ItemIDs {
+		ids[id] = struct{}{}
+	}
+	for i := range state.Items {
+		item := &state.Items[i]
+		if _, ok := ids[item.ID]; ok && item.Reason == InvokeReasonInvalid {
+			return true
+		}
+	}
+	return false
 }
 
 func capClosedResultOutputsByAvailable(outputs []ResultOutput, availableAssets wire.TxAssets, availableValue int64, gasAssetName string, gasFee *scommon.Decimal) []ResultOutput {
@@ -369,6 +466,15 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 			return ResultOutput{}, err
 		}
 	}
+	openValue, openAssets, err := openOrderManagedAssets(runtime.Contract(), &state)
+	if err != nil {
+		return ResultOutput{}, err
+	}
+	if len(openAssets) != 0 {
+		if err := assets.Merge(openAssets); err != nil {
+			return ResultOutput{}, err
+		}
+	}
 	gasAssetName := gasConfig.GasAssetName
 	if gasAssetName == "" {
 		gasAssetName = DefaultGasConfig().GasAssetName
@@ -393,9 +499,43 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	}
 	return ResultOutput{
 		To:     to,
-		Value:  contractChangeValue(runtime.Contract(), state.Running.AssetBInPool),
+		Value:  contractChangeValue(runtime.Contract(), state.Running.AssetBInPool) + openValue,
 		Assets: assets,
 	}, nil
+}
+
+func openOrderManagedAssets(contract Contract, state *TemplateRuntimeState) (int64, wire.TxAssets, error) {
+	if state == nil {
+		return 0, nil, nil
+	}
+	limit, ok := contract.(*LimitOrderContract)
+	if !ok {
+		return 0, nil, nil
+	}
+	var value int64
+	var assets wire.TxAssets
+	for i := range state.Items {
+		item := &state.Items[i]
+		if item.Finished() || item.Reason != InvokeReasonNormal {
+			continue
+		}
+		switch item.OrderType {
+		case OrderTypeBuy:
+			value += item.RemainingValue
+		case OrderTypeSell:
+			if item.RemainingAmt == nil || item.RemainingAmt.Sign() <= 0 {
+				continue
+			}
+			poolAssets, err := newAssetSet(limit.AssetName, item.RemainingAmt.String())
+			if err != nil {
+				return 0, nil, err
+			}
+			if err := assets.Merge(poolAssets); err != nil {
+				return 0, nil, err
+			}
+		}
+	}
+	return value, assets, nil
 }
 
 func contractChangeValue(contract Contract, assetB *scommon.Decimal) int64 {
@@ -438,7 +578,7 @@ func capAssetsByAvailable(assets, available wire.TxAssets) wire.TxAssets {
 }
 
 func BuildCanonicalSettlementResultTx(status ResultStatus, settlementPlans []*SettlementPlan, records []ExecutionRecord, resolve ResultRecipientScriptResolver) (*wire.MsgTx, []ResultPlan, error) {
-	plans, err := BuildSettlementResultPlans(settlementPlans, records)
+	plans, err := BuildSettlementResultPlans(settlementPlans, records, nil)
 	if err != nil {
 		return nil, nil, err
 	}

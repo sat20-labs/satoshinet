@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -181,6 +182,11 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 	}
 	tx, err := s.submitConfirm(candidate, param)
 	if err != nil {
+		if isDuplicateSubmitError(err) {
+			s.clearFailure(contractAddr)
+			s.infof("Agent contract %s confirm already submitted: %v", contractAddr, err)
+			return
+		}
 		delay := s.recordFailure(contractAddr, err)
 		s.warnf("Agent contract %s confirm submit failed: %v, retry_after=%s", contractAddr, err, delay)
 		return
@@ -228,6 +234,11 @@ func (s *Service) processReadyContracts(quit <-chan struct{}, runtimeStore *agen
 			tx, err = s.submitReject(candidate, reject)
 		}
 		if err != nil {
+			if isDuplicateSubmitError(err) {
+				s.clearFailure(contractAddr)
+				s.infof("Agent contract %s ready transition already submitted: %v", contractAddr, err)
+				continue
+			}
 			delay := s.recordFailure(contractAddr, err)
 			s.warnf("Agent contract %s ready transition submit failed: %v, retry_after=%s", contractAddr, err, delay)
 			continue
@@ -286,6 +297,16 @@ func (s *Service) submitInvoke(contract contractcommon.ContractAddress, action s
 		return nil, fmt.Errorf("missing oracle invoke submitter")
 	}
 	return s.cfg.SubmitInvoke(contract, action, param)
+}
+
+func isDuplicateSubmitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already in mempool") ||
+		strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "already have transaction")
 }
 
 func (s *Service) shouldAttempt(contractAddr string, now time.Time) bool {
