@@ -79,6 +79,8 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 	}
 	gasConfig := v.cfg.GasConfig
 	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
+	contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(
+		v.cfg.ContractUTXOs, blockTxs, prefix, agent.ContractTypeAgent)
 
 	executed, err := agent.ExecuteBlock(agent.BlockExecutionRequest{
 		Txs:            blockTxs,
@@ -86,6 +88,7 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 		ContractPrefix: prefix,
 		RuntimeConfig:  v.cfg.RuntimeConfig,
 		GasConfig:      gasConfig,
+		ContractUTXOs:  contractUTXOs,
 		AssetPrecision: v.cfg.AssetPrecision,
 		BlockHeight:    int64(block.Height()),
 		BlockTime:      block.MsgBlock().Header.Timestamp.Unix(),
@@ -100,9 +103,8 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 			return agentBlockRuleError("agent state root: %v", err)
 		}
 	}
-	contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(v.cfg.ContractUTXOs, blockTxs, prefix, agent.ContractTypeAgent)
 	resultPlans, err := agent.AugmentResultPlans(executed.ResultPlans, contractUTXOs, store, v.cfg.AssetPrecision,
-		v.cfg.GasConfig.Normalize().GasAssetName, v.cfg.RuntimeConfig.BootstrapAddress)
+		gasConfig.Normalize().GasAssetName, v.cfg.RuntimeConfig.BootstrapAddress)
 	if err != nil {
 		return agentBlockRuleError("agent result plan: %v", err)
 	}

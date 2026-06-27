@@ -741,6 +741,64 @@ func TestBuildBlockResultTxsIgnoresUnfundedConfirm(t *testing.T) {
 	}
 }
 
+func TestBuildBlockResultTxsUsesPhysicalGasWhenManagedGasMissing(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000, nil)
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0, nil)
+
+	store := NewRuntimeStore()
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID():    "core",
+			aliceBetTx.TxID(): "alice",
+			bobBetTx.TxID():   "bob",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("initial block failed: %v", err)
+	}
+
+	resultGas := testAgentGasFee(t, DefaultGasConfig().ResultBaseGas).Int64()
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
+			return []UTXO{{
+				OutPoint: OutPoint{TxID: chainhash.Hash{7}.String(), Vout: 0},
+				Contract: contract,
+				Assets:   testAgentAsset(DefaultGasConfig().GasAssetName, resultGas),
+			}}, nil
+		}, []*wire.MsgTx{aliceBetTx, bobBetTx}, TestnetContractPrefix, ContractTypeAgent),
+		ResolveScript:  testResultScriptResolver,
+		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.ResultTxs) != 1 {
+		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State()
+	if state.Prediction.GasBalance != "" {
+		t.Fatalf("managed gas should still be empty, got %q", state.Prediction.GasBalance)
+	}
+	if state.Prediction.Status != PredictionStatusSettled {
+		t.Fatalf("confirm did not settle prediction: %#v", state.Prediction)
+	}
+}
+
 func testAgentDeployTx(t *testing.T) (*wire.MsgTx, ContractAddress) {
 	t.Helper()
 	return testAgentDeployTxForContract(t, validPredictionContract())

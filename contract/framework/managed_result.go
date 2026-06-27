@@ -56,13 +56,13 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 
 	managedAssets := requestManagedAssets(req)
 	if !req.ManagedGasPaid {
-		remainingGasFee, err := deductGasFeeFromRetain(&managedAssets, req.GasAssetName, req.GasFee)
+		_, err := deductGasFeeFromRetain(&managedAssets, req.GasAssetName, req.GasFee)
 		if err != nil {
 			return ResultPlan{}, err
 		}
-		if remainingGasFee != nil && remainingGasFee.Sign() > 0 {
-			return ResultPlan{}, fmt.Errorf("insufficient managed gas asset for result fee")
-		}
+		// The physical contract balance has already reserved the full result
+		// fee above. If managed gas is insufficient, the unpaid part is covered
+		// by unmanaged gas held at the contract address.
 	}
 	managedAssets = capResultOutputByAvailable(managedAssets, remainingValue, remainingAssets)
 	if !ResultOutputIsZero(managedAssets) {
