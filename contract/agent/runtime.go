@@ -8,6 +8,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type RuntimeConfig struct {
@@ -25,6 +26,13 @@ type Runtime struct {
 	contract PredictionContract
 	config   RuntimeConfig
 	state    RuntimeState
+}
+
+func (cfg RuntimeConfig) AgentSubtypeEnabled(subtype string) bool {
+	if cfg.ChainParams != nil && cfg.ChainParams.Net == wire.MainNet {
+		return false
+	}
+	return subtype == SubtypePrediction
 }
 
 type RuntimeState struct {
@@ -115,6 +123,9 @@ func NewRuntime(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig
 }
 
 func NewRuntimeWithDeployer(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig, deployer string) (*Runtime, error) {
+	if !cfg.AgentSubtypeEnabled(deploy.SubType) {
+		return nil, fmt.Errorf("agent subtype %s is disabled on this network", deploy.SubType)
+	}
 	if deploy.SubType != SubtypePrediction {
 		return nil, fmt.Errorf("unsupported agent subtype %s", deploy.SubType)
 	}

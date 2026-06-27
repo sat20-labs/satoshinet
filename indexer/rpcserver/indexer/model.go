@@ -500,5 +500,5 @@ func (s *Model) GetContractHistoryByAddress(contractAddress, address string, sta
 }
 
 func (s *Model) contractQueries() contractengine.QueryService {
-	return contractengine.NewQueryService(s.indexer)
+	return contractengine.NewQueryServiceForParams(s.indexer, s.indexer.GetChainParam())
 }

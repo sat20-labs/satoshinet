@@ -1,6 +1,11 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/sat20-labs/satoshinet/chaincfg"
+)
 
 func newTestRuntime(t *testing.T) *Runtime {
 	t.Helper()
@@ -43,6 +48,35 @@ func TestRuntimeReadyRequiresCoreNode(t *testing.T) {
 	state := runtime.State()
 	if state.Status != StatusReady || state.Prediction.Status != PredictionStatusBetting {
 		t.Fatalf("unexpected state: %#v", state)
+	}
+}
+
+func TestRuntimeRejectsPredictionOnMainnet(t *testing.T) {
+	contract := validPredictionContract()
+	content, err := contract.Encode()
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	deployer := "deployer"
+	deploy := DeployPayload{
+		GasLimit:        1000,
+		SubType:         SubtypePrediction,
+		Version:         CurrentAgentVersion,
+		DeployNonce:     3,
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(MainnetContractPrefix, deploy.SubType, content, deployer, deploy.DeployNonce)
+	if err != nil {
+		t.Fatalf("DeriveContractAddress failed: %v", err)
+	}
+	_, err = NewRuntimeWithDeployer(addr, deploy, RuntimeConfig{
+		CoreNodeAddress:  "core",
+		AgentAddress:     "agent",
+		BootstrapAddress: "bootstrap",
+		ChainParams:      &chaincfg.MainNetParams,
+	}, deployer)
+	if err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("expected disabled prediction on mainnet, got %v", err)
 	}
 }
 

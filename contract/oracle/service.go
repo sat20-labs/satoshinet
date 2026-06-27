@@ -67,11 +67,17 @@ type Service struct {
 }
 
 func NewService(cfg Config) (*Service, error) {
+	cfg.Interval = normalizeInterval(cfg.Interval)
+	if cfg.ChainParams != nil && cfg.ChainParams.Net == wire.MainNet {
+		return &Service{
+			cfg:   cfg,
+			retry: make(map[string]retryState),
+		}, nil
+	}
 	client, err := newLLMClient(cfg.LLM, cfg.Infof)
 	if err != nil {
 		return nil, err
 	}
-	cfg.Interval = normalizeInterval(cfg.Interval)
 	return &Service{
 		cfg:    cfg,
 		client: client,

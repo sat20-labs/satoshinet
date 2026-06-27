@@ -34,15 +34,24 @@ type ContractQueryStore interface {
 }
 
 type QueryService struct {
-	store ContractQueryStore
+	store       ContractQueryStore
+	chainParams *chaincfg.Params
 }
 
 func NewQueryService(store ContractQueryStore) QueryService {
-	return QueryService{store: store}
+	return NewQueryServiceForParams(store, nil)
+}
+
+func NewQueryServiceForParams(store ContractQueryStore, params *chaincfg.Params) QueryService {
+	return QueryService{store: store, chainParams: params}
 }
 
 func (q QueryService) SupportedContracts() []string {
-	return []string{"evm", "agent:prediction", contractcommon.TemplateLimitOrder, contractcommon.TemplateAMM, contractcommon.TemplateExchange}
+	contracts := []string{"evm", contractcommon.TemplateLimitOrder, contractcommon.TemplateAMM, contractcommon.TemplateExchange}
+	if q.chainParams == nil || q.chainParams.Net != wire.MainNet {
+		contracts = append(contracts[:1], append([]string{"agent:prediction"}, contracts[1:]...)...)
+	}
+	return contracts
 }
 
 func (q QueryService) DeployedContracts(start, limit int) ([]string, int) {
