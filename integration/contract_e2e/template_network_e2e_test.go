@@ -454,7 +454,7 @@ func TestNetworkTemplateLimitOrderRefundOpenOrders(t *testing.T) {
 	fixture.requireNodesSynced(t)
 }
 
-func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
+func TestNetworkLimitRefundBuy(t *testing.T) {
 	fixture := newTemplateNetworkFixture(t, map[string]int64{
 		"ordx:f:lottarget": 1000,
 	})
@@ -462,17 +462,17 @@ func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
 	const limitAsset = "ordx:f:lottarget"
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
-	traderAAddr := fixture.traderAActor.address
+	traderB := fixture.traderB
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000}, traderA)
-	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 10, 900},
-		[]int64{10, 10, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor, fixture.traderBActor})
 
 	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
 		tmplcontract.NewLimitOrderContract(limitAsset),
-		"limit-order-target-refund-e2e",
-		[]byte("limit-order-target-refund-random"),
+		"limit-refund-buy-e2e",
+		[]byte("limit-refund-buy-random"),
 		[]wire.OutPoint{gasOuts[0]},
 		wire.TxOut{
 			Value:  1,
@@ -480,20 +480,18 @@ func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, deployTx)
 
-	for i := 0; i < 2; i++ {
-		sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
-		sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, uint64(i+1), tmplcontract.InvokeAPISwap, sellParam,
-			[]wire.OutPoint{assetOuts[i], gasOuts[i+1]},
-			wire.TxOut{
-				Value:  0,
-				Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
-			})
-		fixture.sendAndWaitTx(t, sellTx)
-	}
+	buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", "10")
+	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
+		[]wire.OutPoint{gasOuts[1]},
+		wire.TxOut{
+			Value:  100,
+			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
+		})
+	fixture.sendAndWaitTx(t, buyTx)
 
 	refundParam := templateRefundParam(t, []int64{0})
-	refundTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 3, tmplcontract.InvokeAPIRefund, refundParam,
-		nil,
+	refundTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 2, tmplcontract.InvokeAPIRefund, refundParam,
+		[]wire.OutPoint{gasOuts[2]},
 		wire.TxOut{
 			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
@@ -501,9 +499,8 @@ func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
 	fixture.sendAndWaitTx(t, refundTx)
 
 	refundResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, refundTx, contract)
-	requireTemplateResultAssetAmount(t, refundResultOutputs, traderAAddr, limitAsset, "10")
-	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderAAddr, limitAsset, "10")
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), limitAsset, "10")
+	requireTemplateResultValue(t, refundResultOutputs, traderBAddr, 100)
+	requireTemplateResultAssetAmount(t, refundResultOutputs, traderBAddr, limitAsset, "")
 	fixture.requireNodesSynced(t)
 }
 
