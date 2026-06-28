@@ -26,7 +26,7 @@ func TestSettleAMMBuyUsesConstantProductPool(t *testing.T) {
 		FundingOutputs: []ContractOutput{{
 			OutPoint: OutPoint{TxID: "buy", Vout: 1},
 			Contract: addr,
-			Value:    20,
+			Value:    10,
 		}},
 		Height: 1,
 	})
@@ -46,6 +46,53 @@ func TestSettleAMMBuyUsesConstantProductPool(t *testing.T) {
 	requireDecimalString(t, "66.844919786", state.Running.AssetAInPool)
 	requireDecimalString(t, "30", state.Running.AssetBInPool)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+}
+
+func TestSettleAMMBuyResultOutputsUseAssetPrecision(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	fundAMMRuntime(t, runtime)
+	addr := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeBuy,
+		AssetName: "ordx:f:test",
+		Amt:       "30",
+		UnitPrice: "10",
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:  InvokeAPISwap,
+		Param:   param,
+		CallID:  DeriveInvokeCallID("buy", 1, addr),
+		Invoker: "buyer",
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "buy", Vout: 1},
+			Contract: addr,
+			Value:    10,
+		}},
+		Height: 1,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlock(1)
+	require.NoError(t, err)
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	assetPrecision := func(name string) (int, bool) {
+		return 0, name == "ordx:f:test"
+	}
+	resultPlans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, nil, assetPrecision)
+	require.NoError(t, err)
+	resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), nil, assetPrecision)
+	require.NoError(t, err)
+	require.Len(t, resultPlans, 1)
+	require.Len(t, resultPlans[0].Outputs, 2)
+	require.Equal(t, "buyer", resultPlans[0].Outputs[0].To)
+	require.Equal(t, "33", resultPlans[0].Outputs[0].AssetAmt)
+	require.Len(t, resultPlans[0].Outputs[0].Assets, 1)
+	require.Equal(t, "33", resultPlans[0].Outputs[0].Assets[0].Amount.String())
+	require.Equal(t, addr.MustEncode(), resultPlans[0].Outputs[1].To)
+	require.Len(t, resultPlans[0].Outputs[1].Assets, 1)
+	require.Equal(t, "66", resultPlans[0].Outputs[1].Assets[0].Amount.String())
 }
 
 func TestSettleAMMSellUsesConstantProductPool(t *testing.T) {
@@ -107,7 +154,7 @@ func TestSettleAMMRejectsSlippage(t *testing.T) {
 		FundingOutputs: []ContractOutput{{
 			OutPoint: OutPoint{TxID: "buy", Vout: 1},
 			Contract: addr,
-			Value:    20,
+			Value:    10,
 		}},
 		Height: 1,
 	})
@@ -143,7 +190,7 @@ func TestSettleAMMWaitsUntilPoolMeetsK(t *testing.T) {
 		FundingOutputs: []ContractOutput{{
 			OutPoint: OutPoint{TxID: "buy", Vout: 1},
 			Contract: addr,
-			Value:    20,
+			Value:    10,
 		}},
 		Height: 1,
 	})
@@ -200,7 +247,7 @@ func TestSettleAMMAddLiquidityCanMakePoolReady(t *testing.T) {
 		FundingOutputs: []ContractOutput{{
 			OutPoint: OutPoint{TxID: "buy", Vout: 1},
 			Contract: addr,
-			Value:    20,
+			Value:    10,
 		}},
 		Height: 1,
 	})
@@ -276,7 +323,7 @@ func TestSettleAMMDoesNotRecheckInitialKAfterReady(t *testing.T) {
 		FundingOutputs: []ContractOutput{{
 			OutPoint: OutPoint{TxID: "buy1", Vout: 1},
 			Contract: addr,
-			Value:    180,
+			Value:    170,
 		}},
 		Height: 1,
 	})
@@ -439,7 +486,7 @@ func TestSettleAMMRemoveLiquiditySendsProfitShareToFoundation(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, plan.Transfers)
 
-	applyAMMSwapInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "1", "10", 20, nil, 2)
+	applyAMMSwapInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "1", "10", 10, nil, 2)
 	plan, err = runtime.SettleBlock(2)
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)
@@ -571,8 +618,8 @@ func TestSettleAMMProcessesSwapsFIFOAgainstMutatingPool(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	fundAMMRuntime(t, runtime)
 	addr := runtime.Address()
-	applyAMMSwapInvokeForTest(t, runtime, addr, "buy0", "alice", OrderTypeBuy, "", "10", 20, nil, 1)
-	applyAMMSwapInvokeForTest(t, runtime, addr, "buy1", "bob", OrderTypeBuy, "", "10", 20, nil, 1)
+	applyAMMSwapInvokeForTest(t, runtime, addr, "buy0", "alice", OrderTypeBuy, "", "10", 10, nil, 1)
+	applyAMMSwapInvokeForTest(t, runtime, addr, "buy1", "bob", OrderTypeBuy, "", "10", 10, nil, 1)
 
 	plan, err := runtime.SettleBlock(1)
 	require.NoError(t, err)

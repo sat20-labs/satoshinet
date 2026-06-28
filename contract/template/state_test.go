@@ -52,6 +52,7 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	require.Equal(t, OrderTypeBuy, item.OrderType)
 	requireDecimalString(t, "10", item.ExpectedAmt)
 	require.Equal(t, int64(20), item.RemainingValue)
+	require.Equal(t, int64(10), item.OutValue)
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
@@ -59,9 +60,10 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	require.Equal(t, uint64(1), state.InvokeCount)
 	require.Len(t, state.Items, 1)
 	requireDecimalString(t, "30", state.Running.TotalInputAssetB)
+	requireDecimalString(t, "20", state.Running.AssetBInPool)
 }
 
-func TestApplyInvokeMarksLimitOrderBuyInvalidWhenFundingIsOutsideTolerance(t *testing.T) {
+func TestApplyInvokeRecordsLimitOrderBuyExcessForRefund(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	contract := runtime.Address()
 	param, err := (&LimitOrderInvokeParam{
@@ -86,8 +88,9 @@ func TestApplyInvokeMarksLimitOrderBuyInvalidWhenFundingIsOutsideTolerance(t *te
 		Timestamp: 200,
 	})
 	require.NoError(t, err)
-	require.Equal(t, InvokeReasonInvalid, item.Reason)
-	require.Zero(t, item.RemainingValue)
+	require.Equal(t, InvokeReasonNormal, item.Reason)
+	require.Equal(t, int64(20), item.RemainingValue)
+	require.Equal(t, int64(180), item.OutValue)
 }
 
 func TestApplyInvokeMarksLimitOrderSellInvalidWhenAssetAmountDiffers(t *testing.T) {
@@ -111,6 +114,37 @@ func TestApplyInvokeMarksLimitOrderSellInvalidWhenAssetAmountDiffers(t *testing.
 			Contract: contract,
 			Value:    SwapInvokeFee,
 			Assets:   testAsset("ordx:f:test", 9),
+		}},
+		Height:    100,
+		Timestamp: 200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, InvokeReasonInvalid, item.Reason)
+	require.Empty(t, item.RemainingAmt)
+	require.Zero(t, item.RemainingValue)
+}
+
+func TestApplyInvokeMarksLimitOrderSellInvalidWhenExtraSatsProvided(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	contract := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeSell,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		UnitPrice: "2",
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action: InvokeAPISwap,
+		Param:  param,
+		CallID: DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "tx", Vout: 1},
+			Vout:     1,
+			Contract: contract,
+			Value:    10,
+			Assets:   testAsset("ordx:f:test", 10),
 		}},
 		Height:    100,
 		Timestamp: 200,
@@ -189,7 +223,7 @@ func TestApplyInvokeMarksAMMAddLiquidityInvalidWhenDeclaredAssetMissing(t *testi
 	require.Zero(t, item.RemainingValue)
 }
 
-func TestApplyInvokeRecordsAMMBuyWithInvokeFeeOnly(t *testing.T) {
+func TestApplyInvokeRecordsAMMBuyWithExactFunding(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	contract := runtime.Address()
 	param, err := (&LimitOrderInvokeParam{
@@ -208,7 +242,7 @@ func TestApplyInvokeRecordsAMMBuyWithInvokeFeeOnly(t *testing.T) {
 			OutPoint: OutPoint{TxID: "tx", Vout: 1},
 			Vout:     1,
 			Contract: contract,
-			Value:    20,
+			Value:    10,
 		}},
 		Height:    100,
 		Timestamp: 200,

@@ -37,6 +37,7 @@ type ResultVerifyRequest struct {
 type CanonicalResultVerifier struct {
 	GasConfig     GasConfig
 	UTXOs         ContractUTXOProvider
+	Precision     contractframework.AssetPrecisionPolicy
 	ResolveOutput ResultOutputResolver
 }
 
@@ -71,6 +72,7 @@ func (v CanonicalResultVerifier) Verify(resultTx *wire.MsgTx, settled []Executio
 		Label:        "EVM",
 		ResultTx:     resultTx,
 		Plans:        plans,
+		GasAssetName: v.GasConfig.Normalize().GasAssetName,
 		Resolve:      v.ResolveOutput,
 		UseInputUTXO: true,
 	})
@@ -80,6 +82,7 @@ func (v CanonicalResultVerifier) BuildPlans(settled []ExecutionRecord) ([]Result
 	return (contractframework.CanonicalResultPlanner{
 		GasConfig: v.GasConfig,
 		UTXOs:     v.UTXOs,
+		Precision: v.Precision,
 	}).BuildPlans(settled)
 }
 

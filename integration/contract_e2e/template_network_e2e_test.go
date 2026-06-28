@@ -27,6 +27,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/integration/rpctest"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -70,7 +71,7 @@ func TestNetworkTemplateLimitOrderContract(t *testing.T) {
 	sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 		})
 	fixture.sendAndWaitTx(t, sellTx)
@@ -78,7 +79,7 @@ func TestNetworkTemplateLimitOrderContract(t *testing.T) {
 	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[2]},
 		wire.TxOut{
-			Value:  110,
+			Value:  100,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	sendTx(t, fixture.bootstrapNode, buyTx)
@@ -120,7 +121,7 @@ func TestNetworkTemplateDefaultInvokeLimitOrderBuy(t *testing.T) {
 	sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 		})
 	fixture.sendAndWaitTx(t, sellTx)
@@ -248,7 +249,7 @@ func TestNetworkTemplateLimitOrderLargeBuyFilledBySmallSells(t *testing.T) {
 	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[1]},
 		wire.TxOut{
-			Value:  413,
+			Value:  403,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, buyTx)
@@ -258,7 +259,7 @@ func TestNetworkTemplateLimitOrderLargeBuyFilledBySmallSells(t *testing.T) {
 		sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, uint64(i+1), tmplcontract.InvokeAPISwap, sellParam,
 			[]wire.OutPoint{assetOuts[i], gasOuts[i+2]},
 			wire.TxOut{
-				Value:  tmplcontract.SwapInvokeFee,
+				Value:  0,
 				Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 			})
 		fixture.sendAndWaitTx(t, sellTx)
@@ -299,12 +300,12 @@ func TestNetworkTemplateLimitOrderLargeSellFilledBySmallBuys(t *testing.T) {
 	sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 40)},
 		})
 	fixture.sendAndWaitTx(t, sellTx)
 
-	buyValues := []int64{130, 120, 110}
+	buyValues := []int64{120, 110, 100}
 	buyPrices := []string{"12", "11", "10"}
 	for i := 0; i < 3; i++ {
 		buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", buyPrices[i])
@@ -354,7 +355,7 @@ func TestNetworkTemplateLimitOrderBuyTakesLowerPricedSells(t *testing.T) {
 		sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, uint64(i+1), tmplcontract.InvokeAPISwap, sellParam,
 			[]wire.OutPoint{assetOuts[i], gasOuts[i+1]},
 			wire.TxOut{
-				Value:  tmplcontract.SwapInvokeFee,
+				Value:  0,
 				Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 			})
 		fixture.sendAndWaitTx(t, sellTx)
@@ -364,7 +365,7 @@ func TestNetworkTemplateLimitOrderBuyTakesLowerPricedSells(t *testing.T) {
 	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[4]},
 		wire.TxOut{
-			Value:  413,
+			Value:  403,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, buyTx)
@@ -404,7 +405,7 @@ func TestNetworkTemplateLimitOrderRefundOpenOrders(t *testing.T) {
 		sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, uint64(i+1), tmplcontract.InvokeAPISwap, sellParam,
 			[]wire.OutPoint{assetOuts[i], gasOuts[i+1]},
 			wire.TxOut{
-				Value:  tmplcontract.SwapInvokeFee,
+				Value:  0,
 				Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 			})
 		fixture.sendAndWaitTx(t, sellTx)
@@ -413,7 +414,7 @@ func TestNetworkTemplateLimitOrderRefundOpenOrders(t *testing.T) {
 	refundTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 3, tmplcontract.InvokeAPIRefund, nil,
 		nil,
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, refundTx)
@@ -453,7 +454,7 @@ func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
 		sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, uint64(i+1), tmplcontract.InvokeAPISwap, sellParam,
 			[]wire.OutPoint{assetOuts[i], gasOuts[i+1]},
 			wire.TxOut{
-				Value:  tmplcontract.SwapInvokeFee,
+				Value:  0,
 				Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 			})
 		fixture.sendAndWaitTx(t, sellTx)
@@ -463,7 +464,7 @@ func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
 	refundTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 3, tmplcontract.InvokeAPIRefund, refundParam,
 		nil,
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, refundTx)
@@ -505,7 +506,7 @@ func TestNetworkTemplateLimitOrderRefundPartiallyFilledSell(t *testing.T) {
 	sellTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 40)},
 		})
 	fixture.sendAndWaitTx(t, sellTx)
@@ -515,7 +516,7 @@ func TestNetworkTemplateLimitOrderRefundPartiallyFilledSell(t *testing.T) {
 		buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, uint64(i+1), tmplcontract.InvokeAPISwap, buyParam,
 			[]wire.OutPoint{gasOuts[i+2]},
 			wire.TxOut{
-				Value:  110,
+				Value:  100,
 				Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 			})
 		fixture.sendAndWaitTx(t, buyTx)
@@ -525,7 +526,7 @@ func TestNetworkTemplateLimitOrderRefundPartiallyFilledSell(t *testing.T) {
 	refundTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 5, tmplcontract.InvokeAPIRefund, refundParam,
 		nil,
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, refundTx)
@@ -574,17 +575,23 @@ func TestNetworkTemplateAMMContract(t *testing.T) {
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, buyTx)
+	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
+	requirePositiveDecimalString(t, templateResultAssetAmountTo(t, buyResultOutputs, traderBAddr, ammAsset))
+	require.Equal(t, int64(0), templateResultValueTo(buyResultOutputs, traderBAddr))
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, contract.MustEncode(), gasAsset)
 
-	sellParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeSell, "100", "1")
+	sellParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeSell, "1", "1")
 	sellTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 2, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[1], gasOuts[2]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: networkTxAssets(networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, ammAsset, 100)),
 		})
 	fixture.sendAndWaitTx(t, sellTx)
+	sellResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, sellTx, contract)
+	require.Greater(t, templateResultValueTo(sellResultOutputs, traderBAddr), int64(0))
+	require.Empty(t, templateResultAssetAmountTo(t, sellResultOutputs, traderBAddr, ammAsset))
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
 	fixture.requireNodesSynced(t)
 }
@@ -647,7 +654,7 @@ func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
 	triggerTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 3, tmplcontract.InvokeAPIRefund, triggerParam,
 		[]wire.OutPoint{gasOuts[3]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, triggerTx)
@@ -696,6 +703,9 @@ func TestNetworkTemplateAMMRejectsBuySlippage(t *testing.T) {
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, buyTx)
+	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
+	require.Equal(t, int64(10), templateResultValueTo(buyResultOutputs, traderBAddr))
+	require.Empty(t, templateResultAssetAmountTo(t, buyResultOutputs, traderBAddr, ammAsset))
 
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, ammAsset, beforeBuySummary[ammAsset])
 	fixture.requireNodesSynced(t)
@@ -734,10 +744,13 @@ func TestNetworkTemplateAMMSellAddsAssetToPool(t *testing.T) {
 	sellTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[1], gasOuts[1]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: networkTxAssets(networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, ammAsset, 100)),
 		})
 	fixture.sendAndWaitTx(t, sellTx)
+	sellResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, sellTx, contract)
+	require.Greater(t, templateResultValueTo(sellResultOutputs, fixture.spendAddress), int64(0))
+	require.Empty(t, templateResultAssetAmountTo(t, sellResultOutputs, fixture.spendAddress, ammAsset))
 
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), ammAsset, "200")
 	fixture.requireNodesSynced(t)
@@ -786,14 +799,17 @@ func TestNetworkTemplateAMMAddRemoveLiquidity(t *testing.T) {
 	fixture.sendAndWaitTx(t, addTx)
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), ammAsset, "200")
 
-	removeParam := templateRemoveLiquidityParam(t, ammAsset, "1")
+	removeParam := templateRemoveLiquidityParam(t, ammAsset, "10")
 	removeTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 2, tmplcontract.InvokeAPIRemoveLiquidity, removeParam,
 		[]wire.OutPoint{gasOuts[2]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, removeTx)
+	removeResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, removeTx, contract)
+	require.Greater(t, templateResultValueTo(removeResultOutputs, traderBAddr), int64(0))
+	requirePositiveDecimalString(t, templateResultAssetAmountTo(t, removeResultOutputs, traderBAddr, ammAsset))
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
 	fixture.requireNodesSynced(t)
 }
@@ -846,14 +862,14 @@ func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T
 	templateSellTx := buildTemplateInvokeTxWithInputs(t, fixture, traderA, templateContract, 1, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 		})
 	buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", "10")
 	templateBuyTx := buildTemplateInvokeTxWithInputs(t, fixture, traderB, templateContract, 2, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[2]},
 		wire.TxOut{
-			Value:  110,
+			Value:  100,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	evmInvokeTx := buildTemplateWitnessEVMInvokeTx(t, fixture, traderA, evmContract, 2,
@@ -908,7 +924,7 @@ func TestNetworkTemplateContractStateRollbackOnInvalidate(t *testing.T) {
 	sellTx := buildTemplateInvokeTxWithInputs(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
 		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
 		wire.TxOut{
-			Value:  tmplcontract.SwapInvokeFee,
+			Value:  0,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 		})
 	fixture.sendAndWaitTx(t, sellTx)
@@ -918,7 +934,7 @@ func TestNetworkTemplateContractStateRollbackOnInvalidate(t *testing.T) {
 	buyTx := buildTemplateInvokeTxWithInputs(t, fixture, traderB, contract, 2, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[2]},
 		wire.TxOut{
-			Value:  110,
+			Value:  100,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, buyTx)
@@ -1686,6 +1702,109 @@ func requireEVMResultStatusForTx(t *testing.T, node *rpctest.Harness, tx *wire.M
 		}
 	}
 	t.Fatalf("missing EVM result for tx %s in block %s", hash, verbose.BlockHash)
+}
+
+func templateResultOutputsForTx(t *testing.T, node *rpctest.Harness, tx *wire.MsgTx,
+	contract tmplcontract.ContractAddress) []tmplcontract.ResultOutput {
+
+	t.Helper()
+	resultTx := requireTemplateResultForTx(t, node, tx, contract)
+	outputs, err := contractframework.ResultOutputsFromTx(
+		resultTx,
+		tmplcontract.TestnetContractPrefix,
+		contractcommon.ParseContractPkScript,
+		testnetScriptRecipient,
+	)
+	require.NoError(t, err)
+	return outputs
+}
+
+func requireTemplateResultForTx(t *testing.T, node *rpctest.Harness, tx *wire.MsgTx,
+	contract tmplcontract.ContractAddress) *wire.MsgTx {
+
+	t.Helper()
+	contractOutputs, err := tmplcontract.FindContractOutputsForContract(
+		tx, tmplcontract.StandardContractScriptResolver(tmplcontract.TestnetContractPrefix), contract)
+	require.NoError(t, err)
+	require.NotEmpty(t, contractOutputs)
+	targets := make(map[wire.OutPoint]struct{}, len(contractOutputs))
+	hash := tx.TxHash()
+	for _, output := range contractOutputs {
+		targets[wire.OutPoint{Hash: hash, Index: output.Vout}] = struct{}{}
+	}
+	verbose, err := node.Client.GetRawTransactionVerbose(&hash)
+	require.NoError(t, err)
+	require.NotEmpty(t, verbose.BlockHash)
+	blockHash, err := chainhash.NewHashFromStr(verbose.BlockHash)
+	require.NoError(t, err)
+	block, err := node.Client.GetBlock(blockHash)
+	require.NoError(t, err)
+
+	for _, blockTx := range block.Transactions {
+		if _, err := contractframework.ResultPayloadFromTx(blockTx, "template"); err != nil {
+			continue
+		}
+		for _, txIn := range blockTx.TxIn {
+			if _, ok := targets[txIn.PreviousOutPoint]; ok {
+				return blockTx
+			}
+		}
+	}
+	t.Fatalf("missing template result for tx %s in block %s", hash, verbose.BlockHash)
+	return nil
+}
+
+func testnetScriptRecipient(pkScript []byte) (string, bool, error) {
+	_, addrs, _, err := txscript.ExtractPkScriptAddrs(pkScript, &chaincfg.TestNetParams)
+	if err != nil {
+		return "", false, err
+	}
+	if len(addrs) == 0 {
+		return "", false, nil
+	}
+	return addrs[0].EncodeAddress(), true, nil
+}
+
+func templateResultValueTo(outputs []tmplcontract.ResultOutput, address string) int64 {
+	total := int64(0)
+	for _, output := range outputs {
+		if output.To == address {
+			total += output.Value
+		}
+	}
+	return total
+}
+
+func templateResultAssetAmountTo(t *testing.T, outputs []tmplcontract.ResultOutput, address, assetName string) string {
+	t.Helper()
+	var total *indexercommon.Decimal
+	for _, output := range outputs {
+		if output.To != address {
+			continue
+		}
+		for _, asset := range output.Assets {
+			if asset.Name.String() != assetName {
+				continue
+			}
+			if total == nil {
+				total = asset.Amount.Clone()
+			} else {
+				total = total.AddAlignPrecision(&asset.Amount)
+			}
+		}
+	}
+	if total != nil && total.Sign() > 0 {
+		return total.String()
+	}
+	return ""
+}
+
+func requirePositiveDecimalString(t *testing.T, amount string) {
+	t.Helper()
+	require.NotEmpty(t, amount)
+	value, err := indexercommon.NewDecimalFromString(amount, 10)
+	require.NoError(t, err)
+	require.Greater(t, value.Sign(), 0)
 }
 
 func testTaprootAddress(t *testing.T, key *btcec.PrivateKey) string {

@@ -45,11 +45,15 @@ func ResultOutputFromTransferFields(req TransferOutputRequest) (ResultOutput, er
 	if err != nil {
 		return ResultOutput{}, err
 	}
+	assetAmt := ""
+	if len(assets) != 0 {
+		assetAmt = assets[0].Amount.String()
+	}
 	return ResultOutput{
 		To:        req.To,
 		Value:     req.SatValue,
 		AssetName: req.AssetName,
-		AssetAmt:  req.AssetAmt,
+		AssetAmt:  assetAmt,
 		Reason:    req.Reason,
 		Assets:    assets,
 	}, nil

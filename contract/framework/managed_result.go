@@ -36,6 +36,7 @@ type ManagedResultAugmentRequest struct {
 	ManagedRemainder ResultOutput
 	GasAssetName     string
 	GasFee           *scommon.Decimal
+	Precision        AssetPrecisionPolicy
 	ManagedGasPaid   bool
 	DeployerAddress  string
 	BootstrapAddress string
@@ -46,9 +47,12 @@ type ManagedResultAugmentRequest struct {
 func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultPlan, error) {
 	out := CloneResultPlan(req.Plan)
 	out.Inputs = append([]OutPoint(nil), req.View.Inputs...)
-	out.InputUTXOs = nil
+	out.InputUTXOs = make([]UTXO, len(req.View.UTXOs))
+	for i := range req.View.UTXOs {
+		out.InputUTXOs[i] = req.View.UTXOs[i].Clone()
+	}
 
-	outputs := CloneResultOutputs(out.Outputs)
+	outputs := NormalizeResultOutputsPrecision(out.Outputs, req.Precision)
 	remainingValue, remainingAssets, err := physicalRemainderAfterOutputs(req.View, outputs, req.GasAssetName, req.GasFee)
 	if err != nil {
 		return ResultPlan{}, err
@@ -64,7 +68,7 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 		// fee above. If managed gas is insufficient, the unpaid part is covered
 		// by unmanaged gas held at the contract address.
 	}
-	managedAssets = capResultOutputByAvailable(managedAssets, remainingValue, remainingAssets)
+	managedAssets = capResultOutputByAvailable(managedAssets, remainingValue, remainingAssets, req.Precision)
 	if !ResultOutputIsZero(managedAssets) {
 		outputs = append(outputs, splitSurplusOutput(managedAssets, managedSurplusRequest(req))...)
 	}
@@ -109,7 +113,7 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 	surplus := ResultOutput{
 		To:     surplusRecipient(req),
 		Value:  surplusValue,
-		Assets: normalizeAssets(surplusAssets),
+		Assets: NormalizeAssetSetPrecision(surplusAssets, req.Precision),
 	}
 	outputs = append(outputs, splitSurplusOutput(surplus, req)...)
 	out.Outputs = CompactResultOutputs(outputs)
@@ -167,8 +171,10 @@ func physicalRemainderAfterOutputs(view ResultPlanUTXOView, outputs []ResultOutp
 	return remainingValue, normalizeAssets(remainingAssets), nil
 }
 
-func capResultOutputByAvailable(output ResultOutput, availableValue int64, availableAssets wire.TxAssets) ResultOutput {
-	output = NormalizeResultOutput(output)
+func capResultOutputByAvailable(output ResultOutput, availableValue int64, availableAssets wire.TxAssets,
+	policy AssetPrecisionPolicy) ResultOutput {
+
+	output = NormalizeResultOutputPrecision(output, policy)
 	if output.Value > availableValue {
 		output.Value = availableValue
 	}
@@ -193,7 +199,7 @@ func capResultOutputByAvailable(output ResultOutput, availableValue int64, avail
 		next.Amount = *amount
 		assets = append(assets, next)
 	}
-	output.Assets = normalizeAssets(assets)
+	output.Assets = NormalizeAssetSetPrecision(assets, policy)
 	return output
 }
 
@@ -272,7 +278,7 @@ func surplusRecipient(req ManagedResultAugmentRequest) string {
 }
 
 func splitSurplusOutput(surplus ResultOutput, req ManagedResultAugmentRequest) []ResultOutput {
-	surplus = NormalizeResultOutput(surplus)
+	surplus = NormalizeResultOutputPrecision(surplus, req.Precision)
 	if ResultOutputIsZero(surplus) {
 		return nil
 	}
@@ -287,13 +293,15 @@ func splitSurplusOutput(surplus ResultOutput, req ManagedResultAugmentRequest) [
 	deployerOut.Value = surplus.Value * DefaultDeployerProfitBPS / TotalProfitBPS
 	bootstrapOut.Value = surplus.Value - deployerOut.Value
 	deployerOut.Assets, bootstrapOut.Assets = SplitAssetsByBPS(surplus.Assets, DefaultDeployerProfitBPS)
+	deployerOut = NormalizeResultOutputPrecision(deployerOut, req.Precision)
+	bootstrapOut = NormalizeResultOutputPrecision(bootstrapOut, req.Precision)
 
 	out := make([]ResultOutput, 0, 2)
 	if !ResultOutputIsZero(deployerOut) {
-		out = append(out, NormalizeResultOutput(deployerOut))
+		out = append(out, deployerOut)
 	}
 	if !ResultOutputIsZero(bootstrapOut) {
-		out = append(out, NormalizeResultOutput(bootstrapOut))
+		out = append(out, bootstrapOut)
 	}
 	return out
 }
@@ -320,12 +328,7 @@ func resultOutputsAssets(outputs []ResultOutput) (wire.TxAssets, error) {
 }
 
 func normalizeAssets(assets wire.TxAssets) wire.TxAssets {
-	if len(assets) == 0 {
-		return nil
-	}
-	builder := scommon.NewTxAssetsBuilder(len(assets))
-	builder.AddSlice(assets)
-	return builder.Build()
+	return normalizeTxAssets(assets)
 }
 
 func SplitAssetsByBPS(assets wire.TxAssets, deployerBPS int64) (wire.TxAssets, wire.TxAssets) {

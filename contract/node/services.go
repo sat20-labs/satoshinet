@@ -145,6 +145,7 @@ func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 		NewRuntime:          stateStore.RuntimeFactory(),
 		ContractUTXOs:       evmContractUTXOProvider(cfg.EVMContractUTXOs),
 		ResolveRecipient:    contractframework.ScriptRecipientResolver(cfg.EVMResolveRecipient),
+		AssetPrecision:      cfg.AssetPrecision,
 		SkipStateRootVerify: cfg.SkipStateRootVerify,
 	}), nil
 }
@@ -323,6 +324,7 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 				ResolveCaller:             resolveCaller,
 				ResolveGasRefundRecipient: resolveRefund,
 				ContractUTXOs:             contractUTXOs,
+				AssetPrecision:            cfg.AssetPrecision,
 			})
 			if err != nil {
 				return contractframework.ExecutionResult{}, err
@@ -352,6 +354,7 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 				ContractUTXOs:             contractUTXOs,
 				ResolveScript:             resolveScript,
 				ResolveOutput:             resolveOutput,
+				AssetPrecision:            cfg.AssetPrecision,
 			})
 			if err != nil {
 				return contractframework.ResultBuildResult{}, contractframework.ExecutionResult{}, err
@@ -388,6 +391,7 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 				ContractUTXOs:             contractUTXOs,
 				ResolveScript:             resolveScript,
 				ResolveOutput:             resolveOutput,
+				AssetPrecision:            cfg.AssetPrecision,
 			})
 			if err != nil {
 				return contractframework.ResultBuildResult{}, err
@@ -542,6 +546,7 @@ func newTemplateMiningModule(cfg Config, req mining.ContractBuildRequest) (contr
 						ResultTx:     tx,
 						Status:       tmplcontract.ResultStatusSuccess,
 						Plans:        plans,
+						GasAssetName: blockGasConfig.Normalize().GasAssetName,
 						Resolve:      resolveOutput,
 						PlanCount:    templateResultPlanCount,
 						CheckPayload: true,
@@ -680,6 +685,7 @@ func newAgentMiningModule(cfg Config, req mining.ContractBuildRequest) (contract
 						ResultTx:     tx,
 						Status:       agentcontract.ResultStatusSuccess,
 						Plans:        plans,
+						GasAssetName: blockGasConfig.Normalize().GasAssetName,
 						Resolve:      resolveOutput,
 						CheckPayload: true,
 					})
@@ -736,9 +742,10 @@ func NewEVMResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
 				previousOutputScriptResolver(req.UtxoView)),
 			ResolveGasRefundRecipient: evm.LastInputPreviousOutputGasRefundRecipientResolver(cfg.ChainParams,
 				previousOutputScriptResolver(req.UtxoView)),
-			ContractUTXOs: evmContractUTXOProvider(cfg.EVMContractUTXOs),
-			ResolveScript: evmResultScriptResolver(cfg.ChainParams),
-			ResolveOutput: resolveOutput,
+			ContractUTXOs:  evmContractUTXOProvider(cfg.EVMContractUTXOs),
+			ResolveScript:  evmResultScriptResolver(cfg.ChainParams),
+			ResolveOutput:  resolveOutput,
+			AssetPrecision: cfg.AssetPrecision,
 		})
 		if err != nil {
 			return mining.ContractBuildResult{}, err

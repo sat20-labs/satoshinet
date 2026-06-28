@@ -148,3 +148,73 @@ func TestBuildCanonicalResultTxInvoke(t *testing.T) {
 	}
 	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
 }
+
+func TestBuildCanonicalResultTxTruncatesAssetOutputsToPrecision(t *testing.T) {
+	contract := testContract(t)
+	assetName := "brc20:f:ooxx"
+	assetHash := chainhash.Hash{3}
+	assetInput := OutPoint{TxID: assetHash.String(), Vout: 0}
+	record := ExecutionRecord{
+		Kind:           ExecutionKindInvoke,
+		Type:           TxTypeInvoke,
+		Contract:       contract,
+		Status:         ResultStatusSuccess,
+		RequiresResult: true,
+		ResultFeeMode:  ResultFeeModePlainTxFee,
+		AssetIntents: []AssetIntent{{
+			From:      contract,
+			To:        "tb1qdest",
+			AssetName: assetName,
+			Amount:    mustDecimalString(t, "3.9"),
+		}},
+	}
+	available := []UTXO{
+		mustDecimalUTXO(t, assetInput, contract, assetName, "10", 11),
+	}
+	precision := SettlementPrecision(func(name string) (int, bool) {
+		return 0, name == assetName
+	})
+
+	tx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
+		Status:    ResultStatusSuccess,
+		Records:   []ExecutionRecord{record},
+		GasConfig: GasConfig{GasAssetName: assetName},
+		UTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return available, nil
+		},
+		Precision: precision,
+		ResolveScript: func(output ResultOutput) ([]byte, error) {
+			if output.To == contract.MustEncode() {
+				return ContractPkScript(contract)
+			}
+			return []byte{txscript.OP_TRUE}, nil
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, tx.TxOut, 3)
+	require.Len(t, tx.TxOut[0].Assets, 1)
+	require.Equal(t, assetName, tx.TxOut[0].Assets[0].Name.String())
+	require.Equal(t, "3", tx.TxOut[0].Assets[0].Amount.String())
+	require.Len(t, tx.TxOut[1].Assets, 1)
+	require.Equal(t, assetName, tx.TxOut[1].Assets[0].Name.String())
+	require.Equal(t, "7", tx.TxOut[1].Assets[0].Amount.String())
+
+	verifier := CanonicalResultVerifier{
+		GasConfig: GasConfig{GasAssetName: assetName},
+		UTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return available, nil
+		},
+		Precision: precision,
+		ResolveOutput: func(tx *wire.MsgTx) ([]ResultOutput, error) {
+			return contractframework.ResultOutputsFromTx(tx, TestnetContractPrefix, evmcommon.ParseContractPkScript, func(pkScript []byte) (string, bool, error) {
+				if len(pkScript) == 1 && pkScript[0] == txscript.OP_TRUE {
+					return "tb1qdest", true, nil
+				}
+				return "", false, nil
+			})
+		},
+	}
+	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
+}

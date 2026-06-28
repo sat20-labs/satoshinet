@@ -41,12 +41,42 @@ func TestBackendDeployThenInvoke(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, result.StateRoot)
 }
 
+func TestBackendDeployOnlyBuildsGasResultPlan(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	gas := DefaultGasConfig().GasAssetName
+	deployTx.TxOut[1].Assets = testAsset(gas, 5)
+	gasConfig := GasConfig{
+		GasAssetName:    gas,
+		DeployBaseGas:   1,
+		InvokeBaseGas:   1,
+		ResultBaseGas:   1,
+		MaxGasPerInvoke: DefaultGasConfig().MaxGasPerInvoke,
+	}
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{deployTx},
+		GasConfig:   gasConfig,
+		BlockHeight: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
+	require.True(t, addr.Equal(result.Records[0].Contract))
+	require.True(t, result.Records[0].RequiresResult)
+	require.Len(t, result.ResultPlans, 1)
+	require.Equal(t, addr.MustEncode(), result.ResultPlans[0].Contract)
+	require.Empty(t, result.ResultPlans[0].ItemIDs)
+	require.Len(t, result.ResultPlans[0].Inputs, 1)
+	require.Equal(t, "0.001", result.ResultPlans[0].GasFee.String())
+}
+
 func TestBackendSettlesLimitOrdersOnFinalize(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	gasAssetName := DefaultGasConfig().GasAssetName
-	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, 50, "ordx:f:test", 10))
-	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 30, nil)
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, 0, testAssets(gasAssetName, 50, "ordx:f:test", 10))
+	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 20, testAsset(gasAssetName, 50))
 
 	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:         []*wire.MsgTx{deployTx, sellTx, buyTx},
@@ -65,11 +95,108 @@ func TestBackendSettlesLimitOrdersOnFinalize(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, result.StateRoot)
 }
 
+func TestBackendLimitOrderBuyExcessFundingRefundsInvoker(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	gas := DefaultGasConfig().GasAssetName
+	gasConfig := GasConfig{
+		GasAssetName:     gas,
+		BootstrapAddress: "bootstrap-address",
+		DeployBaseGas:    1,
+		InvokeBaseGas:    1,
+		ResultBaseGas:    1,
+		MaxGasPerInvoke:  DefaultGasConfig().MaxGasPerInvoke,
+	}
+	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 30, testAsset(gas, 50))
+	store := NewRuntimeStore()
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{deployTx, buyTx},
+		Store:       store,
+		GasConfig:   gasConfig,
+		BlockHeight: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.SettlementPlans, 1)
+	require.Len(t, result.ResultPlans, 1)
+	require.Len(t, result.SettlementPlans[0].Transfers, 1)
+	require.Equal(t, "invoker-address", result.SettlementPlans[0].Transfers[0].To)
+	require.Equal(t, int64(10), result.SettlementPlans[0].Transfers[0].SatValue)
+
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Len(t, state.Items, 1)
+	require.Equal(t, int64(20), state.Items[0].RemainingValue)
+	require.Zero(t, state.Items[0].OutValue)
+	requireDecimalString(t, "20", state.Running.AssetBInPool)
+
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	require.Contains(t, plans[0].Inputs, OutPoint{TxID: buyTx.TxID(), Vout: 1})
+	requireResultPlanValueTo(t, plans[0], "invoker-address", 10)
+	requireResultPlanValueTo(t, plans[0], addr.MustEncode(), 20)
+	requireResultPlanAssetTo(t, plans[0], addr.MustEncode(), gas, "49.999")
+	requireNoResultPlanOutputTo(t, plans[0], "bootstrap-address")
+}
+
+func TestBackendLimitOrderSellWithExtraSatsIsInvalidAndRefundsInvoker(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	gas := DefaultGasConfig().GasAssetName
+	gasConfig := GasConfig{
+		GasAssetName:     gas,
+		BootstrapAddress: "bootstrap-address",
+		DeployBaseGas:    1,
+		InvokeBaseGas:    1,
+		ResultBaseGas:    1,
+		MaxGasPerInvoke:  DefaultGasConfig().MaxGasPerInvoke,
+	}
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, 10,
+		testAssets(gas, 5, contract.AssetName, 10))
+	store := NewRuntimeStore()
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{deployTx, sellTx},
+		Store:       store,
+		GasConfig:   gasConfig,
+		BlockHeight: 100,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 2)
+	require.Equal(t, ResultStatusInvalid, result.Records[1].Status)
+	require.Len(t, result.SettlementPlans, 1)
+	require.Len(t, result.ResultPlans, 1)
+
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Len(t, state.Items, 1)
+	require.Equal(t, InvokeReasonInvalid, state.Items[0].Reason)
+	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
+	require.Empty(t, state.Running.AssetAInPool)
+	require.Zero(t, state.Running.AssetBInPool)
+	requireDecimalString(t, "4.999", state.Running.GasBalance)
+
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, sellTx}, TestnetContractPrefix, ContractTypeTemplate)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	requireResultPlanValueTo(t, plans[0], "invoker-address", 10)
+	requireResultPlanAssetTo(t, plans[0], "invoker-address", contract.AssetName, "10")
+	requireResultPlanAsset(t, plans[0], gas, "4.999")
+	requireNoResultPlanOutputTo(t, plans[0], "bootstrap-address")
+}
+
 func TestBackendMarksInvokeInvalidWhenDeclaredSellAssetMissing(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	gasAssetName := DefaultGasConfig().GasAssetName
-	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAsset(gasAssetName, 50))
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, 0, testAsset(gasAssetName, 50))
 	store := NewRuntimeStore()
 
 	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
@@ -93,7 +220,7 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	gasAssetName := DefaultGasConfig().GasAssetName
-	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, 50, "ordx:f:test", 10))
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, 0, testAssets(gasAssetName, 50, "ordx:f:test", 10))
 	parsedSell, err := ParseTx(sellTx, testTemplateContractResolver)
 	require.NoError(t, err)
 	parsedSellGas, err := parsedSell.ContractOutputs[0].AssetAmount(gasAssetName)
@@ -137,7 +264,7 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.NoError(t, err)
 	requireDecimalString(t, "50", state.Running.GasBalance)
 
-	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 30, testAsset(gasAssetName, 50))
+	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 20, testAsset(gasAssetName, 50))
 	parsedBuy, err := ParseTx(buyTx, testTemplateContractResolver)
 	require.NoError(t, err)
 	require.Len(t, parsedBuy.ContractOutputs, 1)
@@ -227,7 +354,7 @@ func TestBackendLimitOrderCloseRefundsOwnersAndSplitsProfit(t *testing.T) {
 		ResultBaseGas:    1,
 		MaxGasPerInvoke:  DefaultGasConfig().MaxGasPerInvoke,
 	}
-	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee,
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, 0,
 		testAssets(gas, 5, contract.AssetName, 10))
 	closeTx := testExchangeCloseTx(t, addr, testAsset(gas, 2))
 	store := NewRuntimeStore()
@@ -286,7 +413,7 @@ func TestBackendDefaultInvokeLimitOrderBuyAtMarketPrice(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	gasAssetName := DefaultGasConfig().GasAssetName
-	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, SwapInvokeFee, testAssets(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas), "ordx:f:test", 10))
+	sellTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeSell, 0, testAssets(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas), "ordx:f:test", 10))
 	defaultBuyTx := testTemplateDefaultInvokeTx(t, addr, 20, testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)))
 
 	store := NewRuntimeStore()
@@ -361,6 +488,21 @@ func TestBackendIgnoresInvalidDeploy(t *testing.T) {
 	require.Empty(t, result.Records)
 	require.Empty(t, result.ResultPlans)
 	require.False(t, store.Exists(addr))
+}
+
+func TestBackendDuplicateDeployDoesNotOverwriteRuntime(t *testing.T) {
+	contract := NewLimitOrderContract("ordx:f:test")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	duplicateTx := deployTx.Copy()
+	duplicateTx.LockTime = 1
+	store := NewRuntimeStore()
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, duplicateTx}, Store: store})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 2)
+	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
+	require.Equal(t, ResultStatusInvalid, result.Records[1].Status)
+	require.True(t, store.Exists(addr))
 }
 
 func TestBackendRecordsInvalidInvokeParam(t *testing.T) {

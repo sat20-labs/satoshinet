@@ -44,10 +44,7 @@ func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []R
 		if !record.RequiresResult || record.GasFee == nil || record.GasFee.Sign() == 0 {
 			continue
 		}
-		if len(record.ItemIDs) == 0 {
-			continue
-		}
-		if executionRecordItemsCovered(record, coveredItems) {
+		if len(record.ItemIDs) > 0 && executionRecordItemsCovered(record, coveredItems) {
 			continue
 		}
 		contract := record.Contract.MustEncode()
@@ -107,7 +104,7 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 	contractUTXOs ContractUTXOProvider,
 	assetPrecision contractframework.AssetPrecisionResolver) ([]ResultPlan, error) {
 
-	_ = assetPrecision
+	precision := templateSettlementResultOptions(nil, nil, assetPrecision).Precision
 	gasConfig = gasConfig.Normalize()
 	out := contractframework.CloneResultPlans(plans)
 	for i := range out {
@@ -138,6 +135,7 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 					ManagedAssets:    retain,
 					GasAssetName:     gasConfig.GasAssetName,
 					GasFee:           out[i].GasFee,
+					Precision:        precision,
 					ManagedGasPaid:   templateManagedGasPaid(contract, store, out[i]),
 					DeployerAddress:  deployer,
 					BootstrapAddress: gasConfig.BootstrapAddress,
@@ -153,6 +151,7 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 			if err != nil {
 				return nil, err
 			}
+			change = contractframework.NormalizeResultOutputPrecision(change, precision)
 			if !contractframework.ResultOutputIsZero(change) {
 				out[i].Outputs = append(out[i].Outputs, change)
 			}

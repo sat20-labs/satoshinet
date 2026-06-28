@@ -826,19 +826,18 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 	}
 
 	item := &InvokeItem{
-		ID:         id,
-		CallID:     req.CallID,
-		Action:     req.Action,
-		Height:     req.Height,
-		OrderTime:  req.Timestamp,
-		AssetName:  assetName,
-		Address:    req.Invoker,
-		InUtxos:    inUtxos,
-		InValue:    inValue,
-		InAmt:      inAmt,
-		ServiceFee: SwapInvokeFee,
-		Reason:     InvokeReasonNormal,
-		Done:       ItemStatusInit,
+		ID:        id,
+		CallID:    req.CallID,
+		Action:    req.Action,
+		Height:    req.Height,
+		OrderTime: req.Timestamp,
+		AssetName: assetName,
+		Address:   req.Invoker,
+		InUtxos:   inUtxos,
+		InValue:   inValue,
+		InAmt:     inAmt,
+		Reason:    InvokeReasonNormal,
+		Done:      ItemStatusInit,
 	}
 
 	switch req.Action {
@@ -848,6 +847,9 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 			return nil, err
 		}
 		_, isAMM := contract.(*AMMContract)
+		if isAMM {
+			item.ServiceFee = SwapInvokeFee
+		}
 		item.OrderType = param.OrderType
 		item.AssetName = firstNonEmpty(param.AssetName, assetName)
 		item.UnitPrice = param.UnitPrice
@@ -863,7 +865,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 				item.RemainingAmt = parseDecimalOrZero(param.Amt)
 			}
 			if !isAMM {
-				item.ServiceFee = calcSwapFee(calcLimitOrderTradingValue(param.Amt, param.UnitPrice))
+				item.ServiceFee = calcSwapServiceFee(calcLimitOrderTradingValue(param.Amt, param.UnitPrice))
 			}
 			item.RemainingValue = inValue - item.ServiceFee
 			if item.RemainingValue < 0 {
@@ -984,7 +986,7 @@ func checkInvokeFunding(contract Contract, action string, param []byte, outputs 
 			if _, isAMM := contract.(*AMMContract); isAMM {
 				requiredValue = parseDecimalOrZero(invokeParam.UnitPrice).Int64()
 			} else {
-				requiredValue += calcSwapFee(requiredValue)
+				requiredValue += calcSwapServiceFee(requiredValue)
 			}
 			if requiredValue <= 0 || fundingValue(outputs) < requiredValue {
 				return fmt.Errorf("invoke funding value %d is less than declared value %d", fundingValue(outputs), requiredValue)
@@ -993,6 +995,9 @@ func checkInvokeFunding(contract Contract, action string, param []byte, outputs 
 			requiredAsset := firstNonEmpty(invokeParam.AssetName, assetName)
 			if err := requireFundingAsset(outputs, requiredAsset, invokeParam.Amt); err != nil {
 				return err
+			}
+			if got := fundingValue(outputs); got != SwapInvokeFee {
+				return fmt.Errorf("invoke funding value %d does not match sell service fee %d", got, SwapInvokeFee)
 			}
 		}
 	case InvokeAPIAddLiquidity:
@@ -1071,14 +1076,33 @@ func (i *InvokeItem) applySwapFundingValidation(param LimitOrderInvokeParam, isA
 			requiredValue = parseDecimalOrZero(param.UnitPrice).Int64()
 		}
 		expected := requiredValue + i.ServiceFee
-		if expected <= 0 || !valueWithinTolerance(i.InValue, expected, 5) {
+		if isAMM {
+			if expected <= 0 || !valueWithinTolerance(i.InValue, expected, 5) {
+				i.Reason = InvokeReasonInvalid
+				i.RemainingValue = 0
+			}
+			return
+		}
+		if expected <= 0 || i.InValue < expected {
 			i.Reason = InvokeReasonInvalid
 			i.RemainingValue = 0
+			i.OutValue = 0
+			return
+		}
+		if i.InValue > expected {
+			i.OutValue = i.InValue - expected
+			i.RemainingValue = requiredValue
 		}
 	case OrderTypeSell:
 		if i.InValue < i.ServiceFee {
 			i.Reason = InvokeReasonInvalid
 			i.RemainingAmt = nil
+			return
+		}
+		if i.InValue != i.ServiceFee {
+			i.Reason = InvokeReasonInvalid
+			i.RemainingAmt = nil
+			i.RemainingValue = 0
 			return
 		}
 		if i.InAmt == nil || i.InAmt.Sign() == 0 {

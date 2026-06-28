@@ -152,6 +152,7 @@ type BlockExecutionRequest struct {
 	ResolveTriggers           TriggerResolver
 	ContractUTXOs             ContractUTXOProvider
 	Triggers                  []TriggerCall
+	AssetPrecision            contractframework.AssetPrecisionResolver
 }
 
 type BlockExecutionResult = contractframework.BackendBlockExecutionResult
@@ -169,6 +170,7 @@ type BlockResultBuildRequest struct {
 	ResolveOutput             ResultOutputResolver
 	ResolveTriggers           TriggerResolver
 	Triggers                  []TriggerCall
+	AssetPrecision            contractframework.AssetPrecisionResolver
 }
 
 type BlockResultBuildResult = contractframework.BackendBlockResultBuildResult
@@ -188,6 +190,13 @@ type Backend struct {
 	records []ExecutionRecord
 	pending []ExecutionRecord
 	gasUsed int64
+}
+
+func SettlementPrecision(assetPrecision contractframework.AssetPrecisionResolver) contractframework.AssetPrecisionPolicy {
+	return contractframework.AssetPrecisionPolicy{
+		Fallback: contract.GasFeePrecision,
+		Resolve:  assetPrecision,
+	}
 }
 
 func ExecuteBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
@@ -219,6 +228,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 	verifier := CanonicalResultVerifier{
 		GasConfig:     req.GasConfig,
 		UTXOs:         overlay.Provider,
+		Precision:     SettlementPrecision(req.AssetPrecision),
 		ResolveOutput: resolveOutput,
 	}
 	executor := NewBackend(BlockExecutionRequest{
@@ -288,6 +298,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 			Records:       []ExecutionRecord{record},
 			GasConfig:     req.GasConfig,
 			UTXOs:         overlay.Provider,
+			Precision:     SettlementPrecision(req.AssetPrecision),
 			ResolveScript: req.ResolveScript,
 		})
 		if err != nil {

@@ -19,6 +19,7 @@ type CanonicalResultTxRequest struct {
 	Records       []ExecutionRecord
 	GasConfig     GasConfig
 	UTXOs         ContractUTXOProvider
+	Precision     AssetPrecisionPolicy
 	ResolveScript ResultRecipientScriptResolver
 }
 
@@ -32,6 +33,7 @@ func BuildCanonicalResultTx(req CanonicalResultTxRequest) (*wire.MsgTx, error) {
 	plans, err := (CanonicalResultPlanner{
 		GasConfig: req.GasConfig,
 		UTXOs:     req.UTXOs,
+		Precision: req.Precision,
 	}).BuildPlans(req.Records)
 	if err != nil {
 		return nil, err

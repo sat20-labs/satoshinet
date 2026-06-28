@@ -118,6 +118,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		Policy: contractframework.SingleResultTxPolicy{
 			Label:         "template",
 			Status:        ResultStatusSuccess,
+			GasAssetName:  req.GasConfig.Normalize().GasAssetName,
 			PlanCount:     resultPlanCount,
 			ResolveScript: req.ResolveScript,
 			ResolveOutput: req.ResolveOutput,
@@ -426,6 +427,19 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
+	if e.Store.Exists(addr) {
+		e.appendOutcome(contractframework.ExecutionOutcome{
+			Height:   e.BlockHeight,
+			TxID:     tx.TxID(),
+			Type:     TxTypeDeploy,
+			Kind:     ExecutionKindDeploy,
+			CallID:   DeriveDeployCallID(tx.TxID(), addr),
+			Contract: addr,
+			Status:   ResultStatusInvalid,
+			GasLimit: validated.Payload.GasLimit,
+		})
+		return nil
+	}
 	runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, e.Registry, deployer)
 	if err != nil {
 		return err
@@ -445,6 +459,10 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
+	hasResultGas, err := contractframework.OutputsHaveRequiredGas(fundingOutputs, e.GasConfig.Normalize().GasAssetName, resultFee)
+	if err != nil {
+		return err
+	}
 	e.Store.Add(runtime)
 	outcome := contractframework.ExecutionOutcome{
 		Height:         e.BlockHeight,
@@ -456,9 +474,9 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		Status:         ResultStatusSuccess,
 		GasLimit:       validated.Payload.GasLimit,
 		FundingInputs:  contractframework.ContractOutputOutPoints(fundingOutputs),
-		RequiresResult: true,
+		RequiresResult: hasResultGas,
 	}
-	outcome.GasFee = resultFee
+	outcome.GasFee = contractframework.GasFeeIf(hasResultGas, resultFee)
 	e.appendOutcome(outcome)
 	return nil
 }

@@ -25,6 +25,7 @@ type SingleResultBlockRequest[T any] struct {
 type SingleResultTxPolicy struct {
 	Label         string
 	Status        contract.ResultStatus
+	GasAssetName  string
 	PlanCount     func(ResultPlan) int
 	ResolveScript ResultRecipientScriptResolver
 	ResolveOutput ResultOutputResolver
@@ -58,6 +59,7 @@ func (p SingleResultTxPolicy) VerifyTx(tx *wire.MsgTx, plans []ResultPlan) error
 		ResultTx:     tx,
 		Status:       p.Status,
 		Plans:        plans,
+		GasAssetName: p.GasAssetName,
 		Resolve:      p.ResolveOutput,
 		PlanCount:    p.PlanCount,
 		CheckPayload: true,

@@ -197,6 +197,7 @@ func (v *AgentBlockExecutionValidator) verifyResults(resultTxs []*wire.MsgTx, pl
 		ResultTx:     resultTxs[0],
 		Status:       agent.ResultStatusSuccess,
 		Plans:        plans,
+		GasAssetName: contractGasAssetNameForParams(v.cfg.ChainParams),
 		Resolve:      v.cfg.ResolveResultOutput,
 		CheckPayload: true,
 	})

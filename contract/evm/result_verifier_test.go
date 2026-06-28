@@ -61,6 +61,9 @@ func TestCanonicalResultVerifier(t *testing.T) {
 	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
 
 	tx.TxIn[0], tx.TxIn[1] = tx.TxIn[1], tx.TxIn[0]
+	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
+
+	tx.TxIn[1] = wire.NewTxIn(&wire.OutPoint{Hash: chainhash.Hash{3}, Index: 0}, nil, nil)
 	require.Error(t, verifier.Verify(tx, []ExecutionRecord{record}))
 }
 

@@ -19,6 +19,7 @@ type ResultPlanRequest struct {
 	GasAssetName           string
 	GasFee                 *scommon.Decimal
 	RequiredGasFundingUTXO []OutPoint
+	Precision              AssetPrecisionPolicy
 }
 
 type CanonicalSelectionRequest struct {
@@ -38,6 +39,7 @@ type CanonicalSelection struct {
 type CanonicalResultPlanner struct {
 	GasConfig GasConfig
 	UTXOs     ContractUTXOProvider
+	Precision AssetPrecisionPolicy
 }
 
 func SelectCanonicalInputs(req CanonicalSelectionRequest) (CanonicalSelection, error) {
@@ -132,16 +134,20 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 
 	requiredByAsset := make(map[string]*scommon.Decimal)
 	if req.GasFee != nil && req.GasFee.Sign() > 0 {
-		requiredByAsset[req.GasAssetName] = req.GasFee.Clone()
+		requiredByAsset[req.GasAssetName] = req.Precision.Normalize(req.GasAssetName, req.GasFee.Clone())
 	}
 	for _, intent := range req.Intents {
 		if intent.AssetName == "" || intent.Amount == nil {
 			return ResultPlan{}, ErrInvalidAsset
 		}
+		amount := req.Precision.Normalize(intent.AssetName, intent.Amount.Clone())
+		if amount == nil || amount.Sign() <= 0 {
+			continue
+		}
 		if existing, ok := requiredByAsset[intent.AssetName]; ok {
-			requiredByAsset[intent.AssetName] = existing.AddAlignPrecision(intent.Amount)
+			requiredByAsset[intent.AssetName] = existing.AddAlignPrecision(amount)
 		} else {
-			requiredByAsset[intent.AssetName] = intent.Amount.Clone()
+			requiredByAsset[intent.AssetName] = amount
 		}
 	}
 
@@ -213,8 +219,12 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	intentBuilder := newResultOutputAccumulator()
 	outputs := make([]ResultOutput, 0, len(req.Intents))
 	for _, intent := range req.Intents {
+		amount := req.Precision.Normalize(intent.AssetName, intent.Amount.Clone())
+		if amount == nil || amount.Sign() <= 0 {
+			continue
+		}
 		if len(intent.ExtraData) != 0 {
-			output, err := ResultOutputWithAsset(intent.To, intent.AssetName, intent.Amount)
+			output, err := ResultOutputWithAsset(intent.To, intent.AssetName, amount)
 			if err != nil {
 				return ResultPlan{}, err
 			}
@@ -222,12 +232,13 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 			outputs = append(outputs, output)
 			continue
 		}
-		if err := intentBuilder.Add(intent.To, intent.AssetName, intent.Amount, nil); err != nil {
+		if err := intentBuilder.Add(intent.To, intent.AssetName, amount, nil); err != nil {
 			return ResultPlan{}, err
 		}
 	}
 	outputs = append(outputs, intentBuilder.Outputs()...)
 	outputs = append(outputs, changeBuilder.Outputs()...)
+	outputs = NormalizeResultOutputsPrecision(outputs, req.Precision)
 	return ResultPlan{InputUTXOs: inputs, Outputs: outputs}, nil
 }
 
@@ -306,6 +317,7 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 			GasAssetName:           p.GasConfig.GasAssetName,
 			GasFee:                 gasFee,
 			RequiredGasFundingUTXO: funding,
+			Precision:              p.Precision,
 		})
 		if err != nil {
 			return nil, err

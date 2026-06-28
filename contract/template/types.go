@@ -22,7 +22,7 @@ const (
 const (
 	CurrentTemplateVersion uint32 = 1
 	MaxPriceDivisibility          = 10
-	SwapInvokeFee          int64  = 10
+	SwapInvokeFee          int64  = 0
 	SwapServiceFeeRatio    int64  = 8
 	AMMProfitShareLP              = 60
 )

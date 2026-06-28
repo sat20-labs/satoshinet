@@ -80,6 +80,9 @@ func (r *ContractRuntime) settleLimitOrders(height int64) (*SettlementPlan, erro
 			j++
 		}
 	}
+	if refundOpenLimitOrderBuyExcess(&state, plan) {
+		changed = true
+	}
 	if !changed && !settlementPlanHasChanges(plan) {
 		return plan, nil
 	}
@@ -466,7 +469,7 @@ func applyLimitOrderDeal(buy, sell *InvokeItem, matchAmt *scommon.Decimal, match
 	sell.OutValue += matchValue
 
 	if limitOrderBuyFinished(buy, sell.UnitPrice) {
-		buy.OutValue = buy.RemainingValue
+		buy.OutValue += buy.RemainingValue
 		buy.RemainingValue = 0
 		buy.Done = ItemStatusDealt
 	}
@@ -552,6 +555,30 @@ func addLimitOrderBuyRemainderTransfer(plan *SettlementPlan, item *InvokeItem) {
 		SatValue: item.OutValue,
 		Reason:   SettlementReasonDeal,
 	})
+}
+
+func refundOpenLimitOrderBuyExcess(state *TemplateRuntimeState, plan *SettlementPlan) bool {
+	if state == nil || plan == nil {
+		return false
+	}
+	changed := false
+	for i := range state.Items {
+		item := &state.Items[i]
+		if item.Finished() || item.Reason != InvokeReasonNormal ||
+			item.OrderType != OrderTypeBuy || item.OutValue <= 0 {
+			continue
+		}
+		plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
+		plan.Transfers = append(plan.Transfers, SettlementTransfer{
+			ItemID:   item.ID,
+			To:       item.Address,
+			SatValue: item.OutValue,
+			Reason:   SettlementReasonRefund,
+		})
+		item.OutValue = 0
+		changed = true
+	}
+	return changed
 }
 
 func appendPlanItemID(ids []int64, id int64) []int64 {

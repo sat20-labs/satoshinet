@@ -32,7 +32,7 @@ func TestSettleLimitOrdersMatchesByPriceAndTime(t *testing.T) {
 		FundingOutputs: []ContractOutput{{
 			OutPoint: OutPoint{TxID: "sell", Vout: 1},
 			Contract: addr,
-			Value:    SwapInvokeFee,
+			Value:    0,
 			Assets:   testAsset("ordx:f:test", 10),
 		}},
 		Height: 1,
@@ -45,7 +45,7 @@ func TestSettleLimitOrdersMatchesByPriceAndTime(t *testing.T) {
 		FundingOutputs: []ContractOutput{{
 			OutPoint: OutPoint{TxID: "buy", Vout: 1},
 			Contract: addr,
-			Value:    40,
+			Value:    30,
 		}},
 		Height: 1,
 	})
@@ -104,7 +104,7 @@ func TestSettleLimitOrdersStopsWhenPriceDoesNotCross(t *testing.T) {
 		FundingOutputs: []ContractOutput{{
 			OutPoint: OutPoint{TxID: "sell", Vout: 1},
 			Contract: addr,
-			Value:    SwapInvokeFee,
+			Value:    0,
 			Assets:   testAsset("ordx:f:test", 10),
 		}},
 		Height: 1,
@@ -132,8 +132,8 @@ func TestSettleLimitOrdersStopsWhenPriceDoesNotCross(t *testing.T) {
 func TestSettleLimitOrdersLargeBuyFilledByMultipleSmallSells(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "alice", OrderTypeBuy, "30", "10", 312, nil, 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell1", "bob", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 2)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "alice", OrderTypeBuy, "30", "10", 302, nil, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell1", "bob", OrderTypeSell, "10", "10", 0, testAsset("ordx:f:test", 10), 2)
 
 	plan, err := runtime.SettleBlock(2)
 	require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestSettleLimitOrdersLargeBuyFilledByMultipleSmallSells(t *testing.T) {
 	require.Equal(t, "bob", plan.Transfers[1].To)
 	require.Equal(t, int64(100), plan.Transfers[1].SatValue)
 
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell2", "carol", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 3)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell2", "carol", OrderTypeSell, "10", "10", 0, testAsset("ordx:f:test", 10), 3)
 	plan, err = runtime.SettleBlock(3)
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)
@@ -156,7 +156,7 @@ func TestSettleLimitOrdersLargeBuyFilledByMultipleSmallSells(t *testing.T) {
 	require.Equal(t, "carol", plan.Transfers[1].To)
 	require.Equal(t, int64(100), plan.Transfers[1].SatValue)
 
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell3", "dave", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 4)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell3", "dave", OrderTypeSell, "10", "10", 0, testAsset("ordx:f:test", 10), 4)
 	plan, err = runtime.SettleBlock(4)
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)
@@ -177,8 +177,8 @@ func TestSettleLimitOrdersLargeBuyFilledByMultipleSmallSells(t *testing.T) {
 func TestSettleLimitOrdersLargeSellFilledByMultipleSmallBuys(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "alice", OrderTypeSell, "30", "10", SwapInvokeFee, testAsset("ordx:f:test", 30), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy1", "bob", OrderTypeBuy, "10", "12", 130, nil, 2)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "alice", OrderTypeSell, "30", "10", 0, testAsset("ordx:f:test", 30), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy1", "bob", OrderTypeBuy, "10", "12", 120, nil, 2)
 
 	plan, err := runtime.SettleBlock(2)
 	require.NoError(t, err)
@@ -193,7 +193,7 @@ func TestSettleLimitOrdersLargeSellFilledByMultipleSmallBuys(t *testing.T) {
 	require.Equal(t, "bob", plan.Transfers[2].To)
 	require.Equal(t, int64(20), plan.Transfers[2].SatValue)
 
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy2", "carol", OrderTypeBuy, "10", "11", 120, nil, 3)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy2", "carol", OrderTypeBuy, "10", "11", 110, nil, 3)
 	plan, err = runtime.SettleBlock(3)
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)
@@ -207,7 +207,7 @@ func TestSettleLimitOrdersLargeSellFilledByMultipleSmallBuys(t *testing.T) {
 	require.Equal(t, "carol", plan.Transfers[2].To)
 	require.Equal(t, int64(10), plan.Transfers[2].SatValue)
 
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy3", "dave", OrderTypeBuy, "10", "10", 110, nil, 4)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy3", "dave", OrderTypeBuy, "10", "10", 100, nil, 4)
 	plan, err = runtime.SettleBlock(4)
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)
@@ -229,10 +229,10 @@ func TestSettleLimitOrdersLargeSellFilledByMultipleSmallBuys(t *testing.T) {
 func TestSettleLimitOrdersBuyTakesLowerSellPricesAndLeavesRemainder(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell10", "seller10", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell9", "seller9", OrderTypeSell, "10", "9", SwapInvokeFee, testAsset("ordx:f:test", 10), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell8", "seller8", OrderTypeSell, "10", "8", SwapInvokeFee, testAsset("ordx:f:test", 10), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "40", "10", 413, nil, 2)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell10", "seller10", OrderTypeSell, "10", "10", 0, testAsset("ordx:f:test", 10), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell9", "seller9", OrderTypeSell, "10", "9", 0, testAsset("ordx:f:test", 10), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell8", "seller8", OrderTypeSell, "10", "8", 0, testAsset("ordx:f:test", 10), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "40", "10", 403, nil, 2)
 
 	plan, err := runtime.SettleBlock(2)
 	require.NoError(t, err)
@@ -256,10 +256,10 @@ func TestSettleLimitOrdersBuyTakesLowerSellPricesAndLeavesRemainder(t *testing.T
 func TestSettleLimitOrdersRefundsPartiallyDealtOrder(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell8", "seller8", OrderTypeSell, "10", "8", SwapInvokeFee, testAsset("ordx:f:test", 10), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell9", "seller9", OrderTypeSell, "10", "9", SwapInvokeFee, testAsset("ordx:f:test", 10), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell10", "seller10", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "40", "10", 413, nil, 2)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell8", "seller8", OrderTypeSell, "10", "8", 0, testAsset("ordx:f:test", 10), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell9", "seller9", OrderTypeSell, "10", "9", 0, testAsset("ordx:f:test", 10), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell10", "seller10", OrderTypeSell, "10", "10", 0, testAsset("ordx:f:test", 10), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "40", "10", 403, nil, 2)
 
 	plan, err := runtime.SettleBlock(2)
 	require.NoError(t, err)
@@ -327,7 +327,7 @@ func TestSettleLimitOrdersRefundsInvokerOpenOrders(t *testing.T) {
 	require.Len(t, plan.Transfers, 1)
 	require.Equal(t, int64(0), plan.Transfers[0].ItemID)
 	require.Equal(t, "alice", plan.Transfers[0].To)
-	require.Equal(t, int64(20), plan.Transfers[0].SatValue)
+	require.Equal(t, int64(30), plan.Transfers[0].SatValue)
 	require.Equal(t, SettlementReasonRefund, plan.Transfers[0].Reason)
 	require.ElementsMatch(t, []int64{0, 1}, plan.ItemIDs)
 
@@ -337,14 +337,14 @@ func TestSettleLimitOrdersRefundsInvokerOpenOrders(t *testing.T) {
 	require.Equal(t, InvokeReasonRefund, state.Items[0].Reason)
 	require.Equal(t, ItemStatusRefunded, state.Items[1].Done)
 	require.Zero(t, state.Running.TotalDealCount)
-	requireDecimalString(t, "20", state.Running.TotalRefundAssetB)
+	requireDecimalString(t, "30", state.Running.TotalRefundAssetB)
 }
 
 func TestSettleLimitOrdersRefundCanTargetOneOrder(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy0", "alice", OrderTypeBuy, "10", "2", 30, nil, 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy1", "alice", OrderTypeBuy, "10", "3", 40, nil, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy0", "alice", OrderTypeBuy, "10", "2", 20, nil, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy1", "alice", OrderTypeBuy, "10", "3", 30, nil, 1)
 	refundParam, err := (&RefundInvokeParam{ItemIDs: []int64{0}}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
@@ -372,9 +372,9 @@ func TestSettleLimitOrdersRefundCanTargetOneOrder(t *testing.T) {
 func TestSettleLimitOrdersRefundCanTargetMultipleOrders(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy0", "alice", OrderTypeBuy, "10", "2", 30, nil, 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy1", "alice", OrderTypeBuy, "10", "3", 40, nil, 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy2", "alice", OrderTypeBuy, "10", "4", 50, nil, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy0", "alice", OrderTypeBuy, "10", "2", 20, nil, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy1", "alice", OrderTypeBuy, "10", "3", 30, nil, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy2", "alice", OrderTypeBuy, "10", "4", 40, nil, 1)
 	refundParam, err := (&RefundInvokeParam{ItemIDs: []int64{0, 2}}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
@@ -402,9 +402,9 @@ func TestSettleLimitOrdersRefundCanTargetMultipleOrders(t *testing.T) {
 func TestSettleLimitOrdersSamePriceUsesFIFO(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell0", "seller0", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell1", "seller1", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 2)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "10", "10", 110, nil, 3)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell0", "seller0", OrderTypeSell, "10", "10", 0, testAsset("ordx:f:test", 10), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell1", "seller1", OrderTypeSell, "10", "10", 0, testAsset("ordx:f:test", 10), 2)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "10", "10", 100, nil, 3)
 
 	plan, err := runtime.SettleBlock(3)
 	require.NoError(t, err)
@@ -423,8 +423,8 @@ func TestSettleLimitOrdersSamePriceUsesFIFO(t *testing.T) {
 func TestSettleLimitOrdersIgnoreFutureHeightOrders(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell, "10", "10", SwapInvokeFee, testAsset("ordx:f:test", 10), 5)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "10", "10", 110, nil, 5)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell, "10", "10", 0, testAsset("ordx:f:test", 10), 5)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "10", "10", 100, nil, 5)
 
 	plan, err := runtime.SettleBlock(4)
 	require.NoError(t, err)
@@ -439,8 +439,8 @@ func TestSettleLimitOrdersIgnoreFutureHeightOrders(t *testing.T) {
 func TestSettleLimitOrdersBuyRefundsSurplusWhenFilledAtBetterPrice(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell, "20", "8", SwapInvokeFee, testAsset("ordx:f:test", 20), 1)
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "20", "10", 211, nil, 2)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell, "20", "8", 0, testAsset("ordx:f:test", 20), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "20", "10", 201, nil, 2)
 
 	plan, err := runtime.SettleBlock(2)
 	require.NoError(t, err)
@@ -464,7 +464,7 @@ func TestSettleLimitOrdersBuyRefundsSurplusWhenFilledAtBetterPrice(t *testing.T)
 func TestSettleLimitOrdersRefundCannotCancelOtherUsersOrder(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "alice", OrderTypeBuy, "10", "2", 30, nil, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "alice", OrderTypeBuy, "10", "2", 20, nil, 1)
 	refundParam, err := (&RefundInvokeParam{ItemIDs: []int64{0}}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{

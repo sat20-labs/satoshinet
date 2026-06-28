@@ -86,6 +86,39 @@ func TestBuildCanonicalResultPlan(t *testing.T) {
 	}, plan.Outputs)
 }
 
+func TestBuildCanonicalResultPlanTruncatesOutputsToAssetPrecision(t *testing.T) {
+	contractAddr := testContractAddress(t, ModuleEVM, 1)
+	assetName := "brc20:f:ooxx"
+	available := []UTXO{
+		mustCanonicalUTXODecimal(t, OutPoint{TxID: "asset", Vout: 0}, contractAddr, assetName, "10", 12),
+	}
+
+	plan, err := BuildCanonicalResultPlan(ResultPlanRequest{
+		Contract:     contractAddr,
+		Available:    available,
+		GasAssetName: assetName,
+		Precision: AssetPrecisionPolicy{
+			Fallback: 8,
+			Resolve: func(name string) (int, bool) {
+				return 0, name == assetName
+			},
+		},
+		Intents: []AssetIntent{
+			{
+				From:      contractAddr,
+				To:        "tb1qdest",
+				AssetName: assetName,
+				Amount:    mustCanonicalDecimalString(t, "3.9"),
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, plan.InputUTXOs, 1)
+	require.Len(t, plan.Outputs, 2)
+	requireCanonicalResultOutputAssetString(t, plan.Outputs[0], assetName, "3")
+	requireCanonicalResultOutputAssetString(t, plan.Outputs[1], assetName, "7")
+}
+
 func TestBuildCanonicalResultPlanRejectsMixedContracts(t *testing.T) {
 	contractAddr := testContractAddress(t, ModuleEVM, 1)
 	other := testContractAddress(t, ModuleEVM, 9)
@@ -125,6 +158,28 @@ func mustCanonicalUTXO(t *testing.T, outpoint OutPoint, contractAddr contract.Co
 	return utxo
 }
 
+func mustCanonicalUTXODecimal(t *testing.T, outpoint OutPoint, contractAddr contract.ContractAddress,
+	assetName, amount string, height int64) UTXO {
+
+	t.Helper()
+	utxo := UTXO{
+		OutPoint: outpoint,
+		Contract: contractAddr,
+		Height:   height,
+	}
+	if assetName == contract.SatoshiAssetName {
+		decimal := mustCanonicalDecimalString(t, amount)
+		value, err := DecimalToInt64(*decimal)
+		require.NoError(t, err)
+		utxo.Value = value
+		return utxo
+	}
+	assets, err := NewAssetSet(assetName, mustCanonicalDecimalString(t, amount))
+	require.NoError(t, err)
+	utxo.Assets = assets
+	return utxo
+}
+
 func mustCanonicalResultOutput(t *testing.T, to, assetName string, amount uint64) ResultOutput {
 	t.Helper()
 	output, err := ResultOutputWithAsset(to, assetName, mustCanonicalDecimal(t, amount))
@@ -137,4 +192,18 @@ func mustCanonicalDecimal(t *testing.T, amount uint64) *scommon.Decimal {
 	decimal, err := DecimalFromUint64(amount)
 	require.NoError(t, err)
 	return decimal
+}
+
+func mustCanonicalDecimalString(t *testing.T, amount string) *scommon.Decimal {
+	t.Helper()
+	decimal, err := scommon.NewDecimalFromString(amount, 8)
+	require.NoError(t, err)
+	return decimal
+}
+
+func requireCanonicalResultOutputAssetString(t *testing.T, output ResultOutput, assetName, amount string) {
+	t.Helper()
+	require.Len(t, output.Assets, 1)
+	require.Equal(t, assetName, output.Assets[0].Name.String())
+	require.Zero(t, output.Assets[0].Amount.Cmp(mustCanonicalDecimalString(t, amount)))
 }

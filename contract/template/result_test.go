@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
@@ -48,6 +49,55 @@ func TestBuildSettlementResultPlansUsesSettledItemFunding(t *testing.T) {
 	require.Equal(t, "ordx:f:test", resultPlans[0].Outputs[0].AssetName)
 	require.Equal(t, "10", resultPlans[0].Outputs[0].AssetAmt)
 	require.Len(t, resultPlans[0].Outputs[0].Assets, 1)
+}
+
+func TestBuildSettlementResultPlansTruncatesAssetsToPrecision(t *testing.T) {
+	assetName := "brc20:f:ooxx"
+	plan := &SettlementPlan{
+		Contract: "tc-address",
+		Height:   100,
+		ItemIDs:  []int64{1},
+		Transfers: []SettlementTransfer{{
+			ItemID:    1,
+			To:        "buyer",
+			AssetName: assetName,
+			AssetAmt:  "12.9",
+			Reason:    SettlementReasonDeal,
+		}},
+	}
+
+	resultPlans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, nil, func(name string) (int, bool) {
+		return 0, name == assetName
+	})
+	require.NoError(t, err)
+	require.Len(t, resultPlans, 1)
+	require.Len(t, resultPlans[0].Outputs, 1)
+	require.Equal(t, "12", resultPlans[0].Outputs[0].AssetAmt)
+	require.Len(t, resultPlans[0].Outputs[0].Assets, 1)
+	require.Equal(t, "12", resultPlans[0].Outputs[0].Assets[0].Amount.String())
+}
+
+func TestAddMissingGasResultPlansIncludesDeployRecordWithoutItems(t *testing.T) {
+	contract := testTemplateContract(t)
+	input := OutPoint{TxID: testHash(1), Vout: 1}
+
+	plans := AddMissingGasResultPlans(nil, []ExecutionRecord{{
+		Height:         100,
+		Type:           TxTypeDeploy,
+		Kind:           ExecutionKindDeploy,
+		Contract:       contract,
+		Status:         ResultStatusSuccess,
+		GasFee:         scommon.NewDefaultDecimal(5),
+		FundingInputs:  []OutPoint{input},
+		RequiresResult: true,
+	}})
+
+	require.Len(t, plans, 1)
+	require.Equal(t, contract.MustEncode(), plans[0].Contract)
+	require.Equal(t, int64(100), plans[0].Height)
+	require.Empty(t, plans[0].ItemIDs)
+	require.Equal(t, []OutPoint{input}, plans[0].Inputs)
+	require.Equal(t, "5", plans[0].GasFee.String())
 }
 
 func TestBuildAndVerifySettlementResultTx(t *testing.T) {
@@ -122,6 +172,37 @@ func TestCanonicalResultVerifierRejectsInputMismatch(t *testing.T) {
 		CheckPayload: true,
 	})
 	require.Error(t, err)
+}
+
+func TestCanonicalResultVerifierAllowsExtraInputs(t *testing.T) {
+	plans := []ResultPlan{{
+		ItemIDs: []int64{1},
+		Inputs:  []OutPoint{{TxID: testHash(1), Vout: 0}},
+	}}
+	tx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
+		Status: ResultStatusSuccess,
+		Plans: []ResultPlan{{
+			ItemIDs: []int64{1},
+			Inputs: []OutPoint{
+				{TxID: testHash(1), Vout: 0},
+				{TxID: testHash(2), Vout: 0},
+			},
+		}},
+		ResolveScript: func(output ResultOutput) ([]byte, error) {
+			return []byte{0x51}, nil
+		},
+	}, contractframework.ResultTxBuildOptions{PlanCount: resultPlanCount})
+	require.NoError(t, err)
+
+	err = contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
+		Label:        "template",
+		ResultTx:     tx,
+		Status:       ResultStatusSuccess,
+		Plans:        plans,
+		PlanCount:    resultPlanCount,
+		CheckPayload: true,
+	})
+	require.NoError(t, err)
 }
 
 func TestAugmentClosedAMMCloseOutputsRejectInsufficientContractBalance(t *testing.T) {

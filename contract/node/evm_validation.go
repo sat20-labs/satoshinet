@@ -38,6 +38,7 @@ type EVMBlockExecutionConfig struct {
 	ResolveRecipient    contractframework.ScriptRecipientResolver
 	ResolveResultOutput evm.ResultOutputResolver
 	ResolveTriggers     evm.TriggerResolver
+	AssetPrecision      contractframework.AssetPrecisionResolver
 	VerifyResult        evm.ResultVerifier
 	SkipStateRootVerify bool
 }
@@ -121,6 +122,7 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		VerifyResult:    verifyResult,
 		ResolveTriggers: v.cfg.ResolveTriggers,
 		ContractUTXOs:   contractOverlay.Provider,
+		AssetPrecision:  v.cfg.AssetPrecision,
 	}
 	var result evm.BlockExecutionResult
 	if hasRoot && !v.cfg.SkipStateRootVerify {
@@ -289,6 +291,7 @@ func (v *EVMBlockExecutionValidator) resultVerifier(prefix string,
 	verifier := evm.CanonicalResultVerifier{
 		GasConfig:     gasConfig,
 		UTXOs:         v.cfg.ContractUTXOs,
+		Precision:     evm.SettlementPrecision(v.cfg.AssetPrecision),
 		ResolveOutput: resolveOutput,
 	}
 	if overlay != nil {

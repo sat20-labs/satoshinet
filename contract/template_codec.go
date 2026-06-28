@@ -31,7 +31,7 @@ const (
 const (
 	CurrentTemplateVersion uint32 = 1
 	MaxPriceDivisibility          = 10
-	SwapInvokeFee          int64  = 10
+	SwapInvokeFee          int64  = 0
 )
 
 var templateInvokeActions = map[string]map[string]struct{}{

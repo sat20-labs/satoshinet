@@ -139,12 +139,43 @@ func NormalizeResultOutput(output ResultOutput) ResultOutput {
 		normalized.Assets = nil
 		return normalized
 	}
-	builder := scommon.NewTxAssetsBuilder(len(normalized.Assets))
-	for _, asset := range normalized.Assets {
-		builder.AddClone(&asset)
-	}
-	normalized.Assets = builder.Build()
+	normalized.Assets = normalizeTxAssets(normalized.Assets)
 	return normalized
+}
+
+func NormalizeResultOutputPrecision(output ResultOutput, policy AssetPrecisionPolicy) ResultOutput {
+	normalized := NormalizeResultOutput(output)
+	if !policy.Enabled() {
+		return normalized
+	}
+	normalized.Assets = NormalizeAssetSetPrecision(normalized.Assets, policy)
+	if normalized.AssetName != "" && normalized.AssetName != contract.SatoshiAssetName {
+		name := wire.NewAssetNameFromString(normalized.AssetName)
+		if name != nil {
+			asset, err := normalized.Assets.Find(name)
+			if err == nil && asset != nil && asset.Amount.Sign() > 0 {
+				normalized.AssetAmt = asset.Amount.String()
+			} else {
+				normalized.AssetAmt = ""
+			}
+		}
+	}
+	return normalized
+}
+
+func NormalizeResultOutputsPrecision(outputs []ResultOutput, policy AssetPrecisionPolicy) []ResultOutput {
+	if len(outputs) == 0 {
+		return nil
+	}
+	out := make([]ResultOutput, 0, len(outputs))
+	for _, output := range outputs {
+		normalized := NormalizeResultOutputPrecision(output, policy)
+		if ResultOutputIsZero(normalized) {
+			continue
+		}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func ResultOutputIsZero(output ResultOutput) bool {

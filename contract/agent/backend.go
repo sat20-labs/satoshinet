@@ -124,6 +124,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		Policy: contractframework.SingleResultTxPolicy{
 			Label:         "agent",
 			Status:        ResultStatusSuccess,
+			GasAssetName:  req.GasConfig.Normalize().GasAssetName,
 			ResolveScript: req.ResolveScript,
 			ResolveOutput: req.ResolveOutput,
 			Augment: func(plans []ResultPlan) ([]ResultPlan, error) {

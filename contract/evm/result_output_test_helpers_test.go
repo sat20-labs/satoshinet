@@ -70,9 +70,33 @@ func mustUTXOWithValueAndAsset(t *testing.T, outpoint OutPoint, contract Contrac
 	return utxo
 }
 
+func mustDecimalUTXO(t *testing.T, outpoint OutPoint, contract ContractAddress, assetName, amount string, height int64) UTXO {
+	t.Helper()
+	utxo := UTXO{
+		OutPoint: outpoint,
+		Contract: contract,
+		Height:   height,
+	}
+	assets, err := NewAssetSet(assetName, mustDecimalString(t, amount))
+	if err != nil {
+		t.Fatalf("utxo asset set: %v", err)
+	}
+	utxo.Assets = assets
+	return utxo
+}
+
 func mustDefaultDecimal(t *testing.T, amount uint64) *scommon.Decimal {
 	t.Helper()
 	decimal, err := decimalFromUint64(amount)
+	if err != nil {
+		t.Fatalf("decimal amount: %v", err)
+	}
+	return decimal
+}
+
+func mustDecimalString(t *testing.T, amount string) *scommon.Decimal {
+	t.Helper()
+	decimal, err := scommon.NewDecimalFromString(amount, contractGasPrecisionForTest())
 	if err != nil {
 		t.Fatalf("decimal amount: %v", err)
 	}

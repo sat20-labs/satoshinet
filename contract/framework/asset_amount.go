@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contract "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -15,6 +16,10 @@ type AssetPrecisionResolver func(assetName string) (int, bool)
 type AssetPrecisionPolicy struct {
 	Fallback int
 	Resolve  AssetPrecisionResolver
+}
+
+func (p AssetPrecisionPolicy) Enabled() bool {
+	return p.Resolve != nil || p.Fallback > 0
 }
 
 func (p AssetPrecisionPolicy) ParsePrecision() int {
@@ -33,11 +38,48 @@ func (p AssetPrecisionPolicy) Normalize(assetName string, amount *scommon.Decima
 	if amount == nil {
 		return nil
 	}
-	precision, ok := p.AssetPrecision(assetName)
-	if !ok || amount.Precision == precision {
+	if !p.Enabled() {
+		return amount
+	}
+	precision := p.Fallback
+	if assetName == contract.SatoshiAssetName {
+		precision = 0
+	} else if resolved, ok := p.AssetPrecision(assetName); ok {
+		precision = resolved
+	}
+	if precision < 0 || amount.Precision == precision {
 		return amount
 	}
 	return amount.NewPrecision(precision)
+}
+
+func NormalizeAssetSetPrecision(assets wire.TxAssets, policy AssetPrecisionPolicy) wire.TxAssets {
+	if len(assets) == 0 {
+		return nil
+	}
+	if !policy.Enabled() {
+		return normalizeTxAssets(assets)
+	}
+	builder := scommon.NewTxAssetsBuilder(len(assets))
+	for _, asset := range assets {
+		amount := policy.Normalize(asset.Name.String(), asset.Amount.Clone())
+		if amount == nil || amount.Sign() <= 0 {
+			continue
+		}
+		next := asset
+		next.Amount = *amount
+		builder.AddClone(&next)
+	}
+	return builder.Build()
+}
+
+func normalizeTxAssets(assets wire.TxAssets) wire.TxAssets {
+	if len(assets) == 0 {
+		return nil
+	}
+	builder := scommon.NewTxAssetsBuilder(len(assets))
+	builder.AddSlice(assets)
+	return builder.Build()
 }
 
 func OutputAssetAmount(outpoint OutPoint, value int64, assets wire.TxAssets,
