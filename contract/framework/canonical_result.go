@@ -350,28 +350,40 @@ func ResultExecutionGas(cfg GasConfig, record ExecutionRecord) int64 {
 func RecordGasRefund(record ExecutionRecord, available []UTXO, gasAssetName string,
 	recordGasFee *scommon.Decimal) (*AssetIntent, error) {
 
-	if record.GasRefundRecipient == "" || gasAssetName == "" {
+	return ResultGasRefundIntent(ResultGasRefund{
+		CallID: record.CallID,
+		To:     record.GasRefundRecipient,
+		Inputs: append([]OutPoint(nil), record.FundingInputs...),
+		GasFee: CloneDecimal(recordGasFee),
+	}, record.Contract, available, gasAssetName)
+}
+
+func ResultGasRefundIntent(refund ResultGasRefund, contractAddr contract.ContractAddress, available []UTXO,
+	gasAssetName string) (*AssetIntent, error) {
+
+	if refund.To == "" || gasAssetName == "" {
 		return nil, nil
 	}
-	fundingGas, err := TotalOutpointAsset(available, record.FundingInputs, gasAssetName)
+	fundingGas, err := TotalOutpointAsset(available, refund.Inputs, gasAssetName)
 	if err != nil {
 		return nil, err
 	}
 	if fundingGas == nil || fundingGas.Sign() == 0 {
 		return nil, nil
 	}
-	if recordGasFee == nil {
-		recordGasFee = ZeroDecimal()
+	gasFee := refund.GasFee
+	if gasFee == nil {
+		gasFee = ZeroDecimal()
 	}
-	if fundingGas.Cmp(recordGasFee) <= 0 {
+	if fundingGas.Cmp(gasFee) <= 0 {
 		return nil, nil
 	}
 	return &AssetIntent{
-		CallID:    record.CallID,
-		From:      record.Contract,
-		To:        record.GasRefundRecipient,
+		CallID:    refund.CallID,
+		From:      contractAddr,
+		To:        refund.To,
 		AssetName: gasAssetName,
-		Amount:    fundingGas.SubAlignPrecision(recordGasFee),
+		Amount:    fundingGas.SubAlignPrecision(gasFee),
 	}, nil
 }
 

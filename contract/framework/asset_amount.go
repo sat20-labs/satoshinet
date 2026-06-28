@@ -3,6 +3,7 @@ package framework
 import (
 	"errors"
 	"fmt"
+	"math/big"
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contract "github.com/sat20-labs/satoshinet/contract"
@@ -38,8 +39,44 @@ func (p AssetPrecisionPolicy) Normalize(assetName string, amount *scommon.Decima
 	if amount == nil {
 		return nil
 	}
-	if !p.Enabled() {
+	precision, ok := p.precisionForAsset(assetName)
+	if !ok {
 		return amount
+	}
+	if precision < 0 || amount.Precision == precision {
+		return amount
+	}
+	return amount.NewPrecision(precision)
+}
+
+func (p AssetPrecisionPolicy) NormalizeUp(assetName string, amount *scommon.Decimal) *scommon.Decimal {
+	if amount == nil {
+		return nil
+	}
+	precision, ok := p.precisionForAsset(assetName)
+	if !ok {
+		return amount
+	}
+	if precision < 0 || amount.Precision == precision {
+		return amount.Clone()
+	}
+	if amount.Precision < precision || amount.Sign() <= 0 {
+		return amount.NewPrecision(precision)
+	}
+	diff := amount.Precision - precision
+	divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(diff)), nil)
+	value := new(big.Int).Set(amount.Value)
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(value, divisor, remainder)
+	if remainder.Sign() != 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return &scommon.Decimal{Precision: precision, Value: quotient}
+}
+
+func (p AssetPrecisionPolicy) precisionForAsset(assetName string) (int, bool) {
+	if !p.Enabled() {
+		return 0, false
 	}
 	precision := p.Fallback
 	if assetName == contract.SatoshiAssetName {
@@ -47,10 +84,7 @@ func (p AssetPrecisionPolicy) Normalize(assetName string, amount *scommon.Decima
 	} else if resolved, ok := p.AssetPrecision(assetName); ok {
 		precision = resolved
 	}
-	if precision < 0 || amount.Precision == precision {
-		return amount
-	}
-	return amount.NewPrecision(precision)
+	return precision, true
 }
 
 func NormalizeAssetSetPrecision(assets wire.TxAssets, policy AssetPrecisionPolicy) wire.TxAssets {
@@ -63,6 +97,26 @@ func NormalizeAssetSetPrecision(assets wire.TxAssets, policy AssetPrecisionPolic
 	builder := scommon.NewTxAssetsBuilder(len(assets))
 	for _, asset := range assets {
 		amount := policy.Normalize(asset.Name.String(), asset.Amount.Clone())
+		if amount == nil || amount.Sign() <= 0 {
+			continue
+		}
+		next := asset
+		next.Amount = *amount
+		builder.AddClone(&next)
+	}
+	return builder.Build()
+}
+
+func NormalizeManagedAssetSetPrecision(assets wire.TxAssets, policy AssetPrecisionPolicy) wire.TxAssets {
+	if len(assets) == 0 {
+		return nil
+	}
+	if !policy.Enabled() {
+		return normalizeTxAssets(assets)
+	}
+	builder := scommon.NewTxAssetsBuilder(len(assets))
+	for _, asset := range assets {
+		amount := policy.NormalizeUp(asset.Name.String(), asset.Amount.Clone())
 		if amount == nil || amount.Sign() <= 0 {
 			continue
 		}

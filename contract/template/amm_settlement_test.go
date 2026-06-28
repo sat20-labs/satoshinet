@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -475,6 +476,186 @@ func TestSettleAMMAddLiquidityUsesDeclaredValueOnly(t *testing.T) {
 	requireDecimalString(t, "200", state.Running.AssetAInPool)
 	requireDecimalString(t, "40", state.Running.AssetBInPool)
 	require.Equal(t, int64(40), state.Running.LPCosts["alice"])
+}
+
+func TestSettleAMMAddLiqRefundsExcess(t *testing.T) {
+	runtime := testAMMRuntimeWithAsset(t, "brc20:f:ooxx", 10, 10, "100")
+	fundAMMRuntimeWithAsset(t, runtime, "brc20:f:ooxx", 10, 10)
+	addr := runtime.Address()
+	addParam, err := (&AddLiquidityInvokeParam{
+		OrderType: OrderTypeAddLiquidity,
+		AssetName: "brc20:f:ooxx",
+		Amt:       "8",
+		Value:     6,
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:  InvokeAPIAddLiquidity,
+		Param:   addParam,
+		CallID:  DeriveInvokeCallID("add", 1, addr),
+		Invoker: "alice",
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "add", Vout: 1},
+			Contract: addr,
+			Value:    6,
+			Assets:   testAsset("brc20:f:ooxx", 8),
+		}},
+		Height: 1,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlock(1)
+	require.NoError(t, err)
+	require.Len(t, plan.Transfers, 1)
+	require.Equal(t, "alice", plan.Transfers[0].To)
+	require.Equal(t, SettlementReasonRefund, plan.Transfers[0].Reason)
+	require.Equal(t, "2", plan.Transfers[0].AssetAmt)
+	require.Equal(t, int64(0), plan.Transfers[0].SatValue)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "16", state.Running.AssetAInPool)
+	requireDecimalString(t, "16", state.Running.AssetBInPool)
+	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+	requireDecimalString(t, "6", state.Items[0].OutAmt)
+}
+
+func TestSettleAMMAddLiqResultRefundsExcess(t *testing.T) {
+	assetName := "brc20:f:ooxx"
+	runtime := testAMMRuntimeWithAsset(t, assetName, 10, 10, "100")
+	fundAMMRuntimeWithAsset(t, runtime, assetName, 10, 10)
+	addr := runtime.Address()
+	addParam, err := (&AddLiquidityInvokeParam{
+		OrderType: OrderTypeAddLiquidity,
+		AssetName: assetName,
+		Amt:       "8",
+		Value:     6,
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:  InvokeAPIAddLiquidity,
+		Param:   addParam,
+		CallID:  DeriveInvokeCallID("add", 1, addr),
+		Invoker: "alice",
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "add", Vout: 1},
+			Contract: addr,
+			Value:    6,
+			Assets:   testAsset(assetName, 8),
+		}},
+		Height: 1,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlock(1)
+	require.NoError(t, err)
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	provider := func(contractAddr ContractAddress) ([]contractframework.UTXO, error) {
+		require.True(t, addr.Equal(contractAddr))
+		return []contractframework.UTXO{{
+			OutPoint: OutPoint{TxID: "pool", Vout: 0},
+			Contract: addr,
+			Value:    16,
+			Assets:   testAsset(assetName, 18),
+		}}, nil
+	}
+	assetPrecision := func(name string) (int, bool) {
+		return 0, name == assetName
+	}
+	resultPlans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, nil, assetPrecision)
+	require.NoError(t, err)
+	resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), provider, assetPrecision)
+	require.NoError(t, err)
+	require.Len(t, resultPlans, 1)
+	requireResultPlanAssetTo(t, resultPlans[0], "alice", assetName, "2")
+	requireResultPlanAssetTo(t, resultPlans[0], addr.MustEncode(), assetName, "16")
+	requireResultPlanValueTo(t, resultPlans[0], addr.MustEncode(), 16)
+	requireNoResultPlanOutputTo(t, resultPlans[0], "bootstrap-address")
+}
+
+func TestSettleAMMBuySmallIntegerRefund(t *testing.T) {
+	runtime := testAMMRuntimeWithAsset(t, "brc20:f:ooxx", 18, 19, "342")
+	fundAMMRuntimeWithAsset(t, runtime, "brc20:f:ooxx", 18, 19)
+	addr := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeBuy,
+		AssetName: "brc20:f:ooxx",
+		UnitPrice: "1",
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:  InvokeAPISwap,
+		Param:   param,
+		CallID:  DeriveInvokeCallID("buy", 1, addr),
+		Invoker: "buyer",
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "buy", Vout: 1},
+			Contract: addr,
+			Value:    1,
+		}},
+		Height: 1,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlockWithGasConfigAndPrecision(1, DefaultGasConfig(), func(name string) (int, bool) {
+		return 0, name == "brc20:f:ooxx"
+	})
+	require.NoError(t, err)
+	require.Empty(t, plan.Deals)
+	require.Len(t, plan.Transfers, 1)
+	require.Equal(t, "buyer", plan.Transfers[0].To)
+	require.Equal(t, SettlementReasonRefund, plan.Transfers[0].Reason)
+	require.Equal(t, int64(1), plan.Transfers[0].SatValue)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "18", state.Running.AssetAInPool)
+	requireDecimalString(t, "19", state.Running.AssetBInPool)
+	require.Equal(t, InvokeReasonNoEnoughAsset, state.Items[0].Reason)
+	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
+}
+
+func TestSettleAMMSellSmallIntegerRefund(t *testing.T) {
+	runtime := testAMMRuntimeWithAsset(t, "brc20:f:ooxx", 18, 19, "342")
+	fundAMMRuntimeWithAsset(t, runtime, "brc20:f:ooxx", 18, 19)
+	addr := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeSell,
+		AssetName: "brc20:f:ooxx",
+		UnitPrice: "1",
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:  InvokeAPISwap,
+		Param:   param,
+		CallID:  DeriveInvokeCallID("sell", 1, addr),
+		Invoker: "seller",
+		FundingOutputs: []ContractOutput{{
+			OutPoint: OutPoint{TxID: "sell", Vout: 1},
+			Contract: addr,
+			Assets:   testAsset("brc20:f:ooxx", 1),
+		}},
+		Height: 1,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlockWithGasConfigAndPrecision(1, DefaultGasConfig(), func(name string) (int, bool) {
+		return 0, name == "brc20:f:ooxx"
+	})
+	require.NoError(t, err)
+	require.Empty(t, plan.Deals)
+	require.Len(t, plan.Transfers, 1)
+	require.Equal(t, "seller", plan.Transfers[0].To)
+	require.Equal(t, SettlementReasonRefund, plan.Transfers[0].Reason)
+	require.Equal(t, "1", plan.Transfers[0].AssetAmt)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "18", state.Running.AssetAInPool)
+	requireDecimalString(t, "19", state.Running.AssetBInPool)
+	require.Equal(t, InvokeReasonNoEnoughAsset, state.Items[0].Reason)
+	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
 }
 
 func TestSettleAMMRemoveLiquiditySendsProfitShareToFoundation(t *testing.T) {

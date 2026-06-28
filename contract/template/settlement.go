@@ -21,7 +21,9 @@ func cloneSettlementPlans(plans []*SettlementPlan) []*SettlementPlan {
 	return contractframework.CloneSettlementPlans(plans)
 }
 
-func (r *ContractRuntime) settleLimitOrders(height int64) (*SettlementPlan, error) {
+func (r *ContractRuntime) settleLimitOrders(height int64,
+	assetPrecision contractframework.AssetPrecisionResolver) (*SettlementPlan, error) {
+
 	state, err := r.loadRuntimeState()
 	if err != nil {
 		return nil, err
@@ -59,6 +61,18 @@ func (r *ContractRuntime) settleLimitOrders(height int64) (*SettlementPlan, erro
 		if matchAmt.Sign() == 0 || matchValue == 0 {
 			break
 		}
+		if !settlementAssetOutputNonZero(sell.AssetName, matchAmt, assetPrecision) {
+			sell.Reason = InvokeReasonNoEnoughAsset
+			transfer := markItemRefunded(sell)
+			if transfer.AssetAmt != "" || transfer.SatValue != 0 {
+				plan.Transfers = append(plan.Transfers, transfer)
+			}
+			addSettlementInputs(plan, sell)
+			plan.ItemIDs = appendPlanItemID(plan.ItemIDs, sell.ID)
+			changed = true
+			j++
+			continue
+		}
 
 		applyLimitOrderDeal(buy, sell, matchAmt, matchValue)
 		plan.Deals = append(plan.Deals, SettlementDeal{
@@ -93,7 +107,9 @@ func (r *ContractRuntime) settleLimitOrders(height int64) (*SettlementPlan, erro
 	return plan, nil
 }
 
-func (r *ContractRuntime) settleAMM(height int64) (*SettlementPlan, error) {
+func (r *ContractRuntime) settleAMM(height int64,
+	assetPrecision contractframework.AssetPrecisionResolver) (*SettlementPlan, error) {
+
 	state, err := r.loadRuntimeState()
 	if err != nil {
 		return nil, err
@@ -137,7 +153,7 @@ func (r *ContractRuntime) settleAMM(height int64) (*SettlementPlan, error) {
 			switch item.OrderType {
 			case OrderTypeBuy:
 				beforeReason, beforeDone := item.Reason, item.Done
-				deal, transfer, ok, err := settleAMMBuy(item, poolAsset, poolGas)
+				deal, transfer, ok, err := settleAMMBuy(item, poolAsset, poolGas, assetPrecision)
 				if err != nil {
 					return nil, err
 				}
@@ -893,7 +909,9 @@ func activeAMMItemIDs(items []InvokeItem, height int64) []int {
 	return ids
 }
 
-func settleAMMBuy(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64) (SettlementDeal, SettlementTransfer, bool, error) {
+func settleAMMBuy(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64,
+	assetPrecision contractframework.AssetPrecisionResolver) (SettlementDeal, SettlementTransfer, bool, error) {
+
 	if poolAsset.Sign() <= 0 || poolGas <= 0 || item.RemainingValue <= 0 {
 		item.Reason = InvokeReasonNoEnoughAsset
 		item.Done = ItemStatusClosedDirectly
@@ -917,6 +935,12 @@ func settleAMMBuy(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64) (
 		item.Reason = InvokeReasonNoEnoughAsset
 		item.Done = ItemStatusClosedDirectly
 		return SettlementDeal{}, SettlementTransfer{}, false, nil
+	}
+	outAsset = normalizeAMMSwapAssetOutput(item.AssetName, outAsset, poolAsset, assetPrecision)
+	if outAsset == nil || outAsset.Sign() <= 0 {
+		item.Reason = InvokeReasonNoEnoughAsset
+		transfer := markItemRefunded(item)
+		return SettlementDeal{}, transfer, false, nil
 	}
 	minAsset := item.ExpectedAmt
 	if minAsset == nil {
@@ -972,8 +996,8 @@ func settleAMMSell(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64) 
 	outGas := poolGas - newPoolGasDecimal.Ceil()
 	if outGas <= 0 {
 		item.Reason = InvokeReasonNoEnoughAsset
-		item.Done = ItemStatusClosedDirectly
-		return SettlementDeal{}, SettlementTransfer{}, false, nil
+		transfer := markItemRefunded(item)
+		return SettlementDeal{}, transfer, false, nil
 	}
 	minGas := item.ExpectedAmt
 	if minGas == nil {
@@ -1001,6 +1025,37 @@ func settleAMMSell(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64) 
 		Reason:   SettlementReasonDeal,
 	}
 	return deal, transfer, true, nil
+}
+
+func settlementAssetOutputNonZero(assetName string, amount *scommon.Decimal,
+	assetPrecision contractframework.AssetPrecisionResolver) bool {
+
+	if amount == nil || amount.Sign() <= 0 {
+		return false
+	}
+	policy := contractframework.AssetPrecisionPolicy{
+		Fallback: MaxPriceDivisibility,
+		Resolve:  assetPrecision,
+	}
+	normalized := policy.Normalize(assetName, amount.Clone())
+	return normalized != nil && normalized.Sign() > 0
+}
+
+func normalizeAMMSwapAssetOutput(assetName string, amount *scommon.Decimal, poolAsset *scommon.Decimal,
+	assetPrecision contractframework.AssetPrecisionResolver) *scommon.Decimal {
+
+	if amount == nil || amount.Sign() <= 0 || poolAsset == nil || poolAsset.Sign() <= 0 {
+		return nil
+	}
+	policy := contractframework.AssetPrecisionPolicy{
+		Fallback: MaxPriceDivisibility,
+		Resolve:  assetPrecision,
+	}
+	normalized := policy.Normalize(assetName, amount.Clone())
+	if normalized == nil || normalized.Sign() <= 0 || normalized.Cmp(poolAsset) > 0 {
+		return nil
+	}
+	return normalized
 }
 
 func calcSwapFee(value int64) int64 {

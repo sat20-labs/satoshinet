@@ -78,6 +78,7 @@ type SettlementResultOptions struct {
 	MissingPlanError      string
 	InputsByItem          map[int64][]OutPoint
 	FeesByItem            map[int64]*scommon.Decimal
+	GasRefundsByItem      map[int64]ResultGasRefund
 }
 
 func BuildSettlementResultPlans(plans []*SettlementPlan, opts SettlementResultOptions) ([]ResultPlan, error) {
@@ -113,6 +114,9 @@ func BuildSettlementResultPlan(plan *SettlementPlan, opts SettlementResultOption
 	}
 	for _, itemID := range plan.ItemIDs {
 		out.Inputs = append(out.Inputs, opts.InputsByItem[itemID]...)
+		if refund, ok := opts.GasRefundsByItem[itemID]; ok {
+			out.GasRefunds = append(out.GasRefunds, cloneResultGasRefund(refund))
+		}
 	}
 	out.Inputs = UniqueOutPoints(out.Inputs)
 	for _, transfer := range plan.Transfers {
@@ -204,7 +208,29 @@ func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []Re
 		out[i].GasFee = DecimalAddAllowNil(out[i].GasFee, record.GasFee)
 		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
 		out[i].Inputs = UniqueOutPoints(out[i].Inputs)
+		if refund := ResultGasRefundFromRecord(record); refund.To != "" {
+			out[i].GasRefunds = append(out[i].GasRefunds, refund)
+		}
 	}
+	return out
+}
+
+func ResultGasRefundFromRecord(record ExecutionRecord) ResultGasRefund {
+	if record.GasRefundRecipient == "" || len(record.FundingInputs) == 0 {
+		return ResultGasRefund{}
+	}
+	return ResultGasRefund{
+		CallID: record.CallID,
+		To:     record.GasRefundRecipient,
+		Inputs: append([]OutPoint(nil), record.FundingInputs...),
+		GasFee: CloneDecimal(record.GasFee),
+	}
+}
+
+func cloneResultGasRefund(in ResultGasRefund) ResultGasRefund {
+	out := in
+	out.Inputs = append([]OutPoint(nil), in.Inputs...)
+	out.GasFee = CloneDecimal(in.GasFee)
 	return out
 }
 

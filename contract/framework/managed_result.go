@@ -53,6 +53,11 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 	}
 
 	outputs := NormalizeResultOutputsPrecision(out.Outputs, req.Precision)
+	gasRefundOutputs, err := resultGasRefundOutputs(out, req.View, req.GasAssetName, req.Precision)
+	if err != nil {
+		return ResultPlan{}, err
+	}
+	outputs = append(outputs, gasRefundOutputs...)
 	remainingValue, remainingAssets, err := physicalRemainderAfterOutputs(req.View, outputs, req.GasAssetName, req.GasFee)
 	if err != nil {
 		return ResultPlan{}, err
@@ -121,6 +126,34 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 	return out, nil
 }
 
+func resultGasRefundOutputs(plan ResultPlan, view ResultPlanUTXOView, gasAssetName string,
+	policy AssetPrecisionPolicy) ([]ResultOutput, error) {
+
+	if len(plan.GasRefunds) == 0 {
+		return nil, nil
+	}
+	contractAddr, err := contract.DecodeContractAddress(plan.Contract)
+	if err != nil {
+		return nil, err
+	}
+	outputs := make([]ResultOutput, 0, len(plan.GasRefunds))
+	for _, refund := range plan.GasRefunds {
+		intent, err := ResultGasRefundIntent(refund, contractAddr, view.UTXOs, gasAssetName)
+		if err != nil {
+			return nil, err
+		}
+		if intent == nil {
+			continue
+		}
+		output, err := ResultOutputWithAsset(intent.To, intent.AssetName, intent.Amount)
+		if err != nil {
+			return nil, err
+		}
+		outputs = append(outputs, NormalizeResultOutputPrecision(output, policy))
+	}
+	return outputs, nil
+}
+
 func requestManagedAssets(req ManagedResultAugmentRequest) ResultOutput {
 	if !ResultOutputIsZero(req.ManagedAssets) {
 		return NormalizeResultOutput(req.ManagedAssets)
@@ -174,7 +207,10 @@ func physicalRemainderAfterOutputs(view ResultPlanUTXOView, outputs []ResultOutp
 func capResultOutputByAvailable(output ResultOutput, availableValue int64, availableAssets wire.TxAssets,
 	policy AssetPrecisionPolicy) ResultOutput {
 
-	output = NormalizeResultOutputPrecision(output, policy)
+	output = NormalizeResultOutput(output)
+	if policy.Enabled() {
+		output.Assets = NormalizeManagedAssetSetPrecision(output.Assets, policy)
+	}
 	if output.Value > availableValue {
 		output.Value = availableValue
 	}

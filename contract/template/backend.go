@@ -293,19 +293,11 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 			return err
 		}
 	}
-	invokeFee, err := e.GasConfig.InvokeFee(e.BlockHeight)
-	if err != nil {
-		return err
-	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
 		return err
 	}
-	requiredGas, err := contractframework.AddGasFees(invokeFee, resultFee)
-	if err != nil {
-		return err
-	}
-	hasRequiredGas, err := contractframework.OutputHasRequiredGas(output, e.GasConfig.Normalize().GasAssetName, requiredGas)
+	hasResultGas, err := contractframework.OutputHasRequiredGas(output, e.GasConfig.Normalize().GasAssetName, resultFee)
 	if err != nil {
 		return err
 	}
@@ -316,8 +308,8 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 		FundingOutputs:        []ContractOutput{output},
 		Height:                e.BlockHeight,
 		Timestamp:             e.BlockHeight,
-		ResultGasFee:          contractframework.GasFeeIf(hasRequiredGas, resultFee),
-		ApplyDefaultRetention: !hasRequiredGas,
+		ResultGasFee:          contractframework.GasFeeIf(hasResultGas, resultFee),
+		ApplyDefaultRetention: !hasResultGas,
 	})
 	if err != nil {
 		return err
@@ -325,33 +317,40 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 	if item == nil {
 		return nil
 	}
-	if err := runtime.ApplyGasFunding([]ContractOutput{output}, e.GasConfig.Normalize().GasAssetName); err != nil {
-		return err
+	if !templateResultGasIsSeparate(runtime.Contract(), e.GasConfig.Normalize().GasAssetName) {
+		if err := runtime.ApplyGasFunding([]ContractOutput{output}, e.GasConfig.Normalize().GasAssetName); err != nil {
+			return err
+		}
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
 	runtime.IncrementInvokeCount()
-	outcome := contractframework.ExecutionOutcome{
-		Height:         e.BlockHeight,
-		TxID:           tx.TxID(),
-		Type:           TxTypeInvoke,
-		Kind:           ExecutionKindInvoke,
-		CallID:         DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
-		Contract:       output.Contract,
-		GasLimit:       e.GasConfig.Normalize().InvokeBaseGas,
-		FundingInputs:  []OutPoint{output.OutPoint},
-		ItemIDs:        []int64{item.ID},
-		RequiresResult: true,
+	gasRefundRecipient := ""
+	if templateUsesFrameworkGasRefund(runtime.Contract(), e.GasConfig.Normalize().GasAssetName) {
+		gasRefundRecipient = invoker
 	}
-	outcome.GasFee = contractframework.GasFeeIf(hasRequiredGas, resultFee)
+	outcome := contractframework.ExecutionOutcome{
+		Height:             e.BlockHeight,
+		TxID:               tx.TxID(),
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		CallID:             DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
+		Contract:           output.Contract,
+		GasLimit:           e.GasConfig.Normalize().InvokeBaseGas,
+		FundingInputs:      []OutPoint{output.OutPoint},
+		ItemIDs:            []int64{item.ID},
+		GasRefundRecipient: gasRefundRecipient,
+		RequiresResult:     true,
+	}
+	outcome.GasFee = contractframework.GasFeeIf(hasResultGas, resultFee)
 	e.appendOutcome(outcome)
 	return nil
 }
 
 func (e *Backend) Finalize() (BlockExecutionResult, error) {
-	if err := e.Store.ReconcileAssetCaches(e.ContractUTXOs, e.GasConfig); err != nil {
+	if err := e.reconcileAssetCachesBeforeSettlement(); err != nil {
 		return BlockExecutionResult{}, err
 	}
-	plans, err := e.Store.SettleBlockWithGasConfig(e.BlockHeight, e.GasConfig.Normalize())
+	plans, err := e.Store.SettleBlockWithGasConfigAndPrecision(e.BlockHeight, e.GasConfig.Normalize(), e.AssetPrecision)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
@@ -370,6 +369,41 @@ func (e *Backend) Finalize() (BlockExecutionResult, error) {
 		ResultPlans:     contractframework.CloneResultPlans(resultPlans),
 		StateRoot:       e.Store.StateRoot(),
 	}, nil
+}
+
+func (e *Backend) reconcileAssetCachesBeforeSettlement() error {
+	if e.Store == nil || e.ContractUTXOs == nil {
+		return nil
+	}
+	currentFunding := currentBlockFundingOutpoints(e.records)
+	if len(currentFunding) == 0 {
+		return e.Store.ReconcileAssetCaches(e.ContractUTXOs, e.GasConfig)
+	}
+	provider := func(contract ContractAddress) ([]UTXO, error) {
+		utxos, err := e.ContractUTXOs(contract)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]UTXO, 0, len(utxos))
+		for _, utxo := range utxos {
+			if _, ok := currentFunding[utxo.OutPoint]; ok {
+				continue
+			}
+			out = append(out, utxo)
+		}
+		return out, nil
+	}
+	return e.Store.reconcileAssetCaches(provider, e.GasConfig, true)
+}
+
+func currentBlockFundingOutpoints(records []ExecutionRecord) map[OutPoint]struct{} {
+	out := make(map[OutPoint]struct{})
+	for _, record := range records {
+		for _, funding := range record.FundingInputs {
+			out[funding] = struct{}{}
+		}
+	}
+	return out
 }
 
 func (e *Backend) Records() []ExecutionRecord {
@@ -452,7 +486,7 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		return fmt.Errorf("template DEPLOY output does not match derived contract %s", addr.MustEncode())
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
-	if err := runtime.ApplyFunding(fundingOutputs, e.GasConfig.GasAssetName); err != nil {
+	if err := runtime.ApplyFunding(stripTemplateResultGasFunding(runtime.Contract(), fundingOutputs, e.GasConfig.GasAssetName), e.GasConfig.GasAssetName); err != nil {
 		return nil
 	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
@@ -464,17 +498,22 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		return err
 	}
 	e.Store.Add(runtime)
+	gasRefundRecipient := ""
+	if templateUsesFrameworkGasRefund(runtime.Contract(), e.GasConfig.GasAssetName) {
+		gasRefundRecipient = deployer
+	}
 	outcome := contractframework.ExecutionOutcome{
-		Height:         e.BlockHeight,
-		TxID:           tx.TxID(),
-		Type:           TxTypeDeploy,
-		Kind:           ExecutionKindDeploy,
-		CallID:         DeriveDeployCallID(tx.TxID(), addr),
-		Contract:       addr,
-		Status:         ResultStatusSuccess,
-		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  contractframework.ContractOutputOutPoints(fundingOutputs),
-		RequiresResult: hasResultGas,
+		Height:             e.BlockHeight,
+		TxID:               tx.TxID(),
+		Type:               TxTypeDeploy,
+		Kind:               ExecutionKindDeploy,
+		CallID:             DeriveDeployCallID(tx.TxID(), addr),
+		Contract:           addr,
+		Status:             ResultStatusSuccess,
+		GasLimit:           validated.Payload.GasLimit,
+		FundingInputs:      contractframework.ContractOutputOutPoints(fundingOutputs),
+		GasRefundRecipient: gasRefundRecipient,
+		RequiresResult:     hasResultGas,
 	}
 	outcome.GasFee = contractframework.GasFeeIf(hasResultGas, resultFee)
 	e.appendOutcome(outcome)
@@ -531,8 +570,10 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
-	if err := runtime.ApplyGasFunding(validated.FundingOutputs, e.GasConfig.GasAssetName); err != nil {
-		return err
+	if !templateResultGasIsSeparate(runtime.Contract(), e.GasConfig.GasAssetName) {
+		if err := runtime.ApplyGasFunding(validated.FundingOutputs, e.GasConfig.GasAssetName); err != nil {
+			return err
+		}
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
 	runtime.IncrementInvokeCount()
@@ -541,17 +582,22 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	for _, output := range validated.FundingOutputs {
 		funding = append(funding, output.OutPoint)
 	}
+	gasRefundRecipient := ""
+	if templateUsesFrameworkGasRefund(runtime.Contract(), e.GasConfig.GasAssetName) {
+		gasRefundRecipient = invoker
+	}
 	outcome := contractframework.ExecutionOutcome{
-		Height:         e.BlockHeight,
-		TxID:           tx.TxID(),
-		Type:           TxTypeInvoke,
-		Kind:           ExecutionKindInvoke,
-		CallID:         callID,
-		Contract:       validated.Contract,
-		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  funding,
-		ItemIDs:        []int64{item.ID},
-		RequiresResult: true,
+		Height:             e.BlockHeight,
+		TxID:               tx.TxID(),
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		CallID:             callID,
+		Contract:           validated.Contract,
+		GasLimit:           validated.Payload.GasLimit,
+		FundingInputs:      funding,
+		ItemIDs:            []int64{item.ID},
+		GasRefundRecipient: gasRefundRecipient,
+		RequiresResult:     true,
 	}
 	outcome.GasFee = resultFee
 	e.appendOutcome(outcome)
@@ -582,18 +628,23 @@ func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, runtime *ContractRuntime,
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
 	runtime.IncrementInvokeCount()
+	gasRefundRecipient := ""
+	if templateUsesFrameworkGasRefund(runtime.Contract(), e.GasConfig.GasAssetName) {
+		gasRefundRecipient = invoker
+	}
 	outcome := contractframework.ExecutionOutcome{
-		Height:         e.BlockHeight,
-		TxID:           tx.TxID(),
-		Type:           TxTypeInvoke,
-		Kind:           ExecutionKindInvoke,
-		CallID:         callID,
-		Contract:       validated.Contract,
-		Status:         ResultStatusInvalid,
-		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  contractframework.ContractOutputOutPoints(validated.FundingOutputs),
-		ItemIDs:        []int64{item.ID},
-		RequiresResult: true,
+		Height:             e.BlockHeight,
+		TxID:               tx.TxID(),
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		CallID:             callID,
+		Contract:           validated.Contract,
+		Status:             ResultStatusInvalid,
+		GasLimit:           validated.Payload.GasLimit,
+		FundingInputs:      contractframework.ContractOutputOutPoints(validated.FundingOutputs),
+		ItemIDs:            []int64{item.ID},
+		GasRefundRecipient: gasRefundRecipient,
+		RequiresResult:     true,
 	}
 	outcome.GasFee = invalidResultFee
 	e.appendOutcome(outcome)
@@ -606,6 +657,41 @@ func (e *Backend) appendOutcome(outcome contractframework.ExecutionOutcome) {
 
 func (e *Backend) lastOutcomeSince(before int) (contractframework.ExecutionOutcome, error) {
 	return contractframework.LastExecutionOutcomeSince(e.records, before)
+}
+
+func templateResultGasIsSeparate(contract Contract, gasAssetName string) bool {
+	if gasAssetName == "" || gasAssetName == SatoshiAssetName {
+		return false
+	}
+	if _, ok := contract.(*ExchangeContract); ok {
+		return false
+	}
+	assetA, assetB := defaultInvokePoolAssets(contract)
+	return gasAssetName != assetA && gasAssetName != assetB
+}
+
+func templateUsesFrameworkGasRefund(contract Contract, gasAssetName string) bool {
+	return templateResultGasIsSeparate(contract, gasAssetName)
+}
+
+func stripTemplateResultGasFunding(contract Contract, outputs []ContractOutput, gasAssetName string) []ContractOutput {
+	if !templateResultGasIsSeparate(contract, gasAssetName) {
+		return outputs
+	}
+	out := make([]ContractOutput, len(outputs))
+	for i, output := range outputs {
+		next := output
+		next.Assets = output.Assets.Clone()
+		gas, err := output.AssetAmount(gasAssetName)
+		if err == nil && gas != nil && gas.Sign() > 0 {
+			gasAssets, err := contractframework.NewAssetSet(gasAssetName, gas)
+			if err == nil {
+				_ = next.Assets.Split(gasAssets)
+			}
+		}
+		out[i] = next
+	}
+	return out
 }
 
 func templateDeployRuntime(validated DeployValidation) (*ContractRuntime, error) {

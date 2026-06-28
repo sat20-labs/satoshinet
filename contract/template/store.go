@@ -84,6 +84,12 @@ func (s *RuntimeStore) SettleBlock(height int64) ([]*SettlementPlan, error) {
 }
 
 func (s *RuntimeStore) SettleBlockWithGasConfig(height int64, gasConfig GasConfig) ([]*SettlementPlan, error) {
+	return s.SettleBlockWithGasConfigAndPrecision(height, gasConfig, nil)
+}
+
+func (s *RuntimeStore) SettleBlockWithGasConfigAndPrecision(height int64, gasConfig GasConfig,
+	assetPrecision contractframework.AssetPrecisionResolver) ([]*SettlementPlan, error) {
+
 	if s == nil {
 		return nil, nil
 	}
@@ -95,7 +101,7 @@ func (s *RuntimeStore) SettleBlockWithGasConfig(height int64, gasConfig GasConfi
 
 	plans := make([]*SettlementPlan, 0)
 	for _, key := range keys {
-		plan, err := s.runtimes[key].SettleBlockWithGasConfig(height, gasConfig)
+		plan, err := s.runtimes[key].SettleBlockWithGasConfigAndPrecision(height, gasConfig, assetPrecision)
 		if err != nil {
 			return nil, err
 		}
@@ -107,6 +113,10 @@ func (s *RuntimeStore) SettleBlockWithGasConfig(height int64, gasConfig GasConfi
 }
 
 func (s *RuntimeStore) ReconcileAssetCaches(contractUTXOs ContractUTXOProvider, gasConfig GasConfig) error {
+	return s.reconcileAssetCaches(contractUTXOs, gasConfig, false)
+}
+
+func (s *RuntimeStore) reconcileAssetCaches(contractUTXOs ContractUTXOProvider, gasConfig GasConfig, skipEmpty bool) error {
 	if s == nil || contractUTXOs == nil {
 		return nil
 	}
@@ -119,6 +129,9 @@ func (s *RuntimeStore) ReconcileAssetCaches(contractUTXOs ContractUTXOProvider, 
 		utxos, err := contractUTXOs(runtime.Address())
 		if err != nil {
 			return err
+		}
+		if skipEmpty && len(utxos) == 0 {
+			continue
 		}
 		state, err := runtime.loadRuntimeState()
 		if err != nil {

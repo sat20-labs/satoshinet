@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
 type ContractRuntime struct {
@@ -128,11 +130,17 @@ func (r *ContractRuntime) SettleBlock(height int64) (*SettlementPlan, error) {
 }
 
 func (r *ContractRuntime) SettleBlockWithGasConfig(height int64, gasConfig GasConfig) (*SettlementPlan, error) {
+	return r.SettleBlockWithGasConfigAndPrecision(height, gasConfig, nil)
+}
+
+func (r *ContractRuntime) SettleBlockWithGasConfigAndPrecision(height int64, gasConfig GasConfig,
+	assetPrecision contractframework.AssetPrecisionResolver) (*SettlementPlan, error) {
+
 	switch r.contract.(type) {
 	case *LimitOrderContract:
-		return r.settleLimitOrders(height)
+		return r.settleLimitOrders(height, assetPrecision)
 	case *AMMContract:
-		return r.settleAMM(height)
+		return r.settleAMM(height, assetPrecision)
 	case *ExchangeContract:
 		return r.settleExchange(height, gasConfig.Normalize())
 	default:

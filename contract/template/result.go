@@ -19,15 +19,19 @@ func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionReco
 
 	inputsByItem := make(map[int64][]OutPoint)
 	feesByItem := make(map[int64]*scommon.Decimal)
+	gasRefundsByItem := make(map[int64]contractframework.ResultGasRefund)
 	for _, record := range records {
 		for _, itemID := range record.ItemIDs {
 			inputsByItem[itemID] = append(inputsByItem[itemID], record.FundingInputs...)
 			feesByItem[itemID] = decimalAddAllowNil(feesByItem[itemID], record.GasFee)
+			if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
+				gasRefundsByItem[itemID] = refund
+			}
 		}
 	}
 
 	return contractframework.BuildSettlementResultPlans(plans, templateSettlementResultOptions(
-		inputsByItem, feesByItem, assetPrecision))
+		inputsByItem, feesByItem, gasRefundsByItem, assetPrecision))
 }
 
 func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []ResultPlan {
@@ -58,6 +62,9 @@ func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []R
 		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
 		out[i].Inputs = contractframework.UniqueOutPoints(out[i].Inputs)
 		out[i].ItemIDs = appendMissingItemIDs(out[i].ItemIDs, record.ItemIDs)
+		if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
+			out[i].GasRefunds = append(out[i].GasRefunds, refund)
+		}
 	}
 	return out
 }
@@ -84,11 +91,12 @@ func appendMissingItemIDs(ids []int64, more []int64) []int64 {
 func BuildSettlementAssetIntentsByItem(plan *SettlementPlan,
 	assetPrecision contractframework.AssetPrecisionResolver) (map[int64][]AssetIntent, error) {
 
-	return contractframework.BuildSettlementAssetIntentsByItem(plan, templateSettlementResultOptions(nil, nil, assetPrecision))
+	return contractframework.BuildSettlementAssetIntentsByItem(plan, templateSettlementResultOptions(nil, nil, nil, assetPrecision))
 }
 
 func templateSettlementResultOptions(inputsByItem map[int64][]OutPoint,
 	feesByItem map[int64]*scommon.Decimal,
+	gasRefundsByItem map[int64]contractframework.ResultGasRefund,
 	assetPrecision contractframework.AssetPrecisionResolver) contractframework.SettlementResultOptions {
 
 	return contractframework.SettlementResultOptions{
@@ -97,6 +105,7 @@ func templateSettlementResultOptions(inputsByItem map[int64][]OutPoint,
 		InvalidAsset:     ErrInvalidAsset,
 		InputsByItem:     inputsByItem,
 		FeesByItem:       feesByItem,
+		GasRefundsByItem: gasRefundsByItem,
 	}
 }
 
@@ -104,7 +113,7 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 	contractUTXOs ContractUTXOProvider,
 	assetPrecision contractframework.AssetPrecisionResolver) ([]ResultPlan, error) {
 
-	precision := templateSettlementResultOptions(nil, nil, assetPrecision).Precision
+	precision := templateSettlementResultOptions(nil, nil, nil, assetPrecision).Precision
 	gasConfig = gasConfig.Normalize()
 	out := contractframework.CloneResultPlans(plans)
 	for i := range out {
@@ -122,7 +131,7 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 			if err != nil {
 				return nil, err
 			}
-			mode := contractframework.ResultSurplusToBootstrap
+			mode := contractframework.ResultSurplusToContract
 			managedMode := contractframework.ResultSurplusToContract
 			if closed {
 				mode = contractframework.ResultSurplusAsProfit

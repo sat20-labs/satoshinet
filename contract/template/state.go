@@ -555,13 +555,6 @@ func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetN
 			amt = parseDecimalOrZero(amt.String())
 			retention.AssetB = decimalAddAllowNil(retention.AssetB, amt)
 		}
-		if gasAssetName != "" && gasAssetName != assetA && gasAssetName != assetB {
-			gas, err := output.AssetAmount(gasAssetName)
-			if err != nil {
-				return defaultInvokeRetention{}, nil, 0, nil, "", err
-			}
-			gasBalance = decimalAddAllowNil(gasBalance, gas)
-		}
 	}
 	if resultGasFee != nil && resultGasFee.Sign() > 0 {
 		switch gasAssetName {
@@ -578,10 +571,18 @@ func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetN
 				return defaultInvokeRetention{}, nil, 0, nil, "", err
 			}
 		default:
+			gasBalance = parseDecimalOrZero("0")
+			for _, output := range outputs {
+				gas, err := output.AssetAmount(gasAssetName)
+				if err != nil {
+					return defaultInvokeRetention{}, nil, 0, nil, "", err
+				}
+				gasBalance = decimalAddAllowNil(gasBalance, gas)
+			}
 			if gasBalance == nil || gasBalance.Cmp(resultGasFee) < 0 {
 				return defaultInvokeRetention{}, nil, 0, nil, "", fmt.Errorf("insufficient invalid invoke gas balance")
 			}
-			gasBalance = gasBalance.SubAlignPrecision(resultGasFee)
+			gasBalance = nil
 		}
 	}
 	if inAmt.Sign() == 0 {

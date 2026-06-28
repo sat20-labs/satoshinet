@@ -41,7 +41,7 @@ func TestBackendDeployThenInvoke(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, result.StateRoot)
 }
 
-func TestBackendDeployOnlyBuildsGasResultPlan(t *testing.T) {
+func TestBackendDeployGasResult(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	gas := DefaultGasConfig().GasAssetName
@@ -95,7 +95,7 @@ func TestBackendSettlesLimitOrdersOnFinalize(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, result.StateRoot)
 }
 
-func TestBackendLimitOrderBuyExcessFundingRefundsInvoker(t *testing.T) {
+func TestBackendBuyExcessRefund(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	gas := DefaultGasConfig().GasAssetName
@@ -139,11 +139,12 @@ func TestBackendLimitOrderBuyExcessFundingRefundsInvoker(t *testing.T) {
 	require.Contains(t, plans[0].Inputs, OutPoint{TxID: buyTx.TxID(), Vout: 1})
 	requireResultPlanValueTo(t, plans[0], "invoker-address", 10)
 	requireResultPlanValueTo(t, plans[0], addr.MustEncode(), 20)
-	requireResultPlanAssetTo(t, plans[0], addr.MustEncode(), gas, "49.999")
+	requireResultPlanAssetTo(t, plans[0], "invoker-address", gas, "49.999")
+	requireNoResultPlanAssetTo(t, plans[0], addr.MustEncode(), gas)
 	requireNoResultPlanOutputTo(t, plans[0], "bootstrap-address")
 }
 
-func TestBackendLimitOrderSellWithExtraSatsIsInvalidAndRefundsInvoker(t *testing.T) {
+func TestBackendSellExtraSatsRefund(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
 	gas := DefaultGasConfig().GasAssetName
@@ -180,7 +181,7 @@ func TestBackendLimitOrderSellWithExtraSatsIsInvalidAndRefundsInvoker(t *testing
 	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
 	require.Empty(t, state.Running.AssetAInPool)
 	require.Zero(t, state.Running.AssetBInPool)
-	requireDecimalString(t, "4.999", state.Running.GasBalance)
+	requireDecimalString(t, "0", state.Running.GasBalance)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, sellTx}, TestnetContractPrefix, ContractTypeTemplate)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
@@ -188,7 +189,7 @@ func TestBackendLimitOrderSellWithExtraSatsIsInvalidAndRefundsInvoker(t *testing
 	require.Len(t, plans, 1)
 	requireResultPlanValueTo(t, plans[0], "invoker-address", 10)
 	requireResultPlanAssetTo(t, plans[0], "invoker-address", contract.AssetName, "10")
-	requireResultPlanAsset(t, plans[0], gas, "4.999")
+	requireResultPlanAssetTo(t, plans[0], "invoker-address", gas, "4.999")
 	requireNoResultPlanOutputTo(t, plans[0], "bootstrap-address")
 }
 
@@ -246,13 +247,13 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	firstProvider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, sellTx}, TestnetContractPrefix, ContractTypeTemplate)
 	firstPlans, err := AugmentResultPlans(first.ResultPlans, store, gasConfig, firstProvider, nil)
 	require.NoError(t, err)
-	requireResultPlanAsset(t, firstPlans[0], gasAssetName, "49.999")
+	requireResultPlanAssetTo(t, firstPlans[0], "invoker-address", gasAssetName, "49.999")
 	requireResultPlanAsset(t, firstPlans[0], contract.AssetName, "10")
 	runtime, ok := store.Get(addr)
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "50", state.Running.GasBalance)
+	requireDecimalString(t, "0", state.Running.GasBalance)
 
 	encoded, err := store.MarshalBinary()
 	require.NoError(t, err)
@@ -262,7 +263,7 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.True(t, ok)
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "50", state.Running.GasBalance)
+	requireDecimalString(t, "0", state.Running.GasBalance)
 
 	buyTx := testTemplateLimitOrderInvokeTxWithFunding(t, addr, OrderTypeBuy, 20, testAsset(gasAssetName, 50))
 	parsedBuy, err := ParseTx(buyTx, testTemplateContractResolver)
@@ -272,14 +273,15 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "50", parsedBuyGas.String())
 	executor := NewBackend(BlockExecutionRequest{
-		Store:       store,
-		GasConfig:   gasConfig,
-		BlockHeight: 101,
+		Store:          store,
+		GasConfig:      gasConfig,
+		BlockHeight:    101,
+		ResolveInvoker: testTemplateInvokerResolver,
 	})
 	require.NoError(t, executor.ExecuteTx(buyTx))
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "100", state.Running.GasBalance)
+	requireDecimalString(t, "0", state.Running.GasBalance)
 
 	second, err := executor.Finalize()
 	require.NoError(t, err)
@@ -288,14 +290,14 @@ func TestBackendSettlesLimitOrdersAcrossStoreReload(t *testing.T) {
 	require.Len(t, second.SettlementPlans[0].Deals, 1)
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "100", state.Running.GasBalance)
+	requireDecimalString(t, "0", state.Running.GasBalance)
 	resultPlans, err := AugmentResultPlans(second.ResultPlans, store, gasConfig, nil, nil)
 	require.NoError(t, err)
-	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "100")
+	requireNoResultPlanAssetTo(t, resultPlans[0], addr.MustEncode(), gasAssetName)
 	currentOnly := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{sellTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
 	resultPlans, err = AugmentResultPlans(second.ResultPlans, store, gasConfig, currentOnly, nil)
 	require.NoError(t, err)
-	requireResultPlanAsset(t, resultPlans[0], gasAssetName, "99.999")
+	requireResultPlanAssetTo(t, resultPlans[0], "invoker-address", gasAssetName, "49.999")
 }
 
 func TestBackendInvalidInvokeAbsorbsKnownFunding(t *testing.T) {
@@ -331,7 +333,7 @@ func TestBackendInvalidInvokeAbsorbsKnownFunding(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, state.Running.AssetAInPool)
 	require.Zero(t, state.Running.AssetBInPool)
-	requireDecimalString(t, "4.999", state.Running.GasBalance)
+	requireDecimalString(t, "0", state.Running.GasBalance)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, invokeTx}, TestnetContractPrefix, ContractTypeTemplate)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
@@ -339,7 +341,7 @@ func TestBackendInvalidInvokeAbsorbsKnownFunding(t *testing.T) {
 	require.Len(t, plans, 1)
 	requireResultPlanValueTo(t, plans[0], "invoker-address", 7)
 	requireResultPlanAssetTo(t, plans[0], "invoker-address", contract.AssetName, "10")
-	requireResultPlanAsset(t, plans[0], gas, "4.999")
+	requireResultPlanAssetTo(t, plans[0], "invoker-address", gas, "4.999")
 }
 
 func TestBackendLimitOrderCloseRefundsOwnersAndSplitsProfit(t *testing.T) {
@@ -386,8 +388,8 @@ func TestBackendLimitOrderCloseRefundsOwnersAndSplitsProfit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	requireResultPlanAssetTo(t, plans[0], "seller-address", contract.AssetName, "10")
-	requireResultPlanAssetTo(t, plans[0], "deployer-address", gas, "4.1988")
-	requireResultPlanAssetTo(t, plans[0], "bootstrap-address", gas, "2.7992")
+	requireResultPlanAssetTo(t, plans[0], "seller-address", gas, "4.999")
+	requireResultPlanAssetTo(t, plans[0], "deployer-address", gas, "1.999")
 	requireNoResultPlanOutputTo(t, plans[0], addr.MustEncode())
 }
 
@@ -432,6 +434,252 @@ func TestBackendDefaultInvokeLimitOrderBuyAtMarketPrice(t *testing.T) {
 	require.Len(t, state.Items, 2)
 	require.Equal(t, contractcommon.ContractInvokeAPIDefault, state.Items[1].Action)
 	require.Equal(t, OrderTypeBuy, state.Items[1].OrderType)
+}
+
+func TestBackendLimitOrderDefaultGas(t *testing.T) {
+	assetName := "brc20:f:ooxx"
+	contract := NewLimitOrderContract(assetName)
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	gasAssetName := DefaultGasConfig().GasAssetName
+	buyTx := testTemplateLimitOrderInvokeTxFor(t, addr, OrderTypeBuy, assetName, "1", "1", 1,
+		testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)))
+	sellTx := testTemplateDefaultInvokeTx(t, addr, 0,
+		testAssets(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas), assetName, 1))
+	store := NewRuntimeStore()
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{deployTx, buyTx, sellTx},
+		Store:       store,
+		BlockHeight: 100,
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			switch tx {
+			case deployTx:
+				return "deployer-address", nil
+			case buyTx:
+				return "buyer-address", nil
+			case sellTx:
+				return "seller-address", nil
+			default:
+				return "unknown-address", nil
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.SettlementPlans, 1)
+	require.Len(t, result.SettlementPlans[0].Deals, 1)
+	require.Equal(t, "1", result.SettlementPlans[0].Deals[0].AssetAmt)
+	require.Equal(t, int64(1), result.SettlementPlans[0].Deals[0].SatValue)
+
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{buyTx, sellTx}, TestnetContractPrefix, ContractTypeTemplate)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, DefaultGasConfig(), provider, func(name string) (int, bool) {
+		return 0, name == assetName
+	})
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	requireResultPlanValueTo(t, plans[0], "seller-address", 1)
+	requireResultPlanAssetTo(t, plans[0], "buyer-address", assetName, "1")
+	requireNoResultPlanOutputTo(t, plans[0], "bootstrap-address")
+	requireNoResultPlanAssetTo(t, plans[0], addr.MustEncode(), assetName)
+}
+
+func TestBackendAMMPrecisionKeepsRemainder(t *testing.T) {
+	assetName := "brc20:f:ooxx"
+	contract := NewAMMContract(assetName, "100", 20, "2000")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	deployTx.TxOut[1].Value = 20
+	deployTx.TxOut[1].Assets = testAsset(assetName, 100)
+	gasAssetName := DefaultGasConfig().GasAssetName
+	buyTx := testTemplateDefaultInvokeTx(t, addr, 1,
+		testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)))
+	store := NewRuntimeStore()
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{deployTx, buyTx},
+		Store:       store,
+		BlockHeight: 100,
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			switch tx {
+			case deployTx:
+				return "deployer-address", nil
+			case buyTx:
+				return "buyer-address", nil
+			default:
+				return "unknown-address", nil
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.SettlementPlans, 1)
+	require.Len(t, result.SettlementPlans[0].Deals, 1)
+
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, DefaultGasConfig(), provider, func(name string) (int, bool) {
+		return 0, name == assetName
+	})
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	requireResultPlanAssetTo(t, plans[0], "buyer-address", assetName, "4")
+	requireResultPlanAssetTo(t, plans[0], addr.MustEncode(), assetName, "96")
+	requireNoResultPlanOutputTo(t, plans[0], "bootstrap-address")
+}
+
+func TestBackendAMMRefundsExtraResultGas(t *testing.T) {
+	assetName := "brc20:f:ooxx"
+	contract := NewAMMContract(assetName, "100", 20, "2000")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	deployTx.TxOut[1].Value = 20
+	deployTx.TxOut[1].Assets = testAsset(assetName, 100)
+	gas := DefaultGasConfig().GasAssetName
+	gasConfig := GasConfig{
+		GasAssetName:    gas,
+		DeployBaseGas:   1,
+		InvokeBaseGas:   1,
+		ResultBaseGas:   1,
+		MaxGasPerInvoke: DefaultGasConfig().MaxGasPerInvoke,
+	}
+	buyTx := testTemplateDefaultInvokeTx(t, addr, 1, testAsset(gas, 5))
+	store := NewRuntimeStore()
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{deployTx, buyTx},
+		Store:       store,
+		GasConfig:   gasConfig,
+		BlockHeight: 100,
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			if tx == buyTx {
+				return "buyer-address", nil
+			}
+			return "deployer-address", nil
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResultPlans, 1)
+
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
+	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, func(name string) (int, bool) {
+		return 0, name == assetName
+	})
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	requireResultPlanAssetTo(t, plans[0], "buyer-address", assetName, "4")
+	requireResultPlanAssetTo(t, plans[0], "buyer-address", gas, "4.999")
+	requireNoResultPlanAssetTo(t, plans[0], addr.MustEncode(), gas)
+}
+
+func TestBackendAMMMultiInvokeOneResult(t *testing.T) {
+	assetName := "brc20:f:ooxx"
+	contract := NewAMMContract(assetName, "100", 100, "10000")
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	deployTx.TxOut[1].Value = 100
+	deployTx.TxOut[1].Assets = testAsset(assetName, 100)
+	gas := DefaultGasConfig().GasAssetName
+	fee := testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)
+	buyA := testTemplateDefaultInvokeTx(t, addr, 10, testAsset(gas, fee))
+	buyB := testTemplateDefaultInvokeTx(t, addr, 10, testAsset(gas, fee))
+	store := NewRuntimeStore()
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{deployTx, buyA, buyB},
+		Store:       store,
+		BlockHeight: 100,
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			switch tx {
+			case buyA:
+				return "buyer-a", nil
+			case buyB:
+				return "buyer-b", nil
+			default:
+				return "deployer-address", nil
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.SettlementPlans, 1)
+	require.Len(t, result.SettlementPlans[0].Deals, 2)
+	require.Len(t, result.ResultPlans, 1)
+	require.ElementsMatch(t, []int64{0, 1}, result.ResultPlans[0].ItemIDs)
+	require.Contains(t, result.ResultPlans[0].Inputs, OutPoint{TxID: buyA.TxID(), Vout: 0})
+	require.Contains(t, result.ResultPlans[0].Inputs, OutPoint{TxID: buyB.TxID(), Vout: 0})
+}
+
+func TestBackendAMMAddLiqRefundsExcess(t *testing.T) {
+	assetName := "brc20:f:ooxx"
+	contract := NewAMMContract(assetName, "10", 10, "100")
+	content, err := contract.Encode()
+	require.NoError(t, err)
+	deploy := DeployPayload{
+		GasLimit:        DefaultGasConfig().DeployBaseGas,
+		SubType:         contract.TemplateName(),
+		Version:         contract.Version(),
+		DeployNonce:     7,
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.ContractContent, "deployer-address", deploy.DeployNonce)
+	require.NoError(t, err)
+	gasAssetName := DefaultGasConfig().GasAssetName
+	addParam, err := (&AddLiquidityInvokeParam{
+		OrderType: OrderTypeAddLiquidity,
+		AssetName: assetName,
+		Amt:       "8",
+		Value:     6,
+	}).Encode()
+	require.NoError(t, err)
+	addScript, err := InvokeNullDataScript(InvokePayload{
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
+		CallNonce: 1,
+		Action:    InvokeAPIAddLiquidity,
+		Param:     addParam,
+	})
+	require.NoError(t, err)
+	addTx := wire.NewMsgTx(1)
+	addTx.AddTxIn(&wire.TxIn{})
+	addTx.AddTxOut(wire.NewTxOut(0, nil, addScript))
+	addTx.AddTxOut(wire.NewTxOut(6,
+		testAssets(assetName, 8, gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas)),
+		testTemplateContractScript(addr)))
+	store := NewRuntimeStore()
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, nil, "deployer-address")
+	require.NoError(t, err)
+	fundAMMRuntimeWithAsset(t, runtime, assetName, 20, 20)
+	store.Add(runtime)
+	baseProvider := func(contractAddr ContractAddress) ([]contractframework.UTXO, error) {
+		require.True(t, addr.Equal(contractAddr))
+		return []contractframework.UTXO{{
+			OutPoint: OutPoint{TxID: "previous-result", Vout: 0},
+			Contract: addr,
+			Value:    20,
+			Assets:   testAsset(assetName, 20),
+		}}, nil
+	}
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{addTx},
+		Store:         store,
+		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(baseProvider, []*wire.MsgTx{addTx}, TestnetContractPrefix, ContractTypeTemplate),
+		BlockHeight:   100,
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			return "alice", nil
+		},
+		AssetPrecision: func(name string) (int, bool) {
+			return 0, name == assetName
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.SettlementPlans, 1)
+	require.Len(t, result.SettlementPlans[0].Transfers, 1)
+	require.Equal(t, "2", result.SettlementPlans[0].Transfers[0].AssetAmt)
+
+	plans, err := AugmentResultPlans(result.ResultPlans, store, DefaultGasConfig(),
+		contractframework.ContractUTXOProviderWithTxOutputs(baseProvider, []*wire.MsgTx{addTx}, TestnetContractPrefix, ContractTypeTemplate),
+		func(name string) (int, bool) {
+			return 0, name == assetName
+		})
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	requireResultPlanAssetTo(t, plans[0], "alice", assetName, "2")
+	requireResultPlanAssetTo(t, plans[0], addr.MustEncode(), assetName, "26")
+	requireResultPlanValueTo(t, plans[0], addr.MustEncode(), 26)
+	requireNoResultPlanOutputTo(t, plans[0], "bootstrap-address")
 }
 
 func TestContractUTXOProviderWithTxOutputsIncludesDefaultInvoke(t *testing.T) {
@@ -585,11 +833,18 @@ func testTemplateLimitOrderInvokeTx(t *testing.T, contract ContractAddress, orde
 
 func testTemplateLimitOrderInvokeTxWithFunding(t *testing.T, contract ContractAddress, orderType int, value int64, assets wire.TxAssets) *wire.MsgTx {
 	t.Helper()
+	return testTemplateLimitOrderInvokeTxFor(t, contract, orderType, "ordx:f:test", "10", "2", value, assets)
+}
+
+func testTemplateLimitOrderInvokeTxFor(t *testing.T, contract ContractAddress, orderType int,
+	assetName, amt, unitPrice string, value int64, assets wire.TxAssets) *wire.MsgTx {
+
+	t.Helper()
 	param, err := (&LimitOrderInvokeParam{
 		OrderType: orderType,
-		AssetName: "ordx:f:test",
-		Amt:       "10",
-		UnitPrice: "2",
+		AssetName: assetName,
+		Amt:       amt,
+		UnitPrice: unitPrice,
 	}).Encode()
 	require.NoError(t, err)
 	invokeScript, err := InvokeNullDataScript(InvokePayload{
@@ -675,6 +930,19 @@ func requireResultPlanValueTo(t *testing.T, plan ResultPlan, to string, value in
 		}
 	}
 	t.Fatalf("result plan missing value %d to %s: %+v", value, to, plan.Outputs)
+}
+
+func requireNoResultPlanAssetTo(t *testing.T, plan ResultPlan, to string, assetName string) {
+	t.Helper()
+	name := wire.NewAssetNameFromString(assetName)
+	require.NotNil(t, name)
+	for _, output := range plan.Outputs {
+		if output.To != to {
+			continue
+		}
+		asset, err := output.Assets.Find(name)
+		require.Error(t, err, "unexpected result asset %s to %s: %+v", assetName, to, asset)
+	}
 }
 
 func templateRecordsHaveAssetIntents(records []ExecutionRecord) bool {

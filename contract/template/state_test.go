@@ -124,7 +124,7 @@ func TestApplyInvokeMarksLimitOrderSellInvalidWhenAssetAmountDiffers(t *testing.
 	require.Zero(t, item.RemainingValue)
 }
 
-func TestApplyInvokeMarksLimitOrderSellInvalidWhenExtraSatsProvided(t *testing.T) {
+func TestApplySellExtraSatsInvalid(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	contract := runtime.Address()
 	param, err := (&LimitOrderInvokeParam{
@@ -355,9 +355,40 @@ func fundAMMRuntime(t *testing.T, runtime *ContractRuntime) {
 	require.NoError(t, err)
 }
 
+func fundAMMRuntimeWithAsset(t *testing.T, runtime *ContractRuntime, assetName string, amount int64, value int64) {
+	t.Helper()
+	addr := runtime.Address()
+	err := runtime.ApplyFunding([]ContractOutput{{
+		OutPoint: OutPoint{TxID: "deploy", Vout: 1},
+		Contract: addr,
+		Value:    value,
+		Assets:   testAsset(assetName, amount),
+	}}, "")
+	require.NoError(t, err)
+}
+
 func testAMMRuntime(t *testing.T) *ContractRuntime {
 	t.Helper()
 	contract := NewAMMContract("ordx:f:test", "100", 20, "2000")
+	content, err := contract.Encode()
+	require.NoError(t, err)
+	deploy := DeployPayload{
+		GasLimit:        1000,
+		SubType:         TemplateAMM,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, "deployer-address", deploy.DeployNonce)
+	require.NoError(t, err)
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, nil, "deployer-address")
+	require.NoError(t, err)
+	return runtime
+}
+
+func testAMMRuntimeWithAsset(t *testing.T, assetName string, amount int64, value int64, k string) *ContractRuntime {
+	t.Helper()
+	contract := NewAMMContract(assetName, scommon.NewDefaultDecimal(amount).String(), value, k)
 	content, err := contract.Encode()
 	require.NoError(t, err)
 	deploy := DeployPayload{

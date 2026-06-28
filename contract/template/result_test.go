@@ -77,7 +77,7 @@ func TestBuildSettlementResultPlansTruncatesAssetsToPrecision(t *testing.T) {
 	require.Equal(t, "12", resultPlans[0].Outputs[0].Assets[0].Amount.String())
 }
 
-func TestAddMissingGasResultPlansIncludesDeployRecordWithoutItems(t *testing.T) {
+func TestAddMissingDeployGasPlan(t *testing.T) {
 	contract := testTemplateContract(t)
 	input := OutPoint{TxID: testHash(1), Vout: 1}
 

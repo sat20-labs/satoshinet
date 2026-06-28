@@ -25,14 +25,22 @@ type ResultOutput struct {
 	ExtraData []byte        `json:"extraData,omitempty"`
 }
 
+type ResultGasRefund struct {
+	CallID string           `json:"callId,omitempty"`
+	To     string           `json:"to,omitempty"`
+	Inputs []OutPoint       `json:"inputs,omitempty"`
+	GasFee *scommon.Decimal `json:"gasFee,omitempty"`
+}
+
 type ResultPlan struct {
-	Contract   string           `json:"contract,omitempty"`
-	Height     int64            `json:"height,omitempty"`
-	ItemIDs    []int64          `json:"itemIds,omitempty"`
-	GasFee     *scommon.Decimal `json:"gasFee,omitempty"`
-	Inputs     []OutPoint       `json:"inputs,omitempty"`
-	InputUTXOs []UTXO           `json:"inputUtxos,omitempty"`
-	Outputs    []ResultOutput   `json:"outputs,omitempty"`
+	Contract   string            `json:"contract,omitempty"`
+	Height     int64             `json:"height,omitempty"`
+	ItemIDs    []int64           `json:"itemIds,omitempty"`
+	GasFee     *scommon.Decimal  `json:"gasFee,omitempty"`
+	GasRefunds []ResultGasRefund `json:"gasRefunds,omitempty"`
+	Inputs     []OutPoint        `json:"inputs,omitempty"`
+	InputUTXOs []UTXO            `json:"inputUtxos,omitempty"`
+	Outputs    []ResultOutput    `json:"outputs,omitempty"`
 }
 
 func CloneResultPlans(plans []ResultPlan) []ResultPlan {
@@ -47,6 +55,7 @@ func CloneResultPlan(plan ResultPlan) ResultPlan {
 	out := plan
 	out.GasFee = CloneDecimal(plan.GasFee)
 	out.ItemIDs = append([]int64(nil), plan.ItemIDs...)
+	out.GasRefunds = CloneResultGasRefunds(plan.GasRefunds)
 	out.Inputs = append([]OutPoint(nil), plan.Inputs...)
 	out.InputUTXOs = make([]UTXO, len(plan.InputUTXOs))
 	for i := range plan.InputUTXOs {
@@ -55,6 +64,16 @@ func CloneResultPlan(plan ResultPlan) ResultPlan {
 	out.Outputs = make([]ResultOutput, len(plan.Outputs))
 	for i := range plan.Outputs {
 		out.Outputs[i] = CloneResultOutput(plan.Outputs[i])
+	}
+	return out
+}
+
+func CloneResultGasRefunds(in []ResultGasRefund) []ResultGasRefund {
+	out := make([]ResultGasRefund, len(in))
+	copy(out, in)
+	for i := range out {
+		out[i].Inputs = append([]OutPoint(nil), in[i].Inputs...)
+		out[i].GasFee = CloneDecimal(in[i].GasFee)
 	}
 	return out
 }
