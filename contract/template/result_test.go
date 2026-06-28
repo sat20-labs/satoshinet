@@ -219,12 +219,7 @@ func TestAugmentClosedAMMCloseOutputsRejectInsufficientContractBalance(t *testin
 	store := NewRuntimeStore()
 	store.Add(runtime)
 	provider := func(contract ContractAddress) ([]UTXO, error) {
-		return []UTXO{{
-			OutPoint: OutPoint{TxID: testHash(9), Vout: 0},
-			Contract: contract,
-			Value:    5,
-			Assets:   testAsset("ordx:f:test", 40),
-		}}, nil
+		return []UTXO{testContractUTXO(testHash(9), 0, contract, 5, testAsset("ordx:f:test", 40))}, nil
 	}
 	plans := []ResultPlan{{
 		Contract: addr.EncodeAddress(),

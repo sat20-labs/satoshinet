@@ -106,11 +106,8 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 		BlockTime:     contract.ConfirmAfter + 1,
 		RuntimeConfig: testRuntimeConfig(),
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
-			return []UTXO{{
-				OutPoint: OutPoint{TxID: abnormalTxID, Vout: 0},
-				Contract: contract,
-				Value:    10000,
-			}}, nil
+			return []UTXO{contractframework.UTXOFromTxOutput(OutPoint{TxID: abnormalTxID, Vout: 0},
+				contract, 0, &wire.TxOut{Value: 10000})}, nil
 		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 		ResolveScript:  testResultScriptResolver,

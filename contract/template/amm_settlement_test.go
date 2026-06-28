@@ -21,15 +21,11 @@ func TestSettleAMMBuyUsesConstantProductPool(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("buy", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    10,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 10, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -61,16 +57,12 @@ func TestSettleAMMBuyResultOutputsUseAssetPrecision(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPISwap,
-		Param:   param,
-		CallID:  DeriveInvokeCallID("buy", 1, addr),
-		Invoker: "buyer",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    10,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		Invoker:        "buyer",
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 10, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -108,16 +100,11 @@ func TestSettleAMMSellUsesConstantProductPool(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("sell", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "sell", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-			Assets:   testAsset("ordx:f:test", 100),
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("sell", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("sell", 1, addr, SwapInvokeFee, testAsset("ordx:f:test", 100))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -149,15 +136,11 @@ func TestSettleAMMRejectsSlippage(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("buy", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    10,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 10, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -185,15 +168,11 @@ func TestSettleAMMWaitsUntilPoolMeetsK(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("buy", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    10,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 10, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -201,22 +180,13 @@ func TestSettleAMMWaitsUntilPoolMeetsK(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, plan.Deals)
 
-	err = runtime.ApplyFunding([]ContractOutput{{
-		OutPoint: OutPoint{TxID: "partial", Vout: 1},
-		Contract: addr,
-		Value:    20,
-		Assets:   testAsset("ordx:f:test", 90),
-	}}, "")
+	err = runtime.ApplyFunding([]ContractOutput{testContractOutput("partial", 1, addr, 20, testAsset("ordx:f:test", 90))}, "")
 	require.NoError(t, err)
 	plan, err = runtime.SettleBlock(1)
 	require.NoError(t, err)
 	require.Empty(t, plan.Deals)
 
-	err = runtime.ApplyFunding([]ContractOutput{{
-		OutPoint: OutPoint{TxID: "rest", Vout: 1},
-		Contract: addr,
-		Assets:   testAsset("ordx:f:test", 10),
-	}}, "")
+	err = runtime.ApplyFunding([]ContractOutput{testContractOutput("rest", 1, addr, 0, testAsset("ordx:f:test", 10))}, "")
 	require.NoError(t, err)
 	plan, err = runtime.SettleBlock(1)
 	require.NoError(t, err)
@@ -226,12 +196,7 @@ func TestSettleAMMWaitsUntilPoolMeetsK(t *testing.T) {
 func TestSettleAMMAddLiquidityCanMakePoolReady(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	addr := runtime.Address()
-	err := runtime.ApplyFunding([]ContractOutput{{
-		OutPoint: OutPoint{TxID: "deploy", Vout: 1},
-		Contract: addr,
-		Value:    20,
-		Assets:   testAsset("ordx:f:test", 90),
-	}}, "")
+	err := runtime.ApplyFunding([]ContractOutput{testContractOutput("deploy", 1, addr, 20, testAsset("ordx:f:test", 90))}, "")
 	require.NoError(t, err)
 
 	buyParam, err := (&LimitOrderInvokeParam{
@@ -242,15 +207,11 @@ func TestSettleAMMAddLiquidityCanMakePoolReady(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  buyParam,
-		CallID: DeriveInvokeCallID("buy", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    10,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          buyParam,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 10, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 	plan, err := runtime.SettleBlock(1)
@@ -265,16 +226,11 @@ func TestSettleAMMAddLiquidityCanMakePoolReady(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPIAddLiquidity,
-		Param:  addParam,
-		CallID: DeriveInvokeCallID("add", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "add", Vout: 1},
-			Contract: addr,
-			Value:    1,
-			Assets:   testAsset("ordx:f:test", 10),
-		}},
-		Height: 2,
+		Action:         InvokeAPIAddLiquidity,
+		Param:          addParam,
+		CallID:         DeriveInvokeCallID("add", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("add", 1, addr, 1, testAsset("ordx:f:test", 10))},
+		Height:         2,
 	})
 	require.NoError(t, err)
 
@@ -299,12 +255,7 @@ func TestSettleAMMAddLiquidityCanMakePoolReady(t *testing.T) {
 func TestSettleAMMDoesNotRecheckInitialKAfterReady(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	addr := runtime.Address()
-	err := runtime.ApplyFunding([]ContractOutput{{
-		OutPoint: OutPoint{TxID: "deploy", Vout: 1},
-		Contract: addr,
-		Value:    20,
-		Assets:   testAsset("ordx:f:test", 100),
-	}}, "")
+	err := runtime.ApplyFunding([]ContractOutput{testContractOutput("deploy", 1, addr, 20, testAsset("ordx:f:test", 100))}, "")
 	require.NoError(t, err)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
@@ -318,15 +269,11 @@ func TestSettleAMMDoesNotRecheckInitialKAfterReady(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("buy1", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy1", Vout: 1},
-			Contract: addr,
-			Value:    170,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("buy1", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("buy1", 1, addr, 170, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 	plan, err := runtime.SettleBlock(1)
@@ -348,16 +295,11 @@ func TestSettleAMMDoesNotRecheckInitialKAfterReady(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("sell1", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "sell1", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-			Assets:   testAsset("ordx:f:test", 1),
-		}},
-		Height: 2,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("sell1", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("sell1", 1, addr, SwapInvokeFee, testAsset("ordx:f:test", 1))},
+		Height:         2,
 	})
 	require.NoError(t, err)
 	plan, err = runtime.SettleBlock(2)
@@ -377,17 +319,12 @@ func TestSettleAMMAddAndRemoveLiquidity(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIAddLiquidity,
-		Param:   addParam,
-		CallID:  DeriveInvokeCallID("add", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "add", Vout: 1},
-			Contract: addr,
-			Value:    20,
-			Assets:   testAsset("ordx:f:test", 100),
-		}},
-		Height: 1,
+		Action:         InvokeAPIAddLiquidity,
+		Param:          addParam,
+		CallID:         DeriveInvokeCallID("add", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("add", 1, addr, 20, testAsset("ordx:f:test", 100))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -412,16 +349,12 @@ func TestSettleAMMAddAndRemoveLiquidity(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIRemoveLiquidity,
-		Param:   removeParam,
-		CallID:  DeriveInvokeCallID("remove", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "remove", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-		}},
-		Height: 2,
+		Action:         InvokeAPIRemoveLiquidity,
+		Param:          removeParam,
+		CallID:         DeriveInvokeCallID("remove", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("remove", 1, addr, SwapInvokeFee, nil)},
+		Height:         2,
 	})
 	require.NoError(t, err)
 
@@ -453,17 +386,12 @@ func TestSettleAMMAddLiquidityUsesDeclaredValueOnly(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIAddLiquidity,
-		Param:   addParam,
-		CallID:  DeriveInvokeCallID("add", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "add", Vout: 1},
-			Contract: addr,
-			Value:    50,
-			Assets:   testAsset("ordx:f:test", 100),
-		}},
-		Height: 1,
+		Action:         InvokeAPIAddLiquidity,
+		Param:          addParam,
+		CallID:         DeriveInvokeCallID("add", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("add", 1, addr, 50, testAsset("ordx:f:test", 100))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -490,17 +418,12 @@ func TestSettleAMMAddLiqRefundsExcess(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIAddLiquidity,
-		Param:   addParam,
-		CallID:  DeriveInvokeCallID("add", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "add", Vout: 1},
-			Contract: addr,
-			Value:    6,
-			Assets:   testAsset("brc20:f:ooxx", 8),
-		}},
-		Height: 1,
+		Action:         InvokeAPIAddLiquidity,
+		Param:          addParam,
+		CallID:         DeriveInvokeCallID("add", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("add", 1, addr, 6, testAsset("brc20:f:ooxx", 8))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -520,6 +443,39 @@ func TestSettleAMMAddLiqRefundsExcess(t *testing.T) {
 	requireDecimalString(t, "6", state.Items[0].OutAmt)
 }
 
+func TestAMMAddLiqFractionRefund(t *testing.T) {
+	runtime := testAMMRuntimeWithAsset(t, "brc20:f:ooxx", 1000000, 100000, "100000000000")
+	fundAMMRuntimeWithAsset(t, runtime, "brc20:f:ooxx", 1000000, 100000)
+	addr := runtime.Address()
+	addParam, err := (&AddLiquidityInvokeParam{
+		OrderType: OrderTypeAddLiquidity,
+		AssetName: "brc20:f:ooxx",
+		Amt:       "220000",
+		Value:     20000,
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:         InvokeAPIAddLiquidity,
+		Param:          addParam,
+		CallID:         DeriveInvokeCallID("add", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("add", 1, addr, 20000, testAsset("brc20:f:ooxx", 220000))},
+		Height:         1,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlock(1)
+	require.NoError(t, err)
+	require.Len(t, plan.Transfers, 1)
+	require.Equal(t, "alice", plan.Transfers[0].To)
+	require.Equal(t, "20000", plan.Transfers[0].AssetAmt)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "1200000", state.Running.AssetAInPool)
+	requireDecimalString(t, "120000", state.Running.AssetBInPool)
+}
+
 func TestSettleAMMAddLiqResultRefundsExcess(t *testing.T) {
 	assetName := "brc20:f:ooxx"
 	runtime := testAMMRuntimeWithAsset(t, assetName, 10, 10, "100")
@@ -533,17 +489,12 @@ func TestSettleAMMAddLiqResultRefundsExcess(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIAddLiquidity,
-		Param:   addParam,
-		CallID:  DeriveInvokeCallID("add", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "add", Vout: 1},
-			Contract: addr,
-			Value:    6,
-			Assets:   testAsset(assetName, 8),
-		}},
-		Height: 1,
+		Action:         InvokeAPIAddLiquidity,
+		Param:          addParam,
+		CallID:         DeriveInvokeCallID("add", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("add", 1, addr, 6, testAsset(assetName, 8))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -553,12 +504,7 @@ func TestSettleAMMAddLiqResultRefundsExcess(t *testing.T) {
 	store.Add(runtime)
 	provider := func(contractAddr ContractAddress) ([]contractframework.UTXO, error) {
 		require.True(t, addr.Equal(contractAddr))
-		return []contractframework.UTXO{{
-			OutPoint: OutPoint{TxID: "pool", Vout: 0},
-			Contract: addr,
-			Value:    16,
-			Assets:   testAsset(assetName, 18),
-		}}, nil
+		return []contractframework.UTXO{testContractUTXO("pool", 0, addr, 16, testAsset(assetName, 18))}, nil
 	}
 	assetPrecision := func(name string) (int, bool) {
 		return 0, name == assetName
@@ -585,16 +531,12 @@ func TestSettleAMMBuySmallIntegerRefund(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPISwap,
-		Param:   param,
-		CallID:  DeriveInvokeCallID("buy", 1, addr),
-		Invoker: "buyer",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    1,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		Invoker:        "buyer",
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 1, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -627,16 +569,12 @@ func TestSettleAMMSellSmallIntegerRefund(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPISwap,
-		Param:   param,
-		CallID:  DeriveInvokeCallID("sell", 1, addr),
-		Invoker: "seller",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "sell", Vout: 1},
-			Contract: addr,
-			Assets:   testAsset("brc20:f:ooxx", 1),
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("sell", 1, addr),
+		Invoker:        "seller",
+		FundingOutputs: []ContractOutput{testContractOutput("sell", 1, addr, 0, testAsset("brc20:f:ooxx", 1))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -682,16 +620,12 @@ func TestSettleAMMRemoveLiquiditySendsProfitShareToFoundation(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIRemoveLiquidity,
-		Param:   removeParam,
-		CallID:  DeriveInvokeCallID("remove", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "remove", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-		}},
-		Height: 3,
+		Action:         InvokeAPIRemoveLiquidity,
+		Param:          removeParam,
+		CallID:         DeriveInvokeCallID("remove", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("remove", 1, addr, SwapInvokeFee, nil)},
+		Height:         3,
 	})
 	require.NoError(t, err)
 
@@ -722,16 +656,12 @@ func TestSettleAMMEmptyPoolRequiresInitialKBeforeReadyAgain(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIRemoveLiquidity,
-		Param:   removeParam,
-		CallID:  DeriveInvokeCallID("remove", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "remove", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-		}},
-		Height: 2,
+		Action:         InvokeAPIRemoveLiquidity,
+		Param:          removeParam,
+		CallID:         DeriveInvokeCallID("remove", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("remove", 1, addr, SwapInvokeFee, nil)},
+		Height:         2,
 	})
 	require.NoError(t, err)
 	_, err = runtime.SettleBlock(2)
@@ -767,16 +697,11 @@ func TestSettleAMMRejectsSellSlippage(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("sell", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "sell", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-			Assets:   testAsset("ordx:f:test", 100),
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("sell", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("sell", 1, addr, SwapInvokeFee, testAsset("ordx:f:test", 100))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -843,16 +768,12 @@ func TestSettleAMMRemoveLiquidityCapsAtOwnedAmount(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIRemoveLiquidity,
-		Param:   removeParam,
-		CallID:  DeriveInvokeCallID("remove", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "remove", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-		}},
-		Height: 2,
+		Action:         InvokeAPIRemoveLiquidity,
+		Param:          removeParam,
+		CallID:         DeriveInvokeCallID("remove", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("remove", 1, addr, SwapInvokeFee, nil)},
+		Height:         2,
 	})
 	require.NoError(t, err)
 
@@ -922,16 +843,12 @@ func TestSettleAMMRemoveLiquidityWithoutBalanceClosesDirectly(t *testing.T) {
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIRemoveLiquidity,
-		Param:   removeParam,
-		CallID:  DeriveInvokeCallID("remove", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "remove", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-		}},
-		Height: 1,
+		Action:         InvokeAPIRemoveLiquidity,
+		Param:          removeParam,
+		CallID:         DeriveInvokeCallID("remove", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("remove", 1, addr, SwapInvokeFee, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -955,16 +872,12 @@ func TestSettleAMMCloseClearsPoolState(t *testing.T) {
 	closeParam, err := (&CloseInvokeParam{}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIClose,
-		Param:   closeParam,
-		CallID:  DeriveInvokeCallID("close", 1, addr),
-		Invoker: "deployer-address",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "close", Vout: 1},
-			Contract: addr,
-			Value:    SwapInvokeFee,
-		}},
-		Height: 2,
+		Action:         InvokeAPIClose,
+		Param:          closeParam,
+		CallID:         DeriveInvokeCallID("close", 1, addr),
+		Invoker:        "deployer-address",
+		FundingOutputs: []ContractOutput{testContractOutput("close", 1, addr, SwapInvokeFee, nil)},
+		Height:         2,
 	})
 	require.NoError(t, err)
 
@@ -994,17 +907,12 @@ func applyAMMSwapInvokeForTest(t *testing.T, runtime *ContractRuntime, addr Cont
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPISwap,
-		Param:   param,
-		CallID:  DeriveInvokeCallID(callID, 1, addr),
-		Invoker: invoker,
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: callID, Vout: 1},
-			Contract: addr,
-			Value:    value,
-			Assets:   assets,
-		}},
-		Height: height,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID(callID, 1, addr),
+		Invoker:        invoker,
+		FundingOutputs: []ContractOutput{testContractOutput(callID, 1, addr, value, assets)},
+		Height:         height,
 	})
 	require.NoError(t, err)
 }
@@ -1021,17 +929,12 @@ func applyAMMAddLiquidityForTest(t *testing.T, runtime *ContractRuntime, addr Co
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPIAddLiquidity,
-		Param:   addParam,
-		CallID:  DeriveInvokeCallID(callID, 1, addr),
-		Invoker: invoker,
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: callID, Vout: 1},
-			Contract: addr,
-			Value:    value,
-			Assets:   testAsset("ordx:f:test", assetAmount),
-		}},
-		Height: height,
+		Action:         InvokeAPIAddLiquidity,
+		Param:          addParam,
+		CallID:         DeriveInvokeCallID(callID, 1, addr),
+		Invoker:        invoker,
+		FundingOutputs: []ContractOutput{testContractOutput(callID, 1, addr, value, testAsset("ordx:f:test", assetAmount))},
+		Height:         height,
 	})
 	require.NoError(t, err)
 }

@@ -233,6 +233,7 @@ func capResultOutputByAvailable(output ResultOutput, availableValue int64, avail
 		}
 		next := asset
 		next.Amount = *amount
+		next.BindingSat = available.BindingSat
 		assets = append(assets, next)
 	}
 	output.Assets = NormalizeAssetSetPrecision(assets, policy)

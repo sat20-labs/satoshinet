@@ -26,28 +26,19 @@ func TestSettleLimitOrdersMatchesByPriceAndTime(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  sellParam,
-		CallID: DeriveInvokeCallID("sell", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "sell", Vout: 1},
-			Contract: addr,
-			Value:    0,
-			Assets:   testAsset("ordx:f:test", 10),
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          sellParam,
+		CallID:         DeriveInvokeCallID("sell", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("sell", 1, addr, 0, testAsset("ordx:f:test", 10))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  buyParam,
-		CallID: DeriveInvokeCallID("buy", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    30,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          buyParam,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 30, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -98,28 +89,19 @@ func TestSettleLimitOrdersStopsWhenPriceDoesNotCross(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  sellParam,
-		CallID: DeriveInvokeCallID("sell", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "sell", Vout: 1},
-			Contract: addr,
-			Value:    0,
-			Assets:   testAsset("ordx:f:test", 10),
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          sellParam,
+		CallID:         DeriveInvokeCallID("sell", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("sell", 1, addr, 0, testAsset("ordx:f:test", 10))},
+		Height:         1,
 	})
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  buyParam,
-		CallID: DeriveInvokeCallID("buy", 1, addr),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    30,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          buyParam,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 30, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 
@@ -301,16 +283,12 @@ func TestSettleLimitOrdersRefundsInvokerOpenOrders(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPISwap,
-		Param:   buyParam,
-		CallID:  DeriveInvokeCallID("buy", 1, addr),
-		Invoker: "alice",
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "buy", Vout: 1},
-			Contract: addr,
-			Value:    30,
-		}},
-		Height: 1,
+		Action:         InvokeAPISwap,
+		Param:          buyParam,
+		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		Invoker:        "alice",
+		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 30, nil)},
+		Height:         1,
 	})
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
@@ -461,6 +439,42 @@ func TestSettleLimitOrdersBuyRefundsSurplusWhenFilledAtBetterPrice(t *testing.T)
 	require.Equal(t, int64(40), state.Items[1].OutValue)
 }
 
+func TestSettleLimitOrdersCapsBuyExpectedAcrossPrices(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	addr := runtime.Address()
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell1", "seller1", OrderTypeSell, "500", "1", 0, testAsset("ordx:f:test", 500), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell2", "seller2", OrderTypeSell, "500", "2", 0, testAsset("ordx:f:test", 500), 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "800", "2", 1612, nil, 2)
+
+	plan, err := runtime.SettleBlock(2)
+	require.NoError(t, err)
+	require.Len(t, plan.Deals, 2)
+	require.Equal(t, int64(500), plan.Deals[0].SatValue)
+	require.Equal(t, "500", plan.Deals[0].AssetAmt)
+	require.Equal(t, int64(600), plan.Deals[1].SatValue)
+	require.Equal(t, "300", plan.Deals[1].AssetAmt)
+	require.Len(t, plan.Transfers, 5)
+	require.Equal(t, "buyer", plan.Transfers[0].To)
+	require.Equal(t, "500", plan.Transfers[0].AssetAmt)
+	require.Equal(t, "seller1", plan.Transfers[1].To)
+	require.Equal(t, int64(500), plan.Transfers[1].SatValue)
+	require.Equal(t, "buyer", plan.Transfers[2].To)
+	require.Equal(t, "300", plan.Transfers[2].AssetAmt)
+	require.Equal(t, "seller2", plan.Transfers[3].To)
+	require.Equal(t, int64(600), plan.Transfers[3].SatValue)
+	require.Equal(t, "buyer", plan.Transfers[4].To)
+	require.Equal(t, int64(500), plan.Transfers[4].SatValue)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, ItemStatusDealt, state.Items[2].Done)
+	requireDecimalString(t, "800", state.Items[2].OutAmt)
+	require.Equal(t, int64(500), state.Items[2].OutValue)
+	require.Equal(t, int64(0), state.Items[2].RemainingValue)
+	require.Equal(t, ItemStatusInit, state.Items[1].Done)
+	requireDecimalString(t, "200", state.Items[1].RemainingAmt)
+}
+
 func TestSettleLimitOrdersRefundCannotCancelOtherUsersOrder(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
@@ -499,17 +513,12 @@ func applyLimitOrderInvokeForTest(t *testing.T, runtime *ContractRuntime, addr C
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:  InvokeAPISwap,
-		Param:   param,
-		CallID:  DeriveInvokeCallID(callID, 1, addr),
-		Invoker: invoker,
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: callID, Vout: 1},
-			Contract: addr,
-			Value:    value,
-			Assets:   assets,
-		}},
-		Height: height,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID(callID, 1, addr),
+		Invoker:        invoker,
+		FundingOutputs: []ContractOutput{testContractOutput(callID, 1, addr, value, assets)},
+		Height:         height,
 	})
 	require.NoError(t, err)
 }

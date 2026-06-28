@@ -120,7 +120,7 @@ func exchangeFundingAmounts(contract *ExchangeContract, outputs []ContractOutput
 		amtA = parseDecimalOrZero(amtA.String())
 		amtB := parseDecimalOrZero("0")
 		if contract.AssetBName == SatoshiAssetName {
-			amtB = scommon.NewDefaultDecimal(output.Value)
+			amtB = scommon.NewDefaultDecimal(output.PlainValue())
 		} else {
 			var err error
 			amtB, err = output.AssetAmount(contract.AssetBName)
@@ -169,7 +169,7 @@ func newExchangeItem(id int64, action string, req ApplyInvokeRequest, inUtxos, a
 func fundingValue(outputs []ContractOutput) int64 {
 	var value int64
 	for _, output := range outputs {
-		value += output.Value
+		value += output.PlainValue()
 	}
 	return value
 }

@@ -41,8 +41,8 @@ func TestBuildResultTxFromPredictionSettlementPlan(t *testing.T) {
 	txidB := chainhash.Hash{2}
 	plans, err = AugmentResultPlans(plans, func(contract ContractAddress) ([]UTXO, error) {
 		return []UTXO{
-			{OutPoint: OutPoint{TxID: txidB.String(), Vout: 1}, Contract: contract, Value: 40000, Height: 11},
-			{OutPoint: OutPoint{TxID: txidA.String(), Vout: 0}, Contract: contract, Value: 60000, Height: 10},
+			contractframework.UTXOFromTxOutput(OutPoint{TxID: txidB.String(), Vout: 1}, contract, 11, &wire.TxOut{Value: 40000}),
+			contractframework.UTXOFromTxOutput(OutPoint{TxID: txidA.String(), Vout: 0}, contract, 10, &wire.TxOut{Value: 60000}),
 		}, nil
 	}, nil, nil, DefaultGasConfig().GasAssetName, "bootstrap")
 	if err != nil {
@@ -112,12 +112,8 @@ func TestAugmentResultPlansUsesAssetPrecisionForPredictionPayouts(t *testing.T) 
 		t.Fatalf("NewAssetSetWithPrecision failed: %v", err)
 	}
 	augmented, err := AugmentResultPlans(plans, func(contract ContractAddress) ([]UTXO, error) {
-		return []UTXO{{
-			OutPoint: OutPoint{TxID: chainhash.Hash{3}.String(), Vout: 0},
-			Contract: contract,
-			Assets:   assets,
-			Height:   1,
-		}}, nil
+		outpoint := OutPoint{TxID: chainhash.Hash{3}.String(), Vout: 0}
+		return []UTXO{contractframework.UTXOFromTxOutput(outpoint, contract, 1, &wire.TxOut{Assets: assets})}, nil
 	}, nil, assetPrecision, DefaultGasConfig().GasAssetName, "bootstrap")
 	if err != nil {
 		t.Fatalf("AugmentResultPlans failed: %v", err)
@@ -196,12 +192,8 @@ func TestAugmentResultPlansUsesManagedPredictionPoolAndGas(t *testing.T) {
 	plans[0].GasFee = resultFee
 	physicalAssets := mustAssetSet(t, betAsset, "380", 18)
 	augmented, err := AugmentResultPlans(plans, func(contract ContractAddress) ([]UTXO, error) {
-		return []UTXO{{
-			OutPoint: OutPoint{TxID: chainhash.Hash{4}.String(), Vout: 0},
-			Contract: contract,
-			Assets:   physicalAssets,
-			Height:   1,
-		}}, nil
+		outpoint := OutPoint{TxID: chainhash.Hash{4}.String(), Vout: 0}
+		return []UTXO{contractframework.UTXOFromTxOutput(outpoint, contract, 1, &wire.TxOut{Assets: physicalAssets})}, nil
 	}, store, runtime.config.AssetPrecision, gasAsset, "bootstrap")
 	if err != nil {
 		t.Fatalf("AugmentResultPlans failed: %v", err)

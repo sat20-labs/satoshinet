@@ -6,6 +6,7 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contract "github.com/sat20-labs/satoshinet/contract"
+	l2common "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -28,14 +29,131 @@ type ContractOutput struct {
 	OutPoint OutPoint
 	Vout     uint32
 	Contract contract.ContractAddress
-	Value    int64
-	Assets   wire.TxAssets
-	PkScript []byte
+	TxOutput *l2common.TxOutput
 }
 
 func (o ContractOutput) AssetAmount(assetName string) (*scommon.Decimal, error) {
-	return OutputAssetAmount(o.OutPoint, o.Value, o.Assets,
-		contract.SatoshiAssetName, assetName, ErrInvalidAsset)
+	if assetName == "" {
+		return nil, ErrInvalidAsset
+	}
+	if assetName == contract.SatoshiAssetName {
+		return scommon.NewDefaultDecimal(o.PlainValue()), nil
+	}
+	name := wire.NewAssetNameFromString(assetName)
+	if name == nil {
+		return nil, ErrInvalidAsset
+	}
+	output := o.IndexerTxOutput()
+	if output == nil {
+		return ZeroDecimal(), nil
+	}
+	amount := output.GetAsset(name)
+	if amount == nil {
+		return ZeroDecimal(), nil
+	}
+	return amount, nil
+}
+
+func (o ContractOutput) PlainValue() int64 {
+	output := o.IndexerTxOutput()
+	if output == nil {
+		return 0
+	}
+	return output.GetPlainSat()
+}
+
+func (o ContractOutput) IndexerTxOutput() *l2common.TxOutput {
+	if o.TxOutput != nil {
+		return o.TxOutput.Clone()
+	}
+	return nil
+}
+
+func (o ContractOutput) PhysicalValue() int64 {
+	output := o.IndexerTxOutput()
+	if output == nil {
+		return 0
+	}
+	return output.OutValue.Value
+}
+
+func (o ContractOutput) TxAssets() wire.TxAssets {
+	output := o.IndexerTxOutput()
+	if output == nil {
+		return nil
+	}
+	return output.OutValue.Assets.Clone()
+}
+
+func (o ContractOutput) PkScriptBytes() []byte {
+	output := o.IndexerTxOutput()
+	if output == nil {
+		return nil
+	}
+	return cloneBytes(output.OutValue.PkScript)
+}
+
+func (o *ContractOutput) SubAssetAmount(assetName string, amount *scommon.Decimal) error {
+	if o == nil || amount == nil || amount.Sign() == 0 {
+		return nil
+	}
+	if amount.Sign() < 0 {
+		return fmt.Errorf("asset amount must be non-negative")
+	}
+	output := o.IndexerTxOutput()
+	if output == nil {
+		return fmt.Errorf("missing contract output")
+	}
+	asset := &wire.AssetInfo{Amount: *amount.Clone()}
+	if assetName == contract.SatoshiAssetName {
+		asset.Name = l2common.ASSET_PLAIN_SAT
+	} else {
+		name := wire.NewAssetNameFromString(assetName)
+		if name == nil {
+			return ErrInvalidAsset
+		}
+		existing, err := output.OutValue.Assets.Find(name)
+		if err != nil || existing == nil {
+			return ErrInvalidAsset
+		}
+		asset.Name = *name
+		asset.BindingSat = existing.BindingSat
+	}
+	if err := output.SubAsset(asset); err != nil {
+		return err
+	}
+	output.OutPointStr = o.OutPoint.String()
+	o.applyIndexerTxOutput(output)
+	return nil
+}
+
+func (o *ContractOutput) applyIndexerTxOutput(output *l2common.TxOutput) {
+	if o == nil || output == nil {
+		return
+	}
+	o.TxOutput = output.Clone()
+}
+
+func indexerTxOutputFromWire(outpoint OutPoint, txOut *wire.TxOut) *l2common.TxOutput {
+	if txOut == nil {
+		return nil
+	}
+	return &l2common.TxOutput{
+		UtxoId:      scommon.INVALID_ID,
+		OutPointStr: outpoint.String(),
+		OutValue:    *cloneWireTxOut(txOut),
+	}
+}
+
+func cloneWireTxOut(txOut *wire.TxOut) *wire.TxOut {
+	if txOut == nil {
+		return nil
+	}
+	return &wire.TxOut{
+		Value:    txOut.Value,
+		Assets:   txOut.Assets.Clone(),
+		PkScript: cloneBytes(txOut.PkScript),
+	}
 }
 
 type OutPoint struct {
@@ -248,13 +366,12 @@ func FindInvokeContractOutputs(tx *wire.MsgTx, resolver ContractScriptResolver,
 			return nil, fmt.Errorf("%s INVOKE outputs target multiple contract addresses", spec.ModuleName)
 		}
 		vout := uint32(i)
+		outpoint := OutPoint{TxID: txid, Vout: vout}
 		outputs = append(outputs, ContractOutput{
-			OutPoint: OutPoint{TxID: txid, Vout: vout},
+			OutPoint: outpoint,
 			Vout:     vout,
 			Contract: addr,
-			Value:    txOut.Value,
-			Assets:   txOut.Assets.Clone(),
-			PkScript: cloneBytes(txOut.PkScript),
+			TxOutput: indexerTxOutputFromWire(outpoint, txOut),
 		})
 	}
 	if len(outputs) == 0 {
@@ -283,13 +400,12 @@ func FindContractOutputsForContract(tx *wire.MsgTx, resolver ContractScriptResol
 			continue
 		}
 		vout := uint32(i)
+		outpoint := OutPoint{TxID: txid, Vout: vout}
 		outputs = append(outputs, ContractOutput{
-			OutPoint: OutPoint{TxID: txid, Vout: vout},
+			OutPoint: outpoint,
 			Vout:     vout,
 			Contract: addr,
-			Value:    txOut.Value,
-			Assets:   txOut.Assets.Clone(),
-			PkScript: cloneBytes(txOut.PkScript),
+			TxOutput: indexerTxOutputFromWire(outpoint, txOut),
 		})
 	}
 	return outputs, nil

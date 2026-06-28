@@ -110,10 +110,11 @@ func ValidateParsedInvokeBasic(parsed ParsedTx, moduleName string, contractType 
 func SumContractOutputValue(outputs []ContractOutput) (int64, error) {
 	var total int64
 	for _, output := range outputs {
-		if output.Value < 0 {
+		value := output.PhysicalValue()
+		if value < 0 {
 			return 0, fmt.Errorf("contract output %s has negative value", output.OutPoint)
 		}
-		next, overflow := addInt64(total, output.Value)
+		next, overflow := addInt64(total, value)
 		if overflow {
 			return 0, errors.New("contract output value overflows int64")
 		}

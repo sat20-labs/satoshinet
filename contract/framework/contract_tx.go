@@ -52,9 +52,9 @@ func ContractFundingOutputs(outputs []ContractOutput) []contract.FundingOutput {
 			OutPoint: ContractTxOutPoint(outputs[i].OutPoint),
 			Vout:     outputs[i].Vout,
 			Contract: outputs[i].Contract,
-			Value:    outputs[i].Value,
-			Assets:   outputs[i].Assets.Clone(),
-			PkScript: CloneBytes(outputs[i].PkScript),
+			Value:    outputs[i].PhysicalValue(),
+			Assets:   outputs[i].TxAssets(),
+			PkScript: outputs[i].PkScriptBytes(),
 		}
 	}
 	return out

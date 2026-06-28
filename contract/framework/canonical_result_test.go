@@ -8,6 +8,7 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contract "github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 func TestSelectCanonicalInputsRequiredFirstThenSortedPrefix(t *testing.T) {
@@ -149,12 +150,12 @@ func mustCanonicalUTXO(t *testing.T, outpoint OutPoint, contractAddr contract.Co
 		Height:   height,
 	}
 	if assetName == contract.SatoshiAssetName {
-		utxo.Value = int64(amount)
+		utxo.TxOutput = indexerTxOutputFromWire(outpoint, &wire.TxOut{Value: int64(amount)})
 		return utxo
 	}
 	assets, err := NewAssetSet(assetName, mustCanonicalDecimal(t, amount))
 	require.NoError(t, err)
-	utxo.Assets = assets
+	utxo.TxOutput = indexerTxOutputFromWire(outpoint, &wire.TxOut{Assets: assets})
 	return utxo
 }
 
@@ -171,12 +172,12 @@ func mustCanonicalUTXODecimal(t *testing.T, outpoint OutPoint, contractAddr cont
 		decimal := mustCanonicalDecimalString(t, amount)
 		value, err := DecimalToInt64(*decimal)
 		require.NoError(t, err)
-		utxo.Value = value
+		utxo.TxOutput = indexerTxOutputFromWire(outpoint, &wire.TxOut{Value: value})
 		return utxo
 	}
 	assets, err := NewAssetSet(assetName, mustCanonicalDecimalString(t, amount))
 	require.NoError(t, err)
-	utxo.Assets = assets
+	utxo.TxOutput = indexerTxOutputFromWire(outpoint, &wire.TxOut{Assets: assets})
 	return utxo
 }
 

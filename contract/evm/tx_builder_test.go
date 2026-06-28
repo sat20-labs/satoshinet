@@ -98,7 +98,7 @@ func TestBuildInvokeTx(t *testing.T) {
 	require.Equal(t, TxTypeInvoke, parsed.Type)
 	require.Len(t, parsed.ContractOutputs, 1)
 	require.True(t, contract.Equal(parsed.ContractOutputs[0].Contract))
-	require.Equal(t, int64(77), parsed.ContractOutputs[0].Value)
+	require.Equal(t, int64(77), parsed.ContractOutputs[0].PhysicalValue())
 	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, parsed.Invoke.Param)
 }
 

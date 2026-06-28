@@ -978,16 +978,15 @@ func evmContractUTXOProvider(provider ContractUTXOProvider) evm.ContractUTXOProv
 			if utxo.Value < 0 {
 				return nil, fmt.Errorf("negative EVM contract output value")
 			}
-			out = append(out, evm.UTXO{
-				OutPoint:       evm.WireOutPointToEVM(utxo.OutPoint),
-				Contract:       contract,
-				Value:          utxo.Value,
-				Assets:         utxo.Assets.Clone(),
-				Height:         utxo.Height,
-				IsGasFunding:   utxo.IsGasFunding,
-				SourceCallID:   utxo.SourceCallID,
-				ReservedReason: utxo.ReservedReason,
+			outpoint := evm.WireOutPointToEVM(utxo.OutPoint)
+			next := contractframework.UTXOFromTxOutput(outpoint, contract, utxo.Height, &wire.TxOut{
+				Value:  utxo.Value,
+				Assets: utxo.Assets.Clone(),
 			})
+			next.IsGasFunding = utxo.IsGasFunding
+			next.SourceCallID = utxo.SourceCallID
+			next.ReservedReason = utxo.ReservedReason
+			out = append(out, next)
 		}
 		return out, nil
 	}
@@ -1004,13 +1003,11 @@ func templateContractUTXOProvider(provider ContractUTXOProvider) tmplcontract.Co
 		}
 		out := make([]tmplcontract.UTXO, 0, len(utxos))
 		for _, utxo := range utxos {
-			out = append(out, tmplcontract.UTXO{
-				OutPoint: tmplcontract.WireOutPointToTemplate(utxo.OutPoint),
-				Contract: contract,
-				Value:    utxo.Value,
-				Assets:   utxo.Assets.Clone(),
-				Height:   utxo.Height,
-			})
+			outpoint := tmplcontract.WireOutPointToTemplate(utxo.OutPoint)
+			out = append(out, contractframework.UTXOFromTxOutput(outpoint, contract, utxo.Height, &wire.TxOut{
+				Value:  utxo.Value,
+				Assets: utxo.Assets.Clone(),
+			}))
 		}
 		return out, nil
 	}
@@ -1027,13 +1024,11 @@ func agentContractUTXOProvider(provider ContractUTXOProvider) agentcontract.Cont
 		}
 		out := make([]agentcontract.UTXO, 0, len(utxos))
 		for _, utxo := range utxos {
-			out = append(out, agentcontract.UTXO{
-				OutPoint: agentcontract.WireOutPointToAgent(utxo.OutPoint),
-				Contract: contract,
-				Value:    utxo.Value,
-				Assets:   utxo.Assets.Clone(),
-				Height:   utxo.Height,
-			})
+			outpoint := agentcontract.WireOutPointToAgent(utxo.OutPoint)
+			out = append(out, contractframework.UTXOFromTxOutput(outpoint, contract, utxo.Height, &wire.TxOut{
+				Value:  utxo.Value,
+				Assets: utxo.Assets.Clone(),
+			}))
 		}
 		return out, nil
 	}

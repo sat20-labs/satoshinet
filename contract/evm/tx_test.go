@@ -29,7 +29,7 @@ func TestParseInvokeTxFindsContractOutputs(t *testing.T) {
 	require.Len(t, parsed.ContractOutputs, 1)
 	require.True(t, contract.Equal(parsed.ContractOutputs[0].Contract))
 	require.Equal(t, uint32(1), parsed.ContractOutputs[0].Vout)
-	require.Equal(t, int64(10), parsed.ContractOutputs[0].Value)
+	require.Equal(t, int64(10), parsed.ContractOutputs[0].PhysicalValue())
 	amount, err := parsed.ContractOutputs[0].AssetAmount("ordx:ft:gas")
 	require.NoError(t, err)
 	require.Equal(t, 0, amount.Cmp(mustDefaultDecimal(t, 20)))

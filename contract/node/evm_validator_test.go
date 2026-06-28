@@ -12,6 +12,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -121,15 +122,14 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 		if !contract.Equal(got) {
 			t.Fatalf("unexpected contract %s", got.MustEncode())
 		}
+		outpoint := evm.WireOutPointToEVM(triggerGasInput)
 		return []evm.UTXO{
-			{
-				OutPoint: evm.WireOutPointToEVM(triggerGasInput),
-				Contract: contract,
+			contractframework.UTXOFromTxOutput(outpoint, contract, 0, &wire.TxOut{
 				Assets: wire.TxAssets{{
 					Name:   *wire.NewAssetNameFromString(gasAsset),
 					Amount: *triggerGasFee,
 				}},
-			},
+			}),
 		}, nil
 	}
 

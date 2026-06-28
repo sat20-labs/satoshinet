@@ -492,11 +492,8 @@ func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 		BlockTime:     validPredictionContract().ConfirmAfter + 1,
 		RuntimeConfig: testRuntimeConfig(),
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
-			return []UTXO{{
-				OutPoint: OutPoint{TxID: abnormalTxID, Vout: 0},
-				Contract: contract,
-				Value:    10000,
-			}}, nil
+			return []UTXO{contractframework.UTXOFromTxOutput(OutPoint{TxID: abnormalTxID, Vout: 0},
+				contract, 0, &wire.TxOut{Value: 10000})}, nil
 		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
@@ -771,11 +768,9 @@ func TestBuildBlockResultTxsUsesPhysicalGasWhenManagedGasMissing(t *testing.T) {
 		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
 		RuntimeConfig: testRuntimeConfig(),
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
-			return []UTXO{{
-				OutPoint: OutPoint{TxID: chainhash.Hash{7}.String(), Vout: 0},
-				Contract: contract,
-				Assets:   testAgentAsset(DefaultGasConfig().GasAssetName, resultGas),
-			}}, nil
+			outpoint := OutPoint{TxID: chainhash.Hash{7}.String(), Vout: 0}
+			return []UTXO{contractframework.UTXOFromTxOutput(outpoint,
+				contract, 0, &wire.TxOut{Assets: testAgentAsset(DefaultGasConfig().GasAssetName, resultGas)})}, nil
 		}, []*wire.MsgTx{aliceBetTx, bobBetTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),

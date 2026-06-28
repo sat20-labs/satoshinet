@@ -22,7 +22,8 @@ func TestContractUTXOOverlayAddsOutputsAndRemovesSpentInputs(t *testing.T) {
 			return []UTXO{{
 				OutPoint: baseOut,
 				Contract: addr,
-				Value:    50,
+				TxOutput: indexerTxOutputFromWire(baseOut,
+					&wire.TxOut{Value: 50}),
 			}}, nil
 		},
 	})

@@ -382,6 +382,9 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 		state.Running.AssetAInPool = poolAsset
 		state.Running.AssetBInPool = scommon.NewDefaultDecimal(poolGas)
 		state.Running.TotalLPTAmt = totalLPT
+		if poolAsset != nil && poolAsset.Sign() > 0 && poolGas > 0 {
+			state.Running.K = scommon.DecimalMul(poolAsset, scommon.NewDefaultDecimal(poolGas))
+		}
 	}
 	return changed, nil
 }
@@ -440,15 +443,14 @@ func matchLimitOrderAmount(buy, sell *InvokeItem, price *scommon.Decimal) (*scom
 	if sellRemaining.Sign() <= 0 || buy.RemainingValue <= 0 {
 		return parseDecimalOrZero("0"), 0, nil
 	}
-	sellValue := scommon.DecimalMul(sellRemaining, price).Ceil()
-	if sellValue <= buy.RemainingValue {
-		return sellRemaining, sellValue, nil
-	}
-
-	toBuy := scommon.NewDecimal(buy.RemainingValue, sellRemaining.Precision)
-	matchAmt := scommon.DecimalDiv(toBuy, price)
-	if matchAmt == nil {
-		return nil, 0, fmt.Errorf("failed to calculate match amount")
+	matchAmt := sellRemaining
+	sellValue := scommon.DecimalMul(matchAmt, price).Ceil()
+	if sellValue > buy.RemainingValue {
+		toBuy := scommon.NewDecimal(buy.RemainingValue, sellRemaining.Precision)
+		matchAmt = scommon.DecimalDiv(toBuy, price)
+		if matchAmt == nil {
+			return nil, 0, fmt.Errorf("failed to calculate match amount")
+		}
 	}
 	expected := buy.ExpectedAmt
 	if expected == nil {
@@ -466,6 +468,9 @@ func matchLimitOrderAmount(buy, sell *InvokeItem, price *scommon.Decimal) (*scom
 		if matchAmt.Cmp(remainingExpected) > 0 {
 			matchAmt = remainingExpected
 		}
+	}
+	if matchAmt.Sign() <= 0 {
+		return parseDecimalOrZero("0"), 0, nil
 	}
 	matchValue := scommon.DecimalMul(price, matchAmt).Ceil()
 	if matchAmt.Sign() > 0 && matchValue == 0 {
@@ -1109,7 +1114,7 @@ func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *sco
 	if addAsset == nil || addAsset.Sign() <= 0 || addGas <= 0 {
 		return parseDecimalOrZero("0"), 0, parseDecimalOrZero("0"), 0
 	}
-	if poolAsset == nil || poolAsset.Sign() <= 0 || poolGas <= 0 {
+	if poolAsset == nil || poolAsset.Sign() <= 0 || poolGas <= 0 || !running.TradingReady {
 		return addAsset, addGas, parseDecimalOrZero("0"), 0
 	}
 	price := ammPoolPrice(poolAsset, poolGas, running)
@@ -1117,10 +1122,11 @@ func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *sco
 		return addAsset, addGas, parseDecimalOrZero("0"), 0
 	}
 	reserveGas := addGas
-	reserveAsset := scommon.DecimalDiv(scommon.NewDefaultDecimal(addGas), price)
+	reserveAsset := scommon.DecimalDiv(scommon.NewDecimal(addGas, MaxPriceDivisibility), price)
 	if reserveAsset == nil {
 		return parseDecimalOrZero("0"), 0, addAsset, addGas
 	}
+	reserveAsset = reserveAsset.NewPrecision(addAsset.Precision)
 	if reserveAsset.Cmp(addAsset) > 0 {
 		reserveAsset = addAsset
 		reserveGas = scommon.DecimalMul(addAsset, price).Ceil()
@@ -1138,7 +1144,10 @@ func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *sco
 
 func ammPoolPrice(poolAsset *scommon.Decimal, poolGas int64, running RunningData) *scommon.Decimal {
 	if poolAsset != nil && poolAsset.Sign() > 0 && poolGas > 0 {
-		return scommon.DecimalDiv(scommon.NewDefaultDecimal(poolGas), poolAsset)
+		return scommon.DecimalDiv(
+			scommon.NewDecimal(poolGas, MaxPriceDivisibility),
+			poolAsset.NewPrecision(MaxPriceDivisibility),
+		)
 	}
 	requiredAsset := running.RequiredAssetA
 	if requiredAsset == nil {
@@ -1149,7 +1158,10 @@ func ammPoolPrice(poolAsset *scommon.Decimal, poolGas int64, running RunningData
 		requiredAssetB = parseDecimalOrZero("0")
 	}
 	if requiredAsset.Sign() > 0 && requiredAssetB.Sign() > 0 {
-		return scommon.DecimalDiv(requiredAssetB, requiredAsset)
+		return scommon.DecimalDiv(
+			requiredAssetB.NewPrecision(MaxPriceDivisibility),
+			requiredAsset.NewPrecision(MaxPriceDivisibility),
+		)
 	}
 	return parseDecimalOrZero("0")
 }

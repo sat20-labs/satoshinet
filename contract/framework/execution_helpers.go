@@ -7,13 +7,26 @@ import (
 )
 
 func ContractOutputFromDefaultInvoke(output contract.DefaultInvokeOutput) ContractOutput {
+	return newContractOutput(output.TxID, output.Vout, output.Contract, output.Value, output.Assets, output.PkScript)
+}
+
+func ContractOutputFromFunding(output contract.FundingOutput) ContractOutput {
+	return newContractOutput(output.OutPoint.TxID, output.Vout, output.Contract, output.Value, output.Assets, output.PkScript)
+}
+
+func newContractOutput(txID string, vout uint32, contractAddr contract.ContractAddress,
+	value int64, assets wire.TxAssets, pkScript []byte) ContractOutput {
+
+	outpoint := OutPoint{TxID: txID, Vout: vout}
 	return ContractOutput{
-		OutPoint: OutPoint{TxID: output.TxID, Vout: output.Vout},
-		Vout:     output.Vout,
-		Contract: output.Contract,
-		Value:    output.Value,
-		Assets:   output.Assets.Clone(),
-		PkScript: CloneBytes(output.PkScript),
+		OutPoint: outpoint,
+		Vout:     vout,
+		Contract: contractAddr,
+		TxOutput: indexerTxOutputFromWire(outpoint, &wire.TxOut{
+			Value:    value,
+			Assets:   assets.Clone(),
+			PkScript: CloneBytes(pkScript),
+		}),
 	}
 }
 

@@ -434,14 +434,7 @@ func (e *Backend) DefaultInvoke(ctx contractframework.ExecutionContext,
 	tx contract.Tx, funding contract.FundingOutput) (contractframework.ExecutionOutcome, bool, error) {
 
 	before := len(e.records)
-	output := contractframework.ContractOutput{
-		OutPoint: contractframework.OutPoint{TxID: funding.OutPoint.TxID, Vout: funding.OutPoint.Vout},
-		Vout:     funding.Vout,
-		Contract: funding.Contract,
-		Value:    funding.Value,
-		Assets:   funding.Assets.Clone(),
-		PkScript: contractframework.CloneBytes(funding.PkScript),
-	}
+	output := contractframework.ContractOutputFromFunding(funding)
 	if err := e.executeDefaultInvokeOutputTx(ctx.RawTx, tx, output); err != nil {
 		return contractframework.ExecutionOutcome{}, false, err
 	}
@@ -513,7 +506,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx, contractTx contra
 		CallID: callID,
 		Input:  nil,
 		Gas:    e.GasConfig.Normalize().InvokeBaseGas,
-		Value:  output.Value,
+		Value:  output.PhysicalValue(),
 		Block:  e.Block,
 	})
 	intents := contractframework.CloneAssetIntents(e.Runtime.AssetIntents[intentStart:])

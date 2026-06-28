@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"sort"
+	"strings"
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
@@ -137,7 +138,7 @@ func (s *RuntimeStore) reconcileAssetCaches(contractUTXOs ContractUTXOProvider, 
 		if err != nil {
 			return err
 		}
-		if !reconcileRunningAssetCache(runtime.Contract(), &state.Running, utxos, gasAssetName) {
+		if !reconcileRunningAssetCache(runtime.Contract(), &state, utxos, gasAssetName) {
 			continue
 		}
 		if !state.Running.TradingReady {
@@ -150,14 +151,16 @@ func (s *RuntimeStore) reconcileAssetCaches(contractUTXOs ContractUTXOProvider, 
 	return nil
 }
 
-func reconcileRunningAssetCache(contract Contract, running *RunningData, utxos []UTXO, gasAssetName string) bool {
-	if running == nil {
+func reconcileRunningAssetCache(contract Contract, state *TemplateRuntimeState, utxos []UTXO, gasAssetName string) bool {
+	if state == nil {
 		return false
 	}
+	running := &state.Running
 	assetA, assetB, ok := runtimePoolAssets(contract)
 	if !ok {
 		return false
 	}
+	utxos = filterPendingItemUTXOs(state.Items, utxos)
 	assetAAmount, assetAOK := sumUTXOAssetAmount(utxos, assetA)
 	assetBAmount, assetBOK := sumUTXOAssetAmount(utxos, assetB)
 	changed := false
@@ -177,6 +180,41 @@ func reconcileRunningAssetCache(contract Contract, running *RunningData, utxos [
 		}
 	}
 	return changed
+}
+
+func filterPendingItemUTXOs(items []InvokeItem, utxos []UTXO) []UTXO {
+	if len(items) == 0 || len(utxos) == 0 {
+		return utxos
+	}
+	pending := make(map[OutPoint]struct{})
+	for i := range items {
+		item := &items[i]
+		if item == nil || item.Finished() || item.InUtxos == "" {
+			continue
+		}
+		for _, raw := range strings.Split(item.InUtxos, ",") {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			outpoint, err := ParseOutPoint(raw)
+			if err != nil {
+				continue
+			}
+			pending[WireOutPointToTemplate(outpoint)] = struct{}{}
+		}
+	}
+	if len(pending) == 0 {
+		return utxos
+	}
+	out := make([]UTXO, 0, len(utxos))
+	for _, utxo := range utxos {
+		if _, ok := pending[utxo.OutPoint]; ok {
+			continue
+		}
+		out = append(out, utxo)
+	}
+	return out
 }
 
 func runtimePoolAssets(contract Contract) (assetA, assetB string, ok bool) {

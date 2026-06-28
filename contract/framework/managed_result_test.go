@@ -154,7 +154,8 @@ func TestAugmentResultPlanRefundsAttributedGas(t *testing.T) {
 			UTXOs: []UTXO{{
 				OutPoint: OutPoint{TxID: "invoke", Vout: 0},
 				Contract: contractAddr,
-				Assets:   mustManagedResultAssets(t, managedResultGasAsset, 100),
+				TxOutput: indexerTxOutputFromWire(OutPoint{TxID: "invoke", Vout: 0},
+					&wire.TxOut{Assets: mustManagedResultAssets(t, managedResultGasAsset, 100)}),
 			}},
 			Assets: mustManagedResultAssets(t, managedResultGasAsset, 100),
 		},

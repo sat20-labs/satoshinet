@@ -495,7 +495,7 @@ func retainDefaultInvokeFunding(contract Contract, outputs []ContractOutput) (de
 	adjusted := make([]ContractOutput, 0, len(outputs))
 	for _, output := range outputs {
 		next := output
-		next.Assets = output.Assets.Clone()
+		next.TxOutput = output.IndexerTxOutput()
 		if assetA != "" {
 			fee, err := retainDefaultInvokeAsset(&next, assetA)
 			if err != nil {
@@ -504,9 +504,11 @@ func retainDefaultInvokeFunding(contract Contract, outputs []ContractOutput) (de
 			retention.AssetA = decimalAddAllowNil(retention.AssetA, fee)
 		}
 		if assetB == SatoshiAssetName {
-			fee := next.Value / 100
+			fee := next.PlainValue() / 100
 			if fee > 0 {
-				next.Value -= fee
+				if err := next.SubAssetAmount(SatoshiAssetName, scommon.NewDefaultDecimal(fee)); err != nil {
+					return defaultInvokeRetention{}, nil, err
+				}
 				retention.AssetB = decimalAddAllowNil(retention.AssetB, scommon.NewDefaultDecimal(fee))
 			}
 		} else if assetB != "" && assetB != assetA {
@@ -531,7 +533,8 @@ func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetN
 	inAmt := parseDecimalOrZero("0")
 	inUtxos := ""
 	for i, output := range outputs {
-		inValue += output.Value
+		plainValue := output.PlainValue()
+		inValue += plainValue
 		if i > 0 {
 			inUtxos += ","
 		}
@@ -546,7 +549,7 @@ func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetN
 			inAmt = scommon.DecimalAdd(inAmt, amt)
 		}
 		if assetB == SatoshiAssetName {
-			retention.AssetB = decimalAddAllowNil(retention.AssetB, scommon.NewDefaultDecimal(output.Value))
+			retention.AssetB = decimalAddAllowNil(retention.AssetB, scommon.NewDefaultDecimal(plainValue))
 		} else if assetB != "" && assetB != assetA {
 			amt, err := output.AssetAmount(assetB)
 			if err != nil {
@@ -630,7 +633,7 @@ func retainDefaultInvokeAsset(output *ContractOutput, assetName string) (*scommo
 	if name == nil {
 		return nil, ErrInvalidAsset
 	}
-	if err := output.Assets.Split(wire.TxAssets{{Name: *name, Amount: *fee}}); err != nil {
+	if err := output.SubAssetAmount(assetName, fee); err != nil {
 		return nil, err
 	}
 	return fee, nil
@@ -713,7 +716,7 @@ func defaultInvokeFunding(assetName string, outputs []ContractOutput) (int64, *s
 	inAmt := parseDecimalOrZero("0")
 	inUtxos := ""
 	for i, output := range outputs {
-		inValue += output.Value
+		inValue += output.PlainValue()
 		if i > 0 {
 			inUtxos += ","
 		}
@@ -808,7 +811,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 	inUtxos := ""
 	assetName := contractAssetName(contract)
 	for i, output := range req.FundingOutputs {
-		inValue += output.Value
+		inValue += output.PlainValue()
 		if i > 0 {
 			inUtxos += ","
 		}
@@ -1169,7 +1172,7 @@ func (r *ContractRuntime) ApplyFunding(outputs []ContractOutput, gasAssetName st
 			if state.Running.AssetBInPool == nil {
 				state.Running.AssetBInPool = parseDecimalOrZero("0")
 			}
-			state.Running.AssetBInPool = scommon.DecimalAdd(state.Running.AssetBInPool, scommon.NewDefaultDecimal(output.Value))
+			state.Running.AssetBInPool = scommon.DecimalAdd(state.Running.AssetBInPool, scommon.NewDefaultDecimal(output.PlainValue()))
 			if assetName != "" {
 				amt, err := output.AssetAmount(assetName)
 				if err != nil {

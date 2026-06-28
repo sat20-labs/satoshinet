@@ -231,14 +231,7 @@ func (e *Backend) DefaultInvoke(ctx contractframework.ExecutionContext,
 	tx contract.Tx, funding contract.FundingOutput) (contractframework.ExecutionOutcome, bool, error) {
 
 	before := len(e.records)
-	output := contractframework.ContractOutput{
-		OutPoint: contractframework.OutPoint{TxID: funding.OutPoint.TxID, Vout: funding.OutPoint.Vout},
-		Vout:     funding.Vout,
-		Contract: funding.Contract,
-		Value:    funding.Value,
-		Assets:   funding.Assets.Clone(),
-		PkScript: contractframework.CloneBytes(funding.PkScript),
-	}
+	output := contractframework.ContractOutputFromFunding(funding)
 	if err := e.executeDefaultInvokeOutput(output); err != nil {
 		return contractframework.ExecutionOutcome{}, false, err
 	}
@@ -616,7 +609,7 @@ func betAndGasFundingAmount(outputs []ContractOutput, betAssetName, gasAssetName
 func stateResultPlan(contract ContractAddress, outputs []ContractOutput) (ResultPlan, bool) {
 	inputs := make([]OutPoint, 0, len(outputs))
 	for _, output := range outputs {
-		if output.Value != 0 || len(output.Assets) != 0 {
+		if output.PhysicalValue() != 0 || len(output.TxAssets()) != 0 {
 			continue
 		}
 		inputs = append(inputs, output.OutPoint)

@@ -8,18 +8,18 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contract "github.com/sat20-labs/satoshinet/contract"
+	l2common "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type UTXO struct {
 	OutPoint       OutPoint
 	Contract       contract.ContractAddress
-	Value          int64
-	Assets         wire.TxAssets
 	Height         int64
 	IsGasFunding   bool
 	SourceCallID   string
 	ReservedReason string
+	TxOutput       *l2common.TxOutput
 }
 
 type ContractUTXOOverlayConfig struct {
@@ -157,15 +157,24 @@ func ContractUTXOsFromTx(tx *wire.MsgTx, prefix string, contractType byte, heigh
 					vout, asset.Name.String(), err)
 			}
 		}
+		outpoint := OutPoint{TxID: txid, Vout: uint32(vout)}
 		utxos = append(utxos, UTXO{
-			OutPoint: OutPoint{TxID: txid, Vout: uint32(vout)},
+			OutPoint: outpoint,
 			Contract: contractAddr,
-			Value:    txOut.Value,
-			Assets:   txOut.Assets.Clone(),
 			Height:   height,
+			TxOutput: indexerTxOutputFromWire(outpoint, txOut),
 		})
 	}
 	return utxos, nil
+}
+
+func UTXOFromTxOutput(outpoint OutPoint, contractAddr contract.ContractAddress, height int64, txOut *wire.TxOut) UTXO {
+	return UTXO{
+		OutPoint: outpoint,
+		Contract: contractAddr,
+		Height:   height,
+		TxOutput: indexerTxOutputFromWire(outpoint, txOut),
+	}
 }
 
 func ContractUTXOProviderWithTxOutputs(base ContractUTXOProvider, txs []*wire.MsgTx, prefix string,
@@ -194,12 +203,11 @@ func (u UTXO) Clone() UTXO {
 	return UTXO{
 		OutPoint:       u.OutPoint,
 		Contract:       u.Contract,
-		Value:          u.Value,
-		Assets:         u.Assets.Clone(),
 		Height:         u.Height,
 		IsGasFunding:   u.IsGasFunding,
 		SourceCallID:   u.SourceCallID,
 		ReservedReason: u.ReservedReason,
+		TxOutput:       u.IndexerTxOutput(),
 	}
 }
 
@@ -208,20 +216,52 @@ func (u UTXO) AssetAmount(assetName string) (*scommon.Decimal, error) {
 		return nil, ErrInvalidAsset
 	}
 	if assetName == contract.SatoshiAssetName {
-		if u.Value < 0 {
-			return nil, fmt.Errorf("contract UTXO %s has negative value", u.OutPoint)
-		}
-		return scommon.NewDefaultDecimal(u.Value), nil
+		return scommon.NewDefaultDecimal(u.PlainValue()), nil
 	}
 	name := wire.NewAssetNameFromString(assetName)
 	if name == nil {
 		return nil, ErrInvalidAsset
 	}
-	asset, err := u.Assets.Find(name)
-	if err != nil || asset == nil {
+	output := u.IndexerTxOutput()
+	if output == nil {
 		return ZeroDecimal(), nil
 	}
-	return asset.Amount.Clone(), nil
+	amount := output.GetAsset(name)
+	if amount == nil {
+		return ZeroDecimal(), nil
+	}
+	return amount, nil
+}
+
+func (u UTXO) PlainValue() int64 {
+	output := u.IndexerTxOutput()
+	if output == nil {
+		return 0
+	}
+	return output.GetPlainSat()
+}
+
+func (u UTXO) IndexerTxOutput() *l2common.TxOutput {
+	if u.TxOutput != nil {
+		return u.TxOutput.Clone()
+	}
+	return nil
+}
+
+func (u UTXO) PhysicalValue() int64 {
+	output := u.IndexerTxOutput()
+	if output == nil {
+		return 0
+	}
+	return output.OutValue.Value
+}
+
+func (u UTXO) TxAssets() wire.TxAssets {
+	output := u.IndexerTxOutput()
+	if output == nil {
+		return nil
+	}
+	return output.OutValue.Assets.Clone()
 }
 
 func (u UTXO) HasAsset(assetName string) bool {
@@ -262,15 +302,16 @@ func CollectResultPlanUTXOs(plan ResultPlan, provider ContractUTXOProvider) (Res
 		if !utxo.Contract.Equal(contractAddr) {
 			continue
 		}
-		nextValue, overflow := AddInt64(view.Value, utxo.Value)
+		nextValue, overflow := AddInt64(view.Value, utxo.PhysicalValue())
 		if overflow {
 			return ResultPlanUTXOView{}, fmt.Errorf("contract UTXO value overflows int64")
 		}
 		view.Value = nextValue
 		view.UTXOs = append(view.UTXOs, utxo.Clone())
 		view.Inputs = append(view.Inputs, utxo.OutPoint)
-		if len(utxo.Assets) != 0 {
-			if err := view.Assets.Merge(utxo.Assets); err != nil {
+		assets := utxo.TxAssets()
+		if len(assets) != 0 {
+			if err := view.Assets.Merge(assets); err != nil {
 				return ResultPlanUTXOView{}, err
 			}
 		}

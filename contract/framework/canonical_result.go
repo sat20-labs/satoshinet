@@ -543,7 +543,7 @@ func totalSelectedAssets(selected map[OutPoint]UTXO) (map[string]*scommon.Decima
 			return nil, fmt.Errorf("asset %s amount: %w", contract.SatoshiAssetName, err)
 		}
 		total[contract.SatoshiAssetName] = total[contract.SatoshiAssetName].AddAlignPrecision(sats)
-		for _, asset := range u.Assets {
+		for _, asset := range u.TxAssets() {
 			if total[asset.Name.String()] == nil {
 				total[asset.Name.String()] = ZeroDecimal()
 			}

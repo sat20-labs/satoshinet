@@ -5,6 +5,7 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 func mustResultOutput(t *testing.T, to, assetName string, amount uint64) ResultOutput {
@@ -42,47 +43,35 @@ func contractGasPrecisionForTest() int {
 
 func mustUTXO(t *testing.T, outpoint OutPoint, contract ContractAddress, assetName string, amount uint64, height int64) UTXO {
 	t.Helper()
-	utxo := UTXO{
-		OutPoint: outpoint,
-		Contract: contract,
-		Height:   height,
-	}
 	if assetName == SatoshiAssetName {
-		utxo.Value = int64(amount)
-		return utxo
+		return contractframework.UTXOFromTxOutput(outpoint, contract, height, &wire.TxOut{Value: int64(amount)})
 	}
 	assets, err := NewAssetSet(assetName, mustDefaultDecimal(t, amount))
 	if err != nil {
 		t.Fatalf("utxo asset set: %v", err)
 	}
-	utxo.Assets = assets
-	return utxo
+	return contractframework.UTXOFromTxOutput(outpoint, contract, height, &wire.TxOut{Assets: assets})
 }
 
 func mustUTXOWithValueAndAsset(t *testing.T, outpoint OutPoint, contract ContractAddress, value uint64, height int64, assetName string, amount uint64) UTXO {
 	t.Helper()
-	utxo := mustUTXO(t, outpoint, contract, SatoshiAssetName, value, height)
 	assets, err := NewAssetSet(assetName, mustDefaultDecimal(t, amount))
 	if err != nil {
 		t.Fatalf("utxo asset set: %v", err)
 	}
-	utxo.Assets = assets
-	return utxo
+	return contractframework.UTXOFromTxOutput(outpoint, contract, height, &wire.TxOut{
+		Value:  int64(value),
+		Assets: assets,
+	})
 }
 
 func mustDecimalUTXO(t *testing.T, outpoint OutPoint, contract ContractAddress, assetName, amount string, height int64) UTXO {
 	t.Helper()
-	utxo := UTXO{
-		OutPoint: outpoint,
-		Contract: contract,
-		Height:   height,
-	}
 	assets, err := NewAssetSet(assetName, mustDecimalString(t, amount))
 	if err != nil {
 		t.Fatalf("utxo asset set: %v", err)
 	}
-	utxo.Assets = assets
-	return utxo
+	return contractframework.UTXOFromTxOutput(outpoint, contract, height, &wire.TxOut{Assets: assets})
 }
 
 func mustDefaultDecimal(t *testing.T, amount uint64) *scommon.Decimal {

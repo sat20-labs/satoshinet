@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -13,6 +15,25 @@ func testAsset(assetName string, amount int64) wire.TxAssets {
 		Name:   *wire.NewAssetNameFromString(assetName),
 		Amount: *scommon.NewDefaultDecimal(amount),
 	}}
+}
+
+func testContractOutput(txid string, vout uint32, contractAddr ContractAddress, value int64, assets wire.TxAssets) ContractOutput {
+	return contractframework.ContractOutputFromFunding(contractcommon.FundingOutput{
+		OutPoint: contractcommon.TxOutPoint{TxID: txid, Vout: vout},
+		Vout:     vout,
+		Contract: contractAddr,
+		Value:    value,
+		Assets:   assets,
+	})
+}
+
+func testContractUTXO(txid string, vout uint32, contractAddr ContractAddress, value int64, assets wire.TxAssets) UTXO {
+	output := testContractOutput(txid, vout, contractAddr, value, assets)
+	return UTXO{
+		OutPoint: output.OutPoint,
+		Contract: output.Contract,
+		TxOutput: output.IndexerTxOutput(),
+	}
 }
 
 func requireDecimalString(t *testing.T, expected string, actual *scommon.Decimal) {
@@ -35,17 +56,12 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	require.NoError(t, err)
 
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("tx", 1, contract),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "tx", Vout: 1},
-			Vout:     1,
-			Contract: contract,
-			Value:    30,
-		}},
-		Height:    100,
-		Timestamp: 200,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 30, nil)},
+		Height:         100,
+		Timestamp:      200,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(0), item.ID)
@@ -75,17 +91,12 @@ func TestApplyInvokeRecordsLimitOrderBuyExcessForRefund(t *testing.T) {
 	require.NoError(t, err)
 
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("tx", 1, contract),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "tx", Vout: 1},
-			Vout:     1,
-			Contract: contract,
-			Value:    200,
-		}},
-		Height:    100,
-		Timestamp: 200,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 200, nil)},
+		Height:         100,
+		Timestamp:      200,
 	})
 	require.NoError(t, err)
 	require.Equal(t, InvokeReasonNormal, item.Reason)
@@ -105,18 +116,12 @@ func TestApplyInvokeMarksLimitOrderSellInvalidWhenAssetAmountDiffers(t *testing.
 	require.NoError(t, err)
 
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("tx", 1, contract),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "tx", Vout: 1},
-			Vout:     1,
-			Contract: contract,
-			Value:    SwapInvokeFee,
-			Assets:   testAsset("ordx:f:test", 9),
-		}},
-		Height:    100,
-		Timestamp: 200,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, SwapInvokeFee, testAsset("ordx:f:test", 9))},
+		Height:         100,
+		Timestamp:      200,
 	})
 	require.NoError(t, err)
 	require.Equal(t, InvokeReasonInvalid, item.Reason)
@@ -136,18 +141,12 @@ func TestApplySellExtraSatsInvalid(t *testing.T) {
 	require.NoError(t, err)
 
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("tx", 1, contract),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "tx", Vout: 1},
-			Vout:     1,
-			Contract: contract,
-			Value:    10,
-			Assets:   testAsset("ordx:f:test", 10),
-		}},
-		Height:    100,
-		Timestamp: 200,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 10, testAsset("ordx:f:test", 10))},
+		Height:         100,
+		Timestamp:      200,
 	})
 	require.NoError(t, err)
 	require.Equal(t, InvokeReasonInvalid, item.Reason)
@@ -167,18 +166,12 @@ func TestApplyInvokeRecordsAMMAddLiquidityItem(t *testing.T) {
 	require.NoError(t, err)
 
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPIAddLiquidity,
-		Param:  param,
-		CallID: DeriveInvokeCallID("tx", 1, contract),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "tx", Vout: 1},
-			Vout:     1,
-			Contract: contract,
-			Value:    25,
-			Assets:   testAsset("ordx:f:test", 10),
-		}},
-		Height:    100,
-		Timestamp: 200,
+		Action:         InvokeAPIAddLiquidity,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 25, testAsset("ordx:f:test", 10))},
+		Height:         100,
+		Timestamp:      200,
 	})
 	require.NoError(t, err)
 	require.Equal(t, OrderTypeAddLiquidity, item.OrderType)
@@ -205,17 +198,12 @@ func TestApplyInvokeMarksAMMAddLiquidityInvalidWhenDeclaredAssetMissing(t *testi
 	require.NoError(t, err)
 
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPIAddLiquidity,
-		Param:  param,
-		CallID: DeriveInvokeCallID("tx", 1, contract),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "tx", Vout: 1},
-			Vout:     1,
-			Contract: contract,
-			Value:    20,
-		}},
-		Height:    100,
-		Timestamp: 200,
+		Action:         InvokeAPIAddLiquidity,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 20, nil)},
+		Height:         100,
+		Timestamp:      200,
 	})
 	require.NoError(t, err)
 	require.Equal(t, InvokeReasonInvalid, item.Reason)
@@ -235,17 +223,12 @@ func TestApplyInvokeRecordsAMMBuyWithExactFunding(t *testing.T) {
 	require.NoError(t, err)
 
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action: InvokeAPISwap,
-		Param:  param,
-		CallID: DeriveInvokeCallID("tx", 1, contract),
-		FundingOutputs: []ContractOutput{{
-			OutPoint: OutPoint{TxID: "tx", Vout: 1},
-			Vout:     1,
-			Contract: contract,
-			Value:    10,
-		}},
-		Height:    100,
-		Timestamp: 200,
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 10, nil)},
+		Height:         100,
+		Timestamp:      200,
 	})
 	require.NoError(t, err)
 	require.Equal(t, OrderTypeBuy, item.OrderType)
@@ -257,11 +240,7 @@ func TestApplyInvokeRecordsAMMBuyWithExactFunding(t *testing.T) {
 func TestApplyFundingTracksTemplateGasSeparately(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()
-	err := runtime.ApplyFunding([]ContractOutput{{
-		OutPoint: OutPoint{TxID: "fund", Vout: 1},
-		Contract: addr,
-		Assets:   testAsset("ordx:f:gas", 50),
-	}}, "ordx:f:gas")
+	err := runtime.ApplyFunding([]ContractOutput{testContractOutput("fund", 1, addr, 0, testAsset("ordx:f:gas", 50))}, "ordx:f:gas")
 	require.NoError(t, err)
 
 	state, err := runtime.RuntimeState()
@@ -276,12 +255,7 @@ func TestApplyGasFundingDoesNotChangeAMMPool(t *testing.T) {
 	fundAMMRuntime(t, runtime)
 	addr := runtime.Address()
 
-	err := runtime.ApplyGasFunding([]ContractOutput{{
-		OutPoint: OutPoint{TxID: "invoke", Vout: 1},
-		Contract: addr,
-		Value:    10,
-		Assets:   testAsset("ordx:f:test", 5),
-	}}, "ordx:f:gas")
+	err := runtime.ApplyGasFunding([]ContractOutput{testContractOutput("invoke", 1, addr, 10, testAsset("ordx:f:test", 5))}, "ordx:f:gas")
 	require.NoError(t, err)
 
 	state, err := runtime.RuntimeState()
@@ -308,12 +282,7 @@ func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
 	actualAssets := testAssets("ordx:f:test", 77, gasAssetName, 5)
 	err = store.ReconcileAssetCaches(func(contract ContractAddress) ([]UTXO, error) {
 		require.True(t, contract.Equal(runtime.Address()))
-		return []UTXO{{
-			OutPoint: OutPoint{TxID: "actual", Vout: 0},
-			Contract: contract,
-			Value:    33,
-			Assets:   actualAssets,
-		}}, nil
+		return []UTXO{testContractUTXO("actual", 0, contract, 33, actualAssets)}, nil
 	}, DefaultGasConfig())
 	require.NoError(t, err)
 
@@ -346,24 +315,14 @@ func testLimitOrderRuntime(t *testing.T) *ContractRuntime {
 func fundAMMRuntime(t *testing.T, runtime *ContractRuntime) {
 	t.Helper()
 	addr := runtime.Address()
-	err := runtime.ApplyFunding([]ContractOutput{{
-		OutPoint: OutPoint{TxID: "deploy", Vout: 1},
-		Contract: addr,
-		Value:    20,
-		Assets:   testAsset("ordx:f:test", 100),
-	}}, "")
+	err := runtime.ApplyFunding([]ContractOutput{testContractOutput("deploy", 1, addr, 20, testAsset("ordx:f:test", 100))}, "")
 	require.NoError(t, err)
 }
 
 func fundAMMRuntimeWithAsset(t *testing.T, runtime *ContractRuntime, assetName string, amount int64, value int64) {
 	t.Helper()
 	addr := runtime.Address()
-	err := runtime.ApplyFunding([]ContractOutput{{
-		OutPoint: OutPoint{TxID: "deploy", Vout: 1},
-		Contract: addr,
-		Value:    value,
-		Assets:   testAsset(assetName, amount),
-	}}, "")
+	err := runtime.ApplyFunding([]ContractOutput{testContractOutput("deploy", 1, addr, value, testAsset(assetName, amount))}, "")
 	require.NoError(t, err)
 }
 

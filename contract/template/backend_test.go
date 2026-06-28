@@ -648,12 +648,7 @@ func TestBackendAMMAddLiqRefundsExcess(t *testing.T) {
 	store.Add(runtime)
 	baseProvider := func(contractAddr ContractAddress) ([]contractframework.UTXO, error) {
 		require.True(t, addr.Equal(contractAddr))
-		return []contractframework.UTXO{{
-			OutPoint: OutPoint{TxID: "previous-result", Vout: 0},
-			Contract: addr,
-			Value:    20,
-			Assets:   testAsset(assetName, 20),
-		}}, nil
+		return []contractframework.UTXO{testContractUTXO("previous-result", 0, addr, 20, testAsset(assetName, 20))}, nil
 	}
 
 	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
@@ -698,8 +693,9 @@ func TestContractUTXOProviderWithTxOutputsIncludesDefaultInvoke(t *testing.T) {
 	require.Len(t, utxos, 1)
 	require.Equal(t, OutPoint{TxID: defaultTx.TxID(), Vout: 0}, utxos[0].OutPoint)
 	require.True(t, addr.Equal(utxos[0].Contract))
-	require.Equal(t, int64(20), utxos[0].Value)
-	asset, err := utxos[0].Assets.Find(wire.NewAssetNameFromString(gasAssetName))
+	require.Equal(t, int64(20), utxos[0].PhysicalValue())
+	assets := utxos[0].TxAssets()
+	asset, err := assets.Find(wire.NewAssetNameFromString(gasAssetName))
 	require.NoError(t, err)
 	require.Equal(t, testAsset(gasAssetName, testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))[0].Amount.String(), asset.Amount.String())
 }

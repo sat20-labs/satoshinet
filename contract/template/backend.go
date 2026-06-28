@@ -226,14 +226,7 @@ func (e *Backend) DefaultInvoke(ctx contractframework.ExecutionContext,
 	tx contractcommon.Tx, funding contractcommon.FundingOutput) (contractframework.ExecutionOutcome, bool, error) {
 
 	before := len(e.records)
-	output := contractframework.ContractOutput{
-		OutPoint: contractframework.OutPoint{TxID: funding.OutPoint.TxID, Vout: funding.OutPoint.Vout},
-		Vout:     funding.Vout,
-		Contract: funding.Contract,
-		Value:    funding.Value,
-		Assets:   funding.Assets.Clone(),
-		PkScript: contractframework.CloneBytes(funding.PkScript),
-	}
+	output := contractframework.ContractOutputFromFunding(funding)
 	if err := e.executeDefaultInvokeOutputTx(ctx.RawTx, tx, output); err != nil {
 		return contractframework.ExecutionOutcome{}, false, err
 	}
@@ -681,13 +674,9 @@ func stripTemplateResultGasFunding(contract Contract, outputs []ContractOutput, 
 	out := make([]ContractOutput, len(outputs))
 	for i, output := range outputs {
 		next := output
-		next.Assets = output.Assets.Clone()
 		gas, err := output.AssetAmount(gasAssetName)
 		if err == nil && gas != nil && gas.Sign() > 0 {
-			gasAssets, err := contractframework.NewAssetSet(gasAssetName, gas)
-			if err == nil {
-				_ = next.Assets.Split(gasAssets)
-			}
+			_ = next.SubAssetAmount(gasAssetName, gas)
 		}
 		out[i] = next
 	}

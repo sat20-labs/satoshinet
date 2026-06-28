@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,10 +50,12 @@ func TestNetworkTemplateLimitOrderContract(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor})
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
 		[]int64{10, 1000}, traderA)
 
@@ -85,8 +88,10 @@ func TestNetworkTemplateLimitOrderContract(t *testing.T) {
 	sendTx(t, fixture.bootstrapNode, buyTx)
 	fixture.waitForTx(t, buyTx)
 
+	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
+	requireTemplateResultAssetAmount(t, buyResultOutputs, traderBAddr, limitAsset, "10")
+	requireTemplateResultValue(t, buyResultOutputs, traderAAddr, 100)
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
-	requirePositiveAssetSummary(t, fixture.bootstrapNode, contract.MustEncode(), gasAsset)
 	fixture.requireNodesSynced(t)
 }
 
@@ -99,10 +104,12 @@ func TestNetworkTemplateDefaultInvokeLimitOrderBuy(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor})
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
 		[]int64{10, 1000}, traderA)
 
@@ -135,6 +142,9 @@ func TestNetworkTemplateDefaultInvokeLimitOrderBuy(t *testing.T) {
 	require.False(t, txHasContractOpReturn(defaultBuyTx))
 	fixture.sendAndWaitTx(t, defaultBuyTx)
 
+	defaultBuyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, defaultBuyTx, contract)
+	requireTemplateResultAssetAmount(t, defaultBuyResultOutputs, traderBAddr, limitAsset, "10")
+	requireTemplateResultValue(t, defaultBuyResultOutputs, traderAAddr, 100)
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
 	fixture.requireNodesSynced(t)
 }
@@ -152,16 +162,17 @@ func TestNetworkTemplateExchangeDefaultFundBuyAndClose(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	deployerAddr := fixture.spendAddress
-	buyerAddr := fixture.spendAddress
+	deployerAddr := fixture.traderAActor.address
+	buyerAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset,
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset,
 		[]int64{1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000}, traderA)
+		[]int64{1000, 1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor, fixture.traderAActor})
 	assetAOuts := fixture.splitAsset(t, fixture.assetAnchors[assetA], assetA, []int64{100},
 		[]int64{1000}, traderA)
-	assetBOuts := fixture.splitAsset(t, fixture.assetAnchors[assetB], assetB, []int64{24},
-		[]int64{1000}, traderB)
+	assetBOuts := fixture.splitAssetTo(t, fixture.assetAnchors[assetB], assetB, []int64{24},
+		[]int64{1000}, traderA, []*templateNetworkActor{fixture.traderBActor})
 
 	exchange := tmplcontract.NewExchangeContract(assetA, assetB, tmplcontract.ExchangePriceModeHeight, []tmplcontract.ExchangePriceStep{{
 		Threshold: "0",
@@ -202,6 +213,9 @@ func TestNetworkTemplateExchangeDefaultFundBuyAndClose(t *testing.T) {
 		})
 	require.False(t, txHasContractOpReturn(buyTx))
 	fixture.sendAndWaitTx(t, buyTx)
+	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
+	requireTemplateResultAssetAmount(t, buyResultOutputs, buyerAddr, assetA, "12")
+	requireTemplateResultAssetAmount(t, buyResultOutputs, deployerAddr, assetB, "24")
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, buyerAddr, assetA, "12")
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), assetA, "88")
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, assetB, "24")
@@ -214,7 +228,7 @@ func TestNetworkTemplateExchangeDefaultFundBuyAndClose(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, closeTx)
 	requireAssetSummaryZero(t, fixture.bootstrapNode, contract.MustEncode(), assetA)
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, assetA, "100")
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, assetA, "88")
 	fixture.requireNodesSynced(t)
 }
 
@@ -227,10 +241,12 @@ func TestNetworkTemplateLimitOrderLargeBuyFilledBySmallSells(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor, fixture.traderAActor, fixture.traderAActor, fixture.traderAActor})
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 10, 10, 900},
 		[]int64{10, 10, 10, 1000}, traderA)
 
@@ -263,6 +279,9 @@ func TestNetworkTemplateLimitOrderLargeBuyFilledBySmallSells(t *testing.T) {
 				Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
 			})
 		fixture.sendAndWaitTx(t, sellTx)
+		sellResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, sellTx, contract)
+		requireTemplateResultAssetAmount(t, sellResultOutputs, traderBAddr, limitAsset, "10")
+		requireTemplateResultValue(t, sellResultOutputs, traderAAddr, 100)
 	}
 
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "30")
@@ -278,10 +297,12 @@ func TestNetworkTemplateLimitOrderLargeSellFilledBySmallBuys(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor, fixture.traderBActor, fixture.traderBActor})
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{40, 900},
 		[]int64{40, 1000}, traderA)
 
@@ -307,6 +328,7 @@ func TestNetworkTemplateLimitOrderLargeSellFilledBySmallBuys(t *testing.T) {
 
 	buyValues := []int64{120, 110, 100}
 	buyPrices := []string{"12", "11", "10"}
+	buyRefundValues := []int64{20, 10, 0}
 	for i := 0; i < 3; i++ {
 		buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", buyPrices[i])
 		buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, uint64(i+1), tmplcontract.InvokeAPISwap, buyParam,
@@ -316,6 +338,10 @@ func TestNetworkTemplateLimitOrderLargeSellFilledBySmallBuys(t *testing.T) {
 				Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 			})
 		fixture.sendAndWaitTx(t, buyTx)
+		buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
+		requireTemplateResultAssetAmount(t, buyResultOutputs, traderBAddr, limitAsset, "10")
+		requireTemplateResultValue(t, buyResultOutputs, traderAAddr, 100)
+		requireTemplateResultValue(t, buyResultOutputs, traderBAddr, buyRefundValues[i])
 	}
 
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "30")
@@ -331,10 +357,11 @@ func TestNetworkTemplateLimitOrderBuyTakesLowerPricedSells(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderAActor, fixture.traderAActor, fixture.traderBActor})
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 10, 10, 900},
 		[]int64{10, 10, 10, 1000}, traderA)
 
@@ -370,6 +397,8 @@ func TestNetworkTemplateLimitOrderBuyTakesLowerPricedSells(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, buyTx)
 
+	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
+	requireTemplateResultAssetAmount(t, buyResultOutputs, traderBAddr, limitAsset, "30")
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "30")
 	fixture.requireNodesSynced(t)
 }
@@ -382,7 +411,7 @@ func TestNetworkTemplateLimitOrderRefundOpenOrders(t *testing.T) {
 	const limitAsset = "ordx:f:lotrefund"
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
-	traderAAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
 
 	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
 		[]int64{1000, 1000, 1000, 1000}, traderA)
@@ -419,6 +448,8 @@ func TestNetworkTemplateLimitOrderRefundOpenOrders(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, refundTx)
 
+	refundResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, refundTx, contract)
+	requireTemplateResultAssetAmount(t, refundResultOutputs, traderAAddr, limitAsset, "20")
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderAAddr, limitAsset, "20")
 	fixture.requireNodesSynced(t)
 }
@@ -431,7 +462,7 @@ func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
 	const limitAsset = "ordx:f:lottarget"
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
-	traderAAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
 
 	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
 		[]int64{1000, 1000, 1000, 1000}, traderA)
@@ -469,6 +500,8 @@ func TestNetworkTemplateLimitOrderRefundCanTargetOneOrder(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, refundTx)
 
+	refundResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, refundTx, contract)
+	requireTemplateResultAssetAmount(t, refundResultOutputs, traderAAddr, limitAsset, "10")
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderAAddr, limitAsset, "10")
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), limitAsset, "10")
 	fixture.requireNodesSynced(t)
@@ -483,11 +516,12 @@ func TestNetworkTemplateLimitOrderRefundPartiallyFilledSell(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderAAddr := fixture.spendAddress
-	traderBAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor, fixture.traderBActor, fixture.traderBActor, fixture.traderAActor})
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{40, 900},
 		[]int64{40, 1000}, traderA)
 
@@ -531,6 +565,8 @@ func TestNetworkTemplateLimitOrderRefundPartiallyFilledSell(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, refundTx)
 
+	refundResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, refundTx, contract)
+	requireTemplateResultAssetAmount(t, refundResultOutputs, traderAAddr, limitAsset, "10")
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "30")
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderAAddr, limitAsset, "10")
 	fixture.requireNodesSynced(t)
@@ -545,12 +581,14 @@ func TestNetworkTemplateAMMContract(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
-		[]int64{12000, 1010, 20}, traderA)
-	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{99000, 100, 900},
-		[]int64{10000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
+		[]int64{12000, 1010, 20}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor, fixture.traderBActor})
+	assetOuts := fixture.splitAssetTo(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{99000, 100, 900},
+		[]int64{10000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor, fixture.traderAActor})
 
 	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
 		tmplcontract.NewAMMContract(ammAsset, "99000", 10000, "990000000"),
@@ -577,9 +615,8 @@ func TestNetworkTemplateAMMContract(t *testing.T) {
 	fixture.sendAndWaitTx(t, buyTx)
 	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
 	requirePositiveDecimalString(t, templateResultAssetAmountTo(t, buyResultOutputs, traderBAddr, ammAsset))
-	require.Equal(t, int64(0), templateResultValueTo(buyResultOutputs, traderBAddr))
+	requireTemplateResultValue(t, buyResultOutputs, traderBAddr, 0)
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
-	requirePositiveAssetSummary(t, fixture.bootstrapNode, contract.MustEncode(), gasAsset)
 
 	sellParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeSell, "1", "1")
 	sellTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 2, tmplcontract.InvokeAPISwap, sellParam,
@@ -591,7 +628,7 @@ func TestNetworkTemplateAMMContract(t *testing.T) {
 	fixture.sendAndWaitTx(t, sellTx)
 	sellResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, sellTx, contract)
 	require.Greater(t, templateResultValueTo(sellResultOutputs, traderBAddr), int64(0))
-	require.Empty(t, templateResultAssetAmountTo(t, sellResultOutputs, traderBAddr, ammAsset))
+	requireTemplateResultAssetAmount(t, sellResultOutputs, traderBAddr, ammAsset, "")
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
 	fixture.requireNodesSynced(t)
 }
@@ -605,12 +642,14 @@ func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000}, traderA)
-	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{90, 10, 900},
-		[]int64{100, 100, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor, fixture.traderAActor, fixture.traderAActor})
+	assetOuts := fixture.splitAssetTo(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{90, 10, 900},
+		[]int64{100, 100, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor})
 
 	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
 		tmplcontract.NewAMMContract(ammAsset, "100", 20, "2000"),
@@ -625,14 +664,14 @@ func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
 			),
 		})
 	fixture.sendAndWaitTx(t, deployTx)
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, ammAsset, "910")
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, ammAsset, "900")
 
 	beforeBuySummary := fetchAssetSummaryEventually(t, fixture.bootstrapNode, traderBAddr)
 	buyParam := templateLimitOrderParam(t, ammAsset, tmplcontract.OrderTypeBuy, "1", "10")
 	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[1]},
 		wire.TxOut{
-			Value:  20,
+			Value:  10,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, buyTx)
@@ -672,12 +711,14 @@ func TestNetworkTemplateAMMRejectsBuySlippage(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000},
-		[]int64{1000, 1000}, traderA)
-	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{100, 900},
-		[]int64{100, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000},
+		[]int64{1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor})
+	assetOuts := fixture.splitAssetTo(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{100, 900},
+		[]int64{100, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor})
 
 	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
 		tmplcontract.NewAMMContract(ammAsset, "100", 20, "2000"),
@@ -699,13 +740,13 @@ func TestNetworkTemplateAMMRejectsBuySlippage(t *testing.T) {
 	buyTx := buildTemplateInvokeTx(t, fixture, traderB, contract, 1, tmplcontract.InvokeAPISwap, buyParam,
 		[]wire.OutPoint{gasOuts[1]},
 		wire.TxOut{
-			Value:  20,
+			Value:  10,
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, buyTx)
 	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
-	require.Equal(t, int64(10), templateResultValueTo(buyResultOutputs, traderBAddr))
-	require.Empty(t, templateResultAssetAmountTo(t, buyResultOutputs, traderBAddr, ammAsset))
+	requireTemplateResultValue(t, buyResultOutputs, traderBAddr, 10)
+	requireTemplateResultAssetAmount(t, buyResultOutputs, traderBAddr, ammAsset, "")
 
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, ammAsset, beforeBuySummary[ammAsset])
 	fixture.requireNodesSynced(t)
@@ -720,11 +761,14 @@ func TestNetworkTemplateAMMSellAddsAssetToPool(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000},
-		[]int64{1000, 1000}, traderA)
-	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{100, 100, 800},
-		[]int64{100, 100, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000},
+		[]int64{1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor})
+	assetOuts := fixture.splitAssetTo(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{100, 100, 800},
+		[]int64{100, 100, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor, fixture.traderAActor})
 
 	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
 		tmplcontract.NewAMMContract(ammAsset, "100", 20, "2000"),
@@ -749,8 +793,8 @@ func TestNetworkTemplateAMMSellAddsAssetToPool(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, sellTx)
 	sellResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, sellTx, contract)
-	require.Greater(t, templateResultValueTo(sellResultOutputs, fixture.spendAddress), int64(0))
-	require.Empty(t, templateResultAssetAmountTo(t, sellResultOutputs, fixture.spendAddress, ammAsset))
+	require.Greater(t, templateResultValueTo(sellResultOutputs, traderBAddr), int64(0))
+	requireTemplateResultAssetAmount(t, sellResultOutputs, traderBAddr, ammAsset, "")
 
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), ammAsset, "200")
 	fixture.requireNodesSynced(t)
@@ -765,12 +809,14 @@ func TestNetworkTemplateAMMAddRemoveLiquidity(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
-		[]int64{200, 200, 20}, traderA)
-	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{100, 100, 900},
-		[]int64{100, 100, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000},
+		[]int64{200, 200, 20}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor, fixture.traderBActor})
+	assetOuts := fixture.splitAssetTo(t, fixture.assetAnchors[ammAsset], ammAsset, []int64{100, 100, 900},
+		[]int64{100, 100, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderBActor, fixture.traderAActor})
 
 	deployTx, contract := buildTemplateDeployTx(t, fixture, traderA,
 		tmplcontract.NewAMMContract(ammAsset, "100", 20, "2000"),
@@ -828,11 +874,13 @@ func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset,
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset,
 		[]int64{3000000, 3000000, 3000000, 5000000},
-		[]int64{1000, 1000, 1000, 1000}, traderA)
+		[]int64{1000, 1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor, fixture.traderAActor})
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
 		[]int64{10, 1000}, traderA)
 
@@ -846,7 +894,6 @@ func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, templateDeployTx)
-	waitForTemplateAssetUtxo(t, fixture.bootstrapNode, templateContract.MustEncode(), gasAsset, 1)
 
 	evmDeployTx, evmContract, evmChanges := buildTemplateWitnessEVMDeployTx(t, fixture, traderA, 1,
 		solidityDeployCode(t, counter, nil),
@@ -885,6 +932,9 @@ func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T
 	block, err := fixture.bootstrapNode.Client.GetBlock(blockHash)
 	require.NoError(t, err)
 	requireTemplateResultBeforeEVMResult(t, block)
+	templateBuyOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, templateBuyTx, templateContract)
+	requireTemplateResultAssetAmount(t, templateBuyOutputs, traderBAddr, limitAsset, "10")
+	requireTemplateResultValue(t, templateBuyOutputs, traderAAddr, 100)
 	root, found, err := evm.FindCoinbaseStateRoot(block.Transactions[0])
 	require.NoError(t, err)
 	require.True(t, found)
@@ -902,10 +952,12 @@ func TestNetworkTemplateContractStateRollbackOnInvalidate(t *testing.T) {
 	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
 	traderA := fixture.traderA
 	traderB := fixture.traderB
-	traderBAddr := fixture.spendAddress
+	traderAAddr := fixture.traderAActor.address
+	traderBAddr := fixture.traderBActor.address
 
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000}, traderA)
+	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
+		[]int64{1000, 1000, 1000, 1000}, traderA,
+		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor, fixture.traderAActor})
 	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
 		[]int64{10, 1000}, traderA)
 
@@ -938,6 +990,9 @@ func TestNetworkTemplateContractStateRollbackOnInvalidate(t *testing.T) {
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	fixture.sendAndWaitTx(t, buyTx)
+	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
+	requireTemplateResultAssetAmount(t, buyResultOutputs, traderBAddr, limitAsset, "10")
+	requireTemplateResultValue(t, buyResultOutputs, traderAAddr, 100)
 	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
 
 	buyHash := buyTx.TxHash()
@@ -962,12 +1017,22 @@ type templateNetworkFixture struct {
 	nodes         []*rpctest.Harness
 	traderA       *btcec.PrivateKey
 	traderB       *btcec.PrivateKey
+	traderAActor  *templateNetworkActor
+	traderBActor  *templateNetworkActor
 	spendScript   []byte
 	spendAddress  string
 	redeemScript  []byte
 	controlBlock  []byte
 	gasAnchor     *wire.MsgTx
 	assetAnchors  map[string]*wire.MsgTx
+}
+
+type templateNetworkActor struct {
+	key          *btcec.PrivateKey
+	pkScript     []byte
+	address      string
+	redeemScript []byte
+	controlBlock []byte
 }
 
 func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateNetworkFixture {
@@ -986,7 +1051,8 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 	coreKey := keyFromMnemonic(t, coreMnemonic, 0)
 	traderA := keyFromMnemonic(t, bootstrapMnemonic, 1)
 	traderB := keyFromMnemonic(t, bootstrapMnemonic, 2)
-	spendScript, spendAddress, redeemScript, controlBlock := testCallerTaprootScript(t, bootstrapKey)
+	traderAActor := newTemplateNetworkActor(t, traderA)
+	traderBActor := newTemplateNetworkActor(t, traderB)
 
 	witnessScript, lockedPkScript, err := anchortx.GetP2WSHscript(
 		bootstrapKey.PubKey().SerializeCompressed(),
@@ -1022,7 +1088,7 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 
 	gasAnchor := buildNetworkAnchorTx(t, gasLockedUtxo, lockedValue,
 		testWireAsset(gasAsset, 100000000), gasAsset+"-100000000-0-1",
-		witnessScript, bootstrapKey, spendScript)
+		witnessScript, bootstrapKey, traderAActor.pkScript)
 	sendTx(t, bootstrapNode, gasAnchor)
 
 	assetAnchors := make(map[string]*wire.MsgTx)
@@ -1031,7 +1097,7 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 		amount := assets[asset]
 		anchor := buildNetworkAnchorTx(t, lockedUtxo, lockedValue,
 			testWireAsset(asset, amount), fmt.Sprintf("%s-%d-0-1", asset, amount),
-			witnessScript, bootstrapKey, spendScript)
+			witnessScript, bootstrapKey, traderAActor.pkScript)
 		sendTx(t, bootstrapNode, anchor)
 		assetAnchors[asset] = anchor
 	}
@@ -1043,13 +1109,44 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 		nodes:         nodes,
 		traderA:       traderA,
 		traderB:       traderB,
-		spendScript:   spendScript,
-		spendAddress:  spendAddress,
-		redeemScript:  redeemScript,
-		controlBlock:  controlBlock,
+		traderAActor:  traderAActor,
+		traderBActor:  traderBActor,
+		spendScript:   traderAActor.pkScript,
+		spendAddress:  traderAActor.address,
+		redeemScript:  traderAActor.redeemScript,
+		controlBlock:  traderAActor.controlBlock,
 		gasAnchor:     gasAnchor,
 		assetAnchors:  assetAnchors,
 	}
+}
+
+func newTemplateNetworkActor(t *testing.T, key *btcec.PrivateKey) *templateNetworkActor {
+	t.Helper()
+	pkScript, address, redeemScript, controlBlock := testCallerTaprootScript(t, key)
+	return &templateNetworkActor{
+		key:          key,
+		pkScript:     pkScript,
+		address:      address,
+		redeemScript: redeemScript,
+		controlBlock: controlBlock,
+	}
+}
+
+func (f *templateNetworkFixture) actorForSigner(t *testing.T, signer *btcec.PrivateKey) *templateNetworkActor {
+	t.Helper()
+	require.NotNil(t, f)
+	require.NotNil(t, signer)
+	signerPub := hex.EncodeToString(signer.PubKey().SerializeCompressed())
+	for _, actor := range []*templateNetworkActor{f.traderAActor, f.traderBActor} {
+		if actor == nil || actor.key == nil {
+			continue
+		}
+		if signerPub == hex.EncodeToString(actor.key.PubKey().SerializeCompressed()) {
+			return actor
+		}
+	}
+	require.FailNow(t, "unknown template network signer", signerPub)
+	return nil
 }
 
 func configureFastPOSTimers(t *testing.T) {
@@ -1069,13 +1166,28 @@ func (f *templateNetworkFixture) splitAsset(t *testing.T, anchorTx *wire.MsgTx, 
 	amounts []int64, values []int64, signer *btcec.PrivateKey) []wire.OutPoint {
 
 	t.Helper()
+	actor := f.actorForSigner(t, signer)
+	recipients := make([]*templateNetworkActor, len(amounts))
+	for i := range recipients {
+		recipients[i] = actor
+	}
+	return f.splitAssetTo(t, anchorTx, asset, amounts, values, signer, recipients)
+}
+
+func (f *templateNetworkFixture) splitAssetTo(t *testing.T, anchorTx *wire.MsgTx, asset string,
+	amounts []int64, values []int64, signer *btcec.PrivateKey, recipients []*templateNetworkActor) []wire.OutPoint {
+
+	t.Helper()
 	require.Len(t, values, len(amounts))
+	require.Len(t, recipients, len(amounts))
 	outputs := make([]*wire.TxOut, 0, len(amounts))
 	for i := range amounts {
-		outputs = append(outputs, wire.NewTxOut(values[i], testWireAsset(asset, amounts[i]), f.spendScript))
+		require.NotNil(t, recipients[i])
+		outputs = append(outputs, wire.NewTxOut(values[i], testWireAsset(asset, amounts[i]), recipients[i].pkScript))
 	}
 	tx := buildTemplateSplitTx(t, signer, wire.OutPoint{Hash: anchorTx.TxHash(), Index: 0}, outputs)
-	signTemplateTaprootInputs(t, tx, signer, f.redeemScript, f.controlBlock)
+	actor := f.actorForSigner(t, signer)
+	signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
 	f.sendAndWaitTx(t, tx)
 	return collectSpendableOutPoints(t, tx, outputs)
 }
@@ -1216,14 +1328,15 @@ func fetchAssetSummaryEventually(t *testing.T, node *rpctest.Harness, address st
 	return lastSummary
 }
 
-func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, funding wire.TxOut) []wire.OutPoint {
+func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, actor *templateNetworkActor, funding wire.TxOut) []wire.OutPoint {
 	t.Helper()
+	require.NotNil(t, actor)
 	selected := make([]wire.OutPoint, 0, len(funding.Assets))
 	seen := make(map[string]bool)
 	totalValue := int64(0)
 	for _, want := range funding.Assets {
 		wantAssetName := want.Name.String()
-		utxos := fetchTemplateAssetUtxos(t, f.bootstrapNode, f.spendAddress, wantAssetName)
+		utxos := fetchTemplateAssetUtxos(t, f.bootstrapNode, actor.address, wantAssetName)
 		sort.SliceStable(utxos, func(i, j int) bool {
 			if utxos[i].Value != utxos[j].Value {
 				return utxos[i].Value < utxos[j].Value
@@ -1238,7 +1351,7 @@ func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, funding wi
 			picked = utxo
 			break
 		}
-		require.NotNil(t, picked, "missing funding utxo address=%s asset=%s amount=%s", f.spendAddress, wantAssetName, want.Amount.String())
+		require.NotNil(t, picked, "missing funding utxo address=%s asset=%s amount=%s", actor.address, wantAssetName, want.Amount.String())
 		outpoint, err := tmplcontract.ParseOutPoint(picked.OutPoint)
 		require.NoError(t, err)
 		selected = append(selected, outpoint)
@@ -1247,7 +1360,7 @@ func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, funding wi
 	}
 	if totalValue < funding.Value {
 		gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
-		utxos := fetchTemplateAssetUtxos(t, f.bootstrapNode, f.spendAddress, gasAsset)
+		utxos := fetchTemplateAssetUtxos(t, f.bootstrapNode, actor.address, gasAsset)
 		sort.SliceStable(utxos, func(i, j int) bool {
 			if utxos[i].Value != utxos[j].Value {
 				return utxos[i].Value < utxos[j].Value
@@ -1268,7 +1381,7 @@ func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, funding wi
 			}
 		}
 	}
-	require.GreaterOrEqual(t, totalValue, funding.Value, "missing funding value address=%s", f.spendAddress)
+	require.GreaterOrEqual(t, totalValue, funding.Value, "missing funding value address=%s", actor.address)
 	require.NotEmpty(t, selected)
 	return selected
 }
@@ -1397,8 +1510,12 @@ func buildTemplateDeployTx(t *testing.T, fixture *templateNetworkFixture, signer
 	deployer string, random []byte, inputs []wire.OutPoint, funding wire.TxOut) (*wire.MsgTx, tmplcontract.ContractAddress) {
 
 	t.Helper()
+	var actor *templateNetworkActor
+	if fixture != nil {
+		actor = fixture.actorForSigner(t, signer)
+	}
 	if fixture != nil && len(inputs) == 0 {
-		inputs = fixture.selectFundingOutPoints(t, funding)
+		inputs = fixture.selectFundingOutPoints(t, actor, funding)
 	}
 	return buildTemplateDeployTxWithInputs(t, fixture, signer, contract, deployer, random, inputs, funding)
 }
@@ -1407,8 +1524,9 @@ func buildTemplateDeployTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 	deployer string, random []byte, inputs []wire.OutPoint, funding wire.TxOut) (*wire.MsgTx, tmplcontract.ContractAddress) {
 
 	t.Helper()
+	actor := fixture.actorForSigner(t, signer)
 	if fixture != nil {
-		deployer = fixture.spendAddress
+		deployer = actor.address
 	}
 	tx, address, err := tmplcontract.BuildDeployTx(tmplcontract.DeployTxBuildRequest{
 		ContractPrefix: tmplcontract.TestnetContractPrefix,
@@ -1420,7 +1538,7 @@ func buildTemplateDeployTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 		Inputs:         inputs,
 	})
 	require.NoError(t, err)
-	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
+	signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
 	return tx, address
 }
 
@@ -1428,8 +1546,9 @@ func buildTemplateDefaultInvokeTx(t *testing.T, fixture *templateNetworkFixture,
 	inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
+	actor := fixture.actorForSigner(t, signer)
 	if fixture != nil && len(inputs) == 0 {
-		inputs = fixture.selectFundingOutPoints(t, funding)
+		inputs = fixture.selectFundingOutPoints(t, actor, funding)
 	}
 	pkScript, err := contractcommon.ContractPkScript(contract)
 	require.NoError(t, err)
@@ -1439,7 +1558,7 @@ func buildTemplateDefaultInvokeTx(t *testing.T, fixture *templateNetworkFixture,
 		tx.AddTxIn(wire.NewTxIn(&input, nil, nil))
 	}
 	tx.AddTxOut(&funding)
-	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
+	signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
 	return tx
 }
 
@@ -1459,8 +1578,12 @@ func buildTemplateInvokeTx(t *testing.T, fixture *templateNetworkFixture, signer
 	nonce uint64, action string, param []byte, inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
+	var actor *templateNetworkActor
+	if fixture != nil {
+		actor = fixture.actorForSigner(t, signer)
+	}
 	if fixture != nil && len(inputs) == 0 {
-		inputs = fixture.selectFundingOutPoints(t, funding)
+		inputs = fixture.selectFundingOutPoints(t, actor, funding)
 	}
 	return buildTemplateInvokeTxWithInputs(t, fixture, signer, contract, nonce, action, param, inputs, funding)
 }
@@ -1469,6 +1592,7 @@ func buildTemplateInvokeTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 	nonce uint64, action string, param []byte, inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
+	actor := fixture.actorForSigner(t, signer)
 	tx, err := tmplcontract.BuildInvokeTx(tmplcontract.InvokeTxBuildRequest{
 		Contract:  contract,
 		GasLimit:  networkTemplateInvokeGasLimit(),
@@ -1479,7 +1603,7 @@ func buildTemplateInvokeTxWithInputs(t *testing.T, fixture *templateNetworkFixtu
 		Inputs:    inputs,
 	})
 	require.NoError(t, err)
-	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
+	signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
 	return tx
 }
 
@@ -1487,9 +1611,10 @@ func buildTemplateWitnessEVMDeployTx(t *testing.T, fixture *templateNetworkFixtu
 	initCode []byte, inputs []wire.OutPoint, funding wire.TxOut, changeOutputs []*wire.TxOut) (*wire.MsgTx, evm.ContractAddress, []wire.OutPoint) {
 
 	t.Helper()
+	actor := fixture.actorForSigner(t, signer)
 	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
 		ContractPrefix:  evm.TestnetContractPrefix,
-		Deployer:        evmAddressFromAddressString(fixture.spendAddress).String(),
+		Deployer:        evmAddressFromAddressString(actor.address).String(),
 		GasLimit:        networkEVMDeployGasLimit(),
 		DeployNonce:     nonce,
 		ContractContent: initCode,
@@ -1498,7 +1623,7 @@ func buildTemplateWitnessEVMDeployTx(t *testing.T, fixture *templateNetworkFixtu
 		ExtraOutputs:    changeOutputs,
 	})
 	require.NoError(t, err)
-	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
+	signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
 	change := collectSpendableOutPoints(t, tx, changeOutputs)
 	return tx, contract, change
 }
@@ -1507,6 +1632,7 @@ func buildTemplateWitnessEVMInvokeTx(t *testing.T, fixture *templateNetworkFixtu
 	nonce uint64, calldata []byte, inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
+	actor := fixture.actorForSigner(t, signer)
 	tx, err := evm.BuildInvokeTx(evm.InvokeTxBuildRequest{
 		Contract:  contract,
 		GasLimit:  networkEVMInvokeGasLimit(),
@@ -1516,7 +1642,7 @@ func buildTemplateWitnessEVMInvokeTx(t *testing.T, fixture *templateNetworkFixtu
 		Inputs:    inputs,
 	})
 	require.NoError(t, err)
-	signTemplateTaprootInputs(t, tx, signer, fixture.redeemScript, fixture.controlBlock)
+	signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
 	return tx
 }
 
@@ -1775,6 +1901,12 @@ func templateResultValueTo(outputs []tmplcontract.ResultOutput, address string) 
 	return total
 }
 
+func requireTemplateResultValue(t *testing.T, outputs []tmplcontract.ResultOutput, address string, want int64) {
+	t.Helper()
+	require.Equal(t, want, templateResultValueTo(outputs, address),
+		"address=%s outputs=%v", address, describeTemplateResultOutputs(outputs))
+}
+
 func templateResultAssetAmountTo(t *testing.T, outputs []tmplcontract.ResultOutput, address, assetName string) string {
 	t.Helper()
 	var total *indexercommon.Decimal
@@ -1797,6 +1929,34 @@ func templateResultAssetAmountTo(t *testing.T, outputs []tmplcontract.ResultOutp
 		return total.String()
 	}
 	return ""
+}
+
+func requireTemplateResultAssetAmount(t *testing.T, outputs []tmplcontract.ResultOutput, address, assetName, want string) {
+	t.Helper()
+	got := templateResultAssetAmountTo(t, outputs, address, assetName)
+	if want == "" {
+		require.Empty(t, got, "address=%s asset=%s outputs=%v", address, assetName, describeTemplateResultOutputs(outputs))
+		return
+	}
+	wantDecimal, err := indexercommon.NewDecimalFromString(want, 10)
+	require.NoError(t, err)
+	gotDecimal, err := indexercommon.NewDecimalFromString(got, 10)
+	require.NoError(t, err, "address=%s asset=%s want=%s got=%q outputs=%v",
+		address, assetName, want, got, describeTemplateResultOutputs(outputs))
+	require.Zero(t, gotDecimal.Cmp(wantDecimal), "address=%s asset=%s want=%s got=%s outputs=%v",
+		address, assetName, want, got, describeTemplateResultOutputs(outputs))
+}
+
+func describeTemplateResultOutputs(outputs []tmplcontract.ResultOutput) []string {
+	descriptions := make([]string, 0, len(outputs))
+	for _, output := range outputs {
+		parts := []string{fmt.Sprintf("%s:%d", output.To, output.Value)}
+		for _, asset := range output.Assets {
+			parts = append(parts, fmt.Sprintf("%s=%s", asset.Name.String(), asset.Amount.String()))
+		}
+		descriptions = append(descriptions, strings.Join(parts, " "))
+	}
+	return descriptions
 }
 
 func requirePositiveDecimalString(t *testing.T, amount string) {

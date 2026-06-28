@@ -274,13 +274,14 @@ func VerifyResultInputCoverage(inputs []UTXO, outputs []ResultOutput, gasFee *sc
 			continue
 		}
 		seen[input.OutPoint] = struct{}{}
-		nextValue, overflow := AddInt64(inputValue, input.Value)
+		nextValue, overflow := AddInt64(inputValue, input.PhysicalValue())
 		if overflow {
 			return fmt.Errorf("result input value overflows int64")
 		}
 		inputValue = nextValue
-		if len(input.Assets) != 0 {
-			if err := inputAssets.Merge(input.Assets); err != nil {
+		assets := input.TxAssets()
+		if len(assets) != 0 {
+			if err := inputAssets.Merge(assets); err != nil {
 				return err
 			}
 		}

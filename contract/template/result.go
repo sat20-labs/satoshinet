@@ -576,7 +576,7 @@ func capAssetsByAvailable(assets, available wire.TxAssets) wire.TxAssets {
 		out = append(out, scommon.AssetInfo{
 			Name:       asset.Name,
 			Amount:     *amount,
-			BindingSat: asset.BindingSat,
+			BindingSat: availableAsset.BindingSat,
 		})
 	}
 	if len(out) == 0 {
