@@ -596,10 +596,14 @@ func TestBackendAMMMultiInvokeOneResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.SettlementPlans, 1)
 	require.Len(t, result.SettlementPlans[0].Deals, 2)
+	require.Equal(t, result.SettlementPlans[0].Deals[0].AssetAmt, result.SettlementPlans[0].Deals[1].AssetAmt)
+	require.Equal(t, "9.0247452693", result.SettlementPlans[0].Deals[0].AssetAmt)
 	require.Len(t, result.ResultPlans, 1)
 	require.ElementsMatch(t, []int64{0, 1}, result.ResultPlans[0].ItemIDs)
 	require.Contains(t, result.ResultPlans[0].Inputs, OutPoint{TxID: buyA.TxID(), Vout: 0})
 	require.Contains(t, result.ResultPlans[0].Inputs, OutPoint{TxID: buyB.TxID(), Vout: 0})
+	requireResultPlanAssetTo(t, result.ResultPlans[0], "buyer-a", assetName, "9.0247452693")
+	requireResultPlanAssetTo(t, result.ResultPlans[0], "buyer-b", assetName, "9.0247452693")
 }
 
 func TestBackendAMMAddLiqRefundsExcess(t *testing.T) {

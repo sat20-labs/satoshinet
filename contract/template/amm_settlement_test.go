@@ -795,7 +795,7 @@ func TestSettleAMMRejectsSellSlippage(t *testing.T) {
 	requireDecimalString(t, "20", state.Running.AssetBInPool)
 }
 
-func TestSettleAMMProcessesSwapsFIFOAgainstMutatingPool(t *testing.T) {
+func TestSettleAMMProcessesBatchSwapsAgainstSnapshotPool(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	fundAMMRuntime(t, runtime)
 	addr := runtime.Address()
@@ -807,9 +807,10 @@ func TestSettleAMMProcessesSwapsFIFOAgainstMutatingPool(t *testing.T) {
 	require.Len(t, plan.Deals, 2)
 	require.Equal(t, int64(0), plan.Deals[0].BuyItemID)
 	require.Equal(t, int64(1), plan.Deals[1].BuyItemID)
+	require.Equal(t, "33.155080214", plan.Deals[0].AssetAmt)
+	require.Equal(t, "33.155080214", plan.Deals[1].AssetAmt)
 	require.Equal(t, "alice", plan.Transfers[0].To)
 	require.Equal(t, "bob", plan.Transfers[1].To)
-	require.True(t, parseDecimalOrZero(plan.Deals[0].AssetAmt).Cmp(parseDecimalOrZero(plan.Deals[1].AssetAmt)) > 0)
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
@@ -817,7 +818,7 @@ func TestSettleAMMProcessesSwapsFIFOAgainstMutatingPool(t *testing.T) {
 	require.Equal(t, ItemStatusDealt, state.Items[1].Done)
 	requireDecimalString(t, "40", state.Running.AssetBInPool)
 	require.NotNil(t, state.Running.AssetAInPool)
-	require.True(t, state.Running.AssetAInPool.Cmp(parseDecimalOrZero("100")) < 0)
+	requireDecimalString(t, "33.689839572", state.Running.AssetAInPool)
 }
 
 func TestSettleAMMRemoveLiquidityCapsAtOwnedAmount(t *testing.T) {
