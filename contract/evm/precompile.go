@@ -20,8 +20,15 @@ var (
 
 	assetBalanceOfSelector        = methodSelector("balanceOf(address,string)")
 	assetTransferAssetSelector    = methodSelector("transferAsset(string,string,string,bytes)")
+	assetCompareAmountSelector    = methodSelector("compareAmount(string,string)")
+	assetAddAmountSelector        = methodSelector("addAmount(string,string)")
+	assetSubAmountSelector        = methodSelector("subAmount(string,string)")
+	assetMulAmountSelector        = methodSelector("mulAmount(string,string)")
+	assetDivAmountSelector        = methodSelector("divAmount(string,string)")
 	triggerRegisterHeightSelector = methodSelector("registerHeightTrigger(string,uint256,uint256,bytes)")
 )
+
+const evmAmountMaxPrecision = scommon.MAX_PRECISION - 1
 
 type AssetBalanceReader interface {
 	AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error)
@@ -125,6 +132,61 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 			return nil, err
 		}
 		return abiEncodeBool(true), nil
+	case assetCompareAmountSelector:
+		left, right, err := decodeAmountPair(args)
+		if err != nil {
+			return nil, err
+		}
+		cmp := left.Cmp(right)
+		if cmp < 0 {
+			cmp = -1
+		} else if cmp > 0 {
+			cmp = 1
+		}
+		return abiEncodeInt64(int64(cmp)), nil
+	case assetAddAmountSelector:
+		result, err := runAmountBinaryOp(args, func(left, right *scommon.Decimal) (*scommon.Decimal, error) {
+			return left.AddAlignPrecision(right), nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return abiEncodeDynamicBytes([]byte(result.String())), nil
+	case assetSubAmountSelector:
+		result, err := runAmountBinaryOp(args, func(left, right *scommon.Decimal) (*scommon.Decimal, error) {
+			result := left.SubAlignPrecision(right)
+			if result.Sign() < 0 {
+				return nil, errors.New("amount subtraction underflows")
+			}
+			return result, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return abiEncodeDynamicBytes([]byte(result.String())), nil
+	case assetMulAmountSelector:
+		result, err := runAmountBinaryOp(args, func(left, right *scommon.Decimal) (*scommon.Decimal, error) {
+			return left.MulV2(right), nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return abiEncodeDynamicBytes([]byte(result.String())), nil
+	case assetDivAmountSelector:
+		result, err := runAmountBinaryOp(args, func(left, right *scommon.Decimal) (*scommon.Decimal, error) {
+			if right.Sign() == 0 {
+				return nil, errors.New("amount division by zero")
+			}
+			result := left.NewPrecision(evmAmountMaxPrecision).Div(right)
+			if result == nil {
+				return nil, errors.New("amount division failed")
+			}
+			return result, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return abiEncodeDynamicBytes([]byte(result.String())), nil
 	default:
 		return nil, fmt.Errorf("unknown asset precompile selector 0x%x", selector)
 	}
@@ -222,6 +284,26 @@ func EncodeTransferAssetCall(assetName, to, amount string, extraData []byte) []b
 	return appendMethod(assetTransferAssetSelector, append(head, tail...))
 }
 
+func EncodeCompareAmountCall(left, right string) []byte {
+	return encodeAmountPairCall(assetCompareAmountSelector, left, right)
+}
+
+func EncodeAddAmountCall(left, right string) []byte {
+	return encodeAmountPairCall(assetAddAmountSelector, left, right)
+}
+
+func EncodeSubAmountCall(left, right string) []byte {
+	return encodeAmountPairCall(assetSubAmountSelector, left, right)
+}
+
+func EncodeMulAmountCall(left, right string) []byte {
+	return encodeAmountPairCall(assetMulAmountSelector, left, right)
+}
+
+func EncodeDivAmountCall(left, right string) []byte {
+	return encodeAmountPairCall(assetDivAmountSelector, left, right)
+}
+
 func DecodeTriggerRegistrationCall(input []byte) (Trigger, error) {
 	selector, args, err := splitSelector(input)
 	if err != nil {
@@ -261,6 +343,44 @@ func decodeBalanceOf(args []byte) (EVMAddress, string, error) {
 	return owner, assetName, nil
 }
 
+func decodeAmountPair(args []byte) (*scommon.Decimal, *scommon.Decimal, error) {
+	leftText, err := abiReadString(args, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	rightText, err := abiReadString(args, 1)
+	if err != nil {
+		return nil, nil, err
+	}
+	left, err := ParseDecimalAmountString(leftText)
+	if err != nil {
+		return nil, nil, err
+	}
+	right, err := ParseDecimalAmountString(rightText)
+	if err != nil {
+		return nil, nil, err
+	}
+	if left.Sign() < 0 || right.Sign() < 0 {
+		return nil, nil, errors.New("amount must be non-negative")
+	}
+	return left, right, nil
+}
+
+func runAmountBinaryOp(args []byte, op func(*scommon.Decimal, *scommon.Decimal) (*scommon.Decimal, error)) (*scommon.Decimal, error) {
+	left, right, err := decodeAmountPair(args)
+	if err != nil {
+		return nil, err
+	}
+	result, err := op(left, right)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New("amount operation failed")
+	}
+	return result, nil
+}
+
 func decodeTriggerRegistration(args []byte) (string, uint64, int64, []byte, error) {
 	id, err := abiReadString(args, 0)
 	if err != nil {
@@ -298,6 +418,16 @@ func encodeTriggerRegistrationCall(selector [4]byte, id string, at uint64, gasLi
 	putABIUint64(head[64:96], gasLimitUint)
 	putABIUint64(head[96:128], 128+uint64(len(tail)))
 	tail = append(tail, abiEncodeDynamicBytes(calldata)...)
+	return appendMethod(selector, append(head, tail...))
+}
+
+func encodeAmountPairCall(selector [4]byte, left, right string) []byte {
+	head := make([]byte, 64)
+	tail := make([]byte, 0)
+	putABIUint64(head[0:32], 64+uint64(len(tail)))
+	tail = append(tail, abiEncodeDynamicBytes([]byte(left))...)
+	putABIUint64(head[32:64], 64+uint64(len(tail)))
+	tail = append(tail, abiEncodeDynamicBytes([]byte(right))...)
 	return appendMethod(selector, append(head, tail...))
 }
 
@@ -405,6 +535,17 @@ func abiEncodeBool(v bool) []byte {
 		return make([]byte, 32)
 	}
 	return abiEncodeUint64(1)
+}
+
+func abiEncodeInt64(v int64) []byte {
+	out := make([]byte, 32)
+	if v < 0 {
+		for i := range out {
+			out[i] = 0xff
+		}
+	}
+	binary.BigEndian.PutUint64(out[24:32], uint64(v))
+	return out
 }
 
 func abiEncodeDynamicBytes(v []byte) []byte {

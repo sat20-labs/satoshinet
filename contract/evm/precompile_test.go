@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"encoding/binary"
 	"testing"
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
@@ -52,6 +53,52 @@ func TestAssetPrecompileTransferSatoshiAssetABI(t *testing.T) {
 	require.Equal(t, "tb1psatoshi", to)
 	require.Equal(t, "1", amount.String())
 	require.Empty(t, extraData)
+}
+
+func TestAssetPrecompileAmountCompare(t *testing.T) {
+	precompile := NewAssetPrecompile(nil)
+
+	ret, err := precompile.Run(EncodeCompareAmountCall("1.2", "1.20"))
+	require.NoError(t, err)
+	require.Equal(t, int64(0), abiInt256Small(t, ret))
+
+	ret, err = precompile.Run(EncodeCompareAmountCall("1.2000000001", "1.2"))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), abiInt256Small(t, ret))
+
+	ret, err = precompile.Run(EncodeCompareAmountCall("0.9", "1"))
+	require.NoError(t, err)
+	require.Equal(t, int64(-1), abiInt256Small(t, ret))
+}
+
+func TestAssetPrecompileAmountArithmetic(t *testing.T) {
+	precompile := NewAssetPrecompile(nil)
+
+	ret, err := precompile.Run(EncodeAddAmountCall("1.2", "0.03"))
+	require.NoError(t, err)
+	require.Equal(t, "1.23", abiRawDynamicString(t, ret))
+
+	ret, err = precompile.Run(EncodeSubAmountCall("1.2", "0.03"))
+	require.NoError(t, err)
+	require.Equal(t, "1.17", abiRawDynamicString(t, ret))
+
+	ret, err = precompile.Run(EncodeMulAmountCall("1.5", "2"))
+	require.NoError(t, err)
+	require.Equal(t, "3", abiRawDynamicString(t, ret))
+
+	ret, err = precompile.Run(EncodeDivAmountCall("3", "2"))
+	require.NoError(t, err)
+	require.Equal(t, "1.5", abiRawDynamicString(t, ret))
+}
+
+func TestAssetPrecompileAmountArithmeticRejectsInvalidResults(t *testing.T) {
+	precompile := NewAssetPrecompile(nil)
+
+	_, err := precompile.Run(EncodeSubAmountCall("1", "2"))
+	require.ErrorContains(t, err, "underflows")
+
+	_, err = precompile.Run(EncodeDivAmountCall("1", "0"))
+	require.ErrorContains(t, err, "division by zero")
 }
 
 func TestTriggerPrecompileRegisterHeightABI(t *testing.T) {
@@ -217,6 +264,30 @@ func mustEVMAddress(t *testing.T, s string) EVMAddress {
 	addr, err := ParseEVMAddressHex(s)
 	require.NoError(t, err)
 	return addr
+}
+
+func abiRawDynamicString(t *testing.T, ret []byte) string {
+	t.Helper()
+	require.GreaterOrEqual(t, len(ret), 32)
+	length, err := abiWordToUint64(ret[:32])
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(ret), 32+int(length))
+	return string(ret[32 : 32+length])
+}
+
+func abiInt256Small(t *testing.T, ret []byte) int64 {
+	t.Helper()
+	require.Len(t, ret, 32)
+	if ret[0]&0x80 == 0 {
+		for _, b := range ret[:24] {
+			require.Zero(t, b)
+		}
+		return int64(binary.BigEndian.Uint64(ret[24:32]))
+	}
+	for _, b := range ret[:24] {
+		require.Equal(t, byte(0xff), b)
+	}
+	return int64(binary.BigEndian.Uint64(ret[24:32]))
 }
 
 func callAssetPrecompileThenRevertCode() []byte {
