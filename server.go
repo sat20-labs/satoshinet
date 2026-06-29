@@ -3946,7 +3946,7 @@ func resolveBTCLuckyTemplateServiceConfig() cpuminer.BTCLuckyTemplateServiceConf
 		RefreshInterval: cfg.BTCLuckyTemplateRefreshInterval,
 		JobTTL:          cfg.BTCLuckyTemplateJobTTL,
 		CacheLimit:      cfg.BTCLuckyTemplateCacheLimit,
-		SubmitBlock:     cfg.BTCLuckyTemplateSubmitBlock,
+		FoundBlocksFile: filepath.Join(cfg.DataDir, "btc_lucky_found_blocks.jsonl"),
 	}
 }
 
@@ -3955,12 +3955,16 @@ func resolveBTCLuckyMinerConfig(params *chaincfg.Params) (cpuminer.BTCLuckyMiner
 	if err != nil {
 		return cpuminer.BTCLuckyMinerConfig{}, err
 	}
+	minerID := strings.TrimSpace(cfg.MiningPubKey)
+	if minerID == "" {
+		minerID = rewardAddr
+	}
 	return cpuminer.BTCLuckyMinerConfig{
 		Enabled:      cfg.BTCLuckyMining,
 		Backend:      cfg.BTCLuckyMiningBackend,
 		RewardAddr:   rewardAddr,
-		Workers:      cfg.BTCLuckyMiningWorkers,
-		MaxWorkers:   cfg.BTCLuckyMiningMaxWorkers,
+		MinerID:      minerID,
+		Jobs:         cfg.BTCLuckyMiningJobs,
 		ReserveCores: cfg.BTCLuckyMiningReserveCores,
 		LowPriority:  cfg.BTCLuckyMiningLowPriority,
 		Network:      cfg.BTCLuckyMiningNetwork,

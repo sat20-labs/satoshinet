@@ -3,6 +3,7 @@ package cpuminer
 import (
 	"bytes"
 	"math/big"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -41,33 +42,25 @@ func testRewardAddress(t *testing.T) string {
 	return addr.EncodeAddress()
 }
 
-func TestResolveWorkerCount(t *testing.T) {
-	n, err := ResolveWorkerCount("2", 0, 0)
+func TestResolveJobCount(t *testing.T) {
+	n, err := ResolveJobCount("2", 0)
 	if err != nil {
-		t.Fatalf("ResolveWorkerCount explicit: %v", err)
+		t.Fatalf("ResolveJobCount explicit: %v", err)
 	}
 	if n != 2 {
-		t.Fatalf("explicit workers = %d, want 2", n)
+		t.Fatalf("explicit jobs = %d, want 2", n)
 	}
 
-	n, err = ResolveWorkerCount("auto", 1<<30, 0)
+	n, err = ResolveJobCount("auto", 1<<30)
 	if err != nil {
-		t.Fatalf("ResolveWorkerCount auto: %v", err)
+		t.Fatalf("ResolveJobCount auto: %v", err)
 	}
 	if n != 1 {
 		t.Fatalf("auto with huge reserve = %d, want 1", n)
 	}
 
-	n, err = ResolveWorkerCount("auto", 0, 1)
-	if err != nil {
-		t.Fatalf("ResolveWorkerCount max: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("auto with max = %d, want 1", n)
-	}
-
-	if _, err := ResolveWorkerCount("0", 0, 0); err == nil {
-		t.Fatalf("expected zero workers to fail")
+	if _, err := ResolveJobCount("0", 0); err == nil {
+		t.Fatalf("expected zero jobs to fail")
 	}
 }
 
@@ -88,7 +81,8 @@ func TestMakeWorkerRanges(t *testing.T) {
 
 func TestAssembleBTCWorkUsesBitcoinWireSerialization(t *testing.T) {
 	rewardAddr := testRewardAddress(t)
-	work, err := assembleBTCWork(testTemplate(), &btcchaincfg.MainNetParams, rewardAddr, 7, 11, 1700000001)
+	minerID := "miner-pubkey"
+	work, err := assembleBTCWork(testTemplate(), &btcchaincfg.MainNetParams, rewardAddr, minerID, 7, 11, 1700000001)
 	if err != nil {
 		t.Fatalf("assembleBTCWork: %v", err)
 	}
@@ -110,6 +104,12 @@ func TestAssembleBTCWorkUsesBitcoinWireSerialization(t *testing.T) {
 	if decoded.MsgTx().TxOut[0].Value != work.coinbase.TxOut[0].Value {
 		t.Fatalf("decoded coinbase value mismatch")
 	}
+	if !bytes.Contains(work.coinbase.TxIn[0].SignatureScript, []byte(coinbaseTag)) {
+		t.Fatalf("coinbase signature script missing tag %q", coinbaseTag)
+	}
+	if !bytes.Contains(work.coinbase.TxIn[0].SignatureScript, []byte(minerID)) {
+		t.Fatalf("coinbase signature script missing miner id %q", minerID)
+	}
 
 	var blockBuf bytes.Buffer
 	if err := work.block.Serialize(&blockBuf); err != nil {
@@ -123,7 +123,7 @@ func TestAssembleBTCWorkUsesBitcoinWireSerialization(t *testing.T) {
 func TestCompactJobHeaderHashMatchesAssembledWork(t *testing.T) {
 	tpl := testTemplate()
 	rewardAddr := testRewardAddress(t)
-	work, err := assembleBTCWork(tpl, &btcchaincfg.MainNetParams, rewardAddr, 7, 11, tpl.CurTime)
+	work, err := assembleBTCWork(tpl, &btcchaincfg.MainNetParams, rewardAddr, "miner-pubkey", 7, 11, tpl.CurTime)
 	if err != nil {
 		t.Fatalf("assembleBTCWork: %v", err)
 	}
@@ -168,13 +168,14 @@ func TestTargetFromTemplate(t *testing.T) {
 	}
 }
 
-func TestTemplateServiceSubmitSolutionRecordsMetadataWithoutSubmit(t *testing.T) {
+func TestTemplateServiceSubmitSolutionRecordsMetadataOnSubmitError(t *testing.T) {
 	tpl := testTemplate()
 	rewardAddr := testRewardAddress(t)
+	foundFile := filepath.Join(t.TempDir(), "found.jsonl")
 	service, err := NewTemplateService(BTCLuckyTemplateServiceConfig{
-		Enabled:     true,
-		Network:     "mainnet",
-		SubmitBlock: false,
+		Enabled:         true,
+		Network:         "mainnet",
+		FoundBlocksFile: foundFile,
 	})
 	if err != nil {
 		t.Fatalf("NewTemplateService: %v", err)
@@ -191,9 +192,10 @@ func TestTemplateServiceSubmitSolutionRecordsMetadataWithoutSubmit(t *testing.T)
 		CurTime:           tpl.CurTime,
 		Target:            tpl.Target,
 		RewardAddress:     rewardAddr,
+		MinerID:           "miner-pubkey",
 		ExpiresAt:         time.Now().Add(time.Minute),
 	}
-	work, err := assembleBTCWork(tpl, &btcchaincfg.MainNetParams, rewardAddr, 1, 2, tpl.CurTime)
+	work, err := assembleBTCWork(tpl, &btcchaincfg.MainNetParams, rewardAddr, job.MinerID, 1, 2, tpl.CurTime)
 	if err != nil {
 		t.Fatalf("assembleBTCWork: %v", err)
 	}
@@ -213,16 +215,38 @@ func TestTemplateServiceSubmitSolutionRecordsMetadataWithoutSubmit(t *testing.T)
 		Nonce:         2,
 		HeaderHash:    work.blockHash.String(),
 	})
-	if err != nil {
-		t.Fatalf("SubmitSolution: %v", err)
+	if err == nil {
+		t.Fatalf("expected SubmitSolution to fail without btc rpc client")
 	}
 	if record.BlockHash != work.blockHash.String() {
 		t.Fatalf("record block hash = %s, want %s", record.BlockHash, work.blockHash)
 	}
-	if record.SubmitResult != "submit disabled" {
+	if record.SubmitResult != "btc rpc client is not connected" {
 		t.Fatalf("submit result = %q", record.SubmitResult)
 	}
 	if len(service.FoundBlocks()) != 1 {
 		t.Fatalf("found block count = %d, want 1", len(service.FoundBlocks()))
+	}
+	records, err := loadFoundBlockRecords(foundFile)
+	if err != nil {
+		t.Fatalf("loadFoundBlockRecords: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("persisted found block count = %d, want 1", len(records))
+	}
+	if records[0].BlockHash != work.blockHash.String() {
+		t.Fatalf("persisted block hash = %s, want %s", records[0].BlockHash, work.blockHash)
+	}
+
+	reloaded, err := NewTemplateService(BTCLuckyTemplateServiceConfig{
+		Enabled:         true,
+		Network:         "mainnet",
+		FoundBlocksFile: foundFile,
+	})
+	if err != nil {
+		t.Fatalf("reload NewTemplateService: %v", err)
+	}
+	if len(reloaded.FoundBlocks()) != 1 {
+		t.Fatalf("reloaded found block count = %d, want 1", len(reloaded.FoundBlocks()))
 	}
 }

@@ -24,8 +24,8 @@ type BTCLuckyMinerConfig struct {
 	Enabled      bool
 	Backend      string
 	RewardAddr   string
-	Workers      string
-	MaxWorkers   int
+	MinerID      string
+	Jobs         string
 	ReserveCores int
 	LowPriority  bool
 	Network      string
@@ -45,7 +45,7 @@ type BTCLuckyTemplateServiceConfig struct {
 	RefreshInterval time.Duration
 	JobTTL          time.Duration
 	CacheLimit      int
-	SubmitBlock     bool
+	FoundBlocksFile string
 }
 
 // Normalize fills conservative defaults without enabling any optional module.
@@ -53,8 +53,8 @@ func (c *BTCLuckyMinerConfig) Normalize() {
 	if c.Backend == "" {
 		c.Backend = BTCLuckyBackendPeerTemplate
 	}
-	if c.Workers == "" {
-		c.Workers = "auto"
+	if c.Jobs == "" {
+		c.Jobs = "1"
 	}
 	if c.Network == "" {
 		c.Network = "mainnet"
@@ -86,28 +86,25 @@ func (c *BTCLuckyTemplateServiceConfig) Normalize() {
 	}
 }
 
-func ResolveWorkerCount(workers string, reserveCores, maxWorkers int) (int, error) {
-	workers = strings.TrimSpace(strings.ToLower(workers))
-	if workers == "" || workers == "auto" {
+func ResolveJobCount(jobs string, reserveCores int) (int, error) {
+	jobs = strings.TrimSpace(strings.ToLower(jobs))
+	if jobs == "" {
+		jobs = "1"
+	}
+	if jobs == "auto" {
 		n := runtime.NumCPU() - reserveCores
 		if n < 1 {
 			n = 1
 		}
-		if maxWorkers > 0 && n > maxWorkers {
-			n = maxWorkers
-		}
 		return n, nil
 	}
 
-	n, err := strconv.Atoi(workers)
+	n, err := strconv.Atoi(jobs)
 	if err != nil {
-		return 0, fmt.Errorf("invalid btc lucky mining workers %q", workers)
+		return 0, fmt.Errorf("invalid btc lucky mining jobs %q", jobs)
 	}
 	if n < 1 {
-		return 0, fmt.Errorf("btc lucky mining workers must be positive")
-	}
-	if maxWorkers > 0 && n > maxWorkers {
-		n = maxWorkers
+		return 0, fmt.Errorf("btc lucky mining jobs must be positive")
 	}
 	return n, nil
 }

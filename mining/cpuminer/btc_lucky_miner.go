@@ -20,7 +20,7 @@ type Miner struct {
 	mu      sync.Mutex
 	cfg     BTCLuckyMinerConfig
 	backend MiningJobBackend
-	workers int
+	jobs    int
 	speed   *speedMonitor
 	status  MinerStatus
 	quit    chan struct{}
@@ -36,21 +36,22 @@ func NewMiner(cfg BTCLuckyMinerConfig, backend MiningJobBackend) (*Miner, error)
 	if cfg.RewardAddr == "" {
 		return nil, fmt.Errorf("btc lucky mining reward address is required")
 	}
-	workers, err := ResolveWorkerCount(cfg.Workers, cfg.ReserveCores, cfg.MaxWorkers)
+	jobs, err := ResolveJobCount(cfg.Jobs, cfg.ReserveCores)
 	if err != nil {
 		return nil, err
 	}
 	return &Miner{
 		cfg:     cfg,
 		backend: backend,
-		workers: workers,
+		jobs:    jobs,
 		speed:   newSpeedMonitor(),
 		status: MinerStatus{
 			Enabled:       cfg.Enabled,
 			Backend:       cfg.Backend,
 			RewardAddress: cfg.RewardAddr,
-			Workers:       workers,
-			WorkersMode:   cfg.Workers,
+			MinerID:       cfg.MinerID,
+			Jobs:          jobs,
+			JobsMode:      cfg.Jobs,
 			LowPriority:   cfg.LowPriority,
 		},
 	}, nil
@@ -80,7 +81,7 @@ func (m *Miner) Start() error {
 
 	m.wg.Add(1)
 	go m.controller()
-	log.Infof("BTC lucky miner started with %d workers", m.workers)
+	log.Infof("BTC lucky miner started with %d jobs", m.jobs)
 	return nil
 }
 
@@ -135,7 +136,8 @@ func (m *Miner) controller() {
 		job, err := m.backend.CurrentJob(JobRequest{
 			Network:       m.cfg.Network,
 			RewardAddress: m.cfg.RewardAddr,
-			Workers:       m.workers,
+			MinerID:       m.cfg.MinerID,
+			Jobs:          m.jobs,
 		})
 		if err != nil {
 			m.setError(err)

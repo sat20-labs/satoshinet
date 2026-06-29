@@ -149,10 +149,9 @@ type config struct {
 	TimerGenerate                   bool          `long:"timergenerate" description:"Generate (mine) bitcoins using the POS with timer enabled"`
 	BTCLuckyMining                  bool          `long:"btcluckymining" description:"Enable optional BTC lucky CPU mining"`
 	BTCLuckyMiningBackend           string        `long:"btcluckyminingbackend" description:"BTC lucky mining backend: peer-template, local-template, or rpc-template"`
-	BTCLuckyMiningWorkers           string        `long:"btcluckyminingworkers" description:"BTC lucky mining worker count or auto"`
-	BTCLuckyMiningMaxWorkers        int           `long:"btcluckyminingmaxworkers" description:"Maximum BTC lucky mining workers, 0 for unlimited"`
-	BTCLuckyMiningReserveCores      int           `long:"btcluckyminingreservecores" description:"CPU cores reserved away from BTC lucky mining workers"`
-	BTCLuckyMiningLowPriority       bool          `long:"btcluckymininglowpriority" description:"Run BTC lucky mining workers in cooperative low-priority mode"`
+	BTCLuckyMiningJobs              string        `long:"btcluckyminingjobs" description:"BTC lucky mining job count or auto"`
+	BTCLuckyMiningReserveCores      int           `long:"btcluckyminingreservecores" description:"CPU cores reserved away from BTC lucky mining jobs"`
+	BTCLuckyMiningLowPriority       bool          `long:"btcluckymininglowpriority" description:"Run BTC lucky mining jobs in cooperative low-priority mode"`
 	BTCLuckyMiningNetwork           string        `long:"btcluckyminingnetwork" description:"Bitcoin network for BTC lucky mining: mainnet, testnet4, regtest, simnet"`
 	BTCLuckyTemplateService         bool          `long:"btcluckytemplateservice" description:"Enable BTC lucky template service on a core node"`
 	BTCLuckyTemplateBackend         string        `long:"btcluckytemplatebackend" description:"BTC lucky template service backend"`
@@ -164,7 +163,6 @@ type config struct {
 	BTCLuckyTemplateRefreshInterval time.Duration `long:"btcluckytemplaterefreshinterval" description:"BTC lucky template refresh interval. Valid time units are {s, m, h}."`
 	BTCLuckyTemplateJobTTL          time.Duration `long:"btcluckytemplatejobttl" description:"BTC lucky mining job TTL. Valid time units are {s, m, h}."`
 	BTCLuckyTemplateCacheLimit      int           `long:"btcluckytemplatecachelimit" description:"BTC lucky template/job cache limit"`
-	BTCLuckyTemplateSubmitBlock     bool          `long:"btcluckytemplatesubmitblock" description:"Submit solved BTC blocks through Bitcoin Core RPC"`
 	EnableSTP                       bool          `long:"enableSTP" description:"Enable STP service"`
 	IndexerScheme                   string        `long:"indexerscheme" description:"The scheme for indexer"`
 	IndexerAccessKey                string        `long:"indexeraccesskey" description:"The access key of indexer"`
@@ -531,7 +529,7 @@ func loadConfig() (*config, []string, error) {
 		AgentLLMTimeout:                 defaultAgentLLMTimeout,
 		Generate:                        defaultGenerate,
 		BTCLuckyMiningBackend:           "peer-template",
-		BTCLuckyMiningWorkers:           "auto",
+		BTCLuckyMiningJobs:              "1",
 		BTCLuckyMiningLowPriority:       true,
 		BTCLuckyMiningNetwork:           "mainnet",
 		BTCLuckyTemplateBackend:         "bitcoin-core",
@@ -541,7 +539,6 @@ func loadConfig() (*config, []string, error) {
 		BTCLuckyTemplateRefreshInterval: time.Minute,
 		BTCLuckyTemplateJobTTL:          2 * time.Minute,
 		BTCLuckyTemplateCacheLimit:      16,
-		BTCLuckyTemplateSubmitBlock:     true,
 		TxIndex:                         defaultTxIndex,
 		AddrIndex:                       defaultAddrIndex,
 	}

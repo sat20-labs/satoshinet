@@ -20,12 +20,17 @@ mining, consensus, mempool policy, or validator scheduling.
   use `github.com/btcsuite/btcd/...` types. They must not use SatoshiNet's
   extended `wire` package because SatoshiNet transaction outputs include asset
   serialization that is not valid Bitcoin block serialization.
-- BTC lucky workers run in cooperative low-priority mode by default. They yield
+- BTC lucky jobs run in cooperative low-priority mode by default. They yield
   and briefly sleep during the hash loop so other runnable processes and the
   SatoshiNet node's own critical goroutines can take CPU first. This does not
   lower the priority of the whole node process.
-- V1 records found block metadata in memory. Coinbase maturity tracking and
-  channel credit are follow-up work.
+- The Bitcoin coinbase input script includes a `satoshinet` tag and the
+  SatoshiNet node `miningpubkey` as miner metadata. If `miningpubkey` is empty,
+  the miner falls back to the reward address as metadata. The coinbase output
+  pays the configured mining/channel reward address.
+- V1 records found block metadata in memory and appends it to
+  `btc_lucky_found_blocks.jsonl` under the node data directory. Coinbase
+  maturity tracking and channel credit are follow-up work.
 
 ## Current V1 Flow
 
@@ -55,8 +60,7 @@ reward address remains the node's SatoshiNet mining/channel address.
 ```ini
 btcluckymining=0
 btcluckyminingbackend=peer-template
-btcluckyminingworkers=auto
-btcluckyminingmaxworkers=0
+btcluckyminingjobs=1
 btcluckyminingreservecores=0
 btcluckymininglowpriority=1
 btcluckyminingnetwork=mainnet
@@ -71,7 +75,6 @@ btcluckytemplatenetwork=mainnet
 btcluckytemplaterefreshinterval=60s
 btcluckytemplatejobttl=120s
 btcluckytemplatecachelimit=16
-btcluckytemplatesubmitblock=1
 ```
 
 ## RPC

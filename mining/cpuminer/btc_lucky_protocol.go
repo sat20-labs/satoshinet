@@ -12,7 +12,8 @@ type WorkerRange struct {
 type JobRequest struct {
 	Network       string `json:"network"`
 	RewardAddress string `json:"reward_address"`
-	Workers       int    `json:"workers"`
+	MinerID       string `json:"miner_id"`
+	Jobs          int    `json:"jobs"`
 }
 
 type CompactMiningJob struct {
@@ -27,6 +28,7 @@ type CompactMiningJob struct {
 	CurTime           int64         `json:"curtime"`
 	MinTime           int64         `json:"mintime"`
 	RewardAddress     string        `json:"reward_address"`
+	MinerID           string        `json:"miner_id"`
 	WorkerRanges      []WorkerRange `json:"worker_ranges"`
 	ExpiresAt         time.Time     `json:"expires_at"`
 }

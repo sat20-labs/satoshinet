@@ -19,7 +19,7 @@ import (
 	btcwire "github.com/btcsuite/btcd/wire"
 )
 
-const coinbaseTag = "satoshinet btc lucky"
+const coinbaseTag = "satoshinet"
 
 type assembledWork struct {
 	block     *btcwire.MsgBlock
@@ -87,7 +87,7 @@ func btcPayToAddrScript(addr string, params *btcchaincfg.Params) ([]byte, error)
 	return btctxscript.PayToAddrScript(decoded)
 }
 
-func assembleBTCWork(template *btcbtcjson.GetBlockTemplateResult, params *btcchaincfg.Params, rewardAddress string, extraNonce uint64, nonce uint32, ntime int64) (*assembledWork, error) {
+func assembleBTCWork(template *btcbtcjson.GetBlockTemplateResult, params *btcchaincfg.Params, rewardAddress, minerID string, extraNonce uint64, nonce uint32, ntime int64) (*assembledWork, error) {
 	if template == nil {
 		return nil, fmt.Errorf("nil block template")
 	}
@@ -104,7 +104,7 @@ func assembleBTCWork(template *btcbtcjson.GetBlockTemplateResult, params *btccha
 		return nil, fmt.Errorf("invalid template bits %q: %w", template.Bits, err)
 	}
 
-	coinbase, err := buildCoinbaseTx(template, params, rewardAddress, extraNonce)
+	coinbase, err := buildCoinbaseTx(template, params, rewardAddress, minerID, extraNonce)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func assembleBTCWork(template *btcbtcjson.GetBlockTemplateResult, params *btccha
 	}, nil
 }
 
-func buildCoinbaseTx(template *btcbtcjson.GetBlockTemplateResult, params *btcchaincfg.Params, rewardAddress string, extraNonce uint64) (*btcwire.MsgTx, error) {
+func buildCoinbaseTx(template *btcbtcjson.GetBlockTemplateResult, params *btcchaincfg.Params, rewardAddress, minerID string, extraNonce uint64) (*btcwire.MsgTx, error) {
 	pkScript, err := btcPayToAddrScript(rewardAddress, params)
 	if err != nil {
 		return nil, fmt.Errorf("invalid btc lucky reward address: %w", err)
@@ -162,6 +162,7 @@ func buildCoinbaseTx(template *btcbtcjson.GetBlockTemplateResult, params *btccha
 	sigScript, err := btctxscript.NewScriptBuilder().
 		AddInt64(template.Height).
 		AddData([]byte(coinbaseTag)).
+		AddData([]byte(minerID)).
 		AddData(extraNonceBytes).
 		Script()
 	if err != nil {

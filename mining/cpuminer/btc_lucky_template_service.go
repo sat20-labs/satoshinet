@@ -2,7 +2,11 @@ package cpuminer
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -37,7 +41,7 @@ func NewTemplateService(cfg BTCLuckyTemplateServiceConfig) (*TemplateService, er
 	if err != nil {
 		return nil, err
 	}
-	return &TemplateService{
+	svc := &TemplateService{
 		cfg:    cfg,
 		params: params,
 		jobs:   make(map[string]*cachedBTCJob),
@@ -46,7 +50,11 @@ func NewTemplateService(cfg BTCLuckyTemplateServiceConfig) (*TemplateService, er
 			Backend:    cfg.Backend,
 			BTCNetwork: cfg.Network,
 		},
-	}, nil
+	}
+	if err := svc.loadFoundBlocks(); err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 func (s *TemplateService) Name() string {
@@ -101,8 +109,8 @@ func (s *TemplateService) CurrentJob(req JobRequest) (*CompactMiningJob, error) 
 	if req.RewardAddress == "" {
 		return nil, fmt.Errorf("missing btc lucky reward address")
 	}
-	if req.Workers < 1 {
-		req.Workers = 1
+	if req.Jobs < 1 {
+		req.Jobs = 1
 	}
 
 	s.mu.Lock()
@@ -135,10 +143,10 @@ func (s *TemplateService) CurrentJob(req JobRequest) (*CompactMiningJob, error) 
 		}
 		target = fmt.Sprintf("%064x", t)
 	}
-	workerRanges := makeWorkerRanges(req.Workers)
+	workerRanges := makeWorkerRanges(req.Jobs)
 	for i := range workerRanges {
 		work, err := assembleBTCWork(template, s.params, req.RewardAddress,
-			workerRanges[i].ExtraNonceStart, 0, template.CurTime)
+			req.MinerID, workerRanges[i].ExtraNonceStart, 0, template.CurTime)
 		if err != nil {
 			s.setTemplateError(err)
 			return nil, err
@@ -157,6 +165,7 @@ func (s *TemplateService) CurrentJob(req JobRequest) (*CompactMiningJob, error) 
 		CurTime:           template.CurTime,
 		MinTime:           template.MinTime,
 		RewardAddress:     req.RewardAddress,
+		MinerID:           req.MinerID,
 		WorkerRanges:      workerRanges,
 		ExpiresAt:         now.Add(s.cfg.JobTTL),
 	}
@@ -203,7 +212,6 @@ func (s *TemplateService) SubmitSolution(solution *MiningSolution) (*FoundBlockR
 	s.mu.Lock()
 	cached := s.jobs[solution.JobID]
 	client := s.client
-	submit := s.cfg.SubmitBlock
 	s.mu.Unlock()
 	if cached == nil {
 		return nil, fmt.Errorf("unknown btc lucky mining job %s", solution.JobID)
@@ -216,7 +224,7 @@ func (s *TemplateService) SubmitSolution(solution *MiningSolution) (*FoundBlockR
 	}
 
 	work, err := assembleBTCWork(cached.template, cached.params, solution.RewardAddress,
-		solution.ExtraNonce, solution.Nonce, solution.NTime)
+		cached.job.MinerID, solution.ExtraNonce, solution.Nonce, solution.NTime)
 	if err != nil {
 		s.setSubmitResult("", err)
 		return nil, err
@@ -248,36 +256,38 @@ func (s *TemplateService) SubmitSolution(solution *MiningSolution) (*FoundBlockR
 		TemplateID:    solution.TemplateID,
 		CreatedAt:     time.Now(),
 	}
-	if submit {
-		if client == nil {
-			err := fmt.Errorf("btc rpc client is not connected")
-			s.setSubmitResult("", err)
-			return nil, err
-		}
-		var buf bytes.Buffer
-		if err := work.block.Serialize(&buf); err != nil {
-			s.setSubmitResult("", err)
-			return nil, err
-		}
-		block, err := btcbtcutil.NewBlockFromBytes(buf.Bytes())
-		if err != nil {
-			s.setSubmitResult("", err)
-			return nil, err
-		}
-		err = client.SubmitBlock(block, &btcbtcjson.SubmitBlockOptions{
-			WorkID: cached.template.WorkID,
-		})
-		if err != nil {
-			record.SubmitResult = err.Error()
-			s.setSubmitResult(record.SubmitResult, err)
-			s.rememberFound(record)
-			return &record, err
-		}
-		record.Submitted = true
-		record.SubmitResult = "accepted"
-	} else {
-		record.SubmitResult = "submit disabled"
+	if client == nil {
+		err := fmt.Errorf("btc rpc client is not connected")
+		record.SubmitResult = err.Error()
+		s.setSubmitResult(record.SubmitResult, err)
+		s.rememberFound(record)
+		return &record, err
 	}
+	var buf bytes.Buffer
+	if err := work.block.Serialize(&buf); err != nil {
+		record.SubmitResult = err.Error()
+		s.setSubmitResult(record.SubmitResult, err)
+		s.rememberFound(record)
+		return &record, err
+	}
+	block, err := btcbtcutil.NewBlockFromBytes(buf.Bytes())
+	if err != nil {
+		record.SubmitResult = err.Error()
+		s.setSubmitResult(record.SubmitResult, err)
+		s.rememberFound(record)
+		return &record, err
+	}
+	err = client.SubmitBlock(block, &btcbtcjson.SubmitBlockOptions{
+		WorkID: cached.template.WorkID,
+	})
+	if err != nil {
+		record.SubmitResult = err.Error()
+		s.setSubmitResult(record.SubmitResult, err)
+		s.rememberFound(record)
+		return &record, err
+	}
+	record.Submitted = true
+	record.SubmitResult = "accepted"
 
 	s.setSubmitResult(record.SubmitResult, nil)
 	s.rememberFound(record)
@@ -339,9 +349,70 @@ func (s *TemplateService) setSubmitResult(result string, err error) {
 
 func (s *TemplateService) rememberFound(record FoundBlockRecord) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.found = append(s.found, record)
 	if len(s.found) > 32 {
 		s.found = s.found[len(s.found)-32:]
 	}
+	path := s.cfg.FoundBlocksFile
+	s.mu.Unlock()
+
+	if err := appendFoundBlockRecord(path, record); err != nil {
+		log.Warnf("failed to persist BTC lucky found block record: %v", err)
+	}
+}
+
+func (s *TemplateService) loadFoundBlocks() error {
+	records, err := loadFoundBlockRecords(s.cfg.FoundBlocksFile)
+	if err != nil {
+		return err
+	}
+	if len(records) > 32 {
+		records = records[len(records)-32:]
+	}
+	s.found = records
+	return nil
+}
+
+func appendFoundBlockRecord(path string, record FoundBlockRecord) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	return enc.Encode(record)
+}
+
+func loadFoundBlockRecords(path string) ([]FoundBlockRecord, error) {
+	if path == "" {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	var records []FoundBlockRecord
+	for {
+		var record FoundBlockRecord
+		if err := dec.Decode(&record); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }

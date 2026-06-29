@@ -10,8 +10,9 @@ type MinerStatus struct {
 	Running          bool               `json:"running"`
 	Backend          string             `json:"backend"`
 	RewardAddress    string             `json:"rewardAddress"`
-	Workers          int                `json:"workers"`
-	WorkersMode      string             `json:"workersMode"`
+	MinerID          string             `json:"minerId"`
+	Jobs             int                `json:"jobs"`
+	JobsMode         string             `json:"jobsMode"`
 	LowPriority      bool               `json:"lowPriority"`
 	HashesPerSecond  float64            `json:"hashesPerSecond"`
 	BestShare        string             `json:"bestShare"`
