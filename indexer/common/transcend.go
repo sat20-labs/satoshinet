@@ -2,6 +2,7 @@ package common
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"strings"
@@ -19,18 +20,18 @@ import (
 )
 
 const (
-	SAT20_MAGIC_NUMBER          = txscript.OP_16
+	SAT20_MAGIC_NUMBER = txscript.OP_16
 	// 通道
-	CONTENT_TYPE_MIN	        = txscript.OP_0
-	CONTENT_TYPE_CHANNELID      = txscript.OP_0
-	CONTENT_TYPE_ASCENDING      = txscript.OP_DATA_1
-	CONTENT_TYPE_DESCENDING     = txscript.OP_DATA_2
-	CONTENT_TYPE_PAYMENT        = txscript.OP_DATA_3
-	CONTENT_TYPE_STAKE          = txscript.OP_DATA_4
-	CONTENT_TYPE_UNSTAKE        = txscript.OP_DATA_5
-	CONTENT_TYPE_DEPOSIT        = txscript.OP_DATA_6
-	CONTENT_TYPE_WITHDRAW       = txscript.OP_DATA_7
-	CONTENT_TYPE_LIQUIDPOOL     = txscript.OP_DATA_8
+	CONTENT_TYPE_MIN        = txscript.OP_0
+	CONTENT_TYPE_CHANNELID  = txscript.OP_0
+	CONTENT_TYPE_ASCENDING  = txscript.OP_DATA_1
+	CONTENT_TYPE_DESCENDING = txscript.OP_DATA_2
+	CONTENT_TYPE_PAYMENT    = txscript.OP_DATA_3
+	CONTENT_TYPE_STAKE      = txscript.OP_DATA_4
+	CONTENT_TYPE_UNSTAKE    = txscript.OP_DATA_5
+	CONTENT_TYPE_DEPOSIT    = txscript.OP_DATA_6
+	CONTENT_TYPE_WITHDRAW   = txscript.OP_DATA_7
+	CONTENT_TYPE_LIQUIDPOOL = txscript.OP_DATA_8
 
 	// 通道合约
 	CONTENT_TYPE_PERFORMACTION  = txscript.OP_DATA_20
@@ -38,24 +39,103 @@ const (
 	CONTENT_TYPE_INVOKECONTRACT = txscript.OP_DATA_22
 	CONTENT_TYPE_INVOKERESULT   = txscript.OP_DATA_23
 
-	// EVM合约
-	CONTENT_TYPE_EVM_DEPLOY     = txscript.OP_DATA_31
-	CONTENT_TYPE_EVM_INVOKE     = txscript.OP_DATA_32
-	CONTENT_TYPE_EVM_RESULT     = txscript.OP_DATA_33
+	// 聪网智能合约
+	CONTENT_TYPE_CONTRACT_DEPLOY     = txscript.OP_DATA_31
+	CONTENT_TYPE_CONTRACT_INVOKE     = txscript.OP_DATA_32
+	CONTENT_TYPE_CONTRACT_RESULT     = txscript.OP_DATA_33
+	CONTENT_TYPE_CONTRACT_STATE_ROOT = txscript.OP_DATA_34
+
+	CONTENT_TYPE_EVM_DEPLOY = CONTENT_TYPE_CONTRACT_DEPLOY
+	CONTENT_TYPE_EVM_INVOKE = CONTENT_TYPE_CONTRACT_INVOKE
+	CONTENT_TYPE_EVM_RESULT = CONTENT_TYPE_CONTRACT_RESULT
 
 	// ordx
-	CONTENT_TYPE_UNBIND         = txscript.OP_DATA_40
-	CONTENT_TYPE_SWAP           = txscript.OP_DATA_41
-	CONTENT_TYPE_BINDREFERRER   = txscript.OP_DATA_42
-	CONTENT_TYPE_FREEZE         = txscript.OP_DATA_43
-	CONTENT_TYPE_UNFREEZE       = txscript.OP_DATA_44
+	CONTENT_TYPE_UNBIND       = txscript.OP_DATA_40
+	CONTENT_TYPE_SWAP         = txscript.OP_DATA_41
+	CONTENT_TYPE_BINDREFERRER = txscript.OP_DATA_42
+	CONTENT_TYPE_FREEZE       = txscript.OP_DATA_43
+	CONTENT_TYPE_UNFREEZE     = txscript.OP_DATA_44
 
-	CONTENT_TYPE_MEMO	        = txscript.OP_DATA_75
-	CONTENT_TYPE_MAX	        = txscript.OP_DATA_75
+	CONTENT_TYPE_MEMO = txscript.OP_DATA_75
+	CONTENT_TYPE_MAX  = txscript.OP_DATA_75
 	// -> OP_DATA_75
 
 	MAX_PAYLOAD_LEN = txscript.MaxDataCarrierSize - 8
 )
+
+const (
+	DESCEND_PAYLOAD_V2_MAGIC_0 = byte('D')
+	DESCEND_PAYLOAD_V2_MAGIC_1 = byte('2')
+
+	DESCEND_OP_UNKNOWN      uint8 = 0
+	DESCEND_OP_SPLICING_OUT uint8 = 1
+	DESCEND_OP_CLOSE        uint8 = 2
+	DESCEND_OP_FORCE_CLOSE  uint8 = 3
+)
+
+type DescendPayload struct {
+	Version             int
+	Operation           uint8
+	L1TxId              string
+	ReturnedOutputVouts []uint32
+	LegacyPayload       string
+}
+
+func EncodeDescendPayloadV2(l1TxId string, operation uint8, returnedOutputVouts []uint32) ([]byte, error) {
+	hash, err := chainhash.NewHashFromStr(l1TxId)
+	if err != nil {
+		return nil, err
+	}
+	if len(returnedOutputVouts) > 9 {
+		return nil, fmt.Errorf("too many returned outputs %d", len(returnedOutputVouts))
+	}
+
+	result := make([]byte, 0, 2+1+32+1+4*len(returnedOutputVouts))
+	result = append(result, DESCEND_PAYLOAD_V2_MAGIC_0, DESCEND_PAYLOAD_V2_MAGIC_1, operation)
+	result = append(result, hash.CloneBytes()...)
+	result = append(result, byte(len(returnedOutputVouts)))
+	for _, vout := range returnedOutputVouts {
+		var buf [4]byte
+		binary.LittleEndian.PutUint32(buf[:], vout)
+		result = append(result, buf[:]...)
+	}
+	if len(result) > MAX_PAYLOAD_LEN {
+		return nil, fmt.Errorf("descending v2 payload too large: %d > %d", len(result), MAX_PAYLOAD_LEN)
+	}
+	return result, nil
+}
+
+func ParseDescendPayload(data []byte) (*DescendPayload, error) {
+	if len(data) >= 36 && data[0] == DESCEND_PAYLOAD_V2_MAGIC_0 && data[1] == DESCEND_PAYLOAD_V2_MAGIC_1 {
+		count := int(data[35])
+		expectedLen := 36 + 4*count
+		if len(data) != expectedLen {
+			return nil, fmt.Errorf("invalid descending v2 payload length %d, expected %d", len(data), expectedLen)
+		}
+		hash, err := chainhash.NewHash(data[3:35])
+		if err != nil {
+			return nil, err
+		}
+		result := &DescendPayload{
+			Version:   2,
+			Operation: data[2],
+			L1TxId:    hash.String(),
+		}
+		offset := 36
+		for i := 0; i < count; i++ {
+			result.ReturnedOutputVouts = append(result.ReturnedOutputVouts, binary.LittleEndian.Uint32(data[offset:offset+4]))
+			offset += 4
+		}
+		return result, nil
+	}
+
+	return &DescendPayload{
+		Version:       1,
+		Operation:     DESCEND_OP_UNKNOWN,
+		L1TxId:        string(data),
+		LegacyPayload: string(data),
+	}, nil
+}
 
 type ContractDeployData struct {
 	ContractPath    string
@@ -71,7 +151,6 @@ type ContractInvokeData struct {
 	PubKey       []byte
 	Sig          []byte
 }
-
 
 func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 	value int64, assets wire.TxAssets, sig []byte, err error) {
@@ -234,7 +313,7 @@ func IsSTPNullDataScript(script []byte) bool {
 	}
 
 	// content type
-	if !tokenizer.Next() || tokenizer.Err() != nil  {
+	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return false
 	}
 	ctype := tokenizer.ExtractInt64()
@@ -306,7 +385,6 @@ func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error
 	tokenizer := txscript.MakeScriptTokenizer(0, script)
 	result := ContractDeployData{}
 
-	
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing contract path")
 	}
@@ -365,7 +443,6 @@ func ParseSignedInvokeContractInvoice(data []byte) (*ContractInvokeData, error) 
 
 	return result, nil
 }
-
 
 // 调用 sindexer.NullDataScript 组装成最终的 op_return 数据
 func CreateStakeInvoice(assetName *indexer.AssetName, amt *indexer.Decimal) ([]byte, error) {

@@ -16,6 +16,8 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -834,6 +836,17 @@ func CheckBlockHeaderContext(header *wire.BlockHeader, prevNode HeaderCtx,
 	return nil
 }
 
+func checkContractBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {
+	if err := contractengine.CheckBlockOrder(block, params); err != nil {
+		return ruleError(ErrInvalidEVMBlock, err.Error())
+	}
+	return nil
+}
+
+func checkEVMBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {
+	return checkContractBlockOrder(block, params)
+}
+
 // checkBlockContext performs several validation checks on the block which depend
 // on its position within the block chain.
 //
@@ -853,10 +866,16 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 		return err
 	}
 
-	// 检查是不是由正确的miner挖出来的块，需要先确定这个block的高度
-	err = b.assetIndexerMgr.CheckBlockMiningInfo(block)
-	if err != nil {
+	if err := checkContractBlockOrder(block, b.chainParams); err != nil {
 		return err
+	}
+
+	// 检查是不是由正确的miner挖出来的块，需要先确定这个block的高度
+	if b.assetIndexerMgr != nil {
+		err = b.assetIndexerMgr.CheckBlockMiningInfo(block)
+		if err != nil {
+			return err
+		}
 	}
 
 	fastAdd := flags&BFFastAdd == BFFastAdd
@@ -1141,6 +1160,9 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 
 	// feeRanges 是totalInSatsRange减去所有的out后剩余的sats范围
 	feeTxAssets := totalInTxAssets
+	if err := checkContractBaseGasFee(msgTx, feeTxAssets, txHeight, chainParams); err != nil {
+		return 0, nil, err
+	}
 	// rangeSize := RangesSize(feeRanges)
 	// if txFeeInSatoshi != rangeSize {
 	// 	str := fmt.Sprintf("total fee is not match with fee ranges "+
@@ -1148,6 +1170,87 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 	// 	return 0, nil, ruleError(ErrBadFees, str)
 	// }
 	return txFeeInSatoshi, feeTxAssets, nil
+}
+
+func (b *BlockChain) checkAnchorTxsUnique(block *btcutil.Block) error {
+	seen := make(map[string]*chainhash.Hash)
+	for _, tx := range block.Transactions() {
+		if !IsAnchorTx(tx.MsgTx()) {
+			continue
+		}
+
+		lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+		if err != nil {
+			str := fmt.Sprintf("invalid anchor tx with %s, %v", tx.Hash(), err)
+			return ruleError(ErrAnchorTXVerifyFailed, str)
+		}
+		if prevHash, ok := seen[lockedInfo.Utxo]; ok {
+			str := fmt.Sprintf("block contains duplicate anchor funding utxo %s in tx %s and %s",
+				lockedInfo.Utxo, prevHash, tx.Hash())
+			return ruleError(ErrAnchorTXVerifyFailed, str)
+		}
+		seen[lockedInfo.Utxo] = tx.Hash()
+
+		if info, _ := b.FetchAnchorTx(lockedInfo.Utxo); info != nil {
+			str := fmt.Sprintf("anchor funding utxo %s already anchored by tx %s", lockedInfo.Utxo, info.AnchorTxid)
+			return ruleError(ErrAnchorTXVerifyFailed, str)
+		}
+	}
+	return nil
+}
+
+func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int32, params *chaincfg.Params) error {
+	class, found, err := contractengine.ClassifyTxForBlockOrder(tx, params)
+	if err != nil || !found || !class.IsWork() {
+		return err
+	}
+	if class.TxType == contractcommon.TxTypeInvoke {
+		hasPayload, err := contractcommon.HasContractPayload(tx)
+		if err != nil {
+			return err
+		}
+		if !hasPayload {
+			return nil
+		}
+	}
+	var baseGas int64
+	switch class.TxType {
+	case contractcommon.TxTypeDeploy:
+		baseGas = contractcommon.DeployBaseGas
+	case contractcommon.TxTypeInvoke:
+		baseGas = contractcommon.InvokeBaseGas
+	default:
+		return nil
+	}
+	if height < 0 {
+		height = 0
+	}
+	required, err := contractcommon.GasFeeDecimalAtHeight(baseGas, uint64(height))
+	if err != nil {
+		return ruleError(ErrBadFees, fmt.Sprintf("contract base gas fee error: %v", err))
+	}
+	if required == nil || required.Sign() == 0 {
+		return nil
+	}
+	gasAssetName := contractGasAssetNameForParams(params)
+	assetName := wire.NewAssetNameFromString(gasAssetName)
+	if assetName == nil {
+		return ruleError(ErrBadFees, fmt.Sprintf("invalid contract gas asset %q", gasAssetName))
+	}
+	asset, err := feeAssets.Find(assetName)
+	if err != nil || asset == nil || asset.Amount.Cmp(required) < 0 {
+		return ruleError(ErrBadFees, fmt.Sprintf("contract %d requires at least %s %s base gas fee",
+			class.TxType, required, gasAssetName))
+	}
+	return nil
+}
+
+func contractGasAssetNameForParams(params *chaincfg.Params) string {
+	net := wire.TestNet
+	if params != nil {
+		net = params.Net
+	}
+	return contractcommon.GasAssetNameForNet(net)
 }
 
 func logTxAssets(desc string, assets wire.TxAssets) {
@@ -1291,6 +1394,12 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 	// transaction inputs, counting pay-to-script-hashes, and scripts.
 	err := view.fetchInputUtxos(b.utxoCache, block)
 	if err != nil {
+		return err
+	}
+	if err := b.validateContractBlock(block, view); err != nil {
+		return err
+	}
+	if err := b.checkAnchorTxsUnique(block); err != nil {
 		return err
 	}
 
@@ -1481,7 +1590,7 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 	// prevent CPU exhaustion attacks.
 	if runScripts {
 		err := checkBlockScripts(block, view, scriptFlags, b.sigCache,
-			b.hashCache)
+			b.hashCache, b.chainParams)
 		if err != nil {
 			return err
 		}
@@ -1531,7 +1640,19 @@ func (b *BlockChain) CheckConnectBlockTemplate(block *btcutil.Block) error {
 	view := NewUtxoViewpoint()
 	view.SetBestHash(&tip.hash)
 	newNode := newBlockNode(&header, tip)
+	block.SetHeight(newNode.height)
 	return b.checkConnectBlock(newNode, block, view, nil)
+}
+
+func (b *BlockChain) validateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error {
+	if b.contractBlockValidator != nil {
+		return b.contractBlockValidator.ValidateContractBlock(block, view)
+	}
+	return nil
+}
+
+func (b *BlockChain) validateEVMBlock(block *btcutil.Block, view *UtxoViewpoint) error {
+	return b.validateContractBlock(block, view)
 }
 
 // ChainParams returns the Blockchain's configured chaincfg.Params.

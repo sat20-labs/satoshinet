@@ -16,6 +16,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -25,17 +26,23 @@ import (
 	"time"
 
 	"github.com/decred/dcrd/lru"
+	"github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/addrmgr"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/blockchain/indexers"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/btcutil/bloom"
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractnode "github.com/sat20-labs/satoshinet/contract/node"
+	contractoracle "github.com/sat20-labs/satoshinet/contract/oracle"
 	"github.com/sat20-labs/satoshinet/database"
 	indexerEntry "github.com/sat20-labs/satoshinet/indexer"
+	sidxcommon "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	indexerShare "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/mempool"
@@ -46,8 +53,6 @@ import (
 	"github.com/sat20-labs/satoshinet/stp"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
-	"github.com/sat20-labs/indexer/common"
-	
 )
 
 const (
@@ -205,8 +210,6 @@ type cfHeaderKV struct {
 	filterHeader chainhash.Hash
 }
 
-// server provides a bitcoin server for handling communications to and from
-// bitcoin peers.
 type server struct {
 	// The following variables must only be used atomically.
 	// Putting the uint64s first makes them 64-bit aligned for 32-bit systems.
@@ -217,16 +220,17 @@ type server struct {
 	shutdownSched int32
 	startupTime   int64
 
-	chainParams          *chaincfg.Params
-	assetIndexer         *indexer.IndexerMgr
-	addrManager          *addrmgr.AddrManager
-	connManager          *connmgr.ConnManager
-	sigCache             *txscript.SigCache
-	hashCache            *txscript.HashCache
-	rpcServer            *rpcServer
-	syncManager          *netsync.SyncManager
-	chain                *blockchain.BlockChain
-	txMemPool            *mempool.TxPool
+	chainParams  *chaincfg.Params
+	assetIndexer *indexer.IndexerMgr
+	addrManager  *addrmgr.AddrManager
+	connManager  *connmgr.ConnManager
+	sigCache     *txscript.SigCache
+	hashCache    *txscript.HashCache
+	rpcServer    *rpcServer
+	syncManager  *netsync.SyncManager
+	chain        *blockchain.BlockChain
+	txMemPool    *mempool.TxPool
+	agentOracle  *contractoracle.Service
 	//cpuMiner             *cpuminer.CPUMiner
 	posMiner             *posminer.POSMiner
 	modifyRebroadcastInv chan interface{}
@@ -912,7 +916,7 @@ func (sp *serverPeer) OnGetCFilters(_ *peer.Peer, msg *wire.MsgGetCFilters) {
 		break
 
 	default:
-		peerLog.Debug("Filter request for unknown filter: %v",
+		peerLog.Debugf("Filter request for unknown filter: %v",
 			msg.FilterType)
 		return
 	}
@@ -968,7 +972,7 @@ func (sp *serverPeer) OnGetCFHeaders(_ *peer.Peer, msg *wire.MsgGetCFHeaders) {
 		break
 
 	default:
-		peerLog.Debug("Filter request for unknown headers for "+
+		peerLog.Debugf("Filter request for unknown headers for "+
 			"filter: %v", msg.FilterType)
 		return
 	}
@@ -1085,7 +1089,7 @@ func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
 		break
 
 	default:
-		peerLog.Debug("Filter request for unknown checkpoints for "+
+		peerLog.Debugf("Filter request for unknown checkpoints for "+
 			"filter: %v", msg.FilterType)
 		return
 	}
@@ -2049,13 +2053,13 @@ type getPeersMsg struct {
 }
 
 type getPeerMsg struct {
-	id int32
+	id    int32
 	reply chan *serverPeer
 }
 
 type getPeerByValidatorIdMsg struct {
 	validatorId string
-	reply chan *peer.Peer
+	reply       chan *peer.Peer
 }
 
 type getOutboundGroup struct {
@@ -2130,16 +2134,16 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			for k, v := range state.minerPeers {
 				typ := miningSeqMgr.GetNodeType(k)
 				peerLog.Debugf("miner peer %s %d %v %s", v.String(), typ, v.Connected(), s.miningPubKey)
-				if (typ == common.NODE_TYPE_CORE || 
-				typ == common.NODE_TYPE_BOOTSTRAP) && 
-				v.Connected() &&
-				s.miningPubKey != v.ValidatorId() {
+				if (typ == common.NODE_TYPE_CORE ||
+					typ == common.NODE_TYPE_BOOTSTRAP) &&
+					v.Connected() &&
+					s.miningPubKey != v.ValidatorId() {
 					result = v.Peer
 					break
 				}
 			}
 		}
-		
+
 		msg.reply <- result
 
 	case connectNodeMsg:
@@ -2384,7 +2388,7 @@ func (s *server) peerHandler() {
 		outboundPeers:   make(map[int32]*serverPeer),
 		banned:          make(map[string]time.Time),
 		outboundGroups:  make(map[string]int),
-		minerPeers:        make(map[string]*serverPeer),
+		minerPeers:      make(map[string]*serverPeer),
 	}
 
 	if !cfg.DisableDNSSeed {
@@ -2499,10 +2503,9 @@ func (s *server) ConnectedCount() int32 {
 	return <-replyChan
 }
 
-
 func (s *server) GetPeerById(peerId int32) *serverPeer {
 	replyChan := make(chan *serverPeer)
-	s.query <- getPeerMsg{id:peerId, reply: replyChan}
+	s.query <- getPeerMsg{id: peerId, reply: replyChan}
 	return <-replyChan
 }
 
@@ -2664,23 +2667,23 @@ func (s *server) Start() {
 				return
 			}
 			// 等二层索引器工作
-			time.Sleep(3*time.Second)
+			time.Sleep(3 * time.Second)
 			ticker := time.NewTicker(3 * time.Second)
 		out:
 			for {
 				select {
 				case <-ticker.C:
-					
+
 					tip1 := indexerShare.ShareIndexer.GetChainTip()
 					tip2 := s.getTipFromSyncPeer()
 					tip := max(tip1, tip2)
-					height := indexerShare.ShareIndexer.GetSyncHeight()
-					srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d", 
+					height := indexerShare.ShareIndexer.GetInternalSyncHeight()
+					srvrLog.Infof("syncHeight %d tip %d connCount %d acceptCount %d",
 						height, tip, s.connManager.GetConnCount(), s.connManager.GetAcceptCount())
 					if height != tip {
 						break
 					}
-						
+
 					// 先启动stp模块，可能需要自动质押并成为miner
 					go func() {
 						err = stp.StartSTP()
@@ -2703,7 +2706,7 @@ func (s *server) Start() {
 						}
 						time.Sleep(time.Second)
 					}
-					
+
 					btcdLog.Errorf("not a miner, exit")
 					os.Exit(-1)
 				}
@@ -2715,12 +2718,12 @@ func (s *server) Start() {
 	// 需要等同步到最新高度再加载
 	if cfg.SaveMempool {
 		go func() {
-			time.Sleep(5*time.Second) // 等待peer连接并获取最新高度
+			time.Sleep(5 * time.Second) // 等待peer连接并获取最新高度
 			for {
 				tip1 := indexerShare.ShareIndexer.GetChainTip()
 				tip2 := s.getTipFromSyncPeer()
 				tip := max(tip1, tip2)
-				height := indexerShare.ShareIndexer.GetSyncHeight()
+				height := indexerShare.ShareIndexer.GetInternalSyncHeight()
 				srvrLog.Infof("syncHeight %d tip %d", height, tip)
 				if height != tip {
 					time.Sleep(time.Second)
@@ -2729,6 +2732,12 @@ func (s *server) Start() {
 				s.loadMempoolCache()
 				break
 			}
+		}()
+	}
+
+	if s.agentOracle != nil && s.agentOracle.Enabled() {
+		go func() {
+			s.agentOracle.Run(s.quit)
 		}()
 	}
 }
@@ -2757,6 +2766,10 @@ func (s *server) Stop() error {
 		s.saveMempoolCache()
 	}
 
+	// Signal background services before releasing STP. STP shutdown can wait for
+	// callbacks that depend on server-managed services observing quit.
+	close(s.quit)
+
 	stp.ReleaseSTP()
 
 	s.assetIndexer.Stop()
@@ -2778,8 +2791,6 @@ func (s *server) Stop() error {
 		return nil
 	})
 
-	// Signal the remaining goroutines to quit.
-	close(s.quit)
 	return nil
 }
 
@@ -2794,6 +2805,235 @@ func (s *server) saveMempoolCache() {
 
 func (s *server) loadMempoolCache() {
 	s.txMemPool.Load(s.BtcdDir)
+}
+
+func (s *server) agentOracleTipContext() (contractoracle.TipContext, error) {
+	if s == nil || s.chain == nil {
+		return contractoracle.TipContext{}, nil
+	}
+	best := s.chain.BestSnapshot()
+	unixValue := time.Now().Unix()
+	if tipBlock, err := s.chain.BlockByHash(&best.Hash); err == nil && tipBlock != nil {
+		unixValue = tipBlock.MsgBlock().Header.Timestamp.Unix()
+	} else if !best.MedianTime.IsZero() {
+		unixValue = best.MedianTime.Unix()
+	}
+	return contractoracle.TipContext{
+		Height: int64(best.Height),
+		Unix:   unixValue,
+	}, nil
+}
+
+func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, action string, param []byte) (*wire.MsgTx, error) {
+	if s == nil || s.assetIndexer == nil || s.txMemPool == nil {
+		return nil, fmt.Errorf("agent invoke submitter is not ready")
+	}
+	if s.agentInvokeInMempool(contract, action) {
+		return nil, fmt.Errorf("agent %s transaction is already in mempool", action)
+	}
+	gasConfig := contractnode.DefaultGasConfig()
+	nextHeight := uint64(s.chain.BestSnapshot().Height + 1)
+	gasFee, err := gasConfig.CheckedCallFeeDecimalAtHeight(gasConfig.InvokeBaseGas, nextHeight)
+	if err != nil {
+		return nil, err
+	}
+	funding, err := s.selectAgentConfirmFundingUTXOs(gasFee)
+	if err != nil {
+		return nil, err
+	}
+	changeOutputs := make([]*wire.TxOut, 0, 1)
+	if funding.ChangeOutput != nil {
+		changeOutputs = append(changeOutputs, funding.ChangeOutput)
+	}
+	tx, err := contractcommon.BuildInvokeTx(contractcommon.InvokeTxBuildRequest{
+		Contract:     contract,
+		GasLimit:     gasConfig.InvokeBaseGas,
+		CallNonce:    uint64(time.Now().UnixNano()),
+		Action:       action,
+		Param:        param,
+		Funding:      wire.TxOut{},
+		Inputs:       funding.InputOutPoints(),
+		ExtraOutputs: changeOutputs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	packet, err := spsbt.NewFromUnsignedTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	witnessUtxos := funding.WitnessUtxos()
+	for i := range packet.Inputs {
+		if i >= len(witnessUtxos) {
+			return nil, fmt.Errorf("missing agent confirm witness utxo")
+		}
+		packet.Inputs[i].WitnessUtxo = witnessUtxos[i]
+	}
+	if err := stp.SignPsbt_SatsNet(packet); err != nil {
+		return nil, err
+	}
+	if err := spsbt.MaybeFinalizeAll(packet); err != nil {
+		return nil, err
+	}
+	signedTx, err := spsbt.Extract(packet)
+	if err != nil {
+		return nil, err
+	}
+	accepted, err := s.txMemPool.ProcessTransaction(btcutil.NewTx(signedTx), false, true, 0)
+	if err != nil {
+		return nil, err
+	}
+	s.AnnounceNewTransactions(accepted)
+	return signedTx, nil
+}
+
+func (s *server) selectAgentConfirmFundingUTXOs(minGasFee *common.Decimal) (contractcommon.FundingSelection, error) {
+	pubKey, err := stp.GetPubKey()
+	if err != nil {
+		return contractcommon.FundingSelection{}, err
+	}
+	address, err := sidxcommon.PubKeyBytesToP2TRAddress(pubKey, s.chainParams)
+	if err != nil {
+		return contractcommon.FundingSelection{}, err
+	}
+	expectedScript, err := agentCoreChangeScript(s.chainParams)
+	if err != nil {
+		return contractcommon.FundingSelection{}, err
+	}
+	byAsset := s.assetIndexer.GetAssetUTXOsInAddress(address)
+	gasAssetName := wire.NewAssetNameFromString(contractnode.DefaultGasConfig().GasAssetName)
+	if gasAssetName == nil {
+		return contractcommon.FundingSelection{}, fmt.Errorf("invalid agent gas asset name")
+	}
+	available := make([]contractcommon.FundingUTXO, 0)
+	seen := make(map[string]struct{})
+	for _, outputs := range byAsset {
+		for _, utxo := range outputs {
+			if utxo == nil {
+				continue
+			}
+			if _, ok := seen[utxo.OutPointStr]; ok {
+				continue
+			}
+			seen[utxo.OutPointStr] = struct{}{}
+			outpoint, err := wire.NewOutPointFromString(utxo.OutPointStr)
+			if err != nil {
+				continue
+			}
+			available = append(available, contractcommon.FundingUTXO{
+				OutPoint: *outpoint,
+				OutValue: *cloneTxOut(&utxo.OutValue),
+				Height:   int64(utxo.Height()),
+				SortKey:  utxo.OutPointStr,
+			})
+		}
+	}
+	return contractcommon.SelectFundingUTXOs(contractcommon.FundingSelectionRequest{
+		Available:        available,
+		RequiredValue:    contractoracle.DefaultAgentConfirmTxFee,
+		RequiredAssets:   wire.TxAssets{{Name: *gasAssetName, Amount: *minGasFee.Clone()}},
+		ChangePkScript:   expectedScript,
+		RequiredPkScript: expectedScript,
+		IsSpendable: func(utxo contractcommon.FundingUTXO) bool {
+			outpoint := utxo.OutPoint
+			return s.txMemPool.CheckSpend(outpoint) == nil
+		},
+	})
+}
+
+func (s *server) agentInvokeInMempool(contract contractcommon.ContractAddress, action string) bool {
+	if s == nil || s.txMemPool == nil {
+		return false
+	}
+	prefix := contractAddressPrefix(s.chainParams)
+	for _, desc := range s.txMemPool.TxDescs() {
+		if desc == nil || desc.Tx == nil {
+			continue
+		}
+		invoke, outputs, err := parseAgentInvokeTx(desc.Tx.MsgTx(), prefix)
+		if err != nil || invoke.Action != action {
+			continue
+		}
+		for _, output := range outputs {
+			if output.Equal(contract) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseAgentInvokeTx(tx *wire.MsgTx, prefix string) (contractcommon.InvokePayload,
+	[]contractcommon.ContractAddress, error) {
+
+	var invoke contractcommon.InvokePayload
+	if tx == nil {
+		return invoke, nil, fmt.Errorf("missing transaction")
+	}
+	payloadParts := make([][]byte, 0)
+	outputs := make([]contractcommon.ContractAddress, 0)
+	for _, txOut := range tx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		txType, payload, err := contractcommon.ReadNullDataScript(txOut.PkScript)
+		if err == nil {
+			if txType != contractcommon.TxTypeInvoke {
+				continue
+			}
+			payloadParts = append(payloadParts, payload)
+			continue
+		}
+		contractAddr, ok, err := contractcommon.ParseContractPkScript(txOut.PkScript, prefix)
+		if err != nil || !ok || contractAddr.ContractType() != contractcommon.ContractTypeAgent {
+			continue
+		}
+		outputs = append(outputs, contractAddr)
+	}
+	if len(payloadParts) == 0 || len(outputs) == 0 {
+		return invoke, nil, fmt.Errorf("not an agent invoke transaction")
+	}
+	payload := make([]byte, 0)
+	for _, part := range payloadParts {
+		payload = append(payload, part...)
+	}
+	invoke, err := contractcommon.DecodeInvokePayload(payload)
+	return invoke, outputs, err
+}
+
+func contractAddressPrefix(params *chaincfg.Params) string {
+	if params != nil && params.Net == wire.MainNet {
+		return contractcommon.MainnetContractPrefix
+	}
+	return contractcommon.TestnetContractPrefix
+}
+
+func agentCoreChangeScript(params *chaincfg.Params) ([]byte, error) {
+	pubKey, err := stp.GetPubKey()
+	if err != nil {
+		return nil, err
+	}
+	address, err := sidxcommon.PubKeyBytesToP2TRAddress(pubKey, params)
+	if err != nil {
+		return nil, err
+	}
+	addr, err := btcutil.DecodeAddress(address, params)
+	if err != nil {
+		return nil, err
+	}
+	return txscript.PayToAddrScript(addr)
+}
+
+func cloneTxOut(output *wire.TxOut) *wire.TxOut {
+	if output == nil {
+		return nil
+	}
+	cp := &wire.TxOut{
+		Value:    output.Value,
+		Assets:   output.Assets.Clone(),
+		PkScript: append([]byte(nil), output.PkScript...),
+	}
+	return cp
 }
 
 // ScheduleShutdown schedules a server shutdown after the specified duration.
@@ -3005,9 +3245,24 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		services |= wire.SFNodeMiner
 	}
 
+	assetIndexerRPCPort := activeNetParams.rpcPort
+	if len(cfg.RPCListeners) > 0 {
+		_, port, err := net.SplitHostPort(cfg.RPCListeners[0])
+		if err == nil && port != "" {
+			assetIndexerRPCPort = port
+		}
+	}
+
+	assetIndexerRPCDataPath := cfg.HomeDir
+	if cfg.RPCCert != "" {
+		assetIndexerRPCDataPath = filepath.Dir(cfg.RPCCert)
+	}
+
+	contractcommon.SetNetworkParam(chainParams.Net)
+
 	// seqMgr 最早初始化
-	assetIndexer, err := indexerEntry.NewIndexerMgr(cfg.HomeDir, "",
-		activeNetParams.rpcPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
+	assetIndexer, err := indexerEntry.NewIndexerMgr(assetIndexerRPCDataPath, "",
+		assetIndexerRPCPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
 		interrupt)
 	if err != nil {
 		return nil, err
@@ -3110,19 +3365,84 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		btcdLog.Infof("Prune set to %d MiB", cfg.Prune)
 	}
 
+	gasConfig, err := configuredContractGasConfig()
+	if err != nil {
+		return nil, err
+	}
+	bootstrapAddress, err := templateBootstrapAddress(s.chainParams)
+	if err != nil {
+		return nil, err
+	}
+	agentRuntimeConfig, err := configuredAgentRuntimeConfig(s.chainParams)
+	if err != nil {
+		return nil, err
+	}
+	agentOracle, err := contractoracle.NewService(contractoracle.Config{
+		DB:          s.db,
+		ChainParams: s.chainParams,
+		Interval:    cfg.AgentCheckInterval,
+		LLM: contractoracle.LLMConfig{
+			Provider:    cfg.AgentLLMProvider,
+			Endpoint:    cfg.AgentLLMEndpoint,
+			Model:       cfg.AgentLLMModel,
+			APIKey:      cfg.AgentLLMAPIKey,
+			Timeout:     cfg.AgentLLMTimeout,
+			Temperature: cfg.AgentLLMTemperature,
+			MaxTokens:   cfg.AgentLLMMaxTokens,
+		},
+		TipContext: func() (contractoracle.TipContext, error) {
+			return s.agentOracleTipContext()
+		},
+		SubmitInvoke: s.submitAgentInvokeTx,
+		Infof:        btcdLog.Infof,
+		Warnf:        srvrLog.Warnf,
+		Debugf:       srvrLog.Debugf,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.agentOracle = agentOracle
+	contractServices, err := contractnode.NewServices(contractnode.Config{
+		DB:                       s.db,
+		ChainParams:              s.chainParams,
+		GasConfig:                gasConfig,
+		BootstrapAddress:         bootstrapAddress,
+		AgentRuntime:             agentRuntimeConfig,
+		EVMContractUTXOs:         evmContractUTXOProvider(assetIndexer),
+		TemplateContractUTXOs:    templateContractUTXOProvider(assetIndexer),
+		AgentContractUTXOs:       agentContractUTXOProvider(assetIndexer),
+		AssetPrecision:           contractAssetPrecisionResolver(assetIndexer),
+		EVMResolveRecipient:      evmScriptRecipientResolver(s.chainParams),
+		TemplateResolveRecipient: templateScriptRecipientResolver(s.chainParams),
+		AgentResolveRecipient:    agentScriptRecipientResolver(s.chainParams),
+		SkipStateRootVerify:      true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	btcdLog.Infof("Contract validation is enabled, gas asset=%s fixed gas price=%d",
+		gasConfig.GasAssetName, gasConfig.FixedGasPrice)
+	btcdLog.Infof(
+		"Agent contract validation is enabled, agent address=%s bootstrap address=%s gas asset=%s",
+		agentRuntimeConfig.AgentAddress,
+		agentRuntimeConfig.BootstrapAddress,
+		contractGasAssetNameForParams(s.chainParams))
+
 	// Create a new block chain instance with the appropriate configuration.
 	s.chain, err = blockchain.New(&blockchain.Config{
-		DB:               s.db,
-		Interrupt:        interrupt,
-		ChainParams:      s.chainParams,
-		Checkpoints:      checkpoints,
-		TimeSource:       s.timeSource,
-		SigCache:         s.sigCache,
-		IndexManager:     indexManager,
-		AssetIndexManager: assetIndexer,
-		HashCache:        s.hashCache,
-		Prune:            cfg.Prune * 1024 * 1024,
-		UtxoCacheMaxSize: uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
+		DB:                     s.db,
+		Interrupt:              interrupt,
+		ChainParams:            s.chainParams,
+		Checkpoints:            checkpoints,
+		TimeSource:             s.timeSource,
+		SigCache:               s.sigCache,
+		IndexManager:           indexManager,
+		AssetIndexManager:      assetIndexer,
+		ContractBlockValidator: contractServices.BlockValidator,
+		ContractStateManager:   contractServices.ContractStateManager,
+		HashCache:              s.hashCache,
+		Prune:                  cfg.Prune * 1024 * 1024,
+		UtxoCacheMaxSize:       uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
 	})
 	if err != nil {
 		return nil, err
@@ -3205,12 +3525,13 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	// NOTE: The CPU miner relies on the mempool, so the mempool has to be
 	// created before calling the function to create the CPU miner.
 	policy := mining.Policy{
-		BlockMinWeight:    cfg.BlockMinWeight,
-		BlockMaxWeight:    cfg.BlockMaxWeight,
-		BlockMinSize:      cfg.BlockMinSize,
-		BlockMaxSize:      cfg.BlockMaxSize,
-		BlockPrioritySize: cfg.BlockPrioritySize,
-		TxMinFreeFee:      cfg.minRelayTxFee,
+		BlockMinWeight:        cfg.BlockMinWeight,
+		BlockMaxWeight:        cfg.BlockMaxWeight,
+		BlockMinSize:          cfg.BlockMinSize,
+		BlockMaxSize:          cfg.BlockMaxSize,
+		BlockPrioritySize:     cfg.BlockPrioritySize,
+		TxMinFreeFee:          cfg.minRelayTxFee,
+		ContractResultBuilder: contractServices.ResultBuilder,
 	}
 	blockTemplateGenerator := mining.NewBlkTmplGenerator(&policy,
 		s.chainParams, s.txMemPool, s.chain, s.timeSource,
@@ -3227,6 +3548,19 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	var miningAddr btcutil.Address
 	if len(cfg.miningAddrs) != 0 {
 		miningAddr = cfg.miningAddrs[0]
+	} else if cfg.MiningPubKey != "" {
+		pubKey, err := hex.DecodeString(cfg.MiningPubKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid mining pubkey: %w", err)
+		}
+		addr, err := sidxcommon.PubKeyBytesToP2TRAddress(pubKey, chainParams)
+		if err != nil {
+			return nil, fmt.Errorf("derive mining address: %w", err)
+		}
+		miningAddr, err = btcutil.DecodeAddress(addr, chainParams)
+		if err != nil {
+			return nil, fmt.Errorf("decode mining address: %w", err)
+		}
 	}
 
 	hosts := make([]string, 0)
@@ -3349,22 +3683,23 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		}
 
 		s.rpcServer, err = newRPCServer(&rpcserverConfig{
-			Listeners:    rpcListeners,
-			StartupTime:  s.startupTime,
-			ConnMgr:      &rpcConnManager{&s},
-			SyncMgr:      &rpcSyncMgr{&s, s.syncManager},
-			TimeSource:   s.timeSource,
-			Chain:        s.chain,
-			ChainParams:  chainParams,
-			DB:           db,
-			TxMemPool:    s.txMemPool,
-			Generator:    blockTemplateGenerator,
+			Listeners:   rpcListeners,
+			StartupTime: s.startupTime,
+			ConnMgr:     &rpcConnManager{&s},
+			SyncMgr:     &rpcSyncMgr{&s, s.syncManager},
+			TimeSource:  s.timeSource,
+			Chain:       s.chain,
+			ChainParams: chainParams,
+			DB:          db,
+			TxMemPool:   s.txMemPool,
+			Generator:   blockTemplateGenerator,
 			//CPUMiner:     s.cpuMiner,
-			PosMiner:     s.posMiner,
-			TxIndex:      s.txIndex,
-			AddrIndex:    s.addrIndex,
-			CfIndex:      s.cfIndex,
-			FeeEstimator: s.feeEstimator,
+			PosMiner:          s.posMiner,
+			TxIndex:           s.txIndex,
+			AddrIndex:         s.addrIndex,
+			CfIndex:           s.cfIndex,
+			FeeEstimator:      s.feeEstimator,
+			AssetIndexManager: assetIndexer,
 		})
 		if err != nil {
 			srvrLog.Errorf("Unable to start RPC server: %v", err)
@@ -3380,6 +3715,204 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	}
 
 	return &s, nil
+}
+
+func contractBitcoinNet(params *chaincfg.Params) wire.BitcoinNet {
+	if params == nil {
+		return wire.TestNet
+	}
+	return params.Net
+}
+
+func contractGasAssetNameForParams(params *chaincfg.Params) string {
+	return contractcommon.GasAssetNameForNet(contractBitcoinNet(params))
+}
+
+func templateBootstrapAddress(params *chaincfg.Params) (string, error) {
+	bootstrapPubKey, err := hex.DecodeString(common.GetBootstrapPubKey())
+	if err != nil {
+		return "", err
+	}
+	return sidxcommon.PubKeyBytesToP2TRAddress(bootstrapPubKey, params)
+}
+
+func configuredAgentRuntimeConfig(params *chaincfg.Params) (contractnode.AgentRuntimeConfig, error) {
+	agentPubKey, err := hex.DecodeString(common.GetCoreNodePubKey())
+	if err != nil {
+		return contractnode.AgentRuntimeConfig{}, err
+	}
+	bootstrapPubKey, err := hex.DecodeString(common.GetBootstrapPubKey())
+	if err != nil {
+		return contractnode.AgentRuntimeConfig{}, err
+	}
+	return contractoracle.AgentRuntimeConfig(params, agentPubKey, bootstrapPubKey,
+		sidxcommon.PubKeyBytesToP2TRAddress)
+}
+
+func configuredContractGasConfig() (contractnode.GasConfig, error) {
+	gasConfig := contractnode.DefaultGasConfig()
+	if err := gasConfig.Validate(); err != nil {
+		return contractnode.GasConfig{}, err
+	}
+	return gasConfig, nil
+}
+
+func evmContractUTXOProvider(assetIndexer *indexer.IndexerMgr) contractnode.ContractUTXOProvider {
+	if assetIndexer == nil {
+		return nil
+	}
+	return func(contract contractcommon.ContractAddress) ([]contractnode.ContractUTXO, error) {
+		address := contract.MustEncode()
+		byAsset := assetIndexer.GetInternalAssetUTXOsInAddress(address)
+		utxos := make([]contractnode.ContractUTXO, 0)
+		seen := make(map[string]struct{})
+		for _, outputs := range byAsset {
+			for _, output := range outputs {
+				if output == nil {
+					continue
+				}
+				if _, ok := seen[output.OutPointStr]; ok {
+					continue
+				}
+				seen[output.OutPointStr] = struct{}{}
+				outpoint, err := wire.NewOutPointFromString(output.OutPointStr)
+				if err != nil {
+					return nil, err
+				}
+				if output.OutValue.Value < 0 {
+					return nil, fmt.Errorf("negative EVM contract output value")
+				}
+				utxos = append(utxos, contractnode.ContractUTXO{
+					OutPoint: *outpoint,
+					Value:    output.OutValue.Value,
+					Assets:   output.OutValue.Assets.Clone(),
+					Height:   int64(output.Height()),
+				})
+			}
+		}
+		return utxos, nil
+	}
+}
+
+func evmScriptRecipientResolver(params *chaincfg.Params) contractnode.ScriptRecipientResolver {
+	return func(pkScript []byte) (string, bool, error) {
+		address, err := sidxcommon.GetBTCAddressFromPkScript(pkScript, params)
+		if err != nil {
+			return "", false, nil
+		}
+		return address, true, nil
+	}
+}
+
+func templateContractUTXOProvider(assetIndexer *indexer.IndexerMgr) contractnode.ContractUTXOProvider {
+	if assetIndexer == nil {
+		return nil
+	}
+	return func(contract contractcommon.ContractAddress) ([]contractnode.ContractUTXO, error) {
+		address := contract.MustEncode()
+		byAsset := assetIndexer.GetInternalAssetUTXOsInAddress(address)
+		utxos := make([]contractnode.ContractUTXO, 0)
+		seen := make(map[string]struct{})
+		for _, outputs := range byAsset {
+			for _, output := range outputs {
+				if output == nil {
+					continue
+				}
+				if _, ok := seen[output.OutPointStr]; ok {
+					continue
+				}
+				seen[output.OutPointStr] = struct{}{}
+				outpoint, err := wire.NewOutPointFromString(output.OutPointStr)
+				if err != nil {
+					return nil, err
+				}
+				if output.OutValue.Value < 0 {
+					return nil, fmt.Errorf("negative template contract output value")
+				}
+				utxos = append(utxos, contractnode.ContractUTXO{
+					OutPoint: *outpoint,
+					Value:    output.OutValue.Value,
+					Assets:   output.OutValue.Assets.Clone(),
+					Height:   int64(output.Height()),
+				})
+			}
+		}
+		return utxos, nil
+	}
+}
+
+func templateScriptRecipientResolver(params *chaincfg.Params) contractnode.ScriptRecipientResolver {
+	return func(pkScript []byte) (string, bool, error) {
+		address, err := sidxcommon.GetBTCAddressFromPkScript(pkScript, params)
+		if err != nil {
+			return "", false, nil
+		}
+		return address, true, nil
+	}
+}
+
+func agentContractUTXOProvider(assetIndexer *indexer.IndexerMgr) contractnode.ContractUTXOProvider {
+	if assetIndexer == nil {
+		return nil
+	}
+	return func(contract contractcommon.ContractAddress) ([]contractnode.ContractUTXO, error) {
+		address := contract.MustEncode()
+		byAsset := assetIndexer.GetInternalAssetUTXOsInAddress(address)
+		utxos := make([]contractnode.ContractUTXO, 0)
+		seen := make(map[string]struct{})
+		for _, outputs := range byAsset {
+			for _, output := range outputs {
+				if output == nil {
+					continue
+				}
+				if _, ok := seen[output.OutPointStr]; ok {
+					continue
+				}
+				seen[output.OutPointStr] = struct{}{}
+				outpoint, err := wire.NewOutPointFromString(output.OutPointStr)
+				if err != nil {
+					return nil, err
+				}
+				if output.OutValue.Value < 0 {
+					return nil, fmt.Errorf("negative agent contract output value")
+				}
+				utxos = append(utxos, contractnode.ContractUTXO{
+					OutPoint: *outpoint,
+					Value:    output.OutValue.Value,
+					Assets:   output.OutValue.Assets.Clone(),
+					Height:   int64(output.Height()),
+				})
+			}
+		}
+		return utxos, nil
+	}
+}
+
+func contractAssetPrecisionResolver(assetIndexer *indexer.IndexerMgr) contractnode.AssetPrecisionResolver {
+	if assetIndexer == nil {
+		return nil
+	}
+	return func(assetName string) (int, bool) {
+		name := wire.NewAssetNameFromString(assetName)
+		if name == nil {
+			return 0, false
+		}
+		info := assetIndexer.GetTickerInfo(name)
+		if info == nil {
+			return 0, false
+		}
+		return info.Divisibility, true
+	}
+}
+
+func agentScriptRecipientResolver(params *chaincfg.Params) contractnode.ScriptRecipientResolver {
+	return func(pkScript []byte) (string, bool, error) {
+		address, err := sidxcommon.GetBTCAddressFromPkScript(pkScript, params)
+		if err != nil {
+			return "", false, nil
+		}
+		return address, true, nil
+	}
 }
 
 // initListeners initializes the configured net listeners and adds any bound

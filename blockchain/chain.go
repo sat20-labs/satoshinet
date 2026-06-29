@@ -11,9 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -97,15 +99,17 @@ type BlockChain struct {
 	// The following fields are set when the instance is created and can't
 	// be changed afterwards, so there is no need to protect them with a
 	// separate mutex.
-	checkpoints         []chaincfg.Checkpoint
-	checkpointsByHeight map[int32]*chaincfg.Checkpoint
-	db                  database.DB
-	chainParams         *chaincfg.Params
-	timeSource          MedianTimeSource
-	sigCache            *txscript.SigCache
-	indexManager        IndexManager
-	assetIndexerMgr     *indexer.IndexerMgr
-	hashCache           *txscript.HashCache
+	checkpoints            []chaincfg.Checkpoint
+	checkpointsByHeight    map[int32]*chaincfg.Checkpoint
+	db                     database.DB
+	chainParams            *chaincfg.Params
+	timeSource             MedianTimeSource
+	sigCache               *txscript.SigCache
+	indexManager           IndexManager
+	assetIndexerMgr        *indexer.IndexerMgr
+	contractBlockValidator ContractBlockValidator
+	contractStateManager   ContractStateManager
+	hashCache              *txscript.HashCache
 
 	// The following fields are calculated based upon the provided chain
 	// parameters.  They are also set when the instance is created and
@@ -676,6 +680,15 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 			return err
 		}
 
+		if b.contractStateManager != nil && b.contractBlockValidator != nil {
+			provider, ok := b.contractBlockValidator.(ContractBlockStateProvider)
+			if ok {
+				if err := b.contractStateManager.StoreContractBlockState(dbTx, block.Hash(), provider); err != nil {
+					return err
+				}
+			}
+		}
+
 		// Allow the index manager to call each of the currently active
 		// optional indexes with the block being connected so they can
 		// update themselves accordingly.
@@ -726,7 +739,9 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 		b.sendNotification(NTBlockConnected, block)
 	}()
 
-	b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), b.tipHeight)
+	if b.assetIndexerMgr != nil {
+		b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), b.tipHeight)
+	}
 
 	// Since we may have changed the UTXO cache, we make sure it didn't exceed its
 	// maximum size.  If we're pruned and have flushed already, this will be a no-op.
@@ -821,11 +836,31 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 			return err
 		}
 
+		if b.contractStateManager != nil {
+			err = b.contractStateManager.DeleteContractBlockState(dbTx, block.Hash(), &prevNode.hash)
+			if err != nil {
+				return err
+			}
+		}
+
 		// Allow the index manager to call each of the currently active
 		// optional indexes with the block being disconnected so they
 		// can update themselves accordingly.
 		if b.indexManager != nil {
 			err := b.indexManager.DisconnectBlock(dbTx, block, stxos)
+			if err != nil {
+				return err
+			}
+		}
+		for _, tx := range block.Transactions() {
+			if !IsAnchorTx(tx.MsgTx()) {
+				continue
+			}
+			lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+			if err != nil {
+				return err
+			}
+			err = dbDeleteAnchorTxInfo(dbTx, lockedInfo.Utxo, tx.MsgTx().TxID())
 			if err != nil {
 				return err
 			}
@@ -952,7 +987,15 @@ func (b *BlockChain) reorganizeChain(detachNodes, attachNodes *list.List) error 
 		forkNode = newBest
 	}
 
-	b.assetIndexerMgr.DisconnectBlock(int(forkNode.height))
+	disconnectTo := newBest
+	if forkNode != nil {
+		disconnectTo = forkNode
+	}
+	if disconnectTo != nil {
+		if b.assetIndexerMgr != nil {
+			b.assetIndexerMgr.DisconnectBlock(int(disconnectTo.height))
+		}
+	}
 
 	// Connect the new best chain blocks using the utxocache directly.  It's more
 	// efficient and since we already checked that the blocks are correct and that
@@ -2118,6 +2161,28 @@ type IndexManager interface {
 	DisconnectBlock(database.Tx, *btcutil.Block, []SpentTxOut) error
 }
 
+// ContractBlockValidator validates all enabled contract execution engines for
+// a block after its input UTXOs have been loaded into the view.
+type ContractBlockValidator interface {
+	ValidateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error
+}
+
+// ContractBlockStateProvider is optionally implemented by a
+// ContractBlockValidator that can expose post-state generated during block
+// validation without requiring blockchain to know any concrete contract engine
+// store type.
+type ContractBlockStateProvider interface {
+	ContractBlockPostState(module contractframework.ModuleType, hash *chainhash.Hash) (contractframework.EngineState, bool)
+}
+
+// ContractStateManager persists and rolls back contract post-state snapshots.
+// The implementation lives outside blockchain so concrete contract engine state
+// codecs stay in the contract package tree.
+type ContractStateManager interface {
+	StoreContractBlockState(database.Tx, *chainhash.Hash, ContractBlockStateProvider) error
+	DeleteContractBlockState(database.Tx, *chainhash.Hash, *chainhash.Hash) error
+}
+
 // Config is a descriptor which specifies the blockchain instance configuration.
 type Config struct {
 	// DB defines the database which houses the blocks and will be used to
@@ -2178,6 +2243,15 @@ type Config struct {
 
 	AssetIndexManager *indexer.IndexerMgr
 
+	// ContractBlockValidator optionally validates all contract execution
+	// engines through a single external interface.
+	ContractBlockValidator ContractBlockValidator
+
+	// ContractStateManager optionally persists contract post-states generated
+	// by ContractBlockValidator during block connection and removes them during
+	// disconnect.
+	ContractStateManager ContractStateManager
+
 	// HashCache defines a transaction hash mid-state cache to use when
 	// validating transactions. This cache has the potential to greatly
 	// speed up transaction validation as re-using the pre-calculated
@@ -2230,26 +2304,28 @@ func New(config *Config) (*BlockChain, error) {
 	targetTimePerBlock := int64(params.TargetTimePerBlock / time.Second)
 	adjustmentFactor := params.RetargetAdjustmentFactor
 	b := BlockChain{
-		checkpoints:         config.Checkpoints,
-		checkpointsByHeight: checkpointsByHeight,
-		db:                  config.DB,
-		chainParams:         params,
-		timeSource:          config.TimeSource,
-		sigCache:            config.SigCache,
-		indexManager:        config.IndexManager,
-		assetIndexerMgr:     config.AssetIndexManager,
-		minRetargetTimespan: targetTimespan / adjustmentFactor,
-		maxRetargetTimespan: targetTimespan * adjustmentFactor,
-		blocksPerRetarget:   int32(targetTimespan / targetTimePerBlock),
-		index:               newBlockIndex(config.DB, params),
-		utxoCache:           newUtxoCache(config.DB, config.UtxoCacheMaxSize),
-		hashCache:           config.HashCache,
-		bestChain:           newChainView(nil),
-		orphans:             make(map[chainhash.Hash]*orphanBlock),
-		prevOrphans:         make(map[chainhash.Hash][]*orphanBlock),
-		warningCaches:       newThresholdCaches(vbNumBits),
-		deploymentCaches:    newThresholdCaches(chaincfg.DefinedDeployments),
-		pruneTarget:         config.Prune,
+		checkpoints:            config.Checkpoints,
+		checkpointsByHeight:    checkpointsByHeight,
+		db:                     config.DB,
+		chainParams:            params,
+		timeSource:             config.TimeSource,
+		sigCache:               config.SigCache,
+		indexManager:           config.IndexManager,
+		assetIndexerMgr:        config.AssetIndexManager,
+		contractBlockValidator: config.ContractBlockValidator,
+		contractStateManager:   config.ContractStateManager,
+		minRetargetTimespan:    targetTimespan / adjustmentFactor,
+		maxRetargetTimespan:    targetTimespan * adjustmentFactor,
+		blocksPerRetarget:      int32(targetTimespan / targetTimePerBlock),
+		index:                  newBlockIndex(config.DB, params),
+		utxoCache:              newUtxoCache(config.DB, config.UtxoCacheMaxSize),
+		hashCache:              config.HashCache,
+		bestChain:              newChainView(nil),
+		orphans:                make(map[chainhash.Hash]*orphanBlock),
+		prevOrphans:            make(map[chainhash.Hash][]*orphanBlock),
+		warningCaches:          newThresholdCaches(vbNumBits),
+		deploymentCaches:       newThresholdCaches(chaincfg.DefinedDeployments),
+		pruneTarget:            config.Prune,
 	}
 
 	// Ensure all the deployments are synchronized with our clock if

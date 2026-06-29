@@ -1,12 +1,15 @@
 package indexer
 
 import (
+	"fmt"
+
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
 )
 
 // interface for RPC
@@ -163,6 +166,29 @@ func (b *IndexerMgr) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return b.rpcService.GetDescendData(nullDataUtxo)
 }
 
+func (b *IndexerMgr) GetChannelLedger(channel string) []*common.ChannelLedgerEntry {
+	return b.rpcService.GetChannelLedger(channel)
+}
+
+func (b *IndexerMgr) GetChannelStateEvents(channel string) []*common.ChannelStateEvent {
+	return b.rpcService.GetChannelStateEvents(channel)
+}
+
+func (b *IndexerMgr) RecordChannelStateEvent(event *common.ChannelStateEvent) error {
+	if b.IsMainnet() {
+		return fmt.Errorf("channel state event report is disabled on mainnet")
+	}
+	if err := b.compiling.RecordChannelStateEvent(event); err != nil {
+		return err
+	}
+	newService := base_indexer.NewRpcIndexer(b.compiling)
+	newService.UpdateServiceInstance()
+	b.mutex.Lock()
+	b.rpcService = newService
+	b.mutex.Unlock()
+	return nil
+}
+
 func (b *IndexerMgr) GetReferrer(address string) (*common.ReferrerInfo, error) {
 	return b.rpcService.GetReferrer(address)
 }
@@ -182,7 +208,7 @@ func (b *IndexerMgr) GetTickerMap(protocol string) map[string]*common.TickerInfo
 	result := make(map[string]*common.TickerInfo)
 	tickerMap := b.rpcService.GetTickerMap()
 	for k, v := range tickerMap {
-		
+
 		if protocol == "" || protocol == "*" {
 			result[k] = v
 		} else {
@@ -219,7 +245,7 @@ func (b *IndexerMgr) IsCoreNode(pubkey string) bool {
 	return b.compiling.IsCoreNode(pubkey)
 }
 
-func (b *IndexerMgr) GetCoreNodeInfo(pubkey string) (*common.CoreNodeInfo) {
+func (b *IndexerMgr) GetCoreNodeInfo(pubkey string) *common.CoreNodeInfo {
 	return b.rpcService.GetCoreNodeInfo(pubkey)
 }
 
@@ -234,7 +260,7 @@ func (b *IndexerMgr) GetSeqMgr() *common.MiningSequenceMgr {
 	return b.compiling.GetSequenceMgr()
 }
 
-func (b *IndexerMgr) GetMinerInfo(pubkey string) (*common.MinerInfo) {
+func (b *IndexerMgr) GetMinerInfo(pubkey string) *common.MinerInfo {
 	return b.rpcService.GetMinerInfo(pubkey)
 }
 

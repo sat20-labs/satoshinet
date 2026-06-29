@@ -1,7 +1,10 @@
 package wire
 
 import (
+	"encoding/json"
+
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 
@@ -20,6 +23,23 @@ type DescendResp struct {
 	Data *common.DescendData `json:"data"`
 }
 
+type ChannelLedgerResp struct {
+	indexerwire.BaseResp
+	Data []*common.ChannelLedgerEntry `json:"data"`
+}
+
+type ChannelStateEventReq struct {
+	ConfirmUnsafeTestOnly bool                      `json:"confirm_unsafe_test_only"`
+	Data                  *common.ChannelStateEvent `json:"data"`
+	PubKey                []byte                    `json:"pubkey,omitempty"`
+	Sig                   []byte                    `json:"msgSig,omitempty"`
+}
+
+type ChannelStateEventResp struct {
+	indexerwire.BaseResp
+	Data []*common.ChannelStateEvent `json:"data,omitempty"`
+}
+
 type ReferrerResp struct {
 	indexerwire.BaseResp
 	Data *common.ReferrerInfo `json:"referrer"`
@@ -32,7 +52,7 @@ type ReferreeInfo struct {
 
 type ReferreeResp struct {
 	indexerwire.BaseResp
-	Total int   `json:"total"`
+	Total int             `json:"total"`
 	Data  []*ReferreeInfo `json:"referrees"`
 }
 
@@ -48,18 +68,18 @@ type CheckCoreNodeResp struct {
 
 type GetCoreNodeInfoResp struct {
 	indexerwire.BaseResp
-	Data *common.CoreNodeInfo     `json:"data"`
+	Data *common.CoreNodeInfo `json:"data"`
 }
 
 type MinerInfo struct {
 	*common.MinerInfo
-	IsCoreNode bool		`json:"isCoreNode"`
-	ChildCount int		`json:"childCount"`
+	IsCoreNode bool `json:"isCoreNode"`
+	ChildCount int  `json:"childCount"`
 }
 
 type GetMinerInfoResp struct {
 	indexerwire.BaseResp
-	Data *MinerInfo     `json:"data"`
+	Data *MinerInfo `json:"data"`
 }
 
 type TickersResp struct {
@@ -71,4 +91,25 @@ type TickersResp struct {
 type TickerInfoResp struct {
 	indexerwire.BaseResp
 	Data *common.TickerInfo `json:"data"`
+}
+
+type ContractResp struct {
+	indexerwire.BaseResp
+	Status string          `json:"status,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
+}
+
+type ContractListResp struct {
+	indexerwire.BaseResp
+	Total        int                              `json:"total"`
+	Contracts    []string                         `json:"contracts,omitempty"`
+	ContractURLs []string                         `json:"url,omitempty"`
+	Data         []contractcommon.ContractSummary `json:"data"`
+}
+
+type ContractHistoryResp struct {
+	indexerwire.BaseResp
+	Total  int                                    `json:"total"`
+	Status string                                 `json:"status,omitempty"`
+	Data   []contractcommon.ContractHistoryRecord `json:"data,omitempty"`
 }

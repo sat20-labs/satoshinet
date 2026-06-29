@@ -38,6 +38,9 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.POST(proxy+"/v3/utxos/existing", s.handle.getExistingUtxos)
 	r.GET(proxy+"/v3/ascend/:utxo", s.handle.getAscendData)
 	r.GET(proxy+"/v3/descend/:utxo", s.handle.getDescendData)
+	r.GET(proxy+"/v3/channel/ledger/:channel", s.handle.getChannelLedger)
+	r.GET(proxy+"/v3/channel/state/:channel", s.handle.getChannelStateEvents)
+	r.POST(proxy+"/v3/channel/state", s.handle.recordChannelStateEvent)
 	r.GET(proxy+"/v3/referrer/:address", s.handle.getReferrer)
 	r.GET(proxy+"/v3/referree/:name", s.handle.getReferree)
 	r.GET(proxy+"/v3/corenode/all", s.handle.getAllCoreNode)
@@ -47,10 +50,23 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/miner/info/:pubkey", s.handle.getMinerInfo)
 
 	r.GET(proxy+"/v3/address/summary/:address", s.handle.getAssetSummaryV3)
+	// 获取某个地址上所有utxo数据列表
+	r.GET(proxy+"/v3/address/utxos/:address", s.handle.getAddressUtxosV3)
 	// 获取某个地址上某个资产的utxo数据列表(utxo包含其他资产), ticker格式：wire.AssetName.String()
 	r.GET(proxy+"/v3/address/asset/:address/:ticker", s.handle.getUtxosWithTickerV3)
 	// 获取utxo的资产信息
 	r.GET(proxy+"/v3/utxo/info/:utxo", s.handle.getUtxoInfoV3)
 	r.POST(proxy+"/v3/utxos/info", s.handle.getUtxoInfoListV3)
+
+	r.GET(proxy+"/v3/contracts", s.handle.getContracts)
+	r.POST(proxy+"/v3/contracts/prediction/review-ready", s.handle.reviewPredictionReady)
+	r.GET(proxy+"/v3/contracts/:contract", s.handle.getContract)
+	r.GET(proxy+"/v3/contracts/:contract/state", s.handle.getContractState)
+	r.GET(proxy+"/v3/contracts/:contract/history", s.handle.getContractHistory)
+	r.GET(proxy+"/v3/contracts/:contract/analytics", s.handle.getContractAnalytics)
+	r.GET(proxy+"/v3/contracts/:contract/items/inutxo/:inutxo", s.handle.getContractInvokeItem)
+	r.GET(proxy+"/v3/contracts/:contract/users", s.handle.getContractUsers)
+	r.GET(proxy+"/v3/contracts/:contract/users/:address", s.handle.getContractUser)
+	r.GET(proxy+"/v3/contracts/:contract/users/:address/history", s.handle.getContractUserHistory)
 
 }

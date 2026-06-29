@@ -16,14 +16,15 @@ import (
 
 // TestMerkle tests the BuildMerkleTreeStore API.
 func TestMerkle(t *testing.T) {
-	block := btcutil.NewBlock(&Block100000)
+	msgBlock := satoshiNetBlock100000()
+	block := btcutil.NewBlock(&msgBlock)
 	calcMerkleRoot := CalcMerkleRoot(block.Transactions(), false)
 	merkleStoreTree := BuildMerkleTreeStore(block.Transactions(), false)
 	merkleStoreRoot := merkleStoreTree[len(merkleStoreTree)-1]
 
 	require.Equal(t, *merkleStoreRoot, calcMerkleRoot)
 
-	wantMerkle := &Block100000.Header.MerkleRoot
+	wantMerkle := &msgBlock.Header.MerkleRoot
 	if !wantMerkle.IsEqual(&calcMerkleRoot) {
 		t.Errorf("BuildMerkleTreeStore: merkle root mismatch - "+
 			"got %v, want %v", calcMerkleRoot, wantMerkle)

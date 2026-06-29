@@ -1,0 +1,365 @@
+package template
+
+import (
+	"testing"
+
+	scommon "github.com/sat20-labs/indexer/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/wire"
+	"github.com/stretchr/testify/require"
+)
+
+func testAsset(assetName string, amount int64) wire.TxAssets {
+	return wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(assetName),
+		Amount: *scommon.NewDefaultDecimal(amount),
+	}}
+}
+
+func testContractOutput(txid string, vout uint32, contractAddr ContractAddress, value int64, assets wire.TxAssets) ContractOutput {
+	return contractframework.ContractOutputFromFunding(contractcommon.FundingOutput{
+		OutPoint: contractcommon.TxOutPoint{TxID: txid, Vout: vout},
+		Vout:     vout,
+		Contract: contractAddr,
+		Value:    value,
+		Assets:   assets,
+	})
+}
+
+func testContractUTXO(txid string, vout uint32, contractAddr ContractAddress, value int64, assets wire.TxAssets) UTXO {
+	output := testContractOutput(txid, vout, contractAddr, value, assets)
+	return UTXO{
+		OutPoint: output.OutPoint,
+		Contract: output.Contract,
+		TxOutput: output.IndexerTxOutput(),
+	}
+}
+
+func requireDecimalString(t *testing.T, expected string, actual *scommon.Decimal) {
+	t.Helper()
+	if actual == nil {
+		actual = scommon.NewDefaultDecimal(0)
+	}
+	require.Equal(t, expected, actual.String())
+}
+
+func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	contract := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeBuy,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		UnitPrice: "2",
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 30, nil)},
+		Height:         100,
+		Timestamp:      200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), item.ID)
+	require.Equal(t, OrderTypeBuy, item.OrderType)
+	requireDecimalString(t, "10", item.ExpectedAmt)
+	require.Equal(t, int64(20), item.RemainingValue)
+	require.Equal(t, int64(10), item.OutValue)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), state.NextItemID)
+	require.Equal(t, uint64(1), state.InvokeCount)
+	require.Len(t, state.Items, 1)
+	requireDecimalString(t, "30", state.Running.TotalInputAssetB)
+	requireDecimalString(t, "20", state.Running.AssetBInPool)
+}
+
+func TestApplyInvokeRecordsLimitOrderBuyExcessForRefund(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	contract := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeBuy,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		UnitPrice: "2",
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 200, nil)},
+		Height:         100,
+		Timestamp:      200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, InvokeReasonNormal, item.Reason)
+	require.Equal(t, int64(20), item.RemainingValue)
+	require.Equal(t, int64(180), item.OutValue)
+}
+
+func TestApplyInvokeMarksLimitOrderSellInvalidWhenAssetAmountDiffers(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	contract := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeSell,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		UnitPrice: "2",
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, SwapInvokeFee, testAsset("ordx:f:test", 9))},
+		Height:         100,
+		Timestamp:      200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, InvokeReasonInvalid, item.Reason)
+	require.Empty(t, item.RemainingAmt)
+	require.Zero(t, item.RemainingValue)
+}
+
+func TestApplySellExtraSatsInvalid(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	contract := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeSell,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		UnitPrice: "2",
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 10, testAsset("ordx:f:test", 10))},
+		Height:         100,
+		Timestamp:      200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, InvokeReasonInvalid, item.Reason)
+	require.Empty(t, item.RemainingAmt)
+	require.Zero(t, item.RemainingValue)
+}
+
+func TestApplyInvokeRecordsAMMAddLiquidityItem(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	contract := runtime.Address()
+	param, err := (&AddLiquidityInvokeParam{
+		OrderType: OrderTypeAddLiquidity,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		Value:     20,
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:         InvokeAPIAddLiquidity,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 25, testAsset("ordx:f:test", 10))},
+		Height:         100,
+		Timestamp:      200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, OrderTypeAddLiquidity, item.OrderType)
+	requireDecimalString(t, "10", item.InAmt)
+	require.Equal(t, int64(20), item.RemainingValue)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Empty(t, state.Running.AssetAInPool)
+	require.Zero(t, state.Running.AssetBInPool)
+	requireDecimalString(t, "10", state.Running.TotalInputAssetA)
+	requireDecimalString(t, "25", state.Running.TotalInputAssetB)
+}
+
+func TestApplyInvokeMarksAMMAddLiquidityInvalidWhenDeclaredAssetMissing(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	contract := runtime.Address()
+	param, err := (&AddLiquidityInvokeParam{
+		OrderType: OrderTypeAddLiquidity,
+		AssetName: "ordx:f:test",
+		Amt:       "10",
+		Value:     20,
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:         InvokeAPIAddLiquidity,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 20, nil)},
+		Height:         100,
+		Timestamp:      200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, InvokeReasonInvalid, item.Reason)
+	require.Empty(t, item.RemainingAmt)
+	require.Zero(t, item.RemainingValue)
+}
+
+func TestApplyInvokeRecordsAMMBuyWithExactFunding(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	contract := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeBuy,
+		AssetName: "ordx:f:test",
+		Amt:       "",
+		UnitPrice: "10",
+	}).Encode()
+	require.NoError(t, err)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:         InvokeAPISwap,
+		Param:          param,
+		CallID:         DeriveInvokeCallID("tx", 1, contract),
+		FundingOutputs: []ContractOutput{testContractOutput("tx", 1, contract, 10, nil)},
+		Height:         100,
+		Timestamp:      200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, OrderTypeBuy, item.OrderType)
+	require.Equal(t, int64(SwapInvokeFee), item.ServiceFee)
+	require.Equal(t, int64(10), item.RemainingValue)
+	require.Empty(t, item.ExpectedAmt)
+}
+
+func TestApplyFundingTracksTemplateGasSeparately(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	addr := runtime.Address()
+	err := runtime.ApplyFunding([]ContractOutput{testContractOutput("fund", 1, addr, 0, testAsset("ordx:f:gas", 50))}, "ordx:f:gas")
+	require.NoError(t, err)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "50", state.Running.GasBalance)
+	require.Empty(t, state.Running.AssetAInPool)
+	require.Zero(t, state.Running.AssetBInPool)
+}
+
+func TestApplyGasFundingDoesNotChangeAMMPool(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	fundAMMRuntime(t, runtime)
+	addr := runtime.Address()
+
+	err := runtime.ApplyGasFunding([]ContractOutput{testContractOutput("invoke", 1, addr, 10, testAsset("ordx:f:test", 5))}, "ordx:f:gas")
+	require.NoError(t, err)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "100", state.Running.AssetAInPool)
+	requireDecimalString(t, "20", state.Running.AssetBInPool)
+	require.Empty(t, state.Running.GasBalance)
+	require.True(t, state.Running.TradingReady)
+}
+
+func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	fundAMMRuntime(t, runtime)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	state.Running.AssetAInPool = parseDecimalOrZero("1")
+	state.Running.AssetBInPool = scommon.NewDefaultDecimal(2)
+	state.Running.GasBalance = parseDecimalOrZero("3")
+	require.NoError(t, runtime.saveRuntimeState(state))
+
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	gasAssetName := DefaultGasConfig().GasAssetName
+	actualAssets := testAssets("ordx:f:test", 77, gasAssetName, 5)
+	err = store.ReconcileAssetCaches(func(contract ContractAddress) ([]UTXO, error) {
+		require.True(t, contract.Equal(runtime.Address()))
+		return []UTXO{testContractUTXO("actual", 0, contract, 33, actualAssets)}, nil
+	}, DefaultGasConfig())
+	require.NoError(t, err)
+
+	state, err = runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "77", state.Running.AssetAInPool)
+	requireDecimalString(t, "33", state.Running.AssetBInPool)
+	requireDecimalString(t, "5", state.Running.GasBalance)
+}
+
+func testLimitOrderRuntime(t *testing.T) *ContractRuntime {
+	t.Helper()
+	contract := NewLimitOrderContract("ordx:f:test")
+	content, err := contract.Encode()
+	require.NoError(t, err)
+	deploy := DeployPayload{
+		GasLimit:        1000,
+		SubType:         TemplateLimitOrder,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, "deployer-address", deploy.DeployNonce)
+	require.NoError(t, err)
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, nil, "deployer-address")
+	require.NoError(t, err)
+	return runtime
+}
+
+func fundAMMRuntime(t *testing.T, runtime *ContractRuntime) {
+	t.Helper()
+	addr := runtime.Address()
+	err := runtime.ApplyFunding([]ContractOutput{testContractOutput("deploy", 1, addr, 20, testAsset("ordx:f:test", 100))}, "")
+	require.NoError(t, err)
+}
+
+func fundAMMRuntimeWithAsset(t *testing.T, runtime *ContractRuntime, assetName string, amount int64, value int64) {
+	t.Helper()
+	addr := runtime.Address()
+	err := runtime.ApplyFunding([]ContractOutput{testContractOutput("deploy", 1, addr, value, testAsset(assetName, amount))}, "")
+	require.NoError(t, err)
+}
+
+func testAMMRuntime(t *testing.T) *ContractRuntime {
+	t.Helper()
+	contract := NewAMMContract("ordx:f:test", "100", 20, "2000")
+	content, err := contract.Encode()
+	require.NoError(t, err)
+	deploy := DeployPayload{
+		GasLimit:        1000,
+		SubType:         TemplateAMM,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, "deployer-address", deploy.DeployNonce)
+	require.NoError(t, err)
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, nil, "deployer-address")
+	require.NoError(t, err)
+	return runtime
+}
+
+func testAMMRuntimeWithAsset(t *testing.T, assetName string, amount int64, value int64, k string) *ContractRuntime {
+	t.Helper()
+	contract := NewAMMContract(assetName, scommon.NewDefaultDecimal(amount).String(), value, k)
+	content, err := contract.Encode()
+	require.NoError(t, err)
+	deploy := DeployPayload{
+		GasLimit:        1000,
+		SubType:         TemplateAMM,
+		Version:         CurrentTemplateVersion,
+		DeployNonce:     7,
+		ContractContent: content,
+	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, "deployer-address", deploy.DeployNonce)
+	require.NoError(t, err)
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, nil, "deployer-address")
+	require.NoError(t, err)
+	return runtime
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -187,14 +188,15 @@ type TxPool struct {
 	// The following variables must only be used atomically.
 	lastUpdated int64 // last time pool was updated
 
-	mtx           sync.RWMutex
-	cfg           Config
-	pool          map[chainhash.Hash]*TxDesc
-	orphans       map[chainhash.Hash]*orphanTx
-	orphansByPrev map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx
-	outpoints     map[wire.OutPoint]*btcutil.Tx
-	pennyTotal    float64 // exponentially decaying total for penny spends.
-	lastPennyUnix int64   // unix time of last ``penny spend''
+	mtx             sync.RWMutex
+	cfg             Config
+	pool            map[chainhash.Hash]*TxDesc
+	orphans         map[chainhash.Hash]*orphanTx
+	orphansByPrev   map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx
+	outpoints       map[wire.OutPoint]*btcutil.Tx
+	anchorOutpoints map[string]*btcutil.Tx
+	pennyTotal      float64 // exponentially decaying total for penny spends.
+	lastPennyUnix   int64   // unix time of last ``penny spend''
 
 	// nextExpireScan is the time after which the orphan pool will be
 	// scanned in order to evict orphans.  This is NOT a hard deadline as
@@ -504,6 +506,14 @@ func (mp *TxPool) removeTransaction(tx *btcutil.Tx, removeRedeemers bool) {
 		for _, txIn := range txDesc.Tx.MsgTx().TxIn {
 			delete(mp.outpoints, txIn.PreviousOutPoint)
 		}
+		if blockchain.IsAnchorTx(txDesc.Tx.MsgTx()) {
+			utxo, err := anchorFundingUtxo(txDesc.Tx)
+			if err != nil {
+				log.Warnf("failed to parse anchor tx %s when removing from mempool: %v", txHash, err)
+			} else if existing, ok := mp.anchorOutpoints[utxo]; ok && existing.Hash().IsEqual(txHash) {
+				delete(mp.anchorOutpoints, utxo)
+			}
+		}
 		delete(mp.pool, *txHash)
 		atomic.StoreInt64(&mp.lastUpdated, time.Now().Unix())
 	}
@@ -565,6 +575,14 @@ func (mp *TxPool) addTransaction(utxoView *blockchain.UtxoViewpoint, tx *btcutil
 	mp.pool[*tx.Hash()] = txD
 	for _, txIn := range tx.MsgTx().TxIn {
 		mp.outpoints[txIn.PreviousOutPoint] = tx
+	}
+	if blockchain.IsAnchorTx(tx.MsgTx()) {
+		utxo, err := anchorFundingUtxo(tx)
+		if err != nil {
+			log.Warnf("failed to parse accepted anchor tx %s: %v", tx.Hash(), err)
+		} else {
+			mp.anchorOutpoints[utxo] = tx
+		}
 	}
 	atomic.StoreInt64(&mp.lastUpdated, time.Now().Unix())
 
@@ -1580,13 +1598,13 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 	// In satsnet, the min relay fee is 0, not to validate relay Fee Met
 	if !blockchain.IsDeAnchorTx(tx.MsgTx()) {
 		err = mp.validateRelayFeeMet(
-			tx, txFee, txSize, utxoView, nextBlockHeight, isNew, rateLimit,
-		)
+			tx, txFee, feeAssets, txSize, utxoView, nextBlockHeight,
+			isNew, rateLimit)
 		if err != nil {
 			return nil, err
 		}
 	}
-	
+
 	// If the transaction has any conflicts, and we've made it this far,
 	// then we're processing a potential replacement.
 	var conflicts map[chainhash.Hash]*btcutil.Tx
@@ -1671,9 +1689,10 @@ func (mp *TxPool) validateStandardness(tx *btcutil.Tx, nextBlockHeight int32,
 	}
 
 	// Check the transaction standard.
-	err := CheckTransactionStandard(
+	err := CheckTransactionStandardWithParams(
 		tx, nextBlockHeight, medianTimePast,
 		mp.cfg.Policy.MinRelayTxFee, mp.cfg.Policy.MaxTxVersion,
+		mp.cfg.ChainParams,
 	)
 	if err != nil {
 		// Attempt to extract a reject code from the error so it can be
@@ -1690,7 +1709,7 @@ func (mp *TxPool) validateStandardness(tx *btcutil.Tx, nextBlockHeight int32,
 	}
 
 	// Check the inputs standard.
-	err = checkInputsStandard(tx, utxoView)
+	err = checkInputsStandard(tx, utxoView, mp.cfg.ChainParams)
 	if err != nil {
 		// Attempt to extract a reject code from the error so it can be
 		// retained. When not possible, fall back to a non-standard
@@ -1742,11 +1761,15 @@ func (mp *TxPool) validateSigCost(tx *btcutil.Tx,
 
 // validateRelayFeeMet checks that the min relay fee is covered by this
 // transaction.
-func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee, txSize int64,
+func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee int64,
+	feeAssets wire.TxAssets, txSize int64,
 	utxoView *blockchain.UtxoViewpoint, nextBlockHeight int32,
 	isNew, rateLimit bool) error {
 
 	txHash := tx.Hash()
+	if mp.isContractTx(tx) {
+		return nil
+	}
 
 	// Most miners allow a free transaction area in blocks they mine to go
 	// alongside the area used for high-priority transactions as well as
@@ -1819,6 +1842,27 @@ func (mp *TxPool) validateRelayFeeMet(tx *btcutil.Tx, txFee, txSize int64,
 		oldTotal, mp.pennyTotal, mp.cfg.Policy.FreeTxRelayLimit*10*1000)
 
 	return nil
+}
+
+func (mp *TxPool) isContractTx(tx *btcutil.Tx) bool {
+	if tx == nil {
+		return false
+	}
+	msgTx := tx.MsgTx()
+	hasPayload, err := contractcommon.HasContractPayload(msgTx)
+	if err == nil && hasPayload {
+		return true
+	}
+	prefix := contractPrefixForParams(mp.cfg.ChainParams)
+	for _, txOut := range msgTx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		if _, ok, err := contractcommon.ParseContractPkScript(txOut.PkScript, prefix); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (mp *TxPool) Save(dataDir string) error {
@@ -1907,11 +1951,12 @@ func (mp *TxPool) Load(dataDir string) error {
 // transactions until they are mined into a block.
 func New(cfg *Config) *TxPool {
 	return &TxPool{
-		cfg:            *cfg,
-		pool:           make(map[chainhash.Hash]*TxDesc),
-		orphans:        make(map[chainhash.Hash]*orphanTx),
-		orphansByPrev:  make(map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx),
-		nextExpireScan: time.Now().Add(orphanExpireScanInterval),
-		outpoints:      make(map[wire.OutPoint]*btcutil.Tx),
+		cfg:             *cfg,
+		pool:            make(map[chainhash.Hash]*TxDesc),
+		orphans:         make(map[chainhash.Hash]*orphanTx),
+		orphansByPrev:   make(map[wire.OutPoint]map[chainhash.Hash]*btcutil.Tx),
+		nextExpireScan:  time.Now().Add(orphanExpireScanInterval),
+		outpoints:       make(map[wire.OutPoint]*btcutil.Tx),
+		anchorOutpoints: make(map[string]*btcutil.Tx),
 	}
 }

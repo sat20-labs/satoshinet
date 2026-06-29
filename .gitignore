@@ -9,3 +9,4 @@ log/*
 addblock
 btcctl
 satsnet.conf
+integration/contract_e2e/data/

@@ -148,7 +148,7 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		pkScript, err = indexer.AddressToPkScript(addr, b.IsMainnet())
+		pkScript, err = addressToPkScript(addr, b.IsMainnet())
 		if err != nil {
 			return nil, err
 		}
@@ -362,6 +362,109 @@ func (b *RpcIndexer) GetDescendData(nullDataUtxo string) *common.DescendData {
 	b.utxoIndex.DescendMap[nullDataUtxo] = info
 	b.mutex.Unlock()
 	return info
+}
+
+func (b *RpcIndexer) GetChannelLedger(channel string) []*common.ChannelLedgerEntry {
+	b.mutex.RLock()
+	result := make([]*common.ChannelLedgerEntry, 0)
+	for _, entry := range b.utxoIndex.ChannelLedgerMap {
+		if entry.ChannelId == channel {
+			result = append(result, entry)
+		}
+	}
+	b.mutex.RUnlock()
+	seen := make(map[string]bool)
+	for _, entry := range result {
+		seen[string(stp.GetChannelLedgerDBKey(entry))] = true
+	}
+
+	entries, err := stp.GetChannelLedgerFromDB(b.db, channel)
+	if err != nil {
+		common.Log.Errorf("GetChannelLedgerFromDB %s failed, %v", channel, err)
+	} else {
+		for _, entry := range entries {
+			key := string(stp.GetChannelLedgerDBKey(entry))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, entry)
+		}
+	}
+
+	ascends, err := stp.GetAscendsFromDBByChannel(b.db, channel)
+	if err != nil {
+		common.Log.Errorf("GetAscendsFromDBByChannel %s failed, %v", channel, err)
+	} else {
+		for _, ascend := range ascends {
+			entry := NewAscendingLedgerEntry(ascend)
+			key := string(stp.GetChannelLedgerDBKey(entry))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, entry)
+		}
+	}
+
+	descends, err := stp.GetDescendsFromDBByChannel(b.db, channel)
+	if err != nil {
+		common.Log.Errorf("GetDescendsFromDBByChannel %s failed, %v", channel, err)
+	} else {
+		for _, descend := range descends {
+			entry := NewDescendingLedgerEntry(descend)
+			key := string(stp.GetChannelLedgerDBKey(entry))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, entry)
+		}
+	}
+
+	b.mutex.Lock()
+	for _, entry := range result {
+		b.utxoIndex.ChannelLedgerMap[string(stp.GetChannelLedgerDBKey(entry))] = entry
+	}
+	b.mutex.Unlock()
+	return result
+}
+
+func (b *RpcIndexer) GetChannelStateEvents(channel string) []*common.ChannelStateEvent {
+	b.mutex.RLock()
+	result := make([]*common.ChannelStateEvent, 0)
+	for _, event := range b.utxoIndex.ChannelStateEventMap {
+		if event.ChannelId == channel {
+			result = append(result, event)
+		}
+	}
+	b.mutex.RUnlock()
+
+	seen := make(map[string]bool)
+	for _, event := range result {
+		seen[string(stp.GetChannelStateEventDBKey(event))] = true
+	}
+
+	events, err := stp.GetChannelStateEventsFromDB(b.db, channel)
+	if err != nil {
+		common.Log.Errorf("GetChannelStateEventsFromDB %s failed, %v", channel, err)
+	} else {
+		for _, event := range events {
+			key := string(stp.GetChannelStateEventDBKey(event))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			result = append(result, event)
+		}
+	}
+
+	b.mutex.Lock()
+	for _, event := range result {
+		b.utxoIndex.ChannelStateEventMap[string(stp.GetChannelStateEventDBKey(event))] = event
+	}
+	b.mutex.Unlock()
+	return result
 }
 
 // only for RPC interface

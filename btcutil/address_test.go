@@ -894,3 +894,65 @@ func TestAddresses(t *testing.T) {
 		}
 	}
 }
+
+func TestAddressContract(t *testing.T) {
+	t.Parallel()
+
+	hash, err := hex.DecodeString("00112233445566778899aabbccddeeff00112233")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testnetAddr, err := btcutil.NewAddressContractFromHash(
+		btcutil.ContractAddressVersionV1, 2, hash, &chaincfg.TestNetParams,
+	)
+	if err != nil {
+		t.Fatalf("NewAddressContractFromHash testnet: %v", err)
+	}
+	if !strings.HasPrefix(testnetAddr.EncodeAddress(), btcutil.ContractTestnetPrefix+"1") {
+		t.Fatalf("unexpected testnet contract prefix: %s", testnetAddr.EncodeAddress())
+	}
+	if !testnetAddr.IsForNet(&chaincfg.TestNetParams) {
+		t.Fatalf("testnet contract address is not for testnet")
+	}
+	if testnetAddr.IsForNet(&chaincfg.MainNetParams) {
+		t.Fatalf("testnet contract address is for mainnet")
+	}
+
+	decoded, err := btcutil.DecodeAddress(
+		testnetAddr.EncodeAddress(), &chaincfg.TestNetParams,
+	)
+	if err != nil {
+		t.Fatalf("DecodeAddress testnet contract: %v", err)
+	}
+	decodedContract, ok := decoded.(*btcutil.AddressContract)
+	if !ok {
+		t.Fatalf("decoded address type is %T, want *AddressContract", decoded)
+	}
+	if decodedContract.EncodeAddress() != testnetAddr.EncodeAddress() {
+		t.Fatalf("roundtrip address mismatch: got %s want %s",
+			decodedContract.EncodeAddress(), testnetAddr.EncodeAddress())
+	}
+	if !bytes.Equal(decodedContract.ScriptAddress(), testnetAddr.ScriptAddress()) {
+		t.Fatalf("roundtrip payload mismatch")
+	}
+
+	mainnetAddr, err := btcutil.NewAddressContractFromHash(
+		btcutil.ContractAddressVersionV1, 2, hash, &chaincfg.MainNetParams,
+	)
+	if err != nil {
+		t.Fatalf("NewAddressContractFromHash mainnet: %v", err)
+	}
+	if !strings.HasPrefix(mainnetAddr.EncodeAddress(), btcutil.ContractMainnetPrefix+"1") {
+		t.Fatalf("unexpected mainnet contract prefix: %s", mainnetAddr.EncodeAddress())
+	}
+	if !mainnetAddr.IsForNet(&chaincfg.MainNetParams) {
+		t.Fatalf("mainnet contract address is not for mainnet")
+	}
+
+	badPayload := append([]byte(nil), testnetAddr.ScriptAddress()...)
+	badPayload[1] = 0
+	if _, err := btcutil.NewAddressContract(badPayload, &chaincfg.TestNetParams); err == nil {
+		t.Fatalf("NewAddressContract accepted zero contract type")
+	}
+}

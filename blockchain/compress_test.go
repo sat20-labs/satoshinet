@@ -351,21 +351,21 @@ func TestCompressedTxOut(t *testing.T) {
 			amount:     0,
 			Assets:     wire.TxAssets{},
 			pkScript:   hexToBytes("6a200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"),
-			compressed: hexToBytes("00286a200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"),
+			compressed: hexToBytes("0000286a200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"),
 		},
 		{
 			name:       "pay-to-pubkey-hash dust",
 			amount:     546,
 			Assets:     wire.TxAssets{},
 			pkScript:   hexToBytes("76a9141018853670f9f3b0582c5b9ee8ce93764ac32b9388ac"),
-			compressed: hexToBytes("a52f001018853670f9f3b0582c5b9ee8ce93764ac32b93"),
+			compressed: hexToBytes("a52f00001018853670f9f3b0582c5b9ee8ce93764ac32b93"),
 		},
 		{
 			name:       "pay-to-pubkey uncompressed 1 BTC",
 			amount:     100000000,
 			Assets:     wire.TxAssets{},
 			pkScript:   hexToBytes("4104192d74d0cb94344c9569c2e77901573d8d7903c3ebec3a957724895dca52c6b40d45264838c0bd96852662ce6a847b197376830160c6d2eb5e6a4c44d33f453eac"),
-			compressed: hexToBytes("0904192d74d0cb94344c9569c2e77901573d8d7903c3ebec3a957724895dca52c6b4"),
+			compressed: hexToBytes("090004192d74d0cb94344c9569c2e77901573d8d7903c3ebec3a957724895dca52c6b4"),
 		},
 	}
 

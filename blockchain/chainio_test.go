@@ -52,31 +52,34 @@ func TestStxoSerialization(t *testing.T) {
 			name: "Spends last output of coinbase",
 			stxo: SpentTxOut{
 				Amount:     5000000000,
+				Assets:     wire.TxAssets{},
 				PkScript:   hexToBytes("410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac"),
 				IsCoinBase: true,
 				Height:     9,
 			},
-			serialized: hexToBytes("1300320511db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5c"),
+			serialized: hexToBytes("130032000511db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5c"),
 		},
 		// Adapted from block 100025 in main blockchain.
 		{
 			name: "Spends last output of non coinbase",
 			stxo: SpentTxOut{
 				Amount:     13761000000,
+				Assets:     wire.TxAssets{},
 				PkScript:   hexToBytes("76a914b2fb57eadf61e106a100a7445a8c3f67898841ec88ac"),
 				IsCoinBase: false,
 				Height:     100024,
 			},
-			serialized: hexToBytes("8b99700086c64700b2fb57eadf61e106a100a7445a8c3f67898841ec"),
+			serialized: hexToBytes("8b99700086c6470000b2fb57eadf61e106a100a7445a8c3f67898841ec"),
 		},
 		// Adapted from block 100025 in main blockchain.
 		{
 			name: "Does not spend last output, legacy format",
 			stxo: SpentTxOut{
 				Amount:   34405000000,
+				Assets:   wire.TxAssets{},
 				PkScript: hexToBytes("76a9146edbc6c4d31bae9f1ccc38538a114bf42de65e8688ac"),
 			},
-			serialized: hexToBytes("0091f20f006edbc6c4d31bae9f1ccc38538a114bf42de65e86"),
+			serialized: hexToBytes("0091f20f00006edbc6c4d31bae9f1ccc38538a114bf42de65e86"),
 		},
 	}
 
@@ -224,6 +227,7 @@ func TestSpendJournalSerialization(t *testing.T) {
 			name: "One tx with one input spends last output of coinbase",
 			entry: []SpentTxOut{{
 				Amount:     5000000000,
+				Assets:     wire.TxAssets{},
 				PkScript:   hexToBytes("410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac"),
 				IsCoinBase: true,
 				Height:     9,
@@ -247,18 +251,20 @@ func TestSpendJournalSerialization(t *testing.T) {
 				}},
 				LockTime: 0,
 			}},
-			serialized: hexToBytes("1300320511db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5c"),
+			serialized: hexToBytes("130032000511db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5c"),
 		},
 		// Adapted from block 100025 in main blockchain.
 		{
 			name: "Two txns when one spends last output, one doesn't",
 			entry: []SpentTxOut{{
 				Amount:     34405000000,
+				Assets:     wire.TxAssets{},
 				PkScript:   hexToBytes("76a9146edbc6c4d31bae9f1ccc38538a114bf42de65e8688ac"),
 				IsCoinBase: false,
 				Height:     100024,
 			}, {
 				Amount:     13761000000,
+				Assets:     wire.TxAssets{},
 				PkScript:   hexToBytes("76a914b2fb57eadf61e106a100a7445a8c3f67898841ec88ac"),
 				IsCoinBase: false,
 				Height:     100024,
@@ -300,7 +306,7 @@ func TestSpendJournalSerialization(t *testing.T) {
 				}},
 				LockTime: 0,
 			}},
-			serialized: hexToBytes("8b99700086c64700b2fb57eadf61e106a100a7445a8c3f67898841ec8b99700091f20f006edbc6c4d31bae9f1ccc38538a114bf42de65e86"),
+			serialized: hexToBytes("8b99700086c6470000b2fb57eadf61e106a100a7445a8c3f67898841ec8b99700091f20f00006edbc6c4d31bae9f1ccc38538a114bf42de65e86"),
 		},
 	}
 
@@ -422,7 +428,7 @@ func TestUtxoSerialization(t *testing.T) {
 				blockHeight: 1,
 				packedFlags: tfCoinBase,
 			},
-			serialized: hexToBytes("03320496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52"),
+			serialized: hexToBytes("0332000496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52"),
 		},
 		// From tx in main blockchain:
 		// 0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098:0
@@ -446,7 +452,7 @@ func TestUtxoSerialization(t *testing.T) {
 				blockHeight: 100001,
 				packedFlags: 0,
 			},
-			serialized: hexToBytes("8b99420700ee8bd501094a7d5ca318da2506de35e1cb025ddc"),
+			serialized: hexToBytes("8b9942070000ee8bd501094a7d5ca318da2506de35e1cb025ddc"),
 		},
 		// From tx in main blockchain:
 		// 8131ffb0a2c945ecaf9b9063e59558784f9c3a74741ce6ae2a18d0571dac15bb:1

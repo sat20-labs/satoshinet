@@ -5,10 +5,10 @@
 package blockchain
 
 import (
+	"github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
-	"github.com/sat20-labs/indexer/common"
 )
 
 // -----------------------------------------------------------------------------
@@ -475,6 +475,18 @@ func deserializeString(compressedString []byte) (string, int) {
 	return string(content), bytesRead + int(stringSize)
 }
 
+func deserializeStringChecked(compressedString []byte) (string, int, error) {
+	if len(compressedString) == 0 {
+		return "", 0, errDeserialize("unexpected end of data before string size")
+	}
+	stringSize, bytesRead := deserializeVLQ(compressedString)
+	end := bytesRead + int(stringSize)
+	if end < bytesRead || end > len(compressedString) {
+		return "", bytesRead, errDeserialize("unexpected end of data in string")
+	}
+	return string(compressedString[bytesRead:end]), end, nil
+}
+
 // -----------------------------------------------------------------------------
 // In order to reduce the size of stored amounts, a domain specific compression
 // algorithm is used which relies on there typically being a lot of zeroes at
@@ -659,28 +671,40 @@ func decodeCompressedTxOut(serialized []byte) (uint64, wire.TxAssets, []byte, in
 	}
 	txAssets := wire.TxAssets{}
 	for i := 0; i < int(assetsCount); i++ {
-		assetProtocol, bytesRead := deserializeString(serialized[offset:])
+		assetProtocol, bytesRead, err := deserializeStringChecked(serialized[offset:])
+		if err != nil {
+			return 0, nil, nil, offset + bytesRead, err
+		}
 		offset += bytesRead
 		if offset >= len(serialized) {
 			return 0, nil, nil, offset, errDeserialize("unexpected end of " +
 				"data after asset name protocol")
 		}
 
-		assetType, bytesRead := deserializeString(serialized[offset:])
+		assetType, bytesRead, err := deserializeStringChecked(serialized[offset:])
+		if err != nil {
+			return 0, nil, nil, offset + bytesRead, err
+		}
 		offset += bytesRead
 		if offset >= len(serialized) {
 			return 0, nil, nil, offset, errDeserialize("unexpected end of " +
 				"data after asset name type")
 		}
 
-		assetTicker, bytesRead := deserializeString(serialized[offset:])
+		assetTicker, bytesRead, err := deserializeStringChecked(serialized[offset:])
+		if err != nil {
+			return 0, nil, nil, offset + bytesRead, err
+		}
 		offset += bytesRead
 		if offset >= len(serialized) {
 			return 0, nil, nil, offset, errDeserialize("unexpected end of " +
 				"data after asset name ticker")
 		}
 
-		assetAmount, bytesRead := deserializeString(serialized[offset:])
+		assetAmount, bytesRead, err := deserializeStringChecked(serialized[offset:])
+		if err != nil {
+			return 0, nil, nil, offset + bytesRead, err
+		}
 		offset += bytesRead
 		if offset >= len(serialized) {
 			return 0, nil, nil, offset, errDeserialize("unexpected end of " +

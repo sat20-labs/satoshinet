@@ -7,11 +7,12 @@ import (
 	"strings"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 	swire "github.com/sat20-labs/satoshinet/wire"
-	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
 )
@@ -25,7 +26,6 @@ func NewModel(indexer shareIndexer.Indexer) *Model {
 		indexer: indexer,
 	}
 }
-
 
 func (s *Model) GetTickerList(protocol string, start, limit int) ([]*common.TickerInfo, int) {
 	tickmap := s.indexer.GetTickerMap(protocol)
@@ -58,9 +58,8 @@ func (s *Model) GetTickerInfo(tickerName string) (*common.TickerInfo, error) {
 	return ticker, nil
 }
 
-
 func (s *Model) GetHolderListV3(tickName string, start, limit uint64) ([]*indexerwire.HolderV3, uint64, error) {
-	
+
 	assetName := indexer.NewAssetNameFromString(tickName)
 	holders := s.indexer.GetHoldersWithTick(assetName)
 
@@ -90,7 +89,6 @@ func (s *Model) GetHolderListV3(tickName string, start, limit uint64) ([]*indexe
 	return result, total, nil
 }
 
-
 func (s *Model) getPlainUtxos(address string, value int64, start, limit int) ([]*indexerwire.PlainUtxo, int, error) {
 	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, &indexer.ASSET_PLAIN_SAT)
 	if err != nil {
@@ -119,10 +117,10 @@ func (s *Model) getPlainUtxos(address string, value int64, start, limit int) ([]
 			txid, vout, _ := indexer.ParseUtxo(txOut.OutPoint)
 			avaibableUtxoList = append(avaibableUtxoList, &indexerwire.PlainUtxo{
 				Height: height,
-				Index: index,
-				Txid:  txid,
-				Vout:  vout,
-				Value: txOut.Value,
+				Index:  index,
+				Txid:   txid,
+				Vout:   vout,
+				Value:  txOut.Value,
 			})
 		}
 	}
@@ -158,25 +156,25 @@ func (s *Model) getAllUtxos(address string, start, limit int) ([]*indexerwire.Pl
 		if IsSpent(txOut.OutPoint) {
 			continue
 		}
-		
+
 		txid, vout, _ := indexer.ParseUtxo(txOut.OutPoint)
 
 		height, index, _ := indexer.FromUtxoId(utxoId)
 		if len(txOut.Assets) == 0 {
 			plainUtxos = append(plainUtxos, &indexerwire.PlainUtxo{
 				Height: height,
-				Index: index,
-				Txid:  txid,
-				Vout:  vout,
-				Value: txOut.Value,
+				Index:  index,
+				Txid:   txid,
+				Vout:   vout,
+				Value:  txOut.Value,
 			})
 		} else {
 			otherUtxos = append(otherUtxos, &indexerwire.PlainUtxo{
 				Height: height,
-				Index: index,
-				Txid:  txid,
-				Vout:  vout,
-				Value: txOut.Value,
+				Index:  index,
+				Txid:   txid,
+				Vout:   vout,
+				Value:  txOut.Value,
 			})
 		}
 	}
@@ -221,7 +219,6 @@ func (s *Model) GetAssetSummary(address string, start int, limit int) (*indexerw
 	return &result, nil
 }
 
-
 func (s *Model) GetExistingUtxos(req *indexerwire.UtxosReq) ([]string, error) {
 	result := make([]string, 0)
 	for _, utxo := range req.Utxos {
@@ -243,7 +240,7 @@ func (s *Model) GetExistingUtxos(req *indexerwire.UtxosReq) ([]string, error) {
 func (s *Model) GetAscend(utxo string) (*common.AscendData, error) {
 	data := s.indexer.GetAscendData(utxo)
 	if data == nil {
-		return nil, fmt.Errorf("GetAscendData %s failed", utxo)
+		return nil, fmt.Errorf("GetAscendData %s not found", utxo)
 	}
 
 	return data, nil
@@ -252,10 +249,30 @@ func (s *Model) GetAscend(utxo string) (*common.AscendData, error) {
 func (s *Model) GetDescend(utxo string) (*common.DescendData, error) {
 	data := s.indexer.GetDescendData(utxo)
 	if data == nil {
-		return nil, fmt.Errorf("GetDescendData %s failed", utxo)
+		return nil, fmt.Errorf("GetDescendData %s not found", utxo)
 	}
 
 	return data, nil
+}
+
+func (s *Model) GetChannelLedger(channel string) ([]*common.ChannelLedgerEntry, error) {
+	data := s.indexer.GetChannelLedger(channel)
+	if data == nil {
+		data = []*common.ChannelLedgerEntry{}
+	}
+	return data, nil
+}
+
+func (s *Model) GetChannelStateEvents(channel string) ([]*common.ChannelStateEvent, error) {
+	data := s.indexer.GetChannelStateEvents(channel)
+	if data == nil {
+		data = []*common.ChannelStateEvent{}
+	}
+	return data, nil
+}
+
+func (s *Model) RecordChannelStateEvent(event *common.ChannelStateEvent) error {
+	return s.indexer.RecordChannelStateEvent(event)
 }
 
 func (s *Model) GetReferrer(address string) (*common.ReferrerInfo, error) {
@@ -267,7 +284,7 @@ func (s *Model) GetReferree(name string, start, limit int) ([]*localwire.Referre
 	referrees := s.indexer.GetReferree(name)
 	for k, v := range referrees {
 		result = append(result, &localwire.ReferreeInfo{
-			Name: k,
+			Name:      k,
 			BindBlock: v,
 		})
 	}
@@ -286,7 +303,6 @@ func (s *Model) GetReferree(name string, start, limit int) ([]*localwire.Referre
 
 	return result[start:limit], total
 }
-
 
 func (s *Model) GetAllCoreNode() ([]string, error) {
 	data := s.indexer.GetAllCoreNode()
@@ -315,7 +331,7 @@ func (s *Model) CheckMiner(pubkey string) bool {
 	return s.indexer.IsMinerNode(pubkey)
 }
 
-func (s *Model) GetMinerInfo(pubkey string) (*common.MinerInfo) {
+func (s *Model) GetMinerInfo(pubkey string) *common.MinerInfo {
 	return s.indexer.GetMinerInfo(pubkey)
 }
 
@@ -395,6 +411,29 @@ func (s *Model) GetUtxoInfoListV3(req *indexerwire.UtxosReq) ([]*indexer.AssetsI
 	return result, nil
 }
 
+func (s *Model) GetAddressUtxosV3(address string, start, limit int) ([]*indexer.AssetsInUtxo, int, error) {
+	result := make([]*indexer.AssetsInUtxo, 0)
+	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, txOut := range outputMap {
+		if IsSpent(txOut.OutPoint) {
+			continue
+		}
+		result = append(result, txOut)
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Value == result[j].Value {
+			return result[i].OutPoint < result[j].OutPoint
+		}
+		return result[i].Value > result[j].Value
+	})
+
+	return result, len(result), nil
+}
+
 // name == * , 返回所有utxo
 func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) ([]*indexer.AssetsInUtxo, int, error) {
 	result := make([]*indexer.AssetsInUtxo, 0)
@@ -411,8 +450,55 @@ func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) 
 	}
 
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].Value == result[j].Value {
+			return result[i].OutPoint < result[j].OutPoint
+		}
 		return result[i].Value > result[j].Value
 	})
 
 	return result, len(result), nil
+}
+
+func (s *Model) GetSupportedContracts() []string {
+	return s.contractQueries().SupportedContracts()
+}
+
+func (s *Model) GetDeployedContracts(start, limit int) ([]string, int) {
+	return s.contractQueries().DeployedContracts(start, limit)
+}
+
+func (s *Model) GetContracts(start, limit int) ([]contractengine.ContractSummary, int) {
+	return s.contractQueries().Contracts(start, limit)
+}
+
+func (s *Model) GetContract(contractAddress string) (contractengine.ContractSummary, error) {
+	return s.contractQueries().Contract(contractAddress)
+}
+
+func (s *Model) GetContractHistory(contractAddress string, start, limit int) ([]contractengine.ContractHistoryRecord, int, error) {
+	return s.contractQueries().History(contractAddress, start, limit)
+}
+
+func (s *Model) GetContractAnalytics(contractAddress string) (any, error) {
+	return s.contractQueries().Analytics(contractAddress)
+}
+
+func (s *Model) GetContractInvokeItemByInUtxo(contractAddress, inUtxo string) (any, error) {
+	return s.contractQueries().InvokeItemByInUtxo(contractAddress, inUtxo)
+}
+
+func (s *Model) GetContractAllAddresses(contractAddress string, start, limit int) (any, int, error) {
+	return s.contractQueries().AllAddresses(contractAddress, start, limit)
+}
+
+func (s *Model) GetContractUserStatus(contractAddress, address string) (any, error) {
+	return s.contractQueries().UserStatus(contractAddress, address)
+}
+
+func (s *Model) GetContractHistoryByAddress(contractAddress, address string, start, limit int) (any, int, error) {
+	return s.contractQueries().HistoryByAddress(contractAddress, address, start, limit)
+}
+
+func (s *Model) contractQueries() contractengine.QueryService {
+	return contractengine.NewQueryServiceForParams(s.indexer, s.indexer.GetChainParam())
 }

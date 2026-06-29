@@ -6,6 +6,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
+	contract_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/contract"
 
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 
@@ -57,6 +58,9 @@ type IndexerMgr struct {
 
 	bRunning  bool
 	interrupt <-chan struct{}
+
+	contractIndexer  *contract_indexer.Indexer
+	contractBackupDB *contract_indexer.Indexer
 }
 
 var instance *IndexerMgr
@@ -106,6 +110,7 @@ func (b *IndexerMgr) Init() {
 	}
 	b.compiling = base_indexer.NewBaseIndexer(b.baseDB, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 	b.compiling.Init()
+	b.contractIndexer = contract_indexer.NewIndexer(b.baseDB, b.chaincfgParam)
 	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
 	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
@@ -119,6 +124,7 @@ func (b *IndexerMgr) Init() {
 	b.rpcService = base_indexer.NewRpcIndexer(b.compiling)
 
 	b.compilingBackupDB = nil
+	b.contractBackupDB = nil
 
 	if b.lastCheckHeight == -1 {
 		b.ConnectBlock(b.chaincfgParam.GenesisBlock, 0, 0)
@@ -202,6 +208,9 @@ func (b *IndexerMgr) closeDB() {
 func (b *IndexerMgr) checkSelf() {
 	start := time.Now()
 	b.compiling.CheckSelf()
+	if b.contractIndexer != nil && !b.contractIndexer.CheckSelf() {
+		common.Log.Panicf("ContractIndexer.CheckSelf failed")
+	}
 
 	common.Log.Infof("IndexerMgr.checkSelf takes %v", time.Since(start))
 }
@@ -209,6 +218,9 @@ func (b *IndexerMgr) checkSelf() {
 func (b *IndexerMgr) forceUpdateDB() {
 	//startTime := time.Now()
 
+	if b.contractIndexer != nil {
+		b.contractIndexer.UpdateDB()
+	}
 	//common.Log.Infof("IndexerMgr.forceUpdateDB: takes: %v", time.Since(startTime))
 }
 
@@ -231,7 +243,7 @@ func (b *IndexerMgr) updateDB(height, tip int) {
 	syncHeight := b.compiling.GetSyncHeight()
 	blocksInHistory := b.compiling.GetBlockHistory()
 
-	gap := complingHeight-syncHeight
+	gap := complingHeight - syncHeight
 	if gap < blocksInHistory {
 		common.Log.Infof("performUpdateDBInBuffer nothing to do at height %d-%d", complingHeight, syncHeight)
 	} else {
@@ -254,18 +266,30 @@ func (b *IndexerMgr) updateDB(height, tip int) {
 }
 
 func (b *IndexerMgr) performUpdateDBInBuffer() {
-	b.cleanDBBuffer() // must before UpdateDB
+	// The live compiling buffers must be trimmed before the backup writes to DB.
+	// Subtract keeps only post-backup deltas in memory while the backup commits
+	// the syncHeight view.
+	b.cleanDBBuffer()
 	b.compilingBackupDB.UpdateDB()
+	if b.contractBackupDB != nil {
+		b.contractBackupDB.UpdateDB()
+	}
 	b.compiling.SetSyncBase(b.compilingBackupDB.GetSyncBase())
 }
 
 func (b *IndexerMgr) prepareDBBuffer() {
 	b.compilingBackupDB = b.compiling.Clone(true)
+	if b.contractIndexer != nil {
+		b.contractBackupDB = b.contractIndexer.Clone()
+	}
 	common.Log.Infof("backup instance %d cloned", b.compilingBackupDB.GetHeight())
 }
 
 func (b *IndexerMgr) cleanDBBuffer() {
 	b.compiling.Subtract(b.compilingBackupDB)
+	if b.contractIndexer != nil && b.contractBackupDB != nil {
+		b.contractIndexer.Subtract(b.contractBackupDB)
+	}
 }
 
 func (b *IndexerMgr) updateServiceInstance() {
@@ -317,7 +341,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 					return
 				}
 				p.updateDB(height, tip2)
-				
+
 			}
 			// 重新设置buffer
 			p.prepareDBBuffer()
@@ -352,7 +376,7 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
 	// TODO 优化indexer的设计
 	p.updateDB(height, tip)
-	if (height+1)%200 == 0 {  // TODO 先多检查，以后稳定了再降低检查频率
+	if (height+1)%200 == 0 { // TODO 先多检查，以后稳定了再降低检查频率
 		p.checkSelf()
 	}
 }

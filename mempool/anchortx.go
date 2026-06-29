@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/anchortx"
+	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -50,9 +51,22 @@ func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32)
 		err = fmt.Errorf("the locked tx is anchored already in sats net, anchorTx %s, utxo %s", info.AnchorTxid, txInfo.Utxo)
 		return err
 	}
+	if conflict, ok := mp.anchorOutpoints[txInfo.Utxo]; ok {
+		err = fmt.Errorf("the locked tx is already anchored in mempool, anchorTx %s, utxo %s", conflict.Hash(), txInfo.Utxo)
+		log.Errorf("%v", err)
+		return err
+	}
 
 	// Check the locked tx has completed, all the assets is locked in lnd will be mapped to sats net only one times
 
 	log.Infof("The anchor tx %s is valid", tx.TxID())
 	return nil
+}
+
+func anchorFundingUtxo(tx *btcutil.Tx) (string, error) {
+	txInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+	if err != nil {
+		return "", err
+	}
+	return txInfo.Utxo, nil
 }

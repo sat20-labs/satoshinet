@@ -1,0 +1,221 @@
+package blockchain
+
+import (
+	"math"
+	"testing"
+
+	scommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/txscript"
+	"github.com/sat20-labs/satoshinet/wire"
+)
+
+func TestCheckEVMBlockOrder(t *testing.T) {
+	coinbase := wire.NewMsgTx(2)
+	coinbase.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Index: math.MaxUint32},
+		SignatureScript:  []byte{0x01, 0x01},
+	})
+	coinbase.AddTxOut(&wire.TxOut{PkScript: []byte{txscript.OP_TRUE}})
+
+	ordinary := wire.NewMsgTx(2)
+	ordinary.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0}})
+	ordinary.AddTxOut(&wire.TxOut{PkScript: []byte{txscript.OP_TRUE}})
+
+	deployScript, err := contract.DeployNullDataScript(contract.DeployPayload{
+		Type:        contract.ContractTypeEVM,
+		SubType:     "sol",
+		GasLimit:    1,
+		DeployNonce: 1,
+		ContractContent:    []byte{0x60, 0x00},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy := wire.NewMsgTx(2)
+	deploy.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 1}})
+	deploy.AddTxOut(&wire.TxOut{PkScript: deployScript})
+	c, err := contract.NewContractAddress(contract.TestnetContractPrefix, contract.AddressVersionV1, contract.ContractTypeEVM, contract.EVMAddress{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractOut, err := contract.NewContractTxOut(0, nil, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy.AddTxOut(contractOut)
+
+	validBlock := btcutil.NewBlock(&wire.MsgBlock{
+		Transactions: []*wire.MsgTx{coinbase, ordinary, deploy},
+	})
+	if err := checkEVMBlockOrder(validBlock, &chaincfg.TestNetParams); err != nil {
+		t.Fatalf("valid EVM block order rejected: %v", err)
+	}
+
+	invalidBlock := btcutil.NewBlock(&wire.MsgBlock{
+		Transactions: []*wire.MsgTx{coinbase, deploy, ordinary},
+	})
+	err = checkEVMBlockOrder(invalidBlock, &chaincfg.TestNetParams)
+	if err == nil {
+		t.Fatalf("expected invalid EVM block order error")
+	}
+	ruleErr, ok := err.(RuleError)
+	if !ok {
+		t.Fatalf("expected RuleError, got %T", err)
+	}
+	if ruleErr.ErrorCode != ErrInvalidEVMBlock {
+		t.Fatalf("unexpected error code %v", ruleErr.ErrorCode)
+	}
+
+	stateRootScript, err := contract.StateRootNullDataScript(contract.StateRootPayload{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRootTx := wire.NewMsgTx(2)
+	stateRootTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 2}})
+	stateRootTx.AddTxOut(&wire.TxOut{PkScript: stateRootScript})
+	stateRootBlock := btcutil.NewBlock(&wire.MsgBlock{
+		Transactions: []*wire.MsgTx{coinbase, stateRootTx},
+	})
+	err = checkEVMBlockOrder(stateRootBlock, &chaincfg.TestNetParams)
+	if err == nil {
+		t.Fatalf("expected non-coinbase state root error")
+	}
+	ruleErr, ok = err.(RuleError)
+	if !ok {
+		t.Fatalf("expected RuleError, got %T", err)
+	}
+	if ruleErr.ErrorCode != ErrInvalidEVMBlock {
+		t.Fatalf("unexpected error code %v", ruleErr.ErrorCode)
+	}
+
+	resultScript, err := contract.ResultNullDataScript(contract.ResultPayload{
+		Status:      contract.ResultStatusSuccess,
+		ResultCount: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultTx := wire.NewMsgTx(2)
+	resultTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 3}})
+	resultTx.AddTxOut(&wire.TxOut{PkScript: resultScript})
+	resultBeforeDeployBlock := btcutil.NewBlock(&wire.MsgBlock{
+		Transactions: []*wire.MsgTx{coinbase, resultTx, deploy},
+	})
+	err = checkEVMBlockOrder(resultBeforeDeployBlock, &chaincfg.TestNetParams)
+	if err == nil {
+		t.Fatalf("expected EVM tx after result error")
+	}
+	ruleErr, ok = err.(RuleError)
+	if !ok {
+		t.Fatalf("expected RuleError, got %T", err)
+	}
+	if ruleErr.ErrorCode != ErrInvalidEVMBlock {
+		t.Fatalf("unexpected error code %v", ruleErr.ErrorCode)
+	}
+}
+
+func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
+	assetName := wire.NewAssetNameFromString(contract.GasAssetNameForNet(wire.TestNet))
+	if assetName == nil {
+		t.Fatal("invalid gas asset name")
+	}
+	deployScript, err := contract.DeployNullDataScript(contract.DeployPayload{
+		Type:        contract.ContractTypeEVM,
+		SubType:     "sol",
+		GasLimit:    contract.DeployBaseGas,
+		DeployNonce: 1,
+		ContractContent:    []byte{0x60, 0x00},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := contract.NewContractAddress(contract.TestnetContractPrefix,
+		contract.AddressVersionV1, contract.ContractTypeEVM, contract.EVMAddress{9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractScript, err := contract.ContractPkScript(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseFee, err := contract.GasFeeDecimalAtHeight(contract.DeployBaseGas, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		fee     *scommon.Decimal
+		wantErr bool
+	}{
+		{name: "exact base fee", fee: baseFee},
+		{name: "below base fee", fee: decimalBelow(t, baseFee), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contractFunding := baseFee.Clone()
+			inputAmount := contractFunding.AddAlignPrecision(test.fee)
+			prevOut := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
+			tx := wire.NewMsgTx(2)
+			tx.AddTxIn(wire.NewTxIn(&prevOut, nil, nil))
+			tx.AddTxOut(wire.NewTxOut(0, nil, deployScript))
+			tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
+				Name:   *assetName,
+				Amount: *contractFunding,
+			}}, contractScript))
+
+			view := NewUtxoViewpoint()
+			view.Entries()[prevOut] = NewUtxoEntry(wire.NewTxOut(0, wire.TxAssets{{
+				Name:   *assetName,
+				Amount: *inputAmount,
+			}}, []byte{txscript.OP_TRUE}), 1, false)
+
+			_, _, err := CheckTransactionInputs(btcutil.NewTx(tx), false, 100, view, &chaincfg.TestNetParams)
+			if test.wantErr && err == nil {
+				t.Fatal("expected missing base fee error")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func decimalBelow(t *testing.T, fee *scommon.Decimal) *scommon.Decimal {
+	t.Helper()
+	if fee == nil || fee.Sign() <= 0 {
+		t.Fatal("fee must be positive")
+	}
+	below := fee.SubAlignPrecision(scommon.NewDecimal(1, fee.Precision))
+	if below.Sign() < 0 {
+		return scommon.NewDecimal(0, fee.Precision)
+	}
+	return below
+}
+
+func TestCheckTransactionInputsAllowsEVMDefaultInvokeWithPlainSatsFee(t *testing.T) {
+	c, err := contract.NewContractAddress(contract.TestnetContractPrefix,
+		contract.AddressVersionV1, contract.ContractTypeEVM, contract.EVMAddress{9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractScript, err := contract.ContractPkScript(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevOut := wire.OutPoint{Hash: chainhash.Hash{2}, Index: 0}
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&prevOut, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(900, nil, contractScript))
+
+	view := NewUtxoViewpoint()
+	view.Entries()[prevOut] = NewUtxoEntry(wire.NewTxOut(1000, nil, []byte{txscript.OP_TRUE}), 1, false)
+
+	_, _, err = CheckTransactionInputs(btcutil.NewTx(tx), false, 100, view, &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatalf("unexpected default invoke fee error: %v", err)
+	}
+}

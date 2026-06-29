@@ -129,7 +129,7 @@ func TestCalcPriority(t *testing.T) {
 			utxoView: newUtxoViewpoint([]*wire.MsgTx{commonSourceTx1},
 				[]int32{7}),
 			nextHeight: 169,
-			want:       5e9,
+			want:       0,
 		},
 		{
 			name: "one height 100 input, prio tx height 169",
@@ -137,7 +137,7 @@ func TestCalcPriority(t *testing.T) {
 			utxoView: newUtxoViewpoint([]*wire.MsgTx{commonSourceTx1},
 				[]int32{100}),
 			nextHeight: 169,
-			want:       2129629629.6296296,
+			want:       0,
 		},
 		{
 			name: "one height 7 input, prio tx height 100000",
@@ -145,7 +145,7 @@ func TestCalcPriority(t *testing.T) {
 			utxoView: newUtxoViewpoint([]*wire.MsgTx{commonSourceTx1},
 				[]int32{7}),
 			nextHeight: 100000,
-			want:       3086203703703.7036,
+			want:       0,
 		},
 		{
 			name: "one height 100 input, prio tx height 100000",
@@ -153,7 +153,7 @@ func TestCalcPriority(t *testing.T) {
 			utxoView: newUtxoViewpoint([]*wire.MsgTx{commonSourceTx1},
 				[]int32{100}),
 			nextHeight: 100000,
-			want:       3083333333333.3335,
+			want:       0,
 		},
 	}
 

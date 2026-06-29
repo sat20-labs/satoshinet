@@ -5,8 +5,11 @@
 package mining
 
 import (
+	"time"
+
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -45,7 +48,28 @@ type Policy struct {
 	// required for a transaction to be treated as free for mining purposes
 	// (block template generation).
 	TxMinFreeFee btcutil.Amount
+
+	// ContractResultBuilder optionally appends canonical contract RESULT
+	// transactions and returns the combined contract state root to commit in
+	// the coinbase.
+	ContractResultBuilder ContractResultBuilder
 }
+
+type ContractBuildRequest struct {
+	Txs        []*btcutil.Tx
+	CoinbaseTx *btcutil.Tx
+	Height     int32
+	PrevHash   chainhash.Hash
+	Timestamp  time.Time
+	UtxoView   *blockchain.UtxoViewpoint
+}
+
+type ContractBuildResult struct {
+	ResultTxs []*wire.MsgTx
+	StateRoot [32]byte
+}
+
+type ContractResultBuilder func(ContractBuildRequest) (ContractBuildResult, error)
 
 // minInt is a helper function to return the minimum of two ints.  This avoids
 // a math import and the need to cast to floats.

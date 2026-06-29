@@ -72,23 +72,24 @@ type GetBlockStatsResult struct {
 // getblock returns an object whose tx field is an array of raw transactions.
 // Use GetBlockVerboseTxResult to unmarshal data received from passing verbose=2 to getblock.
 type GetBlockVerboseResult struct {
-	Hash          string        `json:"hash"`
-	Confirmations int64         `json:"confirmations"`
-	StrippedSize  int32         `json:"strippedsize"`
-	Size          int32         `json:"size"`
-	Weight        int32         `json:"weight"`
-	Height        int64         `json:"height"`
-	Version       int32         `json:"version"`
-	VersionHex    string        `json:"versionHex"`
-	MerkleRoot    string        `json:"merkleroot"`
-	Tx            []string      `json:"tx,omitempty"`
-	RawTx         []TxRawResult `json:"rawtx,omitempty"` // Note: this field is always empty when verbose != 2.
-	Time          int64         `json:"time"`
-	Nonce         uint32        `json:"nonce"`
-	Bits          string        `json:"bits"`
-	Difficulty    float64       `json:"difficulty"`
-	PreviousHash  string        `json:"previousblockhash"`
-	NextHash      string        `json:"nextblockhash,omitempty"`
+	Hash          string                 `json:"hash"`
+	Confirmations int64                  `json:"confirmations"`
+	StrippedSize  int32                  `json:"strippedsize"`
+	Size          int32                  `json:"size"`
+	Weight        int32                  `json:"weight"`
+	Height        int64                  `json:"height"`
+	Version       int32                  `json:"version"`
+	VersionHex    string                 `json:"versionHex"`
+	MerkleRoot    string                 `json:"merkleroot"`
+	Tx            []string               `json:"tx,omitempty"`
+	RawTx         []TxRawResult          `json:"rawtx,omitempty"` // Note: this field is always empty when verbose != 2.
+	Time          int64                  `json:"time"`
+	Nonce         uint32                 `json:"nonce"`
+	Bits          string                 `json:"bits"`
+	Difficulty    float64                `json:"difficulty"`
+	PreviousHash  string                 `json:"previousblockhash"`
+	NextHash      string                 `json:"nextblockhash,omitempty"`
+	StateRoot     *ContractStateRootInfo `json:"contractStateRoot,omitempty"`
 }
 
 // GetBlockVerboseTxResult models the data from the getblock command when the
@@ -446,12 +447,13 @@ type ScriptPubKeyResult struct {
 
 // GetTxOutResult models the data from the gettxout command.
 type GetTxOutResult struct {
-	BestBlock     string             `json:"bestblock"`
-	Confirmations int64              `json:"confirmations"`
-	Value         float64            `json:"value"`
-	Assets        []*DisplayAsset    `json:"Assets"`
-	ScriptPubKey  ScriptPubKeyResult `json:"scriptPubKey"`
-	Coinbase      bool               `json:"coinbase"`
+	BestBlock     string              `json:"bestblock"`
+	Confirmations int64               `json:"confirmations"`
+	Value         float64             `json:"value"`
+	Assets        []*DisplayAsset     `json:"Assets"`
+	ScriptPubKey  ScriptPubKeyResult  `json:"scriptPubKey"`
+	Coinbase      bool                `json:"coinbase"`
+	Contract      *ContractOutputInfo `json:"contract,omitempty"`
 }
 
 // GetTxOutSetInfoResult models the data from the gettxoutsetinfo command.
@@ -600,7 +602,7 @@ func (v *Vin) MarshalJSON() ([]byte, error) {
 type PrevOut struct {
 	Addresses []string        `json:"addresses,omitempty"`
 	Value     float64         `json:"value"`
-	Assets    []*DisplayAsset `json:"Assets"`
+	Assets    []*DisplayAsset `json:"Assets,omitempty"`
 }
 
 // VinPrevOut is like Vin except it includes PrevOut.  It is used by searchrawtransaction
@@ -696,10 +698,11 @@ func ConvertAssets(assets wire.TxAssets) []*DisplayAsset {
 // Vout models parts of the tx data.  It is defined separately since both
 // getrawtransaction and decoderawtransaction use the same structure.
 type Vout struct {
-	Value        float64            `json:"value"`
-	Assets       []*DisplayAsset    `json:"Assets"`
-	N            uint32             `json:"n"`
-	ScriptPubKey ScriptPubKeyResult `json:"scriptPubKey"`
+	Value        float64             `json:"value"`
+	Assets       []*DisplayAsset     `json:"Assets"`
+	N            uint32              `json:"n"`
+	ScriptPubKey ScriptPubKeyResult  `json:"scriptPubKey"`
+	Contract     *ContractOutputInfo `json:"contract,omitempty"`
 }
 
 // GetMiningInfoResult models the data from the getmininginfo command.
@@ -748,21 +751,23 @@ type AscendInfo struct {
 
 // TxRawResult models the data from the getrawtransaction command.
 type TxRawResult struct {
-	Hex           string      `json:"hex"`
-	Txid          string      `json:"txid"`
-	Hash          string      `json:"hash,omitempty"`
-	Size          int32       `json:"size,omitempty"`
-	Vsize         int32       `json:"vsize,omitempty"`
-	Weight        int32       `json:"weight,omitempty"`
-	Version       uint32      `json:"version"`
-	LockTime      uint32      `json:"locktime"`
-	Vin           []Vin       `json:"vin"`
-	Vout          []Vout      `json:"vout"`
-	BlockHash     string      `json:"blockhash,omitempty"`
-	Confirmations uint64      `json:"confirmations,omitempty"`
-	Time          int64       `json:"time,omitempty"`
-	Blocktime     int64       `json:"blocktime,omitempty"`
-	AscendInfo    *AscendInfo `json:"ascendInfo,omitempty"`
+	Hex           string                 `json:"hex"`
+	Txid          string                 `json:"txid"`
+	Hash          string                 `json:"hash,omitempty"`
+	Size          int32                  `json:"size,omitempty"`
+	Vsize         int32                  `json:"vsize,omitempty"`
+	Weight        int32                  `json:"weight,omitempty"`
+	Version       uint32                 `json:"version"`
+	LockTime      uint32                 `json:"locktime"`
+	Vin           []Vin                  `json:"vin"`
+	Vout          []Vout                 `json:"vout"`
+	BlockHash     string                 `json:"blockhash,omitempty"`
+	Confirmations uint64                 `json:"confirmations,omitempty"`
+	Time          int64                  `json:"time,omitempty"`
+	Blocktime     int64                  `json:"blocktime,omitempty"`
+	AscendInfo    *AscendInfo            `json:"ascendInfo,omitempty"`
+	ContractOps   []ContractTxOp         `json:"contractOps,omitempty"`
+	StateRoot     *ContractStateRootInfo `json:"contractStateRoot,omitempty"`
 }
 
 // SearchRawTransactionsResult models the data from the searchrawtransaction
@@ -786,11 +791,72 @@ type SearchRawTransactionsResult struct {
 
 // TxRawDecodeResult models the data from the decoderawtransaction command.
 type TxRawDecodeResult struct {
-	Txid     string `json:"txid"`
-	Version  int32  `json:"version"`
-	Locktime uint32 `json:"locktime"`
-	Vin      []Vin  `json:"vin"`
-	Vout     []Vout `json:"vout"`
+	Txid        string                 `json:"txid"`
+	Version     int32                  `json:"version"`
+	Locktime    uint32                 `json:"locktime"`
+	Vin         []Vin                  `json:"vin"`
+	Vout        []Vout                 `json:"vout"`
+	ContractOps []ContractTxOp         `json:"contractOps,omitempty"`
+	StateRoot   *ContractStateRootInfo `json:"contractStateRoot,omitempty"`
+}
+
+type ContractTxOp struct {
+	Kind           string                 `json:"kind"`
+	ContractType   string                 `json:"contractType,omitempty"`
+	ContractTypeID byte                   `json:"contractTypeId,omitempty"`
+	Subtype        string                 `json:"subtype,omitempty"`
+	Action         string                 `json:"action,omitempty"`
+	GasLimit       int64                  `json:"gasLimit,omitempty"`
+	Nonce          uint64                 `json:"nonce,omitempty"`
+	Contract       string                 `json:"contract,omitempty"`
+	Deployer       string                 `json:"deployer,omitempty"`
+	TemplateName   string                 `json:"templateName,omitempty"`
+	Version        uint32                 `json:"version,omitempty"`
+	Status         string                 `json:"status,omitempty"`
+	ResultCount    uint16                 `json:"resultCount,omitempty"`
+	PayloadHex     string                 `json:"payloadHex,omitempty"`
+	Details        map[string]interface{} `json:"details,omitempty"`
+}
+
+type ContractOutputInfo struct {
+	Vout           uint32 `json:"vout,omitempty"`
+	Contract       string `json:"contract"`
+	ContractType   string `json:"contractType"`
+	ContractTypeID byte   `json:"contractTypeId"`
+	Version        byte   `json:"version"`
+	Hash           string `json:"hash"`
+	Value          int64  `json:"value,omitempty"`
+	Role           string `json:"role,omitempty"`
+}
+
+type ContractStateRootInfo struct {
+	Combined string `json:"combined"`
+}
+
+type ContractInfoResult struct {
+	Address        string                 `json:"address"`
+	ContractType   string                 `json:"contractType"`
+	ContractTypeID byte                   `json:"contractTypeId"`
+	Version        byte                   `json:"version"`
+	Hash           string                 `json:"hash"`
+	State          interface{}            `json:"state,omitempty"`
+	Details        map[string]interface{} `json:"details,omitempty"`
+}
+
+type ContractHistoryResult struct {
+	Address string        `json:"address"`
+	History []interface{} `json:"history"`
+}
+
+type PredictionReadyReviewResult struct {
+	Ready        bool   `json:"ready"`
+	URLReachable bool   `json:"urlReachable"`
+	SourceURL    string `json:"sourceUrl,omitempty"`
+	FinalURL     string `json:"finalUrl,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	TextBytes    int    `json:"textBytes,omitempty"`
+	CleanedBytes int    `json:"cleanedBytes,omitempty"`
+	CheckedAt    int64  `json:"checkedAt,omitempty"`
 }
 
 // ValidateAddressChainResult models the data returned by the chain server

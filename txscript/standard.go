@@ -65,11 +65,15 @@ const (
 	NullDataTy                               // Empty data-only (provably prunable).
 	WitnessV1TaprootTy                       // Taproot output
 	WitnessUnknownTy                         // Witness unknown
+
+	// ContractTy identifies a SatoshiNet contract output.  Use a high value
+	// to leave room for future Bitcoin upstream script classes.
+	ContractTy ScriptClass = 200
 )
 
 // scriptClassToName houses the human-readable strings which describe each
 // script class.
-var scriptClassToName = []string{
+var scriptClassToName = map[ScriptClass]string{
 	NonStandardTy:         "nonstandard",
 	PubKeyTy:              "pubkey",
 	PubKeyHashTy:          "pubkeyhash",
@@ -80,16 +84,18 @@ var scriptClassToName = []string{
 	NullDataTy:            "nulldata",
 	WitnessV1TaprootTy:    "witness_v1_taproot",
 	WitnessUnknownTy:      "witness_unknown",
+	ContractTy:            "contract",
 }
 
 // String implements the Stringer interface by returning the name of
 // the enum script class. If the enum is invalid then "Invalid" will be
 // returned.
 func (t ScriptClass) String() string {
-	if int(t) > len(scriptClassToName) || int(t) < 0 {
+	name, ok := scriptClassToName[t]
+	if !ok {
 		return "Invalid"
 	}
-	return scriptClassToName[t]
+	return name
 }
 
 // extractCompressedPubKey extracts a compressed public key from the passed
@@ -468,6 +474,36 @@ func isWitnessTaprootScript(script []byte) bool {
 	return extractWitnessV1KeyBytes(script) != nil
 }
 
+var contractScriptMagic = []byte("CT")
+
+func extractContractScriptPayload(script []byte) []byte {
+	if len(script) < 11 {
+		return nil
+	}
+	if script[0] != OP_FALSE ||
+		script[1] != OP_IF ||
+		script[2] != byte(len(contractScriptMagic)) ||
+		string(script[3:5]) != string(contractScriptMagic) {
+		return nil
+	}
+	payloadLen := int(script[5])
+	if payloadLen < btcutil.ContractAddressMinPayloadLen ||
+		len(script) != payloadLen+8 ||
+		script[6+payloadLen] != OP_ENDIF ||
+		script[7+payloadLen] != OP_FALSE {
+		return nil
+	}
+	payload := script[6 : 6+payloadLen]
+	if payload[0] != 1 || payload[1] == 0 {
+		return nil
+	}
+	return payload
+}
+
+func isContractScript(script []byte) bool {
+	return extractContractScriptPayload(script) != nil
+}
+
 // isAnnexedWitness returns true if the passed witness has a final push
 // that is a witness annex.
 func isAnnexedWitness(witness wire.TxWitness) bool {
@@ -548,6 +584,8 @@ func typeOfScript(scriptVersion uint16, script []byte) ScriptClass {
 			return MultiSigTy
 		case isNullDataScript(scriptVersion, script):
 			return NullDataTy
+		case isContractScript(script):
+			return ContractTy
 		}
 	case TaprootWitnessVersion:
 		switch {
@@ -580,9 +618,9 @@ func GetScriptClass(script []byte) ScriptClass {
 //
 // Not to be confused with GetScriptClass.
 func NewScriptClass(name string) (*ScriptClass, error) {
-	for i, n := range scriptClassToName {
+	for class, n := range scriptClassToName {
 		if n == name {
-			value := ScriptClass(i)
+			value := class
 			return &value, nil
 		}
 	}
@@ -825,6 +863,27 @@ func payToWitnessTaprootScript(rawKey []byte) ([]byte, error) {
 	return NewScriptBuilder().AddOp(OP_1).AddData(rawKey).Script()
 }
 
+// payToContractScript creates a contract output script from a contract address
+// payload.
+func payToContractScript(payload []byte) ([]byte, error) {
+	if len(payload) < btcutil.ContractAddressMinPayloadLen || len(payload) >= OP_PUSHDATA1 {
+		return nil, scriptError(ErrUnsupportedAddress,
+			"invalid contract address payload length")
+	}
+	if payload[0] != btcutil.ContractAddressVersionV1 || payload[1] == 0 {
+		return nil, scriptError(ErrUnsupportedAddress,
+			"invalid contract address payload")
+	}
+	return NewScriptBuilder().
+		AddOp(OP_FALSE).
+		AddOp(OP_IF).
+		AddData(contractScriptMagic).
+		AddData(payload).
+		AddOp(OP_ENDIF).
+		AddOp(OP_FALSE).
+		Script()
+}
+
 // payToPubkeyScript creates a new script to pay a transaction output to a
 // public key. It is expected that the input is a valid pubkey.
 func payToPubKeyScript(serializedPubKey []byte) ([]byte, error) {
@@ -877,6 +936,13 @@ func PayToAddrScript(addr btcutil.Address) ([]byte, error) {
 				nilAddrErrStr)
 		}
 		return payToWitnessTaprootScript(addr.ScriptAddress())
+
+	case *btcutil.AddressContract:
+		if addr == nil {
+			return nil, scriptError(ErrUnsupportedAddress,
+				nilAddrErrStr)
+		}
+		return payToContractScript(addr.ScriptAddress())
 	}
 
 	str := fmt.Sprintf("unable to generate payment script for unsupported "+
@@ -965,6 +1031,14 @@ func scriptHashToAddrs(hash []byte, params *chaincfg.Params) []btcutil.Address {
 	return addrs
 }
 
+func contractScriptToAddrs(payload []byte, params *chaincfg.Params) []btcutil.Address {
+	addr, err := btcutil.NewAddressContract(payload, params)
+	if err != nil {
+		return nil
+	}
+	return []btcutil.Address{addr}
+}
+
 // ExtractPkScriptAddrs returns the type of script, addresses and required
 // signatures associated with the passed PkScript.  Note that it only works for
 // 'standard' transaction script types.  Any data such as public keys which are
@@ -1038,6 +1112,10 @@ func ExtractPkScriptAddrs(pkScript []byte,
 			addrs = append(addrs, addr)
 		}
 		return WitnessV1TaprootTy, addrs, 1, nil
+	}
+
+	if payload := extractContractScriptPayload(pkScript); payload != nil {
+		return ContractTy, contractScriptToAddrs(payload, chainParams), 0, nil
 	}
 
 	// If none of the above passed, then the address must be non-standard.

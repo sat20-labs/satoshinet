@@ -3,11 +3,11 @@ package indexer
 import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	contractengine "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 
 type Indexer interface {
-
 	Start() error
 	Stop()
 
@@ -16,6 +16,7 @@ type Indexer interface {
 	GetBaseDBVer() string
 	GetChainTip() int
 	GetSyncHeight() int
+	GetInternalSyncHeight() int
 	GetBlockInfo(int) (*common.BlockInfo, error)
 
 	// base indexer
@@ -43,6 +44,9 @@ type Indexer interface {
 	GetTxOutputWithUtxoV3(utxo string) *indexer.AssetsInUtxo
 	GetAscendData(fundingUtxo string) *common.AscendData
 	GetDescendData(nullDataUtxo string) *common.DescendData
+	GetChannelLedger(channel string) []*common.ChannelLedgerEntry
+	GetChannelStateEvents(channel string) []*common.ChannelStateEvent
+	RecordChannelStateEvent(event *common.ChannelStateEvent) error
 	GetReferrer(address string) (*common.ReferrerInfo, error)
 	GetReferree(name string) map[string]int
 	GetAllCoreNode() map[string]*common.CoreNodeInfo
@@ -51,4 +55,8 @@ type Indexer interface {
 	IsMinerNode(pubkey string) bool
 	GetMinerInfo(pubkey string) *common.MinerInfo
 	GetSeqMgr() *common.MiningSequenceMgr
+
+	GetContractSummaries(start, limit int) ([]contractengine.ContractSummary, int)
+	GetContractSummary(address string) (contractengine.ContractSummary, bool)
+	GetContractHistory(address string, start, limit int) ([]contractengine.ContractHistoryRecord, int)
 }

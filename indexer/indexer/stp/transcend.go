@@ -12,14 +12,16 @@ import (
 )
 
 const (
-	DB_KEY_ASCEND        = "xa-"
-	DB_KEY_DESCEND       = "xd-"
-	DB_KEY_REFERRER      = "rer-"
-	DB_KEY_REFERREE      = "ree-"
-	DB_KEY_TICKINFO      = "t-"
-	DB_KEY_TICKER_HOLDER = "th-"
-	DB_KEY_CHANNEL       = "c-" // c-address
-	DB_KEY_CORENODES     = "cns-all"
+	DB_KEY_ASCEND         = "xa-"
+	DB_KEY_DESCEND        = "xd-"
+	DB_KEY_REFERRER       = "rer-"
+	DB_KEY_REFERREE       = "ree-"
+	DB_KEY_TICKINFO       = "t-"
+	DB_KEY_TICKER_HOLDER  = "th-"
+	DB_KEY_CHANNEL        = "c-" // c-address
+	DB_KEY_CHANNEL_LEDGER = "cl-"
+	DB_KEY_CHANNEL_STATE  = "cs-"
+	DB_KEY_CORENODES      = "cns-all"
 )
 
 func GetAscendDBKey(fundingUtxo string) []byte {
@@ -50,6 +52,24 @@ func GetChannelDBKey(addr string) []byte {
 	return []byte(DB_KEY_CHANNEL + addr)
 }
 
+func GetChannelLedgerDBPrefix(channel string) []byte {
+	return []byte(DB_KEY_CHANNEL_LEDGER + channel + "-")
+}
+
+func GetChannelLedgerDBKey(entry *common.ChannelLedgerEntry) []byte {
+	return []byte(fmt.Sprintf("%s%s-%09d-%s-%s", DB_KEY_CHANNEL_LEDGER, entry.ChannelId,
+		entry.L2Height, entry.Direction, entry.L2TxId))
+}
+
+func GetChannelStateEventDBPrefix(channel string) []byte {
+	return []byte(DB_KEY_CHANNEL_STATE + channel + "-")
+}
+
+func GetChannelStateEventDBKey(event *common.ChannelStateEvent) []byte {
+	return []byte(fmt.Sprintf("%s%s-%09d-%s-%s", DB_KEY_CHANNEL_STATE, event.ChannelId,
+		event.L2Height, event.EventType, event.ObservedL1TxId))
+}
+
 func GetAllCoreNodeDBKey() []byte {
 	return []byte(DB_KEY_CORENODES)
 }
@@ -70,6 +90,22 @@ func GetAscendFromDB(ldb indexer.KVDB, fundingUtxo string) (*common.AscendData, 
 	return &result, err
 }
 
+func GetAscendsFromDBByChannel(ldb indexer.KVDB, channel string) ([]*common.AscendData, error) {
+	result := make([]*common.AscendData, 0)
+	err := ldb.BatchRead([]byte(DB_KEY_ASCEND), false, func(k, v []byte) error {
+		var ascend common.AscendData
+		err := db.DecodeBytes(v, &ascend)
+		if err != nil {
+			return err
+		}
+		if ascend.Address == channel {
+			result = append(result, &ascend)
+		}
+		return nil
+	})
+	return result, err
+}
+
 func GetDescendFromDB(ldb indexer.KVDB, nullDataUtxo string) (*common.DescendData, error) {
 	var result common.DescendData
 
@@ -84,6 +120,22 @@ func GetDescendFromDB(ldb indexer.KVDB, nullDataUtxo string) (*common.DescendDat
 		return nil, err
 	}
 	return &result, err
+}
+
+func GetDescendsFromDBByChannel(ldb indexer.KVDB, channel string) ([]*common.DescendData, error) {
+	result := make([]*common.DescendData, 0)
+	err := ldb.BatchRead([]byte(DB_KEY_DESCEND), false, func(k, v []byte) error {
+		var descend common.DescendData
+		err := db.DecodeBytes(v, &descend)
+		if err != nil {
+			return err
+		}
+		if descend.Address == channel {
+			result = append(result, &descend)
+		}
+		return nil
+	})
+	return result, err
 }
 
 func GetReferrerFromDB(ldb indexer.KVDB, address string) (*common.ReferrerInfo, error) {
@@ -261,6 +313,34 @@ func GetChannelInfoFromDB(ldb indexer.KVDB, address string) (*common.ChannelInfo
 		return nil, err
 	}
 	return &result, err
+}
+
+func GetChannelLedgerFromDB(ldb indexer.KVDB, channel string) ([]*common.ChannelLedgerEntry, error) {
+	result := make([]*common.ChannelLedgerEntry, 0)
+	err := ldb.BatchRead(GetChannelLedgerDBPrefix(channel), false, func(k, v []byte) error {
+		var entry common.ChannelLedgerEntry
+		err := db.DecodeBytes(v, &entry)
+		if err != nil {
+			return err
+		}
+		result = append(result, &entry)
+		return nil
+	})
+	return result, err
+}
+
+func GetChannelStateEventsFromDB(ldb indexer.KVDB, channel string) ([]*common.ChannelStateEvent, error) {
+	result := make([]*common.ChannelStateEvent, 0)
+	err := ldb.BatchRead(GetChannelStateEventDBPrefix(channel), false, func(k, v []byte) error {
+		var event common.ChannelStateEvent
+		err := db.DecodeBytes(v, &event)
+		if err != nil {
+			return err
+		}
+		result = append(result, &event)
+		return nil
+	})
+	return result, err
 }
 
 func GetAllChannelFromDB(ldb indexer.KVDB) map[string]*common.ChannelInfo {

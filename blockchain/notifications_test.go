@@ -7,19 +7,15 @@ package blockchain
 import (
 	"testing"
 
+	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 )
 
 // TestNotifications ensures that notification callbacks are fired on events.
 func TestNotifications(t *testing.T) {
-	blocks, err := loadBlocks("blk_0_to_4.dat.bz2")
-	if err != nil {
-		t.Fatalf("Error loading file: %v\n", err)
-	}
-
 	// Create a new database and chain instance to run tests against.
 	chain, teardownFunc, err := chainSetup("notifications",
-		&chaincfg.MainNetParams)
+		&chaincfg.RegressionNetParams)
 	if err != nil {
 		t.Fatalf("Failed to setup chain instance: %v", err)
 	}
@@ -39,7 +35,8 @@ func TestNotifications(t *testing.T) {
 		chain.Subscribe(callback)
 	}
 
-	_, _, err = chain.ProcessBlock(blocks[1], BFNone)
+	chain.TstSetCoinbaseMaturity(1)
+	_, _, err = addBlock(chain, btcutil.NewBlock(chain.chainParams.GenesisBlock), nil)
 	if err != nil {
 		t.Fatalf("ProcessBlock fail on block 1: %v\n", err)
 	}

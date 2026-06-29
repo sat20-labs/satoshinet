@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/btcsuite/websocket"
+	gethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/blockchain/indexers"
@@ -35,7 +37,13 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractapi "github.com/sat20-labs/satoshinet/contract"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
+	contractnode "github.com/sat20-labs/satoshinet/contract/node"
 	"github.com/sat20-labs/satoshinet/database"
+	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/mempool"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/mining/posminer"
@@ -154,6 +162,10 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getcfilter":             handleGetCFilter,
 	"getcfilterheader":       handleGetCFilterHeader,
 	"getconnectioncount":     handleGetConnectionCount,
+	"getcontract":            handleGetContract,
+	"getcontracthistory":     handleGetContractHistory,
+	"getcontractstate":       handleGetContractState,
+	"reviewpredictionready":  handleReviewPredictionReady,
 	"getcurrentnet":          handleGetCurrentNet,
 	"getdifficulty":          handleGetDifficulty,
 	"getgenerate":            handleGetGenerate,
@@ -735,6 +747,9 @@ func createVoutList(mtx *wire.MsgTx, chainParams *chaincfg.Params, filterAddrMap
 		vout.ScriptPubKey.Hex = hex.EncodeToString(v.PkScript)
 		vout.ScriptPubKey.Type = scriptClass.String()
 		vout.ScriptPubKey.ReqSigs = int32(reqSigs)
+		if contractInfo, ok := contractOutputInfo(uint32(i), v, chainParams); ok {
+			vout.Contract = contractInfo
+		}
 
 		// Address is defined when there's a single well-defined
 		// receiver address. To spend the output a signature for this,
@@ -747,6 +762,32 @@ func createVoutList(mtx *wire.MsgTx, chainParams *chaincfg.Params, filterAddrMap
 	}
 
 	return voutList
+}
+
+func contractOutputInfo(vout uint32, txOut *wire.TxOut, params *chaincfg.Params) (*btcjson.ContractOutputInfo, bool) {
+	prefix := contractPrefixForRPCParams(params)
+	contractAddr, ok, err := contractcommon.ParseContractPkScript(txOut.PkScript, prefix)
+	if err != nil || !ok {
+		return nil, false
+	}
+	hash := contractcommon.ContractAddressHashBytes(contractAddr)
+	return &btcjson.ContractOutputInfo{
+		Vout:           vout,
+		Contract:       contractAddr.EncodeAddress(),
+		ContractType:   contractengine.GetContractTypeName(contractAddr.ContractType()),
+		ContractTypeID: contractAddr.ContractType(),
+		Version:        contractAddr.Version(),
+		Hash:           hex.EncodeToString(hash),
+		Value:          txOut.Value,
+		Role:           "pool",
+	}, true
+}
+
+func contractPrefixForRPCParams(params *chaincfg.Params) string {
+	if params != nil && params.Net == wire.MainNet {
+		return contractcommon.MainnetContractPrefix
+	}
+	return contractcommon.TestnetContractPrefix
 }
 
 // createTxRawResult converts the passed transaction and associated parameters
@@ -772,6 +813,7 @@ func createTxRawResult(chainParams *chaincfg.Params, mtx *wire.MsgTx,
 		Version:  uint32(mtx.Version),
 		LockTime: mtx.LockTime,
 	}
+	attachContractTxView(txReply, mtx, chainParams)
 
 	if blkHeader != nil {
 		// This is not a typo, they are identical in bitcoind as well.
@@ -782,6 +824,61 @@ func createTxRawResult(chainParams *chaincfg.Params, mtx *wire.MsgTx,
 	}
 
 	return txReply, nil
+}
+
+func attachContractTxView(txReply *btcjson.TxRawResult, mtx *wire.MsgTx, params *chaincfg.Params) {
+	if txReply == nil || mtx == nil {
+		return
+	}
+	view, err := contractengine.BuildTxView(mtx, contractPrefixForRPCParams(params))
+	if err != nil || !view.IsContract {
+		return
+	}
+	txReply.ContractOps = convertContractOps(view.Ops)
+	if view.StateRoot != nil {
+		txReply.StateRoot = &btcjson.ContractStateRootInfo{Combined: view.StateRoot.Combined}
+	}
+}
+
+func attachContractRawDecodeView(txReply *btcjson.TxRawDecodeResult, mtx *wire.MsgTx, params *chaincfg.Params) {
+	if txReply == nil || mtx == nil {
+		return
+	}
+	view, err := contractengine.BuildTxView(mtx, contractPrefixForRPCParams(params))
+	if err != nil || !view.IsContract {
+		return
+	}
+	txReply.ContractOps = convertContractOps(view.Ops)
+	if view.StateRoot != nil {
+		txReply.StateRoot = &btcjson.ContractStateRootInfo{Combined: view.StateRoot.Combined}
+	}
+}
+
+func convertContractOps(ops []contractengine.TxOpView) []btcjson.ContractTxOp {
+	if len(ops) == 0 {
+		return nil
+	}
+	out := make([]btcjson.ContractTxOp, len(ops))
+	for i, op := range ops {
+		out[i] = btcjson.ContractTxOp{
+			Kind:           op.Kind,
+			ContractType:   op.ContractType,
+			ContractTypeID: op.ContractTypeID,
+			Subtype:        op.Subtype,
+			Action:         op.Action,
+			GasLimit:       op.GasLimit,
+			Nonce:          op.Nonce,
+			Contract:       op.Contract,
+			Deployer:       op.Deployer,
+			TemplateName:   op.TemplateName,
+			Version:        op.Version,
+			Status:         op.Status,
+			ResultCount:    op.ResultCount,
+			PayloadHex:     op.PayloadHex,
+			Details:        op.Details,
+		}
+	}
+	return out
 }
 
 // handleDecodeRawTransaction handles decoderawtransaction commands.
@@ -814,7 +911,204 @@ func handleDecodeRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan 
 		Vin:      createVinList(&mtx),
 		Vout:     createVoutList(&mtx, s.cfg.ChainParams, nil),
 	}
+	attachContractRawDecodeView(&txReply, &mtx, s.cfg.ChainParams)
 	return txReply, nil
+}
+
+func handleGetContract(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	c := cmd.(*btcjson.GetContractCmd)
+	if s.cfg.AssetIndexManager != nil {
+		if summary, ok := s.cfg.AssetIndexManager.GetContractSummary(c.Address); ok {
+			return btcjson.ContractInfoResult{
+				Address:        summary.Address,
+				ContractType:   summary.ContractType,
+				ContractTypeID: summary.ContractTypeID,
+				Version:        byte(summary.Version),
+				State:          summary.Status,
+				Details:        summary.Details,
+			}, nil
+		}
+	}
+	view, err := contractengine.DecodeContractAddressView(c.Address)
+	if err != nil {
+		return nil, &btcjson.RPCError{
+			Code:    btcjson.ErrRPCInvalidAddressOrKey,
+			Message: err.Error(),
+		}
+	}
+	return btcjson.ContractInfoResult{
+		Address:        view.Contract,
+		ContractType:   view.ContractType,
+		ContractTypeID: view.ContractTypeID,
+		Version:        view.Version,
+		Hash:           view.Hash,
+	}, nil
+}
+
+func handleGetContractState(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	c := cmd.(*btcjson.GetContractStateCmd)
+	base, err := contractengine.DecodeContractAddressView(c.Address)
+	if err != nil {
+		return nil, &btcjson.RPCError{
+			Code:    btcjson.ErrRPCInvalidAddressOrKey,
+			Message: err.Error(),
+		}
+	}
+	state, details, err := contractStateAtTip(s, c.Address, base.ContractTypeID)
+	if err != nil {
+		return nil, internalRPCError(err.Error(), "Failed to load contract state")
+	}
+	return btcjson.ContractInfoResult{
+		Address:        base.Contract,
+		ContractType:   base.ContractType,
+		ContractTypeID: base.ContractTypeID,
+		Version:        base.Version,
+		Hash:           base.Hash,
+		State:          state,
+		Details:        details,
+	}, nil
+}
+
+func handleReviewPredictionReady(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	c := cmd.(*btcjson.ReviewPredictionReadyCmd)
+	var contract agentcontract.PredictionContract
+	if err := json.Unmarshal([]byte(c.ContractJSON), &contract); err != nil {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, err.Error())
+	}
+	checkedAt := int64(0)
+	if c.CheckedAt != nil {
+		checkedAt = *c.CheckedAt
+	}
+	if checkedAt <= 0 {
+		checkedAt = int64(s.cfg.Chain.BestSnapshot().Height)
+		if contract.TimeBase == agentcontract.TimeBaseUnix {
+			checkedAt = s.cfg.TimeSource.AdjustedTime().Unix()
+		}
+	}
+	client, err := newPredictionReadyReviewLLMClient()
+	if err != nil {
+		return nil, internalRPCError(err.Error(), "Failed to initialize prediction ready reviewer")
+	}
+	if client == nil {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCMisc, "agent LLM access is disabled")
+	}
+	agent := agentcontract.NewPredictionAgent(client)
+	timeout := cfg.AgentLLMTimeout + 30*time.Second
+	if timeout <= 30*time.Second {
+		timeout = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	result, err := agent.ReviewReadyResult(ctx, agentcontract.PredictionAgentReadyReviewRequest{
+		Contract:  contract,
+		CheckedAt: checkedAt,
+	})
+	if err != nil {
+		return nil, internalRPCError(err.Error(), "Failed to review prediction ready")
+	}
+	return btcjson.PredictionReadyReviewResult{
+		Ready:        result.Ready,
+		URLReachable: result.URLReachable,
+		SourceURL:    result.SourceURL,
+		FinalURL:     result.FinalURL,
+		Reason:       result.Reason,
+		TextBytes:    result.TextBytes,
+		CleanedBytes: result.CleanedBytes,
+		CheckedAt:    checkedAt,
+	}, nil
+}
+
+func newPredictionReadyReviewLLMClient() (agentcontract.LLMClient, error) {
+	llmCfg := agentcontract.LLMConfig{
+		Provider:    cfg.AgentLLMProvider,
+		Endpoint:    cfg.AgentLLMEndpoint,
+		Model:       cfg.AgentLLMModel,
+		APIKey:      cfg.AgentLLMAPIKey,
+		Timeout:     cfg.AgentLLMTimeout,
+		Temperature: cfg.AgentLLMTemperature,
+		MaxTokens:   cfg.AgentLLMMaxTokens,
+	}
+	normalized, err := llmCfg.Normalized()
+	if err != nil {
+		return nil, err
+	}
+	return agentcontract.NewLLMClient(normalized)
+}
+
+func handleGetContractHistory(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	c := cmd.(*btcjson.GetContractHistoryCmd)
+	base, err := contractengine.DecodeContractAddressView(c.Address)
+	if err != nil {
+		return nil, &btcjson.RPCError{
+			Code:    btcjson.ErrRPCInvalidAddressOrKey,
+			Message: err.Error(),
+		}
+	}
+	skip := 0
+	count := 100
+	if c.Skip != nil {
+		skip = *c.Skip
+	}
+	if c.Count != nil {
+		count = *c.Count
+	}
+	history := make([]interface{}, 0)
+	if s.cfg.AssetIndexManager != nil {
+		records, _ := s.cfg.AssetIndexManager.GetContractHistory(base.Contract, skip, count)
+		history = make([]interface{}, 0, len(records))
+		for _, record := range records {
+			history = append(history, record)
+		}
+	}
+	return btcjson.ContractHistoryResult{Address: base.Contract, History: history}, nil
+}
+
+func contractStateAtTip(s *rpcServer, address string, contractType byte) (interface{}, map[string]interface{}, error) {
+	contractAddr, err := contractcommon.DecodeContractAddress(address)
+	if err != nil {
+		return nil, nil, err
+	}
+	switch contractType {
+	case contractcommon.ContractTypeTemplate:
+		_, store, err := contractnode.NewTemplateStateStore(s.cfg.DB).LoadTip()
+		if err != nil {
+			return nil, nil, err
+		}
+		if runtime, ok := store.Get(contractAddr); ok {
+			state, err := runtime.RuntimeState()
+			return state, map[string]interface{}{
+				"contract": runtime.Contract(),
+			}, err
+		}
+		return nil, map[string]interface{}{"exists": false}, nil
+	case contractcommon.ContractTypeAgent:
+		_, store, err := contractnode.NewAgentStateStore(s.cfg.DB).LoadTip()
+		if err != nil {
+			return nil, nil, err
+		}
+		if runtime, ok := store.Get(contractAddr); ok {
+			return runtime.State(), map[string]interface{}{
+				"contract": runtime.Contract(),
+			}, nil
+		}
+		return nil, map[string]interface{}{"exists": false}, nil
+	case contractcommon.ContractTypeEVM:
+		_, state, err := contractnode.NewEVMStateStore(s.cfg.DB).LoadTip()
+		if err != nil {
+			return nil, nil, err
+		}
+		addr := gethcommon.BytesToAddress(contractcommon.ContractAddressHashBytes(contractAddr))
+		if !state.Exist(addr) {
+			return nil, map[string]interface{}{"exists": false}, nil
+		}
+		return map[string]interface{}{
+			"balance":   state.GetBalance(addr).String(),
+			"nonce":     state.GetNonce(addr),
+			"code_size": state.GetCodeSize(addr),
+		}, nil, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported contract type %d", contractType)
+	}
 }
 
 // handleDecodeScript handles decodescript commands.
@@ -896,16 +1190,6 @@ func handleEstimateFee(s *rpcServer, cmd interface{}, closeChan <-chan struct{})
 
 // handleGenerate handles generate commands.
 func handleGenerate(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-	// Respond with an error if there are no addresses to pay the
-	// created blocks to.
-	if len(cfg.miningAddrs) == 0 {
-		return nil, &btcjson.RPCError{
-			Code: btcjson.ErrRPCInternal.Code,
-			Message: "No payment addresses specified " +
-				"via --miningaddr",
-		}
-	}
-
 	// Respond with an error if there's virtually 0 chance of mining a block
 	// with the CPU.
 	if !s.cfg.ChainParams.GenerateSupported {
@@ -1154,6 +1438,13 @@ func handleGetBlock(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 		Difficulty:    getDifficultyRatio(blockHeader.Bits, params),
 		NextHash:      nextHashString,
 	}
+	if stateRoot, found, err := contractapi.FindCoinbaseStateRoot(blk.Transactions()[0].MsgTx()); err != nil {
+		return nil, internalRPCError(err.Error(), "Failed to decode contract state root")
+	} else if found {
+		blockReply.StateRoot = &btcjson.ContractStateRootInfo{
+			Combined: hex.EncodeToString(stateRoot.StateRoot[:]),
+		}
+	}
 
 	if *c.Verbosity == 1 {
 		transactions := blk.Transactions()
@@ -1267,7 +1558,7 @@ func handleGetBlockChainInfo(s *rpcServer, cmd interface{}, closeChan <-chan str
 
 		case chaincfg.DeploymentTestDummyMinActivation:
 			forkName = "dummy-min-activation"
-			
+
 		case chaincfg.DeploymentCSV:
 			forkName = "csv"
 
@@ -2974,6 +3265,9 @@ func handleGetTxOut(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 		},
 		Coinbase: isCoinbase,
 	}
+	if contractInfo, ok := contractOutputInfo(c.Vout, wire.NewTxOut(value, assets, pkScript), s.cfg.ChainParams); ok {
+		txOutReply.Contract = contractInfo
+	}
 
 	return txOutReply, nil
 }
@@ -4507,7 +4801,7 @@ func (s *rpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		errMsg := "webserver doesn't support hijacking"
-		rpcsLog.Warnf(errMsg)
+		rpcsLog.Warn(errMsg)
 		errCode := http.StatusInternalServerError
 		http.Error(w, strconv.Itoa(errCode)+" "+errMsg, errCode)
 		return
@@ -4988,6 +5282,10 @@ type rpcserverConfig struct {
 	// The fee estimator keeps track of how long transactions are left in
 	// the mempool before they are mined into blocks.
 	FeeEstimator *mempool.FeeEstimator
+
+	// AssetIndexManager exposes SatoshiNet/L2 index data to JSON-RPC methods
+	// that can be answered locally without asking the HTTP indexer API.
+	AssetIndexManager *indexer.IndexerMgr
 }
 
 // newRPCServer returns a new instance of the rpcServer struct.

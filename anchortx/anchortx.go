@@ -19,6 +19,7 @@ import (
 	"github.com/sat20-labs/satoshinet/mining/posminer/bootstrapnode"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
+	sindexer"github.com/sat20-labs/satoshinet/indexer/common"
 
 	"github.com/sat20-labs/indexer/common"
 )
@@ -293,16 +294,7 @@ func PublicKeyToTaprootAddress(pubKey *btcec.PublicKey) (*btcutil.AddressTaproot
 }
 
 func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64, assets wire.TxAssets) ([]byte, error) {
-	assetsBuf, err := wire.SerializeTxAssets(&assets)
-	if err != nil {
-		return nil, err
-	}
-
-	return txscript.NewScriptBuilder().
-		AddData([]byte(fundingUtxo)).
-		AddData(witnessScript).
-		AddInt64(int64(value)).
-		AddData(assetsBuf).Script()
+	return sindexer.StandardAnchorScript(fundingUtxo, witnessScript, value, assets)
 }
 
 func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Signature) bool {

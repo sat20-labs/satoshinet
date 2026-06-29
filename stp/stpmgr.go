@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"plugin"
+
+	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
 var _stpMgr *plugin.Plugin
@@ -44,7 +46,6 @@ func LoadSTP(dbPath string) error {
 	return nil
 }
 
-
 func StartSTP() error {
 	if _stpMgr == nil {
 		return fmt.Errorf("STPManager not init")
@@ -73,26 +74,25 @@ func StartSTP() error {
 
 func ReleaseSTP() {
 	if _stpMgr == nil {
-		return 
+		return
 	}
 
 	symbol, err := _stpMgr.Lookup("ReleaseSTP")
 	if err != nil {
 		log.Printf("Lookup ReleaseSTP failed: %v", err)
-		return 
+		return
 	}
 
 	releaseSTP, ok := symbol.(func())
 	if !ok {
 		log.Printf("symbol type assertion failed")
-		return 
+		return
 	}
 
 	releaseSTP()
 
 	_stpMgr = nil
 }
-
 
 func SignMsg(msg []byte) ([]byte, error) {
 	if _stpMgr == nil {
@@ -102,7 +102,7 @@ func SignMsg(msg []byte) ([]byte, error) {
 	symbol, err := _stpMgr.Lookup("SignMsg")
 	if err != nil {
 		log.Printf("Lookup SignMsg failed: %v", err)
-		return  nil, err
+		return nil, err
 	}
 
 	signMsg, ok := symbol.(func([]byte) ([]byte, error))
@@ -114,7 +114,27 @@ func SignMsg(msg []byte) ([]byte, error) {
 	return signMsg(msg)
 }
 
-func IsWalletExists() (bool) {
+func SignPsbt_SatsNet(packet *spsbt.Packet) error {
+	if _stpMgr == nil {
+		return fmt.Errorf("STPManager not init")
+	}
+
+	symbol, err := _stpMgr.Lookup("SignPsbt_SatsNet")
+	if err != nil {
+		log.Printf("Lookup SignPsbt_SatsNet failed: %v", err)
+		return err
+	}
+
+	signPsbt, ok := symbol.(func(*spsbt.Packet) error)
+	if !ok {
+		log.Printf("symbol type assertion failed")
+		return fmt.Errorf("symbol type assertion failed")
+	}
+
+	return signPsbt(packet)
+}
+
+func IsWalletExists() bool {
 	if _stpMgr == nil {
 		return false
 	}
@@ -122,10 +142,10 @@ func IsWalletExists() (bool) {
 	symbol, err := _stpMgr.Lookup("IsWalletExisting")
 	if err != nil {
 		log.Printf("Lookup IsWalletExisting failed: %v", err)
-		return  false
+		return false
 	}
 
-	isWalletExisting, ok := symbol.(func() (bool))
+	isWalletExisting, ok := symbol.(func() bool)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return false
@@ -134,8 +154,7 @@ func IsWalletExists() (bool) {
 	return isWalletExisting()
 }
 
-
-func IsUnlocked() (bool) {
+func IsUnlocked() bool {
 	if _stpMgr == nil {
 		return false
 	}
@@ -143,10 +162,10 @@ func IsUnlocked() (bool) {
 	symbol, err := _stpMgr.Lookup("IsUnlocked")
 	if err != nil {
 		log.Printf("Lookup IsUnlocked failed: %v", err)
-		return  false
+		return false
 	}
 
-	isUnlocked, ok := symbol.(func() (bool))
+	isUnlocked, ok := symbol.(func() bool)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return false
@@ -154,7 +173,6 @@ func IsUnlocked() (bool) {
 
 	return isUnlocked()
 }
-
 
 func CreateWallet(pw string) (string, error) {
 	if _stpMgr == nil {
@@ -176,7 +194,7 @@ func CreateWallet(pw string) (string, error) {
 	return f(pw)
 }
 
-func UnlockWallet(pw string) (error) {
+func UnlockWallet(pw string) error {
 	if _stpMgr == nil {
 		return fmt.Errorf("STPManager not init")
 	}
@@ -187,7 +205,7 @@ func UnlockWallet(pw string) (error) {
 		return err
 	}
 
-	f, ok := symbol.(func(string) (error))
+	f, ok := symbol.(func(string) error)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return fmt.Errorf("symbol type assertion failed")
@@ -196,7 +214,7 @@ func UnlockWallet(pw string) (error) {
 	return f(pw)
 }
 
-func ImportWallet(mn, pw string) (error) {
+func ImportWallet(mn, pw string) error {
 	if _stpMgr == nil {
 		return fmt.Errorf("STPManager not init")
 	}
@@ -207,7 +225,7 @@ func ImportWallet(mn, pw string) (error) {
 		return err
 	}
 
-	f, ok := symbol.(func(string, string) (error))
+	f, ok := symbol.(func(string, string) error)
 	if !ok {
 		log.Printf("symbol type assertion failed")
 		return fmt.Errorf("symbol type assertion failed")
@@ -224,7 +242,7 @@ func GetPubKey() ([]byte, error) {
 	symbol, err := _stpMgr.Lookup("GetPubKey")
 	if err != nil {
 		log.Printf("Lookup GetPubKey failed: %v", err)
-		return  nil, err
+		return nil, err
 	}
 
 	getPubKey, ok := symbol.(func() ([]byte, error))
