@@ -52,6 +52,9 @@ type ExecutionOutcome struct {
 	AssetIntents       []AssetIntent
 	RequiresResult     bool
 	ResultFeeMode      ResultFeeMode
+	CloseContract      bool
+	DeployerAddress    string
+	BootstrapAddress   string
 }
 
 func (o ExecutionOutcome) Clone() ExecutionOutcome {
@@ -82,6 +85,9 @@ func (o ExecutionOutcome) ToRecord() ExecutionRecord {
 		AssetIntents:       CloneAssetIntents(o.AssetIntents),
 		RequiresResult:     o.RequiresResult,
 		ResultFeeMode:      o.ResultFeeMode,
+		CloseContract:      o.CloseContract,
+		DeployerAddress:    o.DeployerAddress,
+		BootstrapAddress:   o.BootstrapAddress,
 	}
 }
 
@@ -104,6 +110,9 @@ func ExecutionOutcomeFromRecord(record ExecutionRecord) ExecutionOutcome {
 		AssetIntents:       CloneAssetIntents(record.AssetIntents),
 		RequiresResult:     record.RequiresResult,
 		ResultFeeMode:      record.ResultFeeMode,
+		CloseContract:      record.CloseContract,
+		DeployerAddress:    record.DeployerAddress,
+		BootstrapAddress:   record.BootstrapAddress,
 	}
 }
 

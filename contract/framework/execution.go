@@ -49,6 +49,9 @@ type ExecutionRecord struct {
 	AssetIntents       []AssetIntent
 	RequiresResult     bool
 	ResultFeeMode      ResultFeeMode
+	CloseContract      bool
+	DeployerAddress    string
+	BootstrapAddress   string
 }
 
 func CloneExecutionRecords(in []ExecutionRecord) []ExecutionRecord {

@@ -37,6 +37,8 @@ type memoryAccount struct {
 	SelfDestruct bool
 	NewContract  bool
 	Touched      bool
+	DeployerAddr string
+	Closed       bool
 }
 
 type memorySnapshot struct {
@@ -64,6 +66,12 @@ func (s *MemoryStateDB) StateRoot() [32]byte {
 		h.Write(tmp[:])
 		writeLengthPrefixed(h, acct.Balance.Bytes())
 		h.Write(crypto.Keccak256(acct.Code))
+		writeLengthPrefixed(h, []byte(acct.DeployerAddr))
+		if acct.Closed {
+			h.Write([]byte{1})
+		} else {
+			h.Write([]byte{0})
+		}
 
 		keys := make([]gethcommon.Hash, 0, len(acct.Storage))
 		for key := range acct.Storage {
@@ -241,8 +249,30 @@ func (s *MemoryStateDB) HasSelfDestructed(addr gethcommon.Address) bool {
 }
 
 func (s *MemoryStateDB) Exist(addr gethcommon.Address) bool {
-	_, ok := s.accounts[addr]
-	return ok
+	acct, ok := s.accounts[addr]
+	return ok && !acct.Closed
+}
+
+func (s *MemoryStateDB) SetContractDeployer(addr gethcommon.Address, recipient string) {
+	acct := s.ensure(addr)
+	acct.DeployerAddr = recipient
+}
+
+func (s *MemoryStateDB) ContractDeployer(addr gethcommon.Address) (string, bool) {
+	acct, ok := s.accounts[addr]
+	if !ok {
+		return "", false
+	}
+	return acct.DeployerAddr, true
+}
+
+func (s *MemoryStateDB) CloseContract(addr gethcommon.Address) {
+	s.ensure(addr).Closed = true
+}
+
+func (s *MemoryStateDB) ContractClosed(addr gethcommon.Address) bool {
+	acct, ok := s.accounts[addr]
+	return ok && acct.Closed
 }
 
 func (s *MemoryStateDB) Touch(addr gethcommon.Address) {

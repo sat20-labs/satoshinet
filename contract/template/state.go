@@ -1196,7 +1196,34 @@ func (r *ContractRuntime) ApplyFunding(outputs []ContractOutput, gasAssetName st
 	if !state.Running.TradingReady {
 		state.Running.TradingReady = state.Running.ammTradingReady()
 	}
+	if _, ok := r.contract.(*AMMContract); ok {
+		initializeAMMInitialLP(&state, r.base.Deployer())
+	}
 	return r.saveRuntimeState(state)
+}
+
+func initializeAMMInitialLP(state *TemplateRuntimeState, deployer string) {
+	if state == nil || deployer == "" || !state.Running.TradingReady {
+		return
+	}
+	if state.Running.TotalLPTAmt != nil && state.Running.TotalLPTAmt.Sign() > 0 {
+		return
+	}
+	if len(state.Running.LPBalances) != 0 {
+		return
+	}
+	poolAsset := state.Running.AssetAInPool
+	poolGas := decimalInt64(state.Running.AssetBInPool)
+	if poolAsset == nil || poolAsset.Sign() <= 0 || poolGas <= 0 {
+		return
+	}
+	initialLPT := scommon.DecimalMul(poolAsset, scommon.NewDefaultDecimal(poolGas)).Sqrt()
+	if initialLPT.Sign() <= 0 {
+		return
+	}
+	state.Running.TotalLPTAmt = initialLPT
+	state.Running.LPBalances = map[string]*scommon.Decimal{deployer: initialLPT.Clone()}
+	state.Running.LPCosts = map[string]int64{deployer: ammLiquidityCost(poolAsset, poolGas)}
 }
 
 func (r *ContractRuntime) ApplyGasFunding(outputs []ContractOutput, gasAssetName string) error {

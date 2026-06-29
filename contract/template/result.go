@@ -45,7 +45,7 @@ func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []R
 		}
 	}
 	for _, record := range records {
-		if !record.RequiresResult || record.GasFee == nil || record.GasFee.Sign() == 0 {
+		if !record.RequiresResult {
 			continue
 		}
 		if len(record.ItemIDs) > 0 && executionRecordItemsCovered(record, coveredItems) {
@@ -58,7 +58,9 @@ func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []R
 			planByContract[contract] = i
 			out = append(out, ResultPlan{Contract: contract, Height: record.Height})
 		}
-		out[i].GasFee = contractframework.DecimalAddAllowNil(out[i].GasFee, record.GasFee)
+		if record.GasFee != nil && record.GasFee.Sign() != 0 {
+			out[i].GasFee = contractframework.DecimalAddAllowNil(out[i].GasFee, record.GasFee)
+		}
 		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
 		out[i].Inputs = contractframework.UniqueOutPoints(out[i].Inputs)
 		out[i].ItemIDs = appendMissingItemIDs(out[i].ItemIDs, record.ItemIDs)

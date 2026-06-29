@@ -328,25 +328,6 @@ func VerifyResultInputCoverage(inputs []UTXO, outputs []ResultOutput, gasFee *sc
 	return nil
 }
 
-func VerifyResultInputOrder(tx *wire.MsgTx, expected []OutPoint) error {
-	if tx == nil {
-		return fmt.Errorf("missing result transaction")
-	}
-	if len(tx.TxIn) != len(expected) {
-		return fmt.Errorf("result input count mismatch: got %d want %d", len(tx.TxIn), len(expected))
-	}
-	for i, txIn := range tx.TxIn {
-		if txIn == nil {
-			return fmt.Errorf("nil result input %d", i)
-		}
-		actual := WireOutPointToFramework(txIn.PreviousOutPoint)
-		if actual != expected[i] {
-			return fmt.Errorf("result input %d mismatch: got %s want %s", i, actual, expected[i])
-		}
-	}
-	return nil
-}
-
 func VerifyResultOutputs(actual, expected []ResultOutput) error {
 	if len(actual) != len(expected) {
 		return fmt.Errorf("result output count mismatch: got %d want %d", len(actual), len(expected))

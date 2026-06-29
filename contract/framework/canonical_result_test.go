@@ -120,6 +120,43 @@ func TestBuildCanonicalResultPlanTruncatesOutputsToAssetPrecision(t *testing.T) 
 	requireCanonicalResultOutputAssetString(t, plan.Outputs[1], assetName, "7")
 }
 
+func TestCanonicalCloseProfit(t *testing.T) {
+	contractAddr := testContractAddress(t, ModuleEVM, 1)
+	assetName := "ordx:ft:profit"
+	funding := OutPoint{TxID: "close", Vout: 0}
+	profit := OutPoint{TxID: "profit", Vout: 0}
+	value := OutPoint{TxID: "value", Vout: 0}
+
+	plans, err := (CanonicalResultPlanner{
+		GasConfig: GasConfig{GasAssetName: "brc20:f:sgas"},
+		UTXOs: func(got contract.ContractAddress) ([]UTXO, error) {
+			require.True(t, got.Equal(contractAddr))
+			return []UTXO{
+				mustCanonicalUTXO(t, funding, contractAddr, contract.SatoshiAssetName, 0, 1),
+				mustCanonicalUTXO(t, profit, contractAddr, assetName, 100, 2),
+				mustCanonicalUTXO(t, value, contractAddr, contract.SatoshiAssetName, 10, 3),
+			}, nil
+		},
+	}).BuildPlans([]ExecutionRecord{{
+		Height:           100,
+		Contract:         contractAddr,
+		RequiresResult:   true,
+		FundingInputs:    []OutPoint{funding},
+		ResultFeeMode:    ResultFeeModePlainTxFee,
+		CloseContract:    true,
+		DeployerAddress:  "deployer",
+		BootstrapAddress: "bootstrap",
+	}})
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	require.ElementsMatch(t, []OutPoint{funding, profit, value}, plans[0].Inputs)
+	requireCanonicalResultValue(t, plans[0].Outputs, "deployer", 6)
+	requireCanonicalResultValue(t, plans[0].Outputs, "bootstrap", 4)
+	requireResultAssetString(t, plans[0].Outputs, "deployer", assetName, "60")
+	requireResultAssetString(t, plans[0].Outputs, "bootstrap", assetName, "40")
+	requireNoCanonicalResultOutputTo(t, plans[0].Outputs, contractAddr.MustEncode())
+}
+
 func TestBuildCanonicalResultPlanRejectsMixedContracts(t *testing.T) {
 	contractAddr := testContractAddress(t, ModuleEVM, 1)
 	other := testContractAddress(t, ModuleEVM, 9)
@@ -207,4 +244,36 @@ func requireCanonicalResultOutputAssetString(t *testing.T, output ResultOutput, 
 	require.Len(t, output.Assets, 1)
 	require.Equal(t, assetName, output.Assets[0].Name.String())
 	require.Zero(t, output.Assets[0].Amount.Cmp(mustCanonicalDecimalString(t, amount)))
+}
+
+func requireCanonicalResultValue(t *testing.T, outputs []ResultOutput, to string, value int64) {
+	t.Helper()
+	for _, output := range outputs {
+		if output.To == to && output.Value == value {
+			return
+		}
+	}
+	t.Fatalf("missing value %d to %s in %+v", value, to, outputs)
+}
+
+func requireResultAssetString(t *testing.T, outputs []ResultOutput, to, assetName, amount string) {
+	t.Helper()
+	for _, output := range outputs {
+		if output.To != to {
+			continue
+		}
+		for _, asset := range output.Assets {
+			if asset.Name.String() == assetName && asset.Amount.Cmp(mustCanonicalDecimalString(t, amount)) == 0 {
+				return
+			}
+		}
+	}
+	t.Fatalf("missing asset %s amount %s to %s in %+v", assetName, amount, to, outputs)
+}
+
+func requireNoCanonicalResultOutputTo(t *testing.T, outputs []ResultOutput, to string) {
+	t.Helper()
+	for _, output := range outputs {
+		require.NotEqual(t, to, output.To, "unexpected output to %s: %+v", to, output)
+	}
 }

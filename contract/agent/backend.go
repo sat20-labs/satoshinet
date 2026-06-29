@@ -73,6 +73,8 @@ type Backend struct {
 	resultPlans     []ResultPlan
 }
 
+const agentClosePlanReason = "__agent_close__"
+
 func ExecuteBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
 	executor := NewBackend(req)
 	if err := contractframework.NewExecutor(executor.executorConfig()).ExecuteTxs(req.Txs); err != nil {
@@ -344,19 +346,19 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	}
 	e.Store.Add(runtime)
 	outcome := contractframework.ExecutionOutcome{
-		Height:        e.BlockHeight,
-		TxID:          tx.TxID(),
-		Type:          TxTypeDeploy,
-		Kind:          ExecutionKindDeploy,
-		CallID:        DeriveDeployCallID(tx.TxID(), addr),
-		Contract:      addr,
-		Status:        ResultStatusSuccess,
-		GasLimit:      validated.Payload.GasLimit,
-		FundingInputs: contractframework.ContractOutputOutPoints(fundingOutputs),
+		Height:         e.BlockHeight,
+		TxID:           tx.TxID(),
+		Type:           TxTypeDeploy,
+		Kind:           ExecutionKindDeploy,
+		CallID:         DeriveDeployCallID(tx.TxID(), addr),
+		Contract:       addr,
+		Status:         ResultStatusSuccess,
+		GasLimit:       validated.Payload.GasLimit,
+		FundingInputs:  contractframework.ContractOutputOutPoints(fundingOutputs),
+		RequiresResult: true,
 	}
 	e.appendOutcome(outcome)
 	if resultPlan, ok := stateResultPlan(addr, fundingOutputs); ok {
-		outcome.RequiresResult = true
 		outcome.GasFee = resultFee
 		e.records[len(e.records)-1] = outcome.ToRecord()
 		e.resultPlans = append(e.resultPlans, resultPlan)
@@ -398,6 +400,8 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		settlement, err = e.applyBet(runtime, validated, invoker)
 	case InvokeAPIConfirm:
 		settlement, err = e.applyConfirm(runtime, validated, invoker)
+	case InvokeAPIClose:
+		settlement, err = e.applyClose(runtime, validated, invoker)
 	default:
 		err = fmt.Errorf("unsupported agent action %s", validated.Payload.Action)
 	}
@@ -409,6 +413,12 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		resultPlan, err := contractframework.BuildSettlementResultPlan(settlement, e.settlementResultOptions())
 		if err != nil {
 			return err
+		}
+		if validated.Payload.Action == InvokeAPIClose {
+			resultPlan.Outputs = append(resultPlan.Outputs, ResultOutput{
+				To:     validated.Contract.EncodeAddress(),
+				Reason: agentClosePlanReason,
+			})
 		}
 		settlementIntents, err = contractframework.BuildSettlementAssetIntents(settlement, e.settlementResultOptions())
 		if err != nil {
@@ -435,6 +445,11 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		FundingInputs:  contractframework.ContractOutputOutPoints(validated.FundingOutputs),
 		AssetIntents:   settlementIntents,
 		RequiresResult: requiresResult,
+	}
+	if validated.Payload.Action == InvokeAPIClose && err == nil {
+		outcome.CloseContract = true
+		outcome.DeployerAddress = runtime.deployer
+		outcome.BootstrapAddress = e.RuntimeConfig.BootstrapAddress
 	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
@@ -522,6 +537,18 @@ func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, inv
 		Param:     param,
 		TimeValue: e.predictionTimeValue(runtime.Contract()),
 	})
+}
+
+func (e *Backend) applyClose(runtime *Runtime, validated InvokeValidation, invoker string) (*PredictionSettlementPlan, error) {
+	if len(validated.Payload.Param) != 0 {
+		return nil, fmt.Errorf("agent close takes no parameters")
+	}
+	plan, err := runtime.ApplyClose(ApplyCloseRequest{Invoker: invoker})
+	if err != nil {
+		return nil, err
+	}
+	plan.Inputs = contractframework.ContractOutputOutPoints(validated.FundingOutputs)
+	return plan, nil
 }
 
 func (e *Backend) checkSettlementFunding(settlement *PredictionSettlementPlan) error {

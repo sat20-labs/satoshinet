@@ -17,6 +17,7 @@ const (
 	AgentInvokeAPIBet     = "bet"
 	AgentInvokeAPIConfirm = "confirm"
 	AgentInvokeAPIReject  = "reject"
+	AgentInvokeAPIClose   = ContractInvokeAPIClose
 
 	TimeBaseUnix   = "unix"
 	TimeBaseHeight = "height"

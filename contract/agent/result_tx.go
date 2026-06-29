@@ -1,6 +1,9 @@
 package agent
 
-import contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+import (
+	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+)
 
 func defaultAgentSettlementResultOptions() contractframework.SettlementResultOptions {
 	return agentSettlementResultOptions(nil)
@@ -24,6 +27,7 @@ func AugmentResultPlans(plans []ResultPlan, contractUTXOs ContractUTXOProvider,
 	out := contractframework.CloneResultPlans(plans)
 	opts := agentSettlementResultOptions(assetPrecision)
 	for i := range out {
+		closePlan := stripAgentClosePlanMarker(&out[i])
 		view, err := contractframework.CollectResultPlanUTXOs(out[i], contractUTXOs)
 		if err != nil {
 			return nil, err
@@ -40,7 +44,7 @@ func AugmentResultPlans(plans []ResultPlan, contractUTXOs ContractUTXOProvider,
 				return nil, err
 			}
 		}
-		retain, deployer := agentManagedGasRetain(out[i], store, gasAssetName)
+		retain, deployer := agentManagedRetain(out[i], store, gasAssetName, closePlan)
 		augmented, err := contractframework.AugmentResultPlanWithManagedState(
 			contractframework.ManagedResultAugmentRequest{
 				Plan:             out[i],
@@ -62,8 +66,25 @@ func AugmentResultPlans(plans []ResultPlan, contractUTXOs ContractUTXOProvider,
 	return out, nil
 }
 
-func agentManagedGasRetain(plan ResultPlan, store *RuntimeStore, gasAssetName string) (ResultOutput, string) {
-	if store == nil || gasAssetName == "" {
+func stripAgentClosePlanMarker(plan *ResultPlan) bool {
+	if plan == nil {
+		return false
+	}
+	closePlan := false
+	outputs := plan.Outputs[:0]
+	for _, output := range plan.Outputs {
+		if output.Reason == agentClosePlanReason {
+			closePlan = true
+			continue
+		}
+		outputs = append(outputs, output)
+	}
+	plan.Outputs = outputs
+	return closePlan
+}
+
+func agentManagedRetain(plan ResultPlan, store *RuntimeStore, gasAssetName string, closePlan bool) (ResultOutput, string) {
+	if store == nil {
 		return ResultOutput{}, ""
 	}
 	addr, err := DecodeContractAddress(plan.Contract)
@@ -74,21 +95,88 @@ func agentManagedGasRetain(plan ResultPlan, store *RuntimeStore, gasAssetName st
 	if !ok || runtime == nil {
 		return ResultOutput{}, ""
 	}
+	if closePlan {
+		return agentCloseManagedAssets(runtime, gasAssetName), runtime.deployer
+	}
+	return agentManagedGasAsset(runtime, gasAssetName), runtime.deployer
+}
+
+func agentManagedGasAsset(runtime *Runtime, gasAssetName string) ResultOutput {
+	if runtime == nil || gasAssetName == "" {
+		return ResultOutput{}
+	}
+	addr := runtime.Address()
+	contractAddress := addr.EncodeAddress()
 	gasBalance := parseDecimalOrZero(runtime.State().Prediction.GasBalance)
 	if gasBalance.Sign() <= 0 {
-		return ResultOutput{}, runtime.deployer
+		return ResultOutput{}
 	}
 	if gasAssetName == SatoshiAssetName {
 		value, err := contractframework.DecimalToInt64(*gasBalance)
 		if err != nil {
-			return ResultOutput{}, runtime.deployer
+			return ResultOutput{}
 		}
-		return ResultOutput{To: plan.Contract, Value: value}, runtime.deployer
+		return ResultOutput{To: contractAddress, Value: value}
 	}
 	assets, err := contractframework.NewAssetSetWithPrecisionPolicy(gasAssetName, gasBalance.String(),
 		agentSettlementResultOptions(runtime.config.AssetPrecision).Precision, ErrInvalidAsset)
 	if err != nil {
-		return ResultOutput{}, runtime.deployer
+		return ResultOutput{}
 	}
-	return ResultOutput{To: plan.Contract, Assets: assets}, runtime.deployer
+	return ResultOutput{To: contractAddress, Assets: assets}
+}
+
+func agentCloseManagedAssets(runtime *Runtime, gasAssetName string) ResultOutput {
+	if runtime == nil {
+		return ResultOutput{}
+	}
+	addr := runtime.Address()
+	contractAddress := addr.EncodeAddress()
+	out := ResultOutput{To: contractAddress}
+	if gasAssetName != "" {
+		gasBalance := parseDecimalOrZero(runtime.State().Prediction.GasBalance)
+		addAgentManagedAmount(&out, contractAddress, gasAssetName, gasBalance, runtime.config.AssetPrecision)
+	}
+	betAsset := runtime.Contract().BetAsset
+	betTotal := runtime.totalBetAmount()
+	if betTotal == nil || betTotal.Sign() <= 0 || betAsset == "" {
+		return out
+	}
+	addAgentManagedAmount(&out, contractAddress, betAsset, betTotal, runtime.config.AssetPrecision)
+	return out
+}
+
+func addAgentManagedAmount(out *ResultOutput, contractAddress, assetName string, amount *scommon.Decimal,
+	precision contractframework.AssetPrecisionResolver) {
+
+	if out == nil || amount == nil || amount.Sign() <= 0 {
+		return
+	}
+	out.To = contractAddress
+	if assetName == SatoshiAssetName {
+		value, err := contractframework.DecimalToInt64(*amount)
+		if err == nil {
+			out.Value += value
+		}
+		return
+	}
+	policy := agentSettlementResultOptions(precision).Precision
+	assets, err := contractframework.NewAssetSetWithPrecisionPolicy(assetName, amount.String(), policy, ErrInvalidAsset)
+	if err != nil {
+		return
+	}
+	for _, asset := range assets {
+		merged := false
+		for i := range out.Assets {
+			if out.Assets[i].Name.String() == asset.Name.String() {
+				next := scommon.DecimalAdd(&out.Assets[i].Amount, &asset.Amount)
+				out.Assets[i].Amount = *next
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			out.Assets = append(out.Assets, asset)
+		}
+	}
 }

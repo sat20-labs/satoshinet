@@ -454,33 +454,12 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
-	if e.Store.Exists(addr) {
-		e.appendOutcome(contractframework.ExecutionOutcome{
-			Height:   e.BlockHeight,
-			TxID:     tx.TxID(),
-			Type:     TxTypeDeploy,
-			Kind:     ExecutionKindDeploy,
-			CallID:   DeriveDeployCallID(tx.TxID(), addr),
-			Contract: addr,
-			Status:   ResultStatusInvalid,
-			GasLimit: validated.Payload.GasLimit,
-		})
-		return nil
-	}
-	runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, e.Registry, deployer)
-	if err != nil {
-		return err
-	}
 	fundingOutputs, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(e.ContractPrefix), addr)
 	if err != nil {
 		return err
 	}
 	if len(fundingOutputs) == 0 {
 		return fmt.Errorf("template DEPLOY output does not match derived contract %s", addr.MustEncode())
-	}
-	runtime.SetCurrentBlock(e.BlockHeight)
-	if err := runtime.ApplyFunding(stripTemplateResultGasFunding(runtime.Contract(), fundingOutputs, e.GasConfig.GasAssetName), e.GasConfig.GasAssetName); err != nil {
-		return nil
 	}
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
@@ -490,9 +469,38 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
+	if e.Store.Exists(addr) {
+		gasRefundRecipient := ""
+		if hasResultGas {
+			gasRefundRecipient = deployer
+		}
+		e.appendOutcome(contractframework.ExecutionOutcome{
+			Height:             e.BlockHeight,
+			TxID:               tx.TxID(),
+			Type:               TxTypeDeploy,
+			Kind:               ExecutionKindDeploy,
+			CallID:             DeriveDeployCallID(tx.TxID(), addr),
+			Contract:           addr,
+			Status:             ResultStatusInvalid,
+			GasLimit:           validated.Payload.GasLimit,
+			FundingInputs:      contractframework.ContractOutputOutPoints(fundingOutputs),
+			GasFee:             contractframework.GasFeeIf(hasResultGas, resultFee),
+			GasRefundRecipient: gasRefundRecipient,
+			RequiresResult:     true,
+		})
+		return nil
+	}
+	runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, e.Registry, deployer)
+	if err != nil {
+		return err
+	}
+	runtime.SetCurrentBlock(e.BlockHeight)
+	if err := runtime.ApplyFunding(stripTemplateResultGasFunding(runtime.Contract(), fundingOutputs, e.GasConfig.GasAssetName), e.GasConfig.GasAssetName); err != nil {
+		return nil
+	}
 	e.Store.Add(runtime)
 	gasRefundRecipient := ""
-	if templateUsesFrameworkGasRefund(runtime.Contract(), e.GasConfig.GasAssetName) {
+	if hasResultGas && templateUsesFrameworkGasRefund(runtime.Contract(), e.GasConfig.GasAssetName) {
 		gasRefundRecipient = deployer
 	}
 	outcome := contractframework.ExecutionOutcome{
@@ -506,7 +514,7 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		GasLimit:           validated.Payload.GasLimit,
 		FundingInputs:      contractframework.ContractOutputOutPoints(fundingOutputs),
 		GasRefundRecipient: gasRefundRecipient,
-		RequiresResult:     hasResultGas,
+		RequiresResult:     true,
 	}
 	outcome.GasFee = contractframework.GasFeeIf(hasResultGas, resultFee)
 	e.appendOutcome(outcome)

@@ -286,16 +286,11 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		}
 	}
 
-	resultTxs := make([]*wire.MsgTx, 0)
-	for {
-		pending := executor.PendingRecords()
-		if len(pending) == 0 {
-			break
-		}
-		record := pending[0]
+	resultTxs := make([]*wire.MsgTx, 0, 1)
+	if pending := executor.PendingRecords(); len(pending) != 0 {
 		resultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
-			Status:        record.Status,
-			Records:       []ExecutionRecord{record},
+			Status:        blockResultStatus(pending),
+			Records:       pending,
 			GasConfig:     req.GasConfig,
 			UTXOs:         overlay.Provider,
 			Precision:     SettlementPrecision(req.AssetPrecision),
@@ -320,6 +315,13 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		ResultTxs: resultTxs,
 		Execution: execution,
 	}, nil
+}
+
+func blockResultStatus(records []ExecutionRecord) ResultStatus {
+	if len(records) == 1 {
+		return records[0].Status
+	}
+	return ResultStatusSuccess
 }
 
 func ExecuteWorkBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
@@ -611,6 +613,9 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		return fmt.Errorf("deploy contract mismatch: got %s want %s",
 			result.Contract.MustEncode(), expectedContract.MustEncode())
 	}
+	if result.Status == ResultStatusSuccess {
+		e.Runtime.State.SetContractDeployer(ContractGethAddress(result.Contract), gasRefundRecipient)
+	}
 	funding := make([]OutPoint, 0, len(fundingOutputs))
 	for _, output := range fundingOutputs {
 		funding = append(funding, output.OutPoint)
@@ -641,10 +646,6 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return nil
 	}
-	caller, err := e.callerFromContractTx(contractTx, tx, parsed)
-	if err != nil {
-		return nil
-	}
 	gasRefundRecipient, err := e.refundRecipientFromContractTx(contractTx, tx, parsed)
 	if err != nil {
 		return nil
@@ -652,6 +653,13 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	funding := make([]OutPoint, 0, len(validated.FundingOutputs))
 	for _, output := range validated.FundingOutputs {
 		funding = append(funding, output.OutPoint)
+	}
+	if validated.Payload.Action == contract.ContractInvokeAPIClose {
+		return e.executeCloseInvokeTx(tx, validated, gasRefundRecipient, funding)
+	}
+	caller, err := e.callerFromContractTx(contractTx, tx, parsed)
+	if err != nil {
+		return nil
 	}
 	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
 	intentStart := len(e.Runtime.AssetIntents)
@@ -678,6 +686,38 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		GasRefundRecipient: gasRefundRecipient,
 		AssetIntents:       intents,
 		RequiresResult:     true,
+	}
+	return e.appendOutcome(outcome)
+}
+
+func (e *Backend) executeCloseInvokeTx(tx *wire.MsgTx, validated InvokeValidation, gasRefundRecipient string,
+	funding []OutPoint) error {
+
+	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
+	contractAddr := ContractGethAddress(validated.Contract)
+	deployerAddress, ok := e.Runtime.State.ContractDeployer(contractAddr)
+	status := ResultStatusInvalid
+	closeContract := false
+	if ok && deployerAddress == gasRefundRecipient && !e.Runtime.State.ContractClosed(contractAddr) {
+		status = ResultStatusSuccess
+		closeContract = true
+		e.Runtime.State.CloseContract(contractAddr)
+	}
+	outcome := contractframework.ExecutionOutcome{
+		Height:             int64(e.Block.Number),
+		TxID:               tx.TxID(),
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		CallID:             callID,
+		Contract:           validated.Contract,
+		Status:             status,
+		GasUsed:            e.GasConfig.Normalize().InvokeBaseGas,
+		FundingInputs:      funding,
+		GasRefundRecipient: gasRefundRecipient,
+		RequiresResult:     true,
+		CloseContract:      closeContract,
+		DeployerAddress:    deployerAddress,
+		BootstrapAddress:   e.GasConfig.Normalize().BootstrapAddress,
 	}
 	return e.appendOutcome(outcome)
 }

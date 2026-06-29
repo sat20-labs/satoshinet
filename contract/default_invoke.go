@@ -7,6 +7,7 @@ import (
 )
 
 const ContractInvokeAPIDefault = "default"
+const ContractInvokeAPIClose = "close"
 
 type DefaultInvokeOutput struct {
 	TxID     string

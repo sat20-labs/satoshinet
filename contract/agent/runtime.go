@@ -118,6 +118,10 @@ type ApplyConfirmRequest struct {
 	TimeValue int64
 }
 
+type ApplyCloseRequest struct {
+	Invoker string
+}
+
 func NewRuntime(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig) (*Runtime, error) {
 	return NewRuntimeWithDeployer(address, deploy, cfg, "")
 }
@@ -304,6 +308,29 @@ func (r *Runtime) ApplyConfirm(req ApplyConfirmRequest) (*PredictionSettlementPl
 	}
 	r.state.Status = StatusCompleted
 	r.state.Prediction.Status = PredictionStatusSettled
+	return plan, nil
+}
+
+func (r *Runtime) ApplyClose(req ApplyCloseRequest) (*PredictionSettlementPlan, error) {
+	if req.Invoker == "" || req.Invoker != r.deployer {
+		return nil, fmt.Errorf("invoker is not deployer")
+	}
+	if r.state.Status == StatusCompleted || r.state.Status == StatusRejected {
+		return &PredictionSettlementPlan{
+			Contract:   r.address.EncodeAddress(),
+			AssetName:  r.contract.BetAsset,
+			ResultType: "close",
+		}, nil
+	}
+	plan := &PredictionSettlementPlan{
+		Contract:   r.address.EncodeAddress(),
+		AssetName:  r.contract.BetAsset,
+		ResultType: "close",
+		Refund:     true,
+	}
+	r.addRefundTransfers(plan)
+	r.state.Status = StatusCompleted
+	r.state.Prediction.Status = PredictionStatusRefundable
 	return plan, nil
 }
 

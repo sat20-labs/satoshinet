@@ -284,7 +284,12 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 		intents := make([]AssetIntent, 0)
 		var gasFee *scommon.Decimal
 		funding := make([]OutPoint, 0)
+		var closeRecord *ExecutionRecord
 		for _, record := range group.Records {
+			if record.CloseContract {
+				cp := record
+				closeRecord = &cp
+			}
 			intents = append(intents, record.AssetIntents...)
 			if record.ResultFeeMode != ResultFeeModePlainTxFee {
 				callFee, err := p.GasConfig.CheckedCallFeeDecimalAtHeight(
@@ -310,6 +315,14 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 			}
 			funding = append(funding, record.FundingInputs...)
 		}
+		if closeRecord != nil {
+			plan, err := p.buildClosePlan(group.Contract, available, intents, gasFee, funding, group.Records, *closeRecord)
+			if err != nil {
+				return nil, err
+			}
+			plans = append(plans, plan)
+			continue
+		}
 		plan, err := BuildCanonicalResultPlan(ResultPlanRequest{
 			Contract:               group.Contract,
 			Available:              available,
@@ -325,6 +338,61 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 		plans = append(plans, plan)
 	}
 	return plans, nil
+}
+
+func (p CanonicalResultPlanner) buildClosePlan(contractAddr contract.ContractAddress, available []UTXO,
+	intents []AssetIntent, gasFee *scommon.Decimal, funding []OutPoint, records []ExecutionRecord,
+	closeRecord ExecutionRecord) (ResultPlan, error) {
+
+	plan, err := BuildCanonicalResultPlan(ResultPlanRequest{
+		Contract:               contractAddr,
+		Available:              available,
+		Intents:                intents,
+		GasAssetName:           p.GasConfig.GasAssetName,
+		GasFee:                 gasFee,
+		RequiredGasFundingUTXO: funding,
+		Precision:              p.Precision,
+	})
+	if err != nil {
+		return ResultPlan{}, err
+	}
+	contractText := contractAddr.MustEncode()
+	plan.Contract = contractText
+	plan.Outputs = removeContractRetainOutputs(plan.Outputs, contractText)
+	plan.GasFee = CloneDecimal(gasFee)
+	view, err := CollectResultPlanUTXOs(ResultPlan{Contract: contractText}, func(got contract.ContractAddress) ([]UTXO, error) {
+		if !got.Equal(contractAddr) {
+			return nil, nil
+		}
+		return available, nil
+	})
+	if err != nil {
+		return ResultPlan{}, err
+	}
+	return AugmentResultPlanWithManagedState(ManagedResultAugmentRequest{
+		Plan:             plan,
+		View:             view,
+		GasAssetName:     p.GasConfig.GasAssetName,
+		GasFee:           gasFee,
+		Precision:        p.Precision,
+		DeployerAddress:  closeRecord.DeployerAddress,
+		BootstrapAddress: closeRecord.BootstrapAddress,
+		SurplusMode:      ResultSurplusAsProfit,
+	})
+}
+
+func removeContractRetainOutputs(outputs []ResultOutput, contractText string) []ResultOutput {
+	if len(outputs) == 0 || contractText == "" {
+		return outputs
+	}
+	out := outputs[:0]
+	for _, output := range outputs {
+		if output.To == contractText {
+			continue
+		}
+		out = append(out, output)
+	}
+	return out
 }
 
 func ContractResultKey(contractAddr contract.ContractAddress) string {

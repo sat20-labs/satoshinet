@@ -13,6 +13,7 @@ import (
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -25,19 +26,37 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	caller := testEVMCallerFromBTCAddress(callerAddr)
 	deployTx := testEVMDeployTxForCaller(t, 3, testReturn42InitCode(), caller)
 	blockTime := time.Unix(1710000000, 0)
+	prevView := testPreviousOutputView(t, deployTx.TxIn[0].PreviousOutPoint, callerAddr)
 
 	built, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 		Txs:           []*wire.MsgTx{deployTx},
 		Runtime:       evm.NewRuntime(nil),
 		Block:         evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: evm.DefaultGasConfig().MaxGasPerBlock, FixedGasPrice: 1},
 		ResolveCaller: fixedTestCaller(caller),
-		GasConfig:     evm.GasConfig{GasAssetName: evm.DefaultGasConfig().GasAssetName, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
+		ResolveGasRefundRecipient: evm.LastInputPreviousOutputGasRefundRecipientResolver(&chaincfg.TestNetParams,
+			previousOutputScriptResolver(prevView)),
+		GasConfig: evm.GasConfig{GasAssetName: evm.DefaultGasConfig().GasAssetName, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
 		ResolveScript: func(output evm.ResultOutput) ([]byte, error) {
 			contract, err := evm.DecodeContractAddress(output.To)
 			if err == nil {
 				return evm.ContractPkScript(contract)
 			}
+			if output.To == callerAddr.EncodeAddress() {
+				return txscript.PayToAddrScript(callerAddr)
+			}
 			return []byte{txscript.OP_TRUE}, nil
+		},
+		ResolveOutput: func(resultTx *wire.MsgTx) ([]evm.ResultOutput, error) {
+			return contractframework.ResultOutputsFromTx(resultTx, evm.TestnetContractPrefix, evmcommon.ParseContractPkScript,
+				func(pkScript []byte) (string, bool, error) {
+					if script, err := txscript.PayToAddrScript(callerAddr); err == nil && string(script) == string(pkScript) {
+						return callerAddr.EncodeAddress(), true, nil
+					}
+					if len(pkScript) == 1 && pkScript[0] == txscript.OP_TRUE {
+						return "test-recipient", true, nil
+					}
+					return "", false, nil
+				})
 		},
 	})
 	if err != nil {
@@ -55,8 +74,7 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
 		GasConfig: evm.GasConfig{GasAssetName: evm.DefaultGasConfig().GasAssetName, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
 	})
-	if err := validator.ValidateEVMBlock(block, testPreviousOutputView(t,
-		deployTx.TxIn[0].PreviousOutPoint, callerAddr)); err != nil {
+	if err := validator.ValidateEVMBlock(block, prevView); err != nil {
 		t.Fatal(err)
 	}
 	postState, ok := validator.EVMBlockPostState(block.Hash())
@@ -72,8 +90,7 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	if err := evm.UpsertCoinbaseStateRoot(coinbase, wrongRoot); err != nil {
 		t.Fatal(err)
 	}
-	err = validator.ValidateEVMBlock(block, testPreviousOutputView(t,
-		deployTx.TxIn[0].PreviousOutPoint, callerAddr))
+	err = validator.ValidateEVMBlock(block, prevView)
 	if err == nil {
 		t.Fatal("expected wrong EVM state root to be rejected")
 	}
@@ -87,14 +104,53 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 		Transactions: append([]*wire.MsgTx{testEVMCoinbaseTx(), deployTx}, built.ResultTxs...),
 	})
 	missingRootBlock.SetHeight(100)
-	err = validator.ValidateEVMBlock(missingRootBlock, testPreviousOutputView(t,
-		deployTx.TxIn[0].PreviousOutPoint, callerAddr))
+	err = validator.ValidateEVMBlock(missingRootBlock, prevView)
 	if err == nil {
 		t.Fatal("expected missing EVM state root to be rejected")
 	}
 	ruleErr, ok = err.(blockchain.RuleError)
 	if !ok || ruleErr.ErrorCode != blockchain.ErrInvalidEVMBlock {
 		t.Fatalf("got %T %[1]v, want blockchain.ErrInvalidEVMBlock", err)
+	}
+}
+
+func TestEVMResultUsesPrevCaller(t *testing.T) {
+	callerAddr, err := btcutil.NewAddressPubKeyHash(testBytes(20, 0x22), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := testEVMCallerFromBTCAddress(callerAddr)
+	deployTx := testEVMDeployTxForCaller(t, 7, testReturn42InitCode(), caller)
+	view := testPreviousAssetOutputView(t, deployTx.TxIn[0].PreviousOutPoint, callerAddr)
+	db := testEVMStateDB(t)
+	builder, err := NewResultBuilder(Config{
+		DB:               db,
+		ChainParams:      &chaincfg.TestNetParams,
+		BootstrapAddress: "tb1pbootstrap",
+		EVMResolveRecipient: func(pkScript []byte) (string, bool, error) {
+			if script, err := txscript.PayToAddrScript(callerAddr); err == nil && string(script) == string(pkScript) {
+				return callerAddr.EncodeAddress(), true, nil
+			}
+			return "", false, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := builder(mining.ContractBuildRequest{
+		Txs:       []*btcutil.Tx{btcutil.NewTx(deployTx)},
+		Height:    100,
+		Timestamp: time.Unix(1710000000, 0),
+		UtxoView:  view,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ResultTxs) == 0 {
+		t.Fatal("expected EVM deploy result tx")
+	}
+	if result.StateRoot == ([32]byte{}) {
+		t.Fatal("expected EVM state root")
 	}
 }
 
@@ -331,6 +387,20 @@ func testPreviousOutputView(t *testing.T, outpoint wire.OutPoint, address btcuti
 	}
 	view := blockchain.NewUtxoViewpoint()
 	view.Entries()[outpoint] = blockchain.NewUtxoEntry(wire.NewTxOut(1, nil, script), 1, false)
+	return view
+}
+
+func testPreviousAssetOutputView(t *testing.T, outpoint wire.OutPoint, address btcutil.Address) *blockchain.UtxoViewpoint {
+	t.Helper()
+	script, err := txscript.PayToAddrScript(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := blockchain.NewUtxoViewpoint()
+	view.Entries()[outpoint] = blockchain.NewUtxoEntry(wire.NewTxOut(0, wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),
+		Amount: *scommon.NewDefaultDecimal(20000),
+	}}, script), 1, false)
 	return view
 }
 

@@ -195,7 +195,7 @@ func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []Re
 		index[plan.Contract] = i
 	}
 	for _, record := range records {
-		if !record.RequiresResult || record.GasFee == nil || record.GasFee.Sign() == 0 {
+		if !record.RequiresResult {
 			continue
 		}
 		contract := record.Contract.MustEncode()
@@ -205,7 +205,9 @@ func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []Re
 			index[contract] = i
 			out = append(out, ResultPlan{Contract: contract})
 		}
-		out[i].GasFee = DecimalAddAllowNil(out[i].GasFee, record.GasFee)
+		if record.GasFee != nil && record.GasFee.Sign() != 0 {
+			out[i].GasFee = DecimalAddAllowNil(out[i].GasFee, record.GasFee)
+		}
 		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
 		out[i].Inputs = UniqueOutPoints(out[i].Inputs)
 		if refund := ResultGasRefundFromRecord(record); refund.To != "" {

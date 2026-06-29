@@ -18,6 +18,8 @@ func TestMemoryStateDBMarshalBinaryRoundTrip(t *testing.T) {
 	state.AddBalance(addr, uint256.NewInt(123), 0)
 	state.SetCode(addr, []byte{0x60, 0x2a, 0x00}, 0)
 	state.SetState(addr, slot, value)
+	state.SetContractDeployer(addr, "tb1pdeployer")
+	state.CloseContract(addr)
 	require.NoError(t, state.RegisterTrigger(Trigger{
 		ID:       "vault-release",
 		Contract: testContract(t),
@@ -37,7 +39,29 @@ func TestMemoryStateDBMarshalBinaryRoundTrip(t *testing.T) {
 	require.Equal(t, uint256.NewInt(123), decoded.GetBalance(addr))
 	require.Equal(t, []byte{0x60, 0x2a, 0x00}, decoded.GetCode(addr))
 	require.Equal(t, value, decoded.GetState(addr, slot))
+	deployer, ok := decoded.ContractDeployer(addr)
+	require.True(t, ok)
+	require.Equal(t, "tb1pdeployer", deployer)
+	require.True(t, decoded.ContractClosed(addr))
 	require.Equal(t, state.Triggers(), decoded.Triggers())
+}
+
+func TestStateRootIncludesOwner(t *testing.T) {
+	addr := gethcommon.HexToAddress("0x11112233445566778899aabbccddeeff00112233")
+	a := NewMemoryStateDB()
+	b := NewMemoryStateDB()
+	a.SetCode(addr, []byte{0x00}, 0)
+	b.SetCode(addr, []byte{0x00}, 0)
+	require.Equal(t, a.StateRoot(), b.StateRoot())
+
+	a.SetContractDeployer(addr, "tb1pdeployer-a")
+	b.SetContractDeployer(addr, "tb1pdeployer-b")
+	require.NotEqual(t, a.StateRoot(), b.StateRoot())
+
+	b.SetContractDeployer(addr, "tb1pdeployer-a")
+	require.Equal(t, a.StateRoot(), b.StateRoot())
+	b.CloseContract(addr)
+	require.NotEqual(t, a.StateRoot(), b.StateRoot())
 }
 
 func TestMemoryStateDBMarshalBinaryDeterministic(t *testing.T) {

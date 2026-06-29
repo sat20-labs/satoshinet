@@ -266,16 +266,21 @@ type networkCompiledSolidityContract struct {
 	Bytecode []byte
 }
 
-const networkSolidityCompileTimeout = 30 * time.Second
+const networkSolidityCompileTimeout = 2 * time.Minute
 
 func compileNetworkSolidityContract(t *testing.T, source, contractName string) networkCompiledSolidityContract {
 	t.Helper()
+	if os.Getenv("SATOSHINET_SOLC_RECOMPILE") != "1" {
+		if compiled, ok := precompiledNetworkSolidityContract(t, source, contractName); ok {
+			return compiled
+		}
+	}
 	solc := os.Getenv("SATOSHINET_SOLC")
 	if solc == "" {
 		var err error
 		solc, err = exec.LookPath("solc")
 		if err != nil {
-			t.Fatal("solc not found; install solc or set SATOSHINET_SOLC to run Solidity E2E tests")
+			t.Fatal("solc not found; install solc or set SATOSHINET_SOLC to recompile Solidity E2E fixtures")
 		}
 	}
 	input := map[string]interface{}{

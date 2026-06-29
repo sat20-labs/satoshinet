@@ -21,6 +21,7 @@ const (
 	InvokeAPIBet     = "bet"
 	InvokeAPIConfirm = "confirm"
 	InvokeAPIReject  = "reject"
+	InvokeAPIClose   = contractcommon.AgentInvokeAPIClose
 
 	TimeBaseUnix   = "unix"
 	TimeBaseHeight = "height"

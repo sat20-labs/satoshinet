@@ -135,6 +135,7 @@ func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 	if gasConfig == (evm.GasConfig{}) {
 		gasConfig = evm.DefaultGasConfig()
 	}
+	gasConfig.BootstrapAddress = cfg.BootstrapAddress
 	if err := gasConfig.Validate(); err != nil {
 		return nil, err
 	}
@@ -297,7 +298,7 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 		return nil, err
 	}
 	blockGasConfig := gasConfig
-	blockGasConfig.GasAssetName = contractGasAssetNameForParams(cfg.ChainParams)
+	blockGasConfig = evmGasConfigForBlock(blockGasConfig, cfg)
 	contractPrefix := evmContractPrefix(cfg.ChainParams)
 	block := evm.BlockContext{
 		Number:        uint64(req.Height),
@@ -725,8 +726,7 @@ func NewEVMResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
 			}
 			txs = append(txs, msgTx)
 		}
-		blockGasConfig := gasConfig
-		blockGasConfig.GasAssetName = contractGasAssetNameForParams(cfg.ChainParams)
+		blockGasConfig := evmGasConfigForBlock(gasConfig, cfg)
 		result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 			Txs:            txs,
 			Runtime:        runtime,
@@ -888,6 +888,7 @@ func evmGasConfigFromCommon(base GasConfig) evm.GasConfig {
 	}
 	return evm.GasConfig{
 		GasAssetName:             base.GasAssetName,
+		BootstrapAddress:         base.BootstrapAddress,
 		GasPriceDenominator:      base.GasPriceDenominator,
 		InitialGasPriceNumerator: base.InitialGasPriceNumerator,
 		GasPriceDecayInterval:    base.GasPriceDecayInterval,
@@ -904,6 +905,13 @@ func evmGasConfigFromCommon(base GasConfig) evm.GasConfig {
 		FixedGasPrice:            base.FixedGasPrice,
 		ResultPackingFee:         base.ResultPackingFee,
 	}
+}
+
+func evmGasConfigForBlock(base evm.GasConfig, cfg Config) evm.GasConfig {
+	out := base
+	out.GasAssetName = contractGasAssetNameForParams(cfg.ChainParams)
+	out.BootstrapAddress = cfg.BootstrapAddress
+	return out
 }
 
 func templateGasConfigFromCommon(base GasConfig, cfg Config) tmplcontract.GasConfig {

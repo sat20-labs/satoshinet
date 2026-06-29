@@ -518,6 +518,67 @@ func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 	}
 }
 
+func TestAgentCloseResult(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	resultGas := testAgentGasFee(t, DefaultGasConfig().ResultBaseGas).Int64()
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	closeTx := testAgentInvokeTx(t, addr, InvokeAPIClose, nil, 0,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas*2))
+
+	store := NewRuntimeStore()
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID():    "core",
+			aliceBetTx.TxID(): "alice",
+			bobBetTx.TxID():   "bob",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("initial block failed: %v", err)
+	}
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{closeTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(nil,
+			[]*wire.MsgTx{aliceBetTx, bobBetTx, closeTx}, TestnetContractPrefix, ContractTypeAgent),
+		ResolveScript:  testResultScriptResolver,
+		ResolveInvoker: testInvokerResolver(map[string]string{closeTx.TxID(): "deployer"}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.ResultTxs) != 1 {
+		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
+	}
+	if len(built.Execution.Records) != 1 || !built.Execution.Records[0].CloseContract {
+		t.Fatalf("close record mismatch: %+v", built.Execution.Records)
+	}
+	outputs := built.Execution.ResultPlans[0].Outputs
+	satOutputs := outputsByRecipientAndReason(outputs, SatoshiAssetName)
+	assertOutputAmount(t, satOutputs, "alice/refund", "60000")
+	assertOutputAmount(t, satOutputs, "bob/refund", "40000")
+	gasOutputs := outputsByRecipientAndReason(outputs, DefaultGasConfig().GasAssetName)
+	assertOutputAmount(t, gasOutputs, "deployer/", "59.997")
+	assertOutputAmount(t, gasOutputs, "bootstrap/", "139.998")
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	if runtime.State().Status != StatusCompleted {
+		t.Fatalf("close did not complete runtime: %#v", runtime.State())
+	}
+}
+
 func TestBuildBlockResultTxsForConfirmWithGasBetAsset(t *testing.T) {
 	contract := validPredictionContract()
 	contract.BetAsset = DefaultGasConfig().GasAssetName

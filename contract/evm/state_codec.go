@@ -15,7 +15,7 @@ import (
 
 var stateCodecMagic = []byte("EVMSTATE")
 
-const stateCodecVersion byte = 3
+const stateCodecVersion byte = 1
 
 func (s *MemoryStateDB) Clone() *MemoryStateDB {
 	if s == nil {
@@ -46,6 +46,12 @@ func (s *MemoryStateDB) MarshalBinary() ([]byte, error) {
 		writeUvarint(&buf, acct.Nonce)
 		writeBytes(&buf, acct.Balance.Bytes())
 		writeBytes(&buf, acct.Code)
+		writeBytes(&buf, []byte(acct.DeployerAddr))
+		if acct.Closed {
+			buf.WriteByte(1)
+		} else {
+			buf.WriteByte(0)
+		}
 
 		keys := sortedStorageKeys(acct.Storage)
 		writeUvarint(&buf, uint64(len(keys)))
@@ -99,7 +105,7 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode state version: %w", err)
 	}
-	if version != 1 && version != 2 && version != stateCodecVersion {
+	if version != stateCodecVersion {
 		return nil, fmt.Errorf("unsupported EVM state version %d", version)
 	}
 
@@ -129,6 +135,16 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 			return nil, fmt.Errorf("decode account code %d: %w", i, err)
 		}
 		acct.Code = code
+		deployerAddr, err := readBytes(r)
+		if err != nil {
+			return nil, fmt.Errorf("decode account deployer address %d: %w", i, err)
+		}
+		acct.DeployerAddr = string(deployerAddr)
+		closed, err := r.ReadByte()
+		if err != nil {
+			return nil, fmt.Errorf("decode account closed %d: %w", i, err)
+		}
+		acct.Closed = closed != 0
 
 		storageCount, err := binary.ReadUvarint(r)
 		if err != nil {
@@ -147,72 +163,65 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 			}
 		}
 	}
-	if version >= 2 {
-		triggerCount, err := binary.ReadUvarint(r)
+	triggerCount, err := binary.ReadUvarint(r)
+	if err != nil {
+		return nil, fmt.Errorf("decode trigger count: %w", err)
+	}
+	for i := uint64(0); i < triggerCount; i++ {
+		prefixBytes, err := readBytes(r)
 		if err != nil {
-			return nil, fmt.Errorf("decode trigger count: %w", err)
+			return nil, fmt.Errorf("decode trigger contract prefix %d: %w", i, err)
 		}
-		for i := uint64(0); i < triggerCount; i++ {
-			prefixBytes, err := readBytes(r)
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger contract prefix %d: %w", i, err)
-			}
-			version, err := r.ReadByte()
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger contract version %d: %w", i, err)
-			}
-			contractType, err := r.ReadByte()
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger contract type %d: %w", i, err)
-			}
-			var contractHash EVMAddress
-			if _, err := io.ReadFull(r, contractHash[:]); err != nil {
-				return nil, fmt.Errorf("decode trigger contract %d: %w", i, err)
-			}
-			idBytes, err := readBytes(r)
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger id %d: %w", i, err)
-			}
-			kind, err := r.ReadByte()
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger kind %d: %w", i, err)
-			}
-			height, err := readVarint64(r)
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger height %d: %w", i, err)
-			}
-			if version == 2 {
-				if _, err := readVarint64(r); err != nil {
-					return nil, fmt.Errorf("decode trigger time %d: %w", i, err)
-				}
-			}
-			gasLimit, err := binary.ReadUvarint(r)
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger gas limit %d: %w", i, err)
-			}
-			gasLimitInt, err := contractframework.GasUnitsInt64(gasLimit)
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger gas limit %d: %w", i, err)
-			}
-			calldata, err := readBytes(r)
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger calldata %d: %w", i, err)
-			}
-			contract, err := NewContractAddress(string(prefixBytes), version, contractType, contractHash)
-			if err != nil {
-				return nil, fmt.Errorf("decode trigger contract %d: %w", i, err)
-			}
-			trigger := Trigger{
-				ID:       string(idBytes),
-				Contract: contract,
-				Kind:     TriggerKind(kind),
-				Height:   height,
-				GasLimit: gasLimitInt,
-				Calldata: calldata,
-			}
-			if err := state.RegisterTrigger(trigger); err != nil {
-				return nil, fmt.Errorf("decode trigger %d: %w", i, err)
-			}
+		contractVersion, err := r.ReadByte()
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger contract version %d: %w", i, err)
+		}
+		contractType, err := r.ReadByte()
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger contract type %d: %w", i, err)
+		}
+		var contractHash EVMAddress
+		if _, err := io.ReadFull(r, contractHash[:]); err != nil {
+			return nil, fmt.Errorf("decode trigger contract %d: %w", i, err)
+		}
+		idBytes, err := readBytes(r)
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger id %d: %w", i, err)
+		}
+		kind, err := r.ReadByte()
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger kind %d: %w", i, err)
+		}
+		height, err := readVarint64(r)
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger height %d: %w", i, err)
+		}
+		gasLimit, err := binary.ReadUvarint(r)
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger gas limit %d: %w", i, err)
+		}
+		gasLimitInt, err := contractframework.GasUnitsInt64(gasLimit)
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger gas limit %d: %w", i, err)
+		}
+		calldata, err := readBytes(r)
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger calldata %d: %w", i, err)
+		}
+		contract, err := NewContractAddress(string(prefixBytes), contractVersion, contractType, contractHash)
+		if err != nil {
+			return nil, fmt.Errorf("decode trigger contract %d: %w", i, err)
+		}
+		trigger := Trigger{
+			ID:       string(idBytes),
+			Contract: contract,
+			Kind:     TriggerKind(kind),
+			Height:   height,
+			GasLimit: gasLimitInt,
+			Calldata: calldata,
+		}
+		if err := state.RegisterTrigger(trigger); err != nil {
+			return nil, fmt.Errorf("decode trigger %d: %w", i, err)
 		}
 	}
 	if r.Len() != 0 {
