@@ -54,7 +54,7 @@ const (
 	// messages.
 	pingInterval = 2 * time.Minute
 
-	MinerPingSeconds = 20
+	MinerPingSeconds  = 20
 	MinerPingInterval = MinerPingSeconds * time.Second
 
 	// negotiateTimeout is the duration of inactivity before we timeout a
@@ -205,7 +205,7 @@ type MessageListeners struct {
 
 	// new message
 	OnMineBlock func(p *Peer, msg *wire.MsgMineBlock)
-	OnMineAck func(p *Peer, msg *wire.MsgMineAck)
+	OnMineAck   func(p *Peer, msg *wire.MsgMineAck)
 
 	// OnRead is invoked when a peer receives a bitcoin message.  It
 	// consists of the number of bytes read, the message, and whether or not
@@ -493,12 +493,13 @@ type Peer struct {
 	lastPingTime       time.Time // Time we sent last ping.
 	lastPingMicros     int64     // Time for last ping to return.
 
-	lastMineBlockNonce   uint64    // Set to nonce if we have a pending ping.
-	lastMineBlockTime    time.Time // Time we sent last ping.
-	lastMineBlockMicros  int64     // Time for last ping to return.
-	lastMineAckResult    wire.RejectCode
-	lastMineAckReason    string
-    mineAckWaiters       map[uint64]chan struct{} // 用于等待 MsgMineAck 的 map，从 nonce 到 channel
+	lastMineBlockNonce  uint64    // Set to nonce if we have a pending ping.
+	lastMineBlockTime   time.Time // Time we sent last ping.
+	lastMineBlockMicros int64     // Time for last ping to return.
+	lastMineAckResult   wire.RejectCode
+	lastMineAckReason   string
+	mineAckWaiters      map[uint64]chan struct{}           // 用于等待 MsgMineAck 的 map，从 nonce 到 channel
+	mineBlockWaiters    map[uint64]chan *wire.MsgMineBlock // 用于等待 MsgMineBlock 响应
 
 	stallControl  chan stallControlMsg
 	outputQueue   chan outMsg
@@ -1092,7 +1093,7 @@ func (p *Peer) HandlePongMsg(msg *wire.MsgPong) {
 }
 
 func (p *Peer) HandleMineAckMsg(msg *wire.MsgMineAck) {
-	
+
 	log.Debugf("MineAck nonce %d, last nonce %d, ", msg.Nonce, p.lastMineBlockNonce)
 	p.statsMtx.Lock()
 	if p.lastMineBlockNonce != 0 && msg.Nonce == p.lastMineBlockNonce {
@@ -1115,27 +1116,44 @@ func (p *Peer) HandleMineAckMsg(msg *wire.MsgMineAck) {
 	p.statsMtx.Unlock()
 }
 
-func (p *Peer) SendMineBlock(cmd string, payload, sig []byte) error {
-    // 生成 nonce
-    nonce, err := wire.RandomUint64()
-    if err != nil {
-       	return err
-    }
-
-    // 记录 lastPingTime & lastPingNonce
+func (p *Peer) HandleMineBlockResponseMsg(msg *wire.MsgMineBlock) bool {
 	p.statsMtx.Lock()
-    p.lastMineBlockTime = time.Now()
-    p.lastMineBlockNonce = nonce
-    p.statsMtx.Unlock()
+	ch, ok := p.mineBlockWaiters[msg.Nonce]
+	if ok {
+		delete(p.mineBlockWaiters, msg.Nonce)
+	}
+	p.statsMtx.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- msg:
+	default:
+	}
+	return true
+}
+
+func (p *Peer) SendMineBlock(cmd string, payload, sig []byte) error {
+	// 生成 nonce
+	nonce, err := wire.RandomUint64()
+	if err != nil {
+		return err
+	}
+
+	// 记录 lastPingTime & lastPingNonce
+	p.statsMtx.Lock()
+	p.lastMineBlockTime = time.Now()
+	p.lastMineBlockNonce = nonce
+	p.statsMtx.Unlock()
 
 	log.Debugf("MineBlock nonce %d", nonce)
 
-    // 发送 ping
-    p.QueueMessage(&wire.MsgMineBlock{
-		Nonce: nonce, 
-		SubCmd: cmd, 
+	// 发送 ping
+	p.QueueMessage(&wire.MsgMineBlock{
+		Nonce:   nonce,
+		SubCmd:  cmd,
 		Payload: payload,
-		Sig: sig}, nil)
+		Sig:     sig}, nil)
 	return nil
 }
 
@@ -1148,65 +1166,111 @@ func (p *Peer) SendMineBlockAndWait(timeout time.Duration, cmd string, payload, 
 	duration, rejectCode, reason, err := p.waitForMineAck(timeout, cmd, payload, sig)
 	if err != nil {
 		log.Errorf("Peer %s did not respond in time: %v", p.String(), err)
-    	return err
-	} 
+		return err
+	}
 
 	if rejectCode != 0 {
 		log.Errorf("peer %s reject this block, reason %s", p.String(), reason)
 		return fmt.Errorf("peer reject block, %d %s", rejectCode, reason)
 	}
 
-    log.Debugf("Peer %v responded in %v", p.String(), duration)
+	log.Debugf("Peer %v responded in %v", p.String(), duration)
 	return nil
+}
+
+func (p *Peer) SendMineBlockRequestAndWait(timeout time.Duration, subCmd string, payload, sig []byte, responseSubCmd string) (*wire.MsgMineBlock, error) {
+	if !p.Connected() {
+		log.Errorf("%s not connetcted", p.String())
+		return nil, fmt.Errorf("%s not connetcted", p.String())
+	}
+
+	nonce, err := wire.RandomUint64()
+	if err != nil {
+		return nil, err
+	}
+
+	waiter := make(chan *wire.MsgMineBlock, 1)
+	p.statsMtx.Lock()
+	p.lastMineBlockTime = time.Now()
+	p.lastMineBlockNonce = nonce
+	p.mineBlockWaiters[nonce] = waiter
+	p.statsMtx.Unlock()
+
+	p.QueueMessage(&wire.MsgMineBlock{
+		Nonce:   nonce,
+		SubCmd:  subCmd,
+		Payload: payload,
+		Sig:     sig,
+	}, nil)
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case msg := <-waiter:
+		if responseSubCmd != "" && msg.SubCmd != responseSubCmd {
+			return nil, fmt.Errorf("unexpected mineblock response %s, want %s", msg.SubCmd, responseSubCmd)
+		}
+		return msg, nil
+	case <-timer.C:
+		p.statsMtx.Lock()
+		delete(p.mineBlockWaiters, nonce)
+		p.statsMtx.Unlock()
+		return nil, fmt.Errorf("mineblock response timeout: no response within %s", timeout)
+	case <-p.quit:
+		p.statsMtx.Lock()
+		delete(p.mineBlockWaiters, nonce)
+		p.statsMtx.Unlock()
+		return nil, fmt.Errorf("peer disconnected while waiting for mineblock response")
+	}
 }
 
 // WaitForPongIn sends a ping to peer p, and waits up to timeout for the pong.
 // Returns measured round-trip time (duration), or error if timeout or failed to send.
 func (p *Peer) waitForMineAck(timeout time.Duration, subCmd string, payload, sig []byte) (
 	time.Duration, wire.RejectCode, string, error) {
-    // 生成 nonce
-    nonce, err := wire.RandomUint64()
-    if err != nil {
-       	return 0, 0, "", err
-    }
+	// 生成 nonce
+	nonce, err := wire.RandomUint64()
+	if err != nil {
+		return 0, 0, "", err
+	}
 
-    // 记录 lastPingTime & lastPingNonce
+	// 记录 lastPingTime & lastPingNonce
 	p.statsMtx.Lock()
-    p.lastMineBlockTime = time.Now()
-    p.lastMineBlockNonce = nonce
-	
-    // 创建等待 chan
-    waiter := make(chan struct{}, 1)
-    p.mineAckWaiters[nonce] = waiter
-    p.statsMtx.Unlock()
+	p.lastMineBlockTime = time.Now()
+	p.lastMineBlockNonce = nonce
+
+	// 创建等待 chan
+	waiter := make(chan struct{}, 1)
+	p.mineAckWaiters[nonce] = waiter
+	p.statsMtx.Unlock()
 
 	log.Debugf("MineBlock nonce %d", nonce)
 
-    // 发送 ping
-    p.QueueMessage(&wire.MsgMineBlock{
-		Nonce: nonce, 
-		SubCmd: subCmd, 
+	// 发送 ping
+	p.QueueMessage(&wire.MsgMineBlock{
+		Nonce:   nonce,
+		SubCmd:  subCmd,
 		Payload: payload,
-		Sig: sig}, nil)
+		Sig:     sig}, nil)
 
-    // 等待
-    select {
-    case <-waiter:
-        // 收到 pong
+	// 等待
+	select {
+	case <-waiter:
+		// 收到 pong
 		p.statsMtx.RLock()
-        duration := time.Since(p.lastMineBlockTime)
+		duration := time.Since(p.lastMineBlockTime)
 		code := p.lastMineAckResult
 		reason := p.lastMineAckReason
 		p.statsMtx.RUnlock()
-        return duration, code, reason, nil
-    case <-time.After(timeout):
-        // 超时
-        // 清理
-        p.statsMtx.Lock()
-        delete(p.mineAckWaiters, nonce)
-        p.statsMtx.Unlock()
-        return 0, 0, "", fmt.Errorf("mineack timeout: no response within %s", timeout)
-    }
+		return duration, code, reason, nil
+	case <-time.After(timeout):
+		// 超时
+		// 清理
+		p.statsMtx.Lock()
+		delete(p.mineAckWaiters, nonce)
+		p.statsMtx.Unlock()
+		return 0, 0, "", fmt.Errorf("mineack timeout: no response within %s", timeout)
+	}
 }
 
 func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte, error) {
@@ -2022,8 +2086,8 @@ func (p *Peer) pingHandler() {
 	// 如果本地是一个miner，而且对方也是一个miner，提高下ping的频率
 	d := pingInterval
 	remoteServices := p.Services()
-	if p.cfg.Services&wire.SFNodeMiner == wire.SFNodeMiner && 
-	remoteServices&wire.SFNodeMiner == wire.SFNodeMiner {
+	if p.cfg.Services&wire.SFNodeMiner == wire.SFNodeMiner &&
+		remoteServices&wire.SFNodeMiner == wire.SFNodeMiner {
 		d = MinerPingInterval
 	}
 
@@ -2551,22 +2615,23 @@ func newPeerBase(origCfg *Config, inbound bool) *Peer {
 	}
 
 	p := Peer{
-		inbound:         inbound,
-		wireEncoding:    wire.BaseEncoding,
-		knownInventory:  lru.NewCache(maxKnownInventory),
-		stallControl:    make(chan stallControlMsg, 1), // nonblocking sync
-		outputQueue:     make(chan outMsg, outputBufferSize),
-		sendQueue:       make(chan outMsg, 1),   // nonblocking sync
-		sendDoneQueue:   make(chan struct{}, 1), // nonblocking sync
-		outputInvChan:   make(chan *wire.InvVect, outputBufferSize),
-		inQuit:          make(chan struct{}),
-		queueQuit:       make(chan struct{}),
-		outQuit:         make(chan struct{}),
-		quit:            make(chan struct{}),
-		cfg:             cfg, // Copy so caller can't mutate.
-		services:        cfg.Services,
-		protocolVersion: cfg.ProtocolVersion,
-		mineAckWaiters:     make(map[uint64]chan struct{}),
+		inbound:          inbound,
+		wireEncoding:     wire.BaseEncoding,
+		knownInventory:   lru.NewCache(maxKnownInventory),
+		stallControl:     make(chan stallControlMsg, 1), // nonblocking sync
+		outputQueue:      make(chan outMsg, outputBufferSize),
+		sendQueue:        make(chan outMsg, 1),   // nonblocking sync
+		sendDoneQueue:    make(chan struct{}, 1), // nonblocking sync
+		outputInvChan:    make(chan *wire.InvVect, outputBufferSize),
+		inQuit:           make(chan struct{}),
+		queueQuit:        make(chan struct{}),
+		outQuit:          make(chan struct{}),
+		quit:             make(chan struct{}),
+		cfg:              cfg, // Copy so caller can't mutate.
+		services:         cfg.Services,
+		protocolVersion:  cfg.ProtocolVersion,
+		mineAckWaiters:   make(map[uint64]chan struct{}),
+		mineBlockWaiters: make(map[uint64]chan *wire.MsgMineBlock),
 	}
 	return &p
 }

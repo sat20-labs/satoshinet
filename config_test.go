@@ -19,7 +19,7 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 	if !ok {
 		t.Fatalf("Failed finding config file path")
 	}
-	sampleConfigFile := filepath.Join(filepath.Dir(path), "sample-btcd.conf")
+	sampleConfigFile := filepath.Join(filepath.Dir(path), sampleConfigFilename)
 
 	// Setup a temporary directory
 	tmpDir, err := os.MkdirTemp("", "btcd")
@@ -37,7 +37,7 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed obtaining app path: %v", err)
 	}
-	tmpConfigFile := filepath.Join(appPath, "sample-btcd.conf")
+	tmpConfigFile := filepath.Join(appPath, sampleConfigFilename)
 	err = os.WriteFile(tmpConfigFile, data, 0644)
 	if err != nil {
 		t.Fatalf("Failed copying sample config file: %v", err)
