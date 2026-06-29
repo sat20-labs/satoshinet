@@ -190,7 +190,8 @@ func (s *TemplateService) currentTemplate(client *btcrpcclient.Client, now time.
 	}
 
 	template, err := client.GetBlockTemplate(&btcbtcjson.TemplateRequest{
-		Mode: "template",
+		Mode:  "template",
+		Rules: []string{"segwit"},
 	})
 	if err != nil {
 		return nil, false, err
