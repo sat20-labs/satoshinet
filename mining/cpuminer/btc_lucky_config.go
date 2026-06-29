@@ -21,15 +21,16 @@ const (
 
 // BTCLuckyMinerConfig contains the optional Bitcoin lucky mining settings.
 type BTCLuckyMinerConfig struct {
-	Enabled      bool
-	Backend      string
-	RewardAddr   string
-	MinerID      string
-	Jobs         string
-	ReserveCores int
-	LowPriority  bool
-	Network      string
-	JobTTL       time.Duration
+	Enabled          bool
+	Backend          string
+	RewardAddr       string
+	MinerID          string
+	Jobs             string
+	ReserveCores     int
+	LowPriority      bool
+	LowPrioritySleep time.Duration
+	Network          string
+	JobTTL           time.Duration
 }
 
 // BTCLuckyTemplateServiceConfig contains the Bitcoin Core template service
@@ -58,6 +59,9 @@ func (c *BTCLuckyMinerConfig) Normalize() {
 	}
 	if c.Network == "" {
 		c.Network = "mainnet"
+	}
+	if c.LowPrioritySleep <= 0 {
+		c.LowPrioritySleep = time.Millisecond
 	}
 	if c.JobTTL <= 0 {
 		c.JobTTL = defaultBTCLuckyJobTTL

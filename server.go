@@ -3960,15 +3960,16 @@ func resolveBTCLuckyMinerConfig(params *chaincfg.Params) (cpuminer.BTCLuckyMiner
 		minerID = rewardAddr
 	}
 	return cpuminer.BTCLuckyMinerConfig{
-		Enabled:      cfg.BTCLuckyMining,
-		Backend:      cfg.BTCLuckyMiningBackend,
-		RewardAddr:   rewardAddr,
-		MinerID:      minerID,
-		Jobs:         cfg.BTCLuckyMiningJobs,
-		ReserveCores: cfg.BTCLuckyMiningReserveCores,
-		LowPriority:  cfg.BTCLuckyMiningLowPriority,
-		Network:      cfg.BTCLuckyMiningNetwork,
-		JobTTL:       cfg.BTCLuckyTemplateJobTTL,
+		Enabled:          cfg.BTCLuckyMining,
+		Backend:          cfg.BTCLuckyMiningBackend,
+		RewardAddr:       rewardAddr,
+		MinerID:          minerID,
+		Jobs:             cfg.BTCLuckyMiningJobs,
+		ReserveCores:     cfg.BTCLuckyMiningReserveCores,
+		LowPriority:      cfg.BTCLuckyMiningLowPriority,
+		LowPrioritySleep: cfg.BTCLuckyMiningLowPrioritySleep,
+		Network:          cfg.BTCLuckyMiningNetwork,
+		JobTTL:           cfg.BTCLuckyTemplateJobTTL,
 	}, nil
 }
 

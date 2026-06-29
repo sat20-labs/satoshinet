@@ -14,6 +14,7 @@ type MinerStatus struct {
 	Jobs             int                `json:"jobs"`
 	JobsMode         string             `json:"jobsMode"`
 	LowPriority      bool               `json:"lowPriority"`
+	LowPrioritySleep string             `json:"lowPrioritySleep"`
 	HashesPerSecond  float64            `json:"hashesPerSecond"`
 	BestShare        string             `json:"bestShare"`
 	CurrentTarget    string             `json:"currentTarget"`

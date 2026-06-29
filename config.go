@@ -152,6 +152,7 @@ type config struct {
 	BTCLuckyMiningJobs              string        `long:"btcluckyminingjobs" description:"BTC lucky mining job count or auto"`
 	BTCLuckyMiningReserveCores      int           `long:"btcluckyminingreservecores" description:"CPU cores reserved away from BTC lucky mining jobs"`
 	BTCLuckyMiningLowPriority       bool          `long:"btcluckymininglowpriority" description:"Run BTC lucky mining jobs in cooperative low-priority mode"`
+	BTCLuckyMiningLowPrioritySleep  time.Duration `long:"btcluckymininglowprioritysleep" description:"BTC lucky mining low-priority sleep duration. Valid time units are {s, m, h}."`
 	BTCLuckyMiningNetwork           string        `long:"btcluckyminingnetwork" description:"Bitcoin network for BTC lucky mining: mainnet, testnet4, regtest, simnet"`
 	BTCLuckyTemplateService         bool          `long:"btcluckytemplateservice" description:"Enable BTC lucky template service on a core node"`
 	BTCLuckyTemplateBackend         string        `long:"btcluckytemplatebackend" description:"BTC lucky template service backend"`
@@ -531,6 +532,7 @@ func loadConfig() (*config, []string, error) {
 		BTCLuckyMiningBackend:           "peer-template",
 		BTCLuckyMiningJobs:              "1",
 		BTCLuckyMiningLowPriority:       true,
+		BTCLuckyMiningLowPrioritySleep:  time.Millisecond,
 		BTCLuckyMiningNetwork:           "mainnet",
 		BTCLuckyTemplateBackend:         "bitcoin-core",
 		BTCLuckyTemplateRPCConnect:      "127.0.0.1:8332",

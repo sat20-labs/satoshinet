@@ -63,6 +63,7 @@ btcluckyminingbackend=peer-template
 btcluckyminingjobs=1
 btcluckyminingreservecores=0
 btcluckymininglowpriority=1
+btcluckymininglowprioritysleep=1ms
 btcluckyminingnetwork=mainnet
 
 btcluckytemplateservice=0

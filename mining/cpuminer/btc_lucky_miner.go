@@ -13,7 +13,6 @@ import (
 const (
 	lowPriorityYieldEvery = uint64(4096)
 	lowPrioritySleepEvery = uint64(65536)
-	lowPrioritySleep      = time.Millisecond
 )
 
 type Miner struct {
@@ -46,13 +45,14 @@ func NewMiner(cfg BTCLuckyMinerConfig, backend MiningJobBackend) (*Miner, error)
 		jobs:    jobs,
 		speed:   newSpeedMonitor(),
 		status: MinerStatus{
-			Enabled:       cfg.Enabled,
-			Backend:       cfg.Backend,
-			RewardAddress: cfg.RewardAddr,
-			MinerID:       cfg.MinerID,
-			Jobs:          jobs,
-			JobsMode:      cfg.Jobs,
-			LowPriority:   cfg.LowPriority,
+			Enabled:          cfg.Enabled,
+			Backend:          cfg.Backend,
+			RewardAddress:    cfg.RewardAddr,
+			MinerID:          cfg.MinerID,
+			Jobs:             jobs,
+			JobsMode:         cfg.Jobs,
+			LowPriority:      cfg.LowPriority,
+			LowPrioritySleep: cfg.LowPrioritySleep.String(),
 		},
 	}, nil
 }
@@ -238,7 +238,7 @@ func (m *Miner) lowPriorityPause(nonce uint64) {
 		runtime.Gosched()
 	}
 	if m.cfg.LowPriority && nonce%lowPrioritySleepEvery == 0 {
-		time.Sleep(lowPrioritySleep)
+		time.Sleep(m.cfg.LowPrioritySleep)
 	}
 }
 
