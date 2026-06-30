@@ -500,6 +500,10 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx, contractTx contra
 	if err != nil {
 		return nil
 	}
+	gasRefundRecipient, err := e.refundRecipientFromContractTx(contractTx, tx, parsed)
+	if err != nil {
+		return nil
+	}
 	callID := DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract)
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Call(CallRequest{
@@ -513,19 +517,31 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx, contractTx contra
 		Block:         e.Block,
 	})
 	intents := contractframework.CloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
+	if result.Status != ResultStatusSuccess && gasRefundRecipient != "" {
+		refunds, err := contractframework.NonGasFundingRefundIntents(output.Contract,
+			contractframework.ContractOutputSlice(output), e.GasConfig.Normalize().GasAssetName, gasRefundRecipient)
+		if err != nil {
+			return err
+		}
+		for i := range refunds {
+			refunds[i].CallID = callID
+		}
+		intents = append(intents, refunds...)
+	}
 	outcome := contractframework.ExecutionOutcome{
-		Height:         int64(e.Block.Number),
-		TxID:           tx.TxID(),
-		Type:           TxTypeInvoke,
-		Kind:           ExecutionKindInvoke,
-		CallID:         callID,
-		Contract:       output.Contract,
-		Status:         result.Status,
-		GasUsed:        result.GasUsed,
-		FundingInputs:  []OutPoint{output.OutPoint},
-		AssetIntents:   intents,
-		RequiresResult: true,
-		ResultFeeMode:  ResultFeeModePlainTxFee,
+		Height:             int64(e.Block.Number),
+		TxID:               tx.TxID(),
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		CallID:             callID,
+		Contract:           output.Contract,
+		Status:             result.Status,
+		GasUsed:            result.GasUsed,
+		FundingInputs:      []OutPoint{output.OutPoint},
+		GasRefundRecipient: gasRefundRecipient,
+		AssetIntents:       intents,
+		RequiresResult:     true,
+		ResultFeeMode:      ResultFeeModePlainTxFee,
 	}
 	return e.appendOutcome(outcome)
 }

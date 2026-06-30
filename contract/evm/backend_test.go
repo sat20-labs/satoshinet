@@ -120,7 +120,43 @@ func TestBackendDefaultInvokeEmptyCall(t *testing.T) {
 	require.Equal(t, TxTypeInvoke, executed.Records[1].Type)
 	require.True(t, executed.Records[1].RequiresResult)
 	require.Equal(t, ResultFeeModePlainTxFee, executed.Records[1].ResultFeeMode)
-	require.Empty(t, executed.Records[1].GasRefundRecipient)
+	require.Equal(t, "tb1qrefund", executed.Records[1].GasRefundRecipient)
+}
+
+func TestBackendDefaultInvokeUnsupportedRefundsFunding(t *testing.T) {
+	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
+	deployTx := testDeployTx(t, 3, revertRuntimeInitCode())
+	deployResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
+		{Hash: deployTx.TxHash(), Index: 1},
+	})
+
+	deployed := executeWorkAndVerifyResults(t, BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx},
+		Runtime:       NewRuntime(nil),
+		Block:         testBlockContext(1),
+		ResolveCaller: fixedCaller(caller),
+	}, deployResultTx)
+	require.Len(t, deployed.Records, 1)
+
+	defaultTx := testDefaultInvokeTx(t, deployed.Records[0].Contract, 100,
+		testEVMGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))
+	executed, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:                       []*wire.MsgTx{deployTx, defaultTx},
+		Runtime:                   NewRuntime(nil),
+		Block:                     testBlockContext(1),
+		ResolveCaller:             fixedCaller(caller),
+		ResolveGasRefundRecipient: fixedGasRefundRecipient("tb1qrefund"),
+	})
+	require.NoError(t, err)
+	require.Len(t, executed.Records, 2)
+	record := executed.Records[1]
+	require.Equal(t, TxTypeInvoke, record.Type)
+	require.NotEqual(t, ResultStatusSuccess, record.Status)
+	require.Equal(t, "tb1qrefund", record.GasRefundRecipient)
+	require.Len(t, record.AssetIntents, 1)
+	require.Equal(t, "tb1qrefund", record.AssetIntents[0].To)
+	require.Equal(t, SatoshiAssetName, record.AssetIntents[0].AssetName)
+	require.Equal(t, "100", record.AssetIntents[0].Amount.String())
 }
 
 func TestBackendIgnoresInvalidDeploy(t *testing.T) {
@@ -525,6 +561,20 @@ func testDefaultInvokeTx(t *testing.T, contract ContractAddress, value int64, ga
 		Amount: *scommon.NewDefaultDecimal(gasAmount),
 	}}, contractScript))
 	return tx
+}
+
+func revertRuntimeInitCode() []byte {
+	runtime := []byte{0x60, 0x00, 0x60, 0x00, 0xfd}
+	init := []byte{
+		0x60, byte(len(runtime)),
+		0x60, 0x0c,
+		0x60, 0x00,
+		0x39,
+		0x60, byte(len(runtime)),
+		0x60, 0x00,
+		0xf3,
+	}
+	return append(init, runtime...)
 }
 
 func testEVMGasFee(t *testing.T, gas int64) *scommon.Decimal {
