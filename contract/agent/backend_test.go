@@ -617,7 +617,7 @@ func TestBuildBlockResultTxsForConfirmWithGasBetAsset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validate alice bet failed: %v", err)
 	}
-	amount, gasAmount, err := betAndGasFundingAmount(validatedAlice.FundingOutputs,
+	amount, gasAmount, err := betAndGasFundingAmount(validatedAlice.FundingOutput,
 		contract.BetAsset, DefaultGasConfig().GasAssetName, testAgentGasFee(t, DefaultGasConfig().ResultBaseGas))
 	if err != nil {
 		t.Fatalf("split alice bet funding failed: %v", err)

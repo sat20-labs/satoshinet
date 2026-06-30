@@ -51,7 +51,8 @@ func TestEVMEndToEndDeployInvokeReplayAndReorg(t *testing.T) {
 	invokeTx := e2EInvokeTx(t, contract, evm.InvokePayload{
 		GasLimit:  200000,
 		CallNonce: 1,
-		Calldata:  evm.EncodeTransferAssetCall(evm.SatoshiAssetName, "tb1qe2edest", "77", nil),
+		Action:    evmcommon.ContractInvokeAPICall,
+		Param:     e2ETransferAssetParam(t, evm.SatoshiAssetName, "tb1qe2edest", "77"),
 	}, 500000, gasAsset)
 	probeInvokeResultTx := e2EResultTx(t, evm.ResultStatusSuccess, 1, []wire.OutPoint{{
 		Hash:  invokeTx.TxHash(),
@@ -83,24 +84,9 @@ func TestEVMEndToEndDeployInvokeReplayAndReorg(t *testing.T) {
 	invokeGasAssets, err := evm.NewAssetSet(gasAsset, scommon.NewDefaultDecimal(500000))
 	require.NoError(t, err)
 	available := []evm.UTXO{
-		{
-			OutPoint: evm.OutPoint{TxID: deployTx.TxID(), Vout: 1},
-			Contract: contract,
-			Assets:   deployGasAssets,
-			Height:   100,
-		},
-		{
-			OutPoint: evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1},
-			Contract: contract,
-			Assets:   invokeGasAssets,
-			Height:   100,
-		},
-		{
-			OutPoint: evm.OutPoint{TxID: assetInputHash.String(), Vout: 0},
-			Contract: contract,
-			Value:    100,
-			Height:   99,
-		},
+		e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, deployGasAssets, 100),
+		e2EUTXO(evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1}, contract, 0, invokeGasAssets, 100),
+		e2EUTXO(evm.OutPoint{TxID: assetInputHash.String(), Vout: 0}, contract, 100, nil, 99),
 	}
 	deployResultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
 		Status:    evm.ResultStatusSuccess,
@@ -214,7 +200,8 @@ func TestEVMEndToEndDecimalAssetTransfer(t *testing.T) {
 	invokeTx := e2EInvokeTx(t, contract, evm.InvokePayload{
 		GasLimit:  200000,
 		CallNonce: 1,
-		Calldata:  evm.EncodeTransferAssetCall(transferAsset, "tb1qe2edest", "1.25", nil),
+		Action:    evmcommon.ContractInvokeAPICall,
+		Param:     e2ETransferAssetParam(t, transferAsset, "tb1qe2edest", "1.25"),
 	}, 500000, gasAsset)
 	runtime := evm.NewRuntime(nil)
 	executor := evm.NewBackend(evm.BlockExecutionRequest{
@@ -233,12 +220,9 @@ func TestEVMEndToEndDecimalAssetTransfer(t *testing.T) {
 		GasConfig: cfg,
 		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
 			require.True(t, contract.Equal(got))
-			return []evm.UTXO{{
-				OutPoint: evm.OutPoint{TxID: deployTx.TxID(), Vout: 1},
-				Contract: contract,
-				Assets:   e2EAsset(gasAsset, 500000),
-				Height:   100,
-			}}, nil
+			return []evm.UTXO{
+				e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
+			}, nil
 		},
 		ResolveScript: e2EResultScriptResolver(t, contract),
 	})
@@ -251,24 +235,9 @@ func TestEVMEndToEndDecimalAssetTransfer(t *testing.T) {
 	assetAmount, err := evm.ParseDecimalAmountString("2.5")
 	require.NoError(t, err)
 	available := []evm.UTXO{
-		{
-			OutPoint: evm.OutPoint{TxID: deployTx.TxID(), Vout: 1},
-			Contract: contract,
-			Assets:   e2EAsset(gasAsset, 500000),
-			Height:   100,
-		},
-		{
-			OutPoint: evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1},
-			Contract: contract,
-			Assets:   e2EAsset(gasAsset, 500000),
-			Height:   100,
-		},
-		{
-			OutPoint: evm.OutPoint{TxID: chainhash.Hash{0xbb}.String(), Vout: 0},
-			Contract: contract,
-			Assets:   e2EDecimalAsset(transferAsset, assetAmount),
-			Height:   99,
-		},
+		e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
+		e2EUTXO(evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
+		e2EUTXO(evm.OutPoint{TxID: chainhash.Hash{0xbb}.String(), Vout: 0}, contract, 0, e2EDecimalAsset(transferAsset, assetAmount), 99),
 	}
 	resultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
 		Status:    evm.ResultStatusSuccess,
@@ -340,7 +309,8 @@ func TestEVMEndToEndRejectsWrongResultOutput(t *testing.T) {
 	invokeTx := e2EInvokeTx(t, contract, evm.InvokePayload{
 		GasLimit:  200000,
 		CallNonce: 1,
-		Calldata:  evm.EncodeTransferAssetCall(evm.SatoshiAssetName, "tb1qe2edest", "77", nil),
+		Action:    evmcommon.ContractInvokeAPICall,
+		Param:     e2ETransferAssetParam(t, evm.SatoshiAssetName, "tb1qe2edest", "77"),
 	}, 500000, gasAsset)
 
 	runtime := evm.NewRuntime(nil)
@@ -360,12 +330,9 @@ func TestEVMEndToEndRejectsWrongResultOutput(t *testing.T) {
 		GasConfig: cfg,
 		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
 			require.True(t, contract.Equal(got))
-			return []evm.UTXO{{
-				OutPoint: evm.OutPoint{TxID: deployTx.TxID(), Vout: 1},
-				Contract: contract,
-				Assets:   e2EAsset(gasAsset, 500000),
-				Height:   100,
-			}}, nil
+			return []evm.UTXO{
+				e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
+			}, nil
 		},
 		ResolveScript: e2EResultScriptResolver(t, contract),
 	})
@@ -375,24 +342,9 @@ func TestEVMEndToEndRejectsWrongResultOutput(t *testing.T) {
 	pending := executor.PendingRecords()
 	require.Len(t, pending, 1)
 	available := []evm.UTXO{
-		{
-			OutPoint: evm.OutPoint{TxID: deployTx.TxID(), Vout: 1},
-			Contract: contract,
-			Assets:   e2EAsset(gasAsset, 500000),
-			Height:   100,
-		},
-		{
-			OutPoint: evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1},
-			Contract: contract,
-			Assets:   e2EAsset(gasAsset, 500000),
-			Height:   100,
-		},
-		{
-			OutPoint: evm.OutPoint{TxID: chainhash.Hash{0xcc}.String(), Vout: 0},
-			Contract: contract,
-			Value:    100,
-			Height:   99,
-		},
+		e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
+		e2EUTXO(evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
+		e2EUTXO(evm.OutPoint{TxID: chainhash.Hash{0xcc}.String(), Vout: 0}, contract, 100, nil, 99),
 	}
 	resultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
 		Status:    evm.ResultStatusSuccess,
@@ -435,9 +387,9 @@ func e2EDeployTx(t *testing.T, contract evm.ContractAddress, nonce uint64, initC
 	contractScript, err := evm.ContractPkScript(contract)
 	require.NoError(t, err)
 	script, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
-		GasLimit:    300000,
-		DeployNonce: nonce,
-		InitCode:    initCode,
+		GasLimit:        300000,
+		DeployNonce:     nonce,
+		ContractContent: initCode,
 	})
 	require.NoError(t, err)
 
@@ -460,6 +412,11 @@ func e2EInvokeTx(t *testing.T, contract evm.ContractAddress, payload evm.InvokeP
 	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
 	tx.AddTxOut(wire.NewTxOut(0, e2EAsset(gasAsset, gasAmount), contractScript))
 	return tx
+}
+
+func e2ETransferAssetParam(t *testing.T, assetName, to, amount string) []byte {
+	t.Helper()
+	return evm.EncodeTransferAssetCall(assetName, to, amount, nil)
 }
 
 func e2EResultTx(t *testing.T, status evm.ResultStatus, count uint16, inputs []wire.OutPoint) *wire.MsgTx {
@@ -489,7 +446,7 @@ func e2ECoinbaseTx() *wire.MsgTx {
 }
 
 func e2EFixedCaller(caller evm.EVMAddress) evm.CallerResolver {
-	return func(*wire.MsgTx, evm.ParsedTx) (evm.EVMAddress, error) {
+	return func(*wire.MsgTx, evmcommon.Tx) (evm.EVMAddress, error) {
 		return caller, nil
 	}
 }
@@ -556,6 +513,15 @@ func e2EDecimalAsset(name string, amount *scommon.Decimal) wire.TxAssets {
 		Name:   *assetName,
 		Amount: *amount.Clone(),
 	}}
+}
+
+func e2EUTXO(outpoint evm.OutPoint, contractAddr evm.ContractAddress, value int64,
+	assets wire.TxAssets, height int64) evm.UTXO {
+
+	return contractframework.UTXOFromTxOutput(outpoint, contractAddr, height, &wire.TxOut{
+		Value:  value,
+		Assets: assets,
+	})
 }
 
 func mustE2EEVMAddress(t *testing.T, address string) evm.EVMAddress {

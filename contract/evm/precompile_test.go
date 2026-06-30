@@ -6,6 +6,8 @@ import (
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	scommon "github.com/sat20-labs/indexer/common"
+	evmcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +20,7 @@ func (b testAssetBalances) AssetBalance(owner EVMAddress, assetName string) (*sc
 func TestAssetPrecompileBalanceOf(t *testing.T) {
 	owner := mustEVMAddress(t, "0x0102030405060708090001020304050607080900")
 	balances := testAssetBalances{owner.String() + ":" + SatoshiAssetName: mustDefaultDecimal(t, 42)}
-	precompile := NewAssetPrecompile(balances)
+	precompile := NewAssetPrecompile(balances, nil)
 
 	ret, err := precompile.Run(EncodeBalanceOfCall(owner, SatoshiAssetName))
 	require.NoError(t, err)
@@ -27,6 +29,59 @@ func TestAssetPrecompileBalanceOf(t *testing.T) {
 	require.Equal(t, uint64(2), length)
 	balanceText := string(ret[32 : 32+length])
 	require.Equal(t, "42", balanceText)
+}
+
+func TestAssetPrecompileFundingAssetAmount(t *testing.T) {
+	gasAsset := "brc20:f:sgas"
+	assetSet, err := NewAssetSet(gasAsset, scommon.NewDefaultDecimal(1050))
+	require.NoError(t, err)
+	otherSet, err := NewAssetSet("brc20:f:ooxx", scommon.NewDefaultDecimal(7))
+	require.NoError(t, err)
+	funding := NewFundingAssetView([]contractframework.ContractOutput{
+		contractframework.ContractOutputFromFunding(evmcommon.FundingOutput{
+			OutPoint: evmcommon.TxOutPoint{
+				TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Vout: 0,
+			},
+			Vout:   0,
+			Value:  25,
+			Assets: assetSet,
+		}),
+		contractframework.ContractOutputFromFunding(evmcommon.FundingOutput{
+			OutPoint: evmcommon.TxOutPoint{
+				TxID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				Vout: 1,
+			},
+			Vout:   1,
+			Assets: otherSet,
+		}),
+	}, gasAsset, scommon.NewDefaultDecimal(50))
+	precompile := NewAssetPrecompile(nil, funding)
+
+	ret, err := precompile.Run(EncodeFundingAssetAmountCall(gasAsset))
+	require.NoError(t, err)
+	require.Equal(t, "1000", abiRawDynamicString(t, ret))
+
+	ret, err = precompile.Run(EncodeFundingAssetAmountCall("brc20:f:ooxx"))
+	require.NoError(t, err)
+	require.Equal(t, "7", abiRawDynamicString(t, ret))
+
+	ret, err = precompile.Run(EncodeFundingAssetAmountCall(SatoshiAssetName))
+	require.NoError(t, err)
+	require.Equal(t, "25", abiRawDynamicString(t, ret))
+
+	ret, err = precompile.Run(EncodeFundingSatsCall())
+	require.NoError(t, err)
+	require.Equal(t, uint64(25), binary.BigEndian.Uint64(ret[24:32]))
+	require.Zero(t, funding.ClaimedAssetAmount(gasAsset).Sign())
+
+	ret, err = precompile.Run(EncodeClaimFundingAssetCall(gasAsset, "600"))
+	require.NoError(t, err)
+	require.Equal(t, byte(1), ret[31])
+	require.Equal(t, "600", funding.ClaimedAssetAmount(gasAsset).String())
+
+	_, err = precompile.Run(EncodeClaimFundingAssetCall(gasAsset, "401"))
+	require.ErrorContains(t, err, "exceeds available")
 }
 
 func TestAssetPrecompileTransferAssetABI(t *testing.T) {
@@ -39,7 +94,7 @@ func TestAssetPrecompileTransferAssetABI(t *testing.T) {
 	require.Equal(t, "1000", amount.String())
 	require.Equal(t, []byte{1, 2, 3}, extraData)
 
-	ret, err := NewAssetPrecompile(nil).Run(call)
+	ret, err := NewAssetPrecompile(nil, nil).Run(call)
 	require.NoError(t, err)
 	require.Equal(t, byte(1), ret[31])
 }
@@ -56,7 +111,7 @@ func TestAssetPrecompileTransferSatoshiAssetABI(t *testing.T) {
 }
 
 func TestAssetPrecompileAmountCompare(t *testing.T) {
-	precompile := NewAssetPrecompile(nil)
+	precompile := NewAssetPrecompile(nil, nil)
 
 	ret, err := precompile.Run(EncodeCompareAmountCall("1.2", "1.20"))
 	require.NoError(t, err)
@@ -72,7 +127,7 @@ func TestAssetPrecompileAmountCompare(t *testing.T) {
 }
 
 func TestAssetPrecompileAmountArithmetic(t *testing.T) {
-	precompile := NewAssetPrecompile(nil)
+	precompile := NewAssetPrecompile(nil, nil)
 
 	ret, err := precompile.Run(EncodeAddAmountCall("1.2", "0.03"))
 	require.NoError(t, err)
@@ -92,7 +147,7 @@ func TestAssetPrecompileAmountArithmetic(t *testing.T) {
 }
 
 func TestAssetPrecompileAmountArithmeticRejectsInvalidResults(t *testing.T) {
-	precompile := NewAssetPrecompile(nil)
+	precompile := NewAssetPrecompile(nil, nil)
 
 	_, err := precompile.Run(EncodeSubAmountCall("1", "2"))
 	require.ErrorContains(t, err, "underflows")
@@ -233,6 +288,53 @@ func TestRuntimeCapturesTransferAssetIntent(t *testing.T) {
 	require.Equal(t, "tb1qdest", runtime.AssetIntents[0].To)
 	require.Equal(t, 0, runtime.AssetIntents[0].Amount.Cmp(mustDefaultDecimal(t, 77)))
 	require.Equal(t, caller, ContractAddressHash(runtime.AssetIntents[0].From))
+}
+
+func TestRuntimeRetainsOnlyClaimedGasFunding(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	gasAsset := "brc20:f:sgas"
+	assets, err := NewAssetSet(gasAsset, scommon.NewDefaultDecimal(1050))
+	require.NoError(t, err)
+	funding := contractframework.ContractOutputFromFunding(evmcommon.FundingOutput{
+		OutPoint: evmcommon.TxOutPoint{
+			TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Vout: 1,
+		},
+		Vout:     1,
+		Contract: contract,
+		Assets:   assets,
+	})
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+
+	readResult := runtime.Call(CallRequest{
+		Caller:        caller,
+		Target:        ContractAddressHash(contract),
+		CallID:        "read",
+		Input:         EncodeFundingAssetAmountCall(gasAsset),
+		Gas:           100000,
+		FundingOutput: &funding,
+		GasAssetName:  gasAsset,
+		GasFeeReserve: mustDefaultDecimal(t, 50),
+		Block:         BlockContext{GasLimit: 1000000},
+	})
+	require.NoError(t, readResult.Err)
+	require.Zero(t, readResult.RetainedGasFunding.Sign())
+
+	claimResult := runtime.Call(CallRequest{
+		Caller:        caller,
+		Target:        ContractAddressHash(contract),
+		CallID:        "claim",
+		Input:         EncodeClaimFundingAssetCall(gasAsset, "700"),
+		Gas:           100000,
+		FundingOutput: &funding,
+		GasAssetName:  gasAsset,
+		GasFeeReserve: mustDefaultDecimal(t, 50),
+		Block:         BlockContext{GasLimit: 1000000},
+	})
+	require.NoError(t, claimResult.Err)
+	require.Equal(t, "700", claimResult.RetainedGasFunding.String())
 }
 
 func TestRuntimeDiscardsAssetIntentOnOuterRevert(t *testing.T) {

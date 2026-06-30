@@ -26,10 +26,11 @@ type ResultOutput struct {
 }
 
 type ResultGasRefund struct {
-	CallID string           `json:"callId,omitempty"`
-	To     string           `json:"to,omitempty"`
-	Inputs []OutPoint       `json:"inputs,omitempty"`
-	GasFee *scommon.Decimal `json:"gasFee,omitempty"`
+	CallID             string           `json:"callId,omitempty"`
+	To                 string           `json:"to,omitempty"`
+	Inputs             []OutPoint       `json:"inputs,omitempty"`
+	GasFee             *scommon.Decimal `json:"gasFee,omitempty"`
+	RetainedGasFunding *scommon.Decimal `json:"retainedGasFunding,omitempty"`
 }
 
 type ResultPlan struct {
@@ -74,6 +75,7 @@ func CloneResultGasRefunds(in []ResultGasRefund) []ResultGasRefund {
 	for i := range out {
 		out[i].Inputs = append([]OutPoint(nil), in[i].Inputs...)
 		out[i].GasFee = CloneDecimal(in[i].GasFee)
+		out[i].RetainedGasFunding = CloneDecimal(in[i].RetainedGasFunding)
 	}
 	return out
 }

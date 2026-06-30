@@ -14,6 +14,17 @@ func ContractOutputFromFunding(output contract.FundingOutput) ContractOutput {
 	return newContractOutput(output.OutPoint.TxID, output.Vout, output.Contract, output.Value, output.Assets, output.PkScript)
 }
 
+func ContractOutputSlice(output ContractOutput) []ContractOutput {
+	return []ContractOutput{output}
+}
+
+func OptionalContractOutputSlice(output *ContractOutput) []ContractOutput {
+	if output == nil {
+		return nil
+	}
+	return []ContractOutput{*output}
+}
+
 func newContractOutput(txID string, vout uint32, contractAddr contract.ContractAddress,
 	value int64, assets wire.TxAssets, pkScript []byte) ContractOutput {
 

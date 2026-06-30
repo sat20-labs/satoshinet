@@ -97,8 +97,9 @@ const (
 	ContractTypeEVM       = contractcommon.ContractTypeEVM
 	ContractTypeAgent     = contractcommon.ContractTypeAgent
 	PayloadVersionV1      = contractcommon.PayloadVersionV1
-	SatoshiAssetName      = contractcommon.SatoshiAssetName
 )
+
+var SatoshiAssetName = contractcommon.SatoshiAssetName
 
 type TxType = contractcommon.TxType
 type Tx = contractcommon.Tx
@@ -353,11 +354,11 @@ type Runtime interface {
 }
 
 type FundingStateApplier interface {
-	ApplyFundingState(state *TemplateRuntimeState, outputs []ContractOutput, gasAssetName string) (bool, error)
+	ApplyFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error)
 }
 
 type GasFundingStateApplier interface {
-	ApplyGasFundingState(state *TemplateRuntimeState, outputs []ContractOutput, gasAssetName string) (bool, error)
+	ApplyGasFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error)
 }
 
 type RunningDataApplier interface {

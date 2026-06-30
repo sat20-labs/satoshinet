@@ -80,6 +80,7 @@ func TestBuildInvokeTx(t *testing.T) {
 		Contract:  contract,
 		GasLimit:  100000,
 		CallNonce: 9,
+		Action:    "call",
 		Param:     []byte{0xde, 0xad, 0xbe, 0xef},
 		Funding: wire.TxOut{
 			Value: 77,

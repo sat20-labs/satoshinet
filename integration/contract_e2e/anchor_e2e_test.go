@@ -23,6 +23,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil/hdkeychain"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	sindexercommon "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/integration/rpctest"
@@ -317,6 +318,8 @@ func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,
 			Contract:  contract,
 			GasLimit:  evm.DefaultGasConfig().InvokeBaseGas,
 			CallNonce: uint64(i + 1),
+			Action:    contractcommon.ContractInvokeAPICall,
+			Param:     networkSoliditySelector("inc()"),
 			Funding: wire.TxOut{
 				Assets: wire.TxAssets{{
 					Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),

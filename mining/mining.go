@@ -194,11 +194,14 @@ func txPQByFee(pq *txPriorityQueue, i, j int) bool {
 func txPQByContractOrdering(pq *txPriorityQueue, i, j int) (bool, bool) {
 	left := pq.items[i]
 	right := pq.items[j]
-	if left.tx == nil || right.tx == nil {
-		return false, false
+	var leftHash chainhash.Hash
+	if left.tx != nil {
+		leftHash = *left.tx.Hash()
 	}
-	leftHash := left.tx.Hash()
-	rightHash := right.tx.Hash()
+	var rightHash chainhash.Hash
+	if right.tx != nil {
+		rightHash = *right.tx.Hash()
+	}
 	var leftClass contractframework.TxClass
 	if left.contractTx {
 		leftClass = contractframework.TxClass{
@@ -218,8 +221,8 @@ func txPQByContractOrdering(pq *txPriorityQueue, i, j int) (bool, bool) {
 	return contractframework.CompareMiningOrder(
 		leftClass,
 		rightClass,
-		*leftHash,
-		*rightHash,
+		leftHash,
+		rightHash,
 	)
 }
 

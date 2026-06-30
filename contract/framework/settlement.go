@@ -222,10 +222,11 @@ func ResultGasRefundFromRecord(record ExecutionRecord) ResultGasRefund {
 		return ResultGasRefund{}
 	}
 	return ResultGasRefund{
-		CallID: record.CallID,
-		To:     record.GasRefundRecipient,
-		Inputs: append([]OutPoint(nil), record.FundingInputs...),
-		GasFee: CloneDecimal(record.GasFee),
+		CallID:             record.CallID,
+		To:                 record.GasRefundRecipient,
+		Inputs:             append([]OutPoint(nil), record.FundingInputs...),
+		GasFee:             CloneDecimal(record.GasFee),
+		RetainedGasFunding: CloneDecimal(record.RetainedGasFunding),
 	}
 }
 
@@ -233,6 +234,7 @@ func cloneResultGasRefund(in ResultGasRefund) ResultGasRefund {
 	out := in
 	out.Inputs = append([]OutPoint(nil), in.Inputs...)
 	out.GasFee = CloneDecimal(in.GasFee)
+	out.RetainedGasFunding = CloneDecimal(in.RetainedGasFunding)
 	return out
 }
 

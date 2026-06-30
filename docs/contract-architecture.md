@@ -130,10 +130,12 @@ invoke 参数遵守单一事实来源原则：
 1. 资产名称、资产数量、satoshi 数量、合约 funding 输入、gas/funding 输出等经济参数，以 funding output 为事实来源。
 2. OP_RETURN 只携带调用 envelope、action、nonce、gas limit，以及无法由 funding output 表达的非经济参数。
 3. 如果某个参数可以从 funding output、result input/output、合约地址或前序输出脚本确定，则不应在 OP_RETURN 中重复出现。
-4. 如果业务需要非经济参数，例如滑点、最小输出、deadline、证明 hash 或 calldata，则可以放在 OP_RETURN payload 中。
+4. 如果业务需要非经济参数，例如滑点、最小输出、deadline 或证明 hash，则可以放在 OP_RETURN payload 中。
 5. engine 执行时只消费抽象层解析后的 `FundingOutput` 和 `Payload`，不得自行建立第二套经济参数解析规则。
 
 例如 AMM swap 中，用户输入的资产和数量来自 funding output；OP_RETURN 可以携带最小可接受输出、deadline 或交易方向等无法从 funding output 唯一确定的参数。若 OP_RETURN 和 funding output 对同一经济事实给出不同值，该交易设计本身就是错误的，协议层不应允许这种双来源结构存在。
+
+EVM 合约也遵守同一规则。外部显式 invoke 的 OP_RETURN 只保存统一的 action/param，不直接保存 Solidity calldata；EVM 模块在内部根据 action、param 和 funding output 重建实际 calldata。
 
 ## Engine 接口
 

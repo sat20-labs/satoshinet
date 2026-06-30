@@ -259,10 +259,10 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		if err != nil {
 			continue
 		}
-		if err := executor.ExecuteParsedTx(tx, parsed); err != nil {
+		if err := overlay.AddTxOutputs(tx, int64(req.Block.Number)); err != nil {
 			return BlockResultBuildResult{}, err
 		}
-		if err := overlay.ApplyTx(tx, int64(req.Block.Number)); err != nil {
+		if err := executor.ExecuteParsedTx(tx, parsed); err != nil {
 			return BlockResultBuildResult{}, err
 		}
 	}
@@ -503,13 +503,14 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx, contractTx contra
 	callID := DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract)
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Call(CallRequest{
-		Caller: caller,
-		Target: ContractAddressHash(output.Contract),
-		CallID: callID,
-		Input:  nil,
-		Gas:    e.GasConfig.Normalize().InvokeBaseGas,
-		Value:  output.PhysicalValue(),
-		Block:  e.Block,
+		Caller:        caller,
+		Target:        ContractAddressHash(output.Contract),
+		CallID:        callID,
+		Input:         nil,
+		Gas:           e.GasConfig.Normalize().InvokeBaseGas,
+		Value:         0,
+		FundingOutput: &output,
+		Block:         e.Block,
 	})
 	intents := contractframework.CloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
 	outcome := contractframework.ExecutionOutcome{
@@ -650,10 +651,7 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return nil
 	}
-	funding := make([]OutPoint, 0, len(validated.FundingOutputs))
-	for _, output := range validated.FundingOutputs {
-		funding = append(funding, output.OutPoint)
-	}
+	funding := []OutPoint{validated.FundingOutput.OutPoint}
 	if validated.Payload.Action == contract.ContractInvokeAPIClose {
 		return e.executeCloseInvokeTx(tx, validated, gasRefundRecipient, funding)
 	}
@@ -661,18 +659,38 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return nil
 	}
-	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
+	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract)
+	gasConfig := e.GasConfig.Normalize()
+	gasFeeReserve, err := gasConfig.ContractFundingFee(ExecutionKindInvoke, validated.Payload.GasLimit,
+		true, e.Block.Number)
+	if err != nil {
+		return nil
+	}
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Call(CallRequest{
-		Caller: caller,
-		Target: ContractAddressHash(validated.Contract),
-		CallID: callID,
-		Input:  validated.Payload.Param,
-		Gas:    validated.Payload.GasLimit,
-		Value:  validated.MsgValue,
-		Block:  e.Block,
+		Caller:        caller,
+		Target:        ContractAddressHash(validated.Contract),
+		CallID:        callID,
+		Input:         contractframework.CloneBytes(validated.Payload.Param),
+		Gas:           validated.Payload.GasLimit,
+		Value:         0,
+		FundingOutput: &validated.FundingOutput,
+		GasAssetName:  gasConfig.GasAssetName,
+		GasFeeReserve: gasFeeReserve,
+		Block:         e.Block,
 	})
 	intents := contractframework.CloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
+	if result.Status != ResultStatusSuccess && gasRefundRecipient != "" {
+		refunds, err := contractframework.NonGasFundingRefundIntents(validated.Contract,
+			contractframework.ContractOutputSlice(validated.FundingOutput), gasConfig.GasAssetName, gasRefundRecipient)
+		if err != nil {
+			return err
+		}
+		for i := range refunds {
+			refunds[i].CallID = callID
+		}
+		intents = append(intents, refunds...)
+	}
 	outcome := contractframework.ExecutionOutcome{
 		Height:             int64(e.Block.Number),
 		TxID:               tx.TxID(),
@@ -682,6 +700,33 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		Contract:           validated.Contract,
 		Status:             result.Status,
 		GasUsed:            result.GasUsed,
+		RetainedGasFunding: result.RetainedGasFunding,
+		FundingInputs:      funding,
+		GasRefundRecipient: gasRefundRecipient,
+		AssetIntents:       intents,
+		RequiresResult:     true,
+	}
+	return e.appendOutcome(outcome)
+}
+
+func (e *Backend) executeInvalidInvokeTx(tx *wire.MsgTx, validated InvokeValidation,
+	gasRefundRecipient string, funding []OutPoint, callID string) error {
+
+	intents, err := contractframework.NonGasFundingRefundIntents(validated.Contract,
+		contractframework.ContractOutputSlice(validated.FundingOutput),
+		e.GasConfig.Normalize().GasAssetName, gasRefundRecipient)
+	if err != nil {
+		return err
+	}
+	outcome := contractframework.ExecutionOutcome{
+		Height:             int64(e.Block.Number),
+		TxID:               tx.TxID(),
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		CallID:             callID,
+		Contract:           validated.Contract,
+		Status:             ResultStatusInvalid,
+		GasUsed:            e.GasConfig.Normalize().InvokeBaseGas,
 		FundingInputs:      funding,
 		GasRefundRecipient: gasRefundRecipient,
 		AssetIntents:       intents,
@@ -693,7 +738,7 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 func (e *Backend) executeCloseInvokeTx(tx *wire.MsgTx, validated InvokeValidation, gasRefundRecipient string,
 	funding []OutPoint) error {
 
-	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
+	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract)
 	contractAddr := ContractGethAddress(validated.Contract)
 	deployerAddress, ok := e.Runtime.State.ContractDeployer(contractAddr)
 	status := ResultStatusInvalid

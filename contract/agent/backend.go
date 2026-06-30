@@ -340,6 +340,10 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if len(fundingOutputs) == 0 {
 		return fmt.Errorf("agent DEPLOY output does not match derived contract %s", addr.MustEncode())
 	}
+	if len(fundingOutputs) > 1 {
+		return fmt.Errorf("agent DEPLOY must use at most one contract output")
+	}
+	fundingOutput := fundingOutputs[0]
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
 		return err
@@ -354,11 +358,11 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		Contract:       addr,
 		Status:         ResultStatusSuccess,
 		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  contractframework.ContractOutputOutPoints(fundingOutputs),
+		FundingInputs:  []OutPoint{fundingOutput.OutPoint},
 		RequiresResult: true,
 	}
 	e.appendOutcome(outcome)
-	if resultPlan, ok := stateResultPlan(addr, fundingOutputs); ok {
+	if resultPlan, ok := stateResultPlan(addr, fundingOutput); ok {
 		outcome.GasFee = resultFee
 		e.records[len(e.records)-1] = outcome.ToRecord()
 		e.resultPlans = append(e.resultPlans, resultPlan)
@@ -431,7 +435,7 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	var readyResultPlan ResultPlan
 	if validated.Payload.Action == InvokeAPIReady || validated.Payload.Action == InvokeAPIReject {
 		var ok bool
-		readyResultPlan, ok = stateResultPlan(validated.Contract, validated.FundingOutputs)
+		readyResultPlan, ok = stateResultPlan(validated.Contract, validated.FundingOutput)
 		requiresResult = ok
 	}
 	outcome := contractframework.ExecutionOutcome{
@@ -439,10 +443,10 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		TxID:           tx.TxID(),
 		Type:           TxTypeInvoke,
 		Kind:           ExecutionKindInvoke,
-		CallID:         DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract),
+		CallID:         DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract),
 		Contract:       validated.Contract,
 		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  contractframework.ContractOutputOutPoints(validated.FundingOutputs),
+		FundingInputs:  []OutPoint{validated.FundingOutput.OutPoint},
 		AssetIntents:   settlementIntents,
 		RequiresResult: requiresResult,
 	}
@@ -494,7 +498,7 @@ func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker
 		return nil, err
 	}
 	amount, gasAmount, err := betAndGasFundingAmount(
-		validated.FundingOutputs,
+		validated.FundingOutput,
 		runtime.Contract().BetAsset,
 		e.GasConfig.Normalize().GasAssetName,
 		resultFee,
@@ -547,7 +551,7 @@ func (e *Backend) applyClose(runtime *Runtime, validated InvokeValidation, invok
 	if err != nil {
 		return nil, err
 	}
-	plan.Inputs = contractframework.ContractOutputOutPoints(validated.FundingOutputs)
+	plan.Inputs = []OutPoint{validated.FundingOutput.OutPoint}
 	return plan, nil
 }
 
@@ -591,28 +595,24 @@ func agentDeployRuntime(validated DeployValidation) (*Runtime, error) {
 	return runtime, nil
 }
 
-func fundingAmount(outputs []ContractOutput, assetName string) (string, error) {
-	total := zeroDecimal()
-	for _, output := range outputs {
-		amount, err := output.AssetAmount(assetName)
-		if err != nil {
-			return "", err
-		}
-		total = decimalAdd(total, amount)
+func fundingAmount(output ContractOutput, assetName string) (string, error) {
+	amount, err := output.AssetAmount(assetName)
+	if err != nil {
+		return "", err
 	}
-	return total.String(), nil
+	return decimalAdd(zeroDecimal(), amount).String(), nil
 }
 
-func betAndGasFundingAmount(outputs []ContractOutput, betAssetName, gasAssetName string,
+func betAndGasFundingAmount(output ContractOutput, betAssetName, gasAssetName string,
 	requiredGas *scommon.Decimal) (string, string, error) {
 
-	betTotalText, err := fundingAmount(outputs, betAssetName)
+	betTotalText, err := fundingAmount(output, betAssetName)
 	if err != nil {
 		return "", "", err
 	}
 	gasTotalText := ""
 	if gasAssetName != "" {
-		gasTotalText, err = fundingAmount(outputs, gasAssetName)
+		gasTotalText, err = fundingAmount(output, gasAssetName)
 		if err != nil {
 			return "", "", err
 		}
@@ -633,20 +633,13 @@ func betAndGasFundingAmount(outputs []ContractOutput, betAssetName, gasAssetName
 	return betTotal.SubAlignPrecision(gasReserve).String(), gasReserve.String(), nil
 }
 
-func stateResultPlan(contract ContractAddress, outputs []ContractOutput) (ResultPlan, bool) {
-	inputs := make([]OutPoint, 0, len(outputs))
-	for _, output := range outputs {
-		if output.PhysicalValue() != 0 || len(output.TxAssets()) != 0 {
-			continue
-		}
-		inputs = append(inputs, output.OutPoint)
-	}
-	if len(inputs) == 0 {
+func stateResultPlan(contract ContractAddress, output ContractOutput) (ResultPlan, bool) {
+	if output.PhysicalValue() != 0 || len(output.TxAssets()) != 0 {
 		return ResultPlan{}, false
 	}
 	return ResultPlan{
 		Contract: contract.EncodeAddress(),
-		Inputs:   contractframework.UniqueOutPoints(append([]OutPoint(nil), inputs...)),
+		Inputs:   []OutPoint{output.OutPoint},
 	}, true
 }
 

@@ -21,19 +21,36 @@ func TestValidateInvokeTxBasic(t *testing.T) {
 		Name:   *wire.NewAssetNameFromString(gasAssetName),
 		Amount: *scommon.NewDefaultDecimal(5),
 	}}, testContractScript(contract)))
-	tx.AddTxOut(wire.NewTxOut(11, nil, testContractScript(contract)))
 
 	validated, err := ValidateInvokeTxBasic(tx, testContractResolver, func(addr ContractAddress) bool {
 		return addr.Equal(contract)
 	}, DefaultGasConfig())
 	require.NoError(t, err)
-	require.Equal(t, int64(18), validated.MsgValue)
+	require.Equal(t, int64(7), validated.MsgValue)
 	require.Equal(t, DefaultGasConfig().InvokeBaseGas, validated.Payload.GasLimit)
 	require.True(t, contract.Equal(validated.Contract))
-	require.Len(t, validated.FundingOutputs, 2)
-	gasAmount, err := validated.FundingOutputs[0].AssetAmount(gasAssetName)
+	gasAmount, err := validated.FundingOutput.AssetAmount(gasAssetName)
 	require.NoError(t, err)
 	require.Equal(t, 0, gasAmount.Cmp(mustDefaultDecimal(t, 5)))
+}
+
+func TestValidateInvokeTxBasicRejectsMultipleFundingOutputs(t *testing.T) {
+	contract := testContract(t)
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	invokeScript, err := evmcommon.InvokeNullDataScript(InvokePayload{
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
+		CallNonce: 1,
+	})
+	require.NoError(t, err)
+	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
+	tx.AddTxOut(wire.NewTxOut(7, nil, testContractScript(contract)))
+	tx.AddTxOut(wire.NewTxOut(11, nil, testContractScript(contract)))
+
+	_, err = ValidateInvokeTxBasic(tx, testContractResolver, func(addr ContractAddress) bool {
+		return addr.Equal(contract)
+	}, DefaultGasConfig())
+	require.EqualError(t, err, "EVM INVOKE must use exactly one contract output")
 }
 
 func TestValidateInvokeTxBasicRejectsMissingContract(t *testing.T) {

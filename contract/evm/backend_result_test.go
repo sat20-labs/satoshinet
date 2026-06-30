@@ -82,6 +82,47 @@ func TestBuildBlockResultTxsDeployInvoke(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, result.Execution.StateRoot)
 }
 
+func TestBuildBlockResultTxsDeployOnly(t *testing.T) {
+	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
+	gasAssetName := DefaultGasConfig().GasAssetName
+	gasConfig := GasConfig{
+		GasAssetName:     gasAssetName,
+		FixedGasPrice:    1,
+		ResultPackingFee: 5,
+		MaxGasPerBlock:   evmcommon.MaxGasPerBlock,
+	}
+	contract, err := DeriveCreateContractAddress(TestnetContractPrefix, caller, 3)
+	require.NoError(t, err)
+	deployTx := testDeployTx(t, 3, blockResultInitCode([]byte{0x00}))
+
+	result, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:            []*wire.MsgTx{deployTx},
+		Runtime:        NewRuntime(nil),
+		ContractPrefix: TestnetContractPrefix,
+		GasConfig:      gasConfig,
+		Block:          BlockContext{Number: 100, Time: 1, GasLimit: evmcommon.MaxGasPerBlock, FixedGasPrice: 1},
+		ResolveCaller:  fixedCaller(caller),
+		ResolveGasRefundRecipient: func(*wire.MsgTx, evmcommon.Tx) (string, bool, error) {
+			return "deployer", true, nil
+		},
+		ResolveScript: evmTestResultScriptResolver(t, contract),
+		ResolveOutput: evmTestResultOutputResolver(contract),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.ResultTxs, 1)
+	require.Len(t, result.Execution.Records, 1)
+	require.Equal(t, ExecutionKindDeploy, result.Execution.Records[0].Kind)
+
+	resultTx := result.ResultTxs[0]
+	require.Len(t, resultTx.TxIn, 1)
+	require.Equal(t, deployTx.TxHash(), resultTx.TxIn[0].PreviousOutPoint.Hash)
+	require.Equal(t, uint32(1), resultTx.TxIn[0].PreviousOutPoint.Index)
+	outputs, err := evmTestResultOutputResolver(contract)(resultTx)
+	require.NoError(t, err)
+	requireResultAssetAmount(t, outputs, "deployer", gasAssetName, "4999.995")
+	requireNoResultAssetAmount(t, outputs, contract.MustEncode(), gasAssetName)
+}
+
 func TestBuildBlockResultTxsIgnoresInvokeBeforeDeploy(t *testing.T) {
 	contract := testContract(t)
 	invokeTx := blockResultInvokeTx(t, contract, InvokePayload{
@@ -242,6 +283,21 @@ func requireResultAssetAmount(t *testing.T, outputs []ResultOutput, to, assetNam
 	t.Fatalf("missing asset output to=%s asset=%s amount=%s outputs=%v", to, assetName, amount, outputs)
 }
 
+func requireNoResultAssetAmount(t *testing.T, outputs []ResultOutput, to, assetName string) {
+	t.Helper()
+	for _, output := range outputs {
+		if output.To != to {
+			continue
+		}
+		for _, asset := range output.Assets {
+			if asset.Name.String() == assetName && asset.Amount.Sign() != 0 {
+				t.Fatalf("unexpected asset output to=%s asset=%s amount=%s outputs=%v",
+					to, assetName, asset.Amount.String(), outputs)
+			}
+		}
+	}
+}
+
 func TestContractUTXOOverlayIncludesAndSpendsBlockOutputs(t *testing.T) {
 	contract := testContract(t)
 	tx := blockResultInvokeTx(t, contract, InvokePayload{
@@ -271,6 +327,9 @@ func TestContractUTXOOverlayIncludesAndSpendsBlockOutputs(t *testing.T) {
 
 func blockResultInvokeTx(t *testing.T, contract ContractAddress, payload InvokePayload, gasAssetName string, gasAmount int64) *wire.MsgTx {
 	t.Helper()
+	if payload.Action == "" {
+		payload.Action = "call"
+	}
 	script, err := evmcommon.InvokeNullDataScript(payload)
 	require.NoError(t, err)
 	contractScript, err := ContractPkScript(contract)

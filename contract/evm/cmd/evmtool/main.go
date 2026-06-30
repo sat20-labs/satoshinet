@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -187,14 +188,18 @@ func encodeInvoke(args []string) {
 	fs := flag.NewFlagSet("encode-invoke", flag.ExitOnError)
 	gasLimit := fs.Int64("gas-limit", 0, "invoke gas limit")
 	nonce := fs.Uint64("nonce", 0, "call nonce")
-	calldataHex := fs.String("calldata", "", "EVM calldata hex")
+	action := fs.String("action", "", "invoke action")
+	paramJSON := fs.String("param-json", "{}", "invoke param JSON")
 	_ = fs.Parse(args)
-	calldata, err := hex.DecodeString(trimHexPrefix(*calldataHex))
-	exitIfErr(err)
+	if strings.TrimSpace(*action) == "" {
+		exitIfErr(fmt.Errorf("missing invoke action"))
+	}
+	param := parseJSONParam(*paramJSON)
 	fmt.Println(hex.EncodeToString(evmcommon.EncodeInvokePayload(evm.InvokePayload{
 		GasLimit:  *gasLimit,
 		CallNonce: *nonce,
-		Param:     calldata,
+		Action:    *action,
+		Param:     param,
 	})))
 }
 
@@ -204,7 +209,12 @@ func decodeInvoke(args []string) {
 	exitIfErr(err)
 	fmt.Printf("gas_limit=%d\n", payload.GasLimit)
 	fmt.Printf("nonce=%d\n", payload.CallNonce)
-	fmt.Printf("calldata=%x\n", payload.Param)
+	fmt.Printf("action=%s\n", payload.Action)
+	if len(payload.Param) != 0 && json.Valid(payload.Param) {
+		fmt.Printf("param_json=%s\n", payload.Param)
+	} else {
+		fmt.Printf("param=%x\n", payload.Param)
+	}
 }
 
 func encodeResult(args []string) {
@@ -362,8 +372,9 @@ func buildInvokeTx(args []string) {
 	contractAddress := fs.String("contract", "", "ca/tc contract address")
 	gasLimit := fs.Int64("gas-limit", 0, "invoke gas limit")
 	nonce := fs.Uint64("nonce", 0, "call nonce")
-	calldataHex := fs.String("calldata", "", "EVM calldata hex")
-	fundSats := fs.Int64("fund-sats", 0, "satoshi amount sent to contract as msg.value")
+	action := fs.String("action", "", "invoke action")
+	paramJSON := fs.String("param-json", "{}", "invoke param JSON")
+	fundSats := fs.Int64("fund-sats", 0, "plain sats sent to contract")
 	var inputs repeatedFlag
 	var fundAssets repeatedFlag
 	fs.Var(&inputs, "input", "input outpoint txid:vout, repeatable")
@@ -372,13 +383,16 @@ func buildInvokeTx(args []string) {
 
 	contract, err := evm.DecodeContractAddress(*contractAddress)
 	exitIfErr(err)
-	calldata, err := hex.DecodeString(trimHexPrefix(*calldataHex))
-	exitIfErr(err)
+	if strings.TrimSpace(*action) == "" {
+		exitIfErr(fmt.Errorf("missing invoke action"))
+	}
+	param := parseJSONParam(*paramJSON)
 	tx, err := evm.BuildInvokeTx(evm.InvokeTxBuildRequest{
 		Contract:  contract,
 		GasLimit:  *gasLimit,
 		CallNonce: *nonce,
-		Param:     calldata,
+		Action:    *action,
+		Param:     param,
 		Funding:   wire.TxOut{Value: *fundSats, Assets: parseAssetAmounts(fundAssets)},
 		Inputs:    parseOutPoints(inputs),
 	})
@@ -398,7 +412,7 @@ func usage() {
   evmtool decode-contract-script -prefix tc <script-hex>
   evmtool encode-deploy -gas-limit 100000 -nonce 1 -init-code 6080
   evmtool decode-deploy <payload-hex>
-  evmtool encode-invoke -gas-limit 50000 -nonce 1 -calldata deadbeef
+  evmtool encode-invoke -gas-limit 50000 -nonce 1 -action inc -param-json '{}'
   evmtool decode-invoke <payload-hex>
   evmtool encode-result -status 0 -count 1 [-error-digest <32-byte-hex>]
   evmtool decode-result <payload-hex>
@@ -410,7 +424,7 @@ func usage() {
   evmtool encode-trigger-height -id vault-release -height 100 -gas-limit 50000 -calldata deadbeef
   evmtool decode-trigger <calldata-hex>
   evmtool build-deploy-tx -caller <evm> -nonce 1 -gas-limit 100000 -init-code 6080 -input <txid:vout> -fund-asset ordx:ft:gas=100000
-  evmtool build-invoke-tx -contract <contract-address> -nonce 1 -gas-limit 50000 -calldata deadbeef -input <txid:vout> -fund-asset ordx:ft:gas=50000
+  evmtool build-invoke-tx -contract <contract-address> -nonce 1 -gas-limit 50000 -action inc -param-json '{}' -input <txid:vout> -fund-asset ordx:ft:gas=50000
 `)
 }
 
@@ -450,6 +464,18 @@ func parseAssetAmounts(values []string) wire.TxAssets {
 		})
 	}
 	return assets
+}
+
+func parseJSONParam(value string) []byte {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "{}"
+	}
+	data := []byte(value)
+	if !json.Valid(data) {
+		exitIfErr(fmt.Errorf("param-json must be valid JSON"))
+	}
+	return data
 }
 
 func decodeSingleHexArg(name string, args []string) []byte {

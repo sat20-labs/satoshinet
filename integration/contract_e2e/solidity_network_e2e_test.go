@@ -26,6 +26,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	sindexercommon "github.com/sat20-labs/satoshinet/indexer/common"
 	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
@@ -149,35 +150,38 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 	releaseTick := buildPassthroughAssetTx(t, callerKeys[0], counterChanges[6], gasAsset, 20000000, caller0Script)
 	sendAndMineTx(t, bootstrapNode, nodes, releaseTick, int32(releaseHeight))
 	vaultRelease := buildSolidityInvokeTx(t, callerKeys[0], vaultContract, 2,
-		packNetworkSolidityMethod(t, vault.ABI, "release"),
+		contractcommon.ContractInvokeAPICall, packNetworkSolidityMethod(t, vault.ABI, "release"),
 		wire.OutPoint{Hash: releaseTick.TxHash(), Index: 0}, gasAsset, 5000000)
 	sendAndMineTx(t, bootstrapNode, nodes, vaultRelease, int32(releaseHeight)+1)
 	requireAssetSummaryAmount(t, bootstrapNode, recipient, vaultAsset, "1.25")
 	requireAssetSummaryAmount(t, bootstrapNode, vaultContract.MustEncode(), vaultAsset, "8.75")
 
 	counterInvoke := buildSolidityInvokeTx(t, callerKeys[1], counterContract, 1,
-		packNetworkSolidityMethod(t, counter.ABI, "incrementBy", big.NewInt(7)),
+		contractcommon.ContractInvokeAPICall, packNetworkSolidityMethod(t, counter.ABI, "inc"),
 		counterChanges[2], gasAsset, 5000000)
 	sendAndMineTx(t, bootstrapNode, nodes, counterInvoke, int32(releaseHeight)+2)
 
 	erc20Transfer := buildSolidityInvokeTx(t, callerKeys[0], erc20Contract, 1,
+		contractcommon.ContractInvokeAPICall,
 		packNetworkSolidityMethod(t, erc20.ABI, "transfer",
-			gethcommon.Address(evm.GethAddress(evmAddressFromAddressString(caller1Address))),
+			gethcommon.HexToAddress(evmAddressFromAddressString(caller1Address).String()),
 			big.NewInt(125_000_000)),
 		counterChanges[3], gasAsset, 5000000)
 	sendAndMineTx(t, bootstrapNode, nodes, erc20Transfer, int32(releaseHeight)+3)
 
 	erc20Approve := buildSolidityInvokeTx(t, callerKeys[1], erc20Contract, 2,
+		contractcommon.ContractInvokeAPICall,
 		packNetworkSolidityMethod(t, erc20.ABI, "approve",
-			gethcommon.Address(evm.GethAddress(evmAddressFromAddressString(caller2Address))),
+			gethcommon.HexToAddress(evmAddressFromAddressString(caller2Address).String()),
 			big.NewInt(20_000_000)),
 		counterChanges[4], gasAsset, 5000000)
 	sendAndMineTx(t, bootstrapNode, nodes, erc20Approve, int32(releaseHeight)+4)
 
 	erc20TransferFrom := buildSolidityInvokeTx(t, callerKeys[2], erc20Contract, 3,
+		contractcommon.ContractInvokeAPICall,
 		packNetworkSolidityMethod(t, erc20.ABI, "transferFrom",
-			gethcommon.Address(evm.GethAddress(evmAddressFromAddressString(caller1Address))),
-			gethcommon.Address(evm.GethAddress(evmAddressFromAddressString(caller2Address))),
+			gethcommon.HexToAddress(evmAddressFromAddressString(caller1Address).String()),
+			gethcommon.HexToAddress(evmAddressFromAddressString(caller2Address).String()),
 			big.NewInt(12_500_000)),
 		counterChanges[5], gasAsset, 5000000)
 	sendAndMineTx(t, bootstrapNode, nodes, erc20TransferFrom, int32(releaseHeight)+5)
@@ -392,10 +396,10 @@ func buildSolidityDeployTx(t *testing.T, signer *btcec.PrivateKey, nonce uint64,
 }
 
 func buildSolidityInvokeTx(t *testing.T, signer *btcec.PrivateKey, contract evm.ContractAddress,
-	nonce uint64, calldata []byte, input wire.OutPoint, gasAsset string, gasAmount int64) *wire.MsgTx {
+	nonce uint64, action string, param []byte, input wire.OutPoint, gasAsset string, gasAmount int64) *wire.MsgTx {
 
 	t.Helper()
-	return buildSolidityInvokeTxWithFunding(t, signer, contract, nonce, calldata,
+	return buildSolidityInvokeTxWithFunding(t, signer, contract, nonce, action, param,
 		[]wire.OutPoint{input},
 		wire.TxOut{Assets: wire.TxAssets{{
 			Name:   *wire.NewAssetNameFromString(gasAsset),
@@ -405,7 +409,7 @@ func buildSolidityInvokeTx(t *testing.T, signer *btcec.PrivateKey, contract evm.
 }
 
 func buildSolidityInvokeTxWithFunding(t *testing.T, signer *btcec.PrivateKey, contract evm.ContractAddress,
-	nonce uint64, calldata []byte, inputs []wire.OutPoint, funding wire.TxOut,
+	nonce uint64, action string, param []byte, inputs []wire.OutPoint, funding wire.TxOut,
 	changeOutputs []*wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
@@ -413,7 +417,8 @@ func buildSolidityInvokeTxWithFunding(t *testing.T, signer *btcec.PrivateKey, co
 		Contract:     contract,
 		GasLimit:     networkEVMInvokeGasLimit(),
 		CallNonce:    nonce,
-		Param:        calldata,
+		Action:       action,
+		Param:        param,
 		Funding:      funding,
 		Inputs:       inputs,
 		ExtraOutputs: changeOutputs,
@@ -656,13 +661,12 @@ contract Counter {
     uint256 public value;
     address public lastCaller;
 
-    event Incremented(address indexed caller, uint256 delta, uint256 value);
+    event Incremented(address indexed caller, uint256 value);
 
-    function incrementBy(uint256 delta) public returns (uint256) {
-        require(delta > 0, "delta is zero");
-        value += delta;
+    function inc() public returns (uint256) {
+        value += 1;
         lastCaller = msg.sender;
-        emit Incremented(msg.sender, delta, value);
+        emit Incremented(msg.sender, value);
         return value;
     }
 }

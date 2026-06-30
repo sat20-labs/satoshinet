@@ -20,6 +20,9 @@ var (
 
 	assetBalanceOfSelector        = methodSelector("balanceOf(address,string)")
 	assetTransferAssetSelector    = methodSelector("transferAsset(string,string,string,bytes)")
+	assetFundingAssetSelector     = methodSelector("fundingAssetAmount(string)")
+	assetFundingSatsSelector      = methodSelector("fundingSats()")
+	assetClaimFundingSelector     = methodSelector("claimFundingAsset(string,string)")
 	assetCompareAmountSelector    = methodSelector("compareAmount(string,string)")
 	assetAddAmountSelector        = methodSelector("addAmount(string,string)")
 	assetSubAmountSelector        = methodSelector("subAmount(string,string)")
@@ -34,8 +37,33 @@ type AssetBalanceReader interface {
 	AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error)
 }
 
+type FundingAmountReader interface {
+	FundingAssetAmount(assetName string) (*scommon.Decimal, error)
+	ClaimFundingAsset(assetName string, amount *scommon.Decimal) error
+}
+
 type UTXOAssetView struct {
 	UTXOs []UTXO
+}
+
+type FundingAssetView struct {
+	Outputs       []contractframework.ContractOutput
+	GasAssetName  string
+	GasFeeReserve *scommon.Decimal
+	claimed       map[string]*scommon.Decimal
+}
+
+func NewFundingAssetView(outputs []contractframework.ContractOutput, gasAssetName string,
+	gasFeeReserve *scommon.Decimal) *FundingAssetView {
+
+	cp := make([]contractframework.ContractOutput, len(outputs))
+	copy(cp, outputs)
+	return &FundingAssetView{
+		Outputs:       cp,
+		GasAssetName:  gasAssetName,
+		GasFeeReserve: contractframework.CloneDecimal(gasFeeReserve),
+		claimed:       make(map[string]*scommon.Decimal),
+	}
 }
 
 type ContractUTXOAssetView struct {
@@ -92,12 +120,85 @@ func (v ContractUTXOAssetView) AssetBalance(owner EVMAddress, assetName string) 
 	return contractframework.SumUTXOAssetAmount(utxos, assetName)
 }
 
-type AssetPrecompile struct {
-	Balances AssetBalanceReader
+func (v *FundingAssetView) FundingAssetAmount(assetName string) (*scommon.Decimal, error) {
+	if v == nil {
+		return nil, errors.New("funding reader is not configured")
+	}
+	if assetName == "" {
+		return nil, ErrInvalidAsset
+	}
+	total := zeroDecimal()
+	if assetName == SatoshiAssetName {
+		for _, output := range v.Outputs {
+			if plain := output.PlainValue(); plain > 0 {
+				total = total.AddAlignPrecision(scommon.NewDefaultDecimal(plain))
+			}
+		}
+	} else {
+		for _, output := range v.Outputs {
+			for _, asset := range output.TxAssets() {
+				if asset.Name.String() == assetName && asset.Amount.Sign() > 0 {
+					total = total.AddAlignPrecision(asset.Amount.Clone())
+				}
+			}
+		}
+	}
+	if assetName != v.GasAssetName {
+		return total, nil
+	}
+	reserve := contractframework.CloneDecimal(v.GasFeeReserve)
+	if reserve.Sign() < 0 {
+		return nil, errors.New("gas fee reserve is negative")
+	}
+	if total.Cmp(reserve) <= 0 {
+		return zeroDecimal(), nil
+	}
+	return total.SubAlignPrecision(reserve), nil
 }
 
-func NewAssetPrecompile(balances AssetBalanceReader) *AssetPrecompile {
-	return &AssetPrecompile{Balances: balances}
+func (v *FundingAssetView) ClaimFundingAsset(assetName string, amount *scommon.Decimal) error {
+	if v == nil {
+		return errors.New("funding reader is not configured")
+	}
+	if assetName == "" {
+		return ErrInvalidAsset
+	}
+	if amount == nil || amount.Sign() <= 0 {
+		return errors.New("claim amount must be positive")
+	}
+	available, err := v.FundingAssetAmount(assetName)
+	if err != nil {
+		return err
+	}
+	next := amount.Clone()
+	if existing := v.claimed[assetName]; existing != nil {
+		next = existing.AddAlignPrecision(next)
+	}
+	if next.Cmp(available) > 0 {
+		return fmt.Errorf("claimed funding asset %s amount %s exceeds available %s",
+			assetName, next.String(), available.String())
+	}
+	v.claimed[assetName] = next
+	return nil
+}
+
+func (v *FundingAssetView) ClaimedAssetAmount(assetName string) *scommon.Decimal {
+	if v == nil || assetName == "" {
+		return zeroDecimal()
+	}
+	if amount := v.claimed[assetName]; amount != nil {
+		return amount.Clone()
+	}
+	return zeroDecimal()
+}
+
+type AssetPrecompile struct {
+	Balances AssetBalanceReader
+	Funding  FundingAmountReader
+}
+
+func NewAssetPrecompile(balances AssetBalanceReader, funding FundingAmountReader) *AssetPrecompile {
+	return &AssetPrecompile{Balances: balances, Funding: funding}
 }
 
 func (p *AssetPrecompile) RequiredGas(input []byte) uint64 {
@@ -129,6 +230,61 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 		return abiEncodeDynamicBytes([]byte(balance.String())), nil
 	case assetTransferAssetSelector:
 		if _, _, _, _, err := DecodeTransferAssetCall(input); err != nil {
+			return nil, err
+		}
+		return abiEncodeBool(true), nil
+	case assetFundingAssetSelector:
+		assetName, err := abiReadString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if p.Funding == nil {
+			return nil, errors.New("funding reader is not configured")
+		}
+		amount, err := p.Funding.FundingAssetAmount(assetName)
+		if err != nil {
+			return nil, err
+		}
+		if amount == nil {
+			amount = zeroDecimal()
+		}
+		return abiEncodeDynamicBytes([]byte(amount.String())), nil
+	case assetFundingSatsSelector:
+		if len(args) != 0 {
+			return nil, errors.New("fundingSats takes no arguments")
+		}
+		if p.Funding == nil {
+			return nil, errors.New("funding reader is not configured")
+		}
+		amount, err := p.Funding.FundingAssetAmount(SatoshiAssetName)
+		if err != nil {
+			return nil, err
+		}
+		value, err := contractframework.DecimalToInt64(*amount)
+		if err != nil {
+			return nil, err
+		}
+		if value < 0 {
+			return nil, errors.New("funding sats is negative")
+		}
+		return abiEncodeUint64(uint64(value)), nil
+	case assetClaimFundingSelector:
+		assetName, err := abiReadString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		amountText, err := abiReadString(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		amount, err := ParseDecimalAmountString(amountText)
+		if err != nil {
+			return nil, err
+		}
+		if p.Funding == nil {
+			return nil, errors.New("funding reader is not configured")
+		}
+		if err := p.Funding.ClaimFundingAsset(assetName, amount); err != nil {
 			return nil, err
 		}
 		return abiEncodeBool(true), nil
@@ -218,12 +374,14 @@ func (p *TriggerPrecompile) Name() string {
 	return "satoshinetTrigger"
 }
 
-func SatoshiNetPrecompiles(balances AssetBalanceReader, rules vm.PrecompiledContracts) vm.PrecompiledContracts {
+func SatoshiNetPrecompiles(balances AssetBalanceReader, funding FundingAmountReader,
+	rules vm.PrecompiledContracts) vm.PrecompiledContracts {
+
 	out := make(vm.PrecompiledContracts, len(rules)+2)
 	for addr, p := range rules {
 		out[addr] = p
 	}
-	out[AssetPrecompileAddress] = NewAssetPrecompile(balances)
+	out[AssetPrecompileAddress] = NewAssetPrecompile(balances, funding)
 	out[TriggerPrecompileAddress] = NewTriggerPrecompile()
 	return out
 }
@@ -282,6 +440,27 @@ func EncodeTransferAssetCall(assetName, to, amount string, extraData []byte) []b
 	putABIUint64(head[96:128], 128+uint64(len(tail)))
 	tail = append(tail, abiEncodeDynamicBytes(extraData)...)
 	return appendMethod(assetTransferAssetSelector, append(head, tail...))
+}
+
+func EncodeFundingAssetAmountCall(assetName string) []byte {
+	args := make([]byte, 32)
+	putABIUint64(args, 32)
+	args = append(args, abiEncodeDynamicBytes([]byte(assetName))...)
+	return appendMethod(assetFundingAssetSelector, args)
+}
+
+func EncodeFundingSatsCall() []byte {
+	return assetFundingSatsSelector[:]
+}
+
+func EncodeClaimFundingAssetCall(assetName, amount string) []byte {
+	head := make([]byte, 64)
+	tail := make([]byte, 0)
+	putABIUint64(head[0:32], 64+uint64(len(tail)))
+	tail = append(tail, abiEncodeDynamicBytes([]byte(assetName))...)
+	putABIUint64(head[32:64], 64+uint64(len(tail)))
+	tail = append(tail, abiEncodeDynamicBytes([]byte(amount))...)
+	return appendMethod(assetClaimFundingSelector, append(head, tail...))
 }
 
 func EncodeCompareAmountCall(left, right string) []byte {

@@ -27,6 +27,84 @@ type ContractOutcomeView = contractframework.ContractOutcomeView
 type ContractTransferView = contractframework.ContractTransferView
 type IndexEvent = contractcommon.IndexEvent
 
+type ContractFundingRef struct {
+	Contract       string
+	ContractType   string
+	ContractTypeID byte
+	Subtype        string
+	Name           string
+	SourceTxID     string
+	SourceVout     uint32
+	SourceKind     string
+}
+
+type ContractIndexContext struct {
+	funding map[string]ContractFundingRef
+}
+
+func NewContractIndexContext() *ContractIndexContext {
+	return &ContractIndexContext{funding: make(map[string]ContractFundingRef)}
+}
+
+func (c *ContractIndexContext) AddFundingRefs(tx *wire.MsgTx, records []ContractHistoryRecord, prefix string) {
+	if c == nil || tx == nil || len(records) == 0 {
+		return
+	}
+	recordsByContract := make(map[string]ContractHistoryRecord)
+	for _, record := range records {
+		if record.Contract == "" || (record.Kind != string(contractcommon.IndexEventDeploy) &&
+			record.Kind != string(contractcommon.IndexEventInvoke)) {
+			continue
+		}
+		recordsByContract[record.Contract] = record
+	}
+	if len(recordsByContract) == 0 {
+		return
+	}
+	txid := tx.TxID()
+	for i, txOut := range tx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		contractAddr, ok, err := contractcommon.ParseContractPkScript(txOut.PkScript, prefix)
+		if err != nil || !ok {
+			continue
+		}
+		contractText := contractAddr.EncodeAddress()
+		record, ok := recordsByContract[contractText]
+		if !ok {
+			continue
+		}
+		vout := uint32(i)
+		c.funding[outpointKey(txid, vout)] = ContractFundingRef{
+			Contract:       record.Contract,
+			ContractType:   record.ContractType,
+			ContractTypeID: record.ContractTypeID,
+			Subtype:        record.Subtype,
+			Name:           record.Subtype,
+			SourceTxID:     txid,
+			SourceVout:     vout,
+			SourceKind:     record.Kind,
+		}
+	}
+}
+
+func (c *ContractIndexContext) ResultInputRef(tx *wire.MsgTx) (ContractFundingRef, bool) {
+	if c == nil || tx == nil {
+		return ContractFundingRef{}, false
+	}
+	for _, txIn := range tx.TxIn {
+		if txIn == nil {
+			continue
+		}
+		key := outpointKey(txIn.PreviousOutPoint.Hash.String(), txIn.PreviousOutPoint.Index)
+		if ref, ok := c.funding[key]; ok {
+			return ref, true
+		}
+	}
+	return ContractFundingRef{}, false
+}
+
 type ContractQueryStore interface {
 	GetContractSummaries(start, limit int) ([]ContractSummary, int)
 	GetContractSummary(address string) (ContractSummary, bool)
@@ -147,6 +225,12 @@ func (q QueryService) requireContractType(contractAddress string, view string) (
 }
 
 func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, params *chaincfg.Params) ([]ContractSummary, []ContractHistoryRecord, error) {
+	return BuildContractIndexRecordsWithContext(tx, height, prefix, params, nil)
+}
+
+func BuildContractIndexRecordsWithContext(tx *wire.MsgTx, height int64, prefix string, params *chaincfg.Params,
+	ctx *ContractIndexContext) ([]ContractSummary, []ContractHistoryRecord, error) {
+
 	view, err := BuildTxView(tx, prefix)
 	if err != nil || !view.IsContract {
 		return nil, nil, err
@@ -167,11 +251,27 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 		if contract == "" {
 			contract = outputByType[op.ContractTypeID]
 		}
+		var resultRef ContractFundingRef
+		if contract == "" && op.Kind == "result" && ctx != nil {
+			if ref, ok := ctx.ResultInputRef(tx); ok {
+				resultRef = ref
+				contract = ref.Contract
+				op.ContractType = ref.ContractType
+				op.ContractTypeID = ref.ContractTypeID
+				op.Subtype = ref.Subtype
+				op.TemplateName = ref.Name
+			}
+		}
 		if contract == "" {
 			continue
 		}
 		details := cloneDetails(op.Details)
 		enrichDetailsFromPayload(details, op)
+		if resultRef.Contract != "" {
+			details["result_for_txid"] = resultRef.SourceTxID
+			details["result_for_vout"] = resultRef.SourceVout
+			details["result_for_kind"] = resultRef.SourceKind
+		}
 		if value := outputValueByContract[contract]; value != 0 {
 			details["contract_value"] = value
 		}
@@ -216,6 +316,10 @@ func BuildContractIndexRecords(tx *wire.MsgTx, height int64, prefix string, para
 		})
 	}
 	return summaries, history, nil
+}
+
+func outpointKey(txid string, vout uint32) string {
+	return fmt.Sprintf("%s:%d", txid, vout)
 }
 
 func contractIndexEventKind(kind string) contractcommon.IndexEventKind {

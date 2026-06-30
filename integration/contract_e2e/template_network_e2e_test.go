@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/anchortx"
@@ -1033,7 +1033,7 @@ func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T
 			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
 		})
 	evmInvokeTx := buildTemplateWitnessEVMInvokeTx(t, fixture, traderA, evmContract, 2,
-		packNetworkSolidityMethod(t, counter.ABI, "incrementBy", big.NewInt(0)),
+		contractcommon.ContractInvokeAPICall, networkSoliditySelector("inc()"),
 		[]wire.OutPoint{evmChanges[0]},
 		wire.TxOut{Assets: wire.TxAssets{networkEVMGasFunding(t, gasAsset, 100000)}})
 
@@ -1751,7 +1751,7 @@ func buildTemplateWitnessEVMDeployTx(t *testing.T, fixture *templateNetworkFixtu
 }
 
 func buildTemplateWitnessEVMInvokeTx(t *testing.T, fixture *templateNetworkFixture, signer *btcec.PrivateKey, contract evm.ContractAddress,
-	nonce uint64, calldata []byte, inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
+	nonce uint64, action string, param []byte, inputs []wire.OutPoint, funding wire.TxOut) *wire.MsgTx {
 
 	t.Helper()
 	actor := fixture.actorForSigner(t, signer)
@@ -1759,13 +1759,19 @@ func buildTemplateWitnessEVMInvokeTx(t *testing.T, fixture *templateNetworkFixtu
 		Contract:  contract,
 		GasLimit:  networkEVMInvokeGasLimit(),
 		CallNonce: nonce,
-		Param:     calldata,
+		Action:    action,
+		Param:     param,
 		Funding:   funding,
 		Inputs:    inputs,
 	})
 	require.NoError(t, err)
 	signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
 	return tx
+}
+
+func networkSoliditySelector(signature string) []byte {
+	hash := crypto.Keccak256([]byte(signature))
+	return append([]byte(nil), hash[:4]...)
 }
 
 func buildTemplateWitnessEVMCloseTx(t *testing.T, fixture *templateNetworkFixture, signer *btcec.PrivateKey, contract evm.ContractAddress,

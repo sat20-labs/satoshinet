@@ -149,6 +149,77 @@ func TestBuildCanonicalResultTxInvoke(t *testing.T) {
 	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
 }
 
+func TestBuildCanonicalResultTxRefundsUnclaimedGasFunding(t *testing.T) {
+	contract := testContract(t)
+	gasAssetName := "ordx:ft:gas"
+	gasHash := chainhash.Hash{1}
+	gasInput := OutPoint{TxID: gasHash.String(), Vout: 1}
+	record := ExecutionRecord{
+		Kind:               ExecutionKindInvoke,
+		Type:               TxTypeInvoke,
+		Contract:           contract,
+		Status:             ResultStatusSuccess,
+		GasUsed:            10,
+		FundingInputs:      []OutPoint{gasInput},
+		GasRefundRecipient: "tb1qdest",
+		RequiresResult:     true,
+	}
+	available := []UTXO{mustUTXO(t, gasInput, contract, gasAssetName, 1000, 10)}
+	gasConfig := GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 1, InvokeBaseGas: 10, ResultBaseGas: 50}
+
+	tx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
+		Status:    ResultStatusSuccess,
+		Records:   []ExecutionRecord{record},
+		GasConfig: gasConfig,
+		UTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return available, nil
+		},
+		ResolveScript: evmTestResultScriptResolver(t, contract),
+	})
+	require.NoError(t, err)
+	outputs, err := evmTestResultOutputResolver(contract)(tx)
+	require.NoError(t, err)
+	requireResultAssetAmount(t, outputs, "tb1qdest", gasAssetName, "999.95")
+	requireNoResultAssetAmount(t, outputs, contract.MustEncode(), gasAssetName)
+}
+
+func TestBuildCanonicalResultTxKeepsClaimedGasFunding(t *testing.T) {
+	contract := testContract(t)
+	gasAssetName := "ordx:ft:gas"
+	gasHash := chainhash.Hash{1}
+	gasInput := OutPoint{TxID: gasHash.String(), Vout: 1}
+	record := ExecutionRecord{
+		Kind:               ExecutionKindInvoke,
+		Type:               TxTypeInvoke,
+		Contract:           contract,
+		Status:             ResultStatusSuccess,
+		GasUsed:            10,
+		RetainedGasFunding: mustDefaultDecimal(t, 300),
+		FundingInputs:      []OutPoint{gasInput},
+		GasRefundRecipient: "tb1qdest",
+		RequiresResult:     true,
+	}
+	available := []UTXO{mustUTXO(t, gasInput, contract, gasAssetName, 1000, 10)}
+	gasConfig := GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 1, InvokeBaseGas: 10, ResultBaseGas: 50}
+
+	tx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
+		Status:    ResultStatusSuccess,
+		Records:   []ExecutionRecord{record},
+		GasConfig: gasConfig,
+		UTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return available, nil
+		},
+		ResolveScript: evmTestResultScriptResolver(t, contract),
+	})
+	require.NoError(t, err)
+	outputs, err := evmTestResultOutputResolver(contract)(tx)
+	require.NoError(t, err)
+	requireResultAssetAmount(t, outputs, "tb1qdest", gasAssetName, "699.95")
+	requireResultAssetAmount(t, outputs, contract.MustEncode(), gasAssetName, "300")
+}
+
 func TestBuildCanonicalResultTxTruncatesAssetOutputsToPrecision(t *testing.T) {
 	contract := testContract(t)
 	assetName := "brc20:f:ooxx"

@@ -419,10 +419,11 @@ func RecordGasRefund(record ExecutionRecord, available []UTXO, gasAssetName stri
 	recordGasFee *scommon.Decimal) (*AssetIntent, error) {
 
 	return ResultGasRefundIntent(ResultGasRefund{
-		CallID: record.CallID,
-		To:     record.GasRefundRecipient,
-		Inputs: append([]OutPoint(nil), record.FundingInputs...),
-		GasFee: CloneDecimal(recordGasFee),
+		CallID:             record.CallID,
+		To:                 record.GasRefundRecipient,
+		Inputs:             append([]OutPoint(nil), record.FundingInputs...),
+		GasFee:             CloneDecimal(recordGasFee),
+		RetainedGasFunding: CloneDecimal(record.RetainedGasFunding),
 	}, record.Contract, available, gasAssetName)
 }
 
@@ -443,7 +444,15 @@ func ResultGasRefundIntent(refund ResultGasRefund, contractAddr contract.Contrac
 	if gasFee == nil {
 		gasFee = ZeroDecimal()
 	}
-	if fundingGas.Cmp(gasFee) <= 0 {
+	retained := refund.RetainedGasFunding
+	if retained == nil {
+		retained = ZeroDecimal()
+	}
+	if retained.Sign() < 0 {
+		return nil, fmt.Errorf("retained gas funding is negative")
+	}
+	nonRefundable := gasFee.AddAlignPrecision(retained)
+	if fundingGas.Cmp(nonRefundable) <= 0 {
 		return nil, nil
 	}
 	return &AssetIntent{
@@ -451,7 +460,7 @@ func ResultGasRefundIntent(refund ResultGasRefund, contractAddr contract.Contrac
 		From:      contractAddr,
 		To:        refund.To,
 		AssetName: gasAssetName,
-		Amount:    fundingGas.SubAlignPrecision(gasFee),
+		Amount:    fundingGas.SubAlignPrecision(nonRefundable),
 	}, nil
 }
 

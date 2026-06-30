@@ -86,6 +86,7 @@ func TestBuildUnifiedEVMInvokeTx(t *testing.T) {
 		Contract:  contract,
 		GasLimit:  100000,
 		CallNonce: 9,
+		Action:    "call",
 		Param:     []byte{0xde, 0xad, 0xbe, 0xef},
 		Funding: wire.TxOut{
 			Value: 77,
@@ -106,12 +107,37 @@ func TestBuildUnifiedEVMInvokeTx(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(100000), invoke.GasLimit)
 	require.Equal(t, uint64(9), invoke.CallNonce)
+	require.Equal(t, "call", invoke.Action)
 	require.Equal(t, []byte{0xde, 0xad, 0xbe, 0xef}, invoke.Param)
 
 	contractScript, err := ContractPkScript(contract)
 	require.NoError(t, err)
 	require.Equal(t, contractScript, tx.TxOut[1].PkScript)
 	require.Equal(t, int64(77), tx.TxOut[1].Value)
+}
+
+func TestBuildUnifiedEVMInvokeTxDefaultsCallAction(t *testing.T) {
+	contract, err := NewContractAddress(TestnetContractPrefix, AddressVersionV1, ContractTypeEVM, EVMAddress{1, 2, 3})
+	require.NoError(t, err)
+	tx, err := BuildInvokeTx(InvokeTxBuildRequest{
+		Contract:  contract,
+		GasLimit:  100000,
+		CallNonce: 9,
+		Funding: wire.TxOut{
+			Assets: wire.TxAssets{{
+				Name:   *wire.NewAssetNameFromString("ordx:ft:gas"),
+				Amount: *indexercommon.NewDefaultDecimal(100000),
+			}},
+		},
+		Inputs: []wire.OutPoint{{Hash: chainhash.Hash{2}, Index: 0}},
+	})
+	require.NoError(t, err)
+	txType, payload, err := ReadNullDataScript(tx.TxOut[0].PkScript)
+	require.NoError(t, err)
+	require.Equal(t, TxTypeInvoke, txType)
+	invoke, err := DecodeInvokePayload(payload)
+	require.NoError(t, err)
+	require.Equal(t, ContractInvokeAPICall, invoke.Action)
 }
 
 func TestBuildEVMTxRejectsInvalidFunding(t *testing.T) {

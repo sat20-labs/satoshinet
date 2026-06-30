@@ -87,6 +87,43 @@ func TestBuildCanonicalResultPlan(t *testing.T) {
 	}, plan.Outputs)
 }
 
+func TestResultGasRefundIntentRespectsRetainedGasFunding(t *testing.T) {
+	contractAddr := testContractAddress(t, ModuleEVM, 1)
+	gasAssetName := "ordx:ft:gas"
+	input := OutPoint{TxID: "invoke", Vout: 1}
+	intent, err := ResultGasRefundIntent(ResultGasRefund{
+		CallID:             "call",
+		To:                 "tb1qrefund",
+		Inputs:             []OutPoint{input},
+		GasFee:             mustCanonicalDecimal(t, 50),
+		RetainedGasFunding: mustCanonicalDecimal(t, 300),
+	}, contractAddr, []UTXO{
+		mustCanonicalUTXO(t, input, contractAddr, gasAssetName, 1000, 10),
+	}, gasAssetName)
+	require.NoError(t, err)
+	require.NotNil(t, intent)
+	require.Equal(t, gasAssetName, intent.AssetName)
+	require.Equal(t, "650", intent.Amount.String())
+}
+
+func TestResultGasRefundIntentRefundsAllUnretainedGas(t *testing.T) {
+	contractAddr := testContractAddress(t, ModuleEVM, 1)
+	gasAssetName := "ordx:ft:gas"
+	input := OutPoint{TxID: "invoke", Vout: 1}
+	intent, err := ResultGasRefundIntent(ResultGasRefund{
+		CallID: "call",
+		To:     "tb1qrefund",
+		Inputs: []OutPoint{input},
+		GasFee: mustCanonicalDecimal(t, 50),
+	}, contractAddr, []UTXO{
+		mustCanonicalUTXO(t, input, contractAddr, gasAssetName, 1000, 10),
+	}, gasAssetName)
+	require.NoError(t, err)
+	require.NotNil(t, intent)
+	require.Equal(t, gasAssetName, intent.AssetName)
+	require.Equal(t, "950", intent.Amount.String())
+}
+
 func TestBuildCanonicalResultPlanTruncatesOutputsToAssetPrecision(t *testing.T) {
 	contractAddr := testContractAddress(t, ModuleEVM, 1)
 	assetName := "brc20:f:ooxx"

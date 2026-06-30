@@ -16,7 +16,7 @@ type ApplyInvokeRequest struct {
 	Param                 []byte
 	CallID                string
 	Invoker               string
-	FundingOutputs        []ContractOutput
+	FundingOutput         ContractOutput
 	Height                int64
 	Timestamp             int64
 	ResultGasFee          *scommon.Decimal
@@ -421,12 +421,12 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 	}
 	retention := defaultInvokeRetention{}
 	if req.ApplyDefaultRetention {
-		var fundingOutputs []ContractOutput
-		retention, fundingOutputs, err = retainDefaultInvokeFunding(r.contract, req.FundingOutputs)
+		var fundingOutput ContractOutput
+		retention, fundingOutput, err = retainDefaultInvokeFunding(r.contract, req.FundingOutput)
 		if err != nil {
 			return nil, err
 		}
-		req.FundingOutputs = fundingOutputs
+		req.FundingOutput = fundingOutput
 	}
 	item, err := NewDefaultInvokeItemFromRequest(r.contract, state.NextItemID, state, req)
 	if err != nil || item == nil {
@@ -450,7 +450,7 @@ func (r *ContractRuntime) ApplyInvalidInvoke(req ApplyInvokeRequest, gasAssetNam
 		return nil, err
 	}
 	retention, gasBalance, inValue, inAmt, inUtxos, err := invalidInvokeFunding(
-		r.contract, req.FundingOutputs, gasAssetName, req.ResultGasFee)
+		r.contract, req.FundingOutput, gasAssetName, req.ResultGasFee)
 	if err != nil {
 		return nil, err
 	}
@@ -489,75 +489,63 @@ type defaultInvokeRetention struct {
 	AssetB *scommon.Decimal
 }
 
-func retainDefaultInvokeFunding(contract Contract, outputs []ContractOutput) (defaultInvokeRetention, []ContractOutput, error) {
+func retainDefaultInvokeFunding(contract Contract, output ContractOutput) (defaultInvokeRetention, ContractOutput, error) {
 	assetA, assetB := defaultInvokePoolAssets(contract)
 	retention := defaultInvokeRetention{}
-	adjusted := make([]ContractOutput, 0, len(outputs))
-	for _, output := range outputs {
-		next := output
-		next.TxOutput = output.IndexerTxOutput()
-		if assetA != "" {
-			fee, err := retainDefaultInvokeAsset(&next, assetA)
-			if err != nil {
-				return defaultInvokeRetention{}, nil, err
-			}
-			retention.AssetA = decimalAddAllowNil(retention.AssetA, fee)
+	next := output
+	next.TxOutput = output.IndexerTxOutput()
+	if assetA != "" {
+		fee, err := retainDefaultInvokeAsset(&next, assetA)
+		if err != nil {
+			return defaultInvokeRetention{}, ContractOutput{}, err
 		}
-		if assetB == SatoshiAssetName {
-			fee := next.PlainValue() / 100
-			if fee > 0 {
-				if err := next.SubAssetAmount(SatoshiAssetName, scommon.NewDefaultDecimal(fee)); err != nil {
-					return defaultInvokeRetention{}, nil, err
-				}
-				retention.AssetB = decimalAddAllowNil(retention.AssetB, scommon.NewDefaultDecimal(fee))
-			}
-		} else if assetB != "" && assetB != assetA {
-			fee, err := retainDefaultInvokeAsset(&next, assetB)
-			if err != nil {
-				return defaultInvokeRetention{}, nil, err
-			}
-			retention.AssetB = decimalAddAllowNil(retention.AssetB, fee)
-		}
-		adjusted = append(adjusted, next)
+		retention.AssetA = decimalAddAllowNil(retention.AssetA, fee)
 	}
-	return retention, adjusted, nil
+	if assetB == SatoshiAssetName {
+		fee := next.PlainValue() / 100
+		if fee > 0 {
+			if err := next.SubAssetAmount(SatoshiAssetName, scommon.NewDefaultDecimal(fee)); err != nil {
+				return defaultInvokeRetention{}, ContractOutput{}, err
+			}
+			retention.AssetB = decimalAddAllowNil(retention.AssetB, scommon.NewDefaultDecimal(fee))
+		}
+	} else if assetB != "" && assetB != assetA {
+		fee, err := retainDefaultInvokeAsset(&next, assetB)
+		if err != nil {
+			return defaultInvokeRetention{}, ContractOutput{}, err
+		}
+		retention.AssetB = decimalAddAllowNil(retention.AssetB, fee)
+	}
+	return retention, next, nil
 }
 
-func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetName string, resultGasFee *scommon.Decimal) (
+func invalidInvokeFunding(contract Contract, output ContractOutput, gasAssetName string, resultGasFee *scommon.Decimal) (
 	defaultInvokeRetention, *scommon.Decimal, int64, *scommon.Decimal, string, error) {
 
 	assetA, assetB := defaultInvokePoolAssets(contract)
 	retention := defaultInvokeRetention{}
 	gasBalance := (*scommon.Decimal)(nil)
-	inValue := int64(0)
+	inValue := output.PlainValue()
 	inAmt := parseDecimalOrZero("0")
-	inUtxos := ""
-	for i, output := range outputs {
-		plainValue := output.PlainValue()
-		inValue += plainValue
-		if i > 0 {
-			inUtxos += ","
+	inUtxos := output.OutPoint.String()
+	if assetA != "" {
+		amt, err := output.AssetAmount(assetA)
+		if err != nil {
+			return defaultInvokeRetention{}, nil, 0, nil, "", err
 		}
-		inUtxos += output.OutPoint.String()
-		if assetA != "" {
-			amt, err := output.AssetAmount(assetA)
-			if err != nil {
-				return defaultInvokeRetention{}, nil, 0, nil, "", err
-			}
-			amt = parseDecimalOrZero(amt.String())
-			retention.AssetA = decimalAddAllowNil(retention.AssetA, amt)
-			inAmt = scommon.DecimalAdd(inAmt, amt)
+		amt = parseDecimalOrZero(amt.String())
+		retention.AssetA = decimalAddAllowNil(retention.AssetA, amt)
+		inAmt = scommon.DecimalAdd(inAmt, amt)
+	}
+	if assetB == SatoshiAssetName {
+		retention.AssetB = decimalAddAllowNil(retention.AssetB, scommon.NewDefaultDecimal(inValue))
+	} else if assetB != "" && assetB != assetA {
+		amt, err := output.AssetAmount(assetB)
+		if err != nil {
+			return defaultInvokeRetention{}, nil, 0, nil, "", err
 		}
-		if assetB == SatoshiAssetName {
-			retention.AssetB = decimalAddAllowNil(retention.AssetB, scommon.NewDefaultDecimal(plainValue))
-		} else if assetB != "" && assetB != assetA {
-			amt, err := output.AssetAmount(assetB)
-			if err != nil {
-				return defaultInvokeRetention{}, nil, 0, nil, "", err
-			}
-			amt = parseDecimalOrZero(amt.String())
-			retention.AssetB = decimalAddAllowNil(retention.AssetB, amt)
-		}
+		amt = parseDecimalOrZero(amt.String())
+		retention.AssetB = decimalAddAllowNil(retention.AssetB, amt)
 	}
 	if resultGasFee != nil && resultGasFee.Sign() > 0 {
 		switch gasAssetName {
@@ -575,13 +563,11 @@ func invalidInvokeFunding(contract Contract, outputs []ContractOutput, gasAssetN
 			}
 		default:
 			gasBalance = parseDecimalOrZero("0")
-			for _, output := range outputs {
-				gas, err := output.AssetAmount(gasAssetName)
-				if err != nil {
-					return defaultInvokeRetention{}, nil, 0, nil, "", err
-				}
-				gasBalance = decimalAddAllowNil(gasBalance, gas)
+			gas, err := output.AssetAmount(gasAssetName)
+			if err != nil {
+				return defaultInvokeRetention{}, nil, 0, nil, "", err
 			}
+			gasBalance = decimalAddAllowNil(gasBalance, gas)
 			if gasBalance == nil || gasBalance.Cmp(resultGasFee) < 0 {
 				return defaultInvokeRetention{}, nil, 0, nil, "", fmt.Errorf("insufficient invalid invoke gas balance")
 			}
@@ -659,7 +645,7 @@ func decimalAddAllowNil(a, b *scommon.Decimal) *scommon.Decimal {
 
 func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state TemplateRuntimeState, req ApplyInvokeRequest) (*InvokeItem, error) {
 	if c, ok := contract.(*ExchangeContract); ok {
-		inputA, inputB, inUtxos, err := exchangeFundingAmounts(c, req.FundingOutputs)
+		inputA, inputB, inUtxos, err := exchangeFundingAmounts(c, req.FundingOutput)
 		if err != nil {
 			return nil, err
 		}
@@ -678,7 +664,7 @@ func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state Template
 		return item, nil
 	}
 	assetName := contractAssetName(contract)
-	inValue, inAmt, inUtxos, err := defaultInvokeFunding(assetName, req.FundingOutputs)
+	inValue, inAmt, inUtxos, err := defaultInvokeFunding(assetName, req.FundingOutput)
 	if err != nil {
 		return nil, err
 	}
@@ -711,24 +697,17 @@ func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state Template
 	return item, nil
 }
 
-func defaultInvokeFunding(assetName string, outputs []ContractOutput) (int64, *scommon.Decimal, string, error) {
-	inValue := int64(0)
+func defaultInvokeFunding(assetName string, output ContractOutput) (int64, *scommon.Decimal, string, error) {
+	inValue := output.PlainValue()
 	inAmt := parseDecimalOrZero("0")
-	inUtxos := ""
-	for i, output := range outputs {
-		inValue += output.PlainValue()
-		if i > 0 {
-			inUtxos += ","
+	inUtxos := output.OutPoint.String()
+	if assetName != "" {
+		amt, err := output.AssetAmount(assetName)
+		if err != nil {
+			return 0, nil, "", err
 		}
-		inUtxos += output.OutPoint.String()
-		if assetName != "" {
-			amt, err := output.AssetAmount(assetName)
-			if err != nil {
-				return 0, nil, "", err
-			}
-			amt = parseDecimalOrZero(amt.String())
-			inAmt = scommon.DecimalAdd(inAmt, amt)
-		}
+		amt = parseDecimalOrZero(amt.String())
+		inAmt = scommon.DecimalAdd(inAmt, amt)
 	}
 	if inAmt.Sign() == 0 {
 		inAmt = nil
@@ -806,24 +785,18 @@ func highestActiveBuyPrice(state TemplateRuntimeState) string {
 }
 
 func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeRequest) (*InvokeItem, error) {
-	inValue := int64(0)
+	output := req.FundingOutput
+	inValue := output.PlainValue()
 	inAmt := parseDecimalOrZero("0")
-	inUtxos := ""
+	inUtxos := output.OutPoint.String()
 	assetName := contractAssetName(contract)
-	for i, output := range req.FundingOutputs {
-		inValue += output.PlainValue()
-		if i > 0 {
-			inUtxos += ","
+	if assetName != "" {
+		amt, err := output.AssetAmount(assetName)
+		if err != nil {
+			return nil, err
 		}
-		inUtxos += output.OutPoint.String()
-		if assetName != "" {
-			amt, err := output.AssetAmount(assetName)
-			if err != nil {
-				return nil, err
-			}
-			amt = parseDecimalOrZero(amt.String())
-			inAmt = scommon.DecimalAdd(inAmt, amt)
-		}
+		amt = parseDecimalOrZero(amt.String())
+		inAmt = scommon.DecimalAdd(inAmt, amt)
 	}
 	if inAmt.Sign() == 0 {
 		inAmt = nil
@@ -921,7 +894,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		if err := param.Decode(req.Param); err != nil {
 			return nil, err
 		}
-		inputA, inputB, inUtxos, err := exchangeFundingAmounts(contract, req.FundingOutputs)
+		inputA, inputB, inUtxos, err := exchangeFundingAmounts(contract, req.FundingOutput)
 		if err != nil {
 			return nil, err
 		}
@@ -931,7 +904,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		}
 	case InvokeAPIClose:
 		if exchange, ok := contract.(*ExchangeContract); ok {
-			inputA, inputB, inUtxos, err := exchangeFundingAmounts(exchange, req.FundingOutputs)
+			inputA, inputB, inUtxos, err := exchangeFundingAmounts(exchange, req.FundingOutput)
 			if err != nil {
 				return nil, err
 			}
@@ -950,7 +923,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 				GasFee:         req.ResultGasFee.Clone(),
 				Reason:         InvokeReasonNormal,
 				Done:           ItemStatusInit,
-				RemainingValue: fundingValue(req.FundingOutputs),
+				RemainingValue: fundingValue(req.FundingOutput),
 			}
 			break
 		}
@@ -968,7 +941,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 			GasFee:         req.ResultGasFee.Clone(),
 			Reason:         InvokeReasonNormal,
 			Done:           ItemStatusInit,
-			RemainingValue: fundingValue(req.FundingOutputs),
+			RemainingValue: fundingValue(req.FundingOutput),
 		}
 	default:
 		return nil, fmt.Errorf("unsupported template action %s", req.Action)
@@ -976,7 +949,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 	return item, nil
 }
 
-func checkInvokeFunding(contract Contract, action string, param []byte, outputs []ContractOutput) error {
+func checkInvokeFunding(contract Contract, action string, param []byte, output ContractOutput) error {
 	assetName := contractAssetName(contract)
 	switch action {
 	case InvokeAPISwap:
@@ -992,15 +965,15 @@ func checkInvokeFunding(contract Contract, action string, param []byte, outputs 
 			} else {
 				requiredValue += calcSwapServiceFee(requiredValue)
 			}
-			if requiredValue <= 0 || fundingValue(outputs) < requiredValue {
-				return fmt.Errorf("invoke funding value %d is less than declared value %d", fundingValue(outputs), requiredValue)
+			if requiredValue <= 0 || fundingValue(output) < requiredValue {
+				return fmt.Errorf("invoke funding value %d is less than declared value %d", fundingValue(output), requiredValue)
 			}
 		case OrderTypeSell:
 			requiredAsset := firstNonEmpty(invokeParam.AssetName, assetName)
-			if err := requireFundingAsset(outputs, requiredAsset, invokeParam.Amt); err != nil {
+			if err := requireFundingAsset(output, requiredAsset, invokeParam.Amt); err != nil {
 				return err
 			}
-			if got := fundingValue(outputs); got != SwapInvokeFee {
+			if got := fundingValue(output); got != SwapInvokeFee {
 				return fmt.Errorf("invoke funding value %d does not match sell service fee %d", got, SwapInvokeFee)
 			}
 		}
@@ -1010,17 +983,17 @@ func checkInvokeFunding(contract Contract, action string, param []byte, outputs 
 			return err
 		}
 		requiredAsset := firstNonEmpty(invokeParam.AssetName, assetName)
-		if err := requireFundingAsset(outputs, requiredAsset, invokeParam.Amt); err != nil {
+		if err := requireFundingAsset(output, requiredAsset, invokeParam.Amt); err != nil {
 			return err
 		}
-		if invokeParam.Value <= 0 || fundingValue(outputs) < invokeParam.Value {
-			return fmt.Errorf("invoke funding value %d is less than declared add liquidity value %d", fundingValue(outputs), invokeParam.Value)
+		if invokeParam.Value <= 0 || fundingValue(output) < invokeParam.Value {
+			return fmt.Errorf("invoke funding value %d is less than declared add liquidity value %d", fundingValue(output), invokeParam.Value)
 		}
 	}
 	return nil
 }
 
-func requireFundingAsset(outputs []ContractOutput, assetName string, amount string) error {
+func requireFundingAsset(output ContractOutput, assetName string, amount string) error {
 	if assetName == "" {
 		return fmt.Errorf("missing declared funding asset")
 	}
@@ -1028,7 +1001,7 @@ func requireFundingAsset(outputs []ContractOutput, assetName string, amount stri
 	if required.Sign() <= 0 {
 		return fmt.Errorf("missing declared funding amount")
 	}
-	got, err := fundingAssetAmount(outputs, assetName)
+	got, err := fundingAssetAmount(output, assetName)
 	if err != nil {
 		return err
 	}
@@ -1038,18 +1011,15 @@ func requireFundingAsset(outputs []ContractOutput, assetName string, amount stri
 	return nil
 }
 
-func fundingAssetAmount(outputs []ContractOutput, assetName string) (*scommon.Decimal, error) {
-	total := parseDecimalOrZero("0")
-	for _, output := range outputs {
-		amount, err := output.AssetAmount(assetName)
-		if err != nil {
-			return nil, err
-		}
-		if amount != nil {
-			total = scommon.DecimalAdd(total, parseDecimalOrZero(amount.String()))
-		}
+func fundingAssetAmount(output ContractOutput, assetName string) (*scommon.Decimal, error) {
+	amount, err := output.AssetAmount(assetName)
+	if err != nil {
+		return nil, err
 	}
-	return total, nil
+	if amount == nil {
+		return parseDecimalOrZero("0"), nil
+	}
+	return parseDecimalOrZero(amount.String()), nil
 }
 
 func (i *InvokeItem) applyAddLiquidityFundingValidation(param AddLiquidityInvokeParam) {
@@ -1149,16 +1119,13 @@ func (r *ContractRuntime) initializeRuntimeState() error {
 	}
 }
 
-func (r *ContractRuntime) ApplyFunding(outputs []ContractOutput, gasAssetName string) error {
-	if len(outputs) == 0 {
-		return nil
-	}
+func (r *ContractRuntime) ApplyFunding(output ContractOutput, gasAssetName string) error {
 	state, err := r.loadRuntimeState()
 	if err != nil {
 		return err
 	}
 	if applier, ok := r.contract.(FundingStateApplier); ok {
-		handled, err := applier.ApplyFundingState(&state, outputs, gasAssetName)
+		handled, err := applier.ApplyFundingState(&state, output, gasAssetName)
 		if err != nil || handled {
 			if err != nil {
 				return err
@@ -1167,31 +1134,29 @@ func (r *ContractRuntime) ApplyFunding(outputs []ContractOutput, gasAssetName st
 		}
 	}
 	assetName := contractAssetName(r.contract)
-	for _, output := range outputs {
-		if _, ok := r.contract.(*AMMContract); ok {
-			if state.Running.AssetBInPool == nil {
-				state.Running.AssetBInPool = parseDecimalOrZero("0")
-			}
-			state.Running.AssetBInPool = scommon.DecimalAdd(state.Running.AssetBInPool, scommon.NewDefaultDecimal(output.PlainValue()))
-			if assetName != "" {
-				amt, err := output.AssetAmount(assetName)
-				if err != nil {
-					return err
-				}
-				amt = parseDecimalOrZero(amt.String())
-				if state.Running.AssetAInPool == nil {
-					state.Running.AssetAInPool = parseDecimalOrZero("0")
-				}
-				state.Running.AssetAInPool = scommon.DecimalAdd(state.Running.AssetAInPool, amt)
-			}
+	if _, ok := r.contract.(*AMMContract); ok {
+		if state.Running.AssetBInPool == nil {
+			state.Running.AssetBInPool = parseDecimalOrZero("0")
 		}
-		if gasAssetName != "" {
-			gas, err := output.AssetAmount(gasAssetName)
+		state.Running.AssetBInPool = scommon.DecimalAdd(state.Running.AssetBInPool, scommon.NewDefaultDecimal(output.PlainValue()))
+		if assetName != "" {
+			amt, err := output.AssetAmount(assetName)
 			if err != nil {
 				return err
 			}
-			state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
+			amt = parseDecimalOrZero(amt.String())
+			if state.Running.AssetAInPool == nil {
+				state.Running.AssetAInPool = parseDecimalOrZero("0")
+			}
+			state.Running.AssetAInPool = scommon.DecimalAdd(state.Running.AssetAInPool, amt)
 		}
+	}
+	if gasAssetName != "" {
+		gas, err := output.AssetAmount(gasAssetName)
+		if err != nil {
+			return err
+		}
+		state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
 	}
 	if !state.Running.TradingReady {
 		state.Running.TradingReady = state.Running.ammTradingReady()
@@ -1226,8 +1191,8 @@ func initializeAMMInitialLP(state *TemplateRuntimeState, deployer string) {
 	state.Running.LPCosts = map[string]int64{deployer: ammLiquidityCost(poolAsset, poolGas)}
 }
 
-func (r *ContractRuntime) ApplyGasFunding(outputs []ContractOutput, gasAssetName string) error {
-	if len(outputs) == 0 || gasAssetName == "" {
+func (r *ContractRuntime) ApplyGasFunding(output ContractOutput, gasAssetName string) error {
+	if gasAssetName == "" {
 		return nil
 	}
 	state, err := r.loadRuntimeState()
@@ -1235,7 +1200,7 @@ func (r *ContractRuntime) ApplyGasFunding(outputs []ContractOutput, gasAssetName
 		return err
 	}
 	if applier, ok := r.contract.(GasFundingStateApplier); ok {
-		handled, err := applier.ApplyGasFundingState(&state, outputs, gasAssetName)
+		handled, err := applier.ApplyGasFundingState(&state, output, gasAssetName)
 		if err != nil || handled {
 			if err != nil {
 				return err
@@ -1243,13 +1208,11 @@ func (r *ContractRuntime) ApplyGasFunding(outputs []ContractOutput, gasAssetName
 			return r.saveRuntimeState(state)
 		}
 	}
-	for _, output := range outputs {
-		gas, err := output.AssetAmount(gasAssetName)
-		if err != nil {
-			return err
-		}
-		state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
+	gas, err := output.AssetAmount(gasAssetName)
+	if err != nil {
+		return err
 	}
+	state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
 	return r.saveRuntimeState(state)
 }
 

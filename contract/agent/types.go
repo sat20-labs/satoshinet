@@ -67,8 +67,9 @@ const (
 	AddressVersionV1      = contractcommon.AddressVersionV1
 	ContractTypeAgent     = contractcommon.ContractTypeAgent
 	PayloadVersionV1      = contractcommon.PayloadVersionV1
-	SatoshiAssetName      = contractcommon.SatoshiAssetName
 )
+
+var SatoshiAssetName = contractcommon.SatoshiAssetName
 
 type ContractAddress = contractcommon.ContractAddress
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
+	scommon "github.com/sat20-labs/indexer/common"
 )
 
 const (
@@ -18,9 +19,9 @@ const (
 	ContractTypeAgent    byte = 3
 
 	PayloadVersionV1 byte = 1
-
-	SatoshiAssetName = "::"
 )
+
+var SatoshiAssetName = scommon.ASSET_PLAIN_SAT.String()
 
 type TxType byte
 

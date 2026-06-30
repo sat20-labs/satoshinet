@@ -18,8 +18,9 @@ const (
 	ContractTypeEVM       = evmcommon.ContractTypeEVM
 	ContractTypeAgent     = evmcommon.ContractTypeAgent
 	PayloadVersionV1      = evmcommon.PayloadVersionV1
-	SatoshiAssetName      = evmcommon.SatoshiAssetName
 )
+
+var SatoshiAssetName = evmcommon.SatoshiAssetName
 
 type TxType = evmcommon.TxType
 type Tx = evmcommon.Tx

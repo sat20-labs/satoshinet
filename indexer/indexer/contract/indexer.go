@@ -128,6 +128,7 @@ func (s *Indexer) ProcessBlock(block *sncommon.Block) {
 		return
 	}
 	prefix := contractIndexPrefixForParams(s.chaincfgParam)
+	ctx := contractengine.NewContractIndexContext()
 	summaries := make([]contractengine.ContractSummary, 0)
 	history := make([]contractengine.ContractHistoryRecord, 0)
 	for _, tx := range block.Transactions {
@@ -138,11 +139,12 @@ func (s *Indexer) ProcessBlock(block *sncommon.Block) {
 			continue
 		}
 
-		txSummaries, txHistory, err := contractengine.BuildContractIndexRecords(tx.MsgTx, int64(block.Height), prefix, s.chaincfgParam)
+		txSummaries, txHistory, err := contractengine.BuildContractIndexRecordsWithContext(tx.MsgTx, int64(block.Height), prefix, s.chaincfgParam, ctx)
 		if err != nil {
 			sncommon.Log.Errorf("index contract tx %s at block %d failed: %v", tx.MsgTx.TxID(), block.Height, err)
 			continue
 		}
+		ctx.AddFundingRefs(tx.MsgTx, txHistory, prefix)
 		summaries = append(summaries, txSummaries...)
 		history = append(history, txHistory...)
 	}

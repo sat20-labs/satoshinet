@@ -106,7 +106,7 @@ func TestBackendDefaultInvokeEmptyCall(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	defaultResultTx := testResultTx(t, ResultStatusInvalid, 1, []wire.OutPoint{
+	defaultResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
 		{Hash: defaultTx.TxHash(), Index: 0},
 	})
 	executed := executeWorkAndVerifyResults(t, BlockExecutionRequest{
@@ -497,6 +497,9 @@ func testDeployTx(t *testing.T, nonce uint64, initCode []byte) *wire.MsgTx {
 
 func testInvokeTx(t *testing.T, contract ContractAddress, payload InvokePayload) *wire.MsgTx {
 	t.Helper()
+	if payload.Action == "" {
+		payload.Action = "call"
+	}
 	script, err := evmcommon.InvokeNullDataScript(payload)
 	require.NoError(t, err)
 	contractScript, err := ContractPkScript(contract)

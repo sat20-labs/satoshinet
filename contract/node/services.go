@@ -316,15 +316,18 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 	return contractframework.ModuleAdapter{
 		ModuleDescriptor: evmModuleDescriptor(),
 		ExecuteWorkBlockFunc: func(work contractframework.WorkExecutionRequest) (contractframework.ExecutionResult, error) {
+			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
+			overlay := contractframework.ContractUTXOProviderWithTxOutputs(
+				contractUTXOs, work.Txs, prefix, evm.ContractTypeEVM)
 			executed, err := evm.ExecuteWorkBlock(evm.BlockExecutionRequest{
 				Txs:                       work.Txs,
 				Runtime:                   runtime,
-				ContractPrefix:            contractPrefixForRequest(work.Prefix, contractPrefix),
+				ContractPrefix:            prefix,
 				GasConfig:                 blockGasConfig,
 				Block:                     block,
 				ResolveCaller:             resolveCaller,
 				ResolveGasRefundRecipient: resolveRefund,
-				ContractUTXOs:             contractUTXOs,
+				ContractUTXOs:             overlay,
 				AssetPrecision:            cfg.AssetPrecision,
 			})
 			if err != nil {
@@ -344,15 +347,18 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 			if runtime != nil && runtime.State != nil {
 				parentRoot = runtime.State.StateRoot()
 			}
+			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
+			overlay := contractframework.ContractUTXOProviderWithTxOutputs(
+				contractUTXOs, work.Txs, prefix, evm.ContractTypeEVM)
 			result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 				Txs:                       work.Txs,
 				Runtime:                   runtime,
-				ContractPrefix:            contractPrefixForRequest(work.Prefix, contractPrefix),
+				ContractPrefix:            prefix,
 				GasConfig:                 blockGasConfig,
 				Block:                     block,
 				ResolveCaller:             resolveCaller,
 				ResolveGasRefundRecipient: resolveRefund,
-				ContractUTXOs:             contractUTXOs,
+				ContractUTXOs:             overlay,
 				ResolveScript:             resolveScript,
 				ResolveOutput:             resolveOutput,
 				AssetPrecision:            cfg.AssetPrecision,
@@ -381,15 +387,18 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 		},
 		BuildResultTxsFunc: func(work contractframework.ResultBuildRequest,
 			exec contractframework.ExecutionResult) (contractframework.ResultBuildResult, error) {
+			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
+			overlay := contractframework.ContractUTXOProviderWithTxOutputs(
+				contractUTXOs, work.Txs, prefix, evm.ContractTypeEVM)
 			result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 				Txs:                       work.Txs,
 				Runtime:                   runtime,
-				ContractPrefix:            contractPrefixForRequest(work.Prefix, contractPrefix),
+				ContractPrefix:            prefix,
 				GasConfig:                 blockGasConfig,
 				Block:                     block,
 				ResolveCaller:             resolveCaller,
 				ResolveGasRefundRecipient: resolveRefund,
-				ContractUTXOs:             contractUTXOs,
+				ContractUTXOs:             overlay,
 				ResolveScript:             resolveScript,
 				ResolveOutput:             resolveOutput,
 				AssetPrecision:            cfg.AssetPrecision,

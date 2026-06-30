@@ -11,17 +11,17 @@ import (
 type ContractExistsFunc func(contract.ContractAddress) bool
 
 type DeployValidation struct {
-	Payload        DeployPayload
-	Address        contract.ContractAddress
-	Runtime        any
-	FundingOutputs []ContractOutput
+	Payload       DeployPayload
+	Address       contract.ContractAddress
+	Runtime       any
+	FundingOutput *ContractOutput
 }
 
 type InvokeValidation struct {
-	Contract       contract.ContractAddress
-	FundingOutputs []ContractOutput
-	MsgValue       int64
-	Payload        InvokePayload
+	Contract      contract.ContractAddress
+	FundingOutput ContractOutput
+	MsgValue      int64
+	Payload       InvokePayload
 }
 
 func ValidateParsedDeployBasic(parsed ParsedTx, moduleName string, cfg GasConfig) (DeployValidation, error) {
@@ -70,9 +70,14 @@ func ValidateDeployWithRuntime(req DeployValidationRequest) (DeployValidation, e
 	if err != nil {
 		return DeployValidation{}, err
 	}
+	if len(fundingOutputs) > 1 {
+		return DeployValidation{}, fmt.Errorf("%s DEPLOY must use at most one contract output", req.ModuleName)
+	}
 	validated.Address = addr
 	validated.Runtime = runtime
-	validated.FundingOutputs = fundingOutputs
+	if len(fundingOutputs) == 1 {
+		validated.FundingOutput = &fundingOutputs[0]
+	}
 	return validated, nil
 }
 
@@ -88,6 +93,9 @@ func ValidateParsedInvokeBasic(parsed ParsedTx, moduleName string, contractType 
 	if len(parsed.ContractOutputs) == 0 {
 		return InvokeValidation{}, fmt.Errorf("%s INVOKE has no contract output", moduleName)
 	}
+	if len(parsed.ContractOutputs) != 1 {
+		return InvokeValidation{}, fmt.Errorf("%s INVOKE must use exactly one contract output", moduleName)
+	}
 	contractAddr := parsed.ContractOutputs[0].Contract
 	if contractType != 0 && contractAddr.ContractType() != contractType {
 		return InvokeValidation{}, fmt.Errorf("invoke target is not a %s contract", moduleName)
@@ -100,10 +108,10 @@ func ValidateParsedInvokeBasic(parsed ParsedTx, moduleName string, contractType 
 		return InvokeValidation{}, err
 	}
 	return InvokeValidation{
-		Contract:       contractAddr,
-		FundingOutputs: append([]ContractOutput(nil), parsed.ContractOutputs...),
-		MsgValue:       msgValue,
-		Payload:        *parsed.Invoke,
+		Contract:      contractAddr,
+		FundingOutput: parsed.ContractOutputs[0],
+		MsgValue:      msgValue,
+		Payload:       *parsed.Invoke,
 	}, nil
 }
 

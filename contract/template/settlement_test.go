@@ -29,7 +29,7 @@ func TestSettleLimitOrdersMatchesByPriceAndTime(t *testing.T) {
 		Action:         InvokeAPISwap,
 		Param:          sellParam,
 		CallID:         DeriveInvokeCallID("sell", 1, addr),
-		FundingOutputs: []ContractOutput{testContractOutput("sell", 1, addr, 0, testAsset("ordx:f:test", 10))},
+		FundingOutput: testContractOutput("sell", 1, addr, 0, testAsset("ordx:f:test", 10)),
 		Height:         1,
 	})
 	require.NoError(t, err)
@@ -37,7 +37,7 @@ func TestSettleLimitOrdersMatchesByPriceAndTime(t *testing.T) {
 		Action:         InvokeAPISwap,
 		Param:          buyParam,
 		CallID:         DeriveInvokeCallID("buy", 1, addr),
-		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 30, nil)},
+		FundingOutput: testContractOutput("buy", 1, addr, 30, nil),
 		Height:         1,
 	})
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestSettleLimitOrdersStopsWhenPriceDoesNotCross(t *testing.T) {
 		Action:         InvokeAPISwap,
 		Param:          sellParam,
 		CallID:         DeriveInvokeCallID("sell", 1, addr),
-		FundingOutputs: []ContractOutput{testContractOutput("sell", 1, addr, 0, testAsset("ordx:f:test", 10))},
+		FundingOutput: testContractOutput("sell", 1, addr, 0, testAsset("ordx:f:test", 10)),
 		Height:         1,
 	})
 	require.NoError(t, err)
@@ -100,7 +100,7 @@ func TestSettleLimitOrdersStopsWhenPriceDoesNotCross(t *testing.T) {
 		Action:         InvokeAPISwap,
 		Param:          buyParam,
 		CallID:         DeriveInvokeCallID("buy", 1, addr),
-		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 30, nil)},
+		FundingOutput: testContractOutput("buy", 1, addr, 30, nil),
 		Height:         1,
 	})
 	require.NoError(t, err)
@@ -287,7 +287,7 @@ func TestSettleLimitOrdersRefundsInvokerOpenOrders(t *testing.T) {
 		Param:          buyParam,
 		CallID:         DeriveInvokeCallID("buy", 1, addr),
 		Invoker:        "alice",
-		FundingOutputs: []ContractOutput{testContractOutput("buy", 1, addr, 30, nil)},
+		FundingOutput: testContractOutput("buy", 1, addr, 30, nil),
 		Height:         1,
 	})
 	require.NoError(t, err)
@@ -517,7 +517,7 @@ func applyLimitOrderInvokeForTest(t *testing.T, runtime *ContractRuntime, addr C
 		Param:          param,
 		CallID:         DeriveInvokeCallID(callID, 1, addr),
 		Invoker:        invoker,
-		FundingOutputs: []ContractOutput{testContractOutput(callID, 1, addr, value, assets)},
+		FundingOutput: testContractOutput(callID, 1, addr, value, assets),
 		Height:         height,
 	})
 	require.NoError(t, err)

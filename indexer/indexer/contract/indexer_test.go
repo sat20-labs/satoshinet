@@ -6,6 +6,7 @@ import (
 
 	db "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	sncommon "github.com/sat20-labs/satoshinet/indexer/common"
@@ -80,6 +81,33 @@ func TestContractIndexerCheckSelfAcceptsPersistedAndBufferedData(t *testing.T) {
 	require.True(t, idx.CheckSelf())
 }
 
+func TestContractIndexerBindsResultWithoutContractOutput(t *testing.T) {
+	kvdb := db.NewKVDB(t.TempDir())
+	require.NotNil(t, kvdb)
+	defer kvdb.Close()
+
+	idx := NewIndexer(kvdb, &chaincfg.TestNetParams)
+	deployTx, contractAddr := buildTestTemplateDeployTx(t)
+	fundingVout := requireTestContractFundingVout(t, deployTx)
+	resultTx := buildTestResultTxSpending(t, deployTx.TxHash(), fundingVout)
+	idx.ProcessBlock(testContractBlock(10, deployTx, resultTx))
+
+	history, total := idx.GetContractHistory(contractAddr.EncodeAddress(), 0, 0)
+	require.Equal(t, 2, total)
+	require.Len(t, history, 2)
+	recordsByKind := make(map[string]contractengine.ContractHistoryRecord)
+	for _, record := range history {
+		recordsByKind[record.Kind] = record
+	}
+	require.Contains(t, recordsByKind, "deploy")
+	require.Contains(t, recordsByKind, "result")
+	result := recordsByKind["result"]
+	require.Equal(t, contractAddr.EncodeAddress(), result.Contract)
+	require.Equal(t, deployTx.TxID(), result.Details["result_for_txid"])
+	require.Equal(t, float64(fundingVout), result.Details["result_for_vout"])
+	require.Equal(t, "deploy", result.Details["result_for_kind"])
+}
+
 func TestContractIndexerCheckSelfRejectsMismatchedSummaryKey(t *testing.T) {
 	kvdb := db.NewKVDB(t.TempDir())
 	require.NotNil(t, kvdb)
@@ -134,6 +162,33 @@ func buildTestTemplateInvokeTx(t *testing.T, contractAddr contractcommon.Contrac
 		Funding:   wire.TxOut{Value: 1},
 	})
 	require.NoError(t, err)
+	return tx
+}
+
+func requireTestContractFundingVout(t *testing.T, tx *wire.MsgTx) uint32 {
+	t.Helper()
+	for i, txOut := range tx.TxOut {
+		addr, ok, err := contractcommon.ParseContractPkScript(txOut.PkScript, contractcommon.TestnetContractPrefix)
+		require.NoError(t, err)
+		if ok {
+			require.NotEmpty(t, addr.EncodeAddress())
+			return uint32(i)
+		}
+	}
+	t.Fatalf("contract funding output not found")
+	return 0
+}
+
+func buildTestResultTxSpending(t *testing.T, hash chainhash.Hash, vout uint32) *wire.MsgTx {
+	t.Helper()
+	resultScript, err := contractcommon.ResultNullDataScript(contractcommon.ResultPayload{
+		Status:      contractcommon.ResultStatusSuccess,
+		ResultCount: 1,
+	})
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: hash, Index: vout}})
+	tx.AddTxOut(wire.NewTxOut(0, nil, resultScript))
 	return tx
 }
 

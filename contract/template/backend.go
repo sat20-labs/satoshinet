@@ -298,7 +298,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 		Action:                contractcommon.ContractInvokeAPIDefault,
 		CallID:                DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
 		Invoker:               invoker,
-		FundingOutputs:        []ContractOutput{output},
+		FundingOutput:         output,
 		Height:                e.BlockHeight,
 		Timestamp:             e.BlockHeight,
 		ResultGasFee:          contractframework.GasFeeIf(hasResultGas, resultFee),
@@ -311,7 +311,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 		return nil
 	}
 	if !templateResultGasIsSeparate(runtime.Contract(), e.GasConfig.Normalize().GasAssetName) {
-		if err := runtime.ApplyGasFunding([]ContractOutput{output}, e.GasConfig.Normalize().GasAssetName); err != nil {
+		if err := runtime.ApplyGasFunding(output, e.GasConfig.Normalize().GasAssetName); err != nil {
 			return err
 		}
 	}
@@ -461,11 +461,15 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if len(fundingOutputs) == 0 {
 		return fmt.Errorf("template DEPLOY output does not match derived contract %s", addr.MustEncode())
 	}
+	if len(fundingOutputs) > 1 {
+		return fmt.Errorf("template DEPLOY must use at most one contract output")
+	}
+	fundingOutput := fundingOutputs[0]
 	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
 	if err != nil {
 		return err
 	}
-	hasResultGas, err := contractframework.OutputsHaveRequiredGas(fundingOutputs, e.GasConfig.Normalize().GasAssetName, resultFee)
+	hasResultGas, err := contractframework.OutputHasRequiredGas(fundingOutput, e.GasConfig.Normalize().GasAssetName, resultFee)
 	if err != nil {
 		return err
 	}
@@ -483,7 +487,7 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 			Contract:           addr,
 			Status:             ResultStatusInvalid,
 			GasLimit:           validated.Payload.GasLimit,
-			FundingInputs:      contractframework.ContractOutputOutPoints(fundingOutputs),
+			FundingInputs:      []OutPoint{fundingOutput.OutPoint},
 			GasFee:             contractframework.GasFeeIf(hasResultGas, resultFee),
 			GasRefundRecipient: gasRefundRecipient,
 			RequiresResult:     true,
@@ -495,7 +499,7 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		return err
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
-	if err := runtime.ApplyFunding(stripTemplateResultGasFunding(runtime.Contract(), fundingOutputs, e.GasConfig.GasAssetName), e.GasConfig.GasAssetName); err != nil {
+	if err := runtime.ApplyFunding(stripTemplateResultGasFunding(runtime.Contract(), fundingOutput, e.GasConfig.GasAssetName), e.GasConfig.GasAssetName); err != nil {
 		return nil
 	}
 	e.Store.Add(runtime)
@@ -512,7 +516,7 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		Contract:           addr,
 		Status:             ResultStatusSuccess,
 		GasLimit:           validated.Payload.GasLimit,
-		FundingInputs:      contractframework.ContractOutputOutPoints(fundingOutputs),
+		FundingInputs:      []OutPoint{fundingOutput.OutPoint},
 		GasRefundRecipient: gasRefundRecipient,
 		RequiresResult:     true,
 	}
@@ -551,38 +555,35 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 			return nil
 		}
 	}
-	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutputs[0].Vout, validated.Contract)
+	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract)
 	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
 		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee)
 	}
-	if err := runtime.CheckInvokeFunding(validated.Payload.Action, validated.Payload.Param, validated.FundingOutputs); err != nil {
+	if err := runtime.CheckInvokeFunding(validated.Payload.Action, validated.Payload.Param, validated.FundingOutput); err != nil {
 		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee)
 	}
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:         validated.Payload.Action,
-		Param:          validated.Payload.Param,
-		CallID:         callID,
-		Invoker:        invoker,
-		FundingOutputs: validated.FundingOutputs,
-		Height:         e.BlockHeight,
-		Timestamp:      e.BlockHeight,
-		ResultGasFee:   resultFee,
+		Action:        validated.Payload.Action,
+		Param:         validated.Payload.Param,
+		CallID:        callID,
+		Invoker:       invoker,
+		FundingOutput: validated.FundingOutput,
+		Height:        e.BlockHeight,
+		Timestamp:     e.BlockHeight,
+		ResultGasFee:  resultFee,
 	})
 	if err != nil {
 		return err
 	}
 	if !templateResultGasIsSeparate(runtime.Contract(), e.GasConfig.GasAssetName) {
-		if err := runtime.ApplyGasFunding(validated.FundingOutputs, e.GasConfig.GasAssetName); err != nil {
+		if err := runtime.ApplyGasFunding(validated.FundingOutput, e.GasConfig.GasAssetName); err != nil {
 			return err
 		}
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
 	runtime.IncrementInvokeCount()
 
-	funding := make([]OutPoint, 0, len(validated.FundingOutputs))
-	for _, output := range validated.FundingOutputs {
-		funding = append(funding, output.OutPoint)
-	}
+	funding := []OutPoint{validated.FundingOutput.OutPoint}
 	gasRefundRecipient := ""
 	if templateUsesFrameworkGasRefund(runtime.Contract(), e.GasConfig.GasAssetName) {
 		gasRefundRecipient = invoker
@@ -607,7 +608,7 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 
 func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, runtime *ContractRuntime, validated InvokeValidation, invoker string, callID string, resultFee *scommon.Decimal) error {
 	var invalidResultFee *scommon.Decimal
-	hasResultGas, err := contractframework.OutputsHaveRequiredGas(validated.FundingOutputs, e.GasConfig.Normalize().GasAssetName, resultFee)
+	hasResultGas, err := contractframework.OutputHasRequiredGas(validated.FundingOutput, e.GasConfig.Normalize().GasAssetName, resultFee)
 	if err != nil {
 		return err
 	}
@@ -615,14 +616,14 @@ func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, runtime *ContractRuntime,
 		invalidResultFee = resultFee.Clone()
 	}
 	item, err := runtime.ApplyInvalidInvoke(ApplyInvokeRequest{
-		Action:         validated.Payload.Action,
-		Param:          validated.Payload.Param,
-		CallID:         callID,
-		Invoker:        invoker,
-		FundingOutputs: validated.FundingOutputs,
-		Height:         e.BlockHeight,
-		Timestamp:      e.BlockHeight,
-		ResultGasFee:   invalidResultFee,
+		Action:        validated.Payload.Action,
+		Param:         validated.Payload.Param,
+		CallID:        callID,
+		Invoker:       invoker,
+		FundingOutput: validated.FundingOutput,
+		Height:        e.BlockHeight,
+		Timestamp:     e.BlockHeight,
+		ResultGasFee:  invalidResultFee,
 	}, e.GasConfig.Normalize().GasAssetName)
 	if err != nil {
 		return err
@@ -642,7 +643,7 @@ func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, runtime *ContractRuntime,
 		Contract:           validated.Contract,
 		Status:             ResultStatusInvalid,
 		GasLimit:           validated.Payload.GasLimit,
-		FundingInputs:      contractframework.ContractOutputOutPoints(validated.FundingOutputs),
+		FundingInputs:      []OutPoint{validated.FundingOutput.OutPoint},
 		ItemIDs:            []int64{item.ID},
 		GasRefundRecipient: gasRefundRecipient,
 		RequiresResult:     true,
@@ -675,20 +676,16 @@ func templateUsesFrameworkGasRefund(contract Contract, gasAssetName string) bool
 	return templateResultGasIsSeparate(contract, gasAssetName)
 }
 
-func stripTemplateResultGasFunding(contract Contract, outputs []ContractOutput, gasAssetName string) []ContractOutput {
+func stripTemplateResultGasFunding(contract Contract, output ContractOutput, gasAssetName string) ContractOutput {
 	if !templateResultGasIsSeparate(contract, gasAssetName) {
-		return outputs
+		return output
 	}
-	out := make([]ContractOutput, len(outputs))
-	for i, output := range outputs {
-		next := output
-		gas, err := output.AssetAmount(gasAssetName)
-		if err == nil && gas != nil && gas.Sign() > 0 {
-			_ = next.SubAssetAmount(gasAssetName, gas)
-		}
-		out[i] = next
+	next := output
+	gas, err := output.AssetAmount(gasAssetName)
+	if err == nil && gas != nil && gas.Sign() > 0 {
+		_ = next.SubAssetAmount(gasAssetName, gas)
 	}
-	return out
+	return next
 }
 
 func templateDeployRuntime(validated DeployValidation) (*ContractRuntime, error) {

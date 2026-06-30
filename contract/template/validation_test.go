@@ -62,7 +62,7 @@ func TestValidateTemplateInvokeTxBasic(t *testing.T) {
 	require.True(t, contract.Equal(validated.Contract))
 	require.Equal(t, DefaultGasConfig().InvokeBaseGas, validated.Payload.GasLimit)
 	require.Equal(t, InvokeAPISwap, validated.Payload.Action)
-	require.Len(t, validated.FundingOutputs, 1)
+	require.Equal(t, uint32(1), validated.FundingOutput.Vout)
 }
 
 func TestValidateTemplateInvokeTxBasicRejectsMissingContract(t *testing.T) {

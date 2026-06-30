@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
+	scommon "github.com/sat20-labs/indexer/common"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
@@ -32,21 +33,25 @@ type BlockContext struct {
 }
 
 type CallRequest struct {
-	Caller EVMAddress
-	Target EVMAddress
-	CallID string
-	Input  []byte
-	Gas    int64
-	Value  int64
-	Block  BlockContext
+	Caller        EVMAddress
+	Target        EVMAddress
+	CallID        string
+	Input         []byte
+	Gas           int64
+	Value         int64
+	FundingOutput *contractframework.ContractOutput
+	GasAssetName  string
+	GasFeeReserve *scommon.Decimal
+	Block         BlockContext
 }
 
 type CallResult struct {
-	ReturnData []byte
-	GasUsed    int64
-	GasLeft    int64
-	Status     ResultStatus
-	Err        error
+	ReturnData         []byte
+	GasUsed            int64
+	GasLeft            int64
+	Status             ResultStatus
+	Err                error
+	RetainedGasFunding *scommon.Decimal
 }
 
 type DeployRequest struct {
@@ -120,7 +125,7 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	capturedTriggers := make([]Trigger, 0)
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers)
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
-	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
+	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, nil, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
 		new(big.Int).SetUint64(req.Block.Number),
 		false,
 		req.Block.Time,
@@ -169,7 +174,9 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	capturedTriggers := make([]Trigger, 0)
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers)
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
-	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
+	funding := NewFundingAssetView(contractframework.OptionalContractOutputSlice(req.FundingOutput),
+		req.GasAssetName, req.GasFeeReserve)
+	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, funding, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
 		new(big.Int).SetUint64(req.Block.Number),
 		false,
 		req.Block.Time,
@@ -197,12 +204,17 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	if gasLeftErr != nil && err == nil {
 		err = gasLeftErr
 	}
+	var retainedGas *scommon.Decimal
+	if err == nil && req.GasAssetName != "" {
+		retainedGas = funding.ClaimedAssetAmount(req.GasAssetName)
+	}
 	return CallResult{
-		ReturnData: ret,
-		GasUsed:    gasUsed(req.Gas, gasLeft),
-		GasLeft:    gasLeft,
-		Status:     ResultStatusFromError(err),
-		Err:        err,
+		ReturnData:         ret,
+		GasUsed:            gasUsed(req.Gas, gasLeft),
+		GasLeft:            gasLeft,
+		Status:             ResultStatusFromError(err),
+		Err:                err,
+		RetainedGasFunding: retainedGas,
 	}
 }
 

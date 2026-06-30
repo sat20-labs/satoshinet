@@ -43,6 +43,7 @@ type ExecutionRecord struct {
 	GasLimit           int64
 	GasUsed            int64
 	GasFee             *scommon.Decimal
+	RetainedGasFunding *scommon.Decimal
 	FundingInputs      []OutPoint
 	ItemIDs            []int64
 	GasRefundRecipient string
@@ -61,6 +62,7 @@ func CloneExecutionRecords(in []ExecutionRecord) []ExecutionRecord {
 		out[i].FundingInputs = append([]OutPoint(nil), out[i].FundingInputs...)
 		out[i].ItemIDs = append([]int64(nil), out[i].ItemIDs...)
 		out[i].GasFee = CloneDecimal(out[i].GasFee)
+		out[i].RetainedGasFunding = CloneDecimal(out[i].RetainedGasFunding)
 		out[i].AssetIntents = CloneAssetIntents(out[i].AssetIntents)
 	}
 	return out

@@ -7,6 +7,7 @@ import (
 )
 
 const ContractInvokeAPIDefault = "default"
+const ContractInvokeAPICall = "call"
 const ContractInvokeAPIClose = "close"
 
 type DefaultInvokeOutput struct {
