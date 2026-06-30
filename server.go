@@ -11,7 +11,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/decred/dcrd/lru"
 	"github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/indexer/share/btclucky"
 	"github.com/sat20-labs/satoshinet/addrmgr"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
@@ -48,7 +48,6 @@ import (
 	indexerShare "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/mempool"
 	"github.com/sat20-labs/satoshinet/mining"
-	"github.com/sat20-labs/satoshinet/mining/cpuminer"
 	"github.com/sat20-labs/satoshinet/mining/posminer"
 	"github.com/sat20-labs/satoshinet/netsync"
 	"github.com/sat20-labs/satoshinet/peer"
@@ -233,8 +232,7 @@ type server struct {
 	chain                *blockchain.BlockChain
 	txMemPool            *mempool.TxPool
 	agentOracle          *contractoracle.Service
-	btcTemplateService   *cpuminer.TemplateService
-	btcCpuMiner          *cpuminer.Miner
+	btcCpuMiner          *btclucky.Miner
 	posMiner             *posminer.POSMiner
 	modifyRebroadcastInv chan interface{}
 	newPeers             chan *serverPeer
@@ -1530,117 +1528,9 @@ func (sp *serverPeer) OnMineBlock(_ *peer.Peer, msg *wire.MsgMineBlock) {
 		sp.Peer.QueueMessage(wire.NewMsgMineAck(msg.Nonce), nil)
 		return
 	}
-	if strings.HasPrefix(msg.SubCmd, "btclucky.") {
-		sp.handleBTCLuckyMineBlock(msg)
-		return
-	}
 	peerLog.Infof("OnMineBlock from %s embeded with cmd %s", sp.String(), msg.SubCmd)
 
 	sp.server.posMiner.OnBlockGenerated(sp.Peer, msg)
-}
-
-func (sp *serverPeer) handleBTCLuckyMineBlock(msg *wire.MsgMineBlock) {
-	var code wire.RejectCode
-	var reason string
-	for {
-		code = wire.RejectInvalid
-		if sp.server.btcTemplateService == nil || !sp.server.btcTemplateService.IsReady() {
-			reason = "btc lucky template service is not ready"
-			break
-		}
-
-		switch msg.SubCmd {
-		case cpuminer.BTCLuckySubCmdGetJob:
-			var req cpuminer.JobRequest
-			if err := json.Unmarshal(msg.Payload, &req); err != nil {
-				reason = err.Error()
-				break
-			}
-			if err := sp.validateBTCLuckyPeerRewardAddress(req.RewardAddress); err != nil {
-				reason = err.Error()
-				sp.queueBTCLuckyResponse(msg.Nonce, cpuminer.BTCLuckySubCmdJob, cpuminer.PeerJobResponse{Error: reason})
-				break
-			}
-			job, err := sp.server.btcTemplateService.CurrentJob(req)
-			resp := cpuminer.PeerJobResponse{Job: job}
-			if err != nil {
-				resp.Error = err.Error()
-				reason = err.Error()
-			} else {
-				code = 0
-			}
-			sp.queueBTCLuckyResponse(msg.Nonce, cpuminer.BTCLuckySubCmdJob, resp)
-
-		case cpuminer.BTCLuckySubCmdSubmit:
-			var solution cpuminer.MiningSolution
-			if err := json.Unmarshal(msg.Payload, &solution); err != nil {
-				reason = err.Error()
-				break
-			}
-			if err := sp.validateBTCLuckyPeerRewardAddress(solution.RewardAddress); err != nil {
-				reason = err.Error()
-				sp.queueBTCLuckyResponse(msg.Nonce, cpuminer.BTCLuckySubCmdSubmitResult, cpuminer.PeerSubmitResponse{Error: reason})
-				break
-			}
-			record, err := sp.server.btcTemplateService.SubmitSolution(&solution)
-			resp := cpuminer.PeerSubmitResponse{Found: record}
-			if err != nil {
-				resp.Error = err.Error()
-				reason = err.Error()
-			} else {
-				code = 0
-			}
-			sp.queueBTCLuckyResponse(msg.Nonce, cpuminer.BTCLuckySubCmdSubmitResult, resp)
-
-		default:
-			reason = "unsupported btc lucky subcmd"
-		}
-		break
-	}
-
-	if code != 0 && reason == "" {
-		reason = "btc lucky request rejected"
-	}
-	sp.Peer.QueueMessage(wire.NewMsgMineAckWithCode(msg.Nonce, code, reason), nil)
-}
-
-func (sp *serverPeer) validateBTCLuckyPeerRewardAddress(rewardAddress string) error {
-	remotePubKey := sp.Peer.ValidatorId()
-	if remotePubKey == "" {
-		return errors.New("btc lucky peer has no validator id")
-	}
-	if cfg.MiningPubKey == "" {
-		return errors.New("btc lucky template node has no mining pubkey")
-	}
-	remotePubKeyBytes, err := hex.DecodeString(remotePubKey)
-	if err != nil {
-		return fmt.Errorf("invalid btc lucky peer validator id: %w", err)
-	}
-	localPubKeyBytes, err := hex.DecodeString(cfg.MiningPubKey)
-	if err != nil {
-		return fmt.Errorf("invalid btc lucky local mining pubkey: %w", err)
-	}
-	expected, err := getP2WSHAddress(remotePubKeyBytes, localPubKeyBytes, sp.server.chainParams)
-	if err != nil {
-		return fmt.Errorf("derive btc lucky channel address: %w", err)
-	}
-	expectedAddress := expected.EncodeAddress()
-	if rewardAddress != expectedAddress {
-		return fmt.Errorf("btc lucky reward address mismatch: got %s want %s", rewardAddress, expectedAddress)
-	}
-	return nil
-}
-
-func (sp *serverPeer) queueBTCLuckyResponse(nonce uint64, subCmd string, payload interface{}) {
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		raw, _ = json.Marshal(map[string]string{"error": err.Error()})
-	}
-	sp.Peer.QueueMessage(&wire.MsgMineBlock{
-		Nonce:   nonce,
-		SubCmd:  subCmd,
-		Payload: raw,
-	}, nil)
 }
 
 func (sp *serverPeer) OnMineAck(_ *peer.Peer, msg *wire.MsgMineAck) {
@@ -2765,11 +2655,6 @@ func (s *server) Start() {
 
 	s.assetIndexer.Start()
 
-	if s.btcTemplateService != nil {
-		if err := s.btcTemplateService.Start(); err != nil {
-			srvrLog.Warnf("BTC lucky template service start failed: %v", err)
-		}
-	}
 	if s.btcCpuMiner != nil {
 		if err := s.btcCpuMiner.Start(); err != nil {
 			srvrLog.Warnf("BTC lucky miner start failed: %v", err)
@@ -2899,9 +2784,6 @@ func (s *server) Stop() error {
 
 	if s.btcCpuMiner != nil {
 		s.btcCpuMiner.Stop()
-	}
-	if s.btcTemplateService != nil {
-		s.btcTemplateService.Stop()
 	}
 
 	s.assetIndexer.Stop()
@@ -3718,55 +3600,18 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	})
 
 	if isBTCLuckyBootstrapConfig() {
-		if cfg.BTCLuckyTemplateService {
-			srvrLog.Warnf("BTC lucky template service disabled on bootstrap node")
-		}
 		if cfg.BTCLuckyMining {
 			srvrLog.Warnf("BTC lucky miner disabled on bootstrap node")
 		}
 	} else {
-		if cfg.BTCLuckyTemplateService {
-			svc, err := cpuminer.NewTemplateService(resolveBTCLuckyTemplateServiceConfig())
-			if err != nil {
-				srvrLog.Warnf("BTC lucky template service disabled: %v", err)
-			} else {
-				s.btcTemplateService = svc
-			}
-		}
-
 		if cfg.BTCLuckyMining {
 			minerCfg, err := resolveBTCLuckyMinerConfig(chainParams)
 			if err != nil {
 				srvrLog.Warnf("BTC lucky miner disabled: %v", err)
 			} else {
-				var backend cpuminer.MiningJobBackend
-				switch cfg.BTCLuckyMiningBackend {
-				case cpuminer.BTCLuckyBackendPeerTemplate:
-					backend = cpuminer.NewPeerTemplateBackend(cfg.BTCLuckyMiningNetwork, cfg.BTCLuckyTemplateJobTTL, s.GetRandomCorePeer)
-				case cpuminer.BTCLuckyBackendLocalTemplate:
-					if s.btcTemplateService != nil {
-						backend = s.btcTemplateService
-					}
-				case cpuminer.BTCLuckyBackendRPCTemplate:
-				default:
-					srvrLog.Warnf("BTC lucky mining backend %s is not recognized; falling back to rpc-template", cfg.BTCLuckyMiningBackend)
-				}
-				if s.btcTemplateService != nil && backend == nil && cfg.BTCLuckyMiningBackend == cpuminer.BTCLuckyBackendLocalTemplate {
-					backend = s.btcTemplateService
-				}
-				if cfg.BTCLuckyMiningBackend == cpuminer.BTCLuckyBackendRPCTemplate || backend == nil {
-					backendSvc, err := cpuminer.NewTemplateService(resolveBTCLuckyTemplateServiceConfig())
-					if err != nil {
-						srvrLog.Warnf("BTC lucky miner disabled: %v", err)
-					} else {
-						backend = backendSvc
-						if s.btcTemplateService == nil && cfg.BTCLuckyTemplateService {
-							s.btcTemplateService = backendSvc
-						}
-					}
-				}
+				backend := btclucky.NewHTTPTemplateBackend(resolveBTCLuckyIndexerBaseURL(), 10*time.Second)
 				if backend != nil {
-					miner, err := cpuminer.NewMiner(minerCfg, backend)
+					miner, err := btclucky.NewMiner(minerCfg, backend)
 					if err != nil {
 						srvrLog.Warnf("BTC lucky miner disabled: %v", err)
 					} else {
@@ -3886,14 +3731,12 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 			TxMemPool:   s.txMemPool,
 			Generator:   blockTemplateGenerator,
 			//CPUMiner:     s.cpuMiner,
-			PosMiner:                s.posMiner,
-			TxIndex:                 s.txIndex,
-			AddrIndex:               s.addrIndex,
-			CfIndex:                 s.cfIndex,
-			FeeEstimator:            s.feeEstimator,
-			AssetIndexManager:       assetIndexer,
-			BTCLuckyMiner:           s.btcCpuMiner,
-			BTCLuckyTemplateService: s.btcTemplateService,
+			PosMiner:          s.posMiner,
+			TxIndex:           s.txIndex,
+			AddrIndex:         s.addrIndex,
+			CfIndex:           s.cfIndex,
+			FeeEstimator:      s.feeEstimator,
+			AssetIndexManager: assetIndexer,
 		})
 		if err != nil {
 			srvrLog.Errorf("Unable to start RPC server: %v", err)
@@ -3934,43 +3777,52 @@ func isBTCLuckyBootstrapConfig() bool {
 	return cfg.MiningPubKey != "" && cfg.MiningPubKey == common.GetBootstrapPubKey()
 }
 
-func resolveBTCLuckyTemplateServiceConfig() cpuminer.BTCLuckyTemplateServiceConfig {
-	return cpuminer.BTCLuckyTemplateServiceConfig{
-		Enabled:         cfg.BTCLuckyTemplateService,
-		Backend:         cfg.BTCLuckyTemplateBackend,
-		RPCConnect:      cfg.BTCLuckyTemplateRPCConnect,
-		RPCUser:         cfg.BTCLuckyTemplateRPCUser,
-		RPCPass:         cfg.BTCLuckyTemplateRPCPass,
-		RPCDisableTLS:   cfg.BTCLuckyTemplateRPCDisableTLS,
-		Network:         cfg.BTCLuckyTemplateNetwork,
-		RefreshInterval: cfg.BTCLuckyTemplateRefreshInterval,
-		JobTTL:          cfg.BTCLuckyTemplateJobTTL,
-		CacheLimit:      cfg.BTCLuckyTemplateCacheLimit,
-		FoundBlocksFile: filepath.Join(cfg.DataDir, "btc_lucky_found_blocks.jsonl"),
-	}
-}
-
-func resolveBTCLuckyMinerConfig(params *chaincfg.Params) (cpuminer.BTCLuckyMinerConfig, error) {
+func resolveBTCLuckyMinerConfig(params *chaincfg.Params) (btclucky.BTCLuckyMinerConfig, error) {
 	rewardAddr, err := resolveBTCLuckyRewardAddress(params)
 	if err != nil {
-		return cpuminer.BTCLuckyMinerConfig{}, err
+		return btclucky.BTCLuckyMinerConfig{}, err
 	}
 	minerID := strings.TrimSpace(cfg.MiningPubKey)
 	if minerID == "" {
 		minerID = rewardAddr
 	}
-	return cpuminer.BTCLuckyMinerConfig{
+	return btclucky.BTCLuckyMinerConfig{
 		Enabled:          cfg.BTCLuckyMining,
-		Backend:          cfg.BTCLuckyMiningBackend,
+		Backend:          btclucky.BTCLuckyBackendHTTPTemplate,
 		RewardAddr:       rewardAddr,
 		MinerID:          minerID,
 		Jobs:             cfg.BTCLuckyMiningJobs,
-		ReserveCores:     cfg.BTCLuckyMiningReserveCores,
 		LowPriority:      cfg.BTCLuckyMiningLowPriority,
 		LowPrioritySleep: cfg.BTCLuckyMiningLowPrioritySleep,
-		Network:          cfg.BTCLuckyMiningNetwork,
-		JobTTL:           cfg.BTCLuckyTemplateJobTTL,
+		Network:          btcLuckyNetworkForParams(params),
 	}, nil
+}
+
+func btcLuckyNetworkForParams(params *chaincfg.Params) string {
+	if params == nil {
+		return "mainnet"
+	}
+	switch params.Name {
+	case "testnet":
+		return "testnet4"
+	case "regtest", "simnet":
+		return params.Name
+	default:
+		return "mainnet"
+	}
+}
+
+func resolveBTCLuckyIndexerBaseURL() string {
+	scheme := strings.TrimSpace(cfg.IndexerScheme)
+	if scheme == "" {
+		scheme = "http"
+	}
+	host := strings.TrimRight(strings.TrimSpace(cfg.IndexerHost), "/")
+	proxy := strings.Trim(strings.TrimSpace(cfg.IndexerProxy), "/")
+	if proxy == "" {
+		return fmt.Sprintf("%s://%s", scheme, host)
+	}
+	return fmt.Sprintf("%s://%s/%s", scheme, host, proxy)
 }
 
 func resolveBTCLuckyRewardAddress(params *chaincfg.Params) (string, error) {

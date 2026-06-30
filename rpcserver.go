@@ -46,7 +46,6 @@ import (
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/mempool"
 	"github.com/sat20-labs/satoshinet/mining"
-	"github.com/sat20-labs/satoshinet/mining/cpuminer"
 	"github.com/sat20-labs/satoshinet/mining/posminer"
 	"github.com/sat20-labs/satoshinet/peer"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -143,70 +142,67 @@ type commandHandler func(*rpcServer, interface{}, <-chan struct{}) (interface{},
 // a dependency loop.
 var rpcHandlers map[string]commandHandler
 var rpcHandlersBeforeInit = map[string]commandHandler{
-	"addnode":                   handleAddNode,
-	"createrawtransaction":      handleCreateRawTransaction,
-	"debuglevel":                handleDebugLevel,
-	"decoderawtransaction":      handleDecodeRawTransaction,
-	"decodescript":              handleDecodeScript,
-	"estimatefee":               handleEstimateFee,
-	"generate":                  handleGenerate,
-	"getaddednodeinfo":          handleGetAddedNodeInfo,
-	"getbestblock":              handleGetBestBlock,
-	"getbestblockhash":          handleGetBestBlockHash,
-	"getblock":                  handleGetBlock,
-	"getblockchaininfo":         handleGetBlockChainInfo,
-	"getblockcount":             handleGetBlockCount,
-	"getblockhash":              handleGetBlockHash,
-	"getblockheader":            handleGetBlockHeader,
-	"getblocktemplate":          handleGetBlockTemplate,
-	"getchaintips":              handleGetChainTips,
-	"getcfilter":                handleGetCFilter,
-	"getcfilterheader":          handleGetCFilterHeader,
-	"getconnectioncount":        handleGetConnectionCount,
-	"getcontract":               handleGetContract,
-	"getcontracthistory":        handleGetContractHistory,
-	"getcontractstate":          handleGetContractState,
-	"reviewpredictionready":     handleReviewPredictionReady,
-	"getcurrentnet":             handleGetCurrentNet,
-	"getdifficulty":             handleGetDifficulty,
-	"getbtcluckymininginfo":     handleGetBTCLuckyMiningInfo,
-	"getbtcluckyhashrate":       handleGetBTCLuckyHashRate,
-	"getbtctemplateserviceinfo": handleGetBTCTemplateServiceInfo,
-	"getgenerate":               handleGetGenerate,
-	"gethashespersec":           handleGetHashesPerSec,
-	"getheaders":                handleGetHeaders,
-	"getinfo":                   handleGetInfo,
-	"getmempoolinfo":            handleGetMempoolInfo,
-	"getmininginfo":             handleGetMiningInfo,
-	"getnettotals":              handleGetNetTotals,
-	"getnetworkhashps":          handleGetNetworkHashPS,
-	"getnodeaddresses":          handleGetNodeAddresses,
-	"getpeerinfo":               handleGetPeerInfo,
-	"getrawmempool":             handleGetRawMempool,
-	"getrawtransaction":         handleGetRawTransaction,
-	"gettxout":                  handleGetTxOut,
-	"help":                      handleHelp,
-	"invalidateblock":           handleInvalidateBlock,
-	"node":                      handleNode,
-	"ping":                      handlePing,
-	"reconsiderblock":           handleReconsiderBlock,
-	"searchrawtransactions":     handleSearchRawTransactions,
-	"sendrawtransaction":        handleSendRawTransaction,
-	"setgenerate":               handleSetGenerate,
-	"signmessagewithprivkey":    handleSignMessageWithPrivKey,
-	"stop":                      handleStop,
-	"submitblock":               handleSubmitBlock,
-	"uptime":                    handleUptime,
-	"validateaddress":           handleValidateAddress,
-	"verifychain":               handleVerifyChain,
-	"verifymessage":             handleVerifyMessage,
-	"version":                   handleVersion,
-	"testmempoolaccept":         handleTestMempoolAccept,
-	"gettxspendingprevout":      handleGetTxSpendingPrevOut,
-	"getmempoolentry":           handleGetMempoolEntry,
-	"getblockstats":             handleGetBlockStats,
-	"estimatesmartfee":          handleEstimateSmartFee,
-	"getanchortxinfo":           handleGetAnchorTxInfo,
+	"addnode":                handleAddNode,
+	"createrawtransaction":   handleCreateRawTransaction,
+	"debuglevel":             handleDebugLevel,
+	"decoderawtransaction":   handleDecodeRawTransaction,
+	"decodescript":           handleDecodeScript,
+	"estimatefee":            handleEstimateFee,
+	"generate":               handleGenerate,
+	"getaddednodeinfo":       handleGetAddedNodeInfo,
+	"getbestblock":           handleGetBestBlock,
+	"getbestblockhash":       handleGetBestBlockHash,
+	"getblock":               handleGetBlock,
+	"getblockchaininfo":      handleGetBlockChainInfo,
+	"getblockcount":          handleGetBlockCount,
+	"getblockhash":           handleGetBlockHash,
+	"getblockheader":         handleGetBlockHeader,
+	"getblocktemplate":       handleGetBlockTemplate,
+	"getchaintips":           handleGetChainTips,
+	"getcfilter":             handleGetCFilter,
+	"getcfilterheader":       handleGetCFilterHeader,
+	"getconnectioncount":     handleGetConnectionCount,
+	"getcontract":            handleGetContract,
+	"getcontracthistory":     handleGetContractHistory,
+	"getcontractstate":       handleGetContractState,
+	"reviewpredictionready":  handleReviewPredictionReady,
+	"getcurrentnet":          handleGetCurrentNet,
+	"getdifficulty":          handleGetDifficulty,
+	"getgenerate":            handleGetGenerate,
+	"gethashespersec":        handleGetHashesPerSec,
+	"getheaders":             handleGetHeaders,
+	"getinfo":                handleGetInfo,
+	"getmempoolinfo":         handleGetMempoolInfo,
+	"getmininginfo":          handleGetMiningInfo,
+	"getnettotals":           handleGetNetTotals,
+	"getnetworkhashps":       handleGetNetworkHashPS,
+	"getnodeaddresses":       handleGetNodeAddresses,
+	"getpeerinfo":            handleGetPeerInfo,
+	"getrawmempool":          handleGetRawMempool,
+	"getrawtransaction":      handleGetRawTransaction,
+	"gettxout":               handleGetTxOut,
+	"help":                   handleHelp,
+	"invalidateblock":        handleInvalidateBlock,
+	"node":                   handleNode,
+	"ping":                   handlePing,
+	"reconsiderblock":        handleReconsiderBlock,
+	"searchrawtransactions":  handleSearchRawTransactions,
+	"sendrawtransaction":     handleSendRawTransaction,
+	"setgenerate":            handleSetGenerate,
+	"signmessagewithprivkey": handleSignMessageWithPrivKey,
+	"stop":                   handleStop,
+	"submitblock":            handleSubmitBlock,
+	"uptime":                 handleUptime,
+	"validateaddress":        handleValidateAddress,
+	"verifychain":            handleVerifyChain,
+	"verifymessage":          handleVerifyMessage,
+	"version":                handleVersion,
+	"testmempoolaccept":      handleTestMempoolAccept,
+	"gettxspendingprevout":   handleGetTxSpendingPrevOut,
+	"getmempoolentry":        handleGetMempoolEntry,
+	"getblockstats":          handleGetBlockStats,
+	"estimatesmartfee":       handleEstimateSmartFee,
+	"getanchortxinfo":        handleGetAnchorTxInfo,
 }
 
 // list of commands that we recognize, but for which btcd has no support because
@@ -2600,30 +2596,6 @@ func handleGetCurrentNet(s *rpcServer, cmd interface{}, closeChan <-chan struct{
 func handleGetDifficulty(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	best := s.cfg.Chain.BestSnapshot()
 	return getDifficultyRatio(best.Bits, s.cfg.ChainParams), nil
-}
-
-// handleGetBTCLuckyMiningInfo implements the getbtcluckymininginfo command.
-func handleGetBTCLuckyMiningInfo(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-	if s.cfg.BTCLuckyMiner == nil {
-		return cpuminer.MinerStatus{Enabled: false}, nil
-	}
-	return s.cfg.BTCLuckyMiner.Status(), nil
-}
-
-// handleGetBTCLuckyHashRate implements the getbtcluckyhashrate command.
-func handleGetBTCLuckyHashRate(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-	if s.cfg.BTCLuckyMiner == nil {
-		return float64(0), nil
-	}
-	return s.cfg.BTCLuckyMiner.HashesPerSecond(), nil
-}
-
-// handleGetBTCTemplateServiceInfo implements the getbtctemplateserviceinfo command.
-func handleGetBTCTemplateServiceInfo(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-	if s.cfg.BTCLuckyTemplateService == nil {
-		return cpuminer.TemplateServiceStatus{Enabled: false}, nil
-	}
-	return s.cfg.BTCLuckyTemplateService.Status(), nil
 }
 
 // handleGetGenerate implements the getgenerate command.
@@ -5299,9 +5271,7 @@ type rpcserverConfig struct {
 	// doing regression or simulation testing.
 	Generator *mining.BlkTmplGenerator
 	//CPUMiner  *cpuminer.CPUMiner
-	PosMiner                *posminer.POSMiner
-	BTCLuckyMiner           *cpuminer.Miner
-	BTCLuckyTemplateService *cpuminer.TemplateService
+	PosMiner *posminer.POSMiner
 
 	// These fields define any optional indexes the RPC server can make use
 	// of to provide additional data when queried.

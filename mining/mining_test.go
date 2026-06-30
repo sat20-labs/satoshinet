@@ -195,8 +195,7 @@ func TestEVMMiningInfo(t *testing.T) {
 	invokeScript, err := evmcommon.InvokeNullDataScript(evm.InvokePayload{
 		GasLimit:  123,
 		CallNonce: 1,
-		Action:    "call",
-		Param:     []byte{0xaa},
+		Action:    evmcommon.EVMInvokeAPIInc,
 	})
 	if err != nil {
 		t.Fatal(err)

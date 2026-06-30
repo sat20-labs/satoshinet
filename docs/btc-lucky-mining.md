@@ -1,88 +1,57 @@
 # BTC Lucky Mining
 
-BTC Lucky Mining is an optional Bitcoin-native CPU mining module for SatoshiNet
-nodes. It is disabled by default and does not participate in SatoshiNet PoS
-mining, consensus, mempool policy, or validator scheduling.
+BTC Lucky Mining is an optional Bitcoin-native CPU mining module. SatoshiNet
+nodes and wallets both fetch compact BTC mining jobs from the L1 indexer, mine
+locally, and submit solutions back to the L1 indexer.
 
-## Confirmed V1 Scope
+## Scope
 
-- BTC Lucky Mining is controlled by `btcluckymining`, not by `generate`.
-- BTC template service is controlled by `btcluckytemplateservice`.
-- Bootstrap nodes must not start BTC Lucky Mining or BTC template service.
-- The reward address is the existing SatoshiNet mining/channel address. Except
-  contract addresses, SatoshiNet addresses are compatible with Bitcoin
-  addresses, so the same address can be used as the Bitcoin coinbase output.
-- No development address override is added. The module must resolve the reward
-  address from the node's configured mining/channel identity.
-- If no configured SatoshiNet mining address exists, BTC Lucky Mining requires
-  `serverpubkey` so the node can derive the channel reward address.
+- BTC Lucky Mining is controlled by `btcluckymining`, not by SatoshiNet PoS
+  mining or `generate`.
+- The reward address is always the channel address between the local participant
+  and the serving core node. A wallet uses the L1 indexer provider's pubkey as
+  the core node pubkey.
+- The Bitcoin coinbase input script only includes the `satoshinet` tag and the
+  extra nonce. Winner identity is determined by the coinbase reward address.
 - Bitcoin block, transaction, header, getblocktemplate, and submitblock handling
-  use `github.com/btcsuite/btcd/...` types. They must not use SatoshiNet's
-  extended `wire` package because SatoshiNet transaction outputs include asset
-  serialization that is not valid Bitcoin block serialization.
-- BTC lucky jobs run in cooperative low-priority mode by default. They yield
-  and briefly sleep during the hash loop so other runnable processes and the
-  SatoshiNet node's own critical goroutines can take CPU first. This does not
-  lower the priority of the whole node process.
-- The Bitcoin coinbase input script includes a `satoshinet` tag and the
-  SatoshiNet node `miningpubkey` as miner metadata. If `miningpubkey` is empty,
-  the miner falls back to the reward address as metadata. The coinbase output
-  pays the configured mining/channel reward address.
-- V1 records found block metadata in memory and appends it to
-  `btc_lucky_found_blocks.jsonl` under the node data directory. Coinbase
-  maturity tracking and channel credit are follow-up work.
+  use `github.com/btcsuite/btcd/...` types, not SatoshiNet's extended wire
+  types.
+- The L1 indexer rebuilds the block from the cached job and submitted solution,
+  verifies the hash target and reward address, then calls Bitcoin Core
+  `submitblock`.
+- Found block metadata is recorded in the L1 indexer's local DB under the
+  `btclucky:found:` prefix.
 
-## Current V1 Flow
+## Flow
 
 ```text
 Bitcoin Core / bitcoind
         ^
         | getblocktemplate / submitblock
         |
-SatoshiNet core node BTC template service
+L1 indexer BTC lucky service
         ^
-        | peer-template compact job / solution
+        | HTTP compact job / solution
         |
-BTC lucky CPU miner on miner or ordinary node
+SatoshiNet node or wallet local miner
 ```
 
-The miner requests a compact job from a connected core peer by default. The
-core node builds the Bitcoin coinbase transaction paying the configured
-mining/channel reward address, returns only compact header work to the miner,
-and reconstructs/submits the solved Bitcoin block through Bitcoin Core RPC.
-
-A core node can also set `btcluckyminingbackend=local-template` to mine against
-its in-process template service without a P2P round trip. In both modes the
-reward address remains the node's SatoshiNet mining/channel address.
-
-## Configuration
+## SatoshiNet Configuration
 
 ```ini
 btcluckymining=0
-btcluckyminingbackend=peer-template
 btcluckyminingjobs=1
-btcluckyminingreservecores=0
 btcluckymininglowpriority=1
 btcluckymininglowprioritysleep=1ms
-btcluckyminingnetwork=mainnet
-
-btcluckytemplateservice=0
-btcluckytemplatebackend=bitcoin-core
-btcluckytemplaterpcconnect=127.0.0.1:8332
-btcluckytemplaterpcuser=
-btcluckytemplaterpcpass=
-btcluckytemplaterpcdisabletls=1
-btcluckytemplatenetwork=mainnet
-btcluckytemplaterefreshinterval=60s
-btcluckytemplatejobttl=120s
-btcluckytemplatecachelimit=16
 ```
 
-## RPC
+SatoshiNet nodes use the configured L1 indexer endpoint:
 
-- `getbtcluckymininginfo`
-- `getbtcluckyhashrate`
-- `getbtctemplateserviceinfo`
+```ini
+indexerscheme=http
+indexerhost=127.0.0.1:8009
+indexerproxy=testnet
+```
 
-Existing PoS mining RPCs such as `getgenerate`, `setgenerate`, and
-`gethashespersec` continue to report SatoshiNet PoS miner state only.
+The template service runs in the L1 indexer. SatoshiNet nodes do not expose
+local BTC lucky mining RPC methods.
