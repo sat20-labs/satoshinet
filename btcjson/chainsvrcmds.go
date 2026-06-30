@@ -527,33 +527,6 @@ func NewGetDifficultyCmd() *GetDifficultyCmd {
 	return &GetDifficultyCmd{}
 }
 
-// GetBTCLuckyMiningInfoCmd defines the getbtcluckymininginfo JSON-RPC command.
-type GetBTCLuckyMiningInfoCmd struct{}
-
-// NewGetBTCLuckyMiningInfoCmd returns a new instance which can be used to issue
-// a getbtcluckymininginfo JSON-RPC command.
-func NewGetBTCLuckyMiningInfoCmd() *GetBTCLuckyMiningInfoCmd {
-	return &GetBTCLuckyMiningInfoCmd{}
-}
-
-// GetBTCLuckyHashRateCmd defines the getbtcluckyhashrate JSON-RPC command.
-type GetBTCLuckyHashRateCmd struct{}
-
-// NewGetBTCLuckyHashRateCmd returns a new instance which can be used to issue
-// a getbtcluckyhashrate JSON-RPC command.
-func NewGetBTCLuckyHashRateCmd() *GetBTCLuckyHashRateCmd {
-	return &GetBTCLuckyHashRateCmd{}
-}
-
-// GetBTCTemplateServiceInfoCmd defines the getbtctemplateserviceinfo JSON-RPC command.
-type GetBTCTemplateServiceInfoCmd struct{}
-
-// NewGetBTCTemplateServiceInfoCmd returns a new instance which can be used to
-// issue a getbtctemplateserviceinfo JSON-RPC command.
-func NewGetBTCTemplateServiceInfoCmd() *GetBTCTemplateServiceInfoCmd {
-	return &GetBTCTemplateServiceInfoCmd{}
-}
-
 // GetGenerateCmd defines the getgenerate JSON-RPC command.
 type GetGenerateCmd struct{}
 
@@ -1252,9 +1225,6 @@ func init() {
 	MustRegisterCmd("reviewpredictionready", (*ReviewPredictionReadyCmd)(nil), flags)
 	MustRegisterCmd("getdescriptorinfo", (*GetDescriptorInfoCmd)(nil), flags)
 	MustRegisterCmd("getdifficulty", (*GetDifficultyCmd)(nil), flags)
-	MustRegisterCmd("getbtcluckymininginfo", (*GetBTCLuckyMiningInfoCmd)(nil), flags)
-	MustRegisterCmd("getbtcluckyhashrate", (*GetBTCLuckyHashRateCmd)(nil), flags)
-	MustRegisterCmd("getbtctemplateserviceinfo", (*GetBTCTemplateServiceInfoCmd)(nil), flags)
 	MustRegisterCmd("getgenerate", (*GetGenerateCmd)(nil), flags)
 	MustRegisterCmd("gethashespersec", (*GetHashesPerSecCmd)(nil), flags)
 	MustRegisterCmd("getinfo", (*GetInfoCmd)(nil), flags)

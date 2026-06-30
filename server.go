@@ -2656,9 +2656,18 @@ func (s *server) Start() {
 	s.assetIndexer.Start()
 
 	if s.btcCpuMiner != nil {
+		st := s.btcCpuMiner.Status()
+		srvrLog.Infof("BTC lucky miner runtime: starting enabled=%v backend=%s reward=%s miner_id=%s jobs=%d jobs_mode=%s low_priority=%v sleep=%s",
+			st.Enabled, st.Backend, st.RewardAddress, st.MinerID, st.Jobs, st.JobsMode, st.LowPriority, st.LowPrioritySleep)
 		if err := s.btcCpuMiner.Start(); err != nil {
 			srvrLog.Warnf("BTC lucky miner start failed: %v", err)
+		} else {
+			st = s.btcCpuMiner.Status()
+			srvrLog.Infof("BTC lucky miner runtime: start succeeded running=%v hashrate=%.2f H/s btc_height=%d job_id=%s",
+				st.Running, st.HashesPerSecond, st.BTCHeight, st.JobID)
 		}
+	} else {
+		srvrLog.Infof("BTC lucky miner runtime: not started enabled=%v bootstrap=%v", cfg.BTCLuckyMining, isBTCLuckyBootstrapConfig())
 	}
 
 	// Start the CPU miner if generation is enabled.
@@ -3599,24 +3608,31 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		BtcdDir:                homeDir,
 	})
 
-	if isBTCLuckyBootstrapConfig() {
+	isBTCBootstrap := isBTCLuckyBootstrapConfig()
+	if !cfg.BTCLuckyMining {
+		srvrLog.Infof("BTC lucky miner runtime: disabled by config")
+	} else if isBTCBootstrap {
 		if cfg.BTCLuckyMining {
 			srvrLog.Warnf("BTC lucky miner disabled on bootstrap node")
 		}
 	} else {
-		if cfg.BTCLuckyMining {
-			minerCfg, err := resolveBTCLuckyMinerConfig(chainParams)
-			if err != nil {
-				srvrLog.Warnf("BTC lucky miner disabled: %v", err)
-			} else {
-				backend := btclucky.NewHTTPTemplateBackend(resolveBTCLuckyIndexerBaseURL(), 10*time.Second)
-				if backend != nil {
-					miner, err := btclucky.NewMiner(minerCfg, backend)
-					if err != nil {
-						srvrLog.Warnf("BTC lucky miner disabled: %v", err)
-					} else {
-						s.btcCpuMiner = miner
-					}
+		minerCfg, err := resolveBTCLuckyMinerConfig(chainParams)
+		if err != nil {
+			srvrLog.Warnf("BTC lucky miner disabled: %v", err)
+		} else {
+			indexerBaseURL := resolveBTCLuckyIndexerBaseURL()
+			srvrLog.Infof("BTC lucky miner runtime: initializing enabled=%v backend=%s network=%s indexer=%s reward=%s miner_id=%s jobs_mode=%s low_priority=%v sleep=%s",
+				minerCfg.Enabled, minerCfg.Backend, minerCfg.Network, indexerBaseURL, minerCfg.RewardAddr, minerCfg.MinerID, minerCfg.Jobs, minerCfg.LowPriority, minerCfg.LowPrioritySleep)
+			backend := btclucky.NewHTTPTemplateBackend(indexerBaseURL, 10*time.Second)
+			if backend != nil {
+				miner, err := btclucky.NewMiner(minerCfg, backend)
+				if err != nil {
+					srvrLog.Warnf("BTC lucky miner disabled: %v", err)
+				} else {
+					st := miner.Status()
+					srvrLog.Infof("BTC lucky miner runtime: initialized backend=%s network=%s reward=%s miner_id=%s jobs=%d jobs_mode=%s low_priority=%v sleep=%s",
+						st.Backend, minerCfg.Network, st.RewardAddress, st.MinerID, st.Jobs, st.JobsMode, st.LowPriority, st.LowPrioritySleep)
+					s.btcCpuMiner = miner
 				}
 			}
 		}
