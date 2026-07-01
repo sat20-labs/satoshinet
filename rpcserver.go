@@ -42,6 +42,7 @@ import (
 	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	evmcontract "github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	contractnode "github.com/sat20-labs/satoshinet/contract/node"
 	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
@@ -1069,6 +1070,12 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 	if err != nil {
 		return nil, nil, err
 	}
+	best := s.cfg.Chain.BestSnapshot()
+	viewCtx := contractframework.StateViewContext{
+		Height:          int64(best.Height),
+		Timestamp:       best.MedianTime.Unix(),
+		ContractAddress: address,
+	}
 	switch contractType {
 	case contractcommon.ContractTypeTemplate:
 		_, store, err := contractnode.NewTemplateStateStore(s.cfg.DB).LoadTip()
@@ -1076,7 +1083,7 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 			return nil, nil, err
 		}
 		if runtime, ok := store.Get(contractAddr); ok {
-			state, err := runtime.RuntimeState()
+			state, err := runtime.StateView(viewCtx)
 			return state, map[string]interface{}{
 				"contract": runtime.Contract(),
 			}, err
@@ -1088,9 +1095,10 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 			return nil, nil, err
 		}
 		if runtime, ok := store.Get(contractAddr); ok {
-			return runtime.State(), map[string]interface{}{
+			state, err := runtime.StateView(viewCtx)
+			return state, map[string]interface{}{
 				"contract": runtime.Contract(),
-			}, nil
+			}, err
 		}
 		return nil, map[string]interface{}{"exists": false}, nil
 	case contractcommon.ContractTypeEVM:
@@ -1103,18 +1111,15 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 			return nil, map[string]interface{}{"exists": false}, nil
 		}
 		details := make(map[string]interface{})
-		best := s.cfg.Chain.BestSnapshot()
-		if meta, ok := evmcontract.QueryContractMetadata(state, contractAddr, evmcontract.BlockContext{
+		block := evmcontract.BlockContext{
 			Number: uint64(best.Height),
 			Time:   uint64(best.MedianTime.Unix()),
-		}, 0); ok {
+		}
+		if meta, ok := evmcontract.QueryContractMetadata(state, contractAddr, block, 0); ok {
 			details["contract"] = meta
 		}
-		return map[string]interface{}{
-			"balance":   state.GetBalance(addr).String(),
-			"nonce":     state.GetNonce(addr),
-			"code_size": state.GetCodeSize(addr),
-		}, details, nil
+		view, _ := evmcontract.QueryContractStateView(state, contractAddr, block, 0)
+		return view, details, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported contract type %d", contractType)
 	}

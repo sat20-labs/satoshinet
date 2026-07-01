@@ -1,6 +1,7 @@
 package template
 
 import (
+	"strconv"
 	"testing"
 
 	scommon "github.com/sat20-labs/indexer/common"
@@ -33,15 +34,17 @@ func TestSettleAMMBuyUsesConstantProductPool(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)
 	require.Equal(t, int64(0), plan.Deals[0].BuyItemID)
-	require.Equal(t, "33.155080214", plan.Deals[0].AssetAmt)
-	require.Equal(t, int64(10), plan.Deals[0].SatValue)
-	require.Len(t, plan.Transfers, 1)
-	require.Equal(t, "33.155080214", plan.Transfers[0].AssetAmt)
+	require.Equal(t, "30", plan.Deals[0].AssetAmt)
+	require.Equal(t, int64(9), plan.Deals[0].SatValue)
+	require.Len(t, plan.Transfers, 2)
+	require.Equal(t, "30", plan.Transfers[0].AssetAmt)
+	require.Equal(t, int64(1), plan.Transfers[1].SatValue)
+	require.Equal(t, SettlementReasonRefund, plan.Transfers[1].Reason)
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "66.844919786", state.Running.AssetAInPool)
-	requireDecimalString(t, "30", state.Running.AssetBInPool)
+	requireDecimalString(t, "70", state.Running.AssetAInPool)
+	requireDecimalString(t, "29", state.Running.AssetBInPool)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
 }
 
@@ -78,14 +81,16 @@ func TestSettleAMMBuyResultOutputsUseAssetPrecision(t *testing.T) {
 	resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), nil, assetPrecision)
 	require.NoError(t, err)
 	require.Len(t, resultPlans, 1)
-	require.Len(t, resultPlans[0].Outputs, 2)
+	require.Len(t, resultPlans[0].Outputs, 3)
 	require.Equal(t, "buyer", resultPlans[0].Outputs[0].To)
-	require.Equal(t, "33", resultPlans[0].Outputs[0].AssetAmt)
+	require.Equal(t, "30", resultPlans[0].Outputs[0].AssetAmt)
 	require.Len(t, resultPlans[0].Outputs[0].Assets, 1)
-	require.Equal(t, "33", resultPlans[0].Outputs[0].Assets[0].Amount.String())
-	require.Equal(t, addr.MustEncode(), resultPlans[0].Outputs[1].To)
-	require.Len(t, resultPlans[0].Outputs[1].Assets, 1)
-	require.Equal(t, "66", resultPlans[0].Outputs[1].Assets[0].Amount.String())
+	require.Equal(t, "30", resultPlans[0].Outputs[0].Assets[0].Amount.String())
+	require.Equal(t, "buyer", resultPlans[0].Outputs[1].To)
+	require.Equal(t, int64(1), resultPlans[0].Outputs[1].Value)
+	require.Equal(t, addr.MustEncode(), resultPlans[0].Outputs[2].To)
+	require.Len(t, resultPlans[0].Outputs[2].Assets, 1)
+	require.Equal(t, "70", resultPlans[0].Outputs[2].Assets[0].Amount.String())
 }
 
 func TestSettleAMMSellUsesConstantProductPool(t *testing.T) {
@@ -157,6 +162,100 @@ func TestSettleAMMRejectsSlippage(t *testing.T) {
 	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
 }
 
+func TestSettleAMMBuyNeedsFeeAdjustedFunding(t *testing.T) {
+	const assetName = "brc20:f:ooxx"
+	newRuntime := func(t *testing.T) *ContractRuntime {
+		t.Helper()
+		runtime := testAMMRuntimeWithAsset(t, assetName, 100000, 100000, "10000000000")
+		fundAMMRuntimeWithAsset(t, runtime, assetName, 100000, 100000)
+		return runtime
+	}
+	applyBuy := func(t *testing.T, runtime *ContractRuntime, value int64) *SettlementPlan {
+		t.Helper()
+		addr := runtime.Address()
+		param, err := (&LimitOrderInvokeParam{
+			OrderType: OrderTypeBuy,
+			AssetName: assetName,
+			Amt:       "100",
+			UnitPrice: strconv.FormatInt(value, 10),
+		}).Encode()
+		require.NoError(t, err)
+		_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+			Action:        InvokeAPISwap,
+			Param:         param,
+			CallID:        DeriveInvokeCallID(testHash(byte(value)), 1, addr),
+			Invoker:       "buyer",
+			FundingOutput: testContractOutput(testHash(byte(value)), 1, addr, value, nil),
+			Height:        1,
+		})
+		require.NoError(t, err)
+		plan, err := runtime.SettleBlock(1)
+		require.NoError(t, err)
+		return plan
+	}
+
+	t.Run("100 sats refunds because output is below minimum", func(t *testing.T) {
+		runtime := newRuntime(t)
+		plan := applyBuy(t, runtime, 100)
+		require.Empty(t, plan.Deals)
+		require.Len(t, plan.Transfers, 1)
+		require.Equal(t, int64(100), plan.Transfers[0].SatValue)
+		require.Equal(t, SettlementReasonRefund, plan.Transfers[0].Reason)
+		state, err := runtime.RuntimeState()
+		require.NoError(t, err)
+		require.Equal(t, InvokeReasonSlippageProtect, state.Items[0].Reason)
+		require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
+	})
+
+	t.Run("101 sats buys the requested 100 integer assets", func(t *testing.T) {
+		runtime := newRuntime(t)
+		plan := applyBuy(t, runtime, 101)
+		require.Len(t, plan.Deals, 1)
+		require.Equal(t, int64(101), plan.Deals[0].SatValue)
+		require.Equal(t, "100", plan.Deals[0].AssetAmt)
+		require.Len(t, plan.Transfers, 1)
+		require.Equal(t, "100", plan.Transfers[0].AssetAmt)
+		state, err := runtime.RuntimeState()
+		require.NoError(t, err)
+		require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+
+		store := NewRuntimeStore()
+		store.Add(runtime)
+		resultPlans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, nil, func(name string) (int, bool) {
+			return 0, name == assetName
+		})
+		require.NoError(t, err)
+		resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), nil, func(name string) (int, bool) {
+			return 0, name == assetName
+		})
+		require.NoError(t, err)
+		require.Len(t, resultPlans, 1)
+		require.Equal(t, "buyer", resultPlans[0].Outputs[0].To)
+		require.Equal(t, "100", resultPlans[0].Outputs[0].AssetAmt)
+	})
+
+	t.Run("surplus sats are refunded after buying the requested assets", func(t *testing.T) {
+		runtime := newRuntime(t)
+		plan := applyBuy(t, runtime, 110)
+		require.Len(t, plan.Deals, 1)
+		require.Equal(t, int64(101), plan.Deals[0].SatValue)
+		require.Equal(t, "100", plan.Deals[0].AssetAmt)
+		require.Len(t, plan.Transfers, 2)
+		require.Equal(t, "buyer", plan.Transfers[0].To)
+		require.Equal(t, "100", plan.Transfers[0].AssetAmt)
+		require.Equal(t, SettlementReasonDeal, plan.Transfers[0].Reason)
+		require.Equal(t, "buyer", plan.Transfers[1].To)
+		require.Equal(t, int64(9), plan.Transfers[1].SatValue)
+		require.Equal(t, SettlementReasonRefund, plan.Transfers[1].Reason)
+
+		state, err := runtime.RuntimeState()
+		require.NoError(t, err)
+		require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+		requireDecimalString(t, "99900", state.Running.AssetAInPool)
+		requireDecimalString(t, "100101", state.Running.AssetBInPool)
+	})
+}
+
 func TestSettleAMMWaitsUntilPoolMeetsK(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	addr := runtime.Address()
@@ -222,14 +321,14 @@ func TestSettleAMMAddLiquidityCanMakePoolReady(t *testing.T) {
 		OrderType: OrderTypeAddLiquidity,
 		AssetName: "ordx:f:test",
 		Amt:       "10",
-		Value:     1,
+		Value:     3,
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:        InvokeAPIAddLiquidity,
 		Param:         addParam,
 		CallID:        DeriveInvokeCallID("add", 1, addr),
-		FundingOutput: testContractOutput("add", 1, addr, 1, testAsset("ordx:f:test", 10)),
+		FundingOutput: testContractOutput("add", 1, addr, 3, testAsset("ordx:f:test", 10)),
 		Height:        2,
 	})
 	require.NoError(t, err)
@@ -298,7 +397,7 @@ func TestSettleAMMDoesNotRecheckInitialKAfterReady(t *testing.T) {
 		Action:        InvokeAPISwap,
 		Param:         param,
 		CallID:        DeriveInvokeCallID("sell1", 1, addr),
-		FundingOutput: testContractOutput("sell1", 1, addr, SwapInvokeFee, testAsset("ordx:f:test", 1)),
+		FundingOutput: testContractOutput("sell1", 1, addr, SwapInvokeFee, testAsset("ordx:f:test", 10)),
 		Height:        2,
 	})
 	require.NoError(t, err)
@@ -605,7 +704,7 @@ func TestSettleAMMRemoveLiquiditySendsProfitShareToFoundation(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, plan.Transfers)
 
-	applyAMMSwapInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "1", "10", 10, nil, 2)
+	applyAMMSwapInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "50", "20", 20, nil, 2)
 	plan, err = runtime.SettleBlock(2)
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)

@@ -156,14 +156,14 @@ func (r *ContractRuntime) settleAMM(height int64,
 			switch item.OrderType {
 			case OrderTypeBuy:
 				beforeReason, beforeDone := item.Reason, item.Done
-				deal, transfer, ok, err := settleAMMBuy(item, pricingPoolAsset, pricingPoolGas, availableAsset, settlementK, assetPrecision)
+				deal, transfers, ok, err := settleAMMBuy(item, pricingPoolAsset, pricingPoolGas, availableAsset, settlementK, assetPrecision)
 				if err != nil {
 					return nil, err
 				}
 				changed = changed || item.Reason != beforeReason || item.Done != beforeDone
 				if !ok {
 					if item.Done == ItemStatusRefunded {
-						appendAMMRefundTransfer(plan, item, transfer)
+						appendAMMRefundTransfer(plan, item, firstSettlementTransfer(transfers))
 					}
 					continue
 				}
@@ -171,7 +171,7 @@ func (r *ContractRuntime) settleAMM(height int64,
 				availableAsset = scommon.DecimalSub(availableAsset, parseDecimalOrZero(deal.AssetAmt))
 				availableGas += deal.SatValue
 				plan.Deals = append(plan.Deals, deal)
-				plan.Transfers = append(plan.Transfers, transfer)
+				plan.Transfers = append(plan.Transfers, transfers...)
 				plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
 				addSettlementInputs(plan, item)
 			case OrderTypeSell:
@@ -931,65 +931,147 @@ func ammSettlementK(running RunningData, poolAsset *scommon.Decimal, poolGas int
 }
 
 func settleAMMBuy(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64, availableAsset *scommon.Decimal, k *scommon.Decimal,
-	assetPrecision contractframework.AssetPrecisionResolver) (SettlementDeal, SettlementTransfer, bool, error) {
+	assetPrecision contractframework.AssetPrecisionResolver) (SettlementDeal, []SettlementTransfer, bool, error) {
 
 	if poolAsset.Sign() <= 0 || poolGas <= 0 || availableAsset == nil || availableAsset.Sign() <= 0 ||
 		k == nil || k.Sign() <= 0 || item.RemainingValue <= 0 {
 		item.Reason = InvokeReasonNoEnoughAsset
 		item.Done = ItemStatusClosedDirectly
-		return SettlementDeal{}, SettlementTransfer{}, false, nil
+		return SettlementDeal{}, nil, false, nil
 	}
-	inputValue := item.RemainingValue
-	realSwapValue := realSwapValue(inputValue)
-	if realSwapValue.Sign() == 0 {
-		item.Reason = InvokeReasonNoEnoughAsset
-		item.Done = ItemStatusClosedDirectly
-		return SettlementDeal{}, SettlementTransfer{}, false, nil
-	}
-	newPoolGas := scommon.DecimalAdd(scommon.NewDecimal(poolGas, 3), realSwapValue)
-	newPoolAsset := scommon.DecimalDiv(k, newPoolGas)
-	if newPoolAsset == nil {
-		return SettlementDeal{}, SettlementTransfer{}, false, fmt.Errorf("failed to calculate AMM buy output")
-	}
-	outAsset := scommon.DecimalSub(poolAsset, newPoolAsset)
-	if outAsset.Sign() <= 0 {
-		item.Reason = InvokeReasonNoEnoughAsset
-		item.Done = ItemStatusClosedDirectly
-		return SettlementDeal{}, SettlementTransfer{}, false, nil
-	}
-	outAsset = normalizeAMMSwapAssetOutput(item.AssetName, outAsset, availableAsset, assetPrecision)
-	if outAsset == nil || outAsset.Sign() <= 0 {
-		item.Reason = InvokeReasonNoEnoughAsset
-		transfer := markItemRefunded(item)
-		return SettlementDeal{}, transfer, false, nil
-	}
+	maxInputValue := item.RemainingValue
 	minAsset := item.ExpectedAmt
 	if minAsset == nil {
 		minAsset = parseDecimalOrZero("0")
 	}
-	if minAsset.Sign() > 0 && outAsset.Cmp(minAsset) < 0 {
-		item.Reason = InvokeReasonSlippageProtect
-		transfer := markItemRefunded(item)
-		return SettlementDeal{}, transfer, false, nil
+	inputValue := maxInputValue
+	var outAsset *scommon.Decimal
+	if minAsset.Sign() > 0 {
+		if minAsset.Cmp(availableAsset) > 0 || minAsset.Cmp(poolAsset) >= 0 ||
+			!settlementAssetOutputNonZero(item.AssetName, minAsset, assetPrecision) {
+			item.Reason = InvokeReasonNoEnoughAsset
+			transfer := markItemRefunded(item)
+			return SettlementDeal{}, []SettlementTransfer{transfer}, false, nil
+		}
+		requiredInput, err := requiredAMMBuyInputValue(minAsset, poolAsset, poolGas, k)
+		if err != nil {
+			return SettlementDeal{}, nil, false, err
+		}
+		requiredInput, err = adjustAMMBuyInputValue(requiredInput, maxInputValue, minAsset, poolAsset, poolGas, k)
+		if err != nil {
+			return SettlementDeal{}, nil, false, err
+		}
+		if requiredInput <= 0 || requiredInput > maxInputValue {
+			item.Reason = InvokeReasonSlippageProtect
+			transfer := markItemRefunded(item)
+			return SettlementDeal{}, []SettlementTransfer{transfer}, false, nil
+		}
+		inputValue = requiredInput
+		outAsset = minAsset.Clone()
+	} else {
+		calculatedOut, err := calculateAMMBuyOutput(inputValue, poolAsset, poolGas, k)
+		if err != nil {
+			return SettlementDeal{}, nil, false, err
+		}
+		outAsset = normalizeAMMSwapAssetOutput(item.AssetName, calculatedOut, availableAsset, assetPrecision)
+		if outAsset == nil || outAsset.Sign() <= 0 {
+			item.Reason = InvokeReasonNoEnoughAsset
+			transfer := markItemRefunded(item)
+			return SettlementDeal{}, []SettlementTransfer{transfer}, false, nil
+		}
 	}
 	item.OutAmt = outAsset
+	item.OutValue = inputValue
 	item.RemainingValue = 0
 	item.Done = ItemStatusDealt
-	unitPrice := decimalString(scommon.DecimalDiv(realSwapValue, outAsset))
+	unitPrice := decimalString(scommon.DecimalDiv(realSwapValue(inputValue), outAsset))
 	deal := SettlementDeal{
 		BuyItemID: item.ID,
 		AssetAmt:  decimalString(item.OutAmt),
 		SatValue:  inputValue,
 		UnitPrice: unitPrice,
 	}
-	transfer := SettlementTransfer{
+	transfers := []SettlementTransfer{{
 		ItemID:    item.ID,
 		To:        item.Address,
 		AssetName: item.AssetName,
 		AssetAmt:  decimalString(item.OutAmt),
 		Reason:    SettlementReasonDeal,
+	}}
+	if refundValue := maxInputValue - inputValue; refundValue > 0 {
+		transfers = append(transfers, SettlementTransfer{
+			ItemID:   item.ID,
+			To:       item.Address,
+			SatValue: refundValue,
+			Reason:   SettlementReasonRefund,
+		})
 	}
-	return deal, transfer, true, nil
+	return deal, transfers, true, nil
+}
+
+func calculateAMMBuyOutput(inputValue int64, poolAsset *scommon.Decimal, poolGas int64, k *scommon.Decimal) (*scommon.Decimal, error) {
+	realSwapValue := realSwapValue(inputValue)
+	if realSwapValue.Sign() == 0 {
+		return parseDecimalOrZero("0"), nil
+	}
+	newPoolGas := scommon.DecimalAdd(scommon.NewDecimal(poolGas, 3), realSwapValue)
+	newPoolAsset := scommon.DecimalDiv(k, newPoolGas)
+	if newPoolAsset == nil {
+		return nil, fmt.Errorf("failed to calculate AMM buy output")
+	}
+	outAsset := scommon.DecimalSub(poolAsset, newPoolAsset)
+	if outAsset.Sign() <= 0 {
+		return parseDecimalOrZero("0"), nil
+	}
+	return outAsset, nil
+}
+
+func requiredAMMBuyInputValue(targetAsset, poolAsset *scommon.Decimal, poolGas int64, k *scommon.Decimal) (int64, error) {
+	if targetAsset == nil || targetAsset.Sign() <= 0 || poolAsset == nil || poolAsset.Sign() <= 0 ||
+		k == nil || k.Sign() <= 0 || poolGas <= 0 {
+		return 0, nil
+	}
+	newPoolAsset := scommon.DecimalSub(poolAsset, targetAsset)
+	if newPoolAsset.Sign() <= 0 {
+		return 0, nil
+	}
+	newPoolGas := scommon.DecimalDiv(k, newPoolAsset)
+	if newPoolGas == nil {
+		return 0, fmt.Errorf("failed to calculate AMM buy required pool value")
+	}
+	requiredReal := scommon.DecimalSub(newPoolGas, scommon.NewDecimal(poolGas, newPoolGas.Precision))
+	if requiredReal.Sign() <= 0 {
+		return 0, nil
+	}
+	requiredGross := scommon.DecimalDiv(scommon.DecimalMul(requiredReal, scommon.NewDefaultDecimal(1000)), scommon.NewDefaultDecimal(1000-SwapServiceFeeRatio))
+	if requiredGross == nil {
+		return 0, fmt.Errorf("failed to calculate AMM buy required input")
+	}
+	return requiredGross.Ceil(), nil
+}
+
+func adjustAMMBuyInputValue(inputValue, maxInputValue int64, targetAsset, poolAsset *scommon.Decimal, poolGas int64, k *scommon.Decimal) (int64, error) {
+	if inputValue <= 0 {
+		return inputValue, nil
+	}
+	for inputValue <= maxInputValue {
+		out, err := calculateAMMBuyOutput(inputValue, poolAsset, poolGas, k)
+		if err != nil {
+			return 0, err
+		}
+		if out != nil && out.Cmp(targetAsset) >= 0 {
+			return inputValue, nil
+		}
+		inputValue++
+	}
+	return inputValue, nil
+}
+
+func firstSettlementTransfer(transfers []SettlementTransfer) SettlementTransfer {
+	if len(transfers) == 0 {
+		return SettlementTransfer{}
+	}
+	return transfers[0]
 }
 
 func settleAMMSell(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64, availableGas int64, k *scommon.Decimal) (SettlementDeal, SettlementTransfer, bool, error) {

@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 )
@@ -13,8 +14,10 @@ const (
 var (
 	contractNameSelector      = methodSelector("contractName()")
 	contractSubtypeSelector   = methodSelector("contractSubtype()")
+	contractKindSelector      = methodSelector("contractKind()")
 	managedAssetCountSelector = methodSelector("managedAssetCount()")
 	managedAssetSelector      = methodSelector("managedAsset(uint256)")
+	stateViewSelector         = methodSelector("stateView()")
 	legacyAssetNameSelector   = methodSelector("assetName()")
 	legacyAssetANameSelector  = methodSelector("assetAName()")
 	legacyAssetBNameSelector  = methodSelector("assetBName()")
@@ -25,6 +28,18 @@ type ContractMetadata struct {
 	Name          string   `json:"name,omitempty"`
 	Subtype       string   `json:"subtype,omitempty"`
 	ManagedAssets []string `json:"assets,omitempty"`
+}
+
+type ContractStateView struct {
+	Name          string      `json:"name,omitempty"`
+	Subtype       string      `json:"subtype,omitempty"`
+	ManagedAssets []string    `json:"assets,omitempty"`
+	Balance       string      `json:"balance"`
+	Nonce         uint64      `json:"nonce"`
+	CodeSize      int         `json:"codeSize"`
+	Deployer      string      `json:"deployer,omitempty"`
+	Custom        interface{} `json:"custom,omitempty"`
+	CustomRaw     string      `json:"customRaw,omitempty"`
 }
 
 func (m ContractMetadata) Empty() bool {
@@ -89,6 +104,11 @@ func QueryContractMetadata(state *MemoryStateDB, contract ContractAddress, block
 	if subtype, ok := readString(contractSubtypeSelector); ok {
 		meta.Subtype = subtype
 	}
+	if meta.Subtype == "" {
+		if kind, ok := readString(contractKindSelector); ok {
+			meta.Subtype = kind
+		}
+	}
 	if count, ok := readUint(managedAssetCountSelector); ok {
 		if count > uint64(maxAssets) {
 			count = uint64(maxAssets)
@@ -116,6 +136,63 @@ func QueryContractMetadata(state *MemoryStateDB, contract ContractAddress, block
 		return ContractMetadata{}, false
 	}
 	return meta, true
+}
+
+func QueryContractStateView(state *MemoryStateDB, contract ContractAddress, block BlockContext,
+	maxAssets int) (ContractStateView, bool) {
+
+	if state == nil {
+		return ContractStateView{}, false
+	}
+	target := ContractAddressHash(contract)
+	gethAddr := GethAddress(target)
+	if !state.Exist(gethAddr) {
+		return ContractStateView{}, false
+	}
+	meta, _ := QueryContractMetadata(state, contract, block, maxAssets)
+	view := ContractStateView{
+		Name:          meta.Name,
+		Subtype:       meta.Subtype,
+		ManagedAssets: meta.ManagedAssets,
+		Balance:       state.GetBalance(gethAddr).String(),
+		Nonce:         state.GetNonce(gethAddr),
+		CodeSize:      state.GetCodeSize(gethAddr),
+	}
+	if deployer, ok := state.ContractDeployer(gethAddr); ok {
+		view.Deployer = deployer
+	}
+	if custom, ok := queryContractStateViewString(state, target, block); ok {
+		custom = strings.TrimSpace(custom)
+		if custom != "" {
+			var decoded interface{}
+			if err := json.Unmarshal([]byte(custom), &decoded); err == nil {
+				view.Custom = decoded
+			} else {
+				view.CustomRaw = custom
+			}
+		}
+	}
+	return view, true
+}
+
+func queryContractStateViewString(state *MemoryStateDB, target EVMAddress, block BlockContext) (string, bool) {
+	runtime := NewRuntime(state.Clone())
+	result := runtime.Call(CallRequest{
+		Caller: EVMAddress{},
+		Target: target,
+		CallID: "state-view",
+		Input:  stateViewSelector[:],
+		Gas:    DefaultMetadataQueryGas,
+		Block:  block,
+	})
+	if result.Err != nil || result.Status != ResultStatusSuccess {
+		return "", false
+	}
+	value, err := abiReadString(result.ReturnData, 0)
+	if err != nil {
+		return "", false
+	}
+	return value, strings.TrimSpace(value) != ""
 }
 
 func metadataHasAsset(assets []string, asset string) bool {
