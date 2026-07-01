@@ -11,6 +11,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -113,11 +114,11 @@ func TestEVMAssetFeeBypassesRelaySatoshiFee(t *testing.T) {
 
 func TestEVMDeployRequiresContractFundingOutput(t *testing.T) {
 	deployScript, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
-		Type:        evmcommon.ContractTypeEVM,
-		SubType:     "sol",
-		GasLimit:    1000,
-		DeployNonce: 1,
-		ContractContent:    []byte{0x60, 0x00},
+		Type:            evmcommon.ContractTypeEVM,
+		SubType:         "sol",
+		GasLimit:        1000,
+		DeployNonce:     1,
+		ContractContent: []byte{0x60, 0x00},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +176,147 @@ func TestEVMInvokeRequiresContractFundingOutput(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected invoke without contract funding output to be rejected")
+	}
+}
+
+func TestOrdinaryTxAllowsAtMostFourOpReturns(t *testing.T) {
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	for i := 0; i < maxStandardNullDataOutputs; i++ {
+		tx.AddTxOut(wire.NewTxOut(0, nil, []byte{txscript.OP_RETURN}))
+	}
+	if err := CheckTransactionStandard(
+		btcutil.NewTx(tx),
+		1,
+		time.Unix(1, 0),
+		DefaultMinRelayTxFee,
+		1,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	tx.AddTxOut(wire.NewTxOut(0, nil, []byte{txscript.OP_RETURN}))
+	if err := CheckTransactionStandard(
+		btcutil.NewTx(tx),
+		1,
+		time.Unix(1, 0),
+		DefaultMinRelayTxFee,
+		1,
+	); err == nil {
+		t.Fatal("expected ordinary tx with more than four OP_RETURN outputs to be rejected")
+	}
+}
+
+func TestLargeDeployMayExceedOpReturnLimit(t *testing.T) {
+	scripts, err := evmcommon.DeployNullDataScripts(evm.DeployPayload{
+		Type:            evmcommon.ContractTypeEVM,
+		SubType:         "sol",
+		GasLimit:        1000,
+		DeployNonce:     1,
+		ContractContent: make([]byte, evmcommon.MaxNullDataPayloadLen*maxStandardNullDataOutputs),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) <= maxStandardNullDataOutputs {
+		t.Fatalf("expected split deploy payload to exceed OP_RETURN limit, got %d", len(scripts))
+	}
+
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	for _, script := range scripts {
+		tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	}
+	contractOut, err := evm.NewContractTxOut(0, wire.TxAssets{{
+		Name:   wire.AssetName{Protocol: "ordx", Type: "ft", Ticker: "gas"},
+		Amount: *scommon.NewDefaultDecimal(1),
+	}}, testEVMContractAddress(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.AddTxOut(contractOut)
+
+	if err := CheckTransactionStandard(
+		btcutil.NewTx(tx),
+		1,
+		time.Unix(1, 0),
+		DefaultMinRelayTxFee,
+		1,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLargeInvokeCannotExceedOpReturnLimit(t *testing.T) {
+	scripts, err := evmcommon.InvokeNullDataScripts(evm.InvokePayload{
+		GasLimit:  1000,
+		CallNonce: 1,
+		Param:     make([]byte, evmcommon.MaxNullDataPayloadLen*maxStandardNullDataOutputs),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) <= maxStandardNullDataOutputs {
+		t.Fatalf("expected split invoke payload to exceed OP_RETURN limit, got %d", len(scripts))
+	}
+
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	for _, script := range scripts {
+		tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	}
+	contractOut, err := evm.NewContractTxOut(1000, nil, testEVMContractAddress(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.AddTxOut(contractOut)
+
+	if err := CheckTransactionStandard(
+		btcutil.NewTx(tx),
+		1,
+		time.Unix(1, 0),
+		DefaultMinRelayTxFee,
+		1,
+	); err == nil {
+		t.Fatal("expected split invoke payload to be rejected")
+	}
+}
+
+func TestLargeDeployRejectsMixedOpReturn(t *testing.T) {
+	scripts, err := evmcommon.DeployNullDataScripts(evm.DeployPayload{
+		Type:            evmcommon.ContractTypeEVM,
+		SubType:         "sol",
+		GasLimit:        1000,
+		DeployNonce:     1,
+		ContractContent: make([]byte, evmcommon.MaxNullDataPayloadLen*maxStandardNullDataOutputs),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	for _, script := range scripts {
+		tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	}
+	tx.AddTxOut(wire.NewTxOut(0, nil, []byte{txscript.OP_RETURN}))
+	contractOut, err := evm.NewContractTxOut(0, wire.TxAssets{{
+		Name:   wire.AssetName{Protocol: "ordx", Type: "ft", Ticker: "gas"},
+		Amount: *scommon.NewDefaultDecimal(1),
+	}}, testEVMContractAddress(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.AddTxOut(contractOut)
+
+	if err := CheckTransactionStandard(
+		btcutil.NewTx(tx),
+		1,
+		time.Unix(1, 0),
+		DefaultMinRelayTxFee,
+		1,
+	); err == nil {
+		t.Fatal("expected deploy with mixed OP_RETURN output to be rejected")
 	}
 }
 
