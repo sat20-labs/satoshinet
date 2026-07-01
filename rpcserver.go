@@ -41,6 +41,7 @@ import (
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
+	evmcontract "github.com/sat20-labs/satoshinet/contract/evm"
 	contractnode "github.com/sat20-labs/satoshinet/contract/node"
 	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
@@ -1101,11 +1102,19 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 		if !state.Exist(addr) {
 			return nil, map[string]interface{}{"exists": false}, nil
 		}
+		details := make(map[string]interface{})
+		best := s.cfg.Chain.BestSnapshot()
+		if meta, ok := evmcontract.QueryContractMetadata(state, contractAddr, evmcontract.BlockContext{
+			Number: uint64(best.Height),
+			Time:   uint64(best.MedianTime.Unix()),
+		}, 0); ok {
+			details["contract"] = meta
+		}
 		return map[string]interface{}{
 			"balance":   state.GetBalance(addr).String(),
 			"nonce":     state.GetNonce(addr),
 			"code_size": state.GetCodeSize(addr),
-		}, nil, nil
+		}, details, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported contract type %d", contractType)
 	}
