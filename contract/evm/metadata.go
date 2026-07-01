@@ -9,6 +9,7 @@ import (
 const (
 	DefaultMetadataQueryGas = int64(300000)
 	DefaultMaxManagedAssets = 8
+	UnknownContractName     = "unknown"
 )
 
 var (
@@ -150,8 +151,12 @@ func QueryContractStateView(state *MemoryStateDB, contract ContractAddress, bloc
 		return ContractStateView{}, false
 	}
 	meta, _ := QueryContractMetadata(state, contract, block, maxAssets)
+	name := meta.Name
+	if strings.TrimSpace(name) == "" {
+		name = UnknownContractName
+	}
 	view := ContractStateView{
-		Name:          meta.Name,
+		Name:          name,
 		Subtype:       meta.Subtype,
 		ManagedAssets: meta.ManagedAssets,
 		Balance:       state.GetBalance(gethAddr).String(),

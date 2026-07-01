@@ -16,6 +16,7 @@ func TestQueryContractStateViewReturnsDefaultAccountSummary(t *testing.T) {
 
 	view, ok := QueryContractStateView(state, contract, BlockContext{Number: 10, Time: 20}, 0)
 	require.True(t, ok)
+	require.Equal(t, UnknownContractName, view.Name)
 	require.Equal(t, "0", view.Balance)
 	require.Equal(t, uint64(7), view.Nonce)
 	require.Equal(t, 2, view.CodeSize)
