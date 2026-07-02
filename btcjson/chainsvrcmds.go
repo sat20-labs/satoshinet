@@ -711,6 +711,49 @@ func NewReviewPredictionReadyCmd(contractJSON string, checkedAt *int64) *ReviewP
 	return &ReviewPredictionReadyCmd{ContractJSON: contractJSON, CheckedAt: checkedAt}
 }
 
+// EVMEstimateFundingAsset defines a business funding asset for estimateevminvoke.
+type EVMEstimateFundingAsset struct {
+	AssetName string `json:"assetName"`
+	Amount    string `json:"amount"`
+}
+
+// EVMEstimateInvokeRequest defines the estimateevminvoke request payload.
+type EVMEstimateInvokeRequest struct {
+	ContractAddress string                    `json:"contractAddress"`
+	Caller          string                    `json:"caller"`
+	CalldataHex     string                    `json:"calldataHex"`
+	Value           *int64                    `json:"value,omitempty"`
+	GasLimit        *int64                    `json:"gasLimit,omitempty"`
+	Funding         []EVMEstimateFundingAsset `json:"funding,omitempty"`
+}
+
+// EstimateEVMInvokeCmd defines the estimateevminvoke JSON-RPC command.
+type EstimateEVMInvokeCmd struct {
+	Request EVMEstimateInvokeRequest
+}
+
+func NewEstimateEVMInvokeCmd(request EVMEstimateInvokeRequest) *EstimateEVMInvokeCmd {
+	return &EstimateEVMInvokeCmd{Request: request}
+}
+
+// EVMEstimateDeployRequest defines the estimateevmdeploy request payload.
+type EVMEstimateDeployRequest struct {
+	Caller      string  `json:"caller"`
+	InitCodeHex string  `json:"initCodeHex"`
+	Value       *int64  `json:"value,omitempty"`
+	GasLimit    *int64  `json:"gasLimit,omitempty"`
+	DeployNonce *uint64 `json:"deployNonce,omitempty"`
+}
+
+// EstimateEVMDeployCmd defines the estimateevmdeploy JSON-RPC command.
+type EstimateEVMDeployCmd struct {
+	Request EVMEstimateDeployRequest
+}
+
+func NewEstimateEVMDeployCmd(request EVMEstimateDeployRequest) *EstimateEVMDeployCmd {
+	return &EstimateEVMDeployCmd{Request: request}
+}
+
 // GetContractHistoryCmd defines the getcontracthistory JSON-RPC command.
 type GetContractHistoryCmd struct {
 	Address string
@@ -1222,6 +1265,8 @@ func init() {
 	MustRegisterCmd("getcontract", (*GetContractCmd)(nil), flags)
 	MustRegisterCmd("getcontracthistory", (*GetContractHistoryCmd)(nil), flags)
 	MustRegisterCmd("getcontractstate", (*GetContractStateCmd)(nil), flags)
+	MustRegisterCmd("estimateevmdeploy", (*EstimateEVMDeployCmd)(nil), flags)
+	MustRegisterCmd("estimateevminvoke", (*EstimateEVMInvokeCmd)(nil), flags)
 	MustRegisterCmd("reviewpredictionready", (*ReviewPredictionReadyCmd)(nil), flags)
 	MustRegisterCmd("getdescriptorinfo", (*GetDescriptorInfoCmd)(nil), flags)
 	MustRegisterCmd("getdifficulty", (*GetDifficultyCmd)(nil), flags)

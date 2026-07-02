@@ -16,10 +16,10 @@ func TestRuntimeCallSimpleReturn(t *testing.T) {
 	// PUSH1 0x2a PUSH1 0x00 MSTORE PUSH1 0x20 PUSH1 0x00 RETURN
 	rt.SetCode(contract, []byte{0x60, 0x2a, 0x60, 0x00, 0x52, 0x60, 0x20, 0x60, 0x00, 0xf3})
 	res := rt.Call(CallRequest{
-		Caller: caller,
-		Target: contract,
-		Gas:    100000,
-		Block:  BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		CallerAddress: caller.String(),
+		TargetAddress: contract.String(),
+		Gas:           100000,
+		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
 	})
 	if res.Err != nil {
 		t.Fatal(res.Err)
@@ -44,12 +44,12 @@ func TestRuntimeDeployThenCall(t *testing.T) {
 	rt := NewRuntime(nil)
 
 	deploy := rt.Deploy(DeployRequest{
-		Caller:      caller,
-		CallID:      "deploy-1",
-		InitCode:    return42InitCode(),
-		Gas:         200000,
-		DeployNonce: 3,
-		Block:       BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		CallerAddress: caller.String(),
+		CallID:        "deploy-1",
+		InitCode:      return42InitCode(),
+		Gas:           200000,
+		DeployNonce:   3,
+		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
 	})
 	if deploy.Err != nil {
 		t.Fatal(deploy.Err)
@@ -62,11 +62,11 @@ func TestRuntimeDeployThenCall(t *testing.T) {
 	}
 
 	call := rt.Call(CallRequest{
-		Caller: caller,
-		Target: ContractAddressHash(deploy.Contract),
-		CallID: "call-1",
-		Gas:    100000,
-		Block:  BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+		CallerAddress: caller.String(),
+		TargetAddress: deploy.Contract.MustEncode(),
+		CallID:        "call-1",
+		Gas:           100000,
+		Block:         BlockContext{Number: 1, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
 	})
 	if call.Err != nil {
 		t.Fatal(call.Err)

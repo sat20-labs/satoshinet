@@ -452,8 +452,8 @@ func mustTestEVMAddress(t *testing.T, address string) evm.EVMAddress {
 }
 
 func fixedTestCaller(caller evm.EVMAddress) evm.CallerResolver {
-	return func(*wire.MsgTx, evmcommon.Tx) (evm.EVMAddress, error) {
-		return caller, nil
+	return func(*wire.MsgTx, evmcommon.Tx) (string, error) {
+		return caller.String(), nil
 	}
 }
 

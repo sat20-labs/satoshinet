@@ -65,6 +65,19 @@ type GetBlockStatsResult struct {
 	UTXOSizeIncrease   int64   `json:"utxo_size_inc"`
 }
 
+// EstimateEVMInvokeResult models dry-run gas estimation for an EVM invoke.
+type EstimateEVMInvokeResult struct {
+	Success           bool   `json:"success"`
+	Status            string `json:"status"`
+	GasUsed           int64  `json:"gasUsed"`
+	GasLimit          int64  `json:"gasLimit"`
+	SuggestedGasLimit int64  `json:"suggestedGasLimit"`
+	Error             string `json:"error,omitempty"`
+	ReturnDataHex     string `json:"returnDataHex,omitempty"`
+	ContractAddress   string `json:"contractAddress,omitempty"`
+	RuntimeCodeSize   int    `json:"runtimeCodeSize,omitempty"`
+}
+
 // GetBlockVerboseResult models the data from the getblock command when the
 // verbose flag is set to 1.  When the verbose flag is set to 0, getblock returns a
 // hex-encoded string. When the verbose flag is set to 1, getblock returns an object

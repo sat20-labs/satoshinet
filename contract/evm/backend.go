@@ -3,6 +3,7 @@ package evm
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -12,7 +13,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-type CallerResolver func(tx *wire.MsgTx, contractTx contract.Tx) (EVMAddress, error)
+type CallerResolver func(tx *wire.MsgTx, contractTx contract.Tx) (string, error)
 type GasRefundRecipientResolver func(tx *wire.MsgTx, contractTx contract.Tx) (recipient string, ok bool, err error)
 type ResultVerifier = contractframework.ResultVerifier
 type TriggerResolver func(ctx TriggerResolutionContext) ([]TriggerCall, error)
@@ -29,47 +30,61 @@ func EVMAddressFromPublicKey(pubKey []byte) (EVMAddress, error) {
 	return addr, nil
 }
 
-func LastInputCallerResolver(tx *wire.MsgTx, contractTx contract.Tx) (EVMAddress, error) {
-	var zero EVMAddress
+func EVMAddressFromAddressString(address string) EVMAddress {
+	trimmed := strings.TrimSpace(address)
+	if contractAddr, err := DecodeContractAddress(trimmed); err == nil {
+		return ContractAddressHash(contractAddr)
+	}
+	if addr, err := ParseEVMAddressHex(trimmed); err == nil {
+		return addr
+	}
+	var out EVMAddress
+	hash := btcutil.Hash160([]byte(trimmed))
+	copy(out[:], hash)
+	return out
+}
+
+func LastInputCallerResolver(tx *wire.MsgTx, contractTx contract.Tx) (string, error) {
 	if tx == nil {
-		return zero, errors.New("missing transaction")
+		return "", errors.New("missing transaction")
 	}
 	if len(tx.TxIn) == 0 {
-		return zero, errors.New("transaction has no inputs")
+		return "", errors.New("transaction has no inputs")
 	}
 	pubKey, err := ExtractInputPublicKey(tx.TxIn[len(tx.TxIn)-1])
 	if err != nil {
-		return zero, err
+		return "", err
 	}
-	return EVMAddressFromPublicKey(pubKey)
+	caller, err := EVMAddressFromPublicKey(pubKey)
+	if err != nil {
+		return "", err
+	}
+	return caller.String(), nil
 }
 
 func LastInputPreviousOutputCallerResolver(params *chaincfg.Params,
 	resolve PreviousOutputScriptResolver) CallerResolver {
 
-	return func(tx *wire.MsgTx, contractTx contract.Tx) (EVMAddress, error) {
-		var zero EVMAddress
+	return func(tx *wire.MsgTx, contractTx contract.Tx) (string, error) {
 		if tx == nil {
-			return zero, errors.New("missing transaction")
+			return "", errors.New("missing transaction")
 		}
 		if len(tx.TxIn) == 0 {
-			return zero, errors.New("transaction has no inputs")
+			return "", errors.New("transaction has no inputs")
 		}
 		if resolve != nil {
 			outpoint := tx.TxIn[len(tx.TxIn)-1].PreviousOutPoint
 			if pkScript, ok := resolve(outpoint); ok {
 				address, err := contractframework.PreviousOutputAddress(pkScript, params)
 				if err != nil {
-					return zero, err
+					return "", err
 				}
 				if address != "" {
-					hash := btcutil.Hash160([]byte(address))
-					copy(zero[:], hash)
-					return zero, nil
+					return address, nil
 				}
 			}
 		}
-		return zero, errors.New("missing caller previous output address")
+		return "", errors.New("missing caller previous output address")
 	}
 }
 
@@ -388,11 +403,7 @@ func (e *Backend) executorConfig() contractframework.ExecutorConfig {
 			GasConfig: e.GasConfig,
 		},
 		ResolveActor: func(tx *wire.MsgTx, contractTx contract.Tx) (string, error) {
-			caller, err := e.resolveCaller(tx, contractTx)
-			if err != nil {
-				return "", err
-			}
-			return caller.String(), nil
+			return e.resolveCaller(tx, contractTx)
 		},
 		ResolveRefundRecipient: func(tx *wire.MsgTx, contractTx contract.Tx) (string, bool, error) {
 			recipient, err := e.resolveGasRefundRecipient(tx, contractTx)
@@ -496,7 +507,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx, contractTx contra
 		return nil
 	}
 	parsed := ParsedTx{Type: TxTypeInvoke, ContractOutputs: []ContractOutput{output}, Inputs: contractframework.MsgTxInputs(tx)}
-	caller, err := e.callerFromContractTx(contractTx, tx, parsed)
+	callerAddress, err := e.callerFromContractTx(contractTx, tx, parsed)
 	if err != nil {
 		return nil
 	}
@@ -507,8 +518,8 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx, contractTx contra
 	callID := DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract)
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Call(CallRequest{
-		Caller:        caller,
-		Target:        ContractAddressHash(output.Contract),
+		CallerAddress: callerAddress,
+		TargetAddress: output.Contract.MustEncode(),
 		CallID:        callID,
 		Input:         nil,
 		Gas:           e.GasConfig.Normalize().InvokeBaseGas,
@@ -596,7 +607,7 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return nil
 	}
-	caller, err := e.callerFromContractTx(contractTx, tx, parsed)
+	callerAddress, err := e.callerFromContractTx(contractTx, tx, parsed)
 	if err != nil {
 		return nil
 	}
@@ -604,7 +615,8 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return nil
 	}
-	expectedContract, err := DeriveCreateContractAddress(e.ContractPrefix, caller, validated.Payload.DeployNonce)
+	expectedContract, err := DeriveCreateContractAddress(e.ContractPrefix,
+		EVMAddressFromAddressString(callerAddress), validated.Payload.DeployNonce)
 	if err != nil {
 		return nil
 	}
@@ -619,12 +631,12 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	}
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Deploy(DeployRequest{
-		Caller:      caller,
-		CallID:      callID,
-		InitCode:    validated.Payload.ContractContent,
-		Gas:         validated.Payload.GasLimit,
-		DeployNonce: validated.Payload.DeployNonce,
-		Block:       e.Block,
+		CallerAddress: callerAddress,
+		CallID:        callID,
+		InitCode:      validated.Payload.ContractContent,
+		Gas:           validated.Payload.GasLimit,
+		DeployNonce:   validated.Payload.DeployNonce,
+		Block:         e.Block,
 	})
 	if !result.Contract.Equal(expectedContract) {
 		return fmt.Errorf("deploy contract mismatch: got %s want %s",
@@ -671,7 +683,7 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if validated.Payload.Action == contract.ContractInvokeAPIClose {
 		return e.executeCloseInvokeTx(tx, validated, gasRefundRecipient, funding)
 	}
-	caller, err := e.callerFromContractTx(contractTx, tx, parsed)
+	callerAddress, err := e.callerFromContractTx(contractTx, tx, parsed)
 	if err != nil {
 		return nil
 	}
@@ -684,8 +696,8 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	}
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Call(CallRequest{
-		Caller:        caller,
-		Target:        ContractAddressHash(validated.Contract),
+		CallerAddress: callerAddress,
+		TargetAddress: validated.Contract.MustEncode(),
 		CallID:        callID,
 		Input:         contractframework.CloneBytes(validated.Payload.Param),
 		Gas:           validated.Payload.GasLimit,
@@ -815,12 +827,12 @@ func (e *Backend) ExecuteTrigger(call TriggerCall) error {
 	callID := DeriveTriggerCallID(call.Trigger.Contract, call.Trigger.ID, int64(e.Block.Number))
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Call(CallRequest{
-		Caller: ContractAddressHash(call.Trigger.Contract),
-		Target: ContractAddressHash(call.Trigger.Contract),
-		CallID: callID,
-		Input:  call.Calldata,
-		Gas:    call.GasLimit,
-		Block:  e.Block,
+		CallerAddress: call.Trigger.Contract.MustEncode(),
+		TargetAddress: call.Trigger.Contract.MustEncode(),
+		CallID:        callID,
+		Input:         call.Calldata,
+		Gas:           call.GasLimit,
+		Block:         e.Block,
 	})
 	intents := contractframework.CloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
 	outcome := contractframework.ExecutionOutcome{
@@ -936,9 +948,9 @@ func (e *Backend) lastOutcomeSince(before int) (contractframework.ExecutionOutco
 	return contractframework.LastExecutionOutcomeSince(e.records, before)
 }
 
-func (e *Backend) callerFromContractTx(contractTx contract.Tx, raw *wire.MsgTx, parsed ParsedTx) (EVMAddress, error) {
+func (e *Backend) callerFromContractTx(contractTx contract.Tx, raw *wire.MsgTx, parsed ParsedTx) (string, error) {
 	if contractTx.Actor != "" {
-		return ParseEVMAddressHex(contractTx.Actor)
+		return contractTx.Actor, nil
 	}
 	return e.resolveCaller(raw, contractTx)
 }
@@ -950,9 +962,9 @@ func (e *Backend) refundRecipientFromContractTx(contractTx contract.Tx, raw *wir
 	return e.resolveGasRefundRecipient(raw, contractTx)
 }
 
-func (e *Backend) resolveCaller(tx *wire.MsgTx, contractTx contract.Tx) (EVMAddress, error) {
+func (e *Backend) resolveCaller(tx *wire.MsgTx, contractTx contract.Tx) (string, error) {
 	if e.ResolveCaller == nil {
-		return EVMAddress{}, errors.New("missing EVM caller resolver")
+		return "", errors.New("missing EVM caller resolver")
 	}
 	return e.ResolveCaller(tx, contractTx)
 }

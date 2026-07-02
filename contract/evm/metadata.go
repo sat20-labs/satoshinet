@@ -59,16 +59,14 @@ func QueryContractMetadata(state *MemoryStateDB, contract ContractAddress, block
 		maxAssets = DefaultMaxManagedAssets
 	}
 	target := ContractAddressHash(contract)
-	caller := EVMAddress{}
 	query := func(input []byte) ([]byte, error) {
 		runtime := NewRuntime(state.Clone())
 		result := runtime.Call(CallRequest{
-			Caller: caller,
-			Target: target,
-			CallID: "metadata",
-			Input:  input,
-			Gas:    DefaultMetadataQueryGas,
-			Block:  block,
+			TargetAddress: target.String(),
+			CallID:        "metadata",
+			Input:         input,
+			Gas:           DefaultMetadataQueryGas,
+			Block:         block,
 		})
 		if result.Err != nil || result.Status != ResultStatusSuccess {
 			if result.Err != nil {
@@ -183,12 +181,11 @@ func QueryContractStateView(state *MemoryStateDB, contract ContractAddress, bloc
 func queryContractStateViewString(state *MemoryStateDB, target EVMAddress, block BlockContext) (string, bool) {
 	runtime := NewRuntime(state.Clone())
 	result := runtime.Call(CallRequest{
-		Caller: EVMAddress{},
-		Target: target,
-		CallID: "state-view",
-		Input:  stateViewSelector[:],
-		Gas:    DefaultMetadataQueryGas,
-		Block:  block,
+		TargetAddress: target.String(),
+		CallID:        "state-view",
+		Input:         stateViewSelector[:],
+		Gas:           DefaultMetadataQueryGas,
+		Block:         block,
 	})
 	if result.Err != nil || result.Status != ResultStatusSuccess {
 		return "", false

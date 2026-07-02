@@ -33,8 +33,8 @@ type BlockContext struct {
 }
 
 type CallRequest struct {
-	Caller        EVMAddress
-	Target        EVMAddress
+	CallerAddress string
+	TargetAddress string
 	CallID        string
 	Input         []byte
 	Gas           int64
@@ -55,13 +55,13 @@ type CallResult struct {
 }
 
 type DeployRequest struct {
-	Caller      EVMAddress
-	CallID      string
-	InitCode    []byte
-	Gas         int64
-	Value       int64
-	DeployNonce uint64
-	Block       BlockContext
+	CallerAddress string
+	CallID        string
+	InitCode      []byte
+	Gas           int64
+	Value         int64
+	DeployNonce   uint64
+	Block         BlockContext
 }
 
 type DeployResult struct {
@@ -112,7 +112,8 @@ func (r *Runtime) DueTriggerCalls(block BlockContext) []TriggerCall {
 }
 
 func (r *Runtime) Deploy(req DeployRequest) DeployResult {
-	r.State.SetNonce(GethAddress(req.Caller), req.DeployNonce, 0)
+	caller := EVMAddressFromAddressString(req.CallerAddress)
+	r.State.SetNonce(GethAddress(caller), req.DeployNonce, 0)
 	gasLimit, err := contractframework.GasUnitsUint64(req.Gas)
 	if err != nil {
 		return DeployResult{Status: ResultStatusInvalid, Err: err}
@@ -125,17 +126,17 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	capturedTriggers := make([]Trigger, 0)
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers)
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
-	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, nil, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
+	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, nil, "", vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
 		new(big.Int).SetUint64(req.Block.Number),
 		false,
 		req.Block.Time,
 	))))
 	evm.SetTxContext(vm.TxContext{
-		Origin:   GethAddress(req.Caller),
+		Origin:   GethAddress(caller),
 		GasPrice: uint256.NewInt(req.Block.FixedGasPrice),
 	})
 	_, contractAddr, left, err := evm.Create(
-		GethAddress(req.Caller),
+		GethAddress(caller),
 		contractframework.CloneBytes(req.InitCode),
 		gasLimit,
 		uint256.NewInt(value),
@@ -162,6 +163,8 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 }
 
 func (r *Runtime) Call(req CallRequest) CallResult {
+	caller := EVMAddressFromAddressString(req.CallerAddress)
+	target := EVMAddressFromAddressString(req.TargetAddress)
 	gasLimit, err := contractframework.GasUnitsUint64(req.Gas)
 	if err != nil {
 		return CallResult{Status: ResultStatusInvalid, Err: err}
@@ -176,18 +179,18 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
 	funding := NewFundingAssetView(contractframework.OptionalContractOutputSlice(req.FundingOutput),
 		req.GasAssetName, req.GasFeeReserve)
-	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, funding, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
+	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, funding, req.CallerAddress, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
 		new(big.Int).SetUint64(req.Block.Number),
 		false,
 		req.Block.Time,
 	))))
 	evm.SetTxContext(vm.TxContext{
-		Origin:   GethAddress(req.Caller),
+		Origin:   GethAddress(caller),
 		GasPrice: uint256.NewInt(req.Block.FixedGasPrice),
 	})
 	ret, left, err := evm.Call(
-		GethAddress(req.Caller),
-		GethAddress(req.Target),
+		GethAddress(caller),
+		GethAddress(target),
 		contractframework.CloneBytes(req.Input),
 		gasLimit,
 		uint256.NewInt(value),
@@ -195,7 +198,7 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	if err == nil {
 		for i := range capturedTriggers {
 			if ContractAddressHash(capturedTriggers[i].Contract) == (EVMAddress{}) {
-				capturedTriggers[i].Contract = r.contractAddressFromGeth(GethAddress(req.Target))
+				capturedTriggers[i].Contract = r.contractAddressFromGeth(GethAddress(target))
 			}
 		}
 		err = r.commitCapturedEffects(capturedIntents, capturedTriggers)

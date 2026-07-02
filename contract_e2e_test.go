@@ -446,8 +446,8 @@ func e2ECoinbaseTx() *wire.MsgTx {
 }
 
 func e2EFixedCaller(caller evm.EVMAddress) evm.CallerResolver {
-	return func(*wire.MsgTx, evmcommon.Tx) (evm.EVMAddress, error) {
-		return caller, nil
+	return func(*wire.MsgTx, evmcommon.Tx) (string, error) {
+		return caller.String(), nil
 	}
 }
 

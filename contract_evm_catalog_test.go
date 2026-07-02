@@ -22,12 +22,12 @@ func TestEVMCommonContractsCounterMultipleCallers(t *testing.T) {
 	block := evm.BlockContext{Number: 1, Time: 1710000000, GasLimit: 1000000, FixedGasPrice: 1}
 
 	deploy := rt.Deploy(evm.DeployRequest{
-		Caller:      deployer,
-		CallID:      "counter-deploy",
-		InitCode:    e2EInitCode(e2ECounterRuntimeCode()),
-		Gas:         200000,
-		DeployNonce: 1,
-		Block:       block,
+		CallerAddress: deployer.String(),
+		CallID:        "counter-deploy",
+		InitCode:      e2EInitCode(e2ECounterRuntimeCode()),
+		Gas:           200000,
+		DeployNonce:   1,
+		Block:         block,
 	})
 	require.NoError(t, deploy.Err)
 	require.Equal(t, evm.ResultStatusSuccess, deploy.Status)
@@ -35,11 +35,11 @@ func TestEVMCommonContractsCounterMultipleCallers(t *testing.T) {
 
 	for i, caller := range callers {
 		call := rt.Call(evm.CallRequest{
-			Caller: caller,
-			Target: evm.ContractAddressHash(deploy.Contract),
-			CallID: "counter-call",
-			Gas:    100000,
-			Block:  block,
+			CallerAddress: caller.String(),
+			TargetAddress: deploy.Contract.MustEncode(),
+			CallID:        "counter-call",
+			Gas:           100000,
+			Block:         block,
 		})
 		require.NoError(t, call.Err)
 		require.Equal(t, evm.ResultStatusSuccess, call.Status)
@@ -55,22 +55,22 @@ func TestEVMCommonContractsRevertStatus(t *testing.T) {
 	block := evm.BlockContext{Number: 1, Time: 1710000000, GasLimit: 1000000, FixedGasPrice: 1}
 
 	deploy := rt.Deploy(evm.DeployRequest{
-		Caller:      deployer,
-		CallID:      "reverter-deploy",
-		InitCode:    e2EInitCode(e2EReverterRuntimeCode()),
-		Gas:         100000,
-		DeployNonce: 2,
-		Block:       block,
+		CallerAddress: deployer.String(),
+		CallID:        "reverter-deploy",
+		InitCode:      e2EInitCode(e2EReverterRuntimeCode()),
+		Gas:           100000,
+		DeployNonce:   2,
+		Block:         block,
 	})
 	require.NoError(t, deploy.Err)
 	require.Equal(t, evm.ResultStatusSuccess, deploy.Status)
 
 	call := rt.Call(evm.CallRequest{
-		Caller: caller,
-		Target: evm.ContractAddressHash(deploy.Contract),
-		CallID: "reverter-call",
-		Gas:    100000,
-		Block:  block,
+		CallerAddress: caller.String(),
+		TargetAddress: deploy.Contract.MustEncode(),
+		CallID:        "reverter-call",
+		Gas:           100000,
+		Block:         block,
 	})
 	require.Error(t, call.Err)
 	require.Equal(t, evm.ResultStatusRevert, call.Status)

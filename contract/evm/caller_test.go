@@ -53,7 +53,8 @@ func TestLastInputCallerResolverUsesLastInput(t *testing.T) {
 	require.NoError(t, err)
 	want, err := EVMAddressFromPublicKey(last)
 	require.NoError(t, err)
-	require.Equal(t, want, got)
+	require.Equal(t, want.String(), got)
+	require.Equal(t, want, EVMAddressFromAddressString(got))
 }
 
 func TestLastInputPreviousOutputCallerResolverUsesPreviousOutputAddress(t *testing.T) {
@@ -82,7 +83,9 @@ func TestLastInputPreviousOutputCallerResolverUsesPreviousOutputAddress(t *testi
 		})
 	got, err := resolver(tx, Tx{})
 	require.NoError(t, err)
-	require.Equal(t, btcutil.Hash160([]byte(lastAddr.EncodeAddress())), got[:])
+	require.Equal(t, lastAddr.EncodeAddress(), got)
+	derived := EVMAddressFromAddressString(got)
+	require.Equal(t, btcutil.Hash160([]byte(lastAddr.EncodeAddress())), derived[:])
 }
 
 func TestLastInputPreviousOutputCallerResolverRejectsMissingPreviousOutput(t *testing.T) {

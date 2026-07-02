@@ -779,6 +779,107 @@ func (s *Handle) getContractState(c *gin.Context) {
 	s.contractRPC(c, "getcontractstate", []interface{}{c.Param("contract")})
 }
 
+func (s *Handle) estimateEVMDeploy(c *gin.Context) {
+	resp := &localwire.ContractResp{
+		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
+	}
+	var req struct {
+		Caller      string  `json:"caller"`
+		InitCodeHex string  `json:"initCodeHex"`
+		Value       *int64  `json:"value"`
+		Sats        *int64  `json:"sats"`
+		GasLimit    *int64  `json:"gasLimit"`
+		DeployNonce *uint64 `json:"deployNonce"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	value := req.Value
+	if value == nil {
+		value = req.Sats
+	}
+	param := map[string]interface{}{
+		"caller":      req.Caller,
+		"initCodeHex": req.InitCodeHex,
+	}
+	if value != nil {
+		param["value"] = *value
+	}
+	if req.GasLimit != nil {
+		param["gasLimit"] = *req.GasLimit
+	}
+	if req.DeployNonce != nil {
+		param["deployNonce"] = *req.DeployNonce
+	}
+	result, err := contractStateCall("estimateevmdeploy", []interface{}{param})
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = json.RawMessage(result)
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) estimateEVMInvoke(c *gin.Context) {
+	resp := &localwire.ContractResp{
+		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
+	}
+	var req struct {
+		Caller      string `json:"caller"`
+		CalldataHex string `json:"calldataHex"`
+		Value       *int64 `json:"value"`
+		Sats        *int64 `json:"sats"`
+		GasLimit    *int64 `json:"gasLimit"`
+		Funding     []struct {
+			AssetName string `json:"assetName"`
+			Amount    string `json:"amount"`
+		} `json:"funding"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	value := req.Value
+	if value == nil {
+		value = req.Sats
+	}
+	funding := make([]interface{}, 0, len(req.Funding))
+	for _, item := range req.Funding {
+		funding = append(funding, map[string]interface{}{
+			"assetName": item.AssetName,
+			"amount":    item.Amount,
+		})
+	}
+	param := map[string]interface{}{
+		"contractAddress": c.Param("contract"),
+		"caller":          req.Caller,
+		"calldataHex":     req.CalldataHex,
+		"funding":         funding,
+	}
+	if value != nil {
+		param["value"] = *value
+	}
+	if req.GasLimit != nil {
+		param["gasLimit"] = *req.GasLimit
+	}
+	result, err := contractStateCall("estimateevminvoke", []interface{}{param})
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = json.RawMessage(result)
+	c.JSON(http.StatusOK, resp)
+}
+
 func (s *Handle) reviewPredictionReady(c *gin.Context) {
 	resp := &localwire.ContractResp{
 		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},

@@ -638,8 +638,8 @@ func testCanonicalResultTx(t *testing.T, inputs []wire.OutPoint, outputs []wire.
 }
 
 func fixedCaller(caller EVMAddress) CallerResolver {
-	return func(*wire.MsgTx, Tx) (EVMAddress, error) {
-		return caller, nil
+	return func(*wire.MsgTx, Tx) (string, error) {
+		return caller.String(), nil
 	}
 }
 

@@ -165,6 +165,8 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getcfilterheader":       handleGetCFilterHeader,
 	"getconnectioncount":     handleGetConnectionCount,
 	"getcontract":            handleGetContract,
+	"estimateevmdeploy":      handleEstimateEVMDeploy,
+	"estimateevminvoke":      handleEstimateEVMInvoke,
 	"getcontracthistory":     handleGetContractHistory,
 	"getcontractstate":       handleGetContractState,
 	"reviewpredictionready":  handleReviewPredictionReady,
@@ -971,6 +973,142 @@ func handleGetContractState(s *rpcServer, cmd interface{}, closeChan <-chan stru
 	}, nil
 }
 
+func handleEstimateEVMDeploy(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	c := cmd.(*btcjson.EstimateEVMDeployCmd)
+	req := c.Request
+	initCode, err := decodeContractCallHex(req.InitCodeHex)
+	if err != nil {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, fmt.Sprintf("invalid initCodeHex: %v", err))
+	}
+	if len(initCode) == 0 {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, "initCodeHex is required")
+	}
+	best := s.cfg.Chain.BestSnapshot()
+	_, state, err := contractnode.NewEVMStateStore(s.cfg.DB).LoadTip()
+	if err != nil {
+		return nil, internalRPCError(err.Error(), "Failed to load EVM state")
+	}
+	value := int64(0)
+	if req.Value != nil {
+		value = *req.Value
+	}
+	if value < 0 {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, "value must be non-negative")
+	}
+	gasConfig := evmcontract.DefaultGasConfig().Normalize()
+	gasConfig.GasAssetName = contractcommon.GasAssetNameForNet(s.cfg.ChainParams.Net)
+	block := evmcontract.BlockContext{
+		Number:        uint64(best.Height),
+		Time:          uint64(best.MedianTime.Unix()),
+		GasLimit:      gasConfig.MaxGasPerBlock,
+		FixedGasPrice: gasConfig.FixedGasPrice,
+	}
+	deployNonce := uint64(time.Now().UnixNano())
+	if req.DeployNonce != nil {
+		deployNonce = *req.DeployNonce
+	}
+	try := func(gas int64) evmcontract.DeployResult {
+		runtime := evmcontract.NewRuntime(state.Clone())
+		runtime.ContractPrefix = evmcontract.ContractPrefixForNet(s.cfg.ChainParams.Net)
+		runtime.GasConfig = gasConfig
+		return runtime.Deploy(evmcontract.DeployRequest{
+			CallerAddress: req.Caller,
+			CallID:        "estimate-deploy",
+			InitCode:      initCode,
+			Gas:           gas,
+			Value:         value,
+			DeployNonce:   deployNonce,
+			Block:         block,
+		})
+	}
+	requestedGas := int64(0)
+	if req.GasLimit != nil {
+		requestedGas = *req.GasLimit
+	}
+	result := estimateEVMDeployGas(try, requestedGas, gasConfig.DeployBaseGas, gasConfig.MaxGasPerInvoke)
+	return result, nil
+}
+
+func handleEstimateEVMInvoke(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	c := cmd.(*btcjson.EstimateEVMInvokeCmd)
+	req := c.Request
+	contractAddr, err := contractcommon.DecodeContractAddress(req.ContractAddress)
+	if err != nil {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidAddressOrKey, err.Error())
+	}
+	if contractAddr.ContractType() != contractcommon.ContractTypeEVM {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, "contract is not an EVM contract")
+	}
+	calldata, err := decodeContractCallHex(req.CalldataHex)
+	if err != nil {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, fmt.Sprintf("invalid calldataHex: %v", err))
+	}
+	if len(calldata) < 4 {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, "calldataHex must include a 4-byte selector")
+	}
+	best := s.cfg.Chain.BestSnapshot()
+	_, state, err := contractnode.NewEVMStateStore(s.cfg.DB).LoadTip()
+	if err != nil {
+		return nil, internalRPCError(err.Error(), "Failed to load EVM state")
+	}
+	addr := gethcommon.BytesToAddress(contractcommon.ContractAddressHashBytes(contractAddr))
+	if !state.Exist(addr) {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidAddressOrKey, "EVM contract does not exist")
+	}
+	value := int64(0)
+	if req.Value != nil {
+		value = *req.Value
+	}
+	if value < 0 {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, "value must be non-negative")
+	}
+	gasConfig := evmcontract.DefaultGasConfig().Normalize()
+	gasConfig.GasAssetName = contractcommon.GasAssetNameForNet(s.cfg.ChainParams.Net)
+	block := evmcontract.BlockContext{
+		Number:        uint64(best.Height),
+		Time:          uint64(best.MedianTime.Unix()),
+		GasLimit:      gasConfig.MaxGasPerBlock,
+		FixedGasPrice: gasConfig.FixedGasPrice,
+	}
+	fundingOutput, err := evmEstimateFundingOutput(contractAddr, value, req.Funding)
+	if err != nil {
+		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, err.Error())
+	}
+	baseProvider := rpcEVMContractUTXOProvider(s.cfg.AssetIndexManager)
+	provider := rpcEVMEstimateUTXOProvider(baseProvider, contractAddr, fundingOutput, int64(best.Height))
+	assetBalances := evmcontract.NewContractUTXOAssetView(evmcontract.ContractPrefixForNet(s.cfg.ChainParams.Net), provider)
+
+	try := func(gas int64) evmcontract.CallResult {
+		runtime := evmcontract.NewRuntime(state.Clone())
+		runtime.ContractPrefix = evmcontract.ContractPrefixForNet(s.cfg.ChainParams.Net)
+		runtime.GasConfig = gasConfig
+		runtime.AssetBalances = assetBalances
+		reserve, reserveErr := gasConfig.ContractFundingFee(contractframework.ExecutionKindInvoke, gas, true, block.Number)
+		if reserveErr != nil {
+			return evmcontract.CallResult{Status: evmcontract.ResultStatusInvalid, Err: reserveErr}
+		}
+		return runtime.Call(evmcontract.CallRequest{
+			CallerAddress: req.Caller,
+			TargetAddress: contractAddr.MustEncode(),
+			CallID:        "estimate",
+			Input:         calldata,
+			Gas:           gas,
+			Value:         value,
+			FundingOutput: fundingOutput,
+			GasAssetName:  gasConfig.GasAssetName,
+			GasFeeReserve: reserve,
+			Block:         block,
+		})
+	}
+
+	requestedGas := int64(0)
+	if req.GasLimit != nil {
+		requestedGas = *req.GasLimit
+	}
+	result := estimateEVMInvokeGas(try, requestedGas, gasConfig.InvokeBaseGas, gasConfig.MaxGasPerInvoke)
+	return result, nil
+}
+
 func handleReviewPredictionReady(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	c := cmd.(*btcjson.ReviewPredictionReadyCmd)
 	var contract agentcontract.PredictionContract
@@ -1122,6 +1260,297 @@ func contractStateAtTip(s *rpcServer, address string, contractType byte) (interf
 		return view, details, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported contract type %d", contractType)
+	}
+}
+
+func decodeContractCallHex(value string) ([]byte, error) {
+	text := strings.TrimSpace(value)
+	text = strings.TrimPrefix(text, "0x")
+	text = strings.TrimPrefix(text, "0X")
+	if text == "" || len(text)%2 != 0 {
+		return nil, fmt.Errorf("hex string must be non-empty even-length hex")
+	}
+	return hex.DecodeString(text)
+}
+
+func evmEstimateFundingOutput(contractAddr contractcommon.ContractAddress, value int64,
+	funding []btcjson.EVMEstimateFundingAsset) (*contractframework.ContractOutput, error) {
+
+	assets := wire.TxAssets{}
+	for _, item := range funding {
+		assetName := strings.TrimSpace(item.AssetName)
+		amount := strings.TrimSpace(item.Amount)
+		if assetName == "" || amount == "" {
+			return nil, fmt.Errorf("funding assetName and amount are required")
+		}
+		if assetName == contractcommon.SatoshiAssetName {
+			return nil, fmt.Errorf("sats funding must be provided as value")
+		}
+		next, err := contractframework.NewAssetSetWithPrecision(assetName, amount,
+			contractcommon.GasFeePrecision, contractframework.ErrInvalidAsset)
+		if err != nil {
+			return nil, err
+		}
+		if err := assets.Merge(next); err != nil {
+			return nil, err
+		}
+	}
+	outpoint := contractframework.OutPoint{TxID: "estimate", Vout: 0}
+	utxo := contractframework.UTXOFromTxOutput(outpoint, contractAddr, 0, &wire.TxOut{
+		Value:  value,
+		Assets: assets,
+	})
+	output := contractframework.ContractOutput{
+		OutPoint: utxo.OutPoint,
+		Vout:     utxo.OutPoint.Vout,
+		Contract: contractAddr,
+		TxOutput: utxo.IndexerTxOutput(),
+	}
+	return &output, nil
+}
+
+func rpcEVMContractUTXOProvider(assetIndexer *indexer.IndexerMgr) evmcontract.ContractUTXOProvider {
+	nodeProvider := evmContractUTXOProvider(assetIndexer)
+	if nodeProvider == nil {
+		return nil
+	}
+	return func(contractAddr evmcontract.ContractAddress) ([]evmcontract.UTXO, error) {
+		utxos, err := nodeProvider(contractAddr)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]evmcontract.UTXO, 0, len(utxos))
+		for _, utxo := range utxos {
+			if utxo.Value < 0 {
+				return nil, fmt.Errorf("negative EVM contract output value")
+			}
+			next := contractframework.UTXOFromTxOutput(
+				contractframework.WireOutPointToFramework(utxo.OutPoint),
+				contractAddr,
+				utxo.Height,
+				&wire.TxOut{Value: utxo.Value, Assets: utxo.Assets.Clone()},
+			)
+			next.IsGasFunding = utxo.IsGasFunding
+			next.SourceCallID = utxo.SourceCallID
+			next.ReservedReason = utxo.ReservedReason
+			out = append(out, next)
+		}
+		return out, nil
+	}
+}
+
+func rpcEVMEstimateUTXOProvider(base evmcontract.ContractUTXOProvider, contractAddr evmcontract.ContractAddress,
+	funding *contractframework.ContractOutput, height int64) evmcontract.ContractUTXOProvider {
+
+	return func(got evmcontract.ContractAddress) ([]evmcontract.UTXO, error) {
+		utxos := make([]evmcontract.UTXO, 0)
+		if base != nil {
+			baseUTXOs, err := base(got)
+			if err != nil {
+				return nil, err
+			}
+			utxos = append(utxos, baseUTXOs...)
+		}
+		if got.MustEncode() == contractAddr.MustEncode() && funding != nil {
+			utxo := contractframework.UTXO{
+				OutPoint: funding.OutPoint,
+				Contract: contractAddr,
+				Height:   height,
+				TxOutput: funding.IndexerTxOutput(),
+			}
+			utxos = append(utxos, utxo)
+		}
+		return utxos, nil
+	}
+}
+
+func estimateEVMInvokeGas(try func(int64) evmcontract.CallResult, requestedGas, baseGas,
+	maxGas int64) btcjson.EstimateEVMInvokeResult {
+
+	if baseGas <= 0 {
+		baseGas = contractcommon.InvokeBaseGas
+	}
+	if maxGas <= 0 {
+		maxGas = contractcommon.MaxGasPerInvoke
+	}
+	start := requestedGas
+	if start <= 0 {
+		start = baseGas
+	}
+	if start > maxGas {
+		start = maxGas
+	}
+	first := try(start)
+	if first.Status != evmcontract.ResultStatusOutOfGas {
+		return evmEstimateResult(first, start, maxGas)
+	}
+	low := start
+	high := start * 2
+	if high < baseGas {
+		high = baseGas
+	}
+	if high > maxGas {
+		high = maxGas
+	}
+	var success evmcontract.CallResult
+	successGas := int64(0)
+	for {
+		current := try(high)
+		if current.Status == evmcontract.ResultStatusSuccess {
+			success = current
+			successGas = high
+			break
+		}
+		if current.Status != evmcontract.ResultStatusOutOfGas || high >= maxGas {
+			return evmEstimateResult(current, high, maxGas)
+		}
+		low = high
+		high *= 2
+		if high > maxGas {
+			high = maxGas
+		}
+	}
+	for low+1 < successGas {
+		mid := low + (successGas-low)/2
+		current := try(mid)
+		if current.Status == evmcontract.ResultStatusSuccess {
+			success = current
+			successGas = mid
+		} else if current.Status == evmcontract.ResultStatusOutOfGas {
+			low = mid
+		} else {
+			return evmEstimateResult(current, mid, maxGas)
+		}
+	}
+	return evmEstimateResult(success, successGas, maxGas)
+}
+
+func estimateEVMDeployGas(try func(int64) evmcontract.DeployResult, requestedGas, baseGas,
+	maxGas int64) btcjson.EstimateEVMInvokeResult {
+
+	if baseGas <= 0 {
+		baseGas = contractcommon.DeployBaseGas
+	}
+	if maxGas <= 0 {
+		maxGas = contractcommon.MaxGasPerInvoke
+	}
+	start := requestedGas
+	if start <= 0 {
+		start = baseGas
+	}
+	if start > maxGas {
+		start = maxGas
+	}
+	first := try(start)
+	if first.Status != evmcontract.ResultStatusOutOfGas {
+		return evmDeployEstimateResult(first, start, maxGas)
+	}
+	low := start
+	high := start * 2
+	if high < baseGas {
+		high = baseGas
+	}
+	if high > maxGas {
+		high = maxGas
+	}
+	var success evmcontract.DeployResult
+	successGas := int64(0)
+	for {
+		current := try(high)
+		if current.Status == evmcontract.ResultStatusSuccess {
+			success = current
+			successGas = high
+			break
+		}
+		if current.Status != evmcontract.ResultStatusOutOfGas || high >= maxGas {
+			return evmDeployEstimateResult(current, high, maxGas)
+		}
+		low = high
+		high *= 2
+		if high > maxGas {
+			high = maxGas
+		}
+	}
+	for low+1 < successGas {
+		mid := low + (successGas-low)/2
+		current := try(mid)
+		if current.Status == evmcontract.ResultStatusSuccess {
+			success = current
+			successGas = mid
+		} else if current.Status == evmcontract.ResultStatusOutOfGas {
+			low = mid
+		} else {
+			return evmDeployEstimateResult(current, mid, maxGas)
+		}
+	}
+	return evmDeployEstimateResult(success, successGas, maxGas)
+}
+
+func evmEstimateResult(result evmcontract.CallResult, gasLimit, maxGas int64) btcjson.EstimateEVMInvokeResult {
+	status := evmResultStatusString(result.Status)
+	suggested := int64(0)
+	if result.Status == evmcontract.ResultStatusSuccess {
+		suggested = result.GasUsed + result.GasUsed/5
+		if suggested < gasLimit {
+			suggested = gasLimit
+		}
+		if suggested > maxGas {
+			suggested = maxGas
+		}
+	}
+	message := ""
+	if result.Err != nil {
+		message = result.Err.Error()
+	}
+	return btcjson.EstimateEVMInvokeResult{
+		Success:           result.Status == evmcontract.ResultStatusSuccess,
+		Status:            status,
+		GasUsed:           result.GasUsed,
+		GasLimit:          gasLimit,
+		SuggestedGasLimit: suggested,
+		Error:             message,
+		ReturnDataHex:     hex.EncodeToString(result.ReturnData),
+	}
+}
+
+func evmDeployEstimateResult(result evmcontract.DeployResult, gasLimit, maxGas int64) btcjson.EstimateEVMInvokeResult {
+	status := evmResultStatusString(result.Status)
+	suggested := int64(0)
+	if result.Status == evmcontract.ResultStatusSuccess {
+		suggested = result.GasUsed + result.GasUsed/5
+		if suggested < gasLimit {
+			suggested = gasLimit
+		}
+		if suggested > maxGas {
+			suggested = maxGas
+		}
+	}
+	message := ""
+	if result.Err != nil {
+		message = result.Err.Error()
+	}
+	return btcjson.EstimateEVMInvokeResult{
+		Success:           result.Status == evmcontract.ResultStatusSuccess,
+		Status:            status,
+		GasUsed:           result.GasUsed,
+		GasLimit:          gasLimit,
+		SuggestedGasLimit: suggested,
+		Error:             message,
+		ContractAddress:   result.Contract.EncodeAddress(),
+		RuntimeCodeSize:   len(result.RuntimeCode),
+	}
+}
+
+func evmResultStatusString(status evmcontract.ResultStatus) string {
+	switch status {
+	case evmcontract.ResultStatusSuccess:
+		return "success"
+	case evmcontract.ResultStatusRevert:
+		return "revert"
+	case evmcontract.ResultStatusOutOfGas:
+		return "out_of_gas"
+	default:
+		return "invalid"
 	}
 }
 

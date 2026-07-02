@@ -24,6 +24,7 @@ var (
 	assetFundingAssetSelector      = methodSelector("fundingAssetAmount(string)")
 	assetFundingSatsSelector       = methodSelector("fundingSats()")
 	assetClaimFundingSelector      = methodSelector("claimFundingAsset(string,string)")
+	assetCallerAddressSelector     = methodSelector("callerAddress()")
 	assetCompareAmountSelector     = methodSelector("compareAmount(string,string)")
 	assetAddAmountSelector         = methodSelector("addAmount(string,string)")
 	assetSubAmountSelector         = methodSelector("subAmount(string,string)")
@@ -197,12 +198,17 @@ func (v *FundingAssetView) ClaimedAssetAmount(assetName string) *scommon.Decimal
 }
 
 type AssetPrecompile struct {
-	Balances AssetBalanceReader
-	Funding  FundingAmountReader
+	Balances      AssetBalanceReader
+	Funding       FundingAmountReader
+	CallerAddress string
 }
 
-func NewAssetPrecompile(balances AssetBalanceReader, funding FundingAmountReader) *AssetPrecompile {
-	return &AssetPrecompile{Balances: balances, Funding: funding}
+func NewAssetPrecompile(balances AssetBalanceReader, funding FundingAmountReader, callerAddress ...string) *AssetPrecompile {
+	addr := ""
+	if len(callerAddress) > 0 {
+		addr = callerAddress[0]
+	}
+	return &AssetPrecompile{Balances: balances, Funding: funding, CallerAddress: addr}
 }
 
 func (p *AssetPrecompile) RequiredGas(input []byte) uint64 {
@@ -292,6 +298,14 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 			return nil, err
 		}
 		return abiEncodeBool(true), nil
+	case assetCallerAddressSelector:
+		if len(args) != 0 {
+			return nil, errors.New("callerAddress takes no arguments")
+		}
+		if p.CallerAddress == "" {
+			return nil, errors.New("caller address is not configured")
+		}
+		return abiEncodeDynamicBytes([]byte(p.CallerAddress)), nil
 	case assetCompareAmountSelector:
 		left, right, err := decodeAmountPair(args)
 		if err != nil {
@@ -413,14 +427,14 @@ func (p *TriggerPrecompile) Name() string {
 	return "satoshinetTrigger"
 }
 
-func SatoshiNetPrecompiles(balances AssetBalanceReader, funding FundingAmountReader,
+func SatoshiNetPrecompiles(balances AssetBalanceReader, funding FundingAmountReader, callerAddress string,
 	rules vm.PrecompiledContracts) vm.PrecompiledContracts {
 
 	out := make(vm.PrecompiledContracts, len(rules)+2)
 	for addr, p := range rules {
 		out[addr] = p
 	}
-	out[AssetPrecompileAddress] = NewAssetPrecompile(balances, funding)
+	out[AssetPrecompileAddress] = NewAssetPrecompile(balances, funding, callerAddress)
 	out[TriggerPrecompileAddress] = NewTriggerPrecompile()
 	return out
 }
@@ -490,6 +504,10 @@ func EncodeFundingAssetAmountCall(assetName string) []byte {
 
 func EncodeFundingSatsCall() []byte {
 	return assetFundingSatsSelector[:]
+}
+
+func EncodeCallerAddressCall() []byte {
+	return assetCallerAddressSelector[:]
 }
 
 func EncodeClaimFundingAssetCall(assetName, amount string) []byte {

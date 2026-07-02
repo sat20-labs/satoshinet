@@ -41,12 +41,12 @@ func TestEVMEndToEndSolidityCounter(t *testing.T) {
 	for i, caller := range callers {
 		input := packSolidityMethod(t, compiled.ABI, "incrementBy", big.NewInt(int64(i+1)))
 		call := rt.Call(evm.CallRequest{
-			Caller: caller,
-			Target: evm.ContractAddressHash(contract),
-			CallID: fmt.Sprintf("counter-increment-%d", i),
-			Input:  input,
-			Gas:    200000,
-			Block:  block,
+			CallerAddress: caller.String(),
+			TargetAddress: contract.MustEncode(),
+			CallID:        fmt.Sprintf("counter-increment-%d", i),
+			Input:         input,
+			Gas:           200000,
+			Block:         block,
 		})
 		require.NoError(t, call.Err)
 		require.Equal(t, evm.ResultStatusSuccess, call.Status)
@@ -72,24 +72,24 @@ func TestEVMEndToEndSolidityMiniERC20(t *testing.T) {
 
 	transferAlice := packSolidityMethod(t, compiled.ABI, "transfer", gethcommon.Address(evm.GethAddress(alice)), big.NewInt(125_000_000))
 	call := rt.Call(evm.CallRequest{
-		Caller: deployer,
-		Target: evm.ContractAddressHash(contract),
-		CallID: "erc20-transfer-alice",
-		Input:  transferAlice,
-		Gas:    250000,
-		Block:  block,
+		CallerAddress: deployer.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "erc20-transfer-alice",
+		Input:         transferAlice,
+		Gas:           250000,
+		Block:         block,
 	})
 	require.NoError(t, call.Err)
 	require.Equal(t, evm.ResultStatusSuccess, call.Status)
 
 	approveBob := packSolidityMethod(t, compiled.ABI, "approve", gethcommon.Address(evm.GethAddress(bob)), big.NewInt(20_000_000))
 	call = rt.Call(evm.CallRequest{
-		Caller: alice,
-		Target: evm.ContractAddressHash(contract),
-		CallID: "erc20-approve-bob",
-		Input:  approveBob,
-		Gas:    250000,
-		Block:  block,
+		CallerAddress: alice.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "erc20-approve-bob",
+		Input:         approveBob,
+		Gas:           250000,
+		Block:         block,
 	})
 	require.NoError(t, call.Err)
 	require.Equal(t, evm.ResultStatusSuccess, call.Status)
@@ -100,12 +100,12 @@ func TestEVMEndToEndSolidityMiniERC20(t *testing.T) {
 		big.NewInt(12_500_000),
 	)
 	call = rt.Call(evm.CallRequest{
-		Caller: bob,
-		Target: evm.ContractAddressHash(contract),
-		CallID: "erc20-transfer-from",
-		Input:  transferFromAlice,
-		Gas:    300000,
-		Block:  block,
+		CallerAddress: bob.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "erc20-transfer-from",
+		Input:         transferFromAlice,
+		Gas:           300000,
+		Block:         block,
 	})
 	require.NoError(t, call.Err)
 	require.Equal(t, evm.ResultStatusSuccess, call.Status)
@@ -350,12 +350,12 @@ func callSolidityView(t *testing.T, rt *evm.Runtime, target evm.EVMAddress, call
 	t.Helper()
 	input := packSolidityMethod(t, abiValue, method, args...)
 	call := rt.Call(evm.CallRequest{
-		Caller: caller,
-		Target: target,
-		CallID: "view-" + method,
-		Input:  input,
-		Gas:    200000,
-		Block:  block,
+		CallerAddress: caller.String(),
+		TargetAddress: target.String(),
+		CallID:        "view-" + method,
+		Input:         input,
+		Gas:           200000,
+		Block:         block,
 	})
 	require.NoError(t, call.Err)
 	require.Equal(t, evm.ResultStatusSuccess, call.Status)

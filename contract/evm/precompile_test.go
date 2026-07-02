@@ -84,6 +84,17 @@ func TestAssetPrecompileFundingAssetAmount(t *testing.T) {
 	require.ErrorContains(t, err, "exceeds available")
 }
 
+func TestAssetPrecompileCallerAddress(t *testing.T) {
+	precompile := NewAssetPrecompile(nil, nil, "tb1pcaller")
+
+	ret, err := precompile.Run(EncodeCallerAddressCall())
+	require.NoError(t, err)
+	require.Equal(t, "tb1pcaller", abiRawDynamicString(t, ret))
+
+	_, err = NewAssetPrecompile(nil, nil).Run(EncodeCallerAddressCall())
+	require.ErrorContains(t, err, "caller address is not configured")
+}
+
 func TestAssetPrecompileTransferAssetABI(t *testing.T) {
 	call := EncodeTransferAssetCall("ordx:ticker:0", "tb1ptest", "1000", []byte{1, 2, 3})
 
@@ -203,12 +214,12 @@ func TestRuntimeCapturesTriggerRegistration(t *testing.T) {
 	runtime.SetCode(ContractAddressHash(contract), callTriggerPrecompileCode())
 
 	result := runtime.Call(CallRequest{
-		Caller: caller,
-		Target: ContractAddressHash(contract),
-		CallID: "call-1",
-		Input:  EncodeRegisterHeightTriggerCall("vault-release", 100, 50000, []byte{1, 2, 3}),
-		Gas:    100000,
-		Block:  BlockContext{GasLimit: 1000000},
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "call-1",
+		Input:         EncodeRegisterHeightTriggerCall("vault-release", 100, 50000, []byte{1, 2, 3}),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
 	})
 	require.NoError(t, result.Err)
 	triggers := runtime.State.Triggers()
@@ -228,12 +239,12 @@ func TestRuntimeRejectsOverLimitTriggerRegistration(t *testing.T) {
 	runtime.SetCode(ContractAddressHash(contract), callTriggerPrecompileCode())
 
 	result := runtime.Call(CallRequest{
-		Caller: caller,
-		Target: ContractAddressHash(contract),
-		CallID: "call-1",
-		Input:  EncodeRegisterHeightTriggerCall("vault-release", 100, 11, nil),
-		Gas:    100000,
-		Block:  BlockContext{GasLimit: 1000000},
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "call-1",
+		Input:         EncodeRegisterHeightTriggerCall("vault-release", 100, 11, nil),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
 	})
 	require.ErrorContains(t, result.Err, "trigger gas limit exceeds maximum")
 	require.Equal(t, ResultStatusInvalid, result.Status)
@@ -247,12 +258,12 @@ func TestRuntimeRejectsZeroTriggerRegistration(t *testing.T) {
 	runtime.SetCode(ContractAddressHash(contract), callTriggerPrecompileCode())
 
 	result := runtime.Call(CallRequest{
-		Caller: caller,
-		Target: ContractAddressHash(contract),
-		CallID: "call-1",
-		Input:  EncodeRegisterHeightTriggerCall("vault-release", 100, 0, nil),
-		Gas:    100000,
-		Block:  BlockContext{GasLimit: 1000000},
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "call-1",
+		Input:         EncodeRegisterHeightTriggerCall("vault-release", 100, 0, nil),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
 	})
 	require.ErrorContains(t, result.Err, "trigger gas limit must be positive")
 	require.Equal(t, ResultStatusInvalid, result.Status)
@@ -266,12 +277,12 @@ func TestRuntimeDiscardsTriggerRegistrationOnOuterRevert(t *testing.T) {
 	runtime.SetCode(ContractAddressHash(contract), callTriggerPrecompileThenRevertCode())
 
 	result := runtime.Call(CallRequest{
-		Caller: caller,
-		Target: ContractAddressHash(contract),
-		CallID: "call-1",
-		Input:  EncodeRegisterHeightTriggerCall("vault-release", 100, 50000, nil),
-		Gas:    100000,
-		Block:  BlockContext{GasLimit: 1000000},
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "call-1",
+		Input:         EncodeRegisterHeightTriggerCall("vault-release", 100, 50000, nil),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
 	})
 	require.Error(t, result.Err)
 	require.Empty(t, runtime.State.Triggers())
@@ -298,12 +309,12 @@ func TestRuntimeCapturesTransferAssetIntent(t *testing.T) {
 	runtime := NewRuntime(nil)
 
 	result := runtime.Call(CallRequest{
-		Caller: caller,
-		Target: evmAddressFromGeth(AssetPrecompileAddress),
-		CallID: "call-1",
-		Input:  EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
-		Gas:    100000,
-		Block:  BlockContext{GasLimit: 1000000},
+		CallerAddress: caller.String(),
+		TargetAddress: evmAddressFromGeth(AssetPrecompileAddress).String(),
+		CallID:        "call-1",
+		Input:         EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
 	})
 	require.NoError(t, result.Err)
 	require.Len(t, runtime.AssetIntents, 1)
@@ -333,8 +344,8 @@ func TestRuntimeRetainsOnlyClaimedGasFunding(t *testing.T) {
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 
 	readResult := runtime.Call(CallRequest{
-		Caller:        caller,
-		Target:        ContractAddressHash(contract),
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
 		CallID:        "read",
 		Input:         EncodeFundingAssetAmountCall(gasAsset),
 		Gas:           100000,
@@ -347,8 +358,8 @@ func TestRuntimeRetainsOnlyClaimedGasFunding(t *testing.T) {
 	require.Zero(t, readResult.RetainedGasFunding.Sign())
 
 	claimResult := runtime.Call(CallRequest{
-		Caller:        caller,
-		Target:        ContractAddressHash(contract),
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
 		CallID:        "claim",
 		Input:         EncodeClaimFundingAssetCall(gasAsset, "700"),
 		Gas:           100000,
@@ -368,12 +379,12 @@ func TestRuntimeDiscardsAssetIntentOnOuterRevert(t *testing.T) {
 	runtime.SetCode(contract, callAssetPrecompileThenRevertCode())
 
 	result := runtime.Call(CallRequest{
-		Caller: caller,
-		Target: contract,
-		CallID: "call-1",
-		Input:  EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
-		Gas:    100000,
-		Block:  BlockContext{GasLimit: 1000000},
+		CallerAddress: caller.String(),
+		TargetAddress: contract.String(),
+		CallID:        "call-1",
+		Input:         EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
 	})
 	require.Error(t, result.Err)
 	require.Empty(t, runtime.AssetIntents)
