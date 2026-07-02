@@ -31,6 +31,43 @@ func TestAssetPrecompileBalanceOf(t *testing.T) {
 	require.Equal(t, "42", balanceText)
 }
 
+func TestFundingOverlayBalanceOfAddsCurrentFunding(t *testing.T) {
+	contract := mustEVMAddress(t, "0x0102030405060708090001020304050607080900")
+	other := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	assetName := "brc20:f:ooxx"
+	assets, err := NewAssetSet(assetName, scommon.NewDefaultDecimal(7))
+	require.NoError(t, err)
+	funding := NewFundingAssetView([]contractframework.ContractOutput{
+		contractframework.ContractOutputFromFunding(evmcommon.FundingOutput{
+			OutPoint: evmcommon.TxOutPoint{
+				TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Vout: 0,
+			},
+			Vout:   0,
+			Value:  5,
+			Assets: assets,
+		}),
+	}, "brc20:f:sgas", scommon.NewDefaultDecimal(0))
+	base := testAssetBalances{
+		contract.String() + ":" + assetName:        mustDefaultDecimal(t, 3),
+		contract.String() + ":" + SatoshiAssetName: mustDefaultDecimal(t, 2),
+		other.String() + ":" + assetName:           mustDefaultDecimal(t, 11),
+	}
+	balances := NewFundingOverlayAssetBalanceView(base, funding, contract)
+
+	got, err := balances.AssetBalance(contract, assetName)
+	require.NoError(t, err)
+	require.Equal(t, "10", got.String())
+
+	got, err = balances.AssetBalance(contract, SatoshiAssetName)
+	require.NoError(t, err)
+	require.Equal(t, "7", got.String())
+
+	got, err = balances.AssetBalance(other, assetName)
+	require.NoError(t, err)
+	require.Equal(t, "11", got.String())
+}
+
 func TestAssetPrecompileFundingAssetAmount(t *testing.T) {
 	gasAsset := "brc20:f:sgas"
 	assetSet, err := NewAssetSet(gasAsset, scommon.NewDefaultDecimal(1050))
@@ -370,6 +407,33 @@ func TestRuntimeRetainsOnlyClaimedGasFunding(t *testing.T) {
 	})
 	require.NoError(t, claimResult.Err)
 	require.Equal(t, "700", claimResult.RetainedGasFunding.String())
+}
+
+func TestRuntimeSatsFundingDoesNotRequireNativeEVMBalance(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	funding := contractframework.ContractOutputFromFunding(evmcommon.FundingOutput{
+		OutPoint: evmcommon.TxOutPoint{
+			TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Vout: 1,
+		},
+		Vout:  1,
+		Value: 5,
+	})
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+
+	result := runtime.Call(CallRequest{
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "read-sats",
+		Input:         EncodeFundingSatsCall(),
+		Gas:           100000,
+		Value:         5,
+		FundingOutput: &funding,
+		Block:         BlockContext{GasLimit: 1000000},
+	})
+	require.NoError(t, result.Err)
 }
 
 func TestRuntimeDiscardsAssetIntentOnOuterRevert(t *testing.T) {

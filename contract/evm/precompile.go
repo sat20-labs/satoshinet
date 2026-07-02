@@ -76,6 +76,12 @@ type ContractUTXOAssetView struct {
 	Provider ContractUTXOProvider
 }
 
+type FundingOverlayAssetBalanceView struct {
+	Base     AssetBalanceReader
+	Funding  FundingAmountReader
+	Contract EVMAddress
+}
+
 func NewUTXOAssetView(utxos []UTXO) UTXOAssetView {
 	cp := make([]UTXO, len(utxos))
 	copy(cp, utxos)
@@ -87,6 +93,16 @@ func NewContractUTXOAssetView(prefix string, provider ContractUTXOProvider) Cont
 		prefix = TestnetContractPrefix
 	}
 	return ContractUTXOAssetView{Prefix: prefix, Provider: provider}
+}
+
+func NewFundingOverlayAssetBalanceView(base AssetBalanceReader, funding FundingAmountReader,
+	contract EVMAddress) FundingOverlayAssetBalanceView {
+
+	return FundingOverlayAssetBalanceView{
+		Base:     base,
+		Funding:  funding,
+		Contract: contract,
+	}
 }
 
 func (v UTXOAssetView) AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error) {
@@ -123,6 +139,33 @@ func (v ContractUTXOAssetView) AssetBalance(owner EVMAddress, assetName string) 
 		return nil, err
 	}
 	return contractframework.SumUTXOAssetAmount(utxos, assetName)
+}
+
+func (v FundingOverlayAssetBalanceView) AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error) {
+	if assetName == "" {
+		return nil, ErrInvalidAsset
+	}
+	total := zeroDecimal()
+	if v.Base != nil {
+		base, err := v.Base.AssetBalance(owner, assetName)
+		if err != nil {
+			return nil, err
+		}
+		if base != nil {
+			total = total.AddAlignPrecision(base)
+		}
+	}
+	if owner != v.Contract || v.Funding == nil {
+		return total, nil
+	}
+	funding, err := v.Funding.FundingAssetAmount(assetName)
+	if err != nil {
+		return nil, err
+	}
+	if funding != nil {
+		total = total.AddAlignPrecision(funding)
+	}
+	return total, nil
 }
 
 func (v *FundingAssetView) FundingAssetAmount(assetName string) (*scommon.Decimal, error) {

@@ -118,8 +118,7 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	if err != nil {
 		return DeployResult{Status: ResultStatusInvalid, Err: err}
 	}
-	value, err := contractframework.SatoshiAmountUint64(req.Value)
-	if err != nil {
+	if _, err := contractframework.SatoshiAmountUint64(req.Value); err != nil {
 		return DeployResult{Status: ResultStatusInvalid, Err: err}
 	}
 	capturedIntents := make([]AssetIntent, 0)
@@ -139,7 +138,7 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 		GethAddress(caller),
 		contractframework.CloneBytes(req.InitCode),
 		gasLimit,
-		uint256.NewInt(value),
+		uint256.NewInt(0),
 	)
 	contract := r.contractAddressFromGeth(contractAddr)
 	if err == nil {
@@ -169,8 +168,7 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	if err != nil {
 		return CallResult{Status: ResultStatusInvalid, Err: err}
 	}
-	value, err := contractframework.SatoshiAmountUint64(req.Value)
-	if err != nil {
+	if _, err := contractframework.SatoshiAmountUint64(req.Value); err != nil {
 		return CallResult{Status: ResultStatusInvalid, Err: err}
 	}
 	capturedIntents := make([]AssetIntent, 0)
@@ -179,7 +177,11 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
 	funding := NewFundingAssetView(contractframework.OptionalContractOutputSlice(req.FundingOutput),
 		req.GasAssetName, req.GasFeeReserve)
-	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, funding, req.CallerAddress, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
+	balances := AssetBalanceReader(r.AssetBalances)
+	if req.FundingOutput != nil {
+		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding, target)
+	}
+	evm.SetPrecompiles(SatoshiNetPrecompiles(balances, funding, req.CallerAddress, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
 		new(big.Int).SetUint64(req.Block.Number),
 		false,
 		req.Block.Time,
@@ -193,7 +195,7 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		GethAddress(target),
 		contractframework.CloneBytes(req.Input),
 		gasLimit,
-		uint256.NewInt(value),
+		uint256.NewInt(0),
 	)
 	if err == nil {
 		for i := range capturedTriggers {
