@@ -156,6 +156,30 @@ func TestAssetPrecompileAmountArithmeticRejectsInvalidResults(t *testing.T) {
 	require.ErrorContains(t, err, "division by zero")
 }
 
+func TestAssetPrecompileAmountUintConversions(t *testing.T) {
+	precompile := NewAssetPrecompile(nil, nil)
+
+	ret, err := precompile.Run(EncodeUintToAmountCall(123))
+	require.NoError(t, err)
+	require.Equal(t, "123", abiRawDynamicString(t, ret))
+
+	ret, err = precompile.Run(EncodeAmountToUintFloorCall("123.999"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(123), binary.BigEndian.Uint64(ret[24:32]))
+
+	ret, err = precompile.Run(EncodeAmountToUintFloorCall("0.999"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), binary.BigEndian.Uint64(ret[24:32]))
+
+	ret, err = precompile.Run(EncodeAmountToUintCeilCall("123"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(123), binary.BigEndian.Uint64(ret[24:32]))
+
+	ret, err = precompile.Run(EncodeAmountToUintCeilCall("123.001"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(124), binary.BigEndian.Uint64(ret[24:32]))
+}
+
 func TestTriggerPrecompileRegisterHeightABI(t *testing.T) {
 	call := EncodeRegisterHeightTriggerCall("vault-release", 100, 50000, []byte{1, 2, 3})
 

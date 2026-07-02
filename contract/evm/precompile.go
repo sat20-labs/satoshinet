@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -18,17 +19,20 @@ var (
 	// TriggerPrecompileAddress is the SatoshiNet contract trigger registry interface inside EVM.
 	TriggerPrecompileAddress = gethcommon.HexToAddress("0x0000000000000000000000000000000000534e02")
 
-	assetBalanceOfSelector        = methodSelector("balanceOf(address,string)")
-	assetTransferAssetSelector    = methodSelector("transferAsset(string,string,string,bytes)")
-	assetFundingAssetSelector     = methodSelector("fundingAssetAmount(string)")
-	assetFundingSatsSelector      = methodSelector("fundingSats()")
-	assetClaimFundingSelector     = methodSelector("claimFundingAsset(string,string)")
-	assetCompareAmountSelector    = methodSelector("compareAmount(string,string)")
-	assetAddAmountSelector        = methodSelector("addAmount(string,string)")
-	assetSubAmountSelector        = methodSelector("subAmount(string,string)")
-	assetMulAmountSelector        = methodSelector("mulAmount(string,string)")
-	assetDivAmountSelector        = methodSelector("divAmount(string,string)")
-	triggerRegisterHeightSelector = methodSelector("registerHeightTrigger(string,uint256,uint256,bytes)")
+	assetBalanceOfSelector         = methodSelector("balanceOf(address,string)")
+	assetTransferAssetSelector     = methodSelector("transferAsset(string,string,string,bytes)")
+	assetFundingAssetSelector      = methodSelector("fundingAssetAmount(string)")
+	assetFundingSatsSelector       = methodSelector("fundingSats()")
+	assetClaimFundingSelector      = methodSelector("claimFundingAsset(string,string)")
+	assetCompareAmountSelector     = methodSelector("compareAmount(string,string)")
+	assetAddAmountSelector         = methodSelector("addAmount(string,string)")
+	assetSubAmountSelector         = methodSelector("subAmount(string,string)")
+	assetMulAmountSelector         = methodSelector("mulAmount(string,string)")
+	assetDivAmountSelector         = methodSelector("divAmount(string,string)")
+	assetUintToAmountSelector      = methodSelector("uintToAmount(uint256)")
+	assetAmountToUintFloorSelector = methodSelector("amountToUintFloor(string)")
+	assetAmountToUintCeilSelector  = methodSelector("amountToUintCeil(string)")
+	triggerRegisterHeightSelector  = methodSelector("registerHeightTrigger(string,uint256,uint256,bytes)")
 )
 
 const evmAmountMaxPrecision = scommon.MAX_PRECISION - 1
@@ -343,6 +347,41 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 			return nil, err
 		}
 		return abiEncodeDynamicBytes([]byte(result.String())), nil
+	case assetUintToAmountSelector:
+		value, err := abiReadUint64(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		if value > math.MaxInt64 {
+			return nil, errors.New("uint amount overflows int64")
+		}
+		return abiEncodeDynamicBytes([]byte(scommon.NewDefaultDecimal(int64(value)).String())), nil
+	case assetAmountToUintFloorSelector:
+		amountText, err := abiReadString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		amount, err := ParseDecimalAmountString(amountText)
+		if err != nil {
+			return nil, err
+		}
+		if amount.Sign() < 0 {
+			return nil, errors.New("amount must be non-negative")
+		}
+		return abiEncodeUint64(uint64(amount.Floor())), nil
+	case assetAmountToUintCeilSelector:
+		amountText, err := abiReadString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		amount, err := ParseDecimalAmountString(amountText)
+		if err != nil {
+			return nil, err
+		}
+		if amount.Sign() < 0 {
+			return nil, errors.New("amount must be non-negative")
+		}
+		return abiEncodeUint64(uint64(amount.Ceil())), nil
 	default:
 		return nil, fmt.Errorf("unknown asset precompile selector 0x%x", selector)
 	}
@@ -481,6 +520,24 @@ func EncodeMulAmountCall(left, right string) []byte {
 
 func EncodeDivAmountCall(left, right string) []byte {
 	return encodeAmountPairCall(assetDivAmountSelector, left, right)
+}
+
+func EncodeUintToAmountCall(value uint64) []byte {
+	return appendMethod(assetUintToAmountSelector, abiEncodeUint64(value))
+}
+
+func EncodeAmountToUintFloorCall(amount string) []byte {
+	args := make([]byte, 32)
+	putABIUint64(args, 32)
+	args = append(args, abiEncodeDynamicBytes([]byte(amount))...)
+	return appendMethod(assetAmountToUintFloorSelector, args)
+}
+
+func EncodeAmountToUintCeilCall(amount string) []byte {
+	args := make([]byte, 32)
+	putABIUint64(args, 32)
+	args = append(args, abiEncodeDynamicBytes([]byte(amount))...)
+	return appendMethod(assetAmountToUintCeilSelector, args)
 }
 
 func DecodeTriggerRegistrationCall(input []byte) (Trigger, error) {
