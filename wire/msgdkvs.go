@@ -1,0 +1,516 @@
+package wire
+
+import (
+	"fmt"
+	"io"
+
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+)
+
+const (
+	MaxDKVSKeySize       = 256
+	MaxDKVSValueSize     = 10 * 1024
+	MaxDKVSDataSize      = 10 * 1024
+	MaxDKVSFeeProofSize  = 2 * 1024
+	MaxDKVSSignatureSize = 256
+	MaxDKVSPubKeySize    = 128
+	MaxDKVSRecordSize    = 32 * 1024
+	MaxDKVSRecordsPerMsg = 256
+	MaxDKVSItemsPerMsg   = 1024
+	MaxDKVSCursorSize    = 512
+)
+
+type DKVSRecord struct {
+	Version      uint32
+	Key          string
+	Value        []byte
+	Data         []byte
+	PubKey       []byte
+	Signature    []byte
+	Seq          uint64
+	IssueTime    uint64
+	TTL          uint64
+	ExpiryHeight uint64
+	FeeProof     []byte
+	Flags        uint32
+}
+
+type DKVSInvItem struct {
+	Key        string
+	KeyHash    chainhash.Hash
+	RecordHash chainhash.Hash
+	Seq        uint64
+}
+
+type MsgDKVSNotify struct {
+	EventType    uint32
+	Key          string
+	KeyHash      chainhash.Hash
+	RecordHash   chainhash.Hash
+	Seq          uint64
+	ExpiryHeight uint64
+	Size         uint32
+	SourceNode   string
+	Flags        uint32
+}
+
+type MsgDKVSInv struct {
+	Items []DKVSInvItem
+}
+
+type MsgDKVSGet struct {
+	Keys         []string
+	RecordHashes []chainhash.Hash
+}
+
+type MsgDKVSData struct {
+	Records  []*DKVSRecord
+	NotFound []chainhash.Hash
+}
+
+type MsgDKVSSyncRequest struct {
+	Cursor []byte
+	Limit  uint32
+}
+
+type MsgDKVSSyncResponse struct {
+	Records        []*DKVSRecord
+	NextCursor     []byte
+	Done           bool
+	CheckpointRoot chainhash.Hash
+}
+
+func readDKVSRecord(r io.Reader, pver uint32, buf []byte) (*DKVSRecord, error) {
+	rec := &DKVSRecord{}
+	if err := readElements(r, &rec.Version); err != nil {
+		return nil, err
+	}
+	key, err := readVarStringBuf(r, pver, buf)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) > MaxDKVSKeySize {
+		return nil, messageError("readDKVSRecord", "dkvs key too large")
+	}
+	rec.Key = key
+	if rec.Value, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSValueSize, "dkvs value"); err != nil {
+		return nil, err
+	}
+	if rec.Data, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSDataSize, "dkvs data"); err != nil {
+		return nil, err
+	}
+	if rec.PubKey, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSPubKeySize, "dkvs pubkey"); err != nil {
+		return nil, err
+	}
+	if rec.Signature, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSSignatureSize, "dkvs signature"); err != nil {
+		return nil, err
+	}
+	if err := readElements(r, &rec.Seq, &rec.IssueTime, &rec.TTL, &rec.ExpiryHeight); err != nil {
+		return nil, err
+	}
+	if rec.FeeProof, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSFeeProofSize, "dkvs fee proof"); err != nil {
+		return nil, err
+	}
+	if err := readElements(r, &rec.Flags); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func writeDKVSRecord(w io.Writer, pver uint32, rec *DKVSRecord, buf []byte) error {
+	if rec == nil {
+		return messageError("writeDKVSRecord", "nil dkvs record")
+	}
+	if len(rec.Key) > MaxDKVSKeySize {
+		return messageError("writeDKVSRecord", "dkvs key too large")
+	}
+	if len(rec.Value) > MaxDKVSValueSize || len(rec.Data) > MaxDKVSDataSize ||
+		len(rec.PubKey) > MaxDKVSPubKeySize || len(rec.Signature) > MaxDKVSSignatureSize ||
+		len(rec.FeeProof) > MaxDKVSFeeProofSize {
+		return messageError("writeDKVSRecord", "dkvs record field too large")
+	}
+	if err := writeElements(w, rec.Version); err != nil {
+		return err
+	}
+	if err := writeVarStringBuf(w, pver, rec.Key, buf); err != nil {
+		return err
+	}
+	for _, field := range [][]byte{rec.Value, rec.Data, rec.PubKey, rec.Signature} {
+		if err := WriteVarBytesBuf(w, pver, field, buf); err != nil {
+			return err
+		}
+	}
+	if err := writeElements(w, rec.Seq, rec.IssueTime, rec.TTL, rec.ExpiryHeight); err != nil {
+		return err
+	}
+	if err := WriteVarBytesBuf(w, pver, rec.FeeProof, buf); err != nil {
+		return err
+	}
+	return writeElements(w, rec.Flags)
+}
+
+func readDKVSInvItem(r io.Reader, pver uint32, buf []byte) (DKVSInvItem, error) {
+	var item DKVSInvItem
+	key, err := readVarStringBuf(r, pver, buf)
+	if err != nil {
+		return item, err
+	}
+	if len(key) > MaxDKVSKeySize {
+		return item, messageError("readDKVSInvItem", "dkvs key too large")
+	}
+	item.Key = key
+	if _, err := io.ReadFull(r, item.KeyHash[:]); err != nil {
+		return item, err
+	}
+	if _, err := io.ReadFull(r, item.RecordHash[:]); err != nil {
+		return item, err
+	}
+	err = readElements(r, &item.Seq)
+	return item, err
+}
+
+func writeDKVSInvItem(w io.Writer, pver uint32, item DKVSInvItem, buf []byte) error {
+	if len(item.Key) > MaxDKVSKeySize {
+		return messageError("writeDKVSInvItem", "dkvs key too large")
+	}
+	if err := writeVarStringBuf(w, pver, item.Key, buf); err != nil {
+		return err
+	}
+	if _, err := w.Write(item.KeyHash[:]); err != nil {
+		return err
+	}
+	if _, err := w.Write(item.RecordHash[:]); err != nil {
+		return err
+	}
+	return writeElements(w, item.Seq)
+}
+
+func readHashList(r io.Reader, pver uint32, buf []byte, max uint32, field string) ([]chainhash.Hash, error) {
+	count, err := ReadVarIntBuf(r, pver, buf)
+	if err != nil {
+		return nil, err
+	}
+	if count > uint64(max) {
+		return nil, messageError(field, fmt.Sprintf("too many hashes %d", count))
+	}
+	hashes := make([]chainhash.Hash, 0, count)
+	for i := uint64(0); i < count; i++ {
+		var h chainhash.Hash
+		if _, err := io.ReadFull(r, h[:]); err != nil {
+			return nil, err
+		}
+		hashes = append(hashes, h)
+	}
+	return hashes, nil
+}
+
+func writeHashList(w io.Writer, pver uint32, hashes []chainhash.Hash, max uint32, field string, buf []byte) error {
+	if len(hashes) > int(max) {
+		return messageError(field, fmt.Sprintf("too many hashes %d", len(hashes)))
+	}
+	if err := WriteVarIntBuf(w, pver, uint64(len(hashes)), buf); err != nil {
+		return err
+	}
+	for i := range hashes {
+		if _, err := w.Write(hashes[i][:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (msg *MsgDKVSNotify) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	if err := readElements(r, &msg.EventType); err != nil {
+		return err
+	}
+	key, err := readVarStringBuf(r, pver, buf)
+	if err != nil {
+		return err
+	}
+	if len(key) > MaxDKVSKeySize {
+		return messageError("MsgDKVSNotify.BtcDecode", "dkvs key too large")
+	}
+	msg.Key = key
+	if _, err := io.ReadFull(r, msg.KeyHash[:]); err != nil {
+		return err
+	}
+	if _, err := io.ReadFull(r, msg.RecordHash[:]); err != nil {
+		return err
+	}
+	if err := readElements(r, &msg.Seq, &msg.ExpiryHeight, &msg.Size); err != nil {
+		return err
+	}
+	source, err := readVarStringBuf(r, pver, buf)
+	if err != nil {
+		return err
+	}
+	msg.SourceNode = source
+	return readElements(r, &msg.Flags)
+}
+
+func (msg *MsgDKVSNotify) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
+	if len(msg.Key) > MaxDKVSKeySize {
+		return messageError("MsgDKVSNotify.BtcEncode", "dkvs key too large")
+	}
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	if err := writeElements(w, msg.EventType); err != nil {
+		return err
+	}
+	if err := writeVarStringBuf(w, pver, msg.Key, buf); err != nil {
+		return err
+	}
+	if _, err := w.Write(msg.KeyHash[:]); err != nil {
+		return err
+	}
+	if _, err := w.Write(msg.RecordHash[:]); err != nil {
+		return err
+	}
+	if err := writeElements(w, msg.Seq, msg.ExpiryHeight, msg.Size); err != nil {
+		return err
+	}
+	if err := writeVarStringBuf(w, pver, msg.SourceNode, buf); err != nil {
+		return err
+	}
+	return writeElements(w, msg.Flags)
+}
+
+func (msg *MsgDKVSNotify) Command() string { return CmdDKVSNotify }
+func (msg *MsgDKVSNotify) MaxPayloadLength(pver uint32) uint32 {
+	return 4 + MaxVarIntPayload + MaxDKVSKeySize + chainhash.HashSize*2 + 8 + 8 + 4 + MaxVarIntPayload + 128 + 4
+}
+
+func (msg *MsgDKVSInv) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	count, err := ReadVarIntBuf(r, pver, buf)
+	if err != nil {
+		return err
+	}
+	if count > MaxDKVSItemsPerMsg {
+		return messageError("MsgDKVSInv.BtcDecode", "too many dkvs inv items")
+	}
+	msg.Items = make([]DKVSInvItem, 0, count)
+	for i := uint64(0); i < count; i++ {
+		item, err := readDKVSInvItem(r, pver, buf)
+		if err != nil {
+			return err
+		}
+		msg.Items = append(msg.Items, item)
+	}
+	return nil
+}
+
+func (msg *MsgDKVSInv) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
+	if len(msg.Items) > MaxDKVSItemsPerMsg {
+		return messageError("MsgDKVSInv.BtcEncode", "too many dkvs inv items")
+	}
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	if err := WriteVarIntBuf(w, pver, uint64(len(msg.Items)), buf); err != nil {
+		return err
+	}
+	for _, item := range msg.Items {
+		if err := writeDKVSInvItem(w, pver, item, buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (msg *MsgDKVSInv) Command() string { return CmdDKVSInv }
+func (msg *MsgDKVSInv) MaxPayloadLength(pver uint32) uint32 {
+	return MaxVarIntPayload + MaxDKVSItemsPerMsg*(MaxVarIntPayload+MaxDKVSKeySize+chainhash.HashSize*2+8)
+}
+
+func (msg *MsgDKVSGet) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	count, err := ReadVarIntBuf(r, pver, buf)
+	if err != nil {
+		return err
+	}
+	if count > MaxDKVSItemsPerMsg {
+		return messageError("MsgDKVSGet.BtcDecode", "too many dkvs keys")
+	}
+	msg.Keys = make([]string, 0, count)
+	for i := uint64(0); i < count; i++ {
+		key, err := readVarStringBuf(r, pver, buf)
+		if err != nil {
+			return err
+		}
+		if len(key) > MaxDKVSKeySize {
+			return messageError("MsgDKVSGet.BtcDecode", "dkvs key too large")
+		}
+		msg.Keys = append(msg.Keys, key)
+	}
+	msg.RecordHashes, err = readHashList(r, pver, buf, MaxDKVSItemsPerMsg, "MsgDKVSGet.BtcDecode")
+	return err
+}
+
+func (msg *MsgDKVSGet) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
+	if len(msg.Keys) > MaxDKVSItemsPerMsg {
+		return messageError("MsgDKVSGet.BtcEncode", "too many dkvs keys")
+	}
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	if err := WriteVarIntBuf(w, pver, uint64(len(msg.Keys)), buf); err != nil {
+		return err
+	}
+	for _, key := range msg.Keys {
+		if len(key) > MaxDKVSKeySize {
+			return messageError("MsgDKVSGet.BtcEncode", "dkvs key too large")
+		}
+		if err := writeVarStringBuf(w, pver, key, buf); err != nil {
+			return err
+		}
+	}
+	return writeHashList(w, pver, msg.RecordHashes, MaxDKVSItemsPerMsg, "MsgDKVSGet.BtcEncode", buf)
+}
+
+func (msg *MsgDKVSGet) Command() string { return CmdDKVSGet }
+func (msg *MsgDKVSGet) MaxPayloadLength(pver uint32) uint32 {
+	return MaxVarIntPayload + MaxDKVSItemsPerMsg*(MaxVarIntPayload+MaxDKVSKeySize) +
+		MaxVarIntPayload + MaxDKVSItemsPerMsg*chainhash.HashSize
+}
+
+func (msg *MsgDKVSData) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	count, err := ReadVarIntBuf(r, pver, buf)
+	if err != nil {
+		return err
+	}
+	if count > MaxDKVSRecordsPerMsg {
+		return messageError("MsgDKVSData.BtcDecode", "too many dkvs records")
+	}
+	msg.Records = make([]*DKVSRecord, 0, count)
+	for i := uint64(0); i < count; i++ {
+		rec, err := readDKVSRecord(r, pver, buf)
+		if err != nil {
+			return err
+		}
+		msg.Records = append(msg.Records, rec)
+	}
+	msg.NotFound, err = readHashList(r, pver, buf, MaxDKVSItemsPerMsg, "MsgDKVSData.BtcDecode")
+	return err
+}
+
+func (msg *MsgDKVSData) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
+	if len(msg.Records) > MaxDKVSRecordsPerMsg {
+		return messageError("MsgDKVSData.BtcEncode", "too many dkvs records")
+	}
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	if err := WriteVarIntBuf(w, pver, uint64(len(msg.Records)), buf); err != nil {
+		return err
+	}
+	for _, rec := range msg.Records {
+		if err := writeDKVSRecord(w, pver, rec, buf); err != nil {
+			return err
+		}
+	}
+	return writeHashList(w, pver, msg.NotFound, MaxDKVSItemsPerMsg, "MsgDKVSData.BtcEncode", buf)
+}
+
+func (msg *MsgDKVSData) Command() string { return CmdDKVSData }
+func (msg *MsgDKVSData) MaxPayloadLength(pver uint32) uint32 {
+	return MaxProtocolMessageLength
+}
+
+func (msg *MsgDKVSSyncRequest) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	cursor, err := ReadVarBytesBuf(r, pver, buf, MaxDKVSCursorSize, "dkvs cursor")
+	if err != nil {
+		return err
+	}
+	msg.Cursor = cursor
+	return readElements(r, &msg.Limit)
+}
+
+func (msg *MsgDKVSSyncRequest) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
+	if len(msg.Cursor) > MaxDKVSCursorSize {
+		return messageError("MsgDKVSSyncRequest.BtcEncode", "dkvs cursor too large")
+	}
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	if err := WriteVarBytesBuf(w, pver, msg.Cursor, buf); err != nil {
+		return err
+	}
+	return writeElements(w, msg.Limit)
+}
+
+func (msg *MsgDKVSSyncRequest) Command() string { return CmdDKVSSyncRequest }
+func (msg *MsgDKVSSyncRequest) MaxPayloadLength(pver uint32) uint32 {
+	return MaxVarIntPayload + MaxDKVSCursorSize + 4
+}
+
+func (msg *MsgDKVSSyncResponse) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	count, err := ReadVarIntBuf(r, pver, buf)
+	if err != nil {
+		return err
+	}
+	if count > MaxDKVSRecordsPerMsg {
+		return messageError("MsgDKVSSyncResponse.BtcDecode", "too many dkvs records")
+	}
+	msg.Records = make([]*DKVSRecord, 0, count)
+	for i := uint64(0); i < count; i++ {
+		rec, err := readDKVSRecord(r, pver, buf)
+		if err != nil {
+			return err
+		}
+		msg.Records = append(msg.Records, rec)
+	}
+	msg.NextCursor, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSCursorSize, "dkvs cursor")
+	if err != nil {
+		return err
+	}
+	var done uint8
+	if err := readElements(r, &done); err != nil {
+		return err
+	}
+	msg.Done = done != 0
+	_, err = io.ReadFull(r, msg.CheckpointRoot[:])
+	return err
+}
+
+func (msg *MsgDKVSSyncResponse) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
+	if len(msg.Records) > MaxDKVSRecordsPerMsg {
+		return messageError("MsgDKVSSyncResponse.BtcEncode", "too many dkvs records")
+	}
+	if len(msg.NextCursor) > MaxDKVSCursorSize {
+		return messageError("MsgDKVSSyncResponse.BtcEncode", "dkvs cursor too large")
+	}
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	if err := WriteVarIntBuf(w, pver, uint64(len(msg.Records)), buf); err != nil {
+		return err
+	}
+	for _, rec := range msg.Records {
+		if err := writeDKVSRecord(w, pver, rec, buf); err != nil {
+			return err
+		}
+	}
+	if err := WriteVarBytesBuf(w, pver, msg.NextCursor, buf); err != nil {
+		return err
+	}
+	var done uint8
+	if msg.Done {
+		done = 1
+	}
+	if err := writeElements(w, done); err != nil {
+		return err
+	}
+	_, err := w.Write(msg.CheckpointRoot[:])
+	return err
+}
+
+func (msg *MsgDKVSSyncResponse) Command() string { return CmdDKVSSyncResponse }
+func (msg *MsgDKVSSyncResponse) MaxPayloadLength(pver uint32) uint32 {
+	return MaxProtocolMessageLength
+}

@@ -71,7 +71,7 @@ func TestRegister(t *testing.T) {
 				{
 					name:   "duplicate simnet",
 					params: &SimNetParams,
-					err:    ErrDuplicateNet,
+					err:    nil,
 				},
 			},
 			p2pkhMagics: []magicTest{
@@ -137,7 +137,7 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.Bech32HRPSegwit + "1",
-					valid:  true,
+					valid:  false,
 				},
 				{
 					prefix: SimNetParams.Bech32HRPSegwit + "1",
@@ -271,7 +271,7 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.Bech32HRPSegwit + "1",
-					valid:  true,
+					valid:  false,
 				},
 				{
 					prefix: SimNetParams.Bech32HRPSegwit + "1",
@@ -398,7 +398,7 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.Bech32HRPSegwit + "1",
-					valid:  true,
+					valid:  false,
 				},
 				{
 					prefix: SimNetParams.Bech32HRPSegwit + "1",

@@ -379,8 +379,8 @@ func readVarIntBuf(buf []byte) (uint64, int, error) {
 		// encoded using fewer bytes.
 		min := uint64(0x100000000)
 		if rv < min {
-			return 0, 0, fmt.Errorf("ReadVarInt", fmt.Sprintf(
-				errNonCanonicalVarInt, rv, discriminant, min))
+			return 0, 0, fmt.Errorf("ReadVarInt: "+
+				errNonCanonicalVarInt, rv, discriminant, min)
 		}
 
 	case 0xfe:
@@ -391,8 +391,8 @@ func readVarIntBuf(buf []byte) (uint64, int, error) {
 		// encoded using fewer bytes.
 		min := uint64(0x10000)
 		if rv < min {
-			return 0, 0, fmt.Errorf("ReadVarInt", fmt.Sprintf(
-				errNonCanonicalVarInt, rv, discriminant, min))
+			return 0, 0, fmt.Errorf("ReadVarInt: "+
+				errNonCanonicalVarInt, rv, discriminant, min)
 		}
 
 	case 0xfd:
@@ -403,8 +403,8 @@ func readVarIntBuf(buf []byte) (uint64, int, error) {
 		// encoded using fewer bytes.
 		min := uint64(0xfd)
 		if rv < min {
-			return 0, 0, fmt.Errorf("ReadVarInt", fmt.Sprintf(
-				errNonCanonicalVarInt, rv, discriminant, min))
+			return 0, 0, fmt.Errorf("ReadVarInt: "+
+				errNonCanonicalVarInt, rv, discriminant, min)
 		}
 
 	default:

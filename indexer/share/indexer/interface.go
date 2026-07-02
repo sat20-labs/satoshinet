@@ -3,8 +3,11 @@ package indexer
 import (
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractengine "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	dkvs_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type Indexer interface {
@@ -61,4 +64,13 @@ type Indexer interface {
 	GetContractHistory(address string, start, limit int) ([]contractengine.ContractHistoryRecord, int)
 	GetEVMSourceMetadata(address string) (contractengine.EVMSourceMetadata, bool)
 	PutEVMSourceMetadata(metadata contractengine.EVMSourceMetadata) error
+
+	SetDKVSNotifyCallback(fn dkvs_indexer.NotifyFunc)
+	PutDKVSRecord(record *wire.DKVSRecord) (bool, error)
+	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
+	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
+	GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error)
+	ListDKVSRecords(prefix string, start, limit int) ([]*wire.DKVSRecord, int, error)
+	SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
+	GetDKVSCheckpoint() (*dkvs_indexer.Checkpoint, error)
 }

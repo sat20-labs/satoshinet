@@ -7,6 +7,7 @@ import (
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
 	contract_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/contract"
+	dkvs_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 
@@ -39,6 +40,7 @@ type IndexerMgr struct {
 
 	// data from market
 	localDB indexer.KVDB
+	dkvsDB           indexer.KVDB
 
 	// 配置参数
 	chaincfgParam   *chaincfg.Params
@@ -61,6 +63,8 @@ type IndexerMgr struct {
 
 	contractIndexer  *contract_indexer.Indexer
 	contractBackupDB *contract_indexer.Indexer
+
+	dkvsIndexer      *dkvs_indexer.Indexer
 }
 
 var instance *IndexerMgr
@@ -111,6 +115,19 @@ func (b *IndexerMgr) Init() {
 	b.compiling = base_indexer.NewBaseIndexer(b.baseDB, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 	b.compiling.Init()
 	b.contractIndexer = contract_indexer.NewIndexer(b.baseDB, b.chaincfgParam)
+	b.dkvsIndexer = dkvs_indexer.New(b.dkvsDB, dkvs_indexer.Config{
+		AllowFreeLocal: b.chaincfgParam.Name != chaincfg.MainNetParams.Name,
+		CurrentHeight: func() uint64 {
+			if b.compiling == nil {
+				return 0
+			}
+			height := b.compiling.GetSyncHeight()
+			if height < 0 {
+				return 0
+			}
+			return uint64(height)
+		},
+	})
 	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
 	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
@@ -195,6 +212,7 @@ func (b *IndexerMgr) Stop() {
 func (b *IndexerMgr) dbgc() {
 	db.RunDBGC(b.localDB)
 	db.RunDBGC(b.baseDB)
+	db.RunDBGC(b.dkvsDB)
 	common.Log.Infof("dbgc completed")
 }
 
@@ -203,6 +221,9 @@ func (b *IndexerMgr) closeDB() {
 
 	b.baseDB.Close()
 	b.localDB.Close()
+	if b.dkvsDB != nil {
+		b.dkvsDB.Close()
+	}
 }
 
 func (b *IndexerMgr) checkSelf() {
@@ -210,6 +231,9 @@ func (b *IndexerMgr) checkSelf() {
 	b.compiling.CheckSelf()
 	if b.contractIndexer != nil && !b.contractIndexer.CheckSelf() {
 		common.Log.Panicf("ContractIndexer.CheckSelf failed")
+	}
+	if b.dkvsIndexer == nil {
+		common.Log.Panicf("DKVS indexer is nil")
 	}
 
 	common.Log.Infof("IndexerMgr.checkSelf takes %v", time.Since(start))

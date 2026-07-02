@@ -622,6 +622,88 @@ func TestPeerListeners(t *testing.T) {
 	outPeer.Disconnect()
 }
 
+func TestPeerDKVSListeners(t *testing.T) {
+	verack := make(chan struct{}, 2)
+	ok := make(chan wire.Message, 6)
+	dkvsHash := chainhash.DoubleHashH([]byte("dkvs"))
+	peerCfg := &peer.Config{
+		Listeners: peer.MessageListeners{
+			OnVerAck: func(p *peer.Peer, msg *wire.MsgVerAck) {
+				verack <- struct{}{}
+			},
+			OnDKVSNotify: func(p *peer.Peer, msg *wire.MsgDKVSNotify) {
+				ok <- msg
+			},
+			OnDKVSInv: func(p *peer.Peer, msg *wire.MsgDKVSInv) {
+				ok <- msg
+			},
+			OnDKVSGet: func(p *peer.Peer, msg *wire.MsgDKVSGet) {
+				ok <- msg
+			},
+			OnDKVSData: func(p *peer.Peer, msg *wire.MsgDKVSData) {
+				ok <- msg
+			},
+			OnDKVSSyncRequest: func(p *peer.Peer, msg *wire.MsgDKVSSyncRequest) {
+				ok <- msg
+			},
+			OnDKVSSyncResponse: func(p *peer.Peer, msg *wire.MsgDKVSSyncResponse) {
+				ok <- msg
+			},
+		},
+		UserAgentName:     "peer",
+		UserAgentVersion:  "1.0",
+		UserAgentComments: []string{"comment"},
+		ChainParams:       &chaincfg.MainNetParams,
+		Services:          wire.SFNodeBloom,
+		TrickleInterval:   time.Second * 10,
+		AllowSelfConns:    true,
+	}
+	inPeer := peer.NewInboundPeer(peerCfg)
+
+	peerCfg.Listeners = peer.MessageListeners{
+		OnVerAck: func(p *peer.Peer, msg *wire.MsgVerAck) {
+			verack <- struct{}{}
+		},
+	}
+	outPeer, err := peer.NewOutboundPeer(peerCfg, "10.0.0.1:8333")
+	if err != nil {
+		t.Fatalf("NewOutboundPeer: %v", err)
+	}
+	if err := setupPeerConnection(inPeer, outPeer); err != nil {
+		t.Fatalf("setupPeerConnection: %v", err)
+	}
+	defer inPeer.Disconnect()
+	defer outPeer.Disconnect()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-verack:
+		case <-time.After(time.Second):
+			t.Fatal("verack timeout")
+		}
+	}
+
+	tests := []struct {
+		listener string
+		msg      wire.Message
+	}{
+		{"OnDKVSNotify", &wire.MsgDKVSNotify{EventType: 1, Key: "/tmp/dkvs", KeyHash: dkvsHash, RecordHash: dkvsHash}},
+		{"OnDKVSInv", &wire.MsgDKVSInv{Items: []wire.DKVSInvItem{{Key: "/tmp/dkvs", KeyHash: dkvsHash, RecordHash: dkvsHash}}}},
+		{"OnDKVSGet", &wire.MsgDKVSGet{Keys: []string{"/tmp/dkvs"}, RecordHashes: []chainhash.Hash{dkvsHash}}},
+		{"OnDKVSData", &wire.MsgDKVSData{NotFound: []chainhash.Hash{dkvsHash}}},
+		{"OnDKVSSyncRequest", &wire.MsgDKVSSyncRequest{Limit: 1}},
+		{"OnDKVSSyncResponse", &wire.MsgDKVSSyncResponse{Done: true, CheckpointRoot: dkvsHash}},
+	}
+	for _, test := range tests {
+		outPeer.QueueMessage(test.msg, nil)
+		select {
+		case <-ok:
+		case <-time.After(time.Second):
+			t.Fatalf("%s timeout", test.listener)
+		}
+	}
+}
+
 // TestOutboundPeer tests that the outbound peer works as expected.
 func TestOutboundPeer(t *testing.T) {
 

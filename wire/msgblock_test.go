@@ -71,7 +71,7 @@ func TestBlock(t *testing.T) {
 // hashes from a block accurately.
 func TestBlockTxHashes(t *testing.T) {
 	// Block 1, transaction 1 hash.
-	hashStr := "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098"
+	hashStr := "31f356a8340efe7d15bc232a37f46a46754a014017187d1dbb59030f31f20c5f"
 	wantHash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -568,6 +568,7 @@ var blockOneBytes = []byte{
 	0xff, 0xff, 0xff, 0xff, // Sequence
 	0x01,                                           // Varint for number of transaction outputs
 	0x00, 0xf2, 0x05, 0x2a, 0x01, 0x00, 0x00, 0x00, // Transaction amount
+	0x00, // Varint for number of assets
 	0x43, // Varint for length of pk script
 	0x41, // OP_DATA_65
 	0x04, 0x96, 0xb5, 0x38, 0xe8, 0x53, 0x51, 0x9c,
@@ -585,5 +586,5 @@ var blockOneBytes = []byte{
 
 // Transaction location information for block one transactions.
 var blockOneTxLocs = []TxLoc{
-	{TxStart: 81, TxLen: 134},
+	{TxStart: 81, TxLen: 135},
 }

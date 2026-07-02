@@ -49,6 +49,12 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/miner/check/:pubkey", s.handle.checkMiner)
 	r.GET(proxy+"/v3/miner/info/:pubkey", s.handle.getMinerInfo)
 
+	r.POST(proxy+"/v3/dkvs/records", s.handle.putDKVSRecord)
+	r.GET(proxy+"/v3/dkvs/records", s.handle.getDKVSRecord)
+	r.GET(proxy+"/v3/dkvs/records/prefix", s.handle.listDKVSRecords)
+	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
+	r.GET(proxy+"/v3/dkvs/checkpoint", s.handle.getDKVSCheckpoint)
+
 	r.GET(proxy+"/v3/address/summary/:address", s.handle.getAssetSummaryV3)
 	// 获取某个地址上所有utxo数据列表
 	r.GET(proxy+"/v3/address/utxos/:address", s.handle.getAddressUtxosV3)

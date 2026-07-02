@@ -34,7 +34,7 @@ import (
 
 var (
 	// blockDataNet is the expected network in the test block data.
-	blockDataNet = wire.MainNet
+	blockDataNet = wire.BitcoinNet(0xd9b4bef9)
 
 	// blockDataFile is the path to a file containing the first 256 blocks
 	// of the block chain.

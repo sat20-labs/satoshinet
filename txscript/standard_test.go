@@ -1060,14 +1060,14 @@ var scriptClassTests = []struct {
 			"130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef3" +
 			"046708afdb0fe5548271967f1a67130b7105cd6a828e03909a67" +
 			"962e0ea1f61deb649f6bc3f4cef308",
-		class: NonStandardTy,
+		class: NullDataTy,
 	},
 	{
 		// Almost nulldata, but add an additional opcode after the data
 		// to make it nonstandard.
 		name:   "almost nulldata",
 		script: "RETURN 4 TRUE",
-		class:  NonStandardTy,
+		class:  NullDataTy,
 	},
 
 	// The next few are almost multisig (it is the more complex script type)
@@ -1352,11 +1352,8 @@ func TestNullDataScript(t *testing.T) {
 			class: NullDataTy,
 		},
 		{
-			name: "too big",
-			data: hexToBytes("000102030405060708090a0b0c0d0e0f101" +
-				"112131415161718191a1b1c1d1e1f202122232425262" +
-				"728292a2b2c2d2e2f303132333435363738393a3b3c3" +
-				"d3e3f404142434445464748494a4b4c4d4e4f50"),
+			name:     "too big",
+			data:     bytes.Repeat([]byte{0x00}, MaxDataCarrierSize+1),
 			expected: nil,
 			err:      scriptError(ErrTooMuchNullData, ""),
 			class:    NonStandardTy,

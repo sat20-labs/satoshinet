@@ -65,8 +65,15 @@ const (
 	CmdCFCheckpt    = "cfcheckpt"
 	CmdSendAddrV2   = "sendaddrv2"
 
-	CmdMineBlock   = "mineblock"
-	CmdMineAck     = "mineack"
+	CmdMineBlock = "mineblock"
+	CmdMineAck   = "mineack"
+
+	CmdDKVSNotify       = "dkvsnotify"
+	CmdDKVSInv          = "dkvsinv"
+	CmdDKVSGet          = "dkvsget"
+	CmdDKVSData         = "dkvsdata"
+	CmdDKVSSyncRequest  = "dkvssyncreq"
+	CmdDKVSSyncResponse = "dkvssyncres"
 )
 
 // MessageEncoding represents the wire message encoding format to be used.
@@ -205,6 +212,24 @@ func makeEmptyMessage(command string) (Message, error) {
 
 	case CmdMineAck:
 		msg = &MsgMineAck{}
+
+	case CmdDKVSNotify:
+		msg = &MsgDKVSNotify{}
+
+	case CmdDKVSInv:
+		msg = &MsgDKVSInv{}
+
+	case CmdDKVSGet:
+		msg = &MsgDKVSGet{}
+
+	case CmdDKVSData:
+		msg = &MsgDKVSData{}
+
+	case CmdDKVSSyncRequest:
+		msg = &MsgDKVSSyncRequest{}
+
+	case CmdDKVSSyncResponse:
+		msg = &MsgDKVSSyncResponse{}
 
 	default:
 		return nil, ErrUnknownMessage

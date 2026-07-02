@@ -29,5 +29,10 @@ func (p *IndexerMgr) initDB() (err error) {
 		return err
 	}
 
+	p.dkvsDB, err = openDB(p.dbDir + "dkvs")
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

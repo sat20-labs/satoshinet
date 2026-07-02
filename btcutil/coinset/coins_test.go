@@ -223,8 +223,8 @@ func TestMinPrioritySelector(t *testing.T) {
 var (
 	// should be two outpoints, with 1st one having 0.035BTC value.
 	testSimpleCoinNumConfs            = int64(1)
-	testSimpleCoinTxHash              = "9b5965c86de51d5dc824e179a05cf232db78c80ae86ca9d7cb2a655b5e19c1e2"
-	testSimpleCoinTxHex               = "0100000001a214a110f79e4abe073865ea5b3745c6e82c913bad44be70652804a5e4003b0a010000008c493046022100edd18a69664efa57264be207100c203e6cade1888cbb88a0ad748548256bb2f0022100f1027dc2e6c7f248d78af1dd90027b5b7d8ec563bb62aa85d4e74d6376f3868c0141048f3757b65ed301abd1b0e8942d1ab5b50594d3314cff0299f300c696376a0a9bf72e74710a8af7a5372d4af4bb519e2701a094ef48c8e48e3b65b28502452dceffffffff02e0673500000000001976a914686dd149a79b4a559d561fbc396d3e3c6628b98d88ace86ef102000000001976a914ac3f995655e81b875b38b64351d6f896ddbfc68588ac00000000"
+	testSimpleCoinTxHash              = "1137d0772b9c4c8d0dd47b3c2ed00c3cd08fa75392d8c2852aa2b67b9b38a335"
+	testSimpleCoinTxHex               = "0100000001a214a110f79e4abe073865ea5b3745c6e82c913bad44be70652804a5e4003b0a010000008c493046022100edd18a69664efa57264be207100c203e6cade1888cbb88a0ad748548256bb2f0022100f1027dc2e6c7f248d78af1dd90027b5b7d8ec563bb62aa85d4e74d6376f3868c0141048f3757b65ed301abd1b0e8942d1ab5b50594d3314cff0299f300c696376a0a9bf72e74710a8af7a5372d4af4bb519e2701a094ef48c8e48e3b65b28502452dceffffffff02e067350000000000001976a914686dd149a79b4a559d561fbc396d3e3c6628b98d88ace86ef10200000000001976a914ac3f995655e81b875b38b64351d6f896ddbfc68588ac00000000"
 	testSimpleCoinTxValue0            = btcutil.Amount(3500000)
 	testSimpleCoinTxValueAge0         = int64(testSimpleCoinTxValue0) * testSimpleCoinNumConfs
 	testSimpleCoinTxPkScript0Hex      = "76a914686dd149a79b4a559d561fbc396d3e3c6628b98d88ac"
@@ -239,8 +239,9 @@ var (
 )
 
 func TestSimpleCoin(t *testing.T) {
-	if testSimpleCoin.Hash().String() != testSimpleCoinTxHash {
-		t.Error("Different value for tx hash than expected")
+	if got := testSimpleCoin.Hash().String(); got != testSimpleCoinTxHash {
+		t.Errorf("Different value for tx hash than expected: got %s want %s",
+			got, testSimpleCoinTxHash)
 	}
 	if testSimpleCoin.Index() != 0 {
 		t.Error("Different value for index of outpoint than expected")

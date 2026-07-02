@@ -687,6 +687,11 @@ func TestExtendedKeyAPI(t *testing.T) {
 
 // TestNet ensures the network related APIs work as intended.
 func TestNet(t *testing.T) {
+	if err := chaincfg.Register(&chaincfg.SimNetParams); err != nil &&
+		err != chaincfg.ErrDuplicateNet {
+		t.Fatalf("unable to register simnet params: %v", err)
+	}
+
 	tests := []struct {
 		name      string
 		key       string

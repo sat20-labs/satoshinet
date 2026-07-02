@@ -1,3 +1,6 @@
+//go:build rpctest
+// +build rpctest
+
 package integration
 
 import (

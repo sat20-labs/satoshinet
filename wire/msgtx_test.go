@@ -144,10 +144,37 @@ func TestTx(t *testing.T) {
 	}
 }
 
+func TestTxOutAssetsWire(t *testing.T) {
+	amt := common.NewDefaultDecimal(12345)
+	txOut := &TxOut{
+		Value: 2,
+		Assets: TxAssets{{
+			Name: AssetName{
+				Protocol: "ordx",
+				Type:     "ft",
+				Ticker:   "satoshi",
+			},
+			Amount:     *amt,
+			BindingSat: 1,
+		}},
+		PkScript: []byte{0x51},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, WriteTxOut(&buf, ProtocolVersion, TxVersion, txOut))
+	require.Equal(t, byte(1), buf.Bytes()[8])
+
+	var decoded TxOut
+	require.NoError(t, ReadTxOut(bytes.NewReader(buf.Bytes()), ProtocolVersion, TxVersion, &decoded))
+	require.Equal(t, txOut.Value, decoded.Value)
+	require.Equal(t, txOut.Assets, decoded.Assets)
+	require.Equal(t, txOut.PkScript, decoded.PkScript)
+}
+
 // TestTxHash tests the ability to generate the hash of a transaction accurately.
 func TestTxHash(t *testing.T) {
 	// Hash of first transaction from block 113875.
-	hashStr := "f051e59b5e2503ac626d03aaeac8ab7be2d72ba4b7e97119c5852d70d52dcb86"
+	hashStr := "c732e5814f1983ea18928d1d4489196c4826bc7fd0e6a89130a2bdb0e38d05e9"
 	wantHash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		t.Errorf("NewHashFromStr: %v", err)
@@ -195,13 +222,13 @@ func TestTxHash(t *testing.T) {
 // TestTxSha tests the ability to generate the wtxid, and txid of a transaction
 // with witness inputs accurately.
 func TestWTxSha(t *testing.T) {
-	hashStrTxid := "0f167d1385a84d1518cfee208b653fc9163b605ccf1b75347e2850b3e2eb19f3"
+	hashStrTxid := "812e92c79b50fccf23398baa347e55bd263c9a84374cd7292b418afb1a8bc0a7"
 	wantHashTxid, err := chainhash.NewHashFromStr(hashStrTxid)
 	if err != nil {
 		t.Errorf("NewShaHashFromStr: %v", err)
 		return
 	}
-	hashStrWTxid := "0858eab78e77b6b033da30f46699996396cf48fcf625a783c85a51403e175e74"
+	hashStrWTxid := "29948c4653ed62a86b4c25c1f9f498ac4dd2d948dff02baa1ba73a41c5075777"
 	wantHashWTxid, err := chainhash.NewHashFromStr(hashStrWTxid)
 	if err != nil {
 		t.Errorf("NewShaHashFromStr: %v", err)
@@ -450,7 +477,7 @@ func TestTxWireErrors(t *testing.T) {
 		// Force error in transaction output pk script.
 		{multiTx, multiTxEncoded, pver, BaseEncoding, 63, io.ErrShortWrite, io.EOF},
 		// Force error in transaction output lock time.
-		{multiTx, multiTxEncoded, pver, BaseEncoding, 206, io.ErrShortWrite, io.EOF},
+		{multiTx, multiTxEncoded, pver, BaseEncoding, 208, io.ErrShortWrite, io.EOF},
 	}
 
 	t.Logf("Running %d tests", len(tests))
@@ -608,7 +635,7 @@ func TestTxSerializeErrors(t *testing.T) {
 		// Force error in transaction output pk script.
 		{multiTx, multiTxEncoded, 63, io.ErrShortWrite, io.EOF},
 		// Force error in transaction output lock time.
-		{multiTx, multiTxEncoded, 206, io.ErrShortWrite, io.EOF},
+		{multiTx, multiTxEncoded, 208, io.ErrShortWrite, io.EOF},
 	}
 
 	t.Logf("Running %d tests", len(tests))
@@ -702,6 +729,7 @@ func TestTxOverflowErrors(t *testing.T) {
 				0xff, 0xff, 0xff, 0xff, // Sequence
 				0x01,                                           // Varint for number of output transactions
 				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Transaction amount
+				0x00, // Varint for number of assets
 				0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 				0xff, // Varint for length of public key script
 			}, pver, BaseEncoding, txVer, &MessageError{},
@@ -746,12 +774,12 @@ func TestTxSerializeSizeStripped(t *testing.T) {
 		{noTx, 10},
 
 		// Transcaction with an input and an output.
-		{multiTx, 210},
+		{multiTx, 212},
 
 		// Transaction with an input which includes witness data, and
 		// one output. Note that this uses SerializeSizeStripped which
 		// excludes the additional bytes due to witness data encoding.
-		{multiWitnessTx, 82},
+		{multiWitnessTx, 83},
 	}
 
 	t.Logf("Running %d tests", len(tests))
@@ -780,11 +808,11 @@ func TestTxID(t *testing.T) {
 		{noTx, "d21633ba23f70118185227be58a63527675641ad37967e2aa461559f577aec43"},
 
 		// Transaction with an input and an output.
-		{multiTx, "0100d15a522ff38de05c164ca0a56379a1b77dd1e4805a6534dc9b3d88290e9d"},
+		{multiTx, "51c5f497f015604aff279a5b635c1654bbbb7dee872fc7980523089f21b71bd6"},
 
 		// Transaction with an input which includes witness data, and
 		// one output.
-		{multiWitnessTx, "0f167d1385a84d1518cfee208b653fc9163b605ccf1b75347e2850b3e2eb19f3"},
+		{multiWitnessTx, "812e92c79b50fccf23398baa347e55bd263c9a84374cd7292b418afb1a8bc0a7"},
 	}
 
 	for i, test := range tests {
@@ -802,7 +830,7 @@ func TestTxWitnessSize(t *testing.T) {
 	}{
 		// Transaction with an input which includes witness data, and
 		// one output.
-		{multiWitnessTx, 190},
+		{multiWitnessTx, 191},
 	}
 
 	t.Logf("Running %d tests", len(tests))
@@ -964,6 +992,7 @@ var multiTxEncoded = []byte{
 	0xff, 0xff, 0xff, 0xff, // Sequence
 	0x02,                                           // Varint for number of output transactions
 	0x00, 0xf2, 0x05, 0x2a, 0x01, 0x00, 0x00, 0x00, // Transaction amount
+	0x00, // Varint for number of assets
 	0x43, // Varint for length of pk script
 	0x41, // OP_DATA_65
 	0x04, 0xd6, 0x4b, 0xdf, 0xd0, 0x9e, 0xb1, 0xc5,
@@ -977,6 +1006,7 @@ var multiTxEncoded = []byte{
 	0xa6,                                           // 65-byte signature
 	0xac,                                           // OP_CHECKSIG
 	0x00, 0xe1, 0xf5, 0x05, 0x00, 0x00, 0x00, 0x00, // Transaction amount
+	0x00, // Varint for number of assets
 	0x43, // Varint for length of pk script
 	0x41, // OP_DATA_65
 	0x04, 0xd6, 0x4b, 0xdf, 0xd0, 0x9e, 0xb1, 0xc5,
@@ -994,7 +1024,7 @@ var multiTxEncoded = []byte{
 
 // multiTxPkScriptLocs is the location information for the public key scripts
 // located in multiTx.
-var multiTxPkScriptLocs = []int{63, 139}
+var multiTxPkScriptLocs = []int{64, 141}
 
 // multiWitnessTx is a MsgTx with an input with witness data, and an
 // output used in various tests.
@@ -1065,14 +1095,14 @@ var multiWitnessFlagNoWitness = []byte{
 	0xff, 0xff, 0xff, 0xff, // Sequence
 	0x1,                                    // Varint for number of outputs
 	0xb, 0x7, 0x6, 0x0, 0x0, 0x0, 0x0, 0x0, // Output amount
+	0x0,  // Varint for number of assets
 	0x16, // Varint for length of pk script
 	0x0,  // Version 0 witness program
 	0x14, // OP_DATA_20
 	0x9d, 0xda, 0xc6, 0xf3, 0x9d, 0x51, 0xe0, 0x39,
 	0x8e, 0x53, 0x2a, 0x22, 0xc4, 0x1b, 0xa1, 0x89,
 	0x40, 0x6a, 0x85, 0x23, // 20-byte pub key hash
-	0x00,               // No item on the witness stack for the first input
-	0x00,               // No item on the witness stack for the second input
+	0x00,               // No item on the witness stack
 	0x0, 0x0, 0x0, 0x0, // Lock time
 }
 
@@ -1093,6 +1123,7 @@ var multiWitnessTxEncoded = []byte{
 	0xff, 0xff, 0xff, 0xff, // Sequence
 	0x1,                                    // Varint for number of outputs
 	0xb, 0x7, 0x6, 0x0, 0x0, 0x0, 0x0, 0x0, // Output amount
+	0x0,  // Varint for number of assets
 	0x16, // Varint for length of pk script
 	0x0,  // Version 0 witness program
 	0x14, // OP_DATA_20
@@ -1136,6 +1167,7 @@ var multiWitnessTxEncodedNonZeroFlag = []byte{
 	0xff, 0xff, 0xff, 0xff, // Sequence
 	0x1,                                    // Varint for number of outputs
 	0xb, 0x7, 0x6, 0x0, 0x0, 0x0, 0x0, 0x0, // Output amount
+	0x0,  // Varint for number of assets
 	0x16, // Varint for length of pk script
 	0x0,  // Version 0 witness program
 	0x14, // OP_DATA_20
@@ -1164,4 +1196,4 @@ var multiWitnessTxEncodedNonZeroFlag = []byte{
 
 // multiTxPkScriptLocs is the location information for the public key scripts
 // located in multiWitnessTx.
-var multiWitnessTxPkScriptLocs = []int{58}
+var multiWitnessTxPkScriptLocs = []int{59}

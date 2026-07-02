@@ -207,6 +207,13 @@ type MessageListeners struct {
 	OnMineBlock func(p *Peer, msg *wire.MsgMineBlock)
 	OnMineAck   func(p *Peer, msg *wire.MsgMineAck)
 
+	OnDKVSNotify       func(p *Peer, msg *wire.MsgDKVSNotify)
+	OnDKVSInv          func(p *Peer, msg *wire.MsgDKVSInv)
+	OnDKVSGet          func(p *Peer, msg *wire.MsgDKVSGet)
+	OnDKVSData         func(p *Peer, msg *wire.MsgDKVSData)
+	OnDKVSSyncRequest  func(p *Peer, msg *wire.MsgDKVSSyncRequest)
+	OnDKVSSyncResponse func(p *Peer, msg *wire.MsgDKVSSyncResponse)
+
 	// OnRead is invoked when a peer receives a bitcoin message.  It
 	// consists of the number of bytes read, the message, and whether or not
 	// an error in the read occurred.  Typically, callers will opt to use
@@ -1641,7 +1648,7 @@ out:
 			if p.shouldHandleReadError(err) {
 				errMsg := fmt.Sprintf("Can't read message from %s: %v", p, err)
 				if err != io.ErrUnexpectedEOF {
-					log.Errorf(errMsg)
+					log.Errorf("%s", errMsg)
 				}
 
 				// Push a reject message for the malformed message and wait for
@@ -1823,6 +1830,36 @@ out:
 		case *wire.MsgMineAck:
 			if p.cfg.Listeners.OnMineAck != nil {
 				p.cfg.Listeners.OnMineAck(p, msg)
+			}
+
+		case *wire.MsgDKVSNotify:
+			if p.cfg.Listeners.OnDKVSNotify != nil {
+				p.cfg.Listeners.OnDKVSNotify(p, msg)
+			}
+
+		case *wire.MsgDKVSInv:
+			if p.cfg.Listeners.OnDKVSInv != nil {
+				p.cfg.Listeners.OnDKVSInv(p, msg)
+			}
+
+		case *wire.MsgDKVSGet:
+			if p.cfg.Listeners.OnDKVSGet != nil {
+				p.cfg.Listeners.OnDKVSGet(p, msg)
+			}
+
+		case *wire.MsgDKVSData:
+			if p.cfg.Listeners.OnDKVSData != nil {
+				p.cfg.Listeners.OnDKVSData(p, msg)
+			}
+
+		case *wire.MsgDKVSSyncRequest:
+			if p.cfg.Listeners.OnDKVSSyncRequest != nil {
+				p.cfg.Listeners.OnDKVSSyncRequest(p, msg)
+			}
+
+		case *wire.MsgDKVSSyncResponse:
+			if p.cfg.Listeners.OnDKVSSyncResponse != nil {
+				p.cfg.Listeners.OnDKVSSyncResponse(p, msg)
 			}
 
 		default:

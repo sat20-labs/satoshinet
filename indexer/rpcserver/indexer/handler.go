@@ -17,6 +17,7 @@ import (
 	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
+	swire "github.com/sat20-labs/satoshinet/wire"
 )
 
 const QueryParamDefaultLimit = "100"
@@ -254,6 +255,115 @@ func (s *Handle) getBestHeight(c *gin.Context) {
 		},
 		Data: map[string]int{"height": s.model.GetSyncHeight()},
 	}
+	c.JSON(http.StatusOK, resp)
+}
+
+type dkvsRecordResp struct {
+	indexerwire.BaseResp
+	Data *swire.DKVSRecord `json:"data,omitempty"`
+}
+
+type dkvsRecordsResp struct {
+	indexerwire.BaseResp
+	Total int                 `json:"total"`
+	Data  []*swire.DKVSRecord `json:"data,omitempty"`
+}
+
+type dkvsCheckpointResp struct {
+	indexerwire.BaseResp
+	Data interface{} `json:"data,omitempty"`
+}
+
+func (s *Handle) putDKVSRecord(c *gin.Context) {
+	resp := &dkvsRecordResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	var record swire.DKVSRecord
+	if err := c.ShouldBindJSON(&record); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if _, err := s.model.PutDKVSRecord(&record); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = &record
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) putDKVSTombstone(c *gin.Context) {
+	resp := &dkvsRecordResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	var record swire.DKVSRecord
+	if err := c.ShouldBindJSON(&record); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if record.Flags&1 == 0 || len(record.Value) != 0 {
+		resp.Code = -1
+		resp.Msg = "invalid dkvs tombstone record"
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if _, err := s.model.PutDKVSRecord(&record); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = &record
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getDKVSRecord(c *gin.Context) {
+	resp := &dkvsRecordResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	key := c.Query("key")
+	record, err := s.model.GetDKVSRecord(key)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = record
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) listDKVSRecords(c *gin.Context) {
+	resp := &dkvsRecordsResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	start, err := strconv.Atoi(c.DefaultQuery("start", "0"))
+	if err != nil {
+		start = 0
+	}
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", QueryParamDefaultLimit))
+	if err != nil {
+		limit = 100
+	}
+	records, total, err := s.model.ListDKVSRecords(c.Query("prefix"), start, limit)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Total = total
+	resp.Data = records
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getDKVSCheckpoint(c *gin.Context) {
+	resp := &dkvsCheckpointResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	checkpoint, err := s.model.GetDKVSCheckpoint()
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = checkpoint
 	c.JSON(http.StatusOK, resp)
 }
 

@@ -1537,6 +1537,109 @@ func (sp *serverPeer) OnMineAck(_ *peer.Peer, msg *wire.MsgMineAck) {
 	sp.Peer.HandleMineAckMsg(msg)
 }
 
+func (sp *serverPeer) OnDKVSNotify(_ *peer.Peer, msg *wire.MsgDKVSNotify) {
+	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
+		return
+	}
+	get := &wire.MsgDKVSGet{}
+	if msg.Key != "" {
+		get.Keys = append(get.Keys, msg.Key)
+	}
+	if msg.RecordHash != (chainhash.Hash{}) {
+		get.RecordHashes = append(get.RecordHashes, msg.RecordHash)
+	}
+	if len(get.Keys) != 0 || len(get.RecordHashes) != 0 {
+		sp.QueueMessage(get, nil)
+	}
+}
+
+func (sp *serverPeer) OnDKVSInv(_ *peer.Peer, msg *wire.MsgDKVSInv) {
+	if sp == nil || msg == nil {
+		return
+	}
+	get := &wire.MsgDKVSGet{}
+	for _, item := range msg.Items {
+		if item.Key != "" {
+			get.Keys = append(get.Keys, item.Key)
+		}
+		if item.RecordHash != (chainhash.Hash{}) {
+			get.RecordHashes = append(get.RecordHashes, item.RecordHash)
+		}
+	}
+	if len(get.Keys) != 0 || len(get.RecordHashes) != 0 {
+		sp.QueueMessage(get, nil)
+	}
+}
+
+func (sp *serverPeer) OnDKVSGet(_ *peer.Peer, msg *wire.MsgDKVSGet) {
+	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
+		return
+	}
+	resp := &wire.MsgDKVSData{}
+	for _, key := range msg.Keys {
+		record, err := sp.server.assetIndexer.GetDKVSRecord(key)
+		if err != nil {
+			resp.NotFound = append(resp.NotFound, dkvsKeyHash(key))
+			continue
+		}
+		resp.Records = append(resp.Records, record)
+	}
+	for _, hash := range msg.RecordHashes {
+		record, err := sp.server.assetIndexer.GetDKVSRecordByHash(hash)
+		if err != nil {
+			resp.NotFound = append(resp.NotFound, hash)
+			continue
+		}
+		resp.Records = append(resp.Records, record)
+	}
+	sp.QueueMessage(resp, nil)
+}
+
+func (sp *serverPeer) OnDKVSData(_ *peer.Peer, msg *wire.MsgDKVSData) {
+	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
+		return
+	}
+	for _, record := range msg.Records {
+		if _, err := sp.server.assetIndexer.PutRemoteDKVSRecord(record); err != nil {
+			peerLog.Debugf("reject remote dkvs record %s from %s: %v", record.Key, sp, err)
+		}
+	}
+}
+
+func (sp *serverPeer) OnDKVSSyncRequest(_ *peer.Peer, msg *wire.MsgDKVSSyncRequest) {
+	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
+		return
+	}
+	records, next, done, root, err := sp.server.assetIndexer.SyncDKVSRecords(msg.Cursor, msg.Limit)
+	if err != nil {
+		peerLog.Debugf("dkvs sync request from %s failed: %v", sp, err)
+		return
+	}
+	sp.QueueMessage(&wire.MsgDKVSSyncResponse{
+		Records:        records,
+		NextCursor:     next,
+		Done:           done,
+		CheckpointRoot: root,
+	}, nil)
+}
+
+func (sp *serverPeer) OnDKVSSyncResponse(_ *peer.Peer, msg *wire.MsgDKVSSyncResponse) {
+	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
+		return
+	}
+	for _, record := range msg.Records {
+		if _, err := sp.server.assetIndexer.PutRemoteDKVSRecord(record); err != nil {
+			peerLog.Debugf("reject synced dkvs record %s from %s: %v", record.Key, sp, err)
+		}
+	}
+	if !msg.Done {
+		sp.QueueMessage(&wire.MsgDKVSSyncRequest{
+			Cursor: msg.NextCursor,
+			Limit:  wire.MaxDKVSRecordsPerMsg,
+		}, nil)
+	}
+}
+
 // randomUint16Number returns a random uint16 in a specified input range.  Note
 // that the range is in zeroth ordering; if you pass it 1800, you will get
 // values from 0 to 1800.
@@ -1875,6 +1978,10 @@ func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 
 	// Signal the sync manager this peer is a new sync candidate.
 	s.syncManager.NewPeer(sp.Peer)
+	if s.services&wire.SFNodeMiner == wire.SFNodeMiner &&
+		sp.Services()&wire.SFNodeMiner == wire.SFNodeMiner {
+		sp.QueueMessage(&wire.MsgDKVSSyncRequest{Limit: wire.MaxDKVSRecordsPerMsg}, nil)
+	}
 
 	// Update the address manager and request known addresses from the
 	// remote peer for outbound connections. This is skipped when running on
@@ -2270,33 +2377,39 @@ func disconnectPeer(peerList map[int32]*serverPeer, allPeers map[string]*serverP
 func newPeerConfig(sp *serverPeer) *peer.Config {
 	return &peer.Config{
 		Listeners: peer.MessageListeners{
-			OnVersion:      sp.OnVersion,
-			OnVerAck:       sp.OnVerAck,
-			OnMemPool:      sp.OnMemPool,
-			OnTx:           sp.OnTx,
-			OnBlock:        sp.OnBlock,
-			OnPing:         sp.OnPing,
-			OnPong:         sp.OnPong,
-			OnInv:          sp.OnInv,
-			OnHeaders:      sp.OnHeaders,
-			OnGetData:      sp.OnGetData,
-			OnGetBlocks:    sp.OnGetBlocks,
-			OnGetHeaders:   sp.OnGetHeaders,
-			OnGetCFilters:  sp.OnGetCFilters,
-			OnGetCFHeaders: sp.OnGetCFHeaders,
-			OnGetCFCheckpt: sp.OnGetCFCheckpt,
-			OnFeeFilter:    sp.OnFeeFilter,
-			OnFilterAdd:    sp.OnFilterAdd,
-			OnFilterClear:  sp.OnFilterClear,
-			OnFilterLoad:   sp.OnFilterLoad,
-			OnGetAddr:      sp.OnGetAddr,
-			OnAddr:         sp.OnAddr,
-			OnAddrV2:       sp.OnAddrV2,
-			OnRead:         sp.OnRead,
-			OnWrite:        sp.OnWrite,
-			OnNotFound:     sp.OnNotFound,
-			OnMineBlock:    sp.OnMineBlock,
-			OnMineAck:      sp.OnMineAck,
+			OnVersion:          sp.OnVersion,
+			OnVerAck:           sp.OnVerAck,
+			OnMemPool:          sp.OnMemPool,
+			OnTx:               sp.OnTx,
+			OnBlock:            sp.OnBlock,
+			OnPing:             sp.OnPing,
+			OnPong:             sp.OnPong,
+			OnInv:              sp.OnInv,
+			OnHeaders:          sp.OnHeaders,
+			OnGetData:          sp.OnGetData,
+			OnGetBlocks:        sp.OnGetBlocks,
+			OnGetHeaders:       sp.OnGetHeaders,
+			OnGetCFilters:      sp.OnGetCFilters,
+			OnGetCFHeaders:     sp.OnGetCFHeaders,
+			OnGetCFCheckpt:     sp.OnGetCFCheckpt,
+			OnFeeFilter:        sp.OnFeeFilter,
+			OnFilterAdd:        sp.OnFilterAdd,
+			OnFilterClear:      sp.OnFilterClear,
+			OnFilterLoad:       sp.OnFilterLoad,
+			OnGetAddr:          sp.OnGetAddr,
+			OnAddr:             sp.OnAddr,
+			OnAddrV2:           sp.OnAddrV2,
+			OnRead:             sp.OnRead,
+			OnWrite:            sp.OnWrite,
+			OnNotFound:         sp.OnNotFound,
+			OnMineBlock:        sp.OnMineBlock,
+			OnMineAck:          sp.OnMineAck,
+			OnDKVSNotify:       sp.OnDKVSNotify,
+			OnDKVSInv:          sp.OnDKVSInv,
+			OnDKVSGet:          sp.OnDKVSGet,
+			OnDKVSData:         sp.OnDKVSData,
+			OnDKVSSyncRequest:  sp.OnDKVSSyncRequest,
+			OnDKVSSyncResponse: sp.OnDKVSSyncResponse,
 		},
 		NewestBlock:         sp.newestBlock,
 		HostToNetAddress:    sp.server.addrManager.HostToNetAddress,
@@ -3338,6 +3451,21 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		agentWhitelist:       agentWhitelist,
 		BtcdDir:              homeDir,
 	}
+	assetIndexer.SetDKVSNotifyCallback(func(eventType uint32, key string, recordHash [32]byte, seq uint64, expiryHeight uint64, size uint32, flags uint32) {
+		var hash chainhash.Hash
+		copy(hash[:], recordHash[:])
+		s.BroadcastMessage(&wire.MsgDKVSNotify{
+			EventType:    eventType,
+			Key:          key,
+			KeyHash:      dkvsKeyHash(key),
+			RecordHash:   hash,
+			Seq:          seq,
+			ExpiryHeight: expiryHeight,
+			Size:         size,
+			SourceNode:   cfg.MiningPubKey,
+			Flags:        flags,
+		})
+	})
 
 	// Create the transaction and address indexes if needed.
 	//

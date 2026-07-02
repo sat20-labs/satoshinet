@@ -18,6 +18,7 @@ var (
 	contractKindSelector      = methodSelector("contractKind()")
 	managedAssetCountSelector = methodSelector("managedAssetCount()")
 	managedAssetSelector      = methodSelector("managedAsset(uint256)")
+	managedBalanceSelector    = methodSelector("managedAssetBalance(uint256)")
 	stateViewSelector         = methodSelector("stateView()")
 	legacyAssetNameSelector   = methodSelector("assetName()")
 	legacyAssetANameSelector  = methodSelector("assetAName()")
@@ -31,16 +32,22 @@ type ContractMetadata struct {
 	ManagedAssets []string `json:"assets,omitempty"`
 }
 
+type ManagedAssetBalance struct {
+	AssetName string `json:"assetName"`
+	Amount    string `json:"amount"`
+}
+
 type ContractStateView struct {
-	Name          string      `json:"name,omitempty"`
-	Subtype       string      `json:"subtype,omitempty"`
-	ManagedAssets []string    `json:"assets,omitempty"`
-	Balance       string      `json:"balance"`
-	Nonce         uint64      `json:"nonce"`
-	CodeSize      int         `json:"codeSize"`
-	Deployer      string      `json:"deployer,omitempty"`
-	Custom        interface{} `json:"custom,omitempty"`
-	CustomRaw     string      `json:"customRaw,omitempty"`
+	Name            string                `json:"name,omitempty"`
+	Subtype         string                `json:"subtype,omitempty"`
+	ManagedAssets   []string              `json:"assets,omitempty"`
+	ManagedBalances []ManagedAssetBalance `json:"managedBalances,omitempty"`
+	Balance         string                `json:"balance"`
+	Nonce           uint64                `json:"nonce"`
+	CodeSize        int                   `json:"codeSize"`
+	Deployer        string                `json:"deployer,omitempty"`
+	Custom          interface{}           `json:"custom,omitempty"`
+	CustomRaw       string                `json:"customRaw,omitempty"`
 }
 
 func (m ContractMetadata) Empty() bool {
@@ -161,6 +168,7 @@ func QueryContractStateView(state *MemoryStateDB, contract ContractAddress, bloc
 		Nonce:         state.GetNonce(gethAddr),
 		CodeSize:      state.GetCodeSize(gethAddr),
 	}
+	view.ManagedBalances = queryManagedAssetBalances(state, target, block, meta.ManagedAssets)
 	if deployer, ok := state.ContractDeployer(gethAddr); ok {
 		view.Deployer = deployer
 	}
@@ -176,6 +184,39 @@ func QueryContractStateView(state *MemoryStateDB, contract ContractAddress, bloc
 		}
 	}
 	return view, true
+}
+
+func queryManagedAssetBalances(state *MemoryStateDB, target EVMAddress, block BlockContext,
+	assets []string) []ManagedAssetBalance {
+
+	if len(assets) == 0 {
+		return nil
+	}
+	runtime := NewRuntime(state.Clone())
+	out := make([]ManagedAssetBalance, 0, len(assets))
+	for i, asset := range assets {
+		asset = strings.TrimSpace(asset)
+		if asset == "" {
+			continue
+		}
+		input := appendMethod(managedBalanceSelector, abiEncodeUint64(uint64(i)))
+		result := runtime.Call(CallRequest{
+			TargetAddress: target.String(),
+			CallID:        "managed-balance",
+			Input:         input,
+			Gas:           DefaultMetadataQueryGas,
+			Block:         block,
+		})
+		if result.Err != nil || result.Status != ResultStatusSuccess {
+			continue
+		}
+		amount, err := abiReadString(result.ReturnData, 0)
+		amount = strings.TrimSpace(amount)
+		if err == nil && amount != "" {
+			out = append(out, ManagedAssetBalance{AssetName: asset, Amount: amount})
+		}
+	}
+	return out
 }
 
 func queryContractStateViewString(state *MemoryStateDB, target EVMAddress, block BlockContext) (string, bool) {

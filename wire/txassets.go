@@ -25,11 +25,10 @@ func NewAssetNameFromString(name string) *AssetName {
 	}
 	return &AssetName{
 		Protocol: parts[0],
-		Type: parts[1],
-		Ticker: parts[2],
+		Type:     parts[1],
+		Ticker:   parts[2],
 	}
 }
-
 
 // type AssetInfo struct {
 // 	Name       AssetName
@@ -39,11 +38,9 @@ func NewAssetNameFromString(name string) *AssetName {
 
 type AssetInfo = common.AssetInfo
 
-
 // 有序数组，根据名字排序
-//type TxAssets []AssetInfo
+// type TxAssets []AssetInfo
 type TxAssets = common.TxAssets
-
 
 func SerializeTxAssets(p *TxAssets) ([]byte, error) {
 	var w bytes.Buffer
@@ -59,7 +56,7 @@ func SerializeTxAssets(p *TxAssets) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
-func DeserializeTxAssets(p *TxAssets, r []byte) (error) {
+func DeserializeTxAssets(p *TxAssets, r []byte) error {
 
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
@@ -75,7 +72,6 @@ func DeserializeTxAssets(p *TxAssets, r []byte) (error) {
 	*p = assets
 	return nil
 }
-
 
 func AssetsWriteToBuf(w io.Writer, pver uint32, assets TxAssets, buf []byte) error {
 	// get count for sats range, and write to w
@@ -117,6 +113,9 @@ func AssetsReadFromBuf(r io.Reader, pver uint32, buf, s []byte) (TxAssets, error
 	if err != nil {
 		return nil, err
 	}
+	if count == 0 {
+		return nil, nil
+	}
 
 	assets := make(TxAssets, 0)
 	for i := uint64(0); i < count; i++ {
@@ -147,7 +146,7 @@ func AssetsReadFromBuf(r io.Reader, pver uint32, buf, s []byte) (TxAssets, error
 		if err != nil {
 			return nil, err
 		}
-		newAsset.BindingSat =uint32(bindingSat)
+		newAsset.BindingSat = uint32(bindingSat)
 		assets = append(assets, newAsset)
 	}
 	return assets, nil
@@ -158,5 +157,5 @@ func GetBindingSatNum(amt int64, n uint32) int64 {
 	if n == 0 {
 		return 0
 	}
-	return (amt + int64(n) - 1)/int64(n)
+	return (amt + int64(n) - 1) / int64(n)
 }

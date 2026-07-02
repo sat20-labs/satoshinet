@@ -338,7 +338,7 @@ func (t TxWitness) ToHexStrings() []string {
 
 // TxOut defines a bitcoin transaction output.
 type TxOut struct {
-	Value int64
+	Value    int64
 	Assets   TxAssets // TxOut.Value必须大于等于Assets的GetBindingSatAmout
 	PkScript []byte
 }
@@ -350,21 +350,22 @@ func (t *TxOut) SerializeSize() int {
 	// serialized varint size for the TxAssets count + serialized TxAssets bytes.
 	// serialized varint size for the length of PkScript + PkScript bytes.
 
-	// Assets count
-	lenTxAssets := VarIntSerializeSize(uint64(len(t.Assets)))
-	for _, asset := range t.Assets {
-		// Asset Name (Protocol, Type, Ticker), Assets amount, flag for BindingSat
-		lenTxAssets += VarIntSerializeSize(uint64(len(asset.Name.Protocol))) + len(asset.Name.Protocol)
-		lenTxAssets += VarIntSerializeSize(uint64(len(asset.Name.Type))) + len(asset.Name.Type)
-		lenTxAssets += VarIntSerializeSize(uint64(len(asset.Name.Ticker))) + len(asset.Name.Ticker)
-		formatedAmount := asset.Amount.ToFormatString()
-		lenTxAssets += VarIntSerializeSize(uint64(len(formatedAmount))) + len(formatedAmount)
-		lenTxAssets += VarIntSerializeSize(uint64(asset.BindingSat))
-	}
-
 	// pkscript
 	lenpkScript := VarIntSerializeSize(uint64(len(t.PkScript))) + len(t.PkScript)
-	return 8 + lenTxAssets + lenpkScript
+	return 8 + txAssetsSerializeSize(t.Assets) + lenpkScript
+}
+
+func txAssetsSerializeSize(assets TxAssets) int {
+	n := VarIntSerializeSize(uint64(len(assets)))
+	for _, asset := range assets {
+		n += VarIntSerializeSize(uint64(len(asset.Name.Protocol))) + len(asset.Name.Protocol)
+		n += VarIntSerializeSize(uint64(len(asset.Name.Type))) + len(asset.Name.Type)
+		n += VarIntSerializeSize(uint64(len(asset.Name.Ticker))) + len(asset.Name.Ticker)
+		formatedAmount := asset.Amount.ToFormatString()
+		n += VarIntSerializeSize(uint64(len(formatedAmount))) + len(formatedAmount)
+		n += VarIntSerializeSize(uint64(asset.BindingSat))
+	}
+	return n
 }
 
 // NewTxOut returns a new bitcoin transaction output with the provided
@@ -486,15 +487,17 @@ func (msg *MsgTx) Copy() *MsgTx {
 			copy(newScript, oldScript[:oldScriptLen])
 		}
 
-		newTxAssets := make(TxAssets, 0)
-
-		for _, asset := range oldTxOut.Assets {
-			newAsset := AssetInfo{
-				Name:       asset.Name,
-				Amount:     asset.Amount,
-				BindingSat: asset.BindingSat,
+		var newTxAssets TxAssets
+		if oldTxOut.Assets != nil {
+			newTxAssets = make(TxAssets, 0, len(oldTxOut.Assets))
+			for _, asset := range oldTxOut.Assets {
+				newAsset := AssetInfo{
+					Name:       asset.Name,
+					Amount:     asset.Amount,
+					BindingSat: asset.BindingSat,
+				}
+				newTxAssets = append(newTxAssets, newAsset)
 			}
-			newTxAssets = append(newTxAssets, newAsset)
 		}
 		// Create new txOut with the deep copied data and append it to
 		// new Tx.
@@ -966,9 +969,10 @@ func (msg *MsgTx) PkScriptLocs() []int {
 	for i, txOut := range msg.TxOut {
 		// The offset of the script in the transaction output is:
 		//
-		// Value 8 bytes + serialized varint size for the length of
-		// PkScript.
-		n += 8 + VarIntSerializeSize(uint64(len(txOut.PkScript)))
+		// Value 8 bytes + serialized asset list + serialized varint
+		// size for the length of PkScript.
+		n += 8 + txAssetsSerializeSize(txOut.Assets) +
+			VarIntSerializeSize(uint64(len(txOut.PkScript)))
 		pkScriptLocs[i] = n
 		n += len(txOut.PkScript)
 	}

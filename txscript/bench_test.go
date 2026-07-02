@@ -6,6 +6,7 @@ package txscript
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"testing"
@@ -33,7 +34,126 @@ func init() {
 	txBytes := hexToBytes(string(txHex))
 	err = manyInputsBenchTx.Deserialize(bytes.NewReader(txBytes))
 	if err != nil {
-		panic(err)
+		normalized, normalizeErr := normalizeEmptyAssetTxOuts(txBytes)
+		if normalizeErr != nil {
+			panic(err)
+		}
+		err = manyInputsBenchTx.Deserialize(bytes.NewReader(normalized))
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+func normalizeEmptyAssetTxOuts(tx []byte) ([]byte, error) {
+	offset := 0
+	out := make([]byte, 0, len(tx))
+	copyBytes := func(n int) error {
+		if n < 0 || offset+n > len(tx) {
+			return fmt.Errorf("short transaction")
+		}
+		out = append(out, tx[offset:offset+n]...)
+		offset += n
+		return nil
+	}
+	readVarInt := func() (uint64, int, error) {
+		value, size, err := benchReadVarInt(tx[offset:])
+		if err != nil {
+			return 0, 0, err
+		}
+		return value, size, nil
+	}
+	copyVarBytes := func() error {
+		count, size, err := readVarInt()
+		if err != nil {
+			return err
+		}
+		if err := copyBytes(size); err != nil {
+			return err
+		}
+		return copyBytes(int(count))
+	}
+
+	if err := copyBytes(4); err != nil {
+		return nil, err
+	}
+	txInCount, size, err := readVarInt()
+	if err != nil {
+		return nil, err
+	}
+	if err := copyBytes(size); err != nil {
+		return nil, err
+	}
+	if txInCount == 0 {
+		if err := copyBytes(1); err != nil {
+			return nil, err
+		}
+		txInCount, size, err = readVarInt()
+		if err != nil {
+			return nil, err
+		}
+		if err := copyBytes(size); err != nil {
+			return nil, err
+		}
+	}
+
+	for i := uint64(0); i < txInCount; i++ {
+		if err := copyBytes(36); err != nil {
+			return nil, err
+		}
+		if err := copyVarBytes(); err != nil {
+			return nil, err
+		}
+		if err := copyBytes(4); err != nil {
+			return nil, err
+		}
+	}
+
+	txOutCount, size, err := readVarInt()
+	if err != nil {
+		return nil, err
+	}
+	if err := copyBytes(size); err != nil {
+		return nil, err
+	}
+	for i := uint64(0); i < txOutCount; i++ {
+		if err := copyBytes(8); err != nil {
+			return nil, err
+		}
+		if offset < len(tx) && tx[offset] == 0x00 {
+			offset++
+		}
+		if err := copyVarBytes(); err != nil {
+			return nil, err
+		}
+	}
+
+	out = append(out, tx[offset:]...)
+	return out, nil
+}
+
+func benchReadVarInt(buf []byte) (uint64, int, error) {
+	if len(buf) < 1 {
+		return 0, 0, fmt.Errorf("short varint")
+	}
+	switch buf[0] {
+	case 0xff:
+		if len(buf) < 9 {
+			return 0, 0, fmt.Errorf("short varint")
+		}
+		return binary.LittleEndian.Uint64(buf[1:9]), 9, nil
+	case 0xfe:
+		if len(buf) < 5 {
+			return 0, 0, fmt.Errorf("short varint")
+		}
+		return uint64(binary.LittleEndian.Uint32(buf[1:5])), 5, nil
+	case 0xfd:
+		if len(buf) < 3 {
+			return 0, 0, fmt.Errorf("short varint")
+		}
+		return uint64(binary.LittleEndian.Uint16(buf[1:3])), 3, nil
+	default:
+		return uint64(buf[0]), 1, nil
 	}
 }
 

@@ -194,6 +194,22 @@ func (s *Model) GetSyncHeight() int {
 	return s.indexer.GetSyncHeight()
 }
 
+func (s *Model) PutDKVSRecord(record *swire.DKVSRecord) (bool, error) {
+	return s.indexer.PutDKVSRecord(record)
+}
+
+func (s *Model) GetDKVSRecord(key string) (*swire.DKVSRecord, error) {
+	return s.indexer.GetDKVSRecord(key)
+}
+
+func (s *Model) ListDKVSRecords(prefix string, start, limit int) ([]*swire.DKVSRecord, int, error) {
+	return s.indexer.ListDKVSRecords(prefix, start, limit)
+}
+
+func (s *Model) GetDKVSCheckpoint() (interface{}, error) {
+	return s.indexer.GetDKVSCheckpoint()
+}
+
 func (s *Model) GetBlockInfo(height int) (*common.BlockInfo, error) {
 	return s.indexer.GetBlockInfo(height)
 }
