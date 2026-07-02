@@ -21,6 +21,8 @@ import (
 
 type ContractSummary = contractcommon.ContractSummary
 type ContractHistoryRecord = contractcommon.ContractHistoryRecord
+type EVMCompilerConfig = contractcommon.EVMCompilerConfig
+type EVMSourceMetadata = contractcommon.EVMSourceMetadata
 type ContractAnalytics = contractframework.ContractAnalytics
 type ContractUserStatus = contractframework.ContractUserStatus
 type ContractOutcomeView = contractframework.ContractOutcomeView

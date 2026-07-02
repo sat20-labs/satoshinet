@@ -59,4 +59,6 @@ type Indexer interface {
 	GetContractSummaries(start, limit int) ([]contractengine.ContractSummary, int)
 	GetContractSummary(address string) (contractengine.ContractSummary, bool)
 	GetContractHistory(address string, start, limit int) ([]contractengine.ContractHistoryRecord, int)
+	GetEVMSourceMetadata(address string) (contractengine.EVMSourceMetadata, bool)
+	PutEVMSourceMetadata(metadata contractengine.EVMSourceMetadata) error
 }

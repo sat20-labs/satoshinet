@@ -92,3 +92,23 @@ func TestFilterRuntimeExistingContractSummaries(t *testing.T) {
 		t.Fatalf("include invalid length = %d, want %d", len(all), len(contracts))
 	}
 }
+
+func TestDefaultEVMCompilerConfig(t *testing.T) {
+	cfg := defaultEVMCompilerConfig()
+	if cfg.SolcVersion != "0.8.30" {
+		t.Fatalf("solc version = %s, want 0.8.30", cfg.SolcVersion)
+	}
+	if cfg.EVMVersion != "paris" {
+		t.Fatalf("evm version = %s, want paris", cfg.EVMVersion)
+	}
+	if !cfg.Optimizer.Enabled || cfg.Optimizer.Runs != 200 {
+		t.Fatalf("optimizer = %+v, want enabled runs=200", cfg.Optimizer)
+	}
+	if cfg.Metadata.BytecodeHash != "none" {
+		t.Fatalf("metadata bytecode hash = %s, want none", cfg.Metadata.BytecodeHash)
+	}
+	if !cfg.SingleFileOnly || cfg.AllowImports {
+		t.Fatalf("source policy singleFileOnly=%v allowImports=%v, want true/false",
+			cfg.SingleFileOnly, cfg.AllowImports)
+	}
+}

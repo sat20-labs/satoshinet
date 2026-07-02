@@ -22,3 +22,17 @@ func (s *IndexerMgr) GetContractHistory(address string, start, limit int) ([]con
 	}
 	return s.contractIndexer.GetContractHistory(address, start, limit)
 }
+
+func (s *IndexerMgr) GetEVMSourceMetadata(address string) (contractengine.EVMSourceMetadata, bool) {
+	if s.contractIndexer == nil {
+		return contractengine.EVMSourceMetadata{}, false
+	}
+	return s.contractIndexer.GetEVMSourceMetadata(address)
+}
+
+func (s *IndexerMgr) PutEVMSourceMetadata(metadata contractengine.EVMSourceMetadata) error {
+	if s.contractIndexer == nil {
+		return nil
+	}
+	return s.contractIndexer.PutEVMSourceMetadata(metadata)
+}

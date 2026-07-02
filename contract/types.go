@@ -2,10 +2,11 @@ package contract
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
-	"github.com/sat20-labs/satoshinet/btcutil"
 	scommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/btcutil"
 )
 
 const (
@@ -117,4 +118,35 @@ type ContractHistoryRecord struct {
 	GasLimit       int64                  `json:"gasLimit,omitempty"`
 	Nonce          uint64                 `json:"nonce,omitempty"`
 	Details        map[string]interface{} `json:"details,omitempty"`
+}
+
+type EVMCompilerConfig struct {
+	SolcVersion string `json:"solcVersion"`
+	EVMVersion  string `json:"evmVersion"`
+	Optimizer   struct {
+		Enabled bool `json:"enabled"`
+		Runs    int  `json:"runs"`
+	} `json:"optimizer"`
+	Metadata struct {
+		BytecodeHash string `json:"bytecodeHash"`
+	} `json:"metadata"`
+	SingleFileOnly bool `json:"singleFileOnly"`
+	AllowImports   bool `json:"allowImports"`
+}
+
+type EVMSourceMetadata struct {
+	ContractAddress string            `json:"contractAddress"`
+	DeployTxID      string            `json:"deployTxid,omitempty"`
+	ContractName    string            `json:"contractName"`
+	Source          string            `json:"source"`
+	ABI             json.RawMessage   `json:"abi,omitempty"`
+	CompilerConfig  EVMCompilerConfig `json:"compilerConfig"`
+	ConstructorArgs string            `json:"constructorArgs,omitempty"`
+	InitCodeHash    string            `json:"initCodeHash,omitempty"`
+	RuntimeCodeHash string            `json:"runtimeCodeHash,omitempty"`
+	Verified        bool              `json:"verified"`
+	VerifyStatus    string            `json:"verifyStatus,omitempty"`
+	VerifyError     string            `json:"verifyError,omitempty"`
+	SubmittedAt     int64             `json:"submittedAt,omitempty"`
+	UpdatedAt       int64             `json:"updatedAt,omitempty"`
 }

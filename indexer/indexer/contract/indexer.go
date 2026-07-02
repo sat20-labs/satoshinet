@@ -22,6 +22,7 @@ import (
 const (
 	dbPrefixContractSummary = "contract:v1:summary:"
 	dbPrefixContractHistory = "contract:v1:history:"
+	dbPrefixEVMSource       = "contract:v1:evm:source:"
 )
 
 type Indexer struct {
@@ -370,6 +371,40 @@ func (s *Indexer) GetContractHistory(address string, start, limit int) ([]contra
 	return paginateContractHistoryRecords(records, start, limit), total
 }
 
+func (s *Indexer) GetEVMSourceMetadata(address string) (contractcommon.EVMSourceMetadata, bool) {
+	if s == nil || s.db == nil || address == "" {
+		return contractcommon.EVMSourceMetadata{}, false
+	}
+	var metadata contractcommon.EVMSourceMetadata
+	if err := getJSON(s.db, []byte(evmSourceKey(address)), &metadata); err != nil {
+		if err != idxcommon.ErrKeyNotFound {
+			sncommon.Log.Errorf("load EVM source metadata %s failed: %v", address, err)
+		}
+		return contractcommon.EVMSourceMetadata{}, false
+	}
+	return metadata, true
+}
+
+func (s *Indexer) PutEVMSourceMetadata(metadata contractcommon.EVMSourceMetadata) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("missing contract indexer db")
+	}
+	if strings.TrimSpace(metadata.ContractAddress) == "" {
+		return fmt.Errorf("missing contract address")
+	}
+	now := time.Now().Unix()
+	if metadata.SubmittedAt == 0 {
+		metadata.SubmittedAt = now
+	}
+	metadata.UpdatedAt = now
+	wb := s.db.NewWriteBatch()
+	defer wb.Close()
+	if err := setJSON(wb, []byte(evmSourceKey(metadata.ContractAddress)), &metadata); err != nil {
+		return err
+	}
+	return wb.Flush()
+}
+
 func (s *Indexer) mergeContractSummaryLocked(summary contractengine.ContractSummary) {
 	if summary.Address == "" {
 		return
@@ -559,6 +594,10 @@ func contractHistoryPrefix(address string) string {
 
 func contractHistoryKey(address string, record contractengine.ContractHistoryRecord, index int) string {
 	return fmt.Sprintf("%s%016x:%s:%06d", contractHistoryPrefix(address), uint64(record.Height), encodeKeyPart(record.TxID), index)
+}
+
+func evmSourceKey(address string) string {
+	return dbPrefixEVMSource + encodeKeyPart(address)
 }
 
 func encodeKeyPart(value string) string {

@@ -81,6 +81,33 @@ func TestContractIndexerCheckSelfAcceptsPersistedAndBufferedData(t *testing.T) {
 	require.True(t, idx.CheckSelf())
 }
 
+func TestContractIndexerStoresEVMSourceMetadata(t *testing.T) {
+	kvdb := db.NewKVDB(t.TempDir())
+	require.NotNil(t, kvdb)
+	defer kvdb.Close()
+
+	idx := NewIndexer(kvdb, &chaincfg.TestNetParams)
+	metadata := contractcommon.EVMSourceMetadata{
+		ContractAddress: "tc1qexample",
+		DeployTxID:      "txid",
+		ContractName:    "AMM",
+		Source:          "contract AMM {}",
+		InitCodeHash:    "0x1234",
+		VerifyStatus:    "stored",
+	}
+	metadata.CompilerConfig.SolcVersion = "0.8.30"
+	require.NoError(t, idx.PutEVMSourceMetadata(metadata))
+
+	got, ok := idx.GetEVMSourceMetadata(metadata.ContractAddress)
+	require.True(t, ok)
+	require.Equal(t, metadata.ContractAddress, got.ContractAddress)
+	require.Equal(t, metadata.ContractName, got.ContractName)
+	require.Equal(t, metadata.Source, got.Source)
+	require.Equal(t, metadata.CompilerConfig.SolcVersion, got.CompilerConfig.SolcVersion)
+	require.NotZero(t, got.SubmittedAt)
+	require.NotZero(t, got.UpdatedAt)
+}
+
 func TestContractIndexerBindsResultWithoutContractOutput(t *testing.T) {
 	kvdb := db.NewKVDB(t.TempDir())
 	require.NotNil(t, kvdb)

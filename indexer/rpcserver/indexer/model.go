@@ -475,6 +475,14 @@ func (s *Model) GetContract(contractAddress string) (contractengine.ContractSumm
 	return s.contractQueries().Contract(contractAddress)
 }
 
+func (s *Model) GetEVMSourceMetadata(contractAddress string) (contractengine.EVMSourceMetadata, bool) {
+	return s.indexer.GetEVMSourceMetadata(contractAddress)
+}
+
+func (s *Model) PutEVMSourceMetadata(metadata contractengine.EVMSourceMetadata) error {
+	return s.indexer.PutEVMSourceMetadata(metadata)
+}
+
 func (s *Model) GetContractHistory(contractAddress string, start, limit int) ([]contractengine.ContractHistoryRecord, int, error) {
 	return s.contractQueries().History(contractAddress, start, limit)
 }
