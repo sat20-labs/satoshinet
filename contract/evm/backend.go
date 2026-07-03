@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contract "github.com/sat20-labs/satoshinet/contract"
@@ -771,10 +772,56 @@ func (e *Backend) executeCloseInvokeTx(tx *wire.MsgTx, validated InvokeValidatio
 	deployerAddress, ok := e.Runtime.State.ContractDeployer(contractAddr)
 	status := ResultStatusInvalid
 	closeContract := false
+	gasUsed := e.GasConfig.Normalize().InvokeBaseGas
+	var retainedGasFunding *scommon.Decimal
+	var intents []contractframework.AssetIntent
 	if ok && deployerAddress == gasRefundRecipient && !e.Runtime.State.ContractClosed(contractAddr) {
-		status = ResultStatusSuccess
-		closeContract = true
-		e.Runtime.State.CloseContract(contractAddr)
+		gasConfig := e.GasConfig.Normalize()
+		gasFeeReserve, err := gasConfig.ContractFundingFee(ExecutionKindInvoke, validated.Payload.GasLimit,
+			true, e.Block.Number)
+		if err != nil {
+			return nil
+		}
+		before := e.Runtime.Clone()
+		intentStart := len(e.Runtime.AssetIntents)
+		result := e.Runtime.Call(CallRequest{
+			CallerAddress: gasRefundRecipient,
+			TargetAddress: validated.Contract.MustEncode(),
+			CallID:        callID,
+			Input:         evmCloseHookCalldata(),
+			Gas:           validated.Payload.GasLimit,
+			Value:         0,
+			FundingOutput: &validated.FundingOutput,
+			GasAssetName:  gasConfig.GasAssetName,
+			GasFeeReserve: gasFeeReserve,
+			Block:         e.Block,
+		})
+		status = result.Status
+		gasUsed = result.GasUsed
+		retainedGasFunding = result.RetainedGasFunding
+		if evmCloseHookSucceeded(result) {
+			intents = contractframework.CloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
+			status = ResultStatusSuccess
+			closeContract = true
+			e.Runtime.State.CloseContract(contractAddr)
+		} else {
+			*e.Runtime = *before
+			if status == ResultStatusSuccess {
+				status = ResultStatusInvalid
+			}
+		}
+	}
+	if !closeContract && gasRefundRecipient != "" {
+		refunds, err := contractframework.NonGasFundingRefundIntents(validated.Contract,
+			contractframework.ContractOutputSlice(validated.FundingOutput),
+			e.GasConfig.Normalize().GasAssetName, gasRefundRecipient)
+		if err != nil {
+			return err
+		}
+		for i := range refunds {
+			refunds[i].CallID = callID
+		}
+		intents = append(intents, refunds...)
 	}
 	outcome := contractframework.ExecutionOutcome{
 		Height:             int64(e.Block.Number),
@@ -784,15 +831,35 @@ func (e *Backend) executeCloseInvokeTx(tx *wire.MsgTx, validated InvokeValidatio
 		CallID:             callID,
 		Contract:           validated.Contract,
 		Status:             status,
-		GasUsed:            e.GasConfig.Normalize().InvokeBaseGas,
+		GasUsed:            gasUsed,
+		RetainedGasFunding: retainedGasFunding,
 		FundingInputs:      funding,
 		GasRefundRecipient: gasRefundRecipient,
+		AssetIntents:       intents,
 		RequiresResult:     true,
 		CloseContract:      closeContract,
 		DeployerAddress:    deployerAddress,
 		BootstrapAddress:   e.GasConfig.Normalize().BootstrapAddress,
 	}
 	return e.appendOutcome(outcome)
+}
+
+var evmCloseHookSelector = methodSelector("close()")
+
+func evmCloseHookCalldata() []byte {
+	return appendMethod(evmCloseHookSelector, nil)
+}
+
+func evmCloseHookSucceeded(result CallResult) bool {
+	if result.Status != ResultStatusSuccess || len(result.ReturnData) < 32 {
+		return false
+	}
+	for _, b := range result.ReturnData[:31] {
+		if b != 0 {
+			return false
+		}
+	}
+	return result.ReturnData[31] == 1
 }
 
 func (e *Backend) ExecuteTrigger(call TriggerCall) error {
