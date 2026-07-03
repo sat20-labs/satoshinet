@@ -8,16 +8,18 @@ import (
 )
 
 const (
-	MaxDKVSKeySize       = 256
-	MaxDKVSValueSize     = 10 * 1024
-	MaxDKVSDataSize      = 10 * 1024
-	MaxDKVSFeeProofSize  = 2 * 1024
-	MaxDKVSSignatureSize = 256
-	MaxDKVSPubKeySize    = 128
-	MaxDKVSRecordSize    = 32 * 1024
-	MaxDKVSRecordsPerMsg = 256
-	MaxDKVSItemsPerMsg   = 1024
-	MaxDKVSCursorSize    = 512
+	MaxDKVSKeySize        = 256
+	MaxDKVSValueSize      = 10 * 1024
+	MaxDKVSDataSize       = 10 * 1024
+	MaxDKVSFeeProofSize   = 2 * 1024
+	MaxDKVSSignatureSize  = 256
+	MaxDKVSPubKeySize     = 128
+	MaxDKVSRecordSize     = 32 * 1024
+	MaxDKVSRecordsPerMsg  = 256
+	MaxDKVSItemsPerMsg    = 1024
+	MaxDKVSCursorSize     = 512
+	MaxDKVSSyncFilters    = 64
+	MaxDKVSFilterTypeSize = 16
 )
 
 type DKVSRecord struct {
@@ -69,8 +71,9 @@ type MsgDKVSData struct {
 }
 
 type MsgDKVSSyncRequest struct {
-	Cursor []byte
-	Limit  uint32
+	Cursor  []byte
+	Limit   uint32
+	Filters []DKVSSyncFilter
 }
 
 type MsgDKVSSyncResponse struct {
@@ -78,6 +81,11 @@ type MsgDKVSSyncResponse struct {
 	NextCursor     []byte
 	Done           bool
 	CheckpointRoot chainhash.Hash
+}
+
+type DKVSSyncFilter struct {
+	Type   string
+	Target string
 }
 
 func readDKVSRecord(r io.Reader, pver uint32, buf []byte) (*DKVSRecord, error) {
@@ -217,6 +225,16 @@ func writeHashList(w io.Writer, pver uint32, hashes []chainhash.Hash, max uint32
 		}
 	}
 	return nil
+}
+
+func readerLen(r io.Reader) int {
+	type lenReader interface {
+		Len() int
+	}
+	if lr, ok := r.(lenReader); ok {
+		return lr.Len()
+	}
+	return -1
 }
 
 func (msg *MsgDKVSNotify) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
@@ -428,24 +446,85 @@ func (msg *MsgDKVSSyncRequest) BtcDecode(r io.Reader, pver uint32, _ MessageEnco
 		return err
 	}
 	msg.Cursor = cursor
-	return readElements(r, &msg.Limit)
+	if err := readElements(r, &msg.Limit); err != nil {
+		return err
+	}
+	if readerLen(r) == 0 {
+		return nil
+	}
+	count, err := ReadVarIntBuf(r, pver, buf)
+	if err != nil {
+		return err
+	}
+	if count > MaxDKVSSyncFilters {
+		return messageError("MsgDKVSSyncRequest.BtcDecode", "too many dkvs sync filters")
+	}
+	msg.Filters = make([]DKVSSyncFilter, 0, count)
+	for i := uint64(0); i < count; i++ {
+		filterType, err := readVarStringBuf(r, pver, buf)
+		if err != nil {
+			return err
+		}
+		if len(filterType) > MaxDKVSFilterTypeSize {
+			return messageError("MsgDKVSSyncRequest.BtcDecode", "dkvs sync filter type too large")
+		}
+		target, err := readVarStringBuf(r, pver, buf)
+		if err != nil {
+			return err
+		}
+		if len(target) > MaxDKVSKeySize {
+			return messageError("MsgDKVSSyncRequest.BtcDecode", "dkvs sync filter target too large")
+		}
+		msg.Filters = append(msg.Filters, DKVSSyncFilter{
+			Type:   filterType,
+			Target: target,
+		})
+	}
+	return nil
 }
 
 func (msg *MsgDKVSSyncRequest) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
 	if len(msg.Cursor) > MaxDKVSCursorSize {
 		return messageError("MsgDKVSSyncRequest.BtcEncode", "dkvs cursor too large")
 	}
+	if len(msg.Filters) > MaxDKVSSyncFilters {
+		return messageError("MsgDKVSSyncRequest.BtcEncode", "too many dkvs sync filters")
+	}
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
 	if err := WriteVarBytesBuf(w, pver, msg.Cursor, buf); err != nil {
 		return err
 	}
-	return writeElements(w, msg.Limit)
+	if err := writeElements(w, msg.Limit); err != nil {
+		return err
+	}
+	if len(msg.Filters) == 0 {
+		return nil
+	}
+	if err := WriteVarIntBuf(w, pver, uint64(len(msg.Filters)), buf); err != nil {
+		return err
+	}
+	for _, filter := range msg.Filters {
+		if len(filter.Type) > MaxDKVSFilterTypeSize {
+			return messageError("MsgDKVSSyncRequest.BtcEncode", "dkvs sync filter type too large")
+		}
+		if len(filter.Target) > MaxDKVSKeySize {
+			return messageError("MsgDKVSSyncRequest.BtcEncode", "dkvs sync filter target too large")
+		}
+		if err := writeVarStringBuf(w, pver, filter.Type, buf); err != nil {
+			return err
+		}
+		if err := writeVarStringBuf(w, pver, filter.Target, buf); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (msg *MsgDKVSSyncRequest) Command() string { return CmdDKVSSyncRequest }
 func (msg *MsgDKVSSyncRequest) MaxPayloadLength(pver uint32) uint32 {
-	return MaxVarIntPayload + MaxDKVSCursorSize + 4
+	return MaxVarIntPayload + MaxDKVSCursorSize + 4 + MaxVarIntPayload +
+		MaxDKVSSyncFilters*(MaxVarIntPayload+MaxDKVSFilterTypeSize+MaxVarIntPayload+MaxDKVSKeySize)
 }
 
 func (msg *MsgDKVSSyncResponse) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {

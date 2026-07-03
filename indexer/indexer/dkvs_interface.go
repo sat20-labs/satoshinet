@@ -12,6 +12,12 @@ func (b *IndexerMgr) SetDKVSNotifyCallback(fn dkvs_indexer.NotifyFunc) {
 	}
 }
 
+func (b *IndexerMgr) SetDKVSSubscriptionCallback(fn dkvs_indexer.SubscriptionNotifyFunc) {
+	if b.dkvsIndexer != nil {
+		b.dkvsIndexer.SetSubscriptionNotify(fn)
+	}
+}
+
 func (b *IndexerMgr) PutDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return b.dkvsIndexer.PutLocal(record)
 }
@@ -32,10 +38,46 @@ func (b *IndexerMgr) ListDKVSRecords(prefix string, start, limit int) ([]*wire.D
 	return b.dkvsIndexer.ListPrefix(prefix, start, limit)
 }
 
+func (b *IndexerMgr) GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error) {
+	return b.dkvsIndexer.Usage(prefix)
+}
+
 func (b *IndexerMgr) SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	return b.dkvsIndexer.Sync(cursor, limit)
 }
 
+func (b *IndexerMgr) SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+	return b.dkvsIndexer.SyncFiltered(cursor, limit, filters)
+}
+
 func (b *IndexerMgr) GetDKVSCheckpoint() (*dkvs_indexer.Checkpoint, error) {
 	return b.dkvsIndexer.Checkpoint()
+}
+
+func (b *IndexerMgr) GetDKVSSnapshot() (*dkvs_indexer.Snapshot, error) {
+	return b.dkvsIndexer.Snapshot()
+}
+
+func (b *IndexerMgr) ApplyDKVSSnapshot(snapshot *dkvs_indexer.Snapshot) (int, error) {
+	return b.dkvsIndexer.ApplySnapshot(snapshot)
+}
+
+func (b *IndexerMgr) PruneExpiredDKVSRecords() (int, error) {
+	return b.dkvsIndexer.PruneExpired()
+}
+
+func (b *IndexerMgr) SubscribeDKVS(sub dkvs_indexer.Subscription) ([]*wire.DKVSRecord, int, error) {
+	return b.dkvsIndexer.Subscribe(sub)
+}
+
+func (b *IndexerMgr) UnsubscribeDKVS(sub dkvs_indexer.Subscription) error {
+	return b.dkvsIndexer.Unsubscribe(sub)
+}
+
+func (b *IndexerMgr) ListDKVSSubscriptions() []dkvs_indexer.Subscription {
+	return b.dkvsIndexer.Subscriptions()
+}
+
+func (b *IndexerMgr) IsDKVSSubscribed(key string) bool {
+	return b.dkvsIndexer.IsSubscribed(key)
 }

@@ -73,6 +73,8 @@ func TestFilterRuntimeExistingContractSummaries(t *testing.T) {
 		{Address: "valid"},
 		{Address: "legacy"},
 		{Address: "rpc-error"},
+		{Address: "closed", Status: "invalid"},
+		{Address: "reverted", Status: "revert"},
 	}
 
 	filtered := filterRuntimeExistingContractSummaries(contracts, contractListQuery{})
@@ -90,6 +92,25 @@ func TestFilterRuntimeExistingContractSummaries(t *testing.T) {
 	all := filterRuntimeExistingContractSummaries(contracts, contractListQuery{includeInvalid: true})
 	if len(all) != len(contracts) {
 		t.Fatalf("include invalid length = %d, want %d", len(all), len(contracts))
+	}
+}
+
+func TestContractSummaryStatusActive(t *testing.T) {
+	active := []string{
+		"", "success", "active", "ready", "tradable", " SUCCESS ",
+		"PendingReady", "Betting", "ClosedForBet", "PendingResult", "Settled",
+	}
+	for _, status := range active {
+		if !contractSummaryStatusActive(status) {
+			t.Fatalf("status %q should be active", status)
+		}
+	}
+
+	inactive := []string{"invalid", "revert", "reverted", "out_of_gas", "closed", "Rejected"}
+	for _, status := range inactive {
+		if contractSummaryStatusActive(status) {
+			t.Fatalf("status %q should be inactive", status)
+		}
 	}
 }
 

@@ -66,11 +66,21 @@ type Indexer interface {
 	PutEVMSourceMetadata(metadata contractengine.EVMSourceMetadata) error
 
 	SetDKVSNotifyCallback(fn dkvs_indexer.NotifyFunc)
+	SetDKVSSubscriptionCallback(fn dkvs_indexer.SubscriptionNotifyFunc)
 	PutDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error)
 	ListDKVSRecords(prefix string, start, limit int) ([]*wire.DKVSRecord, int, error)
+	GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error)
 	SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
+	SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
 	GetDKVSCheckpoint() (*dkvs_indexer.Checkpoint, error)
+	GetDKVSSnapshot() (*dkvs_indexer.Snapshot, error)
+	ApplyDKVSSnapshot(snapshot *dkvs_indexer.Snapshot) (int, error)
+	PruneExpiredDKVSRecords() (int, error)
+	SubscribeDKVS(sub dkvs_indexer.Subscription) ([]*wire.DKVSRecord, int, error)
+	UnsubscribeDKVS(sub dkvs_indexer.Subscription) error
+	ListDKVSSubscriptions() []dkvs_indexer.Subscription
+	IsDKVSSubscribed(key string) bool
 }

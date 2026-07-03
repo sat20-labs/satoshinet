@@ -691,7 +691,7 @@ func TestPeerDKVSListeners(t *testing.T) {
 		{"OnDKVSInv", &wire.MsgDKVSInv{Items: []wire.DKVSInvItem{{Key: "/tmp/dkvs", KeyHash: dkvsHash, RecordHash: dkvsHash}}}},
 		{"OnDKVSGet", &wire.MsgDKVSGet{Keys: []string{"/tmp/dkvs"}, RecordHashes: []chainhash.Hash{dkvsHash}}},
 		{"OnDKVSData", &wire.MsgDKVSData{NotFound: []chainhash.Hash{dkvsHash}}},
-		{"OnDKVSSyncRequest", &wire.MsgDKVSSyncRequest{Limit: 1}},
+		{"OnDKVSSyncRequest", &wire.MsgDKVSSyncRequest{Limit: 1, Filters: []wire.DKVSSyncFilter{{Type: "prefix", Target: "/tmp"}}}},
 		{"OnDKVSSyncResponse", &wire.MsgDKVSSyncResponse{Done: true, CheckpointRoot: dkvsHash}},
 	}
 	for _, test := range tests {

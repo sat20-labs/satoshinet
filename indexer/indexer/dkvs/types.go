@@ -1,6 +1,8 @@
 package dkvs
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -15,7 +17,13 @@ const (
 	EventRecordPut       = uint32(1)
 	EventRecordUpdate    = uint32(2)
 	EventRecordTombstone = uint32(3)
+	EventPrefixUpdate    = uint32(4)
+	EventMailboxMessage  = uint32(5)
 	EventSyncHint        = uint32(6)
+	EventCheckpointReady = uint32(7)
+	EventSnapshotReady   = uint32(8)
+	EventRenewal         = uint32(9)
+	EventExpired         = uint32(10)
 
 	MaxKeySize         = 256
 	MaxKeySegmentSize  = 64
@@ -34,19 +42,50 @@ var (
 	ErrPermissionDenied       = errors.New("dkvs permission denied")
 	ErrDIDResolverUnavailable = errors.New("dkvs did resolver unavailable")
 	ErrFeeProofRequired       = errors.New("dkvs fee proof required")
+	ErrInvalidFeeProof        = errors.New("invalid dkvs fee proof")
 	ErrRecordNotFound         = errors.New("dkvs record not found")
+	ErrInvalidCheckpoint      = errors.New("invalid dkvs checkpoint")
+	ErrInvalidSnapshot        = errors.New("invalid dkvs snapshot")
+	ErrMailboxFull            = errors.New("dkvs mailbox full")
+	ErrBlobManifestInvalid    = errors.New("dkvs blob manifest invalid")
+	ErrBlobChunkInvalid       = errors.New("dkvs blob chunk invalid")
 )
 
+type DIDIdentity struct {
+	CanonicalName string
+	NameID        string
+	SigningKeys   [][]byte
+	Active        bool
+}
+
+func (id DIDIdentity) CanSign(pubKey []byte) error {
+	if !id.Active {
+		return ErrPermissionDenied
+	}
+	for _, key := range id.SigningKeys {
+		if bytes.Equal(key, pubKey) {
+			return nil
+		}
+	}
+	return ErrPermissionDenied
+}
+
 type DIDResolver interface {
-	CanWriteName(name string, pubKey []byte) error
-	CanWriteService(serviceName string, pubKey []byte) error
+	ResolveName(name string) (DIDIdentity, error)
+	ResolveService(serviceName string) (DIDIdentity, error)
 }
 
 type FeeVerifier interface {
-	VerifyFeeProof(recordHash [32]byte, namespace string, recordSize int, feeProof []byte) error
+	VerifyFeeProof(recordHash, keyHash [32]byte, namespace string, recordSize int, expiryHeight uint64, feeProof []byte) error
+}
+
+type SystemVerifier interface {
+	CanWriteSystem(key string, pubKey []byte) error
 }
 
 type NotifyFunc func(eventType uint32, key string, recordHash [32]byte, seq uint64, expiryHeight uint64, size uint32, flags uint32)
+
+type SubscriptionNotifyFunc func(sub Subscription)
 
 type Record = wire.DKVSRecord
 
@@ -54,6 +93,7 @@ type FeeProof struct {
 	Mode           string         `json:"mode"`
 	PoolContract   string         `json:"pool_contract,omitempty"`
 	Payer          string         `json:"payer,omitempty"`
+	PayerPubKey    []byte         `json:"payer_pubkey,omitempty"`
 	PaymentTxID    string         `json:"payment_txid,omitempty"`
 	LeaseContract  string         `json:"lease_contract,omitempty"`
 	PlanID         string         `json:"plan_id,omitempty"`
@@ -82,9 +122,28 @@ type Config struct {
 	AllowFreeLocal bool
 	Resolver       DIDResolver
 	FeeVerifier    FeeVerifier
+	SystemVerifier SystemVerifier
 	Notify         NotifyFunc
+	Subscription   SubscriptionNotifyFunc
 	CurrentHeight  func() uint64
 	SourceNode     string
+	MailboxPolicy  MailboxPolicy
+	BlobPolicy     BlobPolicy
+	TmpPolicy      TmpPolicy
+}
+
+type SubscriptionType string
+
+const (
+	SubscriptionKey     SubscriptionType = "key"
+	SubscriptionPrefix  SubscriptionType = "prefix"
+	SubscriptionMailbox SubscriptionType = "mailbox"
+	SubscriptionService SubscriptionType = "service"
+)
+
+type Subscription struct {
+	Type   SubscriptionType `json:"type"`
+	Target string           `json:"target"`
 }
 
 type Checkpoint struct {
@@ -95,23 +154,98 @@ type Checkpoint struct {
 	ActiveRecordRoot      string            `json:"active_record_root"`
 }
 
-type defaultResolver struct{}
-
-func (defaultResolver) CanWriteName(string, []byte) error {
-	return ErrDIDResolverUnavailable
+type Usage struct {
+	Prefix          string `json:"prefix"`
+	ActiveRecords   uint64 `json:"active_records"`
+	ActiveTotalSize uint64 `json:"active_total_size"`
 }
 
-func (defaultResolver) CanWriteService(string, []byte) error {
-	return ErrDIDResolverUnavailable
+type SignedCheckpoint struct {
+	Epoch                 string            `json:"epoch"`
+	Height                uint64            `json:"height"`
+	ActiveRecordCount     uint64            `json:"active_record_count"`
+	ActiveRecordTotalSize uint64            `json:"active_record_total_size"`
+	NamespaceRoots        map[string]string `json:"namespace_roots"`
+	ActiveRecordRoot      string            `json:"active_record_root"`
+	CreatedBy             string            `json:"created_by"`
+	Signature             []byte            `json:"signature"`
+}
+
+type SignedSnapshot struct {
+	Epoch                 string            `json:"epoch"`
+	Height                uint64            `json:"height"`
+	ActiveRecordCount     uint64            `json:"active_record_count"`
+	ActiveRecordTotalSize uint64            `json:"active_record_total_size"`
+	NamespaceRoots        map[string]string `json:"namespace_roots"`
+	ActiveRecordRoot      string            `json:"active_record_root"`
+	SnapshotHash          string            `json:"snapshot_hash"`
+	CreatedAt             uint64            `json:"created_at"`
+	CreatedBy             string            `json:"created_by"`
+	Signature             []byte            `json:"signature"`
+}
+
+type Snapshot struct {
+	Checkpoint *Checkpoint        `json:"checkpoint"`
+	Records    []*wire.DKVSRecord `json:"records"`
+	CreatedAt  uint64             `json:"created_at"`
+}
+
+type MailboxPolicy struct {
+	MaxMsgBytes   uint64
+	MaxMessages   uint64
+	MaxMsgSize    int
+	MaxMsgTTL     uint64
+	MaxShareBytes uint64
+	MaxShares     uint64
+	MaxShareSize  int
+	MaxShareTTL   uint64
+}
+
+type BlobPolicy struct {
+	MaxTotalSize uint64
+	MaxChunkSize int
+	MaxChunks    uint32
+}
+
+type TmpPolicy struct {
+	MaxTTL  uint64
+	MaxSize int
+}
+
+type BlobManifest struct {
+	ContentHash  string          `json:"content_hash"`
+	TotalSize    uint64          `json:"total_size"`
+	ChunkSize    uint32          `json:"chunk_size"`
+	ChunkCount   uint32          `json:"chunk_count"`
+	ChunkHashes  []string        `json:"chunk_hashes"`
+	TTL          uint64          `json:"ttl,omitempty"`
+	ExpiryHeight uint64          `json:"expiry_height,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+}
+
+type defaultResolver struct{}
+
+func (defaultResolver) ResolveName(string) (DIDIdentity, error) {
+	return DIDIdentity{}, ErrDIDResolverUnavailable
+}
+
+func (defaultResolver) ResolveService(string) (DIDIdentity, error) {
+	return DIDIdentity{}, ErrDIDResolverUnavailable
 }
 
 type defaultFeeVerifier struct {
 	allowFreeLocal bool
 }
 
-func (v defaultFeeVerifier) VerifyFeeProof(_ [32]byte, _ string, _ int, feeProof []byte) error {
+func (v defaultFeeVerifier) VerifyFeeProof(_, _ [32]byte, _ string, _ int, _ uint64, feeProof []byte) error {
 	if len(feeProof) == 0 && !v.allowFreeLocal {
 		return ErrFeeProofRequired
 	}
 	return nil
+}
+
+type defaultSystemVerifier struct{}
+
+func (defaultSystemVerifier) CanWriteSystem(_ string, _ []byte) error {
+	return ErrPermissionDenied
 }

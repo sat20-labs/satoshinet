@@ -40,7 +40,7 @@ type IndexerMgr struct {
 
 	// data from market
 	localDB indexer.KVDB
-	dkvsDB           indexer.KVDB
+	dkvsDB  indexer.KVDB
 
 	// 配置参数
 	chaincfgParam   *chaincfg.Params
@@ -64,7 +64,8 @@ type IndexerMgr struct {
 	contractIndexer  *contract_indexer.Indexer
 	contractBackupDB *contract_indexer.Indexer
 
-	dkvsIndexer      *dkvs_indexer.Indexer
+	dkvsIndexer         *dkvs_indexer.Indexer
+	lastDKVSPruneHeight int
 }
 
 var instance *IndexerMgr

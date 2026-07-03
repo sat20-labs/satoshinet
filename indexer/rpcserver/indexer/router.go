@@ -52,8 +52,15 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.POST(proxy+"/v3/dkvs/records", s.handle.putDKVSRecord)
 	r.GET(proxy+"/v3/dkvs/records", s.handle.getDKVSRecord)
 	r.GET(proxy+"/v3/dkvs/records/prefix", s.handle.listDKVSRecords)
+	r.GET(proxy+"/v3/dkvs/usage", s.handle.getDKVSUsage)
 	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
 	r.GET(proxy+"/v3/dkvs/checkpoint", s.handle.getDKVSCheckpoint)
+	r.GET(proxy+"/v3/dkvs/snapshot", s.handle.getDKVSSnapshot)
+	r.POST(proxy+"/v3/dkvs/snapshot", s.handle.applyDKVSSnapshot)
+	r.POST(proxy+"/v3/dkvs/prune", s.handle.pruneDKVS)
+	r.POST(proxy+"/v3/dkvs/subscriptions", s.handle.subscribeDKVS)
+	r.DELETE(proxy+"/v3/dkvs/subscriptions", s.handle.unsubscribeDKVS)
+	r.GET(proxy+"/v3/dkvs/subscriptions", s.handle.listDKVSSubscriptions)
 
 	r.GET(proxy+"/v3/address/summary/:address", s.handle.getAssetSummaryV3)
 	// 获取某个地址上所有utxo数据列表

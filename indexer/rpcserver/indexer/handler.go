@@ -12,8 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
@@ -274,6 +276,33 @@ type dkvsCheckpointResp struct {
 	Data interface{} `json:"data,omitempty"`
 }
 
+type dkvsUsageResp struct {
+	indexerwire.BaseResp
+	Data *dkvsindexer.Usage `json:"data,omitempty"`
+}
+
+type dkvsSubscriptionReq struct {
+	Type   dkvsindexer.SubscriptionType `json:"type"`
+	Target string                       `json:"target"`
+}
+
+type dkvsSubscriptionResp struct {
+	indexerwire.BaseResp
+	Total         int                        `json:"total,omitempty"`
+	Subscriptions []dkvsindexer.Subscription `json:"subscriptions,omitempty"`
+	Data          []*swire.DKVSRecord        `json:"data,omitempty"`
+}
+
+type dkvsPruneResp struct {
+	indexerwire.BaseResp
+	Pruned int `json:"pruned"`
+}
+
+type dkvsSnapshotImportResp struct {
+	indexerwire.BaseResp
+	Applied int `json:"applied"`
+}
+
 func (s *Handle) putDKVSRecord(c *gin.Context) {
 	resp := &dkvsRecordResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	var record swire.DKVSRecord
@@ -321,7 +350,21 @@ func (s *Handle) putDKVSTombstone(c *gin.Context) {
 func (s *Handle) getDKVSRecord(c *gin.Context) {
 	resp := &dkvsRecordResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	key := c.Query("key")
-	record, err := s.model.GetDKVSRecord(key)
+	var record *swire.DKVSRecord
+	var err error
+	if key != "" {
+		record, err = s.model.GetDKVSRecord(key)
+	} else {
+		hashParam := c.Query("hash")
+		hash, hashErr := chainhash.NewHashFromStr(hashParam)
+		if hashErr != nil {
+			resp.Code = -1
+			resp.Msg = hashErr.Error()
+			c.JSON(http.StatusOK, resp)
+			return
+		}
+		record, err = s.model.GetDKVSRecordByHash(*hash)
+	}
 	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
@@ -354,6 +397,19 @@ func (s *Handle) listDKVSRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (s *Handle) getDKVSUsage(c *gin.Context) {
+	resp := &dkvsUsageResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	usage, err := s.model.GetDKVSUsage(c.Query("prefix"))
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = usage
+	c.JSON(http.StatusOK, resp)
+}
+
 func (s *Handle) getDKVSCheckpoint(c *gin.Context) {
 	resp := &dkvsCheckpointResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	checkpoint, err := s.model.GetDKVSCheckpoint()
@@ -364,6 +420,102 @@ func (s *Handle) getDKVSCheckpoint(c *gin.Context) {
 		return
 	}
 	resp.Data = checkpoint
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getDKVSSnapshot(c *gin.Context) {
+	resp := &dkvsCheckpointResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	snapshot, err := s.model.GetDKVSSnapshot()
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Data = snapshot
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) applyDKVSSnapshot(c *gin.Context) {
+	resp := &dkvsSnapshotImportResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	var snapshot dkvsindexer.Snapshot
+	if err := c.ShouldBindJSON(&snapshot); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	applied, err := s.model.ApplyDKVSSnapshot(&snapshot)
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Applied = applied
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) pruneDKVS(c *gin.Context) {
+	resp := &dkvsPruneResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	pruned, err := s.model.PruneExpiredDKVSRecords()
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Pruned = pruned
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) subscribeDKVS(c *gin.Context) {
+	resp := &dkvsSubscriptionResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	var req dkvsSubscriptionReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	records, total, err := s.model.SubscribeDKVS(dkvsindexer.Subscription{Type: req.Type, Target: req.Target})
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Total = total
+	resp.Data = records
+	resp.Subscriptions = s.model.ListDKVSSubscriptions()
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) unsubscribeDKVS(c *gin.Context) {
+	resp := &dkvsSubscriptionResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	var req dkvsSubscriptionReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	if err := s.model.UnsubscribeDKVS(dkvsindexer.Subscription{Type: req.Type, Target: req.Target}); err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	resp.Subscriptions = s.model.ListDKVSSubscriptions()
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) listDKVSSubscriptions(c *gin.Context) {
+	resp := &dkvsSubscriptionResp{
+		BaseResp:      indexerwire.BaseResp{Code: 0, Msg: "ok"},
+		Subscriptions: s.model.ListDKVSSubscriptions(),
+	}
+	resp.Total = len(resp.Subscriptions)
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -1274,12 +1426,24 @@ func filterRuntimeExistingContractSummaries(contracts []contractcommon.ContractS
 
 	filtered := make([]contractcommon.ContractSummary, 0, len(contracts))
 	for _, contract := range contracts {
+		if !contractSummaryStatusActive(contract.Status) {
+			continue
+		}
 		exists, err := contractRuntimeExists(contract.Address)
 		if err != nil || exists {
 			filtered = append(filtered, contract)
 		}
 	}
 	return filtered
+}
+
+func contractSummaryStatusActive(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "invalid", "revert", "reverted", "out_of_gas", "closed", "rejected":
+		return false
+	default:
+		return true
+	}
 }
 
 func contractRuntimeExists(address string) (bool, error) {

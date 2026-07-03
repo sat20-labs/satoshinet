@@ -30,7 +30,7 @@ func TestDKVSMessagesWire(t *testing.T) {
 		&MsgDKVSInv{Items: []DKVSInvItem{{Key: record.Key, KeyHash: keyHash, RecordHash: hash, Seq: 10}}},
 		&MsgDKVSGet{Keys: []string{record.Key}, RecordHashes: []chainhash.Hash{hash}},
 		&MsgDKVSData{Records: []*DKVSRecord{record}, NotFound: []chainhash.Hash{hash}},
-		&MsgDKVSSyncRequest{Cursor: []byte("cursor"), Limit: 10},
+		&MsgDKVSSyncRequest{Cursor: []byte("cursor"), Limit: 10, Filters: []DKVSSyncFilter{{Type: "prefix", Target: "/personal/a"}}},
 		&MsgDKVSSyncResponse{Records: []*DKVSRecord{record}, NextCursor: []byte("next"), Done: true, CheckpointRoot: hash},
 	}
 	for _, test := range tests {
@@ -84,6 +84,8 @@ func TestDKVSMessagesOversize(t *testing.T) {
 		&MsgDKVSGet{Keys: []string{longKey}},
 		&MsgDKVSData{Records: []*DKVSRecord{{Version: 1, Key: "/personal/a/b", Value: longValue}}},
 		&MsgDKVSSyncRequest{Cursor: longCursor},
+		&MsgDKVSSyncRequest{Filters: []DKVSSyncFilter{{Type: string(bytes.Repeat([]byte("t"), MaxDKVSFilterTypeSize+1)), Target: "/tmp/a"}}},
+		&MsgDKVSSyncRequest{Filters: []DKVSSyncFilter{{Type: "prefix", Target: longKey}}},
 		&MsgDKVSSyncResponse{NextCursor: longCursor},
 	}
 	for _, test := range tests {
@@ -117,7 +119,38 @@ func TestDKVSMessagesOversize(t *testing.T) {
 		}
 	}
 
+	var syncReqPayload bytes.Buffer
+	if err := WriteVarBytes(&syncReqPayload, ProtocolVersion, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeElements(&syncReqPayload, uint32(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteVarInt(&syncReqPayload, ProtocolVersion, uint64(MaxDKVSSyncFilters)+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&MsgDKVSSyncRequest{}).BtcDecode(bytes.NewReader(syncReqPayload.Bytes()), ProtocolVersion, BaseEncoding); err == nil {
+		t.Fatalf("syncreq accepted oversized filter count")
+	}
+
 	_ = hash
+}
+
+func TestDKVSSyncRequestLegacyPayload(t *testing.T) {
+	var payload bytes.Buffer
+	if err := WriteVarBytes(&payload, ProtocolVersion, []byte("cursor")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeElements(&payload, uint32(10)); err != nil {
+		t.Fatal(err)
+	}
+	var decoded MsgDKVSSyncRequest
+	if err := decoded.BtcDecode(bytes.NewReader(payload.Bytes()), ProtocolVersion, BaseEncoding); err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded.Cursor) != "cursor" || decoded.Limit != 10 || len(decoded.Filters) != 0 {
+		t.Fatalf("decoded legacy sync request=%#v", decoded)
+	}
 }
 
 func TestDKVSCommandLength(t *testing.T) {

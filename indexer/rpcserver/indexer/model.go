@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	localwire "github.com/sat20-labs/satoshinet/indexer/rpcserver/wire"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
@@ -202,12 +204,44 @@ func (s *Model) GetDKVSRecord(key string) (*swire.DKVSRecord, error) {
 	return s.indexer.GetDKVSRecord(key)
 }
 
+func (s *Model) GetDKVSRecordByHash(hash chainhash.Hash) (*swire.DKVSRecord, error) {
+	return s.indexer.GetDKVSRecordByHash(hash)
+}
+
 func (s *Model) ListDKVSRecords(prefix string, start, limit int) ([]*swire.DKVSRecord, int, error) {
 	return s.indexer.ListDKVSRecords(prefix, start, limit)
 }
 
+func (s *Model) GetDKVSUsage(prefix string) (*dkvsindexer.Usage, error) {
+	return s.indexer.GetDKVSUsage(prefix)
+}
+
 func (s *Model) GetDKVSCheckpoint() (interface{}, error) {
 	return s.indexer.GetDKVSCheckpoint()
+}
+
+func (s *Model) GetDKVSSnapshot() (interface{}, error) {
+	return s.indexer.GetDKVSSnapshot()
+}
+
+func (s *Model) ApplyDKVSSnapshot(snapshot *dkvsindexer.Snapshot) (int, error) {
+	return s.indexer.ApplyDKVSSnapshot(snapshot)
+}
+
+func (s *Model) PruneExpiredDKVSRecords() (int, error) {
+	return s.indexer.PruneExpiredDKVSRecords()
+}
+
+func (s *Model) SubscribeDKVS(sub dkvsindexer.Subscription) ([]*swire.DKVSRecord, int, error) {
+	return s.indexer.SubscribeDKVS(sub)
+}
+
+func (s *Model) UnsubscribeDKVS(sub dkvsindexer.Subscription) error {
+	return s.indexer.UnsubscribeDKVS(sub)
+}
+
+func (s *Model) ListDKVSSubscriptions() []dkvsindexer.Subscription {
+	return s.indexer.ListDKVSSubscriptions()
 }
 
 func (s *Model) GetBlockInfo(height int) (*common.BlockInfo, error) {

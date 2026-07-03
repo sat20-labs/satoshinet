@@ -108,6 +108,41 @@ func UnmarshalRecord(data []byte) (*wire.DKVSRecord, error) {
 	return &record, nil
 }
 
+func NewNotifyEvent(eventType uint32, record *wire.DKVSRecord, sourceNode string) (*NotifyEvent, error) {
+	if record == nil {
+		return nil, ErrInvalidRecord
+	}
+	return &NotifyEvent{
+		EventType:    eventType,
+		Key:          record.Key,
+		KeyHash:      KeyHash(record.Key),
+		RecordHash:   RecordHash(record),
+		Seq:          record.Seq,
+		ExpiryHeight: record.ExpiryHeight,
+		Size:         uint32(RecordSize(record)),
+		SourceNode:   sourceNode,
+		Flags:        record.Flags,
+	}, nil
+}
+
+func MarshalNotifyEvent(event *NotifyEvent) ([]byte, error) {
+	if event == nil {
+		return nil, ErrInvalidRecord
+	}
+	return json.Marshal(event)
+}
+
+func UnmarshalNotifyEvent(data []byte) (*NotifyEvent, error) {
+	var event NotifyEvent
+	if err := json.Unmarshal(data, &event); err != nil {
+		return nil, err
+	}
+	if event.Key == "" {
+		return nil, ErrInvalidKey
+	}
+	return &event, nil
+}
+
 func currentUnixMilli() uint64 {
 	return uint64(time.Now().UnixMilli())
 }

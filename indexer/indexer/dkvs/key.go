@@ -3,6 +3,7 @@ package dkvs
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"strings"
 )
 
@@ -79,6 +80,14 @@ func validSegment(segment string) bool {
 	return true
 }
 
+func NormalizeNameID(canonicalName string) string {
+	if len(canonicalName) > 0 && len(canonicalName) <= MaxKeySegmentSize && validSegment(canonicalName) {
+		return canonicalName
+	}
+	sum := sha256.Sum256([]byte(canonicalName))
+	return hex.EncodeToString(sum[:])
+}
+
 func personalAccountID(pubKey []byte) string {
 	sum := sha256.Sum256(pubKey)
 	return hex.EncodeToString(sum[:])
@@ -95,7 +104,7 @@ func validateNamespaceShape(parsed ParsedKey) error {
 			return ErrInvalidKey
 		}
 	case "name":
-		if len(parsed.Segments) < 1 {
+		if len(parsed.Segments) != 1 {
 			return ErrInvalidKey
 		}
 	case "svc":
@@ -115,6 +124,9 @@ func validateNamespaceShape(parsed ParsedKey) error {
 			return nil
 		}
 		if len(parsed.Segments) == 3 && parsed.Segments[1] == "chunk" {
+			if index, err := strconv.Atoi(parsed.Segments[2]); err != nil || index < 0 {
+				return ErrInvalidKey
+			}
 			return nil
 		}
 		return ErrInvalidKey
@@ -123,9 +135,17 @@ func validateNamespaceShape(parsed ParsedKey) error {
 			return ErrInvalidKey
 		}
 	case "sys":
-		if len(parsed.Segments) < 1 {
-			return ErrInvalidKey
+		switch parsed.Segments[0] {
+		case "params":
+			if len(parsed.Segments) == 1 {
+				return nil
+			}
+		case "checkpoint", "snapshot", "miner", "pool":
+			if len(parsed.Segments) == 2 {
+				return nil
+			}
 		}
+		return ErrInvalidKey
 	}
 	return nil
 }
