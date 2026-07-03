@@ -2,8 +2,10 @@ package evm
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 
+	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	scommon "github.com/sat20-labs/indexer/common"
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
@@ -156,6 +158,84 @@ func TestAssetPrecompileTransferSatoshiAssetABI(t *testing.T) {
 	require.Equal(t, "tb1psatoshi", to)
 	require.Equal(t, "1", amount.String())
 	require.Empty(t, extraData)
+}
+
+func TestAssetPrecompileTransferAssetsABI(t *testing.T) {
+	gas := DefaultGasConfig().GasAssetName
+	call := EncodeTransferAssetsCall(
+		[]string{SatoshiAssetName, gas, "ordx:f:ooxx", "brc20:f:ooxx", "runes:f:BITCOIN•TESTNET"},
+		[]string{"tb1psats", "tb1pgas", "tb1pordx", "tb1pbrc20", "tb1prunes"},
+		[]string{"1", "50", "1000", "7.5", "3"},
+		[][]byte{nil, []byte("gas"), []byte("ordx"), []byte("brc20"), []byte("runes")},
+	)
+
+	transfers, err := DecodeTransferAssetsCall(call)
+	require.NoError(t, err)
+	require.Len(t, transfers, 5)
+	require.Equal(t, SatoshiAssetName, transfers[0].AssetName)
+	require.Equal(t, gas, transfers[1].AssetName)
+	require.Equal(t, "ordx:f:ooxx", transfers[2].AssetName)
+	require.Equal(t, "brc20:f:ooxx", transfers[3].AssetName)
+	require.Equal(t, "runes:f:BITCOIN•TESTNET", transfers[4].AssetName)
+	require.Equal(t, "7.5", transfers[3].Amount.String())
+	require.Equal(t, []byte("runes"), transfers[4].ExtraData)
+
+	ret, err := NewAssetPrecompile(nil, nil).Run(call)
+	require.NoError(t, err)
+	require.Equal(t, byte(1), ret[31])
+}
+
+func TestAssetPrecompileTransferAssetsSolidityABI(t *testing.T) {
+	parsed, err := gethabi.JSON(strings.NewReader(`[{
+		"name":"transferAssets",
+		"type":"function",
+		"inputs":[
+			{"name":"assetNames","type":"string[]"},
+			{"name":"recipients","type":"string[]"},
+			{"name":"amounts","type":"string[]"},
+			{"name":"extraData","type":"bytes[]"}
+		],
+		"outputs":[{"name":"","type":"bool"}]
+	}]`))
+	require.NoError(t, err)
+	input, err := parsed.Pack("transferAssets",
+		[]string{SatoshiAssetName, "brc20:f:sgas"},
+		[]string{"tb1psats", "tb1pgas"},
+		[]string{"1", "50"},
+		[][]byte{nil, []byte("gas")},
+	)
+	require.NoError(t, err)
+	transfers, err := DecodeTransferAssetsCall(input)
+	require.NoError(t, err)
+	require.Len(t, transfers, 2)
+	require.Equal(t, SatoshiAssetName, transfers[0].AssetName)
+	require.Equal(t, "tb1psats", transfers[0].To)
+	require.Equal(t, "1", transfers[0].Amount.String())
+	require.Equal(t, "brc20:f:sgas", transfers[1].AssetName)
+	require.Equal(t, "tb1pgas", transfers[1].To)
+	require.Equal(t, "50", transfers[1].Amount.String())
+	require.Equal(t, []byte("gas"), transfers[1].ExtraData)
+}
+
+func TestAssetPrecompileTransferAssetsRejectsInvalidInput(t *testing.T) {
+	_, err := DecodeTransferAssetsCall(EncodeTransferAssetsCall(nil, nil, nil, nil))
+	require.ErrorContains(t, err, "at least one")
+
+	_, err = DecodeTransferAssetsCall(EncodeTransferAssetsCall(
+		[]string{SatoshiAssetName},
+		[]string{"tb1pdest", "tb1pextra"},
+		[]string{"1"},
+		[][]byte{nil},
+	))
+	require.ErrorContains(t, err, "length mismatch")
+
+	_, err = DecodeTransferAssetsCall(EncodeTransferAssetsCall(
+		[]string{SatoshiAssetName},
+		[]string{"tb1pdest"},
+		[]string{"0"},
+		[][]byte{nil},
+	))
+	require.ErrorContains(t, err, "must be positive")
 }
 
 func TestAssetPrecompileAmountCompare(t *testing.T) {
@@ -360,6 +440,41 @@ func TestRuntimeCapturesTransferAssetIntent(t *testing.T) {
 	require.Equal(t, "tb1qdest", runtime.AssetIntents[0].To)
 	require.Equal(t, 0, runtime.AssetIntents[0].Amount.Cmp(mustDefaultDecimal(t, 77)))
 	require.Equal(t, caller, ContractAddressHash(runtime.AssetIntents[0].From))
+}
+
+func TestRuntimeCapturesTransferAssetsIntents(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	runtime := NewRuntime(nil)
+	gas := DefaultGasConfig().GasAssetName
+
+	result := runtime.Call(CallRequest{
+		CallerAddress: caller.String(),
+		TargetAddress: evmAddressFromGeth(AssetPrecompileAddress).String(),
+		CallID:        "call-batch",
+		Input: EncodeTransferAssetsCall(
+			[]string{SatoshiAssetName, gas, "ordx:f:ooxx", "brc20:f:ooxx", "runes:f:BITCOIN•TESTNET"},
+			[]string{"tb1psats", "tb1pgas", "tb1pordx", "tb1pbrc20", "tb1prunes"},
+			[]string{"1", "50", "1000", "7.5", "3"},
+			[][]byte{nil, []byte("gas"), []byte("ordx"), []byte("brc20"), []byte("runes")},
+		),
+		Gas:   200000,
+		Block: BlockContext{GasLimit: 1000000},
+	})
+	require.NoError(t, result.Err)
+	require.Len(t, runtime.AssetIntents, 5)
+	require.Equal(t, SatoshiAssetName, runtime.AssetIntents[0].AssetName)
+	require.Equal(t, "tb1psats", runtime.AssetIntents[0].To)
+	require.Equal(t, "1", runtime.AssetIntents[0].Amount.String())
+	require.Equal(t, gas, runtime.AssetIntents[1].AssetName)
+	require.Equal(t, "ordx:f:ooxx", runtime.AssetIntents[2].AssetName)
+	require.Equal(t, "brc20:f:ooxx", runtime.AssetIntents[3].AssetName)
+	require.Equal(t, "7.5", runtime.AssetIntents[3].Amount.String())
+	require.Equal(t, "runes:f:BITCOIN•TESTNET", runtime.AssetIntents[4].AssetName)
+	require.Equal(t, []byte("runes"), runtime.AssetIntents[4].ExtraData)
+	for _, intent := range runtime.AssetIntents {
+		require.Equal(t, "call-batch", intent.CallID)
+		require.Equal(t, caller, ContractAddressHash(intent.From))
+	}
 }
 
 func TestRuntimeRetainsOnlyClaimedGasFunding(t *testing.T) {

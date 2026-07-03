@@ -303,19 +303,22 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 		}
 		switch frame.to {
 		case AssetPrecompileAddress:
-			assetName, to, amount, extraData, decodeErr := DecodeTransferAssetCall(frame.input)
+			transfers, decodeErr := DecodeAssetTransferIntents(frame.input)
 			if decodeErr != nil {
 				return
 			}
-			intent := AssetIntent{
-				CallID:    callID,
-				From:      r.contractAddressFromGeth(frame.from),
-				To:        to,
-				AssetName: assetName,
-				Amount:    cloneDecimal(amount),
-				ExtraData: extraData,
+			from := r.contractAddressFromGeth(frame.from)
+			for _, transfer := range transfers {
+				intent := AssetIntent{
+					CallID:    callID,
+					From:      from,
+					To:        transfer.To,
+					AssetName: transfer.AssetName,
+					Amount:    cloneDecimal(transfer.Amount),
+					ExtraData: contractframework.CloneBytes(transfer.ExtraData),
+				}
+				*capturedIntents = append(*capturedIntents, intent)
 			}
-			*capturedIntents = append(*capturedIntents, intent)
 		case TriggerPrecompileAddress:
 			if r.State.GetCodeSize(frame.from) == 0 && !r.State.IsNewContract(frame.from) {
 				return

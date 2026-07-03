@@ -21,6 +21,7 @@ var (
 
 	assetBalanceOfSelector         = methodSelector("balanceOf(address,string)")
 	assetTransferAssetSelector     = methodSelector("transferAsset(string,string,string,bytes)")
+	assetTransferAssetsSelector    = methodSelector("transferAssets(string[],string[],string[],bytes[])")
 	assetFundingAssetSelector      = methodSelector("fundingAssetAmount(string)")
 	assetFundingSatsSelector       = methodSelector("fundingSats()")
 	assetClaimFundingSelector      = methodSelector("claimFundingAsset(string,string)")
@@ -286,6 +287,11 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 			return nil, err
 		}
 		return abiEncodeBool(true), nil
+	case assetTransferAssetsSelector:
+		if _, err := DecodeTransferAssetsCall(input); err != nil {
+			return nil, err
+		}
+		return abiEncodeBool(true), nil
 	case assetFundingAssetSelector:
 		assetName, err := abiReadString(args, 0)
 		if err != nil {
@@ -516,6 +522,74 @@ func DecodeTransferAssetCall(input []byte) (assetName, to string, amount *scommo
 	return assetName, to, amount, extraData, nil
 }
 
+type AssetTransferRequest struct {
+	AssetName string
+	To        string
+	Amount    *scommon.Decimal
+	ExtraData []byte
+}
+
+func DecodeTransferAssetsCall(input []byte) ([]AssetTransferRequest, error) {
+	selector, args, err := splitSelector(input)
+	if err != nil {
+		return nil, err
+	}
+	if selector != assetTransferAssetsSelector {
+		return nil, errors.New("not a transferAssets call")
+	}
+	assetNames, err := abiReadStringArray(args, 0)
+	if err != nil {
+		return nil, err
+	}
+	recipients, err := abiReadStringArray(args, 1)
+	if err != nil {
+		return nil, err
+	}
+	amountTexts, err := abiReadStringArray(args, 2)
+	if err != nil {
+		return nil, err
+	}
+	extraData, err := abiReadBytesArray(args, 3)
+	if err != nil {
+		return nil, err
+	}
+	if len(assetNames) == 0 {
+		return nil, errors.New("transferAssets requires at least one transfer")
+	}
+	if len(assetNames) != len(recipients) || len(assetNames) != len(amountTexts) || len(assetNames) != len(extraData) {
+		return nil, errors.New("transferAssets array length mismatch")
+	}
+	out := make([]AssetTransferRequest, len(assetNames))
+	for i := range assetNames {
+		amount, err := ParseDecimalAmountString(amountTexts[i])
+		if err != nil {
+			return nil, err
+		}
+		if amount.Sign() <= 0 {
+			return nil, errors.New("transferAssets amount must be positive")
+		}
+		out[i] = AssetTransferRequest{
+			AssetName: assetNames[i],
+			To:        recipients[i],
+			Amount:    amount,
+			ExtraData: contractframework.CloneBytes(extraData[i]),
+		}
+	}
+	return out, nil
+}
+
+func DecodeAssetTransferIntents(input []byte) ([]AssetTransferRequest, error) {
+	if assetName, to, amount, extraData, err := DecodeTransferAssetCall(input); err == nil {
+		return []AssetTransferRequest{{
+			AssetName: assetName,
+			To:        to,
+			Amount:    amount,
+			ExtraData: extraData,
+		}}, nil
+	}
+	return DecodeTransferAssetsCall(input)
+}
+
 func EncodeBalanceOfCall(owner EVMAddress, assetName string) []byte {
 	args := make([]byte, 64)
 	copy(args[12:32], owner[:])
@@ -536,6 +610,20 @@ func EncodeTransferAssetCall(assetName, to, amount string, extraData []byte) []b
 	putABIUint64(head[96:128], 128+uint64(len(tail)))
 	tail = append(tail, abiEncodeDynamicBytes(extraData)...)
 	return appendMethod(assetTransferAssetSelector, append(head, tail...))
+}
+
+func EncodeTransferAssetsCall(assetNames, recipients, amounts []string, extraData [][]byte) []byte {
+	head := make([]byte, 128)
+	tail := make([]byte, 0)
+	putABIUint64(head[0:32], 128+uint64(len(tail)))
+	tail = append(tail, abiEncodeStringArray(assetNames)...)
+	putABIUint64(head[32:64], 128+uint64(len(tail)))
+	tail = append(tail, abiEncodeStringArray(recipients)...)
+	putABIUint64(head[64:96], 128+uint64(len(tail)))
+	tail = append(tail, abiEncodeStringArray(amounts)...)
+	putABIUint64(head[96:128], 128+uint64(len(tail)))
+	tail = append(tail, abiEncodeBytesArray(extraData)...)
+	return appendMethod(assetTransferAssetsSelector, append(head, tail...))
 }
 
 func EncodeFundingAssetAmountCall(assetName string) []byte {
@@ -769,6 +857,74 @@ func abiReadString(args []byte, index int) (string, error) {
 	return string(b), nil
 }
 
+func abiReadStringArray(args []byte, index int) ([]string, error) {
+	raw, err := abiReadDynamicArray(args, index)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(raw))
+	for i := range raw {
+		out[i] = string(raw[i])
+	}
+	return out, nil
+}
+
+func abiReadBytesArray(args []byte, index int) ([][]byte, error) {
+	return abiReadDynamicArray(args, index)
+}
+
+func abiReadDynamicArray(args []byte, index int) ([][]byte, error) {
+	offset, err := abiReadUint64(args, index)
+	if err != nil {
+		return nil, err
+	}
+	if offset > uint64(len(args)) || offset+32 > uint64(len(args)) {
+		return nil, errors.New("ABI array offset out of bounds")
+	}
+	if offset%32 != 0 {
+		return nil, errors.New("ABI array offset is not word aligned")
+	}
+	count, err := abiWordToUint64(args[offset : offset+32])
+	if err != nil {
+		return nil, err
+	}
+	if count > uint64(math.MaxInt32) {
+		return nil, errors.New("ABI array length too large")
+	}
+	headStart := offset + 32
+	headEnd := headStart + count*32
+	if headEnd > uint64(len(args)) {
+		return nil, errors.New("ABI array head out of bounds")
+	}
+	out := make([][]byte, int(count))
+	for i := 0; i < int(count); i++ {
+		itemOffset, err := abiWordToUint64(args[headStart+uint64(i*32) : headStart+uint64((i+1)*32)])
+		if err != nil {
+			return nil, err
+		}
+		if itemOffset%32 != 0 {
+			return nil, errors.New("ABI array item offset is not word aligned")
+		}
+		absolute := headStart + itemOffset
+		if absolute < headStart || absolute+32 > uint64(len(args)) {
+			return nil, errors.New("ABI array item offset out of bounds")
+		}
+		length, err := abiWordToUint64(args[absolute : absolute+32])
+		if err != nil {
+			return nil, err
+		}
+		start := absolute + 32
+		end := start + length
+		if end > uint64(len(args)) {
+			return nil, errors.New("ABI array item out of bounds")
+		}
+		item := make([]byte, length)
+		copy(item, args[start:end])
+		out[i] = item
+	}
+	return out, nil
+}
+
 func abiReadDynamicBytes(args []byte, index int) ([]byte, error) {
 	offset, err := abiReadUint64(args, index)
 	if err != nil {
@@ -851,6 +1007,25 @@ func abiEncodeDynamicBytes(v []byte) []byte {
 	putABIUint64(out[:32], uint64(len(v)))
 	copy(out[32:], v)
 	return out
+}
+
+func abiEncodeStringArray(values []string) []byte {
+	items := make([][]byte, len(values))
+	for i := range values {
+		items[i] = []byte(values[i])
+	}
+	return abiEncodeBytesArray(items)
+}
+
+func abiEncodeBytesArray(values [][]byte) []byte {
+	head := make([]byte, 32+32*len(values))
+	putABIUint64(head[:32], uint64(len(values)))
+	tail := make([]byte, 0)
+	for i := range values {
+		putABIUint64(head[32+i*32:32+(i+1)*32], uint64(32*len(values)+len(tail)))
+		tail = append(tail, abiEncodeDynamicBytes(values[i])...)
+	}
+	return append(head, tail...)
 }
 
 func putABIUint64(dst []byte, v uint64) {
