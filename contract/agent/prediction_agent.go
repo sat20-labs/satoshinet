@@ -15,6 +15,8 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
+var ErrPredictionEvidenceUnavailable = errors.New("prediction evidence is unavailable")
+
 const DefaultPredictionResultMaxBytes int64 = 1 << 20
 
 const (
@@ -64,16 +66,18 @@ type HTTPPredictionResultTextFetcher struct {
 }
 
 type HTTPPredictionResultSearcher struct {
-	Client     *http.Client
-	Endpoint   string
-	MaxBytes   int64
-	MaxResults int
+	Client         *http.Client
+	Endpoint       string
+	MaxBytes       int64
+	MaxResults     int
+	TrustedSources []TrustedEvidenceSource
 }
 
 type PredictionAgent struct {
 	Resolver         *PredictionLLMResolver
 	Fetcher          PredictionResultFetcher
 	Searcher         PredictionResultSearcher
+	TrustedSources   []TrustedEvidenceSource
 	RetryAttempts    int
 	RetryBackoff     time.Duration
 	MaxCandidateURLs int
@@ -108,11 +112,94 @@ type PredictionAgentReadyReviewResult struct {
 	CleanedBytes int                   `json:"cleanedBytes,omitempty"`
 }
 
+type TrustedEvidenceSource struct {
+	Domain     string `json:"domain"`
+	PathPrefix string `json:"pathPrefix,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Tier       int    `json:"tier,omitempty"`
+}
+
+func DefaultTrustedEvidenceSources() []TrustedEvidenceSource {
+	return []TrustedEvidenceSource{
+		{Name: "Reuters", Domain: "reuters.com", Tier: 1},
+		{Name: "Associated Press", Domain: "apnews.com", Tier: 1},
+		{Name: "AFP", Domain: "afp.com", Tier: 1},
+		{Name: "United Nations", Domain: "un.org", Tier: 1},
+		{Name: "World Health Organization", Domain: "who.int", Tier: 1},
+		{Name: "World Bank", Domain: "worldbank.org", Tier: 1},
+		{Name: "International Monetary Fund", Domain: "imf.org", Tier: 1},
+		{Name: "OECD", Domain: "oecd.org", Tier: 1},
+		{Name: "U.S. SEC", Domain: "sec.gov", Tier: 1},
+		{Name: "U.S. Federal Reserve", Domain: "federalreserve.gov", Tier: 1},
+		{Name: "U.S. Treasury", Domain: "treasury.gov", Tier: 1},
+		{Name: "U.S. Bureau of Labor Statistics", Domain: "bls.gov", Tier: 1},
+		{Name: "U.S. Bureau of Economic Analysis", Domain: "bea.gov", Tier: 1},
+		{Name: "NOAA", Domain: "noaa.gov", Tier: 1},
+		{Name: "National Weather Service", Domain: "weather.gov", Tier: 1},
+		{Name: "U.S. Geological Survey", Domain: "usgs.gov", Tier: 1},
+		{Name: "World Meteorological Organization", Domain: "wmo.int", Tier: 1},
+		{Name: "U.S. CDC", Domain: "cdc.gov", Tier: 1},
+		{Name: "U.S. NIH", Domain: "nih.gov", Tier: 1},
+		{Name: "U.S. FDA", Domain: "fda.gov", Tier: 1},
+		{Name: "U.S. FEC", Domain: "fec.gov", Tier: 1},
+		{Name: "U.S. Congress", Domain: "congress.gov", Tier: 1},
+		{Name: "UK Government", Domain: "gov.uk", Tier: 1},
+		{Name: "European Union", Domain: "europa.eu", Tier: 1},
+		{Name: "ESPN Sports", Domain: "espn.com", Tier: 2},
+		{Name: "BBC", Domain: "bbc.com", Tier: 2},
+		{Name: "The Guardian", Domain: "theguardian.com", Tier: 2},
+		{Name: "Al Jazeera", Domain: "aljazeera.com", Tier: 2},
+		{Name: "Nature", Domain: "nature.com", Tier: 2},
+		{Name: "Science", Domain: "science.org", Tier: 2},
+	}
+}
+
+func ParseTrustedEvidenceSources(values []string) ([]TrustedEvidenceSource, error) {
+	out := make([]TrustedEvidenceSource, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		source, err := ParseTrustedEvidenceSource(value)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, source)
+	}
+	return out, nil
+}
+
+func ParseTrustedEvidenceSource(value string) (TrustedEvidenceSource, error) {
+	original := strings.TrimSpace(value)
+	if original == "" {
+		return TrustedEvidenceSource{}, fmt.Errorf("trusted evidence source is empty")
+	}
+	if !strings.Contains(original, "://") {
+		original = "https://" + original
+	}
+	parsed, err := url.Parse(original)
+	if err != nil {
+		return TrustedEvidenceSource{}, err
+	}
+	domain := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if domain == "" {
+		return TrustedEvidenceSource{}, fmt.Errorf("trusted evidence source domain is empty")
+	}
+	path := strings.TrimRight(parsed.EscapedPath(), "/")
+	if path == "" {
+		path = strings.TrimRight(parsed.Path, "/")
+	}
+	return TrustedEvidenceSource{Domain: domain, PathPrefix: path}, nil
+}
+
 func NewPredictionAgent(client LLMClient) *PredictionAgent {
+	trustedSources := DefaultTrustedEvidenceSources()
 	return &PredictionAgent{
 		Resolver:         NewPredictionLLMResolver(client),
 		Fetcher:          HTTPPredictionResultTextFetcher{},
-		Searcher:         HTTPPredictionResultSearcher{},
+		Searcher:         HTTPPredictionResultSearcher{TrustedSources: trustedSources},
+		TrustedSources:   trustedSources,
 		RetryAttempts:    DefaultPredictionAgentRetryAttempts,
 		RetryBackoff:     DefaultPredictionAgentRetryBackoff,
 		MaxCandidateURLs: DefaultPredictionAgentMaxCandidates,
@@ -238,10 +325,16 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 	if err == nil {
 		return param, nil
 	}
-	candidateURLs := a.candidateResultURLs(ctx, req.Contract, fetched.Links)
+	candidateURLs := a.candidateResultURLs(req.Contract, fetched.Links)
 	a.audit(PredictionAgentAuditEvent{Stage: "candidate_urls", CandidateCount: len(candidateURLs)})
 	lastErr := err
-	for _, candidateURL := range candidateURLs {
+	searched := false
+	if len(candidateURLs) == 0 {
+		candidateURLs = a.appendSearchResultURLs(ctx, req.Contract, candidateURLs)
+		searched = true
+	}
+	for i := 0; i < len(candidateURLs) && i < a.maxCandidateURLs(); i++ {
+		candidateURL := candidateURLs[i]
 		next, fetchErr := a.fetchWithRetry(ctx, fetcher, candidateURL)
 		if fetchErr != nil {
 			lastErr = fetchErr
@@ -252,6 +345,11 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 			return param, nil
 		}
 		lastErr = resolveErr
+		candidateURLs = appendCandidateResultURLs(candidateURLs, next.Links, req.Contract.SourceURL, a.trustedSources(), a.maxCandidateURLs())
+		if i+1 >= len(candidateURLs) && !searched {
+			candidateURLs = a.appendSearchResultURLs(ctx, req.Contract, candidateURLs)
+			searched = true
+		}
 	}
 	return PredictionConfirmParam{}, lastErr
 }
@@ -287,8 +385,13 @@ func (a *PredictionAgent) resolveFetchedResult(ctx context.Context, req Predicti
 	if fetched.FinalURL != "" {
 		resultURL = fetched.FinalURL
 	}
-	if !ResultURLAllowed(req.Contract.SourceURL, resultURL) {
+	trustedSources := a.trustedSources()
+	if !EvidenceURLAllowed(req.Contract.SourceURL, resultURL, trustedSources) {
 		return PredictionConfirmParam{}, fmt.Errorf("final result url is outside source site")
+	}
+	paramResultURL := resultURL
+	if !ResultURLAllowed(req.Contract.SourceURL, paramResultURL) {
+		paramResultURL = req.Contract.SourceURL
 	}
 	if !predictionEvidenceLooksRelevant(req.Contract, fetched.Text) {
 		a.audit(PredictionAgentAuditEvent{
@@ -297,12 +400,12 @@ func (a *PredictionAgent) resolveFetchedResult(ctx context.Context, req Predicti
 			TextBytes:    len(fetched.Text),
 			CleanedBytes: len(CleanPredictionResultText(fetched.Text)),
 		})
-		return PredictionConfirmParam{}, ErrPredictionResultPending
+		return PredictionConfirmParam{}, ErrPredictionEvidenceUnavailable
 	}
 	resolveReq := PredictionLLMResolveRequest{
 		Contract:   req.Contract,
 		SourceURL:  req.Contract.SourceURL,
-		ResultURL:  resultURL,
+		ResultURL:  paramResultURL,
 		ResultText: fetched.Text,
 		ObservedAt: req.ObservedAt,
 	}
@@ -358,28 +461,15 @@ func (a *PredictionAgent) resolveWithRetry(ctx context.Context, req PredictionLL
 	return PredictionConfirmParam{}, lastDecision, lastErr
 }
 
-func (a *PredictionAgent) candidateResultURLs(ctx context.Context, contract PredictionContract, links []string) []string {
-	limit := a.MaxCandidateURLs
-	if limit <= 0 {
-		limit = DefaultPredictionAgentMaxCandidates
-	}
-	seen := make(map[string]struct{})
-	candidates := make([]string, 0, limit)
-	appendURL := func(candidateURL string) {
-		if len(candidates) >= limit || !ResultURLAllowed(contract.SourceURL, candidateURL) {
-			return
-		}
-		if _, ok := seen[candidateURL]; ok {
-			return
-		}
-		seen[candidateURL] = struct{}{}
-		candidates = append(candidates, candidateURL)
-	}
-	for _, candidateURL := range links {
-		appendURL(candidateURL)
-	}
+func (a *PredictionAgent) candidateResultURLs(contract PredictionContract, links []string) []string {
+	limit := a.maxCandidateURLs()
+	return appendCandidateResultURLs(nil, links, contract.SourceURL, a.trustedSources(), limit)
+}
+
+func (a *PredictionAgent) appendSearchResultURLs(ctx context.Context, contract PredictionContract, candidates []string) []string {
+	limit := a.maxCandidateURLs()
 	for _, candidateURL := range a.searchResultURLs(ctx, contract) {
-		appendURL(candidateURL)
+		candidates = appendCandidateResultURLs(candidates, []string{candidateURL}, contract.SourceURL, a.trustedSources(), limit)
 	}
 	return candidates
 }
@@ -409,6 +499,20 @@ func (a *PredictionAgent) retryBackoff() time.Duration {
 		return DefaultPredictionAgentRetryBackoff
 	}
 	return a.RetryBackoff
+}
+
+func (a *PredictionAgent) maxCandidateURLs() int {
+	if a == nil || a.MaxCandidateURLs <= 0 {
+		return DefaultPredictionAgentMaxCandidates
+	}
+	return a.MaxCandidateURLs
+}
+
+func (a *PredictionAgent) trustedSources() []TrustedEvidenceSource {
+	if a == nil || len(a.TrustedSources) == 0 {
+		return DefaultTrustedEvidenceSources()
+	}
+	return a.TrustedSources
 }
 
 func (a *PredictionAgent) audit(event PredictionAgentAuditEvent) {
@@ -466,13 +570,14 @@ func (f HTTPPredictionResultTextFetcher) FetchPredictionResult(ctx context.Conte
 	}
 	rawText := string(raw)
 	text := ExtractPredictionResultText(rawText)
-	if text == "" {
+	links := ExtractPredictionResultLinks(rawText, resp.Request.URL)
+	if text == "" && len(links) == 0 {
 		return PredictionResultFetchResult{}, fmt.Errorf("result url text is empty")
 	}
 	return PredictionResultFetchResult{
 		FinalURL: resp.Request.URL.String(),
 		Text:     text,
-		Links:    ExtractPredictionResultLinks(rawText, resp.Request.URL),
+		Links:    links,
 	}, nil
 }
 
@@ -488,6 +593,7 @@ func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
+	searchDomains := predictionSearchDomains(searchDomain, s.trustedSources())
 	client := s.Client
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
@@ -499,7 +605,7 @@ func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context
 
 	endpoints := s.endpoints()
 	if len(endpoints) == 1 {
-		urls, _, err := s.searchPredictionResultEndpoint(ctx, client, maxBytes, searchDomain, contract, endpoints[0])
+		urls, _, err := s.searchPredictionResultEndpoint(ctx, client, maxBytes, searchDomains, contract, endpoints[0])
 		return urls, err
 	}
 
@@ -515,7 +621,7 @@ func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context
 	for _, endpoint := range endpoints {
 		endpoint := endpoint
 		go func() {
-			urls, searchOK, err := s.searchPredictionResultEndpoint(searchCtx, client, maxBytes, searchDomain, contract, endpoint)
+			urls, searchOK, err := s.searchPredictionResultEndpoint(searchCtx, client, maxBytes, searchDomains, contract, endpoint)
 			results <- endpointResult{urls: urls, searchOK: searchOK, err: err}
 		}()
 	}
@@ -545,12 +651,12 @@ func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context
 }
 
 func (s HTTPPredictionResultSearcher) searchPredictionResultEndpoint(ctx context.Context,
-	client *http.Client, maxBytes int64, searchDomain string, contract PredictionContract,
+	client *http.Client, maxBytes int64, searchDomains []string, contract PredictionContract,
 	endpoint string) ([]string, bool, error) {
 
 	var lastErr error
 	searchOK := false
-	for _, searchQuery := range buildPredictionSearchQueries(searchDomain, contract) {
+	for _, searchQuery := range buildPredictionSearchQueries(searchDomains, contract) {
 		searchURL, err := url.Parse(endpoint)
 		if err != nil {
 			lastErr = err
@@ -590,7 +696,7 @@ func (s HTTPPredictionResultSearcher) searchPredictionResultEndpoint(ctx context
 			continue
 		}
 		searchOK = true
-		urls := extractPredictionSearchURLs(string(raw), contract.SourceURL, s.maxResults())
+		urls := extractPredictionSearchURLs(string(raw), contract.SourceURL, s.trustedSources(), s.maxResults())
 		if len(urls) > 0 {
 			return urls, true, nil
 		}
@@ -605,11 +711,93 @@ func (s HTTPPredictionResultSearcher) maxResults() int {
 	return DefaultPredictionSearchMaxResults
 }
 
+func (s HTTPPredictionResultSearcher) trustedSources() []TrustedEvidenceSource {
+	if len(s.TrustedSources) == 0 {
+		return DefaultTrustedEvidenceSources()
+	}
+	return s.TrustedSources
+}
+
 func (s HTTPPredictionResultSearcher) endpoints() []string {
 	if endpoint := strings.TrimSpace(s.Endpoint); endpoint != "" {
 		return []string{endpoint}
 	}
 	return []string{DefaultPredictionSearchEndpoint, DefaultPredictionSearchFallback}
+}
+
+func appendCandidateResultURLs(candidates []string, urls []string, sourceURL string,
+	trustedSources []TrustedEvidenceSource, limit int) []string {
+
+	if limit <= 0 {
+		limit = DefaultPredictionAgentMaxCandidates
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		seen[candidate] = struct{}{}
+	}
+	for _, candidateURL := range urls {
+		if len(candidates) >= limit || !EvidenceURLAllowed(sourceURL, candidateURL, trustedSources) {
+			continue
+		}
+		if _, ok := seen[candidateURL]; ok {
+			continue
+		}
+		seen[candidateURL] = struct{}{}
+		candidates = append(candidates, candidateURL)
+	}
+	return candidates
+}
+
+func EvidenceURLAllowed(sourceURL, resultURL string, trustedSources []TrustedEvidenceSource) bool {
+	if ResultURLAllowed(sourceURL, resultURL) {
+		return true
+	}
+	return TrustedEvidenceURLAllowed(resultURL, trustedSources)
+}
+
+func TrustedEvidenceURLAllowed(resultURL string, trustedSources []TrustedEvidenceSource) bool {
+	result, err := parseHTTPURL(resultURL)
+	if err != nil || result.Scheme != "https" {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(result.Hostname()), ".")
+	for _, source := range trustedSources {
+		domain := strings.TrimSuffix(strings.ToLower(source.Domain), ".")
+		if domain == "" || !hostInDomainScope(host, domain) {
+			continue
+		}
+		pathPrefix := strings.TrimRight(source.PathPrefix, "/")
+		if pathPrefix == "" || strings.HasPrefix(result.EscapedPath(), pathPrefix) ||
+			strings.HasPrefix(result.Path, pathPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func hostInDomainScope(host, domain string) bool {
+	return host == domain || strings.HasSuffix(host, "."+domain)
+}
+
+func predictionSearchDomains(sourceDomain string, trustedSources []TrustedEvidenceSource) []string {
+	out := make([]string, 0, len(trustedSources)+1)
+	seen := make(map[string]struct{})
+	appendDomain := func(domain string) {
+		domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+		if domain == "" {
+			return
+		}
+		if _, ok := seen[domain]; ok {
+			return
+		}
+		seen[domain] = struct{}{}
+		out = append(out, domain)
+	}
+	appendDomain(sourceDomain)
+	for _, source := range trustedSources {
+		appendDomain(source.Domain)
+	}
+	return out
 }
 
 func readLimitedAndClose(resp *http.Response, maxBytes int64) ([]byte, error) {
@@ -630,10 +818,13 @@ var (
 	htmlStylePattern      = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
 	htmlTagPattern        = regexp.MustCompile(`(?is)<[^>]+>`)
 	htmlAnchorPattern     = regexp.MustCompile(`(?is)<a\b([^>]*)>(.*?)</a>`)
+	htmlScriptSrcPattern  = regexp.MustCompile(`(?is)<script\b([^>]*)>`)
 	htmlFramePattern      = regexp.MustCompile(`(?is)<(iframe|frame)\b([^>]*)>`)
 	htmlAttrPattern       = regexp.MustCompile(`(?is)\b(href|src)=["']([^"']+)["']`)
 	searchHrefPattern     = regexp.MustCompile(`(?is)href=["']([^"']+)["']`)
 	rawHTTPURLPattern     = regexp.MustCompile(`https?://[^\s"'<>\\]+`)
+	rawSchemeURLPattern   = regexp.MustCompile(`(?m)(^|[^:])//[A-Za-z0-9.-]+/[^\s"'<>\\]+`)
+	rawPathURLPattern     = regexp.MustCompile(`["'](/[^"']*(?:api|game|match|score|result|schedule|fixture|season_game)[^"']*)["']`)
 )
 
 func ExtractPredictionResultText(raw string) string {
@@ -697,6 +888,16 @@ func ExtractPredictionResultLinks(raw string, base *url.URL) []string {
 			appendURL(rawURL)
 		}
 	}
+	for _, match := range htmlScriptSrcPattern.FindAllStringSubmatch(raw, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		rawURL := predictionURLAttr(match[1], "src")
+		if rawURL == "" || !predictionScriptURLLooksRelevant(rawURL) {
+			continue
+		}
+		appendURL(rawURL)
+	}
 	for _, match := range htmlAnchorPattern.FindAllStringSubmatch(raw, -1) {
 		if len(match) < 3 {
 			continue
@@ -706,6 +907,16 @@ func ExtractPredictionResultLinks(raw string, base *url.URL) []string {
 		if rawURL == "" || !predictionResultURLLooksRelevant(rawURL, text) {
 			continue
 		}
+		appendURL(rawURL)
+	}
+	for _, rawURL := range rawHTTPURLPattern.FindAllString(raw, -1) {
+		rawURL = html.UnescapeString(strings.TrimRight(rawURL, ".,);"))
+		if !predictionResultURLLooksRelevant(rawURL, "") {
+			continue
+		}
+		appendURL(rawURL)
+	}
+	for _, rawURL := range extractPredictionDataURLsFromScript(raw, base) {
 		appendURL(rawURL)
 	}
 	return out
@@ -730,8 +941,16 @@ func predictionURLAttr(attrs, name string) string {
 }
 
 func predictionResultURLLooksRelevant(rawURL, text string) bool {
+	if predictionURLLooksStaticAsset(rawURL) {
+		parsed, err := url.Parse(rawURL)
+		if err != nil || !strings.HasSuffix(strings.ToLower(parsed.Path), ".js") ||
+			!predictionScriptURLLooksRelevant(rawURL) {
+			return false
+		}
+	}
 	value := strings.ToLower(rawURL + " " + text)
-	for _, token := range []string{"/match/", "/game/", "result", "final", "boxscore", "recap", "比分", "赛果", "战报", "集锦"} {
+	for _, token := range []string{"/match/", "/game/", "result", "final", "boxscore", "recap",
+		"score", "schedule", "fixture", "season_game", "赛程", "赛果", "比分", "战报", "集锦"} {
 		if strings.Contains(value, token) {
 			return true
 		}
@@ -744,16 +963,120 @@ func predictionResultURLLooksRelevant(rawURL, text string) bool {
 	return false
 }
 
+func predictionScriptURLLooksRelevant(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	value := strings.ToLower(parsed.Path + " " + parsed.RawQuery)
+	for _, token := range []string{"match", "game", "score", "result", "schedule", "fixture", "season_game", "worldcup"} {
+		if strings.Contains(value, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func predictionURLLooksStaticAsset(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	path := strings.ToLower(parsed.Path)
+	for _, suffix := range []string{".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico",
+		".woff", ".woff2", ".ttf", ".eot", ".map"} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractPredictionDataURLsFromScript(raw string, base *url.URL) []string {
+	out := make([]string, 0)
+	appendRaw := func(rawURL string) {
+		rawURL = html.UnescapeString(strings.TrimRight(strings.TrimSpace(rawURL), ".,);"))
+		if rawURL == "" {
+			return
+		}
+		if strings.HasPrefix(rawURL, "//") && base != nil {
+			rawURL = base.Scheme + ":" + rawURL
+		}
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return
+		}
+		if base != nil {
+			parsed = base.ResolveReference(parsed)
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return
+		}
+		if !predictionDataURLLooksRelevant(parsed.String()) {
+			return
+		}
+		out = append(out, parsed.String())
+	}
+	for _, rawURL := range rawHTTPURLPattern.FindAllString(raw, -1) {
+		appendRaw(rawURL)
+	}
+	for _, match := range rawSchemeURLPattern.FindAllStringSubmatch(raw, -1) {
+		if len(match) >= 1 {
+			rawURL := strings.TrimSpace(match[0])
+			if strings.HasPrefix(rawURL, "//") {
+				appendRaw(rawURL)
+			} else if idx := strings.Index(rawURL, "//"); idx >= 0 {
+				appendRaw(rawURL[idx:])
+			}
+		}
+	}
+	for _, match := range rawPathURLPattern.FindAllStringSubmatch(raw, -1) {
+		if len(match) >= 2 {
+			appendRaw(match[1])
+		}
+	}
+	if base != nil && strings.Contains(raw, "season_game_list") && strings.Contains(base.Hostname(), "cctv.com") {
+		appendRaw("https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400&season=2026&client=pc")
+	}
+	if base != nil && strings.Contains(raw, "game_status_list") && strings.Contains(base.Hostname(), "cctv.com") {
+		appendRaw("https://cbs-u.sports.cctv.com/pc/game/game_status_list?client=pc")
+	}
+	return out
+}
+
+func predictionDataURLLooksRelevant(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	path := strings.ToLower(parsed.Path)
+	if predictionURLLooksStaticAsset(rawURL) && !strings.HasSuffix(path, ".js") && !strings.HasSuffix(path, ".json") {
+		return false
+	}
+	value := strings.ToLower(parsed.Path + " " + parsed.RawQuery)
+	if strings.HasSuffix(strings.ToLower(parsed.Path), ".json") {
+		return true
+	}
+	for _, token := range []string{"/api/", "/game/", "/match/", "/score", "/result", "/schedule", "/fixture", "season_game"} {
+		if strings.Contains(value, token) {
+			return true
+		}
+	}
+	return false
+}
+
 func predictionEvidenceLooksRelevant(contract PredictionContract, text string) bool {
 	normalizedText := normalizePredictionEvidenceText(text)
 	if normalizedText == "" {
 		return false
 	}
-	if title := normalizePredictionEvidenceText(contract.Title); title != "" &&
-		strings.Contains(normalizedText, title) {
-		return true
+	for _, phrase := range []string{contract.Title, contract.Description} {
+		normalizedPhrase := normalizePredictionEvidenceText(phrase)
+		if normalizedPhrase != "" && strings.Contains(normalizedText, normalizedPhrase) {
+			return true
+		}
 	}
-	terms := predictionTitleTerms(contract.Title)
+	terms := predictionEvidenceTerms(contract)
 	if len(terms) == 0 {
 		return true
 	}
@@ -767,6 +1090,60 @@ func predictionEvidenceLooksRelevant(contract PredictionContract, text string) b
 		return matched == 1
 	}
 	return matched >= 2
+}
+
+func predictionEvidenceTerms(contract PredictionContract) []string {
+	terms := make([]string, 0)
+	for _, source := range []string{contract.Title, contract.Description} {
+		terms = appendPredictionEvidenceTerms(terms, predictionTitleTerms(source)...)
+	}
+	for _, outcome := range contract.Outcomes {
+		terms = appendPredictionEvidenceTerms(terms, predictionTitleTerms(outcome.Text)...)
+	}
+	return terms
+}
+
+func appendPredictionEvidenceTerms(dst []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(dst))
+	for _, value := range dst {
+		seen[normalizePredictionEvidenceText(value)] = struct{}{}
+	}
+	for _, value := range values {
+		normalized := normalizePredictionEvidenceText(value)
+		if normalized == "" || predictionWeakEvidenceTerm(normalized) {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		dst = append(dst, value)
+	}
+	return dst
+}
+
+func predictionWeakEvidenceTerm(term string) bool {
+	if len([]rune(term)) <= 1 {
+		return true
+	}
+	allDigits := true
+	for _, r := range term {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return true
+	}
+	switch term {
+	case "vs", "v", "win", "wins", "lose", "loses", "draw", "result", "test",
+		"world", "cup", "worldcup", "round", "final", "finals", "match", "game",
+		"predict", "prediction", "home", "away",
+		"世界杯", "决赛", "比赛", "结果", "投注", "预测", "主场", "客场", "赢", "输", "平":
+		return true
+	}
+	return false
 }
 
 func normalizePredictionEvidenceText(value string) string {
@@ -799,36 +1176,42 @@ func predictionTitleTerms(title string) []string {
 	return terms
 }
 
-func buildPredictionSearchQueries(domain string, contract PredictionContract) []string {
+func buildPredictionSearchQueries(domains []string, contract PredictionContract) []string {
 	title := strings.TrimSpace(contract.Title)
 	description := strings.TrimSpace(contract.Description)
-	variants := [][]string{
-		{"site:" + domain, title, description},
-	}
-	if compactTitle := strings.ReplaceAll(title, " ", ""); compactTitle != title {
-		variants = append(variants,
-			[]string{"site:" + domain, compactTitle, description},
-			[]string{"site:" + domain, compactTitle},
-		)
-	}
-	variants = append(variants, []string{"site:" + domain, title})
-	out := make([]string, 0, len(variants))
+	out := make([]string, 0)
 	seen := make(map[string]struct{})
-	for _, parts := range variants {
-		query := strings.Join(nonEmptyStrings(parts), " ")
-		if query == "" {
+	for _, domain := range domains {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
 			continue
 		}
-		if _, ok := seen[query]; ok {
-			continue
+		variants := [][]string{
+			{"site:" + domain, title, description},
 		}
-		seen[query] = struct{}{}
-		out = append(out, query)
+		if compactTitle := strings.ReplaceAll(title, " ", ""); compactTitle != title {
+			variants = append(variants,
+				[]string{"site:" + domain, compactTitle, description},
+				[]string{"site:" + domain, compactTitle},
+			)
+		}
+		variants = append(variants, []string{"site:" + domain, title})
+		for _, parts := range variants {
+			query := strings.Join(nonEmptyStrings(parts), " ")
+			if query == "" {
+				continue
+			}
+			if _, ok := seen[query]; ok {
+				continue
+			}
+			seen[query] = struct{}{}
+			out = append(out, query)
+		}
 	}
 	return out
 }
 
-func extractPredictionSearchURLs(raw, sourceURL string, limit int) []string {
+func extractPredictionSearchURLs(raw, sourceURL string, trustedSources []TrustedEvidenceSource, limit int) []string {
 	if limit <= 0 {
 		limit = DefaultPredictionSearchMaxResults
 	}
@@ -842,9 +1225,9 @@ func extractPredictionSearchURLs(raw, sourceURL string, limit int) []string {
 		if normalized == "" {
 			return
 		}
-		if !ResultURLAllowed(sourceURL, normalized) {
+		if !EvidenceURLAllowed(sourceURL, normalized, trustedSources) {
 			normalized = mirrorPredictionCandidateToSourceSite(sourceURL, normalized)
-			if normalized == "" || !ResultURLAllowed(sourceURL, normalized) {
+			if normalized == "" || !EvidenceURLAllowed(sourceURL, normalized, trustedSources) {
 				return
 			}
 		}

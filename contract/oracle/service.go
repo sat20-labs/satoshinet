@@ -42,7 +42,8 @@ type Config struct {
 	ChainParams *chaincfg.Params
 	Interval    time.Duration
 
-	LLM LLMConfig
+	LLM                    LLMConfig
+	TrustedEvidenceSources []string
 
 	TipContext   func() (TipContext, error)
 	SubmitInvoke func(contractcommon.ContractAddress, string, []byte) (*wire.MsgTx, error)
@@ -136,7 +137,10 @@ func (s *Service) processOnce(quit <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
-	corenodeAgent := agentcontract.NewPredictionAgent(s.client)
+	corenodeAgent, err := s.newPredictionAgent()
+	if err != nil {
+		return err
+	}
 	if err := s.processReadyContracts(quit, runtimeStore, corenodeAgent, tip.Unix); err != nil {
 		return err
 	}
@@ -151,6 +155,20 @@ func (s *Service) processOnce(quit <-chan struct{}) error {
 		s.processConfirmCandidate(corenodeAgent, candidate, tip)
 	}
 	return nil
+}
+
+func (s *Service) newPredictionAgent() (*agentcontract.PredictionAgent, error) {
+	corenodeAgent := agentcontract.NewPredictionAgent(s.client)
+	if len(s.cfg.TrustedEvidenceSources) == 0 {
+		return corenodeAgent, nil
+	}
+	trustedSources, err := agentcontract.ParseTrustedEvidenceSources(s.cfg.TrustedEvidenceSources)
+	if err != nil {
+		return nil, err
+	}
+	corenodeAgent.TrustedSources = trustedSources
+	corenodeAgent.Searcher = agentcontract.HTTPPredictionResultSearcher{TrustedSources: trustedSources}
+	return corenodeAgent, nil
 }
 
 func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.PredictionAgent,
@@ -168,6 +186,23 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 	if candidate.Contract.TimeBase == agentcontract.TimeBaseUnix {
 		observedAt = tip.Unix
 	}
+	if len(candidate.State.Prediction.Bets) == 0 {
+		param := noBetConfirmParam(candidate.Contract, observedAt, s.cfg.LLM.Model)
+		tx, err := s.submitConfirm(candidate, param)
+		if err != nil {
+			if isDuplicateSubmitError(err) {
+				s.clearFailure(contractAddr)
+				s.infof("Agent contract %s no-bet confirm already submitted: %v", contractAddr, err)
+				return
+			}
+			delay := s.recordFailure(contractAddr, err)
+			s.warnf("Agent contract %s no-bet confirm submit failed: %v, retry_after=%s", contractAddr, err, delay)
+			return
+		}
+		s.clearFailure(contractAddr)
+		s.infof("Agent contract %s no-bet confirm submitted: tx=%s", contractAddr, tx.TxID())
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LLM.Timeout)
 	defer cancel()
 	param, err := corenodeAgent.BuildConfirmParam(ctx, agentcontract.PredictionAgentConfirmRequest{
@@ -178,12 +213,23 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 		ModelVersion: s.cfg.LLM.Model,
 	})
 	if err != nil {
+		if errors.Is(err, agentcontract.ErrPredictionEvidenceUnavailable) {
+			delay := s.recordFailure(contractAddr, err)
+			s.infof("Agent contract %s evidence unavailable, keep pending, retry_after=%s", contractAddr, delay)
+			return
+		}
 		delay := s.recordFailure(contractAddr, err)
 		if errors.Is(err, agentcontract.ErrPredictionResultPending) {
 			s.infof("Agent contract %s result pending, retry_after=%s", contractAddr, delay)
 		} else {
 			s.warnf("Agent contract %s confirm build failed: %v, retry_after=%s", contractAddr, err, delay)
 		}
+		return
+	}
+	if param.ResultType == agentcontract.ResultTypeUnverifiable {
+		err := agentcontract.ErrPredictionEvidenceUnavailable
+		delay := s.recordFailure(contractAddr, err)
+		s.infof("Agent contract %s LLM returned unverifiable, keep pending, retry_after=%s", contractAddr, delay)
 		return
 	}
 	tx, err := s.submitConfirm(candidate, param)
@@ -294,6 +340,17 @@ func (s *Service) submitConfirm(candidate agentcontract.PredictionConfirmCandida
 		return nil, err
 	}
 	return s.submitInvoke(candidate.Address, agentcontract.InvokeAPIConfirm, encoded)
+}
+
+func noBetConfirmParam(contract agentcontract.PredictionContract, observedAt int64, modelVersion string) agentcontract.PredictionConfirmParam {
+	return agentcontract.PredictionConfirmParam{
+		ResultType:   agentcontract.ResultTypeCancelled,
+		Result:       "no bets",
+		ResultURL:    contract.SourceURL,
+		ObservedAt:   observedAt,
+		AgentVersion: agentcontract.CurrentAgentVersion,
+		ModelVersion: modelVersion,
+	}
 }
 
 func (s *Service) submitInvoke(contract contractcommon.ContractAddress, action string,

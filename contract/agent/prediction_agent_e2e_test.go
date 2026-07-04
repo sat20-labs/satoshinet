@@ -245,6 +245,24 @@ func TestPredictionAgentSearchesSiteWhenSourceHasNoResultLink(t *testing.T) {
 	}
 }
 
+func TestPredictionAgentReturnsEvidenceUnavailable(t *testing.T) {
+	contract := predictionContractForResultServer("https://example.com")
+	corenodeAgent := NewPredictionAgent(&fakeLLMClient{response: `{}`})
+	corenodeAgent.Fetcher = &retryPredictionFetcher{result: PredictionResultFetchResult{
+		FinalURL: contract.SourceURL,
+		Text:     "generic sports schedule without contract participants",
+	}}
+	corenodeAgent.Searcher = staticPredictionSearcher{}
+	_, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if !errors.Is(err, ErrPredictionEvidenceUnavailable) {
+		t.Fatalf("expected evidence unavailable, got %v", err)
+	}
+}
+
 func TestPredictionResultURLAllowedSameRegisteredDomain(t *testing.T) {
 	source := "https://worldcup.cctv.com/2026/schedule/index.shtml"
 	if !ResultURLAllowed(source, "https://cbs-u.sports.cctv.com/pc/game/season_game_list") {
@@ -278,6 +296,24 @@ func TestPredictionResultFetcherExtractsIframeAndEmbeddedData(t *testing.T) {
 	}
 }
 
+func TestPredictionResultFetcherExtractsScriptCandidateURL(t *testing.T) {
+	raw := `<html><head>
+		<link rel="stylesheet" href="https://r.img.cctvpic.com/worldcup/2026/schedule/style/style.css">
+	</head><body>
+		<script>
+			var iframe="https://cbs.sports.cctv.com/worldcup2026_schedule_tabs.html";
+		</script>
+	</body></html>`
+	base, err := url.Parse("https://worldcup.cctv.com/2026/schedule/index.shtml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := ExtractPredictionResultLinks(raw, base)
+	if len(links) != 1 || links[0] != "https://cbs.sports.cctv.com/worldcup2026_schedule_tabs.html" {
+		t.Fatalf("script candidate links mismatch: %#v", links)
+	}
+}
+
 func TestPredictionSearchExtractsGoogleResultURLs(t *testing.T) {
 	source := "https://worldcup.cctv.com/2026/schedule/index.shtml"
 	raw := `<html><body>
@@ -286,7 +322,7 @@ func TestPredictionSearchExtractsGoogleResultURLs(t *testing.T) {
 		<a href="/url?q=https%3A%2F%2Fevilcctv.com%2Ffake&sa=U">fake</a>
 		<a href="https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400">api</a>
 	</body></html>`
-	urls := extractPredictionSearchURLs(raw, source, 5)
+	urls := extractPredictionSearchURLs(raw, source, nil, 5)
 	if len(urls) != 3 {
 		t.Fatalf("search urls mismatch: %#v", urls)
 	}
@@ -298,6 +334,109 @@ func TestPredictionSearchExtractsGoogleResultURLs(t *testing.T) {
 	}
 	if urls[2] != "https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400" {
 		t.Fatalf("third search url mismatch: %s", urls[2])
+	}
+}
+
+func TestPredictionEvidenceUsesDescriptionAndOutcomes(t *testing.T) {
+	contract := validPredictionContract()
+	contract.Title = "Argentina vs Cabo Verde"
+	contract.Description = "2026世界杯1/16决赛 阿根廷 对 佛得角"
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "阿根廷赢"},
+		{ID: "b", Text: "佛得角赢"},
+		{ID: "c", Text: "平"},
+	}
+	text := `{"gameName":"阿根廷vs佛得角","gameRound":"1/16决赛","homeScore":3,"guestScore":2}`
+	if !predictionEvidenceLooksRelevant(contract, text) {
+		t.Fatalf("expected Chinese description/outcome evidence to be relevant")
+	}
+}
+
+func TestPredictionAgentFollowsStaticScriptDataURL(t *testing.T) {
+	var resultServer *httptest.Server
+	resultServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/match/preview/123":
+			_, _ = w.Write([]byte(`<html><body>
+				<iframe src="/frame/schedule.html"></iframe>
+			</body></html>`))
+		case "/frame/schedule.html":
+			_, _ = w.Write([]byte(`<html><head>
+				<script src="/scripts/worldcup2026_schedule.js"></script>
+			</head><body>fixture shell</body></html>`))
+		case "/scripts/worldcup2026_schedule.js":
+			_, _ = w.Write([]byte(`const url="/api/game/season_game_list?leagueId=3400&season=2026&client=pc";`))
+		case "/api/game/season_game_list":
+			_, _ = w.Write([]byte(`{"gameName":"阿根廷vs佛得角","gameRound":"1/16决赛","homeScore":3,"guestScore":2}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer resultServer.Close()
+
+	client := &sequenceLLMClient{responses: []string{
+		`{"result_type":"outcome","outcome_id":"a","result":"阿根廷 3-2 佛得角","reason":"阿根廷获胜"}`,
+	}}
+	contract := validPredictionContract()
+	contract.Title = "Argentina vs Cabo Verde"
+	contract.Description = "2026世界杯1/16决赛 阿根廷 对 佛得角"
+	contract.SourceURL = resultServer.URL + "/match/preview/123"
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "阿根廷赢"},
+		{ID: "b", Text: "佛得角赢"},
+		{ID: "c", Text: "平"},
+	}
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.RetryAttempts = 1
+	corenodeAgent.MaxCandidateURLs = 8
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.OutcomeID != "a" || param.ResultURL != resultServer.URL+"/api/game/season_game_list?leagueId=3400&season=2026&client=pc" {
+		t.Fatalf("unexpected confirm param: %#v", param)
+	}
+}
+
+func TestPredictionAgentUsesTrustedExternalEvidence(t *testing.T) {
+	sourceServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body>Official event page pending.</body></html>`))
+	}))
+	defer sourceServer.Close()
+
+	evidenceServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><body>Team A vs Team B final: Team A 101, Team B 98.</body></html>`))
+	}))
+	defer evidenceServer.Close()
+
+	evidenceURL, err := url.Parse(evidenceServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &sequenceLLMClient{responses: []string{
+		`{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`,
+	}}
+	contract := predictionContractForResultServer(sourceServer.URL)
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = HTTPPredictionResultTextFetcher{Client: evidenceServer.Client()}
+	corenodeAgent.Searcher = staticPredictionSearcher{urls: []string{evidenceServer.URL}}
+	corenodeAgent.TrustedSources = []TrustedEvidenceSource{{Domain: evidenceURL.Hostname()}}
+	corenodeAgent.RetryAttempts = 1
+
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.OutcomeID != "a" || param.ResultURL != contract.SourceURL {
+		t.Fatalf("trusted external evidence should keep source result url, got %#v", param)
 	}
 }
 
