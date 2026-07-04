@@ -1605,7 +1605,7 @@ func (sp *serverPeer) OnDKVSData(_ *peer.Peer, msg *wire.MsgDKVSData) {
 			continue
 		}
 		if _, err := sp.server.assetIndexer.PutRemoteDKVSRecord(record); err != nil {
-			peerLog.Debugf("reject remote dkvs record %s from %s: %v", record.Key, sp, err)
+			peerLog.Warnf("reject remote dkvs record %s from %s: %v", record.Key, sp, err)
 		}
 	}
 }
@@ -1637,7 +1637,7 @@ func (sp *serverPeer) OnDKVSSyncResponse(_ *peer.Peer, msg *wire.MsgDKVSSyncResp
 			continue
 		}
 		if _, err := sp.server.assetIndexer.PutRemoteDKVSRecord(record); err != nil {
-			peerLog.Debugf("reject synced dkvs record %s from %s: %v", record.Key, sp, err)
+			peerLog.Warnf("reject synced dkvs record %s from %s: %v", record.Key, sp, err)
 		}
 	}
 	if !msg.Done {
@@ -3541,9 +3541,15 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	contractcommon.SetNetworkParam(chainParams.Net)
 
 	// seqMgr 最早初始化
-	assetIndexer, err := indexerEntry.NewIndexerMgr(assetIndexerRPCDataPath, "",
+	dkvsCfg := (*indexer.DKVSIntegrationConfig)(nil)
+	if l1IndexerBaseURL := resolveIndexerBaseURL(); l1IndexerBaseURL != "" {
+		dkvsCfg = &indexer.DKVSIntegrationConfig{
+			ResolverL1NSBaseURL: l1IndexerBaseURL,
+		}
+	}
+	assetIndexer, err := indexerEntry.NewIndexerMgrWithDKVS(assetIndexerRPCDataPath, "",
 		assetIndexerRPCPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
-		interrupt)
+		interrupt, dkvsCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -4108,11 +4114,18 @@ func btcLuckyNetworkForParams(params *chaincfg.Params) string {
 }
 
 func resolveBTCLuckyIndexerBaseURL() string {
+	return resolveIndexerBaseURL()
+}
+
+func resolveIndexerBaseURL() string {
 	scheme := strings.TrimSpace(cfg.IndexerScheme)
 	if scheme == "" {
 		scheme = "http"
 	}
 	host := strings.TrimRight(strings.TrimSpace(cfg.IndexerHost), "/")
+	if host == "" {
+		return ""
+	}
 	proxy := strings.Trim(strings.TrimSpace(cfg.IndexerProxy), "/")
 	if proxy == "" {
 		return fmt.Sprintf("%s://%s", scheme, host)

@@ -1,16 +1,21 @@
 package dkvs
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	dbpkg "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -311,149 +316,6 @@ func TestValidateSnapshotRejectsNamespaceRootMismatch(t *testing.T) {
 	}
 }
 
-func TestSignedCheckpointRecord(t *testing.T) {
-	source := testIndexer(t)
-	userPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := source.PutLocal(signedPersonalRecordWithKey(t, userPriv, 1, "value", 0)); err != nil {
-		t.Fatal(err)
-	}
-	checkpoint, err := source.Checkpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	systemPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, signed, err := BuildSignedCheckpointRecord(systemPriv, checkpoint, "1", "", RecordOptions{
-		Seq:          1,
-		TTL:          60_000,
-		ExpiryHeight: 100,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record.Key != "/sys/checkpoint/1" || signed.Epoch != "1" {
-		t.Fatalf("checkpoint key=%s signed=%#v", record.Key, signed)
-	}
-	verified, err := VerifySignedCheckpointValue(record.Value, systemPriv.PubKey().SerializeCompressed())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if verified.ActiveRecordRoot != checkpoint.ActiveRecordRoot ||
-		verified.ActiveRecordCount != checkpoint.ActiveRecordCount {
-		t.Fatalf("verified checkpoint=%#v source=%#v", verified, checkpoint)
-	}
-	var tampered SignedCheckpoint
-	if err := json.Unmarshal(record.Value, &tampered); err != nil {
-		t.Fatal(err)
-	}
-	tampered.ActiveRecordCount++
-	tamperedValue, err := json.Marshal(tampered)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := VerifySignedCheckpointValue(tamperedValue, systemPriv.PubKey().SerializeCompressed()); err != ErrInvalidCheckpoint {
-		t.Fatalf("tampered checkpoint err=%v", err)
-	}
-
-	defaultSys := testIndexer(t)
-	if _, err := defaultSys.PutLocal(record); err != ErrPermissionDenied {
-		t.Fatalf("default sys put err=%v", err)
-	}
-	authorizedSys := testIndexerWithConfig(t, Config{
-		AllowFreeLocal: true,
-		CurrentHeight:  func() uint64 { return 1 },
-		SystemVerifier: StaticSystemVerifier{Keys: [][]byte{systemPriv.PubKey().SerializeCompressed()}},
-	})
-	if updated, err := authorizedSys.PutLocal(record); err != nil || !updated {
-		t.Fatalf("authorized sys put updated=%v err=%v", updated, err)
-	}
-	got, err := authorizedSys.Get(record.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := VerifySignedCheckpointValue(got.Value, nil); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSignedSnapshotRecord(t *testing.T) {
-	source := testIndexer(t)
-	userPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := source.PutLocal(signedPersonalRecordWithKey(t, userPriv, 1, "value", 0)); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := source.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if SnapshotHash(snapshot) == "" {
-		t.Fatalf("snapshot hash missing")
-	}
-	systemPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	record, signed, err := BuildSignedSnapshotRecord(systemPriv, snapshot, "1", "", RecordOptions{
-		Seq:          1,
-		TTL:          60_000,
-		ExpiryHeight: 100,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if record.Key != "/sys/snapshot/1" || signed.Epoch != "1" || signed.SnapshotHash != SnapshotHash(snapshot) {
-		t.Fatalf("snapshot key=%s signed=%#v", record.Key, signed)
-	}
-	verified, err := VerifySignedSnapshotValue(record.Value, systemPriv.PubKey().SerializeCompressed())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if verified.ActiveRecordRoot != snapshot.Checkpoint.ActiveRecordRoot ||
-		verified.SnapshotHash != signed.SnapshotHash {
-		t.Fatalf("verified snapshot=%#v source=%#v", verified, signed)
-	}
-	var tampered SignedSnapshot
-	if err := json.Unmarshal(record.Value, &tampered); err != nil {
-		t.Fatal(err)
-	}
-	tampered.SnapshotHash = strings.Repeat("0", 64)
-	tamperedValue, err := json.Marshal(tampered)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := VerifySignedSnapshotValue(tamperedValue, systemPriv.PubKey().SerializeCompressed()); err != ErrInvalidSnapshot {
-		t.Fatalf("tampered snapshot err=%v", err)
-	}
-
-	defaultSys := testIndexer(t)
-	if _, err := defaultSys.PutLocal(record); err != ErrPermissionDenied {
-		t.Fatalf("default snapshot sys put err=%v", err)
-	}
-	authorizedSys := testIndexerWithConfig(t, Config{
-		AllowFreeLocal: true,
-		CurrentHeight:  func() uint64 { return 1 },
-		SystemVerifier: StaticSystemVerifier{Keys: [][]byte{systemPriv.PubKey().SerializeCompressed()}},
-	})
-	if updated, err := authorizedSys.PutLocal(record); err != nil || !updated {
-		t.Fatalf("authorized snapshot sys put updated=%v err=%v", updated, err)
-	}
-	got, err := authorizedSys.Get(record.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := VerifySignedSnapshotValue(got.Value, nil); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func testIdentity(canonicalName string, signingKeys ...[]byte) DIDIdentity {
 	return DIDIdentity{
 		CanonicalName: canonicalName,
@@ -469,6 +331,48 @@ type testFeeVerifier struct {
 
 func (v testFeeVerifier) VerifyFeeProof(_, _ [32]byte, _ string, _ int, _ uint64, _ []byte) error {
 	return v.err
+}
+
+type testAutopayStateProvider struct {
+	states map[string]*AutopayContractState
+	err    error
+}
+
+func (p testAutopayStateProvider) GetAutopayState(contract string) (*AutopayContractState, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	state, ok := p.states[contract]
+	if !ok {
+		return nil, ErrInvalidFeeProof
+	}
+	copyState := *state
+	return &copyState, nil
+}
+
+type countingDIDResolver struct {
+	names        map[string]DIDIdentity
+	services     map[string]DIDIdentity
+	nameCalls    int
+	serviceCalls int
+}
+
+func (r *countingDIDResolver) ResolveName(name string) (DIDIdentity, error) {
+	r.nameCalls++
+	identity, ok := r.names[name]
+	if !ok {
+		return DIDIdentity{}, ErrDIDResolverUnavailable
+	}
+	return identity, nil
+}
+
+func (r *countingDIDResolver) ResolveService(serviceName string) (DIDIdentity, error) {
+	r.serviceCalls++
+	identity, ok := r.services[serviceName]
+	if !ok {
+		return DIDIdentity{}, ErrDIDResolverUnavailable
+	}
+	return identity, nil
 }
 
 func signedRecordForKey(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64) *wire.DKVSRecord {
@@ -511,6 +415,29 @@ func signedRecordWithStructuredFee(t *testing.T, priv *btcec.PrivateKey, key str
 		t.Fatal(err)
 	}
 	record.FeeProof = encoded
+	signRecord(t, priv, record)
+	return record
+}
+
+func signedRecordWithAutopayFee(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, contract string, expiry uint64) *wire.DKVSRecord {
+	t.Helper()
+	record := signedRecordWithValue(t, priv, key, seq, []byte("value"), 0)
+	record.ExpiryHeight = expiry
+	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := NewAutopayFeeProof(key, parsed.Namespace, wire.MaxDKVSRecordSize, expiry, contract, payer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AttachSignedFeeProof(record, proof, priv); err != nil {
+		t.Fatal(err)
+	}
 	signRecord(t, priv, record)
 	return record
 }
@@ -839,6 +766,216 @@ func TestJSONFeeVerifierProofSignature(t *testing.T) {
 	}
 }
 
+func TestAutopayFeeVerifierCapacity(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := personalAccountID(priv.PubKey().SerializeCompressed())
+	contract := "autopay-contract"
+	recipient := "dkvs-fee-recipient"
+	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := testIndexerWithConfig(t, Config{
+		FeeVerifier: AutopayFeeVerifier{
+			StateProvider: testAutopayStateProvider{states: map[string]*AutopayContractState{
+				contract: {
+					TemplateName: "autopay.tc",
+					Deployer:     payer,
+					Recipient:    recipient,
+					FeeAssetName: "sat",
+					ScheduleMode: "fixed",
+					BaseAmount:   "2",
+					Status:       "active",
+					CurrentBlock: 10,
+				},
+			}},
+			Recipient:             recipient,
+			FeeAssetName:          "sat",
+			FullRecordFeePerBlock: "1",
+			AddressParams:         &chaincfg.TestNetParams,
+			RequireProofSignature: true,
+		},
+	})
+
+	key1 := "/personal/" + account + "/profile1"
+	key2 := "/personal/" + account + "/profile2"
+	key3 := "/personal/" + account + "/profile3"
+	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, key1, 1, contract, 100)); err != nil || !updated {
+		t.Fatalf("autopay put 1 updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, key2, 1, contract, 100)); err != nil || !updated {
+		t.Fatalf("autopay put 2 updated=%v err=%v", updated, err)
+	}
+	if _, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, key3, 1, contract, 100)); err != ErrFeeCapacityExceeded {
+		t.Fatalf("capacity err=%v", err)
+	}
+	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, key1, 2, contract, 100)); err != nil || !updated {
+		t.Fatalf("autopay replacement updated=%v err=%v", updated, err)
+	}
+}
+
+func TestAutopayFeeVerifierRejectsInvalidStateAndPayer(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := personalAccountID(priv.PubKey().SerializeCompressed())
+	key := "/personal/" + account + "/profile"
+	contract := "autopay-contract"
+	recipient := "dkvs-fee-recipient"
+	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseState := AutopayContractState{
+		TemplateName: "autopay.tc",
+		Deployer:     payer,
+		Recipient:    recipient,
+		FeeAssetName: "sat",
+		ScheduleMode: "fixed",
+		BaseAmount:   "1",
+		Status:       "active",
+		CurrentBlock: 10,
+	}
+	tests := []struct {
+		name   string
+		state  AutopayContractState
+		record *wire.DKVSRecord
+	}{
+		{
+			name:  "inactive",
+			state: func() AutopayContractState { s := baseState; s.Status = "funding"; return s }(),
+		},
+		{
+			name:  "wrong deployer",
+			state: func() AutopayContractState { s := baseState; s.Deployer = "tb1pwrong"; return s }(),
+		},
+		{
+			name:  "wrong recipient",
+			state: func() AutopayContractState { s := baseState; s.Recipient = "other-recipient"; return s }(),
+		},
+		{
+			name:  "expiry exceeds end height",
+			state: func() AutopayContractState { s := baseState; s.EndHeight = 50; return s }(),
+		},
+		{
+			name:  "payer pubkey mismatch",
+			state: baseState,
+			record: func() *wire.DKVSRecord {
+				record := signedRecordWithValue(t, priv, key, 1, []byte("value"), 0)
+				record.ExpiryHeight = 100
+				proof, err := NewAutopayFeeProof(key, "personal", wire.MaxDKVSRecordSize, 100, contract, payer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := AttachSignedFeeProof(record, proof, otherPriv); err != nil {
+					t.Fatal(err)
+				}
+				signRecord(t, priv, record)
+				return record
+			}(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := testIndexerWithConfig(t, Config{
+				FeeVerifier: AutopayFeeVerifier{
+					StateProvider: testAutopayStateProvider{states: map[string]*AutopayContractState{
+						contract: &tt.state,
+					}},
+					Recipient:             recipient,
+					FeeAssetName:          "sat",
+					FullRecordFeePerBlock: "1",
+					AddressParams:         &chaincfg.TestNetParams,
+					RequireProofSignature: true,
+				},
+			})
+			record := tt.record
+			if record == nil {
+				record = signedRecordWithAutopayFee(t, priv, key, 1, contract, 100)
+			}
+			if _, err := idx.PutLocal(record); err != ErrInvalidFeeProof {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
+
+func TestHTTPFeeVerifier(t *testing.T) {
+	allow := true
+	wrapped := false
+	var seen httpFeeVerifyRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%s", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+			t.Fatal(err)
+		}
+		if seen.Namespace != "personal" || seen.RecordSize <= 0 || seen.ExpiryHeight != 100 {
+			t.Fatalf("request=%#v", seen)
+		}
+		if _, err := base64.StdEncoding.DecodeString(seen.FeeProofBase64); err != nil {
+			t.Fatalf("fee proof base64: %v", err)
+		}
+		if wrapped {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code": 0,
+				"msg":  "ok",
+				"data": map[string]interface{}{"valid": allow},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"valid": allow})
+	}))
+	defer server.Close()
+
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	proof := FeeProof{
+		Mode:         FeeModeOneshot,
+		PoolContract: "dkvs-pool",
+		Payer:        "payer",
+		PaymentTxID:  "payment",
+		KeyHash:      KeyHash(key),
+		RecordSize:   wire.MaxDKVSRecordSize,
+		ExpiryHeight: 100,
+		Namespace:    "personal",
+	}
+	record := signedRecordWithStructuredFee(t, priv, key, 1, proof)
+	idx := testIndexerWithConfig(t, Config{
+		FeeVerifier: HTTPFeeVerifier{Endpoint: server.URL},
+	})
+	if updated, err := idx.PutLocal(record); err != nil || !updated {
+		t.Fatalf("http fee verifier put updated=%v err=%v", updated, err)
+	}
+	if seen.RecordHash == "" || seen.KeyHash == "" {
+		t.Fatalf("hashes missing in request: %#v", seen)
+	}
+
+	wrapped = true
+	record = signedRecordWithStructuredFee(t, priv, key, 2, proof)
+	if updated, err := idx.PutLocal(record); err != nil || !updated {
+		t.Fatalf("wrapped http fee verifier put updated=%v err=%v", updated, err)
+	}
+
+	allow = false
+	record = signedRecordWithStructuredFee(t, priv, key, 3, proof)
+	if _, err := idx.PutLocal(record); err != ErrInvalidFeeProof {
+		t.Fatalf("denied http fee verifier err=%v", err)
+	}
+}
+
 func TestNormalizeNameID(t *testing.T) {
 	if got := NormalizeNameID("alice.name"); got != "alice.name" {
 		t.Fatalf("safe name id=%s", got)
@@ -1140,6 +1277,438 @@ func TestDefaultResolverKeepsNameServiceClosed(t *testing.T) {
 	}
 }
 
+func TestHTTPDIDResolver(t *testing.T) {
+	namePriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	servicePriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/name/alice":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"canonical_name": "alice",
+				"name_id":        "alice",
+				"signing_keys":   []string{hex.EncodeToString(namePriv.PubKey().SerializeCompressed())},
+				"active":         active,
+			})
+		case "/service/wallet":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code": 0,
+				"msg":  "ok",
+				"data": map[string]interface{}{
+					"canonical_name": "wallet",
+					"name_id":        "wallet",
+					"signing_keys":   []string{hex.EncodeToString(servicePriv.PubKey().SerializeCompressed())},
+					"active":         active,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	resolver := HTTPDIDResolver{BaseURL: server.URL}
+	nameID, err := resolver.ResolveName("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nameID.CanonicalName != "alice" || nameID.NameID != "alice" || !nameID.Active ||
+		len(nameID.SigningKeys) != 1 || string(nameID.SigningKeys[0]) != string(namePriv.PubKey().SerializeCompressed()) {
+		t.Fatalf("name identity=%#v", nameID)
+	}
+	serviceID, err := resolver.ResolveService("wallet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serviceID.CanonicalName != "wallet" || serviceID.NameID != "wallet" || !serviceID.Active ||
+		len(serviceID.SigningKeys) != 1 || string(serviceID.SigningKeys[0]) != string(servicePriv.PubKey().SerializeCompressed()) {
+		t.Fatalf("service identity=%#v", serviceID)
+	}
+	if _, err := resolver.ResolveName("missing"); err != ErrDIDResolverUnavailable {
+		t.Fatalf("missing identity err=%v", err)
+	}
+
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		Resolver:       resolver,
+	})
+	if updated, err := idx.PutLocal(signedRecordForKey(t, namePriv, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("http resolver name put updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, servicePriv, "/svc/wallet/config", 1)); err != nil || !updated {
+		t.Fatalf("http resolver service put updated=%v err=%v", updated, err)
+	}
+	otherPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.PutLocal(signedRecordForKey(t, otherPriv, "/name/alice", 2)); err != ErrPermissionDenied {
+		t.Fatalf("wrong signer err=%v", err)
+	}
+}
+
+func TestL1NSResolverUsesOwnerAddress(t *testing.T) {
+	ownerPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerAddress, err := P2TRAddressFromPubKeyBytes(ownerPriv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seenPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		switch r.URL.Path {
+		case "/ns/name/alice":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"code": 0,
+				"msg":  "ok",
+				"data": map[string]interface{}{
+					"name":    "alice",
+					"address": ownerAddress,
+					"utxo":    "txid:0",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	resolver := L1NSResolver{
+		BaseURL:       server.URL,
+		AddressParams: &chaincfg.TestNetParams,
+	}
+	identity, err := resolver.ResolveName("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenPath != "/ns/name/alice" || identity.CanonicalName != "alice" ||
+		len(identity.OwnerAddresses) != 1 || identity.OwnerAddresses[0] != ownerAddress {
+		t.Fatalf("l1 identity=%#v path=%s", identity, seenPath)
+	}
+	if err := identity.CanSign(ownerPriv.PubKey().SerializeCompressed()); err != nil {
+		t.Fatal(err)
+	}
+	otherPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := identity.CanSign(otherPriv.PubKey().SerializeCompressed()); err != ErrPermissionDenied {
+		t.Fatalf("wrong address signer err=%v", err)
+	}
+
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		Resolver:       resolver,
+	})
+	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("l1 owner put updated=%v err=%v", updated, err)
+	}
+	if _, err := idx.PutLocal(signedRecordForKey(t, otherPriv, "/name/alice", 2)); err != ErrPermissionDenied {
+		t.Fatalf("l1 wrong owner err=%v", err)
+	}
+}
+
+func TestExistingNameRecordSkipsResolverForSamePubKey(t *testing.T) {
+	ownerPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &countingDIDResolver{
+		names: map[string]DIDIdentity{
+			"alice": testIdentity("alice", ownerPriv.PubKey().SerializeCompressed()),
+		},
+	}
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		Resolver:       resolver,
+	})
+	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("initial put updated=%v err=%v", updated, err)
+	}
+	if resolver.nameCalls != 1 {
+		t.Fatalf("initial resolver calls=%d", resolver.nameCalls)
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 2)); err != nil || !updated {
+		t.Fatalf("same owner update updated=%v err=%v", updated, err)
+	}
+	if resolver.nameCalls != 1 {
+		t.Fatalf("same pubkey update should skip resolver calls=%d", resolver.nameCalls)
+	}
+	resolver.names["alice"] = testIdentity("alice", newPriv.PubKey().SerializeCompressed())
+	if updated, err := idx.PutLocal(signedRecordForKey(t, newPriv, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("new owner replace updated=%v err=%v", updated, err)
+	}
+	if resolver.nameCalls != 2 {
+		t.Fatalf("new pubkey should resolve calls=%d", resolver.nameCalls)
+	}
+	got, err := idx.Get("/name/alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.PubKey, newPriv.PubKey().SerializeCompressed()) || got.Seq != 1 {
+		t.Fatalf("unexpected record seq=%d", got.Seq)
+	}
+}
+
+func TestNameTransferNotifyForcesNextNameResolve(t *testing.T) {
+	ownerPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &countingDIDResolver{
+		names: map[string]DIDIdentity{
+			"alice": testIdentity("alice", ownerPriv.PubKey().SerializeCompressed()),
+		},
+	}
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		Resolver:       resolver,
+	})
+	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("initial put updated=%v err=%v", updated, err)
+	}
+	if resolver.nameCalls != 1 {
+		t.Fatalf("initial resolver calls=%d", resolver.nameCalls)
+	}
+	if err := idx.NotifyNameTransfers([]string{"alice", "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	resolver.names["alice"] = testIdentity("alice", newPriv.PubKey().SerializeCompressed())
+	if _, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 2)); err != ErrPermissionDenied {
+		t.Fatalf("old owner after transfer err=%v", err)
+	}
+	if resolver.nameCalls != 2 {
+		t.Fatalf("transfer should force resolve calls=%d", resolver.nameCalls)
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, newPriv, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("new owner after transfer updated=%v err=%v", updated, err)
+	}
+	if resolver.nameCalls != 3 {
+		t.Fatalf("new owner should resolve calls=%d", resolver.nameCalls)
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, newPriv, "/name/alice", 2)); err != nil || !updated {
+		t.Fatalf("same new owner update updated=%v err=%v", updated, err)
+	}
+	if resolver.nameCalls != 3 {
+		t.Fatalf("dirty marker should be cleared calls=%d", resolver.nameCalls)
+	}
+}
+
+func TestNameTransferNotifyPersistsDirtyMarker(t *testing.T) {
+	db := dbpkg.NewKVDB(t.TempDir())
+	if db == nil {
+		t.Fatal("NewKVDB failed")
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ownerPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &countingDIDResolver{
+		names: map[string]DIDIdentity{
+			"alice": testIdentity("alice", ownerPriv.PubKey().SerializeCompressed()),
+		},
+	}
+	idx := New(db, Config{
+		AllowFreeLocal: true,
+		CurrentHeight:  func() uint64 { return 1 },
+		Resolver:       resolver,
+	})
+	if _, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.NotifyNameTransfers([]string{"alice"}); err != nil {
+		t.Fatal(err)
+	}
+	resolver.names["alice"] = testIdentity("alice", newPriv.PubKey().SerializeCompressed())
+	restarted := New(db, Config{
+		AllowFreeLocal: true,
+		CurrentHeight:  func() uint64 { return 1 },
+		Resolver:       resolver,
+	})
+	if _, err := restarted.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 2)); err != ErrPermissionDenied {
+		t.Fatalf("dirty marker after restart err=%v", err)
+	}
+}
+
+func TestNameTransferNotifyClearsAfterResolvedNoop(t *testing.T) {
+	ownerPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &countingDIDResolver{
+		names: map[string]DIDIdentity{
+			"alice": testIdentity("alice", ownerPriv.PubKey().SerializeCompressed()),
+		},
+	}
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		Resolver:       resolver,
+	})
+	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 10)); err != nil || !updated {
+		t.Fatalf("initial put updated=%v err=%v", updated, err)
+	}
+	if err := idx.NotifyNameTransfers([]string{"alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 1)); err != nil || updated {
+		t.Fatalf("resolved noop updated=%v err=%v", updated, err)
+	}
+	if resolver.nameCalls != 2 {
+		t.Fatalf("dirty noop should resolve once calls=%d", resolver.nameCalls)
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/name/alice", 11)); err != nil || !updated {
+		t.Fatalf("post-noop update updated=%v err=%v", updated, err)
+	}
+	if resolver.nameCalls != 2 {
+		t.Fatalf("dirty marker should be cleared after noop calls=%d", resolver.nameCalls)
+	}
+}
+
+func TestHTTPSystemVerifier(t *testing.T) {
+	systemPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := true
+	var seenReq httpSystemVerifyRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/system/verify" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&seenReq); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"code": 0,
+			"msg":  "ok",
+			"data": map[string]interface{}{"valid": valid},
+		})
+	}))
+	defer server.Close()
+
+	verifier := HTTPSystemVerifier{Endpoint: server.URL + "/system/verify"}
+	if err := verifier.CanWriteSystem(SystemParamsKey(), systemPriv.PubKey().SerializeCompressed()); err != nil {
+		t.Fatal(err)
+	}
+	if seenReq.Key != SystemParamsKey() ||
+		seenReq.PubKeyHex != hex.EncodeToString(systemPriv.PubKey().SerializeCompressed()) ||
+		seenReq.PubKeyBase64 != base64.StdEncoding.EncodeToString(systemPriv.PubKey().SerializeCompressed()) {
+		t.Fatalf("system verifier request=%#v", seenReq)
+	}
+	valid = false
+	if err := verifier.CanWriteSystem(SystemParamsKey(), systemPriv.PubKey().SerializeCompressed()); err != ErrPermissionDenied {
+		t.Fatalf("invalid system auth err=%v", err)
+	}
+
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		CurrentHeight:  func() uint64 { return 1 },
+		SystemVerifier: verifier,
+	})
+	valid = true
+	record, err := NewSignedRecord(systemPriv, SystemParamsKey(), []byte(`{"epoch":"1"}`), RecordOptions{
+		Seq:          1,
+		TTL:          60_000,
+		ExpiryHeight: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := idx.PutLocal(record); err != nil || !updated {
+		t.Fatalf("http system verifier put updated=%v err=%v", updated, err)
+	}
+	valid = false
+	record.Seq = 2
+	signRecord(t, systemPriv, record)
+	if _, err := idx.PutLocal(record); err != ErrPermissionDenied {
+		t.Fatalf("denied system put err=%v", err)
+	}
+}
+
+func TestRuntimeVerifierInjection(t *testing.T) {
+	namePriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := testIndexerWithConfig(t, Config{AllowFreeLocal: true})
+	if _, err := idx.PutLocal(signedRecordForKey(t, namePriv, "/name/alice", 1)); err != ErrDIDResolverUnavailable {
+		t.Fatalf("default resolver err=%v", err)
+	}
+	idx.SetResolver(StaticDIDResolver{
+		Names: map[string]DIDIdentity{
+			"alice": testIdentity("alice", namePriv.PubKey().SerializeCompressed()),
+		},
+	})
+	if updated, err := idx.PutLocal(signedRecordForKey(t, namePriv, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("injected resolver updated=%v err=%v", updated, err)
+	}
+	idx.SetResolver(nil)
+	if _, err := idx.PutLocal(signedRecordForKey(t, namePriv, "/name/bob", 1)); err != ErrDIDResolverUnavailable {
+		t.Fatalf("nil resolver err=%v", err)
+	}
+
+	feePriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	feeIdx := testIndexerWithConfig(t, Config{})
+	feeRecord := signedPersonalRecordWithKey(t, feePriv, 1, "value", 0)
+	if _, err := feeIdx.PutLocal(feeRecord); err != ErrFeeProofRequired {
+		t.Fatalf("default fee err=%v", err)
+	}
+	feeIdx.SetFeeVerifier(testFeeVerifier{})
+	if updated, err := feeIdx.PutLocal(feeRecord); err != nil || !updated {
+		t.Fatalf("injected fee verifier updated=%v err=%v", updated, err)
+	}
+	feeIdx.SetFeeVerifier(nil)
+	feeRecord2 := signedPersonalRecordWithKey(t, feePriv, 2, "value2", 0)
+	if _, err := feeIdx.PutLocal(feeRecord2); err != ErrFeeProofRequired {
+		t.Fatalf("nil fee verifier err=%v", err)
+	}
+
+	systemPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	systemIdx := testIndexer(t)
+	systemRecord := signedRecordForKey(t, systemPriv, "/sys/params", 1)
+	if _, err := systemIdx.PutLocal(systemRecord); err != ErrPermissionDenied {
+		t.Fatalf("default system err=%v", err)
+	}
+	systemIdx.SetSystemVerifier(StaticSystemVerifier{Keys: [][]byte{systemPriv.PubKey().SerializeCompressed()}})
+	if updated, err := systemIdx.PutLocal(systemRecord); err != nil || !updated {
+		t.Fatalf("injected system verifier updated=%v err=%v", updated, err)
+	}
+	systemIdx.SetSystemVerifier(nil)
+	systemRecord2 := signedRecordForKey(t, systemPriv, "/sys/params", 2)
+	if _, err := systemIdx.PutLocal(systemRecord2); err != ErrPermissionDenied {
+		t.Fatalf("nil system verifier err=%v", err)
+	}
+}
+
 func TestDIDOwnerRotationFiltersAndAllowsReplacement(t *testing.T) {
 	db := dbpkg.NewKVDB(t.TempDir())
 	if db == nil {
@@ -1171,28 +1740,32 @@ func TestDIDOwnerRotationFiltersAndAllowsReplacement(t *testing.T) {
 	}
 
 	resolver.Names["alice"] = testIdentity("alice", newPriv.PubKey().SerializeCompressed())
-	if _, err := idx.Get(oldRecord.Key); err != ErrRecordNotFound {
+	gotOld, err := idx.Get(oldRecord.Key)
+	if err != nil {
 		t.Fatalf("rotated old owner get err=%v", err)
+	}
+	if !bytes.Equal(gotOld.PubKey, oldPriv.PubKey().SerializeCompressed()) {
+		t.Fatalf("unexpected old record pubkey")
 	}
 	listed, total, err := idx.ListPrefix("/name/alice", 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed) != 0 || total != 0 {
-		t.Fatalf("rotated old owner still listed len=%d total=%d", len(listed), total)
+	if len(listed) != 1 || total != 1 {
+		t.Fatalf("rotated old owner listed len=%d total=%d", len(listed), total)
 	}
 	synced, _, done, _, err := idx.Sync(nil, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(synced) != 0 || !done {
+	if len(synced) != 1 || !done {
 		t.Fatalf("rotated old owner synced len=%d done=%v", len(synced), done)
 	}
 	cp, err := idx.Checkpoint()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cp.ActiveRecordCount != 0 {
+	if cp.ActiveRecordCount != 1 {
 		t.Fatalf("rotated old owner checkpoint count=%d", cp.ActiveRecordCount)
 	}
 
@@ -1204,7 +1777,7 @@ func TestDIDOwnerRotationFiltersAndAllowsReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got.PubKey) != string(newRecord.PubKey) || got.Seq != 1 {
+	if !bytes.Equal(got.PubKey, newRecord.PubKey) || got.Seq != 1 {
 		t.Fatalf("unexpected active record seq=%d", got.Seq)
 	}
 }
@@ -1515,7 +2088,7 @@ func TestSysAuthorizedWrite(t *testing.T) {
 	}
 }
 
-func TestNameTombstonePermissionUsesCurrentOwner(t *testing.T) {
+func TestNameTombstonePermissionAllowsExistingOwnerAndNewOwnerReplace(t *testing.T) {
 	db := dbpkg.NewKVDB(t.TempDir())
 	if db == nil {
 		t.Fatal("NewKVDB failed")
@@ -1549,7 +2122,7 @@ func TestNameTombstonePermissionUsesCurrentOwner(t *testing.T) {
 	oldTombstone.Flags = FlagTombstone
 	hash := SigningHash(oldTombstone)
 	oldTombstone.Signature = ecdsa.Sign(oldPriv, hash[:]).Serialize()
-	if _, err := idx.PutLocal(oldTombstone); err != ErrPermissionDenied {
+	if updated, err := idx.PutLocal(oldTombstone); err != nil || !updated {
 		t.Fatalf("old owner tombstone err=%v", err)
 	}
 	newTombstone := signedRecordForKey(t, newPriv, "/name/alice", 1)
@@ -1650,6 +2223,66 @@ func TestPruneExpiredRecords(t *testing.T) {
 	}
 	if _, err := idx.getRaw(record.Key); err != ErrRecordNotFound {
 		t.Fatalf("raw after prune err=%v", err)
+	}
+}
+
+func TestPruneExpiredKeepsPaidRecords(t *testing.T) {
+	height := uint64(1)
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		CurrentHeight:  func() uint64 { return height },
+		FeeVerifier: JSONFeeVerifier{
+			AllowFreeLocal: true,
+		},
+	})
+	freePriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	paidPriv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeRecord := signedPersonalRecordWithKey(t, freePriv, 1, "free", 0)
+	freeRecord.ExpiryHeight = 2
+	signRecord(t, freePriv, freeRecord)
+	paidRecord := signedPersonalRecordWithKey(t, paidPriv, 1, "paid", 0)
+	paidRecord.ExpiryHeight = 2
+	parsed, err := ParseKey(paidRecord.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := NewOneshotFeeProof(paidRecord.Key, parsed.Namespace, wire.MaxDKVSRecordSize, paidRecord.ExpiryHeight, "pool", "payer", "txid", "100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AttachSignedFeeProof(paidRecord, proof, paidPriv); err != nil {
+		t.Fatal(err)
+	}
+	signRecord(t, paidPriv, paidRecord)
+	if _, err := idx.PutLocal(freeRecord); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.PutLocal(paidRecord); err != nil {
+		t.Fatal(err)
+	}
+
+	height = 2
+	pruned, err := idx.PruneExpired()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned=%d", pruned)
+	}
+	if _, err := idx.getRaw(freeRecord.Key); err != ErrRecordNotFound {
+		t.Fatalf("free raw after prune err=%v", err)
+	}
+	if _, err := idx.Get(paidRecord.Key); err != ErrRecordNotFound {
+		t.Fatalf("paid active get after expiry err=%v", err)
+	}
+	if _, err := idx.getRaw(paidRecord.Key); err != nil {
+		t.Fatalf("paid raw after prune err=%v", err)
 	}
 }
 

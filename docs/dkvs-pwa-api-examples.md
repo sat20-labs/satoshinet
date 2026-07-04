@@ -4,6 +4,8 @@
 
 本文给 PWA、dApp 和本地 Agent 提供当前 SatoshiNet indexer DKVS REST API 的最小调用样本。它只描述现有 HTTP/API 行为，不替代钱包签名 SDK，也不引入新的 wire command。
 
+当前 `sat20wallet/pwa` 已提供 DKVS developer tool 页面：`/wallet/dkvs`。该页面只调用现有 REST API，支持 key/hash 查询、prefix 列表、提交已签名 record、提交 tombstone 和读取 checkpoint；record 签名与 fee proof 仍应由钱包/SDK 或外部流程生成。
+
 ## 约定
 
 - API base URL 示例使用 `http://127.0.0.1:8334`，如果节点配置了 proxy prefix，需要把 prefix 加到 `/v3/dkvs/...` 前。

@@ -10,9 +10,19 @@ import (
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 )
 
-
 func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool, interrupt <-chan struct{}) (*indexer.IndexerMgr, error) {
-	
+	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, bTestNet, interrupt, nil)
+}
+
+func NewIndexerMgrWithDKVS(dbPath, host, port, user, ps string, enableTls, bTestNet bool,
+	interrupt <-chan struct{}, dkvs *indexer.DKVSIntegrationConfig) (*indexer.IndexerMgr, error) {
+
+	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, bTestNet, interrupt, dkvs)
+}
+
+func newIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool,
+	interrupt <-chan struct{}, dkvs *indexer.DKVSIntegrationConfig) (*indexer.IndexerMgr, error) {
+
 	p, err := strconv.Atoi(port)
 	if err != nil {
 		return nil, err
@@ -24,12 +34,13 @@ func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool
 	cfg := indexer.Config{
 		DataPath: dbPath,
 		RPCCfg: &indexer.RPCConfig{
-			Host: host,
-			Port: p,
-			User: user,
-			Password: ps,
+			Host:      host,
+			Port:      p,
+			User:      user,
+			Password:  ps,
 			EnableTls: enableTls,
 		},
+		DKVS: dkvs,
 	}
 
 	indexerMgr := indexer.NewIndexerMgr(&cfg, bTestNet, interrupt)
@@ -45,13 +56,13 @@ func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool
 }
 
 func initRpcService(dbPath string, port int, bTestNet bool, indexerMgr *indexer.IndexerMgr) (*rpcserver.Rpc, error) {
-	
+
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	proxy := "mainnet"
 	if bTestNet {
 		proxy = "testnet"
-	} 
-	
+	}
+
 	rpc := rpcserver.NewRpc(indexerMgr)
 	err := rpc.Start(addr, proxy, dbPath+"/logs/"+indexerMgr.GetChainParam().Name)
 	if err != nil {

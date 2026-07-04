@@ -18,12 +18,34 @@ func (b *IndexerMgr) SetDKVSSubscriptionCallback(fn dkvs_indexer.SubscriptionNot
 	}
 }
 
+func (b *IndexerMgr) SetDKVSResolver(resolver dkvs_indexer.DIDResolver) {
+	if b.dkvsIndexer != nil {
+		b.dkvsIndexer.SetResolver(resolver)
+	}
+}
+
+func (b *IndexerMgr) SetDKVSFeeVerifier(verifier dkvs_indexer.FeeVerifier) {
+	if b.dkvsIndexer != nil {
+		b.dkvsIndexer.SetFeeVerifier(verifier)
+	}
+}
+
+func (b *IndexerMgr) SetDKVSSystemVerifier(verifier dkvs_indexer.SystemVerifier) {
+	if b.dkvsIndexer != nil {
+		b.dkvsIndexer.SetSystemVerifier(verifier)
+	}
+}
+
 func (b *IndexerMgr) PutDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return b.dkvsIndexer.PutLocal(record)
 }
 
 func (b *IndexerMgr) PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return b.dkvsIndexer.PutRemote(record)
+}
+
+func (b *IndexerMgr) NotifyDKVSNameTransfers(names []string) error {
+	return b.dkvsIndexer.NotifyNameTransfers(names)
 }
 
 func (b *IndexerMgr) GetDKVSRecord(key string) (*wire.DKVSRecord, error) {

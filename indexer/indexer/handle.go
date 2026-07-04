@@ -1,8 +1,13 @@
 package indexer
 
-import "github.com/sat20-labs/satoshinet/indexer/common"
+import (
+	"time"
+
+	"github.com/sat20-labs/satoshinet/indexer/common"
+)
 
 const dkvsPruneIntervalBlocks = 144
+const dkvsPruneInterval = time.Hour
 
 func (s *IndexerMgr) processBlock(block *common.Block) {
 	if s.contractIndexer != nil {
@@ -27,4 +32,42 @@ func (s *IndexerMgr) pruneExpiredDKVSOnBlock(block *common.Block) {
 	if pruned > 0 {
 		common.Log.Infof("DKVS pruned %d expired records at height %d", pruned, block.Height)
 	}
+}
+
+func (s *IndexerMgr) startDKVSPruneTimer() {
+	if s == nil || s.dkvsIndexer == nil || s.dkvsPruneStop != nil {
+		return
+	}
+	s.dkvsPruneStop = make(chan struct{})
+	stop := s.dkvsPruneStop
+	interrupt := s.interrupt
+	go func() {
+		timer := time.NewTicker(dkvsPruneInterval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				pruned, err := s.dkvsIndexer.PruneExpired()
+				if err != nil {
+					common.Log.Warningf("DKVS timed prune failed: %v", err)
+					continue
+				}
+				if pruned > 0 {
+					common.Log.Infof("DKVS timed prune removed %d expired free records", pruned)
+				}
+			case <-stop:
+				return
+			case <-interrupt:
+				return
+			}
+		}
+	}()
+}
+
+func (s *IndexerMgr) stopDKVSPruneTimer() {
+	if s == nil || s.dkvsPruneStop == nil {
+		return
+	}
+	close(s.dkvsPruneStop)
+	s.dkvsPruneStop = nil
 }

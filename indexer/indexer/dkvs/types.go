@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -43,6 +44,7 @@ var (
 	ErrDIDResolverUnavailable = errors.New("dkvs did resolver unavailable")
 	ErrFeeProofRequired       = errors.New("dkvs fee proof required")
 	ErrInvalidFeeProof        = errors.New("invalid dkvs fee proof")
+	ErrFeeCapacityExceeded    = errors.New("dkvs fee capacity exceeded")
 	ErrRecordNotFound         = errors.New("dkvs record not found")
 	ErrInvalidCheckpoint      = errors.New("invalid dkvs checkpoint")
 	ErrInvalidSnapshot        = errors.New("invalid dkvs snapshot")
@@ -52,10 +54,12 @@ var (
 )
 
 type DIDIdentity struct {
-	CanonicalName string
-	NameID        string
-	SigningKeys   [][]byte
-	Active        bool
+	CanonicalName  string
+	NameID         string
+	SigningKeys    [][]byte
+	OwnerAddresses []string
+	AddressParams  *chaincfg.Params
+	Active         bool
 }
 
 func (id DIDIdentity) CanSign(pubKey []byte) error {
@@ -65,6 +69,17 @@ func (id DIDIdentity) CanSign(pubKey []byte) error {
 	for _, key := range id.SigningKeys {
 		if bytes.Equal(key, pubKey) {
 			return nil
+		}
+	}
+	if len(id.OwnerAddresses) > 0 {
+		addr, err := P2TRAddressFromPubKeyBytes(pubKey, id.AddressParams)
+		if err != nil {
+			return err
+		}
+		for _, owner := range id.OwnerAddresses {
+			if owner == addr {
+				return nil
+			}
 		}
 	}
 	return ErrPermissionDenied
@@ -77,6 +92,14 @@ type DIDResolver interface {
 
 type FeeVerifier interface {
 	VerifyFeeProof(recordHash, keyHash [32]byte, namespace string, recordSize int, expiryHeight uint64, feeProof []byte) error
+}
+
+type RecordFeeVerifier interface {
+	VerifyRecordFeeProof(record *wire.DKVSRecord, parsed ParsedKey) error
+}
+
+type FeeCapacityVerifier interface {
+	VerifyFeeCapacity(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, records []*wire.DKVSRecord, height, now uint64) error
 }
 
 type SystemVerifier interface {
@@ -158,30 +181,6 @@ type Usage struct {
 	Prefix          string `json:"prefix"`
 	ActiveRecords   uint64 `json:"active_records"`
 	ActiveTotalSize uint64 `json:"active_total_size"`
-}
-
-type SignedCheckpoint struct {
-	Epoch                 string            `json:"epoch"`
-	Height                uint64            `json:"height"`
-	ActiveRecordCount     uint64            `json:"active_record_count"`
-	ActiveRecordTotalSize uint64            `json:"active_record_total_size"`
-	NamespaceRoots        map[string]string `json:"namespace_roots"`
-	ActiveRecordRoot      string            `json:"active_record_root"`
-	CreatedBy             string            `json:"created_by"`
-	Signature             []byte            `json:"signature"`
-}
-
-type SignedSnapshot struct {
-	Epoch                 string            `json:"epoch"`
-	Height                uint64            `json:"height"`
-	ActiveRecordCount     uint64            `json:"active_record_count"`
-	ActiveRecordTotalSize uint64            `json:"active_record_total_size"`
-	NamespaceRoots        map[string]string `json:"namespace_roots"`
-	ActiveRecordRoot      string            `json:"active_record_root"`
-	SnapshotHash          string            `json:"snapshot_hash"`
-	CreatedAt             uint64            `json:"created_at"`
-	CreatedBy             string            `json:"created_by"`
-	Signature             []byte            `json:"signature"`
 }
 
 type Snapshot struct {

@@ -3,8 +3,11 @@ package dkvs
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -16,6 +19,7 @@ import (
 const (
 	FeeModeOneshot   = "ONESHOT"
 	FeeModeLease     = "LEASE"
+	FeeModeAutopay   = "AUTOPAY"
 	FeeModeFreeLocal = "FREE_LOCAL"
 )
 
@@ -23,6 +27,11 @@ type JSONFeeVerifier struct {
 	AllowFreeLocal         bool
 	AllowMissingRecordHash bool
 	RequireProofSignature  bool
+}
+
+type HTTPFeeVerifier struct {
+	Endpoint string
+	Client   *http.Client
 }
 
 func NewOneshotFeeProof(key, namespace string, recordSize uint32, expiryHeight uint64, poolContract, payer, paymentTxID, paidAmount string) (*FeeProof, error) {
@@ -72,6 +81,30 @@ func NewLeaseFeeProof(key, namespace string, recordSize uint32, expiryHeight uin
 	}, nil
 }
 
+func NewAutopayFeeProof(key, namespace string, recordSize uint32, expiryHeight uint64, poolContract, payer string) (*FeeProof, error) {
+	parsed, err := parseFeeProofKeyNamespace(key, namespace)
+	if err != nil {
+		return nil, err
+	}
+	poolContract = strings.TrimSpace(poolContract)
+	payer = strings.TrimSpace(payer)
+	if poolContract == "" || payer == "" {
+		return nil, ErrInvalidFeeProof
+	}
+	if recordSize < wire.MaxDKVSRecordSize {
+		recordSize = wire.MaxDKVSRecordSize
+	}
+	return &FeeProof{
+		Mode:         FeeModeAutopay,
+		PoolContract: poolContract,
+		Payer:        payer,
+		KeyHash:      KeyHash(key),
+		RecordSize:   recordSize,
+		ExpiryHeight: expiryHeight,
+		Namespace:    parsed.Namespace,
+	}, nil
+}
+
 func NewFreeLocalFeeProof(key, namespace string, recordSize uint32, expiryHeight uint64) (*FeeProof, error) {
 	parsed, err := parseFeeProofKeyNamespace(key, namespace)
 	if err != nil {
@@ -114,44 +147,6 @@ func EncodeFeeProof(proof *FeeProof) ([]byte, error) {
 }
 
 var feeProofSignatureDomain = []byte("satoshinet-dkvs-fee-proof-v1")
-
-func SignFeeProof(proof *FeeProof, priv *btcec.PrivateKey) error {
-	if proof == nil || priv == nil {
-		return ErrInvalidFeeProof
-	}
-	if len(proof.PayerPubKey) == 0 {
-		proof.PayerPubKey = priv.PubKey().SerializeCompressed()
-	}
-	hash := FeeProofSigningHash(proof)
-	proof.ProofSignature = ecdsa.Sign(priv, hash[:]).Serialize()
-	return nil
-}
-
-func AttachSignedFeeProof(record *wire.DKVSRecord, proof *FeeProof, priv *btcec.PrivateKey) error {
-	if record == nil || proof == nil || priv == nil {
-		return ErrInvalidFeeProof
-	}
-	if len(proof.PayerPubKey) == 0 {
-		proof.PayerPubKey = priv.PubKey().SerializeCompressed()
-	}
-	proof.RecordHash = chainhash.Hash{}
-	proof.ProofSignature = nil
-	encoded, err := EncodeFeeProof(proof)
-	if err != nil {
-		return err
-	}
-	record.FeeProof = encoded
-	proof.RecordHash = FeeAnchorHash(record)
-	if err := SignFeeProof(proof, priv); err != nil {
-		return err
-	}
-	encoded, err = EncodeFeeProof(proof)
-	if err != nil {
-		return err
-	}
-	record.FeeProof = encoded
-	return nil
-}
 
 func VerifyFeeProofSignature(proof *FeeProof) error {
 	if proof == nil || len(proof.ProofSignature) == 0 {
@@ -234,11 +229,83 @@ func ParseFeeProof(data []byte) (*FeeProof, error) {
 	}
 	proof.Mode = strings.ToUpper(strings.TrimSpace(proof.Mode))
 	switch proof.Mode {
-	case FeeModeOneshot, FeeModeLease, FeeModeFreeLocal:
+	case FeeModeOneshot, FeeModeLease, FeeModeAutopay, FeeModeFreeLocal:
 	default:
 		return nil, ErrInvalidFeeProof
 	}
 	return &proof, nil
+}
+
+type httpFeeVerifyRequest struct {
+	RecordHash     string `json:"record_hash"`
+	KeyHash        string `json:"key_hash"`
+	Namespace      string `json:"namespace"`
+	RecordSize     int    `json:"record_size"`
+	ExpiryHeight   uint64 `json:"expiry_height"`
+	FeeProofBase64 string `json:"fee_proof_base64"`
+}
+
+type httpFeeVerifyResponse struct {
+	Code  int                    `json:"code,omitempty"`
+	Msg   string                 `json:"msg,omitempty"`
+	Valid *bool                  `json:"valid,omitempty"`
+	Data  *httpFeeVerifyResponse `json:"data,omitempty"`
+}
+
+func (v HTTPFeeVerifier) VerifyFeeProof(recordHash, keyHash [32]byte, namespace string, recordSize int, expiryHeight uint64, feeProof []byte) error {
+	endpoint := strings.TrimSpace(v.Endpoint)
+	if endpoint == "" {
+		return ErrInvalidFeeProof
+	}
+	reqBody := httpFeeVerifyRequest{
+		RecordHash:     hex.EncodeToString(recordHash[:]),
+		KeyHash:        hex.EncodeToString(keyHash[:]),
+		Namespace:      namespace,
+		RecordSize:     recordSize,
+		ExpiryHeight:   expiryHeight,
+		FeeProofBase64: base64.StdEncoding.EncodeToString(feeProof),
+	}
+	encoded, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+	client := v.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return errors.New(resp.Status)
+	}
+	var verifyResp httpFeeVerifyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&verifyResp); err != nil {
+		return err
+	}
+	return verifyResp.err()
+}
+
+func (r httpFeeVerifyResponse) err() error {
+	if r.Code != 0 {
+		if r.Msg != "" {
+			return errors.New(r.Msg)
+		}
+		return ErrInvalidFeeProof
+	}
+	src := &r
+	if r.Data != nil {
+		src = r.Data
+	}
+	if src.Valid != nil && *src.Valid {
+		return nil
+	}
+	if src.Msg != "" {
+		return errors.New(src.Msg)
+	}
+	return ErrInvalidFeeProof
 }
 
 func (v JSONFeeVerifier) VerifyFeeProof(recordHash, keyHash [32]byte, namespace string, recordSize int, expiryHeight uint64, feeProof []byte) error {
@@ -284,6 +351,10 @@ func (v JSONFeeVerifier) VerifyFeeProof(recordHash, keyHash [32]byte, namespace 
 		}
 	case FeeModeLease:
 		if proof.PoolContract == "" || proof.LeaseContract == "" || proof.PlanID == "" {
+			return ErrInvalidFeeProof
+		}
+	case FeeModeAutopay:
+		if proof.PoolContract == "" || proof.Payer == "" {
 			return ErrInvalidFeeProof
 		}
 	case FeeModeFreeLocal:

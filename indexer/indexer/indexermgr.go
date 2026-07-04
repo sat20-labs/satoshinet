@@ -29,6 +29,30 @@ type RPCConfig struct {
 type Config struct {
 	DataPath string
 	RPCCfg   *RPCConfig
+	DKVS     *DKVSIntegrationConfig
+}
+
+type DKVSIntegrationConfig struct {
+	Resolver                     dkvs_indexer.DIDResolver
+	ResolverHTTPBaseURL          string
+	ResolverHTTPNamePath         string
+	ResolverHTTPServicePath      string
+	ResolverL1NSBaseURL          string
+	ResolverL1NSNamePath         string
+	ResolverL1NSServicePath      string
+	FeeVerifier                  dkvs_indexer.FeeVerifier
+	FeeVerifierHTTPEndpoint      string
+	AutopayStateProvider         dkvs_indexer.AutopayStateProvider
+	AutopayFeeRecipient          string
+	AutopayFeeAssetName          string
+	AutopayFullRecordFeePerBlock string
+	AutopayRequireProofSignature *bool
+	SystemVerifier               dkvs_indexer.SystemVerifier
+	SystemVerifierHTTPEndpoint   string
+	MailboxPolicy                dkvs_indexer.MailboxPolicy
+	BlobPolicy                   dkvs_indexer.BlobPolicy
+	TmpPolicy                    dkvs_indexer.TmpPolicy
+	AllowFreeLocal               *bool
 }
 
 type IndexerMgr struct {
@@ -65,6 +89,7 @@ type IndexerMgr struct {
 	contractBackupDB *contract_indexer.Indexer
 
 	dkvsIndexer         *dkvs_indexer.Indexer
+	dkvsPruneStop       chan struct{}
 	lastDKVSPruneHeight int
 }
 
@@ -116,19 +141,7 @@ func (b *IndexerMgr) Init() {
 	b.compiling = base_indexer.NewBaseIndexer(b.baseDB, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 	b.compiling.Init()
 	b.contractIndexer = contract_indexer.NewIndexer(b.baseDB, b.chaincfgParam)
-	b.dkvsIndexer = dkvs_indexer.New(b.dkvsDB, dkvs_indexer.Config{
-		AllowFreeLocal: b.chaincfgParam.Name != chaincfg.MainNetParams.Name,
-		CurrentHeight: func() uint64 {
-			if b.compiling == nil {
-				return 0
-			}
-			height := b.compiling.GetSyncHeight()
-			if height < 0 {
-				return 0
-			}
-			return uint64(height)
-		},
-	})
+	b.dkvsIndexer = dkvs_indexer.New(b.dkvsDB, b.dkvsConfig())
 	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
 	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
@@ -148,6 +161,100 @@ func (b *IndexerMgr) Init() {
 		b.ConnectBlock(b.chaincfgParam.GenesisBlock, 0, 0)
 	}
 
+	b.startDKVSPruneTimer()
+}
+
+func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
+	defaults := dkvs_indexer.NetworkDefaultsForParams(b.chaincfgParam)
+	cfg := dkvs_indexer.Config{
+		AllowFreeLocal: b.chaincfgParam.Name != chaincfg.MainNetParams.Name,
+		CurrentHeight: func() uint64 {
+			if b.compiling == nil {
+				return 0
+			}
+			height := b.compiling.GetSyncHeight()
+			if height < 0 {
+				return 0
+			}
+			return uint64(height)
+		},
+	}
+	ext := (*DKVSIntegrationConfig)(nil)
+	if b.cfg != nil {
+		ext = b.cfg.DKVS
+	}
+	if defaults.UseAutopayFeeVerifier {
+		cfg.AllowFreeLocal = false
+	}
+	if ext == nil {
+		ext = &DKVSIntegrationConfig{}
+	}
+	if ext.AllowFreeLocal != nil {
+		cfg.AllowFreeLocal = *ext.AllowFreeLocal
+	}
+	cfg.Resolver = ext.Resolver
+	if cfg.Resolver == nil && ext.ResolverL1NSBaseURL != "" {
+		cfg.Resolver = dkvs_indexer.L1NSResolver{
+			BaseURL:       ext.ResolverL1NSBaseURL,
+			NamePath:      ext.ResolverL1NSNamePath,
+			ServicePath:   ext.ResolverL1NSServicePath,
+			AddressParams: b.chaincfgParam,
+		}
+	}
+	if cfg.Resolver == nil && ext.ResolverHTTPBaseURL != "" {
+		cfg.Resolver = dkvs_indexer.HTTPDIDResolver{
+			BaseURL:     ext.ResolverHTTPBaseURL,
+			NamePath:    ext.ResolverHTTPNamePath,
+			ServicePath: ext.ResolverHTTPServicePath,
+		}
+	}
+	cfg.FeeVerifier = ext.FeeVerifier
+	autopayFeeRecipient := ext.AutopayFeeRecipient
+	autopayFeeAssetName := ext.AutopayFeeAssetName
+	autopayFullRecordFeePerBlock := ext.AutopayFullRecordFeePerBlock
+	if defaults.UseAutopayFeeVerifier {
+		if autopayFeeRecipient == "" {
+			autopayFeeRecipient = defaults.AutopayRecipient
+		}
+		if autopayFeeAssetName == "" {
+			autopayFeeAssetName = defaults.AutopayFeeAssetName
+		}
+		if autopayFullRecordFeePerBlock == "" {
+			autopayFullRecordFeePerBlock = defaults.FullRecordFeePerBlock
+		}
+	}
+	if cfg.FeeVerifier == nil && autopayFullRecordFeePerBlock != "" {
+		stateProvider := ext.AutopayStateProvider
+		if stateProvider == nil {
+			stateProvider = dkvs_indexer.RPCAutopayStateProvider{Call: satsnet_rpc.Call}
+		}
+		requireProofSignature := defaults.RequireProofSignature
+		if !defaults.Enabled {
+			requireProofSignature = true
+		}
+		if ext.AutopayRequireProofSignature != nil {
+			requireProofSignature = *ext.AutopayRequireProofSignature
+		}
+		cfg.FeeVerifier = dkvs_indexer.AutopayFeeVerifier{
+			StateProvider:         stateProvider,
+			Recipient:             autopayFeeRecipient,
+			FeeAssetName:          autopayFeeAssetName,
+			FullRecordFeePerBlock: autopayFullRecordFeePerBlock,
+			AddressParams:         b.chaincfgParam,
+			RequireProofSignature: requireProofSignature,
+		}
+	}
+	if cfg.FeeVerifier == nil && ext.FeeVerifierHTTPEndpoint != "" {
+		cfg.FeeVerifier = dkvs_indexer.HTTPFeeVerifier{Endpoint: ext.FeeVerifierHTTPEndpoint}
+	}
+	cfg.SystemVerifier = ext.SystemVerifier
+	if cfg.SystemVerifier == nil && ext.SystemVerifierHTTPEndpoint != "" {
+		cfg.SystemVerifier = dkvs_indexer.HTTPSystemVerifier{Endpoint: ext.SystemVerifierHTTPEndpoint}
+	}
+	cfg.MailboxPolicy = ext.MailboxPolicy
+	cfg.BlobPolicy = ext.BlobPolicy
+	cfg.TmpPolicy = ext.TmpPolicy
+	return cfg
 }
 
 func (b *IndexerMgr) GetBaseDB() indexer.KVDB {
@@ -208,6 +315,7 @@ func (b *IndexerMgr) Start() error {
 
 func (b *IndexerMgr) Stop() {
 	b.bRunning = false
+	b.stopDKVSPruneTimer()
 }
 
 func (b *IndexerMgr) dbgc() {

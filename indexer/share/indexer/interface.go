@@ -67,8 +67,12 @@ type Indexer interface {
 
 	SetDKVSNotifyCallback(fn dkvs_indexer.NotifyFunc)
 	SetDKVSSubscriptionCallback(fn dkvs_indexer.SubscriptionNotifyFunc)
+	SetDKVSResolver(resolver dkvs_indexer.DIDResolver)
+	SetDKVSFeeVerifier(verifier dkvs_indexer.FeeVerifier)
+	SetDKVSSystemVerifier(verifier dkvs_indexer.SystemVerifier)
 	PutDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
+	NotifyDKVSNameTransfers(names []string) error
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error)
 	ListDKVSRecords(prefix string, start, limit int) ([]*wire.DKVSRecord, int, error)

@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	recordKeyPrefix = []byte("dkvs:record:")
-	hashKeyPrefix   = []byte("dkvs:hash:")
+	recordKeyPrefix       = []byte("dkvs:record:")
+	hashKeyPrefix         = []byte("dkvs:hash:")
+	nameTransferKeyPrefix = []byte("dkvs:name-transfer:")
 )
 
 type Indexer struct {
@@ -76,6 +77,33 @@ func (i *Indexer) SetSubscriptionNotify(fn SubscriptionNotifyFunc) {
 	i.subNotify = fn
 }
 
+func (i *Indexer) SetResolver(resolver DIDResolver) {
+	i.mutex.Lock()
+	defer i.mutex.Unlock()
+	if resolver == nil {
+		resolver = defaultResolver{}
+	}
+	i.resolver = resolver
+}
+
+func (i *Indexer) SetFeeVerifier(verifier FeeVerifier) {
+	i.mutex.Lock()
+	defer i.mutex.Unlock()
+	if verifier == nil {
+		verifier = defaultFeeVerifier{}
+	}
+	i.feeVerifier = verifier
+}
+
+func (i *Indexer) SetSystemVerifier(verifier SystemVerifier) {
+	i.mutex.Lock()
+	defer i.mutex.Unlock()
+	if verifier == nil {
+		verifier = defaultSystemVerifier{}
+	}
+	i.system = verifier
+}
+
 func (i *Indexer) PutLocal(record *wire.DKVSRecord) (bool, error) {
 	updated, eventType, hash, err := i.put(record)
 	if err != nil {
@@ -90,6 +118,24 @@ func (i *Indexer) PutLocal(record *wire.DKVSRecord) (bool, error) {
 func (i *Indexer) PutRemote(record *wire.DKVSRecord) (bool, error) {
 	updated, _, _, err := i.put(record)
 	return updated, err
+}
+
+func (i *Indexer) NotifyNameTransfers(names []string) error {
+	i.mutex.Lock()
+	defer i.mutex.Unlock()
+	for _, name := range names {
+		name = strings.TrimSpace(strings.ToLower(name))
+		if name == "" {
+			continue
+		}
+		if len(name) > MaxKeySegmentSize || !validSegment(name) {
+			return ErrInvalidKey
+		}
+		if err := i.db.Write(nameTransferDBKey(name), []byte{1}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (i *Indexer) Get(key string) (*wire.DKVSRecord, error) {
@@ -347,6 +393,9 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 		if !IsExpired(record, height, now) {
 			continue
 		}
+		if recordHasPaidFeeProof(record) {
+			continue
+		}
 		if err := i.db.Delete(recordDBKey(record.Key)); err != nil {
 			i.mutex.Unlock()
 			return pruned, err
@@ -364,6 +413,14 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 		i.emit(EventExpired, expired.record, expired.hash)
 	}
 	return pruned, nil
+}
+
+func recordHasPaidFeeProof(record *wire.DKVSRecord) bool {
+	if record == nil || len(record.FeeProof) == 0 {
+		return false
+	}
+	proof, err := ParseFeeProof(record.FeeProof)
+	return err == nil && proof.Mode != FeeModeFreeLocal
 }
 
 func checkpointFromRecords(records []*wire.DKVSRecord, height uint64) (*Checkpoint, error) {
@@ -395,7 +452,7 @@ func checkpointFromRecords(records []*wire.DKVSRecord, height uint64) (*Checkpoi
 func (i *Indexer) put(record *wire.DKVSRecord) (bool, uint32, chainhash.Hash, error) {
 	height := i.currentHeight()
 	now := currentUnixMilli()
-	parsed, err := i.validateParsed(record, height, now)
+	parsed, err := i.validateParsedBasic(record, height, now)
 	if err != nil {
 		return false, 0, chainhash.Hash{}, err
 	}
@@ -405,11 +462,24 @@ func (i *Indexer) put(record *wire.DKVSRecord) (bool, uint32, chainhash.Hash, er
 	if err != nil && !errors.Is(err, ErrRecordNotFound) {
 		return false, 0, chainhash.Hash{}, err
 	}
+	forceReplace, err := i.validateWritePermission(parsed, record, existing)
+	if err != nil {
+		return false, 0, chainhash.Hash{}, err
+	}
 	if err := i.validateStatefulLocked(record, parsed, existing, height, now); err != nil {
 		return false, 0, chainhash.Hash{}, err
 	}
-	if existing != nil && i.activeError(existing, height, now) == nil && CompareRecords(existing, record) >= 0 {
+	clearNameTransfer := parsed.Namespace == "name" && i.isNameTransferDirty(parsed.Segments[0])
+	if existing != nil && !forceReplace && i.activeError(existing, height, now) == nil && CompareRecords(existing, record) >= 0 {
+		if clearNameTransfer {
+			if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {
+				return false, 0, chainhash.Hash{}, err
+			}
+		}
 		return false, 0, RecordHash(existing), nil
+	}
+	if err := i.validateFeeCapacityLocked(record, parsed, existing, height, now); err != nil {
+		return false, 0, chainhash.Hash{}, err
 	}
 	data, err := MarshalRecord(record)
 	if err != nil {
@@ -430,6 +500,11 @@ func (i *Indexer) put(record *wire.DKVSRecord) (bool, uint32, chainhash.Hash, er
 	if err := i.db.Write(hashDBKey(hash), []byte(record.Key)); err != nil {
 		return false, 0, chainhash.Hash{}, err
 	}
+	if clearNameTransfer {
+		if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {
+			return false, 0, chainhash.Hash{}, err
+		}
+	}
 	eventType := notifyEventType(parsed, record, existing)
 	return true, eventType, hash, nil
 }
@@ -440,11 +515,25 @@ func (i *Indexer) validate(record *wire.DKVSRecord) error {
 }
 
 func (i *Indexer) validateAt(record *wire.DKVSRecord, height, now uint64) error {
-	_, err := i.validateParsed(record, height, now)
-	return err
+	parsed, err := i.validateParsedBasic(record, height, now)
+	if err != nil {
+		return err
+	}
+	return i.validateStoredPermission(parsed, record)
 }
 
 func (i *Indexer) validateParsed(record *wire.DKVSRecord, height, now uint64) (ParsedKey, error) {
+	parsed, err := i.validateParsedBasic(record, height, now)
+	if err != nil {
+		return parsed, err
+	}
+	if _, err := i.validateWritePermission(parsed, record, nil); err != nil {
+		return parsed, err
+	}
+	return parsed, nil
+}
+
+func (i *Indexer) validateParsedBasic(record *wire.DKVSRecord, height, now uint64) (ParsedKey, error) {
 	var parsed ParsedKey
 	if record == nil || record.Version != Version {
 		return parsed, ErrInvalidRecord
@@ -466,8 +555,15 @@ func (i *Indexer) validateParsed(record *wire.DKVSRecord, height, now uint64) (P
 	if IsTombstone(record.Flags) && len(record.Value) != 0 {
 		return parsed, ErrInvalidRecord
 	}
-	if err := i.validatePermission(parsed, record.PubKey); err != nil {
+	if err := i.verifyFeeProof(record, parsed); err != nil {
 		return parsed, err
+	}
+	return parsed, nil
+}
+
+func (i *Indexer) verifyFeeProof(record *wire.DKVSRecord, parsed ParsedKey) error {
+	if verifier, ok := i.feeVerifier.(RecordFeeVerifier); ok {
+		return verifier.VerifyRecordFeeProof(record, parsed)
 	}
 	hash := FeeAnchorHash(record)
 	var hash32 [32]byte
@@ -476,9 +572,21 @@ func (i *Indexer) validateParsed(record *wire.DKVSRecord, height, now uint64) (P
 	var keyHash32 [32]byte
 	copy(keyHash32[:], keyHash[:])
 	if err := i.feeVerifier.VerifyFeeProof(hash32, keyHash32, parsed.Namespace, RecordSize(record), record.ExpiryHeight, record.FeeProof); err != nil {
-		return parsed, err
+		return err
 	}
-	return parsed, nil
+	return nil
+}
+
+func (i *Indexer) validateFeeCapacityLocked(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, height, now uint64) error {
+	verifier, ok := i.feeVerifier.(FeeCapacityVerifier)
+	if !ok {
+		return nil
+	}
+	records, _, _, err := i.scanLocked("", nil, 0, false, height, now)
+	if err != nil {
+		return err
+	}
+	return verifier.VerifyFeeCapacity(record, parsed, existing, records, height, now)
 }
 
 func (i *Indexer) activeError(record *wire.DKVSRecord, height, now uint64) error {
@@ -512,6 +620,52 @@ func (i *Indexer) validatePermission(parsed ParsedKey, pubKey []byte) error {
 		return i.system.CanWriteSystem("/"+parsed.Namespace+"/"+strings.Join(parsed.Segments, "/"), pubKey)
 	}
 	return nil
+}
+
+func (i *Indexer) validateWritePermission(parsed ParsedKey, record, existing *wire.DKVSRecord) (bool, error) {
+	if record == nil {
+		return false, ErrInvalidRecord
+	}
+	switch parsed.Namespace {
+	case "name", "svc":
+		if existing != nil && bytes.Equal(existing.PubKey, record.PubKey) && !i.requiresNameResolve(parsed) {
+			return false, nil
+		}
+		if err := i.validatePermission(parsed, record.PubKey); err != nil {
+			return false, err
+		}
+		return existing != nil && !bytes.Equal(existing.PubKey, record.PubKey), nil
+	default:
+		return false, i.validatePermission(parsed, record.PubKey)
+	}
+}
+
+func (i *Indexer) requiresNameResolve(parsed ParsedKey) bool {
+	if parsed.Namespace != "name" || len(parsed.Segments) != 1 {
+		return false
+	}
+	return i.isNameTransferDirty(parsed.Segments[0])
+}
+
+func (i *Indexer) isNameTransferDirty(name string) bool {
+	_, err := i.db.Read(nameTransferDBKey(name))
+	return err == nil
+}
+
+func (i *Indexer) clearNameTransferDirty(name string) error {
+	if !i.isNameTransferDirty(name) {
+		return nil
+	}
+	return i.db.Delete(nameTransferDBKey(name))
+}
+
+func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRecord) error {
+	switch parsed.Namespace {
+	case "name", "svc":
+		return nil
+	default:
+		return i.validatePermission(parsed, record.PubKey)
+	}
 }
 
 func (i *Indexer) validateStatefulLocked(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, height, now uint64) error {
@@ -723,6 +877,13 @@ func hashDBKey(hash chainhash.Hash) []byte {
 	out := make([]byte, 0, len(hashKeyPrefix)+chainhash.HashSize)
 	out = append(out, hashKeyPrefix...)
 	out = append(out, hash[:]...)
+	return out
+}
+
+func nameTransferDBKey(name string) []byte {
+	out := make([]byte, 0, len(nameTransferKeyPrefix)+len(name))
+	out = append(out, nameTransferKeyPrefix...)
+	out = append(out, name...)
 	return out
 }
 
