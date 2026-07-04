@@ -21,6 +21,7 @@ type SettlementPlan struct {
 	Transfers []SettlementTransfer `json:"transfers,omitempty"`
 	ItemIDs   []int64              `json:"itemIDs,omitempty"`
 	Inputs    []OutPoint           `json:"inputs,omitempty"`
+	GasFee    *scommon.Decimal     `json:"gasFee,omitempty"`
 
 	DeployerFeeBPS   int `json:"deployerFeeBPS,omitempty"`
 	AgentFeeBPS      int `json:"agentFeeBPS,omitempty"`
@@ -66,6 +67,7 @@ func CloneSettlementPlan(plan *SettlementPlan) *SettlementPlan {
 	out.Transfers = append([]SettlementTransfer(nil), plan.Transfers...)
 	out.ItemIDs = append([]int64(nil), plan.ItemIDs...)
 	out.Inputs = append([]OutPoint(nil), plan.Inputs...)
+	out.GasFee = CloneDecimal(plan.GasFee)
 	return &out
 }
 
@@ -111,6 +113,7 @@ func BuildSettlementResultPlan(plan *SettlementPlan, opts SettlementResultOption
 		Height:   plan.Height,
 		ItemIDs:  append([]int64(nil), plan.ItemIDs...),
 		Inputs:   append([]OutPoint(nil), plan.Inputs...),
+		GasFee:   CloneDecimal(plan.GasFee),
 	}
 	for _, itemID := range plan.ItemIDs {
 		out.Inputs = append(out.Inputs, opts.InputsByItem[itemID]...)

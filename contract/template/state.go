@@ -220,6 +220,12 @@ type RunningData struct {
 	LPBalances        map[string]*scommon.Decimal `json:"lpBalances,omitempty"`
 	LPCosts           map[string]int64            `json:"lpCosts,omitempty"`
 	Closed            bool                        `json:"closed,omitempty"`
+	FeeBalance        *scommon.Decimal            `json:"feeBalance,omitempty"`
+	AutopayStatus     string                      `json:"autopayStatus,omitempty"`
+	ActiveHeight      int64                       `json:"activeHeight,omitempty"`
+	NextPayHeight     int64                       `json:"nextPayHeight,omitempty"`
+	LastPayHeight     int64                       `json:"lastPayHeight,omitempty"`
+	PaidBlockCount    int64                       `json:"paidBlockCount,omitempty"`
 }
 
 type runningDataJSON struct {
@@ -240,6 +246,12 @@ type runningDataJSON struct {
 	LPBalances        map[string]string `json:"lpBalances,omitempty"`
 	LPCosts           map[string]int64  `json:"lpCosts,omitempty"`
 	Closed            bool              `json:"closed,omitempty"`
+	FeeBalance        string            `json:"feeBalance,omitempty"`
+	AutopayStatus     string            `json:"autopayStatus,omitempty"`
+	ActiveHeight      int64             `json:"activeHeight,omitempty"`
+	NextPayHeight     int64             `json:"nextPayHeight,omitempty"`
+	LastPayHeight     int64             `json:"lastPayHeight,omitempty"`
+	PaidBlockCount    int64             `json:"paidBlockCount,omitempty"`
 }
 
 func (r RunningData) MarshalJSON() ([]byte, error) {
@@ -261,6 +273,12 @@ func (r RunningData) MarshalJSON() ([]byte, error) {
 		LPBalances:        decimalStringMap(r.LPBalances),
 		LPCosts:           cloneLPCosts(r.LPCosts),
 		Closed:            r.Closed,
+		FeeBalance:        decimalString(r.FeeBalance),
+		AutopayStatus:     r.AutopayStatus,
+		ActiveHeight:      r.ActiveHeight,
+		NextPayHeight:     r.NextPayHeight,
+		LastPayHeight:     r.LastPayHeight,
+		PaidBlockCount:    r.PaidBlockCount,
 	})
 }
 
@@ -306,6 +324,9 @@ func (r *RunningData) UnmarshalJSON(data []byte) error {
 	if r.TotalLPTAmt, err = parseOptionalStateDecimal("totalLptAmt", item.TotalLPTAmt); err != nil {
 		return err
 	}
+	if r.FeeBalance, err = parseOptionalStateDecimal("feeBalance", item.FeeBalance); err != nil {
+		return err
+	}
 	r.TradingReady = item.TradingReady
 	r.TotalDealCount = item.TotalDealCount
 	r.LPBalances, err = parseStateDecimalMap("lpBalances", item.LPBalances)
@@ -314,6 +335,11 @@ func (r *RunningData) UnmarshalJSON(data []byte) error {
 	}
 	r.LPCosts = cloneLPCosts(item.LPCosts)
 	r.Closed = item.Closed
+	r.AutopayStatus = item.AutopayStatus
+	r.ActiveHeight = item.ActiveHeight
+	r.NextPayHeight = item.NextPayHeight
+	r.LastPayHeight = item.LastPayHeight
+	r.PaidBlockCount = item.PaidBlockCount
 	return nil
 }
 
@@ -490,6 +516,9 @@ type defaultInvokeRetention struct {
 }
 
 func retainDefaultInvokeFunding(contract Contract, output ContractOutput) (defaultInvokeRetention, ContractOutput, error) {
+	if _, ok := contract.(*AutopayContract); ok {
+		return defaultInvokeRetention{}, output, nil
+	}
 	assetA, assetB := defaultInvokePoolAssets(contract)
 	retention := defaultInvokeRetention{}
 	next := output
@@ -644,6 +673,9 @@ func decimalAddAllowNil(a, b *scommon.Decimal) *scommon.Decimal {
 }
 
 func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state TemplateRuntimeState, req ApplyInvokeRequest) (*InvokeItem, error) {
+	if c, ok := contract.(*AutopayContract); ok {
+		return NewAutopayDefaultInvokeItem(c, id, req)
+	}
 	if c, ok := contract.(*ExchangeContract); ok {
 		inputA, inputB, inUtxos, err := exchangeFundingAmounts(c, req.FundingOutput)
 		if err != nil {
@@ -1114,6 +1146,13 @@ func (r *ContractRuntime) initializeRuntimeState() error {
 			},
 		}
 		return r.saveRuntimeState(state)
+	case *AutopayContract:
+		state := TemplateRuntimeState{
+			Running: RunningData{
+				AutopayStatus: AutopayStatusFunding,
+			},
+		}
+		return r.saveRuntimeState(state)
 	default:
 		return nil
 	}
@@ -1245,6 +1284,8 @@ func contractAssetName(contract Contract) string {
 		return c.AssetName
 	case *ExchangeContract:
 		return c.AssetAName
+	case *AutopayContract:
+		return c.FeeAssetName
 	default:
 		return ""
 	}

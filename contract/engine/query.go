@@ -127,7 +127,7 @@ func NewQueryServiceForParams(store ContractQueryStore, params *chaincfg.Params)
 }
 
 func (q QueryService) SupportedContracts() []string {
-	contracts := []string{"evm", contractcommon.TemplateLimitOrder, contractcommon.TemplateAMM, contractcommon.TemplateExchange}
+	contracts := []string{"evm", contractcommon.TemplateLimitOrder, contractcommon.TemplateAMM, contractcommon.TemplateExchange, contractcommon.TemplateAutopay}
 	if q.chainParams == nil || q.chainParams.Net != wire.MainNet {
 		contracts = append(contracts[:1], append([]string{"agent:prediction"}, contracts[1:]...)...)
 	}

@@ -136,13 +136,26 @@ func (r *ContractRuntime) SettleBlockWithGasConfig(height int64, gasConfig GasCo
 func (r *ContractRuntime) SettleBlockWithGasConfigAndPrecision(height int64, gasConfig GasConfig,
 	assetPrecision contractframework.AssetPrecisionResolver) (*SettlementPlan, error) {
 
-	switch r.contract.(type) {
+	switch c := r.contract.(type) {
 	case *LimitOrderContract:
 		return r.settleLimitOrders(height, assetPrecision)
 	case *AMMContract:
 		return r.settleAMM(height, assetPrecision)
 	case *ExchangeContract:
 		return r.settleExchange(height, gasConfig.Normalize())
+	case *AutopayContract:
+		state, err := r.RuntimeState()
+		if err != nil {
+			return nil, err
+		}
+		plan, err := c.settleAutopay(r, &state, height, gasConfig.Normalize())
+		if err != nil {
+			return nil, err
+		}
+		if err := r.saveRuntimeState(state); err != nil {
+			return nil, err
+		}
+		return plan, nil
 	default:
 		addr := r.Address()
 		return &SettlementPlan{

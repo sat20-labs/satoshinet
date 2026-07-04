@@ -16,6 +16,7 @@ const (
 	TemplateSwapLegacy = "swap.tc"
 	TemplateAMM        = "amm.tc"
 	TemplateExchange   = "exchange.tc"
+	TemplateAutopay    = "autopay.tc"
 )
 
 const (
@@ -50,6 +51,9 @@ var templateInvokeActions = map[string]map[string]struct{}{
 		TemplateInvokeAPIExchange: {},
 		TemplateInvokeAPIClose:    {},
 	},
+	TemplateAutopay: {
+		TemplateInvokeAPIClose: {},
+	},
 }
 
 const (
@@ -82,6 +86,8 @@ const (
 	ExchangePriceModeHeight = "height"
 	ExchangePriceModeSoldA  = "sold_a"
 	MaxExchangePriceSteps   = 128
+	AutopayScheduleFixed    = "fixed"
+	AutopayScheduleLinear   = "linear"
 )
 
 type TemplateLimitOrderInvokeParam struct {
@@ -116,6 +122,15 @@ type TemplateExchangeContract struct {
 	Steps      []TemplateExchangePriceStep `json:"steps"`
 }
 
+type TemplateAutopayContract struct {
+	Recipient    string `json:"recipient"`
+	FeeAssetName string `json:"feeAssetName"`
+	ScheduleMode string `json:"scheduleMode"`
+	BaseAmount   string `json:"baseAmount"`
+	StepAmount   string `json:"stepAmount,omitempty"`
+	EndHeight    int64  `json:"endHeight,omitempty"`
+}
+
 type TemplateExchangeInvokeParam struct {
 	MinOutA string `json:"minOutA,omitempty"`
 }
@@ -134,6 +149,8 @@ func NormalizeTemplateName(name string) string {
 		return TemplateAMM
 	case TemplateExchange:
 		return TemplateExchange
+	case TemplateAutopay:
+		return TemplateAutopay
 	default:
 		return strings.ToLower(strings.TrimSpace(name))
 	}
@@ -220,6 +237,20 @@ func EncodeTemplateExchangeContent(contract TemplateExchangeContract) ([]byte, e
 			AddData([]byte(step.BPerA))
 	}
 	return builder.Script()
+}
+
+func EncodeTemplateAutopayContent(contract TemplateAutopayContract) ([]byte, error) {
+	if err := contract.Check(); err != nil {
+		return nil, err
+	}
+	return txscript.NewScriptBuilder().
+		AddData([]byte(contract.Recipient)).
+		AddData([]byte(contract.FeeAssetName)).
+		AddData([]byte(contract.ScheduleMode)).
+		AddData([]byte(contract.BaseAmount)).
+		AddData([]byte(contract.StepAmount)).
+		AddInt64(contract.EndHeight).
+		Script()
 }
 
 func (p *TemplateLimitOrderInvokeParam) Encode() ([]byte, error) {
@@ -435,6 +466,50 @@ func (c TemplateExchangeContract) Check() error {
 	return nil
 }
 
+func (c TemplateAutopayContract) Check() error {
+	if strings.TrimSpace(c.Recipient) == "" {
+		return fmt.Errorf("missing autopay recipient")
+	}
+	if err := checkTemplatePayableAssetName(c.FeeAssetName); err != nil {
+		return fmt.Errorf("invalid fee asset: %w", err)
+	}
+	switch c.ScheduleMode {
+	case AutopayScheduleFixed:
+	case AutopayScheduleLinear:
+	default:
+		return fmt.Errorf("unsupported autopay schedule mode %s", c.ScheduleMode)
+	}
+	base, err := parsePositiveDecimal("base amount", c.BaseAmount)
+	if err != nil {
+		return err
+	}
+	if c.FeeAssetName == SatoshiAssetName && base.Cmp(indexercommon.NewDefaultDecimal(base.Int64())) != 0 {
+		return fmt.Errorf("satoshi autopay base amount must be an integer")
+	}
+	if c.StepAmount != "" {
+		step, err := parseNonNegativeDecimal("step amount", c.StepAmount)
+		if err != nil {
+			return err
+		}
+		if c.FeeAssetName == SatoshiAssetName && step.Cmp(indexercommon.NewDefaultDecimal(step.Int64())) != 0 {
+			return fmt.Errorf("satoshi autopay step amount must be an integer")
+		}
+	}
+	if c.ScheduleMode == AutopayScheduleFixed && c.StepAmount != "" {
+		step, err := parseNonNegativeDecimal("step amount", c.StepAmount)
+		if err != nil {
+			return err
+		}
+		if step.Sign() != 0 {
+			return fmt.Errorf("fixed autopay step amount must be zero")
+		}
+	}
+	if c.EndHeight < 0 {
+		return fmt.Errorf("invalid end height %d", c.EndHeight)
+	}
+	return nil
+}
+
 func checkTemplateAssetName(assetName string) error {
 	name := wire.NewAssetNameFromString(assetName)
 	if name == nil {
@@ -442,6 +517,20 @@ func checkTemplateAssetName(assetName string) error {
 	}
 	if name.Type != indexercommon.ASSET_TYPE_FT {
 		return fmt.Errorf("invalid asset type %s", name.Type)
+	}
+	if name.Protocol == "" || name.Ticker == "" {
+		return fmt.Errorf("invalid asset name %s", assetName)
+	}
+	return nil
+}
+
+func checkTemplatePayableAssetName(assetName string) error {
+	if assetName == SatoshiAssetName {
+		return nil
+	}
+	name := wire.NewAssetNameFromString(assetName)
+	if name == nil {
+		return fmt.Errorf("invalid asset name %s", assetName)
 	}
 	if name.Protocol == "" || name.Ticker == "" {
 		return fmt.Errorf("invalid asset name %s", assetName)

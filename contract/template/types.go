@@ -17,6 +17,7 @@ const (
 	TemplateSwapLegacy = contractcommon.TemplateSwapLegacy
 	TemplateAMM        = contractcommon.TemplateAMM
 	TemplateExchange   = contractcommon.TemplateExchange
+	TemplateAutopay    = contractcommon.TemplateAutopay
 )
 
 const (

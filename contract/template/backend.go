@@ -294,11 +294,16 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 	if err != nil {
 		return err
 	}
+	fundingOutput := output
+	if _, ok := runtime.Contract().(*AutopayContract); ok {
+		fundingOutput = stripCurrentResultGasFunding(output, e.GasConfig.Normalize().GasAssetName,
+			contractframework.GasFeeIf(hasResultGas, resultFee))
+	}
 	item, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{
 		Action:                contractcommon.ContractInvokeAPIDefault,
 		CallID:                DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
 		Invoker:               invoker,
-		FundingOutput:         output,
+		FundingOutput:         fundingOutput,
 		Height:                e.BlockHeight,
 		Timestamp:             e.BlockHeight,
 		ResultGasFee:          contractframework.GasFeeIf(hasResultGas, resultFee),
@@ -311,7 +316,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 		return nil
 	}
 	if !templateResultGasIsSeparate(runtime.Contract(), e.GasConfig.Normalize().GasAssetName) {
-		if err := runtime.ApplyGasFunding(output, e.GasConfig.Normalize().GasAssetName); err != nil {
+		if err := runtime.ApplyGasFunding(fundingOutput, e.GasConfig.Normalize().GasAssetName); err != nil {
 			return err
 		}
 	}
@@ -499,7 +504,8 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		return err
 	}
 	runtime.SetCurrentBlock(e.BlockHeight)
-	if err := runtime.ApplyFunding(stripTemplateResultGasFunding(runtime.Contract(), fundingOutput, e.GasConfig.GasAssetName), e.GasConfig.GasAssetName); err != nil {
+	if err := runtime.ApplyFunding(stripTemplateResultGasFunding(runtime.Contract(), fundingOutput, e.GasConfig.GasAssetName,
+		contractframework.GasFeeIf(hasResultGas, resultFee)), e.GasConfig.GasAssetName); err != nil {
 		return nil
 	}
 	e.Store.Add(runtime)
@@ -562,12 +568,16 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err := runtime.CheckInvokeFunding(validated.Payload.Action, validated.Payload.Param, validated.FundingOutput); err != nil {
 		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee)
 	}
+	fundingOutput := validated.FundingOutput
+	if _, ok := runtime.Contract().(*AutopayContract); ok {
+		fundingOutput = stripCurrentResultGasFunding(validated.FundingOutput, e.GasConfig.Normalize().GasAssetName, resultFee)
+	}
 	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:        validated.Payload.Action,
 		Param:         validated.Payload.Param,
 		CallID:        callID,
 		Invoker:       invoker,
-		FundingOutput: validated.FundingOutput,
+		FundingOutput: fundingOutput,
 		Height:        e.BlockHeight,
 		Timestamp:     e.BlockHeight,
 		ResultGasFee:  resultFee,
@@ -576,7 +586,7 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		return err
 	}
 	if !templateResultGasIsSeparate(runtime.Contract(), e.GasConfig.GasAssetName) {
-		if err := runtime.ApplyGasFunding(validated.FundingOutput, e.GasConfig.GasAssetName); err != nil {
+		if err := runtime.ApplyGasFunding(fundingOutput, e.GasConfig.GasAssetName); err != nil {
 			return err
 		}
 	}
@@ -665,6 +675,9 @@ func templateResultGasIsSeparate(contract Contract, gasAssetName string) bool {
 	if gasAssetName == "" || gasAssetName == SatoshiAssetName {
 		return false
 	}
+	if _, ok := contract.(*AutopayContract); ok {
+		return false
+	}
 	if _, ok := contract.(*ExchangeContract); ok {
 		return false
 	}
@@ -673,10 +686,16 @@ func templateResultGasIsSeparate(contract Contract, gasAssetName string) bool {
 }
 
 func templateUsesFrameworkGasRefund(contract Contract, gasAssetName string) bool {
+	if _, ok := contract.(*AutopayContract); ok {
+		return false
+	}
 	return templateResultGasIsSeparate(contract, gasAssetName)
 }
 
-func stripTemplateResultGasFunding(contract Contract, output ContractOutput, gasAssetName string) ContractOutput {
+func stripTemplateResultGasFunding(contract Contract, output ContractOutput, gasAssetName string, resultGasFee *scommon.Decimal) ContractOutput {
+	if _, ok := contract.(*AutopayContract); ok {
+		return stripCurrentResultGasFunding(output, gasAssetName, resultGasFee)
+	}
 	if !templateResultGasIsSeparate(contract, gasAssetName) {
 		return output
 	}
@@ -685,6 +704,15 @@ func stripTemplateResultGasFunding(contract Contract, output ContractOutput, gas
 	if err == nil && gas != nil && gas.Sign() > 0 {
 		_ = next.SubAssetAmount(gasAssetName, gas)
 	}
+	return next
+}
+
+func stripCurrentResultGasFunding(output ContractOutput, gasAssetName string, resultGasFee *scommon.Decimal) ContractOutput {
+	if gasAssetName == "" || resultGasFee == nil || resultGasFee.Sign() <= 0 {
+		return output
+	}
+	next := output
+	_ = next.SubAssetAmount(gasAssetName, resultGasFee)
 	return next
 }
 

@@ -183,6 +183,9 @@ func templateManagedGasPaid(contract ContractAddress, store *RuntimeStore, plan 
 	if _, ok := runtime.Contract().(*ExchangeContract); ok {
 		return true
 	}
+	if _, ok := runtime.Contract().(*AutopayContract); ok {
+		return plan.GasFee != nil && plan.GasFee.Sign() > 0
+	}
 	if len(plan.ItemIDs) == 0 {
 		return false
 	}
@@ -453,6 +456,49 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	}
 
 	assets := wire.TxAssets{}
+	if autopay, ok := runtime.Contract().(*AutopayContract); ok {
+		if state.Running.FeeBalance != nil && state.Running.FeeBalance.Sign() > 0 &&
+			autopay.FeeAssetName != SatoshiAssetName {
+			feeAssets, err := newAssetSet(autopay.FeeAssetName, state.Running.FeeBalance.String())
+			if err != nil {
+				return ResultOutput{}, err
+			}
+			if err := assets.Merge(feeAssets); err != nil {
+				return ResultOutput{}, err
+			}
+		}
+		gasAssetName := gasConfig.GasAssetName
+		if gasAssetName == "" {
+			gasAssetName = DefaultGasConfig().GasAssetName
+		}
+		if state.Running.GasBalance != nil && state.Running.GasBalance.Sign() > 0 &&
+			gasAssetName != SatoshiAssetName {
+			gasAssets, err := newGasAssetSet(gasAssetName, state.Running.GasBalance.String())
+			if err != nil {
+				return ResultOutput{}, err
+			}
+			if err := assets.Merge(gasAssets); err != nil {
+				return ResultOutput{}, err
+			}
+		}
+		if len(assets) == 0 {
+			assets = nil
+		} else if len(availableAssets) != 0 {
+			assets = capAssetsByAvailable(assets, availableAssets)
+		}
+		to := contract.MustEncode()
+		if state.Running.Closed {
+			to = runtime.RuntimeBase().Deployer()
+		}
+		value := int64(0)
+		if autopay.FeeAssetName == SatoshiAssetName {
+			value += decimalInt64(state.Running.FeeBalance)
+		}
+		if gasAssetName == SatoshiAssetName {
+			value += decimalInt64(state.Running.GasBalance)
+		}
+		return ResultOutput{To: to, Value: value, Assets: assets}, nil
+	}
 	assetName := contractAssetName(runtime.Contract())
 	if assetName != "" && state.Running.AssetAInPool != nil && state.Running.AssetAInPool.Sign() > 0 {
 		poolAssets, err := newAssetSet(assetName, state.Running.AssetAInPool.String())

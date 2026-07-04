@@ -50,6 +50,24 @@ type AMMStateView struct {
 	Closed         bool              `json:"closed,omitempty"`
 }
 
+type AutopayStateView struct {
+	TemplateStateView
+	Recipient     string `json:"recipient"`
+	FeeAssetName  string `json:"feeAssetName"`
+	ScheduleMode  string `json:"scheduleMode"`
+	BaseAmount    string `json:"baseAmount"`
+	StepAmount    string `json:"stepAmount,omitempty"`
+	EndHeight     int64  `json:"endHeight,omitempty"`
+	Status        string `json:"status"`
+	FeeBalance    string `json:"feeBalance,omitempty"`
+	GasBalance    string `json:"gasBalance,omitempty"`
+	ActiveHeight  int64  `json:"activeHeight,omitempty"`
+	NextPayHeight int64  `json:"nextPayHeight,omitempty"`
+	LastPayHeight int64  `json:"lastPayHeight,omitempty"`
+	PaidBlocks    int64  `json:"paidBlocks,omitempty"`
+	Closed        bool   `json:"closed,omitempty"`
+}
+
 func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (interface{}, error) {
 	state, err := r.RuntimeState()
 	if err != nil {
@@ -91,6 +109,31 @@ func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (int
 		}
 		view.AssetName = contract.AssetName
 		view.Assets = templateViewAssets(contract.AssetName, SatoshiAssetName)
+		return view, nil
+	case *AutopayContract:
+		status := state.Running.AutopayStatus
+		if status == "" {
+			status = AutopayStatusFunding
+		}
+		view := AutopayStateView{
+			TemplateStateView: base,
+			Recipient:         contract.Recipient,
+			FeeAssetName:      contract.FeeAssetName,
+			ScheduleMode:      contract.ScheduleMode,
+			BaseAmount:        contract.BaseAmount,
+			StepAmount:        contract.StepAmount,
+			EndHeight:         contract.EndHeight,
+			Status:            status,
+			FeeBalance:        decimalString(state.Running.FeeBalance),
+			GasBalance:        decimalString(state.Running.GasBalance),
+			ActiveHeight:      state.Running.ActiveHeight,
+			NextPayHeight:     state.Running.NextPayHeight,
+			LastPayHeight:     state.Running.LastPayHeight,
+			PaidBlocks:        state.Running.PaidBlockCount,
+			Closed:            state.Running.Closed,
+		}
+		view.AssetName = contract.FeeAssetName
+		view.Assets = templateViewAssets(contract.FeeAssetName)
 		return view, nil
 	default:
 		return base, nil
