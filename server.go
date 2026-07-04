@@ -3691,6 +3691,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 			Temperature: cfg.AgentLLMTemperature,
 			MaxTokens:   cfg.AgentLLMMaxTokens,
 		},
+		TrustedEvidenceSources: cfg.AgentTrustedEvidence,
 		TipContext: func() (contractoracle.TipContext, error) {
 			return s.agentOracleTipContext()
 		},
