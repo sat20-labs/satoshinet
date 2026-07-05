@@ -124,12 +124,18 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 			return nil, err
 		}
 		contract := view.Contract
+		planGasConfig := gasConfig
+		if store != nil {
+			if runtime, ok := store.Get(contract); ok {
+				planGasConfig = GasConfigForRuntime(gasConfig, runtime)
+			}
+		}
 		if contractUTXOs != nil {
 			closed, deployer, err := closedContractChangeRecipient(contract, store)
 			if err != nil {
 				return nil, err
 			}
-			retain, err := contractChangeOutput(contract, store, gasConfig, view.Assets)
+			retain, err := contractChangeOutput(contract, store, planGasConfig, view.Assets)
 			if err != nil {
 				return nil, err
 			}
@@ -144,12 +150,12 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 					Plan:             out[i],
 					View:             view,
 					ManagedAssets:    retain,
-					GasAssetName:     gasConfig.GasAssetName,
+					GasAssetName:     planGasConfig.GasAssetName,
 					GasFee:           out[i].GasFee,
 					Precision:        precision,
 					ManagedGasPaid:   templateManagedGasPaid(contract, store, out[i]),
 					DeployerAddress:  deployer,
-					BootstrapAddress: gasConfig.BootstrapAddress,
+					BootstrapAddress: planGasConfig.BootstrapAddress,
 					ManagedMode:      managedMode,
 					SurplusMode:      mode,
 				})
@@ -158,7 +164,7 @@ func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasCo
 			}
 			out[i] = augmented
 		} else {
-			change, err := contractChangeOutput(contract, store, gasConfig, nil)
+			change, err := contractChangeOutput(contract, store, planGasConfig, nil)
 			if err != nil {
 				return nil, err
 			}

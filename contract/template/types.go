@@ -344,6 +344,7 @@ type Contract interface {
 	TemplateName() string
 	Version() uint32
 	NetworkExclusive() bool
+	BaseGasConfig() contractframework.BaseGasConfig
 	Encode() ([]byte, error)
 	Decode([]byte) error
 	CheckContent() error

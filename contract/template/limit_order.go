@@ -5,6 +5,7 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -23,6 +24,10 @@ func (c *LimitOrderContract) TemplateName() string {
 
 func (c *LimitOrderContract) NetworkExclusive() bool {
 	return false
+}
+
+func (c *LimitOrderContract) BaseGasConfig() contractframework.BaseGasConfig {
+	return contractframework.BaseGasConfig{}
 }
 
 func (c *LimitOrderContract) Version() uint32 {

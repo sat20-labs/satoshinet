@@ -51,6 +51,10 @@ func (c *AutopayContract) NetworkExclusive() bool {
 	return true
 }
 
+func (c *AutopayContract) BaseGasConfig() contractframework.BaseGasConfig {
+	return contractframework.BaseGasConfig{}
+}
+
 func (c *AutopayContract) Version() uint32 {
 	return CurrentTemplateVersion
 }

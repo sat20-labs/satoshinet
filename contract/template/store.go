@@ -150,7 +150,8 @@ func (s *RuntimeStore) SettleBlockWithGasConfigAndPrecision(height int64, gasCon
 
 	plans := make([]*SettlementPlan, 0)
 	for _, key := range keys {
-		plan, err := s.runtimes[key].SettleBlockWithGasConfigAndPrecision(height, gasConfig, assetPrecision)
+		runtimeGasConfig := GasConfigForRuntime(gasConfig, s.runtimes[key])
+		plan, err := s.runtimes[key].SettleBlockWithGasConfigAndPrecision(height, runtimeGasConfig, assetPrecision)
 		if err != nil {
 			return nil, err
 		}

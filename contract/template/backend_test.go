@@ -23,6 +23,30 @@ func testTemplateInvokerResolver(tx *wire.MsgTx, contractTx Tx) (string, error) 
 	return "invoker-address", nil
 }
 
+type testBaseGasLimitOrderContract struct {
+	LimitOrderContract
+	baseGas contractframework.BaseGasConfig
+}
+
+func newTestBaseGasLimitOrderContract(assetName string, baseGas contractframework.BaseGasConfig) *testBaseGasLimitOrderContract {
+	return &testBaseGasLimitOrderContract{
+		LimitOrderContract: *NewLimitOrderContract(assetName),
+		baseGas:            baseGas,
+	}
+}
+
+func (c *testBaseGasLimitOrderContract) BaseGasConfig() contractframework.BaseGasConfig {
+	return c.baseGas
+}
+
+func testTemplateRegistryWithBaseGas(baseGas contractframework.BaseGasConfig) *Registry {
+	registry := NewRegistry()
+	mustRegister(registry, TemplateLimitOrder, func() Contract {
+		return newTestBaseGasLimitOrderContract("", baseGas)
+	})
+	return registry
+}
+
 func TestBackendDeployThenInvoke(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
@@ -69,6 +93,38 @@ func TestBackendDeployGasResult(t *testing.T) {
 	require.Empty(t, result.ResultPlans[0].ItemIDs)
 	require.Len(t, result.ResultPlans[0].Inputs, 1)
 	require.Equal(t, "0.001", result.ResultPlans[0].GasFee.String())
+}
+
+func TestBackendUsesTemplateDeployBaseGas(t *testing.T) {
+	baseGas := contractframework.BaseGasConfig{DeployBaseGas: 1}
+	contract := newTestBaseGasLimitOrderContract("ordx:f:test", baseGas)
+	deployTx, addr := testTemplateDeployTxWithGasLimit(t, contract, 7, 1)
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:      []*wire.MsgTx{deployTx},
+		Registry: testTemplateRegistryWithBaseGas(baseGas),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
+	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
+	require.True(t, addr.Equal(result.Records[0].Contract))
+	require.EqualValues(t, 1, result.Records[0].GasLimit)
+}
+
+func TestBackendUsesTemplateInvokeBaseGas(t *testing.T) {
+	baseGas := contractframework.BaseGasConfig{InvokeBaseGas: DefaultGasConfig().InvokeBaseGas + 1}
+	contract := newTestBaseGasLimitOrderContract("ordx:f:test", baseGas)
+	deployTx, addr := testTemplateDeployTx(t, contract)
+	invokeTx := testTemplateLimitOrderInvokeTx(t, addr, OrderTypeBuy)
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:      []*wire.MsgTx{deployTx, invokeTx},
+		Registry: testTemplateRegistryWithBaseGas(baseGas),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, TxTypeDeploy, result.Records[0].Type)
 }
 
 func TestDeployRequiresResult(t *testing.T) {
@@ -937,10 +993,15 @@ func testTemplateDeployTx(t *testing.T, contract Contract) (*wire.MsgTx, Contrac
 
 func testTemplateDeployTxWithNonce(t *testing.T, contract Contract, nonce uint64) (*wire.MsgTx, ContractAddress) {
 	t.Helper()
+	return testTemplateDeployTxWithGasLimit(t, contract, nonce, DefaultGasConfig().DeployBaseGas)
+}
+
+func testTemplateDeployTxWithGasLimit(t *testing.T, contract Contract, nonce uint64, gasLimit int64) (*wire.MsgTx, ContractAddress) {
+	t.Helper()
 	content, err := contract.Encode()
 	require.NoError(t, err)
 	deploy := DeployPayload{
-		GasLimit:        DefaultGasConfig().DeployBaseGas,
+		GasLimit:        gasLimit,
 		SubType:         contract.TemplateName(),
 		Version:         contract.Version(),
 		DeployNonce:     nonce,

@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/txscript"
 )
 
@@ -41,6 +42,10 @@ func (c *ExchangeContract) TemplateName() string {
 
 func (c *ExchangeContract) NetworkExclusive() bool {
 	return false
+}
+
+func (c *ExchangeContract) BaseGasConfig() contractframework.BaseGasConfig {
+	return contractframework.BaseGasConfig{}
 }
 
 func (c *ExchangeContract) Version() uint32 {

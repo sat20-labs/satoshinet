@@ -71,6 +71,10 @@ func (r *ContractRuntime) Version() uint32 {
 	return r.contract.Version()
 }
 
+func (r *ContractRuntime) NetworkExclusive() bool {
+	return r.contract.NetworkExclusive()
+}
+
 func (r *ContractRuntime) Encode() ([]byte, error) {
 	return r.contract.Encode()
 }
@@ -81,6 +85,10 @@ func (r *ContractRuntime) Decode(data []byte) error {
 
 func (r *ContractRuntime) CheckContent() error {
 	return r.contract.CheckContent()
+}
+
+func (r *ContractRuntime) BaseGasConfig() contractframework.BaseGasConfig {
+	return r.contract.BaseGasConfig()
 }
 
 func (r *ContractRuntime) Contract() Contract {

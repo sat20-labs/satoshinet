@@ -32,7 +32,6 @@ type GasConfig struct {
 }
 
 type BaseGasConfig struct {
-	GasAssetName     string
 	DeployBaseGas    int64
 	InvokeBaseGas    int64
 	ResultBaseGas    int64
@@ -44,7 +43,6 @@ type BaseGasConfig struct {
 func DefaultBaseGasConfig() BaseGasConfig {
 	cfg := DefaultGasConfig()
 	return BaseGasConfig{
-		GasAssetName:     cfg.GasAssetName,
 		DeployBaseGas:    cfg.DeployBaseGas,
 		InvokeBaseGas:    cfg.InvokeBaseGas,
 		ResultBaseGas:    cfg.ResultBaseGas,
@@ -56,9 +54,6 @@ func DefaultBaseGasConfig() BaseGasConfig {
 
 func NormalizeBaseGasConfig(cfg BaseGasConfig) BaseGasConfig {
 	def := DefaultBaseGasConfig()
-	if cfg.GasAssetName == "" {
-		cfg.GasAssetName = def.GasAssetName
-	}
 	if cfg.DeployBaseGas == 0 {
 		cfg.DeployBaseGas = def.DeployBaseGas
 	}
@@ -80,11 +75,10 @@ func NormalizeBaseGasConfig(cfg BaseGasConfig) BaseGasConfig {
 	return cfg
 }
 
-func BaseGasConfigFromFields(gasAssetName string, deployBaseGas, invokeBaseGas,
+func BaseGasConfigFromFields(deployBaseGas, invokeBaseGas,
 	resultBaseGas, triggerBaseGas, maxGasPerInvoke int64) BaseGasConfig {
 
 	return BaseGasConfig{
-		GasAssetName:     gasAssetName,
 		DeployBaseGas:    deployBaseGas,
 		InvokeBaseGas:    invokeBaseGas,
 		ResultBaseGas:    resultBaseGas,
@@ -92,6 +86,28 @@ func BaseGasConfigFromFields(gasAssetName string, deployBaseGas, invokeBaseGas,
 		MaxGasPerInvoke:  maxGasPerInvoke,
 		MaxGasPerTrigger: maxGasPerInvoke,
 	}
+}
+
+func ApplyBaseGasConfig(cfg GasConfig, base BaseGasConfig) GasConfig {
+	if base.DeployBaseGas != 0 {
+		cfg.DeployBaseGas = base.DeployBaseGas
+	}
+	if base.InvokeBaseGas != 0 {
+		cfg.InvokeBaseGas = base.InvokeBaseGas
+	}
+	if base.ResultBaseGas != 0 {
+		cfg.ResultBaseGas = base.ResultBaseGas
+	}
+	if base.TriggerBaseGas != 0 {
+		cfg.TriggerBaseGas = base.TriggerBaseGas
+	}
+	if base.MaxGasPerInvoke != 0 {
+		cfg.MaxGasPerInvoke = base.MaxGasPerInvoke
+	}
+	if base.MaxGasPerTrigger != 0 {
+		cfg.MaxGasPerTrigger = base.MaxGasPerTrigger
+	}
+	return cfg
 }
 
 func DefaultGasConfig() GasConfig {

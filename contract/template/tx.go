@@ -108,32 +108,42 @@ func ValidateDeployTxBasic(tx *wire.MsgTx, prefix string, registry *Registry, cf
 }
 
 func ValidateDeployTxBasicWithActor(tx *wire.MsgTx, prefix string, registry *Registry, cfg GasConfig, actor string) (DeployValidation, error) {
-	return contractframework.ValidateDeployWithRuntime(contractframework.DeployValidationRequest{
-		Tx:         tx,
-		Prefix:     prefix,
-		ModuleName: "template",
-		ParseSpec:  templateParseSpec(),
-		GasConfig:  cfg,
-		Actor:      actor,
-		Resolver:   StandardContractScriptResolver,
-		BuildRuntime: func(payload contractframework.DeployPayload, deployer string) (ContractAddress, any, error) {
-			addr, _, err := DeriveContractAddress(
-				prefix,
-				payload.ContractContent,
-				deployer,
-				payload.DeployNonce,
-			)
-			if err != nil {
-				return ContractAddress{}, nil, err
-			}
-			deployPayload := templateDeployPayloadFromFramework(&payload)
-			runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, registry, deployer)
-			if err != nil {
-				return ContractAddress{}, nil, err
-			}
-			return addr, runtime, nil
-		},
-	})
+	parsed, err := ParseTx(tx, nil)
+	if err != nil {
+		return DeployValidation{}, err
+	}
+	if parsed.Type != TxTypeDeploy || parsed.Deploy == nil {
+		return DeployValidation{}, fmt.Errorf("not a template DEPLOY transaction")
+	}
+	addr, _, err := DeriveContractAddress(prefix, parsed.Deploy.ContractContent, actor, parsed.Deploy.DeployNonce)
+	if err != nil {
+		return DeployValidation{}, err
+	}
+	deployPayload := templateDeployPayloadFromFramework(parsed.Deploy)
+	runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, registry, actor)
+	if err != nil {
+		return DeployValidation{}, err
+	}
+	gasConfig := GasConfigForRuntime(cfg, runtime)
+	if err := contractframework.ValidateDeployGasLimit(parsed.Deploy.GasLimit, gasConfig); err != nil {
+		return DeployValidation{}, err
+	}
+	fundingOutputs, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(prefix), addr)
+	if err != nil {
+		return DeployValidation{}, err
+	}
+	if len(fundingOutputs) > 1 {
+		return DeployValidation{}, fmt.Errorf("template DEPLOY must use at most one contract output")
+	}
+	validated := DeployValidation{
+		Payload: *parsed.Deploy,
+		Address: addr,
+		Runtime: runtime,
+	}
+	if len(fundingOutputs) == 1 {
+		validated.FundingOutput = &fundingOutputs[0]
+	}
+	return validated, nil
 }
 
 func ValidateInvokeTxBasic(tx *wire.MsgTx, resolver ContractScriptResolver, exists ContractExistsFunc, cfg GasConfig) (InvokeValidation, error) {

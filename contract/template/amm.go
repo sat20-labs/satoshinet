@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/txscript"
 )
 
@@ -29,6 +30,10 @@ func (c *AMMContract) TemplateName() string {
 
 func (c *AMMContract) NetworkExclusive() bool {
 	return false
+}
+
+func (c *AMMContract) BaseGasConfig() contractframework.BaseGasConfig {
+	return contractframework.BaseGasConfig{}
 }
 
 func (c *AMMContract) ApplyRunningData(running *RunningData, item *InvokeItem) bool {
