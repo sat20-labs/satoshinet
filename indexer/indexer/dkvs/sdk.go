@@ -18,7 +18,6 @@ type RecordOptions struct {
 	TTL          uint64
 	ExpiryHeight uint64
 	FeeProof     []byte
-	Data         []byte
 	Flags        uint32
 }
 
@@ -39,7 +38,6 @@ func NewRecord(key string, value []byte, pubKey []byte, opts RecordOptions) (*wi
 		Version:      Version,
 		Key:          key,
 		Value:        append([]byte{}, value...),
-		Data:         append([]byte{}, opts.Data...),
 		PubKey:       append([]byte{}, pubKey...),
 		Seq:          opts.Seq,
 		IssueTime:    opts.IssueTime,
@@ -52,8 +50,7 @@ func NewRecord(key string, value []byte, pubKey []byte, opts RecordOptions) (*wi
 		record.IssueTime = currentUnixMilli()
 	}
 	if RecordSize(record) > wire.MaxDKVSRecordSize ||
-		len(record.Value) > MaxRecordValueSize ||
-		len(record.Data) > MaxRecordDataSize {
+		len(record.Value) > MaxRecordValueSize {
 		return nil, ErrRecordTooLarge
 	}
 	return record, nil
@@ -66,8 +63,7 @@ func VerifyRecordForClient(record *wire.DKVSRecord, opts RecordVerificationOptio
 	if opts.ExpectedKey != "" && record.Key != opts.ExpectedKey {
 		return ErrInvalidKey
 	}
-	if len(record.Value) > MaxRecordValueSize || len(record.Data) > MaxRecordDataSize ||
-		RecordSize(record) > wire.MaxDKVSRecordSize {
+	if len(record.Value) > MaxRecordValueSize || RecordSize(record) > wire.MaxDKVSRecordSize {
 		return ErrRecordTooLarge
 	}
 	parsed, err := ParseKey(record.Key)

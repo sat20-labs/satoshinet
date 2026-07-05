@@ -9,12 +9,11 @@ import (
 
 const (
 	MaxDKVSKeySize        = 256
-	MaxDKVSValueSize      = 10 * 1024
-	MaxDKVSDataSize       = 10 * 1024
+	MaxDKVSValueSize      = 16 * 1024
 	MaxDKVSFeeProofSize   = 2 * 1024
 	MaxDKVSSignatureSize  = 256
 	MaxDKVSPubKeySize     = 128
-	MaxDKVSRecordSize     = 32 * 1024
+	MaxDKVSRecordSize     = 16 * 1024
 	MaxDKVSRecordsPerMsg  = 256
 	MaxDKVSItemsPerMsg    = 1024
 	MaxDKVSCursorSize     = 512
@@ -26,7 +25,6 @@ type DKVSRecord struct {
 	Version      uint32
 	Key          string
 	Value        []byte
-	Data         []byte
 	PubKey       []byte
 	Signature    []byte
 	Seq          uint64
@@ -104,9 +102,6 @@ func readDKVSRecord(r io.Reader, pver uint32, buf []byte) (*DKVSRecord, error) {
 	if rec.Value, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSValueSize, "dkvs value"); err != nil {
 		return nil, err
 	}
-	if rec.Data, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSDataSize, "dkvs data"); err != nil {
-		return nil, err
-	}
 	if rec.PubKey, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSPubKeySize, "dkvs pubkey"); err != nil {
 		return nil, err
 	}
@@ -122,6 +117,9 @@ func readDKVSRecord(r io.Reader, pver uint32, buf []byte) (*DKVSRecord, error) {
 	if err := readElements(r, &rec.Flags); err != nil {
 		return nil, err
 	}
+	if dkvsRecordSerializeSize(rec) > MaxDKVSRecordSize {
+		return nil, messageError("readDKVSRecord", "dkvs record too large")
+	}
 	return rec, nil
 }
 
@@ -132,10 +130,13 @@ func writeDKVSRecord(w io.Writer, pver uint32, rec *DKVSRecord, buf []byte) erro
 	if len(rec.Key) > MaxDKVSKeySize {
 		return messageError("writeDKVSRecord", "dkvs key too large")
 	}
-	if len(rec.Value) > MaxDKVSValueSize || len(rec.Data) > MaxDKVSDataSize ||
+	if len(rec.Value) > MaxDKVSValueSize ||
 		len(rec.PubKey) > MaxDKVSPubKeySize || len(rec.Signature) > MaxDKVSSignatureSize ||
 		len(rec.FeeProof) > MaxDKVSFeeProofSize {
 		return messageError("writeDKVSRecord", "dkvs record field too large")
+	}
+	if dkvsRecordSerializeSize(rec) > MaxDKVSRecordSize {
+		return messageError("writeDKVSRecord", "dkvs record too large")
 	}
 	if err := writeElements(w, rec.Version); err != nil {
 		return err
@@ -143,7 +144,7 @@ func writeDKVSRecord(w io.Writer, pver uint32, rec *DKVSRecord, buf []byte) erro
 	if err := writeVarStringBuf(w, pver, rec.Key, buf); err != nil {
 		return err
 	}
-	for _, field := range [][]byte{rec.Value, rec.Data, rec.PubKey, rec.Signature} {
+	for _, field := range [][]byte{rec.Value, rec.PubKey, rec.Signature} {
 		if err := WriteVarBytesBuf(w, pver, field, buf); err != nil {
 			return err
 		}
@@ -155,6 +156,20 @@ func writeDKVSRecord(w io.Writer, pver uint32, rec *DKVSRecord, buf []byte) erro
 		return err
 	}
 	return writeElements(w, rec.Flags)
+}
+
+func dkvsRecordSerializeSize(rec *DKVSRecord) int {
+	if rec == nil {
+		return 0
+	}
+	return 4 +
+		VarIntSerializeSize(uint64(len(rec.Key))) + len(rec.Key) +
+		VarIntSerializeSize(uint64(len(rec.Value))) + len(rec.Value) +
+		VarIntSerializeSize(uint64(len(rec.PubKey))) + len(rec.PubKey) +
+		VarIntSerializeSize(uint64(len(rec.Signature))) + len(rec.Signature) +
+		32 +
+		VarIntSerializeSize(uint64(len(rec.FeeProof))) + len(rec.FeeProof) +
+		4
 }
 
 func readDKVSInvItem(r io.Reader, pver uint32, buf []byte) (DKVSInvItem, error) {

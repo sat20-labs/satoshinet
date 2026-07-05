@@ -538,8 +538,7 @@ func (i *Indexer) validateParsedBasic(record *wire.DKVSRecord, height, now uint6
 	if record == nil || record.Version != Version {
 		return parsed, ErrInvalidRecord
 	}
-	if len(record.Value) > MaxRecordValueSize || len(record.Data) > MaxRecordDataSize ||
-		RecordSize(record) > wire.MaxDKVSRecordSize {
+	if len(record.Value) > MaxRecordValueSize || RecordSize(record) > wire.MaxDKVSRecordSize {
 		return parsed, ErrRecordTooLarge
 	}
 	parsed, err := ParseKey(record.Key)
@@ -685,7 +684,7 @@ func (i *Indexer) validateTmp(record *wire.DKVSRecord) error {
 	if record.TTL == 0 || record.TTL > i.tmp.MaxTTL {
 		return ErrInvalidRecord
 	}
-	if len(record.Value) > i.tmp.MaxSize || len(record.Data) > i.tmp.MaxSize {
+	if len(record.Value) > i.tmp.MaxSize {
 		return ErrRecordTooLarge
 	}
 	return nil
@@ -862,7 +861,6 @@ func isRenewal(record, existing *wire.DKVSRecord) bool {
 		record.ExpiryHeight > existing.ExpiryHeight &&
 		record.TTL >= existing.TTL &&
 		bytes.Equal(record.Value, existing.Value) &&
-		bytes.Equal(record.Data, existing.Data) &&
 		bytes.Equal(record.PubKey, existing.PubKey)
 }
 

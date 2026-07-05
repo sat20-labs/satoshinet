@@ -20,7 +20,7 @@ func RecordSize(record *wire.DKVSRecord) int {
 	if record == nil {
 		return 0
 	}
-	return len(record.Key) + len(record.Value) + len(record.Data) + len(record.PubKey) +
+	return len(record.Key) + len(record.Value) + len(record.PubKey) +
 		len(record.Signature) + len(record.FeeProof) + 64
 }
 
@@ -35,6 +35,10 @@ func KeyHash(key string) chainhash.Hash {
 
 func SigningHash(record *wire.DKVSRecord) [32]byte {
 	return sha256.Sum256(canonicalRecordBytes(record, false))
+}
+
+func SigningMessage(record *wire.DKVSRecord) []byte {
+	return canonicalRecordBytes(record, false)
 }
 
 func VerifySignature(record *wire.DKVSRecord) error {
@@ -156,7 +160,6 @@ func canonicalRecordBytes(record *wire.DKVSRecord, includeSignature bool) []byte
 	writeUint32(&buf, record.Version)
 	writeString(&buf, record.Key)
 	writeHash(&buf, sha256.Sum256(record.Value))
-	writeHash(&buf, sha256.Sum256(record.Data))
 	writeBytes(&buf, record.PubKey)
 	writeUint64(&buf, record.Seq)
 	writeUint64(&buf, record.IssueTime)

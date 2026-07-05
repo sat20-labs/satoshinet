@@ -15,7 +15,6 @@ func TestDKVSMessagesWire(t *testing.T) {
 		Version:      1,
 		Key:          "/personal/a/b",
 		Value:        []byte("value"),
-		Data:         []byte("data"),
 		PubKey:       []byte{2, 1, 2, 3},
 		Signature:    []byte{48, 1, 1},
 		Seq:          10,
@@ -77,12 +76,14 @@ func TestDKVSMessagesOversize(t *testing.T) {
 	hash := chainhash.DoubleHashH([]byte("record"))
 	longKey := string(bytes.Repeat([]byte("k"), MaxDKVSKeySize+1))
 	longValue := bytes.Repeat([]byte("v"), MaxDKVSValueSize+1)
+	largeRecordValue := bytes.Repeat([]byte("v"), MaxDKVSRecordSize)
 	longCursor := bytes.Repeat([]byte("c"), MaxDKVSCursorSize+1)
 	tests := []Message{
 		&MsgDKVSNotify{Key: longKey},
 		&MsgDKVSInv{Items: []DKVSInvItem{{Key: longKey}}},
 		&MsgDKVSGet{Keys: []string{longKey}},
 		&MsgDKVSData{Records: []*DKVSRecord{{Version: 1, Key: "/personal/a/b", Value: longValue}}},
+		&MsgDKVSData{Records: []*DKVSRecord{{Version: 1, Key: "/personal/a/b", Value: largeRecordValue}}},
 		&MsgDKVSSyncRequest{Cursor: longCursor},
 		&MsgDKVSSyncRequest{Filters: []DKVSSyncFilter{{Type: string(bytes.Repeat([]byte("t"), MaxDKVSFilterTypeSize+1)), Target: "/tmp/a"}}},
 		&MsgDKVSSyncRequest{Filters: []DKVSSyncFilter{{Type: "prefix", Target: longKey}}},
@@ -176,7 +177,6 @@ func sampleDKVSMessages() []Message {
 		Version:      1,
 		Key:          "/personal/a/b",
 		Value:        []byte("value"),
-		Data:         []byte("data"),
 		PubKey:       []byte{2, 1, 2, 3},
 		Signature:    []byte{48, 1, 1},
 		Seq:          10,

@@ -9,8 +9,8 @@
 ## 约定
 
 - API base URL 示例使用 `http://127.0.0.1:8334`，如果节点配置了 proxy prefix，需要把 prefix 加到 `/v3/dkvs/...` 前。
-- DKVS 写入必须提交已签名的 `DKVSRecord`。PWA 不应手工拼接签名；应通过钱包/SDK 构造 record、签名、fee proof 后再提交。
-- Go `[]byte` 字段在 JSON 中是 base64 字符串，包括 `Value`、`Data`、`PubKey`、`Signature`、`FeeProof`。
+- DKVS 写入必须提交已签名的 `DKVSRecord`。PWA 不应手工拼接签名；应通过钱包/SDK 构造 record、附加 fee proof、签名后再提交。
+- Go `[]byte` 字段在 JSON 中是 base64 字符串，包括 `Value`、`PubKey`、`Signature`、`FeeProof`。
 - 默认主网兼容策略下，未配置免费策略或真实 `FeeVerifier` 时，缺少 `FeeProof` 的写入会被拒绝。
 - `/name`、`/svc` 和 `/sys` 默认未开放普通写入，除非节点注入真实 DID resolver 或 system verifier。
 
@@ -21,14 +21,13 @@
   "Version": 1,
   "Key": "/personal/<account_id>/profile",
   "Value": "base64-encoded-value",
-  "Data": "",
   "PubKey": "base64-encoded-compressed-pubkey",
   "Signature": "base64-encoded-ecdsa-signature",
   "Seq": 1,
   "IssueTime": 1783094400000,
   "TTL": 60000,
   "ExpiryHeight": 100,
-  "FeeProof": "base64-encoded-fee-proof-json",
+  "FeeProof": "base64-encoded-compact-fee-proof",
   "Flags": 0
 }
 ```

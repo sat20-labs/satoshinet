@@ -83,8 +83,7 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 	if defaultAutopayVerifier.Recipient != defaults.AutopayRecipient ||
 		defaultAutopayVerifier.FeeAssetName != defaults.AutopayFeeAssetName ||
 		defaultAutopayVerifier.FullRecordFeePerBlock != defaults.FullRecordFeePerBlock ||
-		defaultAutopayVerifier.AddressParams != &chaincfg.TestNetParams ||
-		!defaultAutopayVerifier.RequireProofSignature {
+		defaultAutopayVerifier.AddressParams != &chaincfg.TestNetParams {
 		t.Fatalf("testnet default autopay verifier config=%+v defaults=%+v", defaultAutopayVerifier, defaults)
 	}
 
@@ -178,14 +177,12 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 		t.Fatalf("l1 resolver config=%+v", l1Resolver)
 	}
 
-	autopayRequireSignature := false
 	autopayMgr := &IndexerMgr{
 		cfg: &Config{
 			DKVS: &DKVSIntegrationConfig{
 				AutopayFeeRecipient:          "dkvs-fee-recipient",
 				AutopayFeeAssetName:          "sat",
 				AutopayFullRecordFeePerBlock: "1",
-				AutopayRequireProofSignature: &autopayRequireSignature,
 			},
 		},
 		chaincfgParam: &chaincfg.TestNetParams,
@@ -197,8 +194,7 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 	if autopayVerifier.Recipient != "dkvs-fee-recipient" ||
 		autopayVerifier.FeeAssetName != "sat" ||
 		autopayVerifier.FullRecordFeePerBlock != "1" ||
-		autopayVerifier.AddressParams != &chaincfg.TestNetParams ||
-		autopayVerifier.RequireProofSignature {
+		autopayVerifier.AddressParams != &chaincfg.TestNetParams {
 		t.Fatalf("autopay verifier config=%+v", autopayVerifier)
 	}
 

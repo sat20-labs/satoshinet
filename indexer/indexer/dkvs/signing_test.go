@@ -6,7 +6,6 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
-	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -47,7 +46,6 @@ func NewSignedRenewalRecord(priv *btcec.PrivateKey, existing *wire.DKVSRecord, o
 	record := *existing
 	record.PubKey = append([]byte{}, existing.PubKey...)
 	record.Value = append([]byte{}, existing.Value...)
-	record.Data = append([]byte{}, existing.Data...)
 	record.Signature = nil
 	record.IssueTime = opts.IssueTime
 	if record.IssueTime == 0 {
@@ -63,8 +61,7 @@ func NewSignedRenewalRecord(priv *btcec.PrivateKey, existing *wire.DKVSRecord, o
 		record.FeeProof = append([]byte{}, existing.FeeProof...)
 	}
 	if RecordSize(&record) > wire.MaxDKVSRecordSize ||
-		len(record.Value) > MaxRecordValueSize ||
-		len(record.Data) > MaxRecordDataSize {
+		len(record.Value) > MaxRecordValueSize {
 		return nil, ErrRecordTooLarge
 	}
 	SignRecord(priv, &record)
@@ -80,37 +77,11 @@ func SignRecord(priv *btcec.PrivateKey, record *wire.DKVSRecord) {
 	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
 }
 
-func SignFeeProof(proof *FeeProof, priv *btcec.PrivateKey) error {
-	if proof == nil || priv == nil {
-		return ErrInvalidFeeProof
-	}
-	if len(proof.PayerPubKey) == 0 {
-		proof.PayerPubKey = priv.PubKey().SerializeCompressed()
-	}
-	hash := FeeProofSigningHash(proof)
-	proof.ProofSignature = ecdsa.Sign(priv, hash[:]).Serialize()
-	return nil
-}
-
 func AttachSignedFeeProof(record *wire.DKVSRecord, proof *FeeProof, priv *btcec.PrivateKey) error {
 	if record == nil || proof == nil || priv == nil {
 		return ErrInvalidFeeProof
 	}
-	if len(proof.PayerPubKey) == 0 {
-		proof.PayerPubKey = priv.PubKey().SerializeCompressed()
-	}
-	proof.RecordHash = chainhash.Hash{}
-	proof.ProofSignature = nil
 	encoded, err := EncodeFeeProof(proof)
-	if err != nil {
-		return err
-	}
-	record.FeeProof = encoded
-	proof.RecordHash = FeeAnchorHash(record)
-	if err := SignFeeProof(proof, priv); err != nil {
-		return err
-	}
-	encoded, err = EncodeFeeProof(proof)
 	if err != nil {
 		return err
 	}

@@ -169,7 +169,7 @@ type FeeVerifier interface {
 
 ### Inputs
 
-- `recordHash`: `FeeAnchorHash(record)`, not the final `RecordHash(record)`. This avoids fee proof self-reference and signature cycles.
+- `recordHash`: current `FeeAnchorHash(record)`, which is the record hash with `Signature` cleared.
 - `keyHash`: `KeyHash(record.Key)`.
 - `namespace`: parsed top-level namespace.
 - `recordSize`: `RecordSize(record)`.
@@ -178,7 +178,7 @@ type FeeVerifier interface {
 
 ### Supported Proof Shape
 
-Current JSON proof modes:
+Current compact binary proof modes:
 
 ```text
 ONESHOT
@@ -187,26 +187,16 @@ FREE_LOCAL
 AUTOPAY
 ```
 
-Current fields:
+Current encoded fields:
 
 ```text
-mode
-pool_contract
-payer
-payer_pubkey
-payment_txid
-lease_contract
-plan_id
-key_hash
-record_hash
-record_size
-expiry_height
-namespace
-paid_amount
-proof_signature
+AUTOPAY: pool_contract
+FREE_LOCAL: <none>
+ONESHOT: pool_contract, payer, payment_txid, paid_amount
+LEASE: pool_contract, lease_contract, plan_id
 ```
 
-`proof_signature` signs the canonical fee proof fields and excludes `proof_signature` itself.
+`FeeProof` is covered by the record signature. AUTOPAY does not carry a separate payer pubkey or proof signature; the verifier derives the payer p2tr address from `record.PubKey`.
 
 ### Required Real Pool Semantics
 
@@ -215,16 +205,15 @@ A production DKVS Pool verifier must validate at least:
 - pool contract address is recognized;
 - `ONESHOT` payment exists, is confirmed enough, has not been replayed outside allowed policy, and covers namespace, size and expiry;
 - `LEASE` contract is active, funded, covers namespace/key scope, size quota and expiry;
-- `AUTOPAY` contract is an active `autopay.tc` template contract, its deployer equals the payer, recipient and fee asset match node policy, expiry is within the contract end height, and per-block payment covers the number of full-size records held by that contract;
+- `AUTOPAY` contract is an active `autopay.tc` template contract, its deployer equals the p2tr address derived from `record.PubKey`, recipient and fee asset match node policy, expiry is within the contract end height, and per-block payment covers the number of full-size records held by that contract;
 - `FREE_LOCAL` is accepted only under an explicit local policy, normally not for mainnet public writes;
-- proof payer and optional proof signature are valid under the final contract rules;
 - mailbox quota and daily message quota are enforced consistently with plan state if the plan is quota-based.
 
 ### Default Behavior
 
 The default verifier rejects missing fee proof unless `AllowFreeLocal` is explicitly enabled. This is a mainnet compatibility guard.
 
-The current `JSONFeeVerifier` is a structured payload verifier and test/local helper. It is not a DKVS Pool contract verifier.
+The current `JSONFeeVerifier` name is historical; it validates compact fee proof structure for tests/local policy. It is not a DKVS Pool contract verifier.
 
 ### AUTOPAY Template Verifier
 
@@ -233,12 +222,12 @@ The current `JSONFeeVerifier` is a structured payload verifier and test/local he
 For each record it validates:
 
 - proof mode is `AUTOPAY`;
-- proof namespace, key hash, optional record hash, expiry height and record size match the submitted record;
-- `payer_pubkey` derives to the proof payer p2tr address and matches the record pubkey;
+- proof contains a non-empty `pool_contract`;
+- `record.PubKey` derives to a p2tr address;
 - contract state `templateName` is `autopay.tc`, `status` is `active`, and `closed` is false;
-- contract `deployer` equals proof payer;
+- contract `deployer` equals the p2tr address derived from `record.PubKey`;
 - configured recipient and fee asset match contract state;
-- proof expiry does not exceed contract `endHeight` when one is set;
+- record expiry does not exceed contract `endHeight` when one is set;
 - contract per-block amount divided by configured full-record fee gives a max full-size-record capacity, and the submitter does not exceed that capacity across active records using the same AUTOPAY contract.
 
 Testnet defaults are hard-coded through `NetworkDefaultsForParams`: deployer/recipient `tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g`, fee asset `ordx:f:dkvsfee`, fixed AUTOPAY amount `100`, and full-record fee `1`. Mainnet intentionally has no active default AUTOPAY verifier until production parameters and revenue rules are finalized.

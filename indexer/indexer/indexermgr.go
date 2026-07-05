@@ -46,7 +46,6 @@ type DKVSIntegrationConfig struct {
 	AutopayFeeRecipient          string
 	AutopayFeeAssetName          string
 	AutopayFullRecordFeePerBlock string
-	AutopayRequireProofSignature *bool
 	SystemVerifier               dkvs_indexer.SystemVerifier
 	SystemVerifierHTTPEndpoint   string
 	MailboxPolicy                dkvs_indexer.MailboxPolicy
@@ -228,20 +227,12 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 		if stateProvider == nil {
 			stateProvider = dkvs_indexer.RPCAutopayStateProvider{Call: satsnet_rpc.Call}
 		}
-		requireProofSignature := defaults.RequireProofSignature
-		if !defaults.Enabled {
-			requireProofSignature = true
-		}
-		if ext.AutopayRequireProofSignature != nil {
-			requireProofSignature = *ext.AutopayRequireProofSignature
-		}
 		cfg.FeeVerifier = dkvs_indexer.AutopayFeeVerifier{
 			StateProvider:         stateProvider,
 			Recipient:             autopayFeeRecipient,
 			FeeAssetName:          autopayFeeAssetName,
 			FullRecordFeePerBlock: autopayFullRecordFeePerBlock,
 			AddressParams:         b.chaincfgParam,
-			RequireProofSignature: requireProofSignature,
 		}
 	}
 	if cfg.FeeVerifier == nil && ext.FeeVerifierHTTPEndpoint != "" {

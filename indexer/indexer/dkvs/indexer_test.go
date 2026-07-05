@@ -407,10 +407,7 @@ func signRecord(t *testing.T, priv *btcec.PrivateKey, record *wire.DKVSRecord) {
 func signedRecordWithStructuredFee(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, proof FeeProof) *wire.DKVSRecord {
 	t.Helper()
 	record := signedRecordWithValue(t, priv, key, seq, []byte("value"), 0)
-	if proof.RecordSize == 0 {
-		proof.RecordSize = wire.MaxDKVSRecordSize
-	}
-	encoded, err := json.Marshal(proof)
+	encoded, err := EncodeFeeProof(&proof)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,15 +420,11 @@ func signedRecordWithAutopayFee(t *testing.T, priv *btcec.PrivateKey, key string
 	t.Helper()
 	record := signedRecordWithValue(t, priv, key, seq, []byte("value"), 0)
 	record.ExpiryHeight = expiry
-	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
-	if err != nil {
-		t.Fatal(err)
-	}
 	parsed, err := ParseKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof, err := NewAutopayFeeProof(key, parsed.Namespace, wire.MaxDKVSRecordSize, expiry, contract, payer)
+	proof, err := NewAutopayFeeProof(key, parsed.Namespace, wire.MaxDKVSRecordSize, expiry, contract, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,14 +501,23 @@ func TestNameServiceResolverAndFeeVerifier(t *testing.T) {
 }
 
 func TestParseFeeProof(t *testing.T) {
-	proof, err := ParseFeeProof([]byte(`{"mode":"oneshot"}`))
+	encoded, err := EncodeFeeProof(&FeeProof{
+		Mode:         "oneshot",
+		PoolContract: "pool",
+		Payer:        "payer",
+		PaymentTxID:  "payment",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := ParseFeeProof(encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if proof.Mode != FeeModeOneshot {
 		t.Fatalf("mode=%s", proof.Mode)
 	}
-	if _, err := ParseFeeProof([]byte(`{"mode":"bad"}`)); err != ErrInvalidFeeProof {
+	if _, err := ParseFeeProof([]byte{1, 99}); err != ErrInvalidFeeProof {
 		t.Fatalf("bad mode err=%v", err)
 	}
 	if _, err := ParseFeeProof(nil); err != ErrFeeProofRequired {
@@ -533,7 +535,7 @@ func TestFeeProofBuilders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := JSONFeeVerifier{AllowMissingRecordHash: true}
+	verifier := JSONFeeVerifier{}
 	keyHash := KeyHash(key)
 	var keyHash32 [32]byte
 	copy(keyHash32[:], keyHash[:])
@@ -559,7 +561,7 @@ func TestFeeProofBuilders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	freeVerifier := JSONFeeVerifier{AllowFreeLocal: true, AllowMissingRecordHash: true}
+	freeVerifier := JSONFeeVerifier{AllowFreeLocal: true}
 	if err := freeVerifier.VerifyFeeProof([32]byte{}, keyHash32, "personal", 100, 100, encoded); err != nil {
 		t.Fatalf("free verify err=%v", err)
 	}
@@ -576,7 +578,7 @@ func TestFeeProofBuilders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if trimmed.Namespace != "personal" || trimmed.PoolContract != "pool" || trimmed.Payer != "payer" || trimmed.PaymentTxID != "payment" {
+	if trimmed.PoolContract != "pool" || trimmed.Payer != "payer" || trimmed.PaymentTxID != "payment" {
 		t.Fatalf("proof fields not normalized: %+v", trimmed)
 	}
 	if _, err := EncodeFeeProof(&FeeProof{Mode: "bad"}); err != ErrInvalidFeeProof {
@@ -590,18 +592,15 @@ func TestJSONFeeVerifierPutLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
-	keyHash := KeyHash(key)
 	record := signedRecordWithStructuredFee(t, priv, key, 1, FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
 		Payer:        "payer",
 		PaymentTxID:  "payment",
-		KeyHash:      keyHash,
-		ExpiryHeight: 100,
-		Namespace:    "personal",
+		PaidAmount:   "1",
 	})
 	idx := testIndexerWithConfig(t, Config{
-		FeeVerifier: JSONFeeVerifier{AllowMissingRecordHash: true},
+		FeeVerifier: JSONFeeVerifier{},
 	})
 	if updated, err := idx.PutLocal(record); err != nil || !updated {
 		t.Fatalf("put structured fee updated=%v err=%v", updated, err)
@@ -620,7 +619,7 @@ func TestDefaultFeeVerifierRejectsMissingProof(t *testing.T) {
 	}
 }
 
-func TestJSONFeeVerifierRejectsMismatchedFields(t *testing.T) {
+func TestJSONFeeVerifierRejectsMalformedProof(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -630,41 +629,16 @@ func TestJSONFeeVerifierRejectsMismatchedFields(t *testing.T) {
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
 		Payer:        "payer",
-		PaymentTxID:  "payment",
-		KeyHash:      KeyHash(key),
-		ExpiryHeight: 100,
-		Namespace:    "mail",
 	})
 	idx := testIndexerWithConfig(t, Config{
-		FeeVerifier: JSONFeeVerifier{AllowMissingRecordHash: true},
+		FeeVerifier: JSONFeeVerifier{},
 	})
 	if _, err := idx.PutLocal(record); err != ErrInvalidFeeProof {
-		t.Fatalf("mismatched proof err=%v", err)
+		t.Fatalf("malformed proof err=%v", err)
 	}
 }
 
-func TestJSONFeeVerifierStrictRecordHash(t *testing.T) {
-	proof := FeeProof{
-		Mode:         FeeModeOneshot,
-		PoolContract: "dkvs-pool",
-		Payer:        "payer",
-		PaymentTxID:  "payment",
-		KeyHash:      chainhash.Hash{},
-		RecordSize:   100,
-		ExpiryHeight: 10,
-		Namespace:    "personal",
-	}
-	encoded, err := json.Marshal(proof)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verifier := JSONFeeVerifier{}
-	if err := verifier.VerifyFeeProof([32]byte{}, [32]byte{}, "personal", 100, 10, encoded); err != ErrInvalidFeeProof {
-		t.Fatalf("strict record hash err=%v", err)
-	}
-}
-
-func TestJSONFeeVerifierStrictFeeAnchorHash(t *testing.T) {
+func TestFeeProofCoveredByRecordSignature(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -675,94 +649,24 @@ func TestJSONFeeVerifierStrictFeeAnchorHash(t *testing.T) {
 		PoolContract: "dkvs-pool",
 		Payer:        "payer",
 		PaymentTxID:  "payment",
-		KeyHash:      KeyHash(key),
-		RecordSize:   wire.MaxDKVSRecordSize,
-		ExpiryHeight: 100,
-		Namespace:    "personal",
 	}
 	record := signedRecordWithStructuredFee(t, priv, key, 1, proof)
-	proof.RecordHash = FeeAnchorHash(record)
-	encoded, err := json.Marshal(proof)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.FeeProof = encoded
-	signRecord(t, priv, record)
-	if proof.RecordHash == RecordHash(record) {
-		t.Fatalf("fee anchor hash unexpectedly equals record hash")
-	}
-	idx := testIndexerWithConfig(t, Config{
-		FeeVerifier: JSONFeeVerifier{},
-	})
-	if updated, err := idx.PutLocal(record); err != nil || !updated {
-		t.Fatalf("strict fee anchor put updated=%v err=%v", updated, err)
-	}
-	if err := VerifyRecordForClient(record, RecordVerificationOptions{
-		ExpectedKey: key,
-		FeeVerifier: JSONFeeVerifier{},
-		Height:      1,
-		Now:         record.IssueTime,
-	}); err != nil {
-		t.Fatalf("client strict fee anchor verify err=%v", err)
-	}
-}
-
-func TestJSONFeeVerifierProofSignature(t *testing.T) {
-	recordPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	payerPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := "/personal/" + personalAccountID(recordPriv.PubKey().SerializeCompressed()) + "/profile"
-	proof := FeeProof{
-		Mode:         FeeModeOneshot,
-		PoolContract: "dkvs-pool",
-		Payer:        "payer-id",
-		PaymentTxID:  "payment",
-		KeyHash:      KeyHash(key),
-		RecordSize:   wire.MaxDKVSRecordSize,
-		ExpiryHeight: 100,
-		Namespace:    "personal",
-		PaidAmount:   "10",
-	}
-	record := signedRecordWithStructuredFee(t, recordPriv, key, 1, proof)
-	if err := AttachSignedFeeProof(record, &proof, payerPriv); err != nil {
-		t.Fatal(err)
-	}
-	signRecord(t, recordPriv, record)
-	idx := testIndexerWithConfig(t, Config{
-		FeeVerifier: JSONFeeVerifier{RequireProofSignature: true},
-	})
-	if updated, err := idx.PutLocal(record); err != nil || !updated {
-		t.Fatalf("signed fee proof put updated=%v err=%v", updated, err)
-	}
-
-	unsigned := proof
-	unsigned.ProofSignature = nil
-	unsigned.PayerPubKey = nil
-	encoded, err := EncodeFeeProof(&unsigned)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.FeeProof = encoded
-	signRecord(t, recordPriv, record)
-	if _, err := idx.PutLocal(record); err != ErrInvalidFeeProof {
-		t.Fatalf("unsigned fee proof err=%v", err)
-	}
-
 	tampered := proof
-	tampered.PaidAmount = "20"
-	encoded, err = EncodeFeeProof(&tampered)
+	tampered.PaymentTxID = "other-payment"
+	encoded, err := EncodeFeeProof(&tampered)
 	if err != nil {
 		t.Fatal(err)
 	}
 	record.FeeProof = encoded
-	signRecord(t, recordPriv, record)
-	if _, err := idx.PutLocal(record); err != ErrInvalidFeeProof {
-		t.Fatalf("tampered fee proof err=%v", err)
+	idx := testIndexerWithConfig(t, Config{
+		FeeVerifier: JSONFeeVerifier{},
+	})
+	if _, err := idx.PutLocal(record); err != ErrInvalidSignature {
+		t.Fatalf("tampered fee proof signature err=%v", err)
+	}
+	signRecord(t, priv, record)
+	if updated, err := idx.PutLocal(record); err != nil || !updated {
+		t.Fatalf("resigned fee proof put updated=%v err=%v", updated, err)
 	}
 }
 
@@ -796,7 +700,6 @@ func TestAutopayFeeVerifierCapacity(t *testing.T) {
 			FeeAssetName:          "sat",
 			FullRecordFeePerBlock: "1",
 			AddressParams:         &chaincfg.TestNetParams,
-			RequireProofSignature: true,
 		},
 	})
 
@@ -819,10 +722,6 @@ func TestAutopayFeeVerifierCapacity(t *testing.T) {
 
 func TestAutopayFeeVerifierRejectsInvalidStateAndPayer(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherPriv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -865,23 +764,6 @@ func TestAutopayFeeVerifierRejectsInvalidStateAndPayer(t *testing.T) {
 			name:  "expiry exceeds end height",
 			state: func() AutopayContractState { s := baseState; s.EndHeight = 50; return s }(),
 		},
-		{
-			name:  "payer pubkey mismatch",
-			state: baseState,
-			record: func() *wire.DKVSRecord {
-				record := signedRecordWithValue(t, priv, key, 1, []byte("value"), 0)
-				record.ExpiryHeight = 100
-				proof, err := NewAutopayFeeProof(key, "personal", wire.MaxDKVSRecordSize, 100, contract, payer)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := AttachSignedFeeProof(record, proof, otherPriv); err != nil {
-					t.Fatal(err)
-				}
-				signRecord(t, priv, record)
-				return record
-			}(),
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -894,7 +776,6 @@ func TestAutopayFeeVerifierRejectsInvalidStateAndPayer(t *testing.T) {
 					FeeAssetName:          "sat",
 					FullRecordFeePerBlock: "1",
 					AddressParams:         &chaincfg.TestNetParams,
-					RequireProofSignature: true,
 				},
 			})
 			record := tt.record
@@ -947,10 +828,6 @@ func TestHTTPFeeVerifier(t *testing.T) {
 		PoolContract: "dkvs-pool",
 		Payer:        "payer",
 		PaymentTxID:  "payment",
-		KeyHash:      KeyHash(key),
-		RecordSize:   wire.MaxDKVSRecordSize,
-		ExpiryHeight: 100,
-		Namespace:    "personal",
 	}
 	record := signedRecordWithStructuredFee(t, priv, key, 1, proof)
 	idx := testIndexerWithConfig(t, Config{

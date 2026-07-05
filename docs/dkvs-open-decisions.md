@@ -43,13 +43,13 @@
 
 当前阻塞：
 
-- `JSONFeeVerifier` 只能验证 fee proof 结构、字段一致性和可选 payer signature。
+- `JSONFeeVerifier` 仍是历史命名；当前只验证 compact fee proof 的基础结构，不做真实 DKVS Pool 支付校验。
 - AUTOPAY template contract verifier 已可通过 `getcontractstate` 校验 `autopay.tc` active、deployer/payer、recipient、fee asset、expiry 和按 full-size record 换算容量。
 - 测试网已有硬编码默认 AUTOPAY 参数；主网仍未定义默认 contract/deployer/recipient/fee asset/full-record fee，也未定义 miner 收益分配。
 
 需要决策：
 
-1. 主网 AUTOPAY 合约默认参数：deployer、recipient、fee asset、full-record fee、默认 nonce/地址和是否要求 proof signature。
+1. 主网 AUTOPAY 合约默认参数：deployer、recipient、fee asset、full-record fee、默认 nonce/地址。
 2. miner 收益分配规则：按区块 miner、按在线 miner 权重、按 core/miner 类型权重，还是由 AUTOPAY/Pool 合约单独结算。
 3. AUTOPAY 是否就是第一版唯一生产 fee proof，还是仍需要 ONESHOT/LEASE。
 4. 如果需要 ONESHOT：payment proof 格式、确认数、可覆盖 namespace/size/expiry 和防重放规则。
@@ -59,7 +59,7 @@
 
 推荐的最小生产接入：
 
-- 第一版以 AUTOPAY verifier 为主：record proof 提供 contract/payer/payer_pubkey/key_hash/record_hash/expiry/size，节点读取 contract state 重新校验。
+- 第一版以 AUTOPAY verifier 为主：record proof 只提供 contract，节点从 record pubkey 派生 p2tr payer，并读取 contract state 重新校验。
 - miner 收益分配先由 AUTOPAY/Pool 合约内部规则处理，DKVS core 不计算收益。
 - 主网 `AllowFreeLocal=false`，且没有主网默认 AUTOPAY 参数前不自动放行；测试网使用硬编码 AUTOPAY 默认参数，本地仍可显式开启 `FREE_LOCAL`。
 
@@ -73,7 +73,7 @@
 - `dkvs.Config.FeeVerifier`
 - `indexer.Config.DKVS.FeeVerifier`
 - `IndexerMgr.SetDKVSFeeVerifier`
-- `FeeAnchorHash(record)` 是当前 fee proof 的 record hash 输入，避免 fee proof 自引用。
+- `FeeAnchorHash(record)` 当前只清空 record signature 后计算，用于外部 verifier 请求上下文；AUTOPAY compact proof 不再携带 record hash。
 
 ## 3. Checkpoint / Snapshot Anchor
 
@@ -121,7 +121,7 @@
 
 1. 真实 DID resolver 服务地址和返回数据来源。
 2. record 签名由哪个 wallet flow 提供：当前账户私钥、插件签名接口，还是 SDK helper。
-3. fee proof 如何输入：测试网 AUTOPAY 默认 proof、本地手动 JSON、主网 AUTOPAY proof。
+3. fee proof 如何输入：测试网 AUTOPAY 默认 compact proof、本地手动 compact proof、主网 AUTOPAY proof。
 4. 主网 AUTOPAY proof 的构造、查询和错误展示方式。
 5. 生产样本是否做成钱包恢复、mailbox、service authenticity，还是保留开发者工具。
 

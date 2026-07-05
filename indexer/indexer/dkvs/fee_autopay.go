@@ -1,14 +1,12 @@
 package dkvs
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
-	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -49,13 +47,11 @@ type AutopayContractState struct {
 }
 
 type AutopayFeeVerifier struct {
-	StateProvider          AutopayStateProvider
-	Recipient              string
-	FeeAssetName           string
-	FullRecordFeePerBlock  string
-	AddressParams          *chaincfg.Params
-	RequireProofSignature  bool
-	AllowMissingRecordHash bool
+	StateProvider         AutopayStateProvider
+	Recipient             string
+	FeeAssetName          string
+	FullRecordFeePerBlock string
+	AddressParams         *chaincfg.Params
 }
 
 func (p RPCAutopayStateProvider) GetAutopayState(contract string) (*AutopayContractState, error) {
@@ -123,8 +119,21 @@ func (v AutopayFeeVerifier) VerifyRecordFeeProof(record *wire.DKVSRecord, parsed
 }
 
 func (v AutopayFeeVerifier) VerifyFeeProof(recordHash, keyHash [32]byte, namespace string, recordSize int, expiryHeight uint64, feeProof []byte) error {
-	_, _, _, err := v.verifyProof(recordHash, keyHash, namespace, recordSize, expiryHeight, feeProof)
-	return err
+	_ = recordHash
+	_ = keyHash
+	_ = namespace
+	_ = expiryHeight
+	if recordSize < 0 {
+		return ErrInvalidFeeProof
+	}
+	proof, err := ParseFeeProof(feeProof)
+	if err != nil {
+		return err
+	}
+	if proof.Mode != FeeModeAutopay || strings.TrimSpace(proof.PoolContract) == "" {
+		return ErrInvalidFeeProof
+	}
+	return nil
 }
 
 func (v AutopayFeeVerifier) VerifyFeeCapacity(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, records []*wire.DKVSRecord, height, now uint64) error {
@@ -167,87 +176,41 @@ type autopayCapacity struct {
 }
 
 func (v AutopayFeeVerifier) verifyProofForRecord(record *wire.DKVSRecord, parsed ParsedKey) (*FeeProof, autopayCapacity, error) {
-	hash := FeeAnchorHash(record)
-	var hash32 [32]byte
-	copy(hash32[:], hash[:])
-	keyHash := KeyHash(record.Key)
-	var keyHash32 [32]byte
-	copy(keyHash32[:], keyHash[:])
-	proof, capacity, _, err := v.verifyProof(hash32, keyHash32, parsed.Namespace, RecordSize(record), record.ExpiryHeight, record.FeeProof)
-	if err != nil || proof == nil || proof.Mode != FeeModeAutopay {
+	var capacity autopayCapacity
+	_ = parsed
+	if record == nil {
+		return nil, capacity, ErrInvalidRecord
+	}
+	if RecordSize(record) < 0 {
+		return nil, capacity, ErrInvalidFeeProof
+	}
+	proof, err := ParseFeeProof(record.FeeProof)
+	if err != nil {
 		return proof, capacity, err
 	}
-	if len(proof.PayerPubKey) == 0 || !bytes.Equal(proof.PayerPubKey, record.PubKey) {
+	if proof.Mode != FeeModeAutopay || strings.TrimSpace(proof.PoolContract) == "" {
 		return proof, capacity, ErrInvalidFeeProof
 	}
 	payer, err := P2TRAddressFromPubKeyBytes(record.PubKey, v.AddressParams)
 	if err != nil {
 		return proof, capacity, ErrInvalidFeeProof
 	}
-	if !strings.EqualFold(strings.TrimSpace(proof.Payer), payer) {
-		return proof, capacity, ErrInvalidFeeProof
-	}
-	return proof, capacity, nil
-}
-
-func (v AutopayFeeVerifier) verifyProof(recordHash, keyHash [32]byte, namespace string, recordSize int, expiryHeight uint64, feeProof []byte) (*FeeProof, autopayCapacity, *AutopayContractState, error) {
-	var capacity autopayCapacity
-	if len(feeProof) == 0 {
-		return nil, capacity, nil, ErrFeeProofRequired
-	}
-	if recordSize < 0 {
-		return nil, capacity, nil, ErrInvalidFeeProof
-	}
-	proof, err := ParseFeeProof(feeProof)
+	state, err := v.verifyState(proof, payer, record.ExpiryHeight)
 	if err != nil {
-		return proof, capacity, nil, err
-	}
-	if proof.Mode != FeeModeAutopay {
-		return proof, capacity, nil, ErrInvalidFeeProof
-	}
-	if len(proof.ProofSignature) != 0 || v.RequireProofSignature {
-		if err := VerifyFeeProofSignature(proof); err != nil {
-			return proof, capacity, nil, err
-		}
-	}
-	if proof.Namespace != namespace ||
-		proof.RecordSize < wire.MaxDKVSRecordSize ||
-		proof.ExpiryHeight != expiryHeight ||
-		proof.KeyHash != chainhash.Hash(keyHash) {
-		return proof, capacity, nil, ErrInvalidFeeProof
-	}
-	if proof.RecordHash != (chainhash.Hash{}) {
-		if proof.RecordHash != chainhash.Hash(recordHash) {
-			return proof, capacity, nil, ErrInvalidFeeProof
-		}
-	} else if !v.AllowMissingRecordHash {
-		return proof, capacity, nil, ErrInvalidFeeProof
-	}
-	if strings.TrimSpace(proof.PoolContract) == "" || strings.TrimSpace(proof.Payer) == "" {
-		return proof, capacity, nil, ErrInvalidFeeProof
-	}
-	if len(proof.PayerPubKey) != 0 {
-		payer, err := P2TRAddressFromPubKeyBytes(proof.PayerPubKey, v.AddressParams)
-		if err != nil || !strings.EqualFold(strings.TrimSpace(proof.Payer), payer) {
-			return proof, capacity, nil, ErrInvalidFeeProof
-		}
-	}
-	state, err := v.verifyState(proof)
-	if err != nil {
-		return proof, capacity, state, err
+		return proof, capacity, err
 	}
 	maxRecords, err := v.maxRecordsForState(state)
 	if err != nil {
-		return proof, capacity, state, err
+		return proof, capacity, err
 	}
 	capacity = autopayCapacity{
 		Contract:   strings.TrimSpace(proof.PoolContract),
 		MaxRecords: maxRecords,
 	}
-	return proof, capacity, state, nil
+	return proof, capacity, nil
 }
 
-func (v AutopayFeeVerifier) verifyState(proof *FeeProof) (*AutopayContractState, error) {
+func (v AutopayFeeVerifier) verifyState(proof *FeeProof, payer string, expiryHeight uint64) (*AutopayContractState, error) {
 	if v.StateProvider == nil {
 		return nil, ErrInvalidFeeProof
 	}
@@ -261,7 +224,7 @@ func (v AutopayFeeVerifier) verifyState(proof *FeeProof) (*AutopayContractState,
 		state.Closed {
 		return state, ErrInvalidFeeProof
 	}
-	if !strings.EqualFold(strings.TrimSpace(state.Deployer), strings.TrimSpace(proof.Payer)) {
+	if !strings.EqualFold(strings.TrimSpace(state.Deployer), strings.TrimSpace(payer)) {
 		return state, ErrInvalidFeeProof
 	}
 	if expected := strings.TrimSpace(v.Recipient); expected != "" &&
@@ -272,7 +235,7 @@ func (v AutopayFeeVerifier) verifyState(proof *FeeProof) (*AutopayContractState,
 		strings.TrimSpace(state.FeeAssetName) != expected {
 		return state, ErrInvalidFeeProof
 	}
-	if state.EndHeight > 0 && proof.ExpiryHeight > uint64(state.EndHeight) {
+	if state.EndHeight > 0 && expiryHeight > uint64(state.EndHeight) {
 		return state, ErrInvalidFeeProof
 	}
 	return state, nil

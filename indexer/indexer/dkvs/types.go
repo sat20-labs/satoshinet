@@ -29,8 +29,7 @@ const (
 	MaxKeySize         = 256
 	MaxKeySegmentSize  = 64
 	MaxNamespaceSize   = 16
-	MaxRecordValueSize = 10 * 1024
-	MaxRecordDataSize  = 10 * 1024
+	MaxRecordValueSize = wire.MaxDKVSRecordSize
 )
 
 var (
@@ -113,20 +112,13 @@ type SubscriptionNotifyFunc func(sub Subscription)
 type Record = wire.DKVSRecord
 
 type FeeProof struct {
-	Mode           string         `json:"mode"`
-	PoolContract   string         `json:"pool_contract,omitempty"`
-	Payer          string         `json:"payer,omitempty"`
-	PayerPubKey    []byte         `json:"payer_pubkey,omitempty"`
-	PaymentTxID    string         `json:"payment_txid,omitempty"`
-	LeaseContract  string         `json:"lease_contract,omitempty"`
-	PlanID         string         `json:"plan_id,omitempty"`
-	KeyHash        chainhash.Hash `json:"key_hash"`
-	RecordHash     chainhash.Hash `json:"record_hash"`
-	RecordSize     uint32         `json:"record_size"`
-	ExpiryHeight   uint64         `json:"expiry_height"`
-	Namespace      string         `json:"namespace"`
-	PaidAmount     string         `json:"paid_amount,omitempty"`
-	ProofSignature []byte         `json:"proof_signature,omitempty"`
+	Mode          string `json:"mode"`
+	PoolContract  string `json:"pool_contract,omitempty"`
+	Payer         string `json:"payer,omitempty"`
+	PaymentTxID   string `json:"payment_txid,omitempty"`
+	LeaseContract string `json:"lease_contract,omitempty"`
+	PlanID        string `json:"plan_id,omitempty"`
+	PaidAmount    string `json:"paid_amount,omitempty"`
 }
 
 type NotifyEvent struct {

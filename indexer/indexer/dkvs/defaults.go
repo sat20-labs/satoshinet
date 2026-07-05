@@ -31,7 +31,6 @@ type NetworkDefaults struct {
 	AutopayDeployNonce    uint64
 	AutopayContract       string
 	FullRecordFeePerBlock string
-	RequireProofSignature bool
 	UseAutopayFeeVerifier bool
 }
 
@@ -40,9 +39,7 @@ type NetworkDefaults struct {
 // production contract/deployer/recipient are finalized.
 func NetworkDefaultsForParams(params *chaincfg.Params) NetworkDefaults {
 	if params == nil || params.Name == chaincfg.MainNetParams.Name {
-		return NetworkDefaults{
-			RequireProofSignature: true,
-		}
+		return NetworkDefaults{}
 	}
 	defaults := NetworkDefaults{
 		Enabled:               true,
@@ -54,7 +51,6 @@ func NetworkDefaultsForParams(params *chaincfg.Params) NetworkDefaults {
 		AutopayEndHeight:      DefaultAutopayEndHeight,
 		AutopayDeployNonce:    DefaultTestNetAutopayDeployNonce,
 		FullRecordFeePerBlock: DefaultAutopayFullRecordFeePerBlock,
-		RequireProofSignature: true,
 		UseAutopayFeeVerifier: true,
 	}
 	defaults.AutopayContract = defaults.deriveAutopayContract(params)
