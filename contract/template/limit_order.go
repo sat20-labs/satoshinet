@@ -21,6 +21,10 @@ func (c *LimitOrderContract) TemplateName() string {
 	return TemplateLimitOrder
 }
 
+func (c *LimitOrderContract) NetworkExclusive() bool {
+	return false
+}
+
 func (c *LimitOrderContract) Version() uint32 {
 	return CurrentTemplateVersion
 }

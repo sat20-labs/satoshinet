@@ -44,6 +44,7 @@ type SettlementTransfer struct {
 	AssetAmt  string `json:"assetAmt,omitempty"`
 	SatValue  int64  `json:"satValue,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	AsFee     bool   `json:"asFee,omitempty"`
 }
 
 func SettlementPlanHasChanges(plan *SettlementPlan) bool {
@@ -123,6 +124,16 @@ func BuildSettlementResultPlan(plan *SettlementPlan, opts SettlementResultOption
 	}
 	out.Inputs = UniqueOutPoints(out.Inputs)
 	for _, transfer := range plan.Transfers {
+		if transfer.AsFee {
+			output, err := ResultOutputFromSettlementTransfer(transfer, opts)
+			if err != nil {
+				return ResultPlan{}, err
+			}
+			if !ResultOutputIsZero(output) {
+				out.FeeOutputs = append(out.FeeOutputs, output)
+			}
+			continue
+		}
 		output, err := ResultOutputFromSettlementTransfer(transfer, opts)
 		if err != nil {
 			return ResultPlan{}, err
@@ -159,6 +170,9 @@ func BuildSettlementAssetIntents(plan *SettlementPlan, opts SettlementResultOpti
 	}
 	out := make([]AssetIntent, 0, len(plan.Transfers))
 	for i, transfer := range plan.Transfers {
+		if transfer.AsFee {
+			continue
+		}
 		intents, err := assetIntentsFromSettlementTransfer(contractAddr, transfer, uint32(i), opts)
 		if err != nil {
 			return nil, err
@@ -180,6 +194,9 @@ func BuildSettlementAssetIntentsByItem(plan *SettlementPlan,
 	}
 	out := make(map[int64][]AssetIntent)
 	for i, transfer := range plan.Transfers {
+		if transfer.AsFee {
+			continue
+		}
 		intents, err := assetIntentsFromSettlementTransfer(contractAddr, transfer, uint32(i), opts)
 		if err != nil {
 			return nil, err

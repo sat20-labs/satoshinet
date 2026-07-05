@@ -147,6 +147,64 @@ func TestBackendIgnoresInvalidDeploy(t *testing.T) {
 	}
 }
 
+func TestBackendNonExclusiveDeployAllowsSameConfig(t *testing.T) {
+	contract := validPredictionContract()
+	deployTx, addr := testAgentDeployTxForContractWithNonce(t, contract, 7)
+	duplicateTx, duplicateAddr := testAgentDeployTxForContractWithNonce(t, contract, 8)
+	store := NewRuntimeStore()
+
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:   []*wire.MsgTx{deployTx, duplicateTx},
+		Store: store,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock failed: %v", err)
+	}
+	if len(result.Records) != 2 {
+		t.Fatalf("record count mismatch: %+v", result.Records)
+	}
+	if result.Records[0].Status != ResultStatusSuccess || result.Records[1].Status != ResultStatusSuccess {
+		t.Fatalf("record status mismatch: %+v", result.Records)
+	}
+	if !store.Exists(addr) || !store.Exists(duplicateAddr) {
+		t.Fatalf("non-exclusive deploy store mismatch, first=%v duplicate=%v", store.Exists(addr), store.Exists(duplicateAddr))
+	}
+}
+
+func TestBackendNonExclusiveDeployAllowsSameConfigAfterClose(t *testing.T) {
+	contract := validPredictionContract()
+	deployTx, addr := testAgentDeployTxForContractWithNonce(t, contract, 7)
+	closeTx := testAgentInvokeTx(t, addr, InvokeAPIClose, nil, 0, nil)
+	store := NewRuntimeStore()
+
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:   []*wire.MsgTx{deployTx, closeTx},
+		Store: store,
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			closeTx.TxID(): "deployer",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBlock close failed: %v", err)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok || runtime.State().Status != StatusCompleted {
+		t.Fatalf("contract did not close: ok=%v state=%#v", ok, runtime.State())
+	}
+
+	redeployTx, redeployAddr := testAgentDeployTxForContractWithNonce(t, contract, 8)
+	result, err := testAgentExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{redeployTx}, Store: store})
+	if err != nil {
+		t.Fatalf("ExecuteBlock redeploy failed: %v", err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Status != ResultStatusSuccess {
+		t.Fatalf("redeploy record mismatch: %+v", result.Records)
+	}
+	if !store.Exists(redeployAddr) {
+		t.Fatalf("redeploy runtime missing")
+	}
+}
+
 func TestBackendIgnoresBetBeforeReady(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)

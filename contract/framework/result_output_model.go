@@ -41,6 +41,7 @@ type ResultPlan struct {
 	GasRefunds []ResultGasRefund `json:"gasRefunds,omitempty"`
 	Inputs     []OutPoint        `json:"inputs,omitempty"`
 	InputUTXOs []UTXO            `json:"inputUtxos,omitempty"`
+	FeeOutputs []ResultOutput    `json:"feeOutputs,omitempty"`
 	Outputs    []ResultOutput    `json:"outputs,omitempty"`
 }
 
@@ -61,6 +62,10 @@ func CloneResultPlan(plan ResultPlan) ResultPlan {
 	out.InputUTXOs = make([]UTXO, len(plan.InputUTXOs))
 	for i := range plan.InputUTXOs {
 		out.InputUTXOs[i] = plan.InputUTXOs[i].Clone()
+	}
+	out.FeeOutputs = make([]ResultOutput, len(plan.FeeOutputs))
+	for i := range plan.FeeOutputs {
+		out.FeeOutputs[i] = CloneResultOutput(plan.FeeOutputs[i])
 	}
 	out.Outputs = make([]ResultOutput, len(plan.Outputs))
 	for i := range plan.Outputs {

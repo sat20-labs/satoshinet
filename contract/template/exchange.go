@@ -39,6 +39,10 @@ func (c *ExchangeContract) TemplateName() string {
 	return TemplateExchange
 }
 
+func (c *ExchangeContract) NetworkExclusive() bool {
+	return false
+}
+
 func (c *ExchangeContract) Version() uint32 {
 	return CurrentTemplateVersion
 }

@@ -348,6 +348,27 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
+	if e.Store.Exists(addr) || e.Store.ActiveNetworkExclusiveExists(runtime) {
+		outcome := contractframework.ExecutionOutcome{
+			Height:         e.BlockHeight,
+			TxID:           tx.TxID(),
+			Type:           TxTypeDeploy,
+			Kind:           ExecutionKindDeploy,
+			CallID:         DeriveDeployCallID(tx.TxID(), addr),
+			Contract:       addr,
+			Status:         ResultStatusInvalid,
+			GasLimit:       validated.Payload.GasLimit,
+			FundingInputs:  []OutPoint{fundingOutput.OutPoint},
+			RequiresResult: true,
+		}
+		e.appendOutcome(outcome)
+		if resultPlan, ok := stateResultPlan(addr, fundingOutput); ok {
+			outcome.GasFee = resultFee
+			e.records[len(e.records)-1] = outcome.ToRecord()
+			e.resultPlans = append(e.resultPlans, resultPlan)
+		}
+		return nil
+	}
 	e.Store.Add(runtime)
 	outcome := contractframework.ExecutionOutcome{
 		Height:         e.BlockHeight,

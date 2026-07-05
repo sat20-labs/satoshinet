@@ -713,6 +713,11 @@ func predictionContractForResultServer(serverURL string) PredictionContract {
 
 func testAgentDeployTxForContract(t *testing.T, contract PredictionContract) (*wire.MsgTx, ContractAddress) {
 	t.Helper()
+	return testAgentDeployTxForContractWithNonce(t, contract, 7)
+}
+
+func testAgentDeployTxForContractWithNonce(t *testing.T, contract PredictionContract, nonce uint64) (*wire.MsgTx, ContractAddress) {
+	t.Helper()
 	content, err := contract.Encode()
 	if err != nil {
 		t.Fatalf("Encode failed: %v", err)
@@ -722,7 +727,7 @@ func testAgentDeployTxForContract(t *testing.T, contract PredictionContract) (*w
 		GasLimit:        DefaultGasConfig().DeployBaseGas,
 		SubType:         SubtypePrediction,
 		Version:         CurrentAgentVersion,
-		DeployNonce:     7,
+		DeployNonce:     nonce,
 		ContractContent: content,
 	}
 	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.SubType, deploy.ContractContent, deployer, deploy.DeployNonce)

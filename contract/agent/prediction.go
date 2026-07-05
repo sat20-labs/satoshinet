@@ -59,6 +59,10 @@ func (c PredictionContract) Encode() ([]byte, error) {
 	return json.Marshal(c)
 }
 
+func (c PredictionContract) NetworkExclusive() bool {
+	return false
+}
+
 func DecodePredictionContract(data []byte) (PredictionContract, error) {
 	var c PredictionContract
 	if err := json.Unmarshal(data, &c); err != nil {

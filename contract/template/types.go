@@ -343,6 +343,7 @@ func writeHashBytes(buf *bytes.Buffer, data []byte) {
 type Contract interface {
 	TemplateName() string
 	Version() uint32
+	NetworkExclusive() bool
 	Encode() ([]byte, error)
 	Decode([]byte) error
 	CheckContent() error

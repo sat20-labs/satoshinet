@@ -18,6 +18,9 @@ const (
 	AutopayStatusActive  = "active"
 	AutopayStatusExpired = "expired"
 	AutopayStatusClosed  = "closed"
+
+	AutopayReasonPayment  = "autopay"
+	AutopayReasonMinerFee = "miner_fee"
 )
 
 type AutopayContract struct {
@@ -42,6 +45,10 @@ func NewAutopayContract(recipient, feeAssetName, scheduleMode, baseAmount, stepA
 
 func (c *AutopayContract) TemplateName() string {
 	return TemplateAutopay
+}
+
+func (c *AutopayContract) NetworkExclusive() bool {
+	return true
 }
 
 func (c *AutopayContract) Version() uint32 {
@@ -220,7 +227,7 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 	}
 	state.Running.GasBalance = decimalSubAllowNil(state.Running.GasBalance, triggerGasFee)
 	plan.GasFee = triggerGasFee.Clone()
-	plan.Transfers = append(plan.Transfers, autopayTransfer(c.Recipient, c.FeeAssetName, fee))
+	plan.Transfers = append(plan.Transfers, c.autopayPaymentTransfer(fee))
 	state.Running.PaidBlockCount++
 	state.Running.LastPayHeight = height
 	state.Running.NextPayHeight = height + 1
@@ -410,7 +417,7 @@ func autopayTransfer(to, assetName string, amount *scommon.Decimal) SettlementTr
 	transfer := SettlementTransfer{
 		To:        to,
 		AssetName: assetName,
-		Reason:    "autopay",
+		Reason:    AutopayReasonPayment,
 	}
 	if assetName == SatoshiAssetName {
 		value, err := contractframework.DecimalToInt64(*decimalOrZero(amount))
@@ -420,6 +427,16 @@ func autopayTransfer(to, assetName string, amount *scommon.Decimal) SettlementTr
 		return transfer
 	}
 	transfer.AssetAmt = decimalString(amount)
+	return transfer
+}
+
+func (c *AutopayContract) autopayPaymentTransfer(amount *scommon.Decimal) SettlementTransfer {
+	if c.Recipient != "" {
+		return autopayTransfer(c.Recipient, c.FeeAssetName, amount)
+	}
+	transfer := autopayTransfer("", c.FeeAssetName, amount)
+	transfer.Reason = AutopayReasonMinerFee
+	transfer.AsFee = true
 	return transfer
 }
 

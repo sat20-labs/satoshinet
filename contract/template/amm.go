@@ -27,6 +27,10 @@ func (c *AMMContract) TemplateName() string {
 	return TemplateAMM
 }
 
+func (c *AMMContract) NetworkExclusive() bool {
+	return false
+}
+
 func (c *AMMContract) ApplyRunningData(running *RunningData, item *InvokeItem) bool {
 	return false
 }

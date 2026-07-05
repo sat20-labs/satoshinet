@@ -836,6 +836,49 @@ func TestBackendDuplicateDeployDoesNotOverwriteRuntime(t *testing.T) {
 	require.True(t, store.Exists(addr))
 }
 
+func TestBackendNetworkExclusiveDeployRejectsSameConfig(t *testing.T) {
+	contract := NewAutopayContract("recipient-address", "ordx:f:test", AutopayScheduleFixed, "10", "", 0)
+	deployTx, addr := testTemplateDeployTxWithNonce(t, contract, 7)
+	duplicateTx, duplicateAddr := testTemplateDeployTxWithNonce(t, contract, 8)
+	store := NewRuntimeStore()
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, duplicateTx}, Store: store})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 2)
+	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
+	require.Equal(t, ResultStatusInvalid, result.Records[1].Status)
+	require.True(t, store.Exists(addr))
+	require.False(t, store.Exists(duplicateAddr))
+}
+
+func TestBackendNetworkExclusiveDeployAllowsAfterClose(t *testing.T) {
+	contract := NewAutopayContract("recipient-address", "ordx:f:test", AutopayScheduleFixed, "10", "", 0)
+	deployTx, addr := testTemplateDeployTxWithNonce(t, contract, 7)
+	closeTx := testExchangeCloseTx(t, addr, testAsset(DefaultGasConfig().GasAssetName, 2))
+	store := NewRuntimeStore()
+
+	_, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:   []*wire.MsgTx{deployTx, closeTx},
+		Store: store,
+		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
+			return "deployer-address", nil
+		},
+	})
+	require.NoError(t, err)
+	runtime, ok := store.Get(addr)
+	require.True(t, ok)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.True(t, state.Running.Closed)
+
+	redeployTx, redeployAddr := testTemplateDeployTxWithNonce(t, contract, 8)
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{redeployTx}, Store: store})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
+	require.True(t, store.Exists(redeployAddr))
+}
+
 func TestBackendRecordsInvalidInvokeParam(t *testing.T) {
 	contract := NewLimitOrderContract("ordx:f:test")
 	deployTx, addr := testTemplateDeployTx(t, contract)
@@ -889,13 +932,18 @@ func TestBackendRecordsUnsupportedAMMRefund(t *testing.T) {
 
 func testTemplateDeployTx(t *testing.T, contract Contract) (*wire.MsgTx, ContractAddress) {
 	t.Helper()
+	return testTemplateDeployTxWithNonce(t, contract, 7)
+}
+
+func testTemplateDeployTxWithNonce(t *testing.T, contract Contract, nonce uint64) (*wire.MsgTx, ContractAddress) {
+	t.Helper()
 	content, err := contract.Encode()
 	require.NoError(t, err)
 	deploy := DeployPayload{
 		GasLimit:        DefaultGasConfig().DeployBaseGas,
 		SubType:         contract.TemplateName(),
 		Version:         contract.Version(),
-		DeployNonce:     7,
+		DeployNonce:     nonce,
 		ContractContent: content,
 	}
 	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.ContractContent, "deployer-address", deploy.DeployNonce)

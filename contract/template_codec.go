@@ -467,9 +467,6 @@ func (c TemplateExchangeContract) Check() error {
 }
 
 func (c TemplateAutopayContract) Check() error {
-	if strings.TrimSpace(c.Recipient) == "" {
-		return fmt.Errorf("missing autopay recipient")
-	}
 	if err := checkTemplatePayableAssetName(c.FeeAssetName); err != nil {
 		return fmt.Errorf("invalid fee asset: %w", err)
 	}

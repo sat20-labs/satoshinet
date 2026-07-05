@@ -503,6 +503,27 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
+	if e.Store.ActiveNetworkExclusiveExists(runtime) {
+		gasRefundRecipient := ""
+		if hasResultGas {
+			gasRefundRecipient = deployer
+		}
+		e.appendOutcome(contractframework.ExecutionOutcome{
+			Height:             e.BlockHeight,
+			TxID:               tx.TxID(),
+			Type:               TxTypeDeploy,
+			Kind:               ExecutionKindDeploy,
+			CallID:             DeriveDeployCallID(tx.TxID(), addr),
+			Contract:           addr,
+			Status:             ResultStatusInvalid,
+			GasLimit:           validated.Payload.GasLimit,
+			FundingInputs:      []OutPoint{fundingOutput.OutPoint},
+			GasFee:             contractframework.GasFeeIf(hasResultGas, resultFee),
+			GasRefundRecipient: gasRefundRecipient,
+			RequiresResult:     true,
+		})
+		return nil
+	}
 	runtime.SetCurrentBlock(e.BlockHeight)
 	if err := runtime.ApplyFunding(stripTemplateResultGasFunding(runtime.Contract(), fundingOutput, e.GasConfig.GasAssetName,
 		contractframework.GasFeeIf(hasResultGas, resultFee)), e.GasConfig.GasAssetName); err != nil {

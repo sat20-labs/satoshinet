@@ -53,12 +53,14 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 	}
 
 	outputs := NormalizeResultOutputsPrecision(out.Outputs, req.Precision)
+	feeOutputs := NormalizeResultOutputsPrecision(out.FeeOutputs, req.Precision)
 	gasRefundOutputs, err := resultGasRefundOutputs(out, req.View, req.GasAssetName, req.Precision)
 	if err != nil {
 		return ResultPlan{}, err
 	}
 	outputs = append(outputs, gasRefundOutputs...)
-	remainingValue, remainingAssets, err := physicalRemainderAfterOutputs(req.View, outputs, req.GasAssetName, req.GasFee)
+	plannedSpends := append(CloneResultOutputs(outputs), feeOutputs...)
+	remainingValue, remainingAssets, err := physicalRemainderAfterOutputs(req.View, plannedSpends, req.GasAssetName, req.GasFee)
 	if err != nil {
 		return ResultPlan{}, err
 	}
@@ -78,7 +80,7 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 		outputs = append(outputs, splitSurplusOutput(managedAssets, managedSurplusRequest(req))...)
 	}
 
-	spentValue := resultOutputsValue(outputs)
+	spentValue := resultOutputsValue(outputs) + resultOutputsValue(feeOutputs)
 	if req.GasAssetName == contract.SatoshiAssetName && req.GasFee != nil && req.GasFee.Sign() > 0 {
 		feeValue, err := DecimalToInt64(*req.GasFee)
 		if err != nil {
@@ -93,7 +95,7 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 
 	surplusValue := req.View.Value - spentValue
 	surplusAssets := req.View.Assets.Clone()
-	spentAssets, err := resultOutputsAssets(outputs)
+	spentAssets, err := resultOutputsAssets(append(CloneResultOutputs(outputs), feeOutputs...))
 	if err != nil {
 		return ResultPlan{}, err
 	}

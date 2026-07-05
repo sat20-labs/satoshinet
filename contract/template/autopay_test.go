@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,6 +99,47 @@ func TestAutopayDefaultFundingAndCloseReturnsBalances(t *testing.T) {
 	require.Equal(t, AutopayStatusClosed, state.Running.AutopayStatus)
 }
 
+func TestAutopayEmptyRecipientPaysMinerFee(t *testing.T) {
+	gasConfig := testAutopayGasConfig()
+	runtime := testAutopayRuntime(t, "", "ordx:f:test", AutopayScheduleFixed, "10", "", 101)
+	contractAddr := runtime.Address()
+	err := runtime.ApplyFunding(
+		testContractOutput("fund", 0, contractAddr, 0, testAssets("ordx:f:test", 20, gasConfig.GasAssetName, 100)),
+		gasConfig.GasAssetName,
+	)
+	require.NoError(t, err)
+	_, err = runtime.SettleBlockWithGasConfig(100, gasConfig)
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlockWithGasConfig(101, gasConfig)
+	require.NoError(t, err)
+	require.Len(t, plan.Transfers, 1)
+	require.True(t, plan.Transfers[0].AsFee)
+	require.Empty(t, plan.Transfers[0].To)
+	require.Equal(t, AutopayReasonMinerFee, plan.Transfers[0].Reason)
+	require.Equal(t, "ordx:f:test", plan.Transfers[0].AssetName)
+	require.Equal(t, "10", plan.Transfers[0].AssetAmt)
+
+	resultPlans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, resultPlans, 1)
+	require.Empty(t, resultPlans[0].Outputs)
+
+	provider := func(contract ContractAddress) ([]UTXO, error) {
+		require.True(t, contract.Equal(contractAddr))
+		return []UTXO{
+			testContractUTXO("fund", 0, contractAddr, 0, testAssets("ordx:f:test", 20, gasConfig.GasAssetName, 100)),
+		}, nil
+	}
+	augmented, err := AugmentResultPlans(resultPlans, runtimeStoreWith(runtime), gasConfig,
+		contractframework.ContractUTXOProvider(provider), nil)
+	require.NoError(t, err)
+	require.Len(t, augmented, 1)
+	requireResultPlanAssetTo(t, augmented[0], contractAddr.MustEncode(), "ordx:f:test", "10")
+	requireNoResultPlanOutputTo(t, augmented[0], "")
+	requireNoResultPlanOutputTo(t, augmented[0], "recipient-address")
+}
+
 func testAutopayRuntime(t *testing.T, recipient, feeAsset, mode, base, step string, endHeight int64) *ContractRuntime {
 	t.Helper()
 	contract := NewAutopayContract(recipient, feeAsset, mode, base, step, endHeight)
@@ -115,6 +157,12 @@ func testAutopayRuntime(t *testing.T, recipient, feeAsset, mode, base, step stri
 	runtime, err := NewRuntimeWithDeployer(addr, deploy, NewDefaultRegistry(), "deployer-address")
 	require.NoError(t, err)
 	return runtime
+}
+
+func runtimeStoreWith(runtime *ContractRuntime) *RuntimeStore {
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	return store
 }
 
 func testAutopayGasConfig() GasConfig {

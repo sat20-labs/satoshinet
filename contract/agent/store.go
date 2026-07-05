@@ -3,8 +3,10 @@ package agent
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strconv"
 )
 
 type byteWriter interface {
@@ -56,6 +58,46 @@ func (s *RuntimeStore) Get(contract ContractAddress) (*Runtime, bool) {
 func (s *RuntimeStore) Exists(contract ContractAddress) bool {
 	_, ok := s.Get(contract)
 	return ok
+}
+
+func (s *RuntimeStore) ActiveNetworkExclusiveExists(runtime *Runtime) bool {
+	if s == nil || runtime == nil || !runtime.Contract().NetworkExclusive() {
+		return false
+	}
+	want := runtime.NetworkExclusiveKey()
+	if want == "" {
+		return false
+	}
+	for _, existing := range s.runtimes {
+		if existing == nil {
+			continue
+		}
+		if existing.NetworkExclusiveKey() != want {
+			continue
+		}
+		if !existing.NetworkExclusiveActive() {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (r *Runtime) NetworkExclusiveKey() string {
+	if r == nil {
+		return ""
+	}
+	sum := sha256.Sum256(r.deploy.ContractContent)
+	return r.deploy.SubType + ":" + strconv.FormatUint(uint64(r.deploy.Version), 10) + ":" +
+		hex.EncodeToString(sum[:])
+}
+
+func (r *Runtime) NetworkExclusiveActive() bool {
+	if r == nil {
+		return false
+	}
+	status := r.state.Status
+	return status != StatusCompleted && status != StatusRejected
 }
 
 func (r *Runtime) StateRoot() [32]byte {

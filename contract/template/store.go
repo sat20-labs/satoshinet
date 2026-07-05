@@ -2,8 +2,10 @@ package template
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	scommon "github.com/sat20-labs/indexer/common"
@@ -55,6 +57,52 @@ func (s *RuntimeStore) Get(contract ContractAddress) (*ContractRuntime, bool) {
 func (s *RuntimeStore) Exists(contract ContractAddress) bool {
 	_, ok := s.Get(contract)
 	return ok
+}
+
+func (s *RuntimeStore) ActiveNetworkExclusiveExists(runtime *ContractRuntime) bool {
+	if s == nil || runtime == nil {
+		return false
+	}
+	if !runtime.Contract().NetworkExclusive() {
+		return false
+	}
+	want := runtime.NetworkExclusiveKey()
+	if want == "" {
+		return false
+	}
+	for _, existing := range s.runtimes {
+		if existing == nil {
+			continue
+		}
+		if existing.NetworkExclusiveKey() != want {
+			continue
+		}
+		if !existing.NetworkExclusiveActive() {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (r *ContractRuntime) NetworkExclusiveKey() string {
+	if r == nil || r.base == nil {
+		return ""
+	}
+	sum := sha256.Sum256(r.base.contractContent)
+	return r.base.templateName + ":" + strconv.FormatUint(uint64(r.base.templateVersion), 10) + ":" +
+		hex.EncodeToString(sum[:])
+}
+
+func (r *ContractRuntime) NetworkExclusiveActive() bool {
+	if r == nil {
+		return false
+	}
+	state, err := r.RuntimeState()
+	if err != nil {
+		return false
+	}
+	return !state.Running.Closed
 }
 
 func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
