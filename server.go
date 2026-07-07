@@ -39,6 +39,8 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	contractnode "github.com/sat20-labs/satoshinet/contract/node"
 	contractoracle "github.com/sat20-labs/satoshinet/contract/oracle"
 	"github.com/sat20-labs/satoshinet/database"
@@ -233,6 +235,9 @@ type server struct {
 	chain                *blockchain.BlockChain
 	txMemPool            *mempool.TxPool
 	agentOracle          *contractoracle.Service
+	agentStateStore      *contractnode.AgentStateStore
+	agentInvokeMu        sync.Mutex
+	agentInvokePending   map[string]struct{}
 	btcCpuMiner          *btclucky.Miner
 	posMiner             *posminer.POSMiner
 	modifyRebroadcastInv chan interface{}
@@ -3108,16 +3113,15 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 	if s == nil || s.assetIndexer == nil || s.txMemPool == nil {
 		return nil, fmt.Errorf("agent invoke submitter is not ready")
 	}
-	if s.agentInvokeInMempool(contract, action) {
+	if s.agentInvokeSubmitPending(contract, action) || s.agentInvokeInMempool(contract, action) {
 		return nil, fmt.Errorf("agent %s transaction is already in mempool", action)
 	}
 	gasConfig := contractnode.DefaultGasConfig()
-	nextHeight := uint64(s.chain.BestSnapshot().Height + 1)
-	gasFee, err := gasConfig.CheckedCallFeeDecimalAtHeight(gasConfig.InvokeBaseGas, nextHeight)
+	topUpGas, err := s.agentConfirmGasTopUp(contract, action, gasConfig)
 	if err != nil {
 		return nil, err
 	}
-	funding, err := s.selectAgentConfirmFundingUTXOs(gasFee)
+	funding, err := s.selectAgentConfirmFundingUTXOs(agentConfirmExternalGasFunding(topUpGas))
 	if err != nil {
 		return nil, err
 	}
@@ -3125,13 +3129,17 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 	if funding.ChangeOutput != nil {
 		changeOutputs = append(changeOutputs, funding.ChangeOutput)
 	}
+	confirmFunding, err := agentConfirmFundingOutput(topUpGas, gasConfig.GasAssetName)
+	if err != nil {
+		return nil, err
+	}
 	tx, err := contractcommon.BuildInvokeTx(contractcommon.InvokeTxBuildRequest{
 		Contract:     contract,
 		GasLimit:     gasConfig.InvokeBaseGas,
 		CallNonce:    uint64(time.Now().UnixNano()),
 		Action:       action,
 		Param:        param,
-		Funding:      wire.TxOut{},
+		Funding:      confirmFunding,
 		Inputs:       funding.InputOutPoints(),
 		ExtraOutputs: changeOutputs,
 	})
@@ -3163,8 +3171,77 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 	if err != nil {
 		return nil, err
 	}
+	s.markAgentInvokeSubmitted(contract, action)
 	s.AnnounceNewTransactions(accepted)
 	return signedTx, nil
+}
+
+func agentConfirmFundingOutput(topUpGas *common.Decimal, gasAssetName string) (wire.TxOut, error) {
+	if topUpGas == nil || topUpGas.Sign() == 0 {
+		return wire.TxOut{}, nil
+	}
+	if topUpGas.Sign() < 0 {
+		return wire.TxOut{}, fmt.Errorf("invalid agent confirm gas top up")
+	}
+	gasAsset := wire.NewAssetNameFromString(gasAssetName)
+	if gasAsset == nil {
+		return wire.TxOut{}, fmt.Errorf("invalid agent gas asset name")
+	}
+	return wire.TxOut{
+		Assets: wire.TxAssets{{
+			Name:   *gasAsset,
+			Amount: *topUpGas.Clone(),
+		}},
+	}, nil
+}
+
+func agentConfirmExternalGasFunding(topUpGas *common.Decimal) *common.Decimal {
+	if topUpGas == nil || topUpGas.Sign() <= 0 {
+		return nil
+	}
+	return topUpGas.Clone()
+}
+
+func (s *server) agentConfirmGasTopUp(contract contractcommon.ContractAddress, action string,
+	gasConfig contractframework.GasConfig) (*common.Decimal, error) {
+
+	if s == nil || s.chain == nil {
+		return nil, fmt.Errorf("agent confirm submitter is not ready")
+	}
+	if strings.TrimSpace(action) != agentcontract.InvokeAPIConfirm {
+		return nil, nil
+	}
+	resultFee, err := gasConfig.ResultFee(int64(s.chain.BestSnapshot().Height) + 1)
+	if err != nil {
+		return nil, err
+	}
+	if resultFee == nil || resultFee.Sign() <= 0 {
+		return nil, nil
+	}
+	if s == nil || s.agentStateStore == nil {
+		return resultFee.Clone(), nil
+	}
+	_, store, err := s.agentStateStore.LoadTip()
+	if err != nil {
+		srvrLog.Warnf("agent confirm gas top up uses full result fee: load agent state failed: %v", err)
+		return resultFee.Clone(), nil
+	}
+	runtime, ok := store.Get(contract)
+	if !ok || runtime == nil {
+		return resultFee.Clone(), nil
+	}
+	current := common.NewDecimal(0, resultFee.Precision)
+	if gasBalance := strings.TrimSpace(runtime.State().Prediction.GasBalance); gasBalance != "" {
+		current, err = common.NewDecimalFromString(gasBalance, agentcontract.MaxPredictionDecimalPrecision)
+		if err != nil {
+			return nil, err
+		}
+		current = current.NewPrecision(resultFee.Precision)
+	}
+	if current.Cmp(resultFee) >= 0 {
+		return nil, nil
+	}
+	return resultFee.SubAlignPrecision(current), nil
 }
 
 func (s *server) selectAgentConfirmFundingUTXOs(minGasFee *common.Decimal) (contractcommon.FundingSelection, error) {
@@ -3200,24 +3277,84 @@ func (s *server) selectAgentConfirmFundingUTXOs(minGasFee *common.Decimal) (cont
 			if err != nil {
 				continue
 			}
+			entry, err := s.chain.FetchUtxoEntry(*outpoint)
+			if err != nil {
+				srvrLog.Warnf("agent confirm funding skip %s: fetch chain utxo failed: %v", utxo.OutPointStr, err)
+				continue
+			}
+			if entry == nil || entry.IsSpent() {
+				srvrLog.Warnf("agent confirm funding skip %s: missing or spent in chain utxo view", utxo.OutPointStr)
+				continue
+			}
+			chainAssets := entry.TxAssets()
+			chainOut := wire.TxOut{
+				Value:    entry.Amount(),
+				Assets:   chainAssets.Clone(),
+				PkScript: append([]byte(nil), entry.PkScript()...),
+			}
 			available = append(available, contractcommon.FundingUTXO{
 				OutPoint: *outpoint,
-				OutValue: *cloneTxOut(&utxo.OutValue),
+				OutValue: chainOut,
 				Height:   int64(utxo.Height()),
 				SortKey:  utxo.OutPointStr,
 			})
 		}
 	}
+	return selectAgentConfirmFundingFromAvailable(available, minGasFee, gasAssetName.String(), expectedScript, func(utxo contractcommon.FundingUTXO) bool {
+		outpoint := utxo.OutPoint
+		return s.txMemPool.CheckSpend(outpoint) == nil
+	})
+}
+
+func selectAgentConfirmFundingFromAvailable(available []contractcommon.FundingUTXO, minGasFee *common.Decimal,
+	gasAssetName string, expectedScript []byte, isSpendable func(contractcommon.FundingUTXO) bool) (contractcommon.FundingSelection, error) {
+
+	if minGasFee == nil || minGasFee.Sign() == 0 {
+		candidates := make([]contractcommon.FundingUTXO, 0, len(available))
+		for _, utxo := range available {
+			if len(expectedScript) != 0 && !bytes.Equal(utxo.OutValue.PkScript, expectedScript) {
+				continue
+			}
+			if isSpendable != nil && !isSpendable(utxo) {
+				continue
+			}
+			candidates = append(candidates, utxo.Clone())
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].Height != candidates[j].Height {
+				return candidates[i].Height < candidates[j].Height
+			}
+			return candidates[i].SortKey < candidates[j].SortKey
+		})
+		if len(candidates) == 0 {
+			return contractcommon.FundingSelection{}, fmt.Errorf("no enough contract funding UTXO")
+		}
+		selected := candidates[0]
+		changeOutput := cloneTxOut(&selected.OutValue)
+		if changeOutput != nil {
+			changeOutput.PkScript = append([]byte(nil), expectedScript...)
+		}
+		return contractcommon.FundingSelection{
+			Inputs:       []contractcommon.FundingUTXO{selected.Clone()},
+			TotalValue:   selected.OutValue.Value,
+			TotalAssets:  selected.OutValue.Assets.Clone(),
+			ChangeOutput: changeOutput,
+		}, nil
+	}
+	if minGasFee.Sign() < 0 {
+		return contractcommon.FundingSelection{}, fmt.Errorf("invalid agent confirm gas funding")
+	}
+	gasAsset := wire.NewAssetNameFromString(gasAssetName)
+	if gasAsset == nil {
+		return contractcommon.FundingSelection{}, fmt.Errorf("invalid agent gas asset name")
+	}
 	return contractcommon.SelectFundingUTXOs(contractcommon.FundingSelectionRequest{
 		Available:        available,
-		RequiredValue:    contractoracle.DefaultAgentConfirmTxFee,
-		RequiredAssets:   wire.TxAssets{{Name: *gasAssetName, Amount: *minGasFee.Clone()}},
+		RequiredValue:    0,
+		RequiredAssets:   wire.TxAssets{{Name: *gasAsset, Amount: *minGasFee.Clone()}},
 		ChangePkScript:   expectedScript,
 		RequiredPkScript: expectedScript,
-		IsSpendable: func(utxo contractcommon.FundingUTXO) bool {
-			outpoint := utxo.OutPoint
-			return s.txMemPool.CheckSpend(outpoint) == nil
-		},
+		IsSpendable:      isSpendable,
 	})
 }
 
@@ -3241,6 +3378,32 @@ func (s *server) agentInvokeInMempool(contract contractcommon.ContractAddress, a
 		}
 	}
 	return false
+}
+
+func (s *server) agentInvokeSubmitPending(contract contractcommon.ContractAddress, action string) bool {
+	if s == nil {
+		return false
+	}
+	s.agentInvokeMu.Lock()
+	defer s.agentInvokeMu.Unlock()
+	_, ok := s.agentInvokePending[agentInvokePendingKey(contract, action)]
+	return ok
+}
+
+func (s *server) markAgentInvokeSubmitted(contract contractcommon.ContractAddress, action string) {
+	if s == nil {
+		return
+	}
+	s.agentInvokeMu.Lock()
+	defer s.agentInvokeMu.Unlock()
+	if s.agentInvokePending == nil {
+		s.agentInvokePending = make(map[string]struct{})
+	}
+	s.agentInvokePending[agentInvokePendingKey(contract, action)] = struct{}{}
+}
+
+func agentInvokePendingKey(contract contractcommon.ContractAddress, action string) string {
+	return contract.String() + ":" + strings.TrimSpace(action)
 }
 
 func parseAgentInvokeTx(tx *wire.MsgTx, prefix string) (contractcommon.InvokePayload,
@@ -3597,6 +3760,8 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize),
 		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
 		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
+		agentStateStore:      contractnode.NewAgentStateStore(db),
+		agentInvokePending:   make(map[string]struct{}),
 		agentBlacklist:       agentBlacklist,
 		agentWhitelist:       agentWhitelist,
 		BtcdDir:              homeDir,
@@ -3694,6 +3859,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 			Model:       cfg.AgentLLMModel,
 			APIKey:      cfg.AgentLLMAPIKey,
 			Timeout:     cfg.AgentLLMTimeout,
+			KeepAlive:   cfg.AgentLLMKeepAlive,
 			Temperature: cfg.AgentLLMTemperature,
 			MaxTokens:   cfg.AgentLLMMaxTokens,
 		},
@@ -3751,6 +3917,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		HashCache:              s.hashCache,
 		Prune:                  cfg.Prune * 1024 * 1024,
 		UtxoCacheMaxSize:       uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
+		OnBlockConnected:       newSyncToHeightCallback(cfg.SyncToHeight, interrupt),
 	})
 	if err != nil {
 		return nil, err

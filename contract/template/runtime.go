@@ -126,7 +126,7 @@ func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, erro
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
-	state.Running.ApplyForContract(r.contract, item)
+	state.ApplyForContract(r.contract, item)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err
 	}
@@ -171,10 +171,6 @@ func (r *ContractRuntime) SettleBlockWithGasConfigAndPrecision(height int64, gas
 			Height:   height,
 		}, nil
 	}
-}
-
-func (r *ContractRuntime) StateRoot() [32]byte {
-	return r.base.StateRoot()
 }
 
 func (r *ContractRuntime) SetCurrentBlock(height int64) {

@@ -36,8 +36,12 @@ func (c *AMMContract) BaseGasConfig() contractframework.BaseGasConfig {
 	return contractframework.BaseGasConfig{}
 }
 
-func (c *AMMContract) ApplyRunningData(running *RunningData, item *InvokeItem) bool {
-	return false
+func (c *AMMContract) ApplyRunningData(state *TemplateRuntimeState, item *InvokeItem) bool {
+	if state == nil {
+		return true
+	}
+	applyAMMRunningStats(state.AMMData(), item)
+	return true
 }
 
 func (c *AMMContract) Encode() ([]byte, error) {

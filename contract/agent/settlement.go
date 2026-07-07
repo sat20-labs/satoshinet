@@ -58,7 +58,7 @@ func (r *Runtime) buildSettlementPlan(confirm PredictionConfirmParam) (*Predicti
 		settlementOutput(r.config.AgentAddress, r.contract.BetAsset, agentFee, "agent_fee"),
 		settlementOutput(r.config.BootstrapAddress, r.contract.BetAsset, bootstrapFee, "bootstrap_fee"),
 	)
-	plan.Transfers = append(plan.Transfers, distributeWinnerPool(r.contract.BetAsset, winnerPool, winners)...)
+	plan.Transfers = append(plan.Transfers, distributeWinnerPool(r.contract.BetAsset, winnerPool, winners, precision)...)
 	return plan, nil
 }
 
@@ -103,6 +103,9 @@ func (r *Runtime) totalBetAmount() *scommon.Decimal {
 }
 
 func (r *Runtime) betAssetPrecision() int {
+	if r != nil && r.contract.BetAsset == SatoshiAssetName {
+		return 0
+	}
 	if r == nil || r.config.AssetPrecision == nil {
 		return MaxPredictionDecimalPrecision
 	}
@@ -113,25 +116,23 @@ func (r *Runtime) betAssetPrecision() int {
 	return precision
 }
 
-func distributeWinnerPool(assetName string, winnerPool *scommon.Decimal, winners []predictionWinner) []PredictionSettlementOutput {
+func distributeWinnerPool(assetName string, winnerPool *scommon.Decimal, winners []predictionWinner,
+	assetPrecision int) []PredictionSettlementOutput {
+
 	if len(winners) == 0 || winnerPool == nil || winnerPool.Sign() <= 0 {
 		return nil
 	}
-	precision := winnerPool.Precision
 	totalWinnerAmount := scommon.NewDefaultDecimal(0)
 	for _, winner := range winners {
-		if winner.Amount.Precision > precision {
-			precision = winner.Amount.Precision
-		}
-		totalWinnerAmount = scommon.DecimalAdd(totalWinnerAmount, winner.Amount)
+		totalWinnerAmount = scommon.DecimalAdd(totalWinnerAmount, winner.Amount.NewPrecision(assetPrecision))
 	}
-	totalWinnerAmount = totalWinnerAmount.NewPrecision(precision)
-	pool := winnerPool.NewPrecision(precision)
+	totalWinnerAmount = totalWinnerAmount.NewPrecision(assetPrecision)
+	pool := winnerPool.NewPrecision(assetPrecision)
 
 	rawShares := make([]*big.Int, len(winners))
 	sum := big.NewInt(0)
 	for i, winner := range winners {
-		amount := winner.Amount.NewPrecision(precision)
+		amount := winner.Amount.NewPrecision(assetPrecision)
 		raw := new(big.Int).Mul(pool.Value, amount.Value)
 		raw.Div(raw, totalWinnerAmount.Value)
 		rawShares[i] = raw
@@ -148,7 +149,7 @@ func distributeWinnerPool(assetName string, winnerPool *scommon.Decimal, winners
 		outputs = append(outputs, PredictionSettlementOutput{
 			To:        winner.Address,
 			AssetName: assetName,
-			AssetAmt:  (&scommon.Decimal{Precision: precision, Value: rawShares[i]}).String(),
+			AssetAmt:  (&scommon.Decimal{Precision: assetPrecision, Value: rawShares[i]}).String(),
 			Reason:    "winner_payout",
 		})
 	}

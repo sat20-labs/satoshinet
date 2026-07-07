@@ -26,6 +26,8 @@ const (
 	TemplateInvokeAPIRemoveLiquidity = "removeliq"
 	TemplateInvokeAPIProfit          = "profit"
 	TemplateInvokeAPIExchange        = "exchange"
+	TemplateInvokeAPIConfig          = "config"
+	TemplateInvokeAPICancel          = "cancel"
 	TemplateInvokeAPIClose           = "close"
 )
 
@@ -52,7 +54,9 @@ var templateInvokeActions = map[string]map[string]struct{}{
 		TemplateInvokeAPIClose:    {},
 	},
 	TemplateAutopay: {
-		TemplateInvokeAPIClose: {},
+		TemplateInvokeAPIConfig: {},
+		TemplateInvokeAPICancel: {},
+		TemplateInvokeAPIClose:  {},
 	},
 }
 
@@ -79,15 +83,14 @@ const (
 	OrderTypeBind            = 19
 	OrderTypeClose           = 20
 	OrderTypeExchange        = 21
-	OrderTypeUnused          = 22
+	OrderTypeCancel          = 22
+	OrderTypeUnused          = 23
 )
 
 const (
 	ExchangePriceModeHeight = "height"
 	ExchangePriceModeSoldA  = "sold_a"
 	MaxExchangePriceSteps   = 128
-	AutopayScheduleFixed    = "fixed"
-	AutopayScheduleLinear   = "linear"
 )
 
 type TemplateLimitOrderInvokeParam struct {
@@ -123,16 +126,18 @@ type TemplateExchangeContract struct {
 }
 
 type TemplateAutopayContract struct {
-	Recipient    string `json:"recipient"`
-	FeeAssetName string `json:"feeAssetName"`
-	ScheduleMode string `json:"scheduleMode"`
-	BaseAmount   string `json:"baseAmount"`
-	StepAmount   string `json:"stepAmount,omitempty"`
-	EndHeight    int64  `json:"endHeight,omitempty"`
+	ServiceName       string `json:"serviceName"`
+	Recipient         string `json:"recipient"`
+	FeeAssetName      string `json:"feeAssetName"`
+	MinAmountPerBlock string `json:"minAmountPerBlock"`
 }
 
 type TemplateExchangeInvokeParam struct {
 	MinOutA string `json:"minOutA,omitempty"`
+}
+
+type TemplateAutopayConfigInvokeParam struct {
+	AmountPerBlock string `json:"amountPerBlock"`
 }
 
 type TemplateCloseInvokeParam struct{}
@@ -244,13 +249,26 @@ func EncodeTemplateAutopayContent(contract TemplateAutopayContract) ([]byte, err
 		return nil, err
 	}
 	return txscript.NewScriptBuilder().
+		AddData([]byte(contract.ServiceName)).
 		AddData([]byte(contract.Recipient)).
 		AddData([]byte(contract.FeeAssetName)).
-		AddData([]byte(contract.ScheduleMode)).
-		AddData([]byte(contract.BaseAmount)).
-		AddData([]byte(contract.StepAmount)).
-		AddInt64(contract.EndHeight).
+		AddData([]byte(contract.MinAmountPerBlock)).
 		Script()
+}
+
+func (p *TemplateAutopayConfigInvokeParam) Encode() ([]byte, error) {
+	return txscript.NewScriptBuilder().
+		AddData([]byte(p.AmountPerBlock)).
+		Script()
+}
+
+func (p *TemplateAutopayConfigInvokeParam) Decode(data []byte) error {
+	tokenizer := txscript.MakeScriptTokenizer(0, data)
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing amount per block")
+	}
+	p.AmountPerBlock = string(tokenizer.Data())
+	return tokenizer.Err()
 }
 
 func (p *TemplateLimitOrderInvokeParam) Encode() ([]byte, error) {
@@ -467,42 +485,18 @@ func (c TemplateExchangeContract) Check() error {
 }
 
 func (c TemplateAutopayContract) Check() error {
+	if strings.TrimSpace(c.ServiceName) == "" {
+		return fmt.Errorf("autopay service name is empty")
+	}
 	if err := checkTemplatePayableAssetName(c.FeeAssetName); err != nil {
 		return fmt.Errorf("invalid fee asset: %w", err)
 	}
-	switch c.ScheduleMode {
-	case AutopayScheduleFixed:
-	case AutopayScheduleLinear:
-	default:
-		return fmt.Errorf("unsupported autopay schedule mode %s", c.ScheduleMode)
-	}
-	base, err := parsePositiveDecimal("base amount", c.BaseAmount)
+	minAmount, err := parsePositiveDecimal("minimum amount per block", c.MinAmountPerBlock)
 	if err != nil {
 		return err
 	}
-	if c.FeeAssetName == SatoshiAssetName && base.Cmp(indexercommon.NewDefaultDecimal(base.Int64())) != 0 {
-		return fmt.Errorf("satoshi autopay base amount must be an integer")
-	}
-	if c.StepAmount != "" {
-		step, err := parseNonNegativeDecimal("step amount", c.StepAmount)
-		if err != nil {
-			return err
-		}
-		if c.FeeAssetName == SatoshiAssetName && step.Cmp(indexercommon.NewDefaultDecimal(step.Int64())) != 0 {
-			return fmt.Errorf("satoshi autopay step amount must be an integer")
-		}
-	}
-	if c.ScheduleMode == AutopayScheduleFixed && c.StepAmount != "" {
-		step, err := parseNonNegativeDecimal("step amount", c.StepAmount)
-		if err != nil {
-			return err
-		}
-		if step.Sign() != 0 {
-			return fmt.Errorf("fixed autopay step amount must be zero")
-		}
-	}
-	if c.EndHeight < 0 {
-		return fmt.Errorf("invalid end height %d", c.EndHeight)
+	if c.FeeAssetName == SatoshiAssetName && minAmount.Cmp(indexercommon.NewDefaultDecimal(minAmount.Int64())) != 0 {
+		return fmt.Errorf("satoshi autopay minimum amount must be an integer")
 	}
 	return nil
 }

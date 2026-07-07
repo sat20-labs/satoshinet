@@ -576,6 +576,94 @@ func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 	}
 }
 
+func TestBuildBlockResultTxsConfirmUsesSatoshiPrecision(t *testing.T) {
+	contract := validPredictionContract()
+	contract.MinBetUnit = "1"
+	contract.Outcomes = append(contract.Outcomes, PredictionOutcome{ID: "c", Text: "draw"})
+	deployTx, addr := testAgentDeployTxForContract(t, contract)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	resultGas := testAgentGasFee(t, DefaultGasConfig().ResultBaseGas).Int64()
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 100,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 300,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	carolBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "c"), 1000,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	daveBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 100,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm,
+		mustEncodeConfirm(t, ResultTypeOutcome, "b"), 0, nil)
+
+	store := NewRuntimeStore()
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx, carolBetTx, daveBetTx},
+		Store:         store,
+		BlockHeight:   1,
+		BlockTime:     contract.BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID():    "core",
+			aliceBetTx.TxID(): "alice",
+			bobBetTx.TxID():   "bob",
+			carolBetTx.TxID(): "carol",
+			daveBetTx.TxID():  "dave",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("first block failed: %v", err)
+	}
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   2,
+		BlockTime:     contract.ConfirmAfter + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(nil,
+			[]*wire.MsgTx{aliceBetTx, bobBetTx, carolBetTx, daveBetTx, confirmTx},
+			TestnetContractPrefix, ContractTypeAgent),
+		ResolveScript:  testResultScriptResolver,
+		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.ResultTxs) != 1 {
+		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
+	}
+	if len(built.Execution.SettlementPlans) != 1 {
+		t.Fatalf("settlement plan count mismatch: %d", len(built.Execution.SettlementPlans))
+	}
+	plan := built.Execution.SettlementPlans[0]
+	assertTransfer(t, plan, "deployer", "90", "deployer_fee")
+	assertTransfer(t, plan, "agent", "45", "agent_fee")
+	assertTransfer(t, plan, "bootstrap", "15", "bootstrap_fee")
+	assertTransfer(t, plan, "bob", "1013", "winner_payout")
+	assertTransfer(t, plan, "dave", "337", "winner_payout")
+
+	outputs := outputsByRecipientAndReason(built.Execution.ResultPlans[0].Outputs, SatoshiAssetName)
+	assertOutputAmount(t, outputs, "deployer/deployer_fee", "90")
+	assertOutputAmount(t, outputs, "agent/agent_fee", "45")
+	assertOutputAmount(t, outputs, "bootstrap/bootstrap_fee", "15")
+	assertOutputAmount(t, outputs, "bob/winner_payout", "1013")
+	assertOutputAmount(t, outputs, "dave/winner_payout", "337")
+	if got := sumOutputAmounts(built.Execution.ResultPlans[0].Outputs, SatoshiAssetName); got != "1500" {
+		t.Fatalf("result satoshi total mismatch: got %s want 1500", got)
+	}
+
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State().Prediction
+	if state.Status != PredictionStatusSettled {
+		t.Fatalf("confirm did not settle prediction: %#v", state)
+	}
+	if state.GasBalance != "150" {
+		t.Fatalf("managed gas mismatch: got %q want 150", state.GasBalance)
+	}
+}
+
 func TestAgentCloseResult(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
@@ -910,6 +998,74 @@ func TestBuildBlockResultTxsUsesPhysicalGasWhenManagedGasMissing(t *testing.T) {
 	}
 	if state.Prediction.Status != PredictionStatusSettled {
 		t.Fatalf("confirm did not settle prediction: %#v", state.Prediction)
+	}
+}
+
+func TestBuildBlockResultTxsUsesConfirmTopUpGas(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000, nil)
+	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000, nil)
+
+	resultHeight := validPredictionContract().ConfirmAfter + 1
+	resultGas, err := DefaultGasConfig().ResultFee(resultHeight)
+	if err != nil {
+		t.Fatalf("ResultFee failed: %v", err)
+	}
+	confirmTx := testAgentInvokeTx(t, addr, InvokeAPIConfirm, mustEncodeConfirm(t, ResultTypeOutcome, "a"), 0,
+		wire.TxAssets{{
+			Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
+			Amount: *resultGas.Clone(),
+		}})
+	if confirmTx.TxOut[1].Value != 0 {
+		t.Fatalf("confirm funding should not carry sats, got %d", confirmTx.TxOut[1].Value)
+	}
+
+	store := NewRuntimeStore()
+	_, err = testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx, aliceBetTx, bobBetTx},
+		Store:         store,
+		BlockHeight:   validPredictionContract().BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID():    "core",
+			aliceBetTx.TxID(): "alice",
+			bobBetTx.TxID():   "bob",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("initial block failed: %v", err)
+	}
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{confirmTx},
+		Store:         store,
+		BlockHeight:   resultHeight,
+		RuntimeConfig: testRuntimeConfig(),
+		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(nil,
+			[]*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
+		ResolveScript:  testResultScriptResolver,
+		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.ResultTxs) != 1 {
+		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
+	}
+	if len(built.ResultTxs[0].TxIn) != 3 {
+		t.Fatalf("result input count mismatch: %d", len(built.ResultTxs[0].TxIn))
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	state := runtime.State().Prediction
+	if state.Status != PredictionStatusSettled {
+		t.Fatalf("confirm did not settle prediction: %#v", state)
+	}
+	if state.GasBalance != "0" && state.GasBalance != "" {
+		t.Fatalf("managed gas should be consumed by result fee, got %q", state.GasBalance)
 	}
 }
 

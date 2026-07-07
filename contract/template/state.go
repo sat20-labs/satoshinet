@@ -24,10 +24,13 @@ type ApplyInvokeRequest struct {
 }
 
 type TemplateRuntimeState struct {
-	NextItemID  int64        `json:"nextItemId"`
-	InvokeCount uint64       `json:"invokeCount"`
-	Items       []InvokeItem `json:"items"`
-	Running     RunningData  `json:"running"`
+	NextItemID  int64                  `json:"nextItemId"`
+	InvokeCount uint64                 `json:"invokeCount"`
+	Items       []InvokeItem           `json:"items,omitempty"`
+	LimitOrder  *LimitOrderRunningData `json:"limitOrder,omitempty"`
+	AMM         *AMMRunningData        `json:"amm,omitempty"`
+	Exchange    *ExchangeRunningData   `json:"exchange,omitempty"`
+	Autopay     *AutopayRunningData    `json:"autopay,omitempty"`
 }
 
 type InvokeItem struct {
@@ -56,6 +59,7 @@ type InvokeItem struct {
 	RefundItemIDs  []int64          `json:"refundItemIds,omitempty"`
 	Reason         string           `json:"reason"`
 	Done           int              `json:"done"`
+	StatsApplied   bool             `json:"statsApplied,omitempty"`
 }
 
 func (i InvokeItem) Finished() bool {
@@ -88,6 +92,7 @@ type invokeItemJSON struct {
 	RefundItemIDs  []int64 `json:"refundItemIds,omitempty"`
 	Reason         string  `json:"reason"`
 	Done           int     `json:"done"`
+	StatsApplied   bool    `json:"statsApplied,omitempty"`
 }
 
 func (i InvokeItem) MarshalJSON() ([]byte, error) {
@@ -117,6 +122,7 @@ func (i InvokeItem) MarshalJSON() ([]byte, error) {
 		RefundItemIDs:  i.RefundItemIDs,
 		Reason:         i.Reason,
 		Done:           i.Done,
+		StatsApplied:   i.StatsApplied,
 	})
 }
 
@@ -199,10 +205,25 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 	i.RefundItemIDs = item.RefundItemIDs
 	i.Reason = item.Reason
 	i.Done = item.Done
+	i.StatsApplied = item.StatsApplied
 	return nil
 }
 
-type RunningData struct {
+type LimitOrderRunningData struct {
+	AssetAInPool      *scommon.Decimal `json:"assetAInPool,omitempty"`
+	AssetBInPool      *scommon.Decimal `json:"assetBInPool,omitempty"`
+	TradingReady      bool             `json:"tradingReady,omitempty"`
+	GasBalance        *scommon.Decimal `json:"gasBalance,omitempty"`
+	TotalInputAssetA  *scommon.Decimal `json:"totalInputAssetA,omitempty"`
+	TotalInputAssetB  *scommon.Decimal `json:"totalInputAssetB,omitempty"`
+	TotalDealAssetA   *scommon.Decimal `json:"totalDealAssetA,omitempty"`
+	TotalDealAssetB   *scommon.Decimal `json:"totalDealAssetB,omitempty"`
+	TotalDealCount    int              `json:"totalDealCount,omitempty"`
+	TotalRefundAssetB *scommon.Decimal `json:"totalRefundAssetB,omitempty"`
+	Closed            bool             `json:"closed,omitempty"`
+}
+
+type AMMRunningData struct {
 	AssetAInPool      *scommon.Decimal            `json:"assetAInPool,omitempty"`
 	AssetBInPool      *scommon.Decimal            `json:"assetBInPool,omitempty"`
 	RequiredAssetA    *scommon.Decimal            `json:"requiredAssetA,omitempty"`
@@ -214,145 +235,253 @@ type RunningData struct {
 	TotalInputAssetB  *scommon.Decimal            `json:"totalInputAssetB,omitempty"`
 	TotalDealAssetA   *scommon.Decimal            `json:"totalDealAssetA,omitempty"`
 	TotalDealAssetB   *scommon.Decimal            `json:"totalDealAssetB,omitempty"`
-	TotalDealCount    int                         `json:"totalDealCount"`
+	TotalDealCount    int                         `json:"totalDealCount,omitempty"`
 	TotalRefundAssetB *scommon.Decimal            `json:"totalRefundAssetB,omitempty"`
 	TotalLPTAmt       *scommon.Decimal            `json:"totalLptAmt,omitempty"`
 	LPBalances        map[string]*scommon.Decimal `json:"lpBalances,omitempty"`
 	LPCosts           map[string]int64            `json:"lpCosts,omitempty"`
 	Closed            bool                        `json:"closed,omitempty"`
-	FeeBalance        *scommon.Decimal            `json:"feeBalance,omitempty"`
-	AutopayStatus     string                      `json:"autopayStatus,omitempty"`
-	ActiveHeight      int64                       `json:"activeHeight,omitempty"`
-	NextPayHeight     int64                       `json:"nextPayHeight,omitempty"`
-	LastPayHeight     int64                       `json:"lastPayHeight,omitempty"`
-	PaidBlockCount    int64                       `json:"paidBlockCount,omitempty"`
 }
 
-type runningDataJSON struct {
-	AssetAInPool      string            `json:"assetAInPool,omitempty"`
-	AssetBInPool      string            `json:"assetBInPool,omitempty"`
-	RequiredAssetA    string            `json:"requiredAssetA,omitempty"`
-	RequiredAssetB    string            `json:"requiredAssetB,omitempty"`
-	K                 string            `json:"k,omitempty"`
-	TradingReady      bool              `json:"tradingReady,omitempty"`
-	GasBalance        string            `json:"gasBalance,omitempty"`
-	TotalInputAssetA  string            `json:"totalInputAssetA,omitempty"`
-	TotalInputAssetB  string            `json:"totalInputAssetB,omitempty"`
-	TotalDealAssetA   string            `json:"totalDealAssetA,omitempty"`
-	TotalDealAssetB   string            `json:"totalDealAssetB,omitempty"`
-	TotalDealCount    int               `json:"totalDealCount"`
-	TotalRefundAssetB string            `json:"totalRefundAssetB,omitempty"`
-	TotalLPTAmt       string            `json:"totalLptAmt,omitempty"`
-	LPBalances        map[string]string `json:"lpBalances,omitempty"`
-	LPCosts           map[string]int64  `json:"lpCosts,omitempty"`
-	Closed            bool              `json:"closed,omitempty"`
-	FeeBalance        string            `json:"feeBalance,omitempty"`
-	AutopayStatus     string            `json:"autopayStatus,omitempty"`
-	ActiveHeight      int64             `json:"activeHeight,omitempty"`
-	NextPayHeight     int64             `json:"nextPayHeight,omitempty"`
-	LastPayHeight     int64             `json:"lastPayHeight,omitempty"`
-	PaidBlockCount    int64             `json:"paidBlockCount,omitempty"`
+type ExchangeRunningData struct {
+	AssetAInPool      *scommon.Decimal `json:"assetAInPool,omitempty"`
+	AssetBInPool      *scommon.Decimal `json:"assetBInPool,omitempty"`
+	GasBalance        *scommon.Decimal `json:"gasBalance,omitempty"`
+	TotalInputAssetA  *scommon.Decimal `json:"totalInputAssetA,omitempty"`
+	TotalInputAssetB  *scommon.Decimal `json:"totalInputAssetB,omitempty"`
+	TotalDealAssetA   *scommon.Decimal `json:"totalDealAssetA,omitempty"`
+	TotalDealAssetB   *scommon.Decimal `json:"totalDealAssetB,omitempty"`
+	TotalDealCount    int              `json:"totalDealCount,omitempty"`
+	TotalRefundAssetB *scommon.Decimal `json:"totalRefundAssetB,omitempty"`
+	Closed            bool             `json:"closed,omitempty"`
 }
 
-func (r RunningData) MarshalJSON() ([]byte, error) {
-	return json.Marshal(runningDataJSON{
-		AssetAInPool:      decimalString(r.AssetAInPool),
-		AssetBInPool:      decimalString(r.AssetBInPool),
-		RequiredAssetA:    decimalString(r.RequiredAssetA),
-		RequiredAssetB:    decimalString(r.RequiredAssetB),
-		K:                 decimalString(r.K),
-		TradingReady:      r.TradingReady,
-		GasBalance:        decimalString(r.GasBalance),
-		TotalInputAssetA:  decimalString(r.TotalInputAssetA),
-		TotalInputAssetB:  decimalString(r.TotalInputAssetB),
-		TotalDealAssetA:   decimalString(r.TotalDealAssetA),
-		TotalDealAssetB:   decimalString(r.TotalDealAssetB),
-		TotalDealCount:    r.TotalDealCount,
-		TotalRefundAssetB: decimalString(r.TotalRefundAssetB),
-		TotalLPTAmt:       decimalString(r.TotalLPTAmt),
-		LPBalances:        decimalStringMap(r.LPBalances),
-		LPCosts:           cloneLPCosts(r.LPCosts),
-		Closed:            r.Closed,
-		FeeBalance:        decimalString(r.FeeBalance),
-		AutopayStatus:     r.AutopayStatus,
-		ActiveHeight:      r.ActiveHeight,
-		NextPayHeight:     r.NextPayHeight,
-		LastPayHeight:     r.LastPayHeight,
-		PaidBlockCount:    r.PaidBlockCount,
-	})
+type AutopayRunningData struct {
+	GasBalance          *scommon.Decimal           `json:"gasBalance,omitempty"`
+	Closed              bool                       `json:"closed,omitempty"`
+	FeeBalance          *scommon.Decimal           `json:"feeBalance,omitempty"`
+	AutopayStatus       string                     `json:"autopayStatus,omitempty"`
+	ActiveHeight        int64                      `json:"activeHeight,omitempty"`
+	NextPayHeight       int64                      `json:"nextPayHeight,omitempty"`
+	LastPayHeight       int64                      `json:"lastPayHeight,omitempty"`
+	PaidBlockCount      int64                      `json:"paidBlockCount,omitempty"`
+	AutopayCloseStarted bool                       `json:"autopayCloseStarted,omitempty"`
+	AutopayDelegates    map[string]AutopayDelegate `json:"autopayDelegates,omitempty"`
 }
 
-func (r *RunningData) UnmarshalJSON(data []byte) error {
-	var item runningDataJSON
-	if err := json.Unmarshal(data, &item); err != nil {
-		return err
+type AutopayDelegate struct {
+	AmountPerBlock *scommon.Decimal `json:"amountPerBlock,omitempty"`
+	Balance        *scommon.Decimal `json:"balance,omitempty"`
+	TotalPaid      *scommon.Decimal `json:"totalPaid,omitempty"`
+	PaidBlockCount int64            `json:"paidBlockCount,omitempty"`
+	LastPayHeight  int64            `json:"lastPayHeight,omitempty"`
+	Status         string           `json:"status,omitempty"`
+}
+
+type autopayDelegateJSON struct {
+	AmountPerBlock string `json:"amountPerBlock,omitempty"`
+	Balance        string `json:"balance,omitempty"`
+	TotalPaid      string `json:"totalPaid,omitempty"`
+	PaidBlockCount int64  `json:"paidBlockCount,omitempty"`
+	LastPayHeight  int64  `json:"lastPayHeight,omitempty"`
+	Status         string `json:"status,omitempty"`
+}
+
+func (s *TemplateRuntimeState) LimitOrderData() *LimitOrderRunningData {
+	if s == nil {
+		return nil
 	}
-	var err error
-	if r.AssetAInPool, err = parseOptionalStateDecimal("assetAInPool", item.AssetAInPool); err != nil {
-		return err
+	if s.LimitOrder == nil {
+		s.LimitOrder = &LimitOrderRunningData{}
 	}
-	if r.AssetBInPool, err = parseOptionalStateDecimal("assetBInPool", item.AssetBInPool); err != nil {
-		return err
+	return s.LimitOrder
+}
+
+func (s *TemplateRuntimeState) AMMData() *AMMRunningData {
+	if s == nil {
+		return nil
 	}
-	if r.RequiredAssetA, err = parseOptionalStateDecimal("requiredAssetA", item.RequiredAssetA); err != nil {
-		return err
+	if s.AMM == nil {
+		s.AMM = &AMMRunningData{}
 	}
-	if r.RequiredAssetB, err = parseOptionalStateDecimal("requiredAssetB", item.RequiredAssetB); err != nil {
-		return err
+	return s.AMM
+}
+
+func (s *TemplateRuntimeState) ExchangeData() *ExchangeRunningData {
+	if s == nil {
+		return nil
 	}
-	if r.K, err = parseOptionalStateDecimal("k", item.K); err != nil {
-		return err
+	if s.Exchange == nil {
+		s.Exchange = &ExchangeRunningData{}
 	}
-	if r.GasBalance, err = parseOptionalGasStateDecimal("gasBalance", item.GasBalance); err != nil {
-		return err
+	return s.Exchange
+}
+
+func (s *TemplateRuntimeState) AutopayData() *AutopayRunningData {
+	if s == nil {
+		return nil
 	}
-	if r.TotalInputAssetA, err = parseOptionalStateDecimal("totalInputAssetA", item.TotalInputAssetA); err != nil {
-		return err
+	if s.Autopay == nil {
+		s.Autopay = &AutopayRunningData{}
 	}
-	if r.TotalInputAssetB, err = parseOptionalStateDecimal("totalInputAssetB", item.TotalInputAssetB); err != nil {
-		return err
+	return s.Autopay
+}
+
+func parseDecimalOrNil(value string) *scommon.Decimal {
+	if value == "" {
+		return nil
 	}
-	if r.TotalDealAssetA, err = parseOptionalStateDecimal("totalDealAssetA", item.TotalDealAssetA); err != nil {
-		return err
+	return parseDecimalOrZero(value)
+}
+
+func parseGasDecimalOrNil(value string) *scommon.Decimal {
+	if value == "" {
+		return nil
 	}
-	if r.TotalDealAssetB, err = parseOptionalStateDecimal("totalDealAssetB", item.TotalDealAssetB); err != nil {
-		return err
-	}
-	if r.TotalRefundAssetB, err = parseOptionalStateDecimal("totalRefundAssetB", item.TotalRefundAssetB); err != nil {
-		return err
-	}
-	if r.TotalLPTAmt, err = parseOptionalStateDecimal("totalLptAmt", item.TotalLPTAmt); err != nil {
-		return err
-	}
-	if r.FeeBalance, err = parseOptionalStateDecimal("feeBalance", item.FeeBalance); err != nil {
-		return err
-	}
-	r.TradingReady = item.TradingReady
-	r.TotalDealCount = item.TotalDealCount
-	r.LPBalances, err = parseStateDecimalMap("lpBalances", item.LPBalances)
+	d, err := parseGasStateDecimal("gas", value)
 	if err != nil {
-		return err
+		return nil
 	}
-	r.LPCosts = cloneLPCosts(item.LPCosts)
-	r.Closed = item.Closed
-	r.AutopayStatus = item.AutopayStatus
-	r.ActiveHeight = item.ActiveHeight
-	r.NextPayHeight = item.NextPayHeight
-	r.LastPayHeight = item.LastPayHeight
-	r.PaidBlockCount = item.PaidBlockCount
-	return nil
+	return d
 }
 
-func (r *RunningData) Apply(item *InvokeItem) {
+func (s *TemplateRuntimeState) ClosedForContract(contract Contract) bool {
+	if s == nil {
+		return false
+	}
+	switch contract.(type) {
+	case *LimitOrderContract:
+		return s.LimitOrderData().Closed
+	case *AMMContract:
+		return s.AMMData().Closed
+	case *ExchangeContract:
+		return s.ExchangeData().Closed
+	case *AutopayContract:
+		return s.AutopayData().Closed
+	default:
+		return false
+	}
+}
+
+func (s *TemplateRuntimeState) GasBalanceForContract(contract Contract) *scommon.Decimal {
+	if s == nil {
+		return nil
+	}
+	switch contract.(type) {
+	case *LimitOrderContract:
+		return s.LimitOrderData().GasBalance
+	case *AMMContract:
+		return s.AMMData().GasBalance
+	case *ExchangeContract:
+		return s.ExchangeData().GasBalance
+	case *AutopayContract:
+		return s.AutopayData().GasBalance
+	default:
+		return nil
+	}
+}
+
+func addRunningGasBalance(contract Contract, state *TemplateRuntimeState, gas *scommon.Decimal) {
+	if state == nil || gas == nil || gas.Sign() == 0 {
+		return
+	}
+	switch contract.(type) {
+	case *LimitOrderContract:
+		data := state.LimitOrderData()
+		data.GasBalance = decimalAddAllowNil(data.GasBalance, gas)
+	case *AMMContract:
+		data := state.AMMData()
+		data.GasBalance = decimalAddAllowNil(data.GasBalance, gas)
+	case *ExchangeContract:
+		data := state.ExchangeData()
+		data.GasBalance = decimalAddAllowNil(data.GasBalance, gas)
+	case *AutopayContract:
+		data := state.AutopayData()
+		data.GasBalance = decimalAddAllowNil(data.GasBalance, gas)
+	}
+}
+
+func (s *TemplateRuntimeState) PoolBalancesForContract(contract Contract) (*scommon.Decimal, *scommon.Decimal) {
+	if s == nil {
+		return nil, nil
+	}
+	switch contract.(type) {
+	case *LimitOrderContract:
+		data := s.LimitOrderData()
+		return data.AssetAInPool, data.AssetBInPool
+	case *AMMContract:
+		data := s.AMMData()
+		return data.AssetAInPool, data.AssetBInPool
+	case *ExchangeContract:
+		data := s.ExchangeData()
+		return data.AssetAInPool, data.AssetBInPool
+	default:
+		return nil, nil
+	}
+}
+
+func applyDefaultInvokeRetentionToLimitOrder(r *LimitOrderRunningData, item *InvokeItem) {
+	if r == nil || item == nil {
+		return
+	}
+	if item.RetainedAssetA != nil && item.RetainedAssetA.Sign() > 0 {
+		if r.AssetAInPool == nil {
+			r.AssetAInPool = parseDecimalOrZero("0")
+		}
+		r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.RetainedAssetA)
+	}
+	if item.RetainedAssetB != nil && item.RetainedAssetB.Sign() > 0 {
+		if r.AssetBInPool == nil {
+			r.AssetBInPool = parseDecimalOrZero("0")
+		}
+		r.AssetBInPool = scommon.DecimalAdd(r.AssetBInPool, item.RetainedAssetB)
+	}
+}
+
+func applyDefaultInvokeRetentionToAMM(r *AMMRunningData, item *InvokeItem) {
+	if r == nil || item == nil {
+		return
+	}
+	if item.RetainedAssetA != nil && item.RetainedAssetA.Sign() > 0 {
+		if r.AssetAInPool == nil {
+			r.AssetAInPool = parseDecimalOrZero("0")
+		}
+		r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.RetainedAssetA)
+	}
+	if item.RetainedAssetB != nil && item.RetainedAssetB.Sign() > 0 {
+		if r.AssetBInPool == nil {
+			r.AssetBInPool = parseDecimalOrZero("0")
+		}
+		r.AssetBInPool = scommon.DecimalAdd(r.AssetBInPool, item.RetainedAssetB)
+	}
+}
+
+func applyDefaultInvokeRetentionToExchange(r *ExchangeRunningData, item *InvokeItem) {
+	if r == nil || item == nil {
+		return
+	}
+	if item.RetainedAssetA != nil && item.RetainedAssetA.Sign() > 0 {
+		if r.AssetAInPool == nil {
+			r.AssetAInPool = parseDecimalOrZero("0")
+		}
+		r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.RetainedAssetA)
+	}
+	if item.RetainedAssetB != nil && item.RetainedAssetB.Sign() > 0 {
+		if r.AssetBInPool == nil {
+			r.AssetBInPool = parseDecimalOrZero("0")
+		}
+		r.AssetBInPool = scommon.DecimalAdd(r.AssetBInPool, item.RetainedAssetB)
+	}
+}
+
+func applyLimitOrderRunningStats(r *LimitOrderRunningData, item *InvokeItem) {
 	if item == nil {
 		return
 	}
 	if item.Reason == InvokeReasonInvalid {
 		return
 	}
-	r.applyDefaultInvokeRetention(item)
-	switch item.OrderType {
-	}
+	applyDefaultInvokeRetentionToLimitOrder(r, item)
 	if r.TotalInputAssetB == nil {
 		r.TotalInputAssetB = parseDecimalOrZero("0")
 	}
@@ -391,53 +520,191 @@ func (r *RunningData) Apply(item *InvokeItem) {
 	}
 }
 
-func (c *LimitOrderContract) ApplyRunningData(r *RunningData, item *InvokeItem) bool {
-	if r == nil {
+func applyAMMRunningStats(r *AMMRunningData, item *InvokeItem) {
+	if item == nil {
+		return
+	}
+	if item.Reason == InvokeReasonInvalid {
+		return
+	}
+	applyDefaultInvokeRetentionToAMM(r, item)
+	if r.TotalInputAssetB == nil {
+		r.TotalInputAssetB = parseDecimalOrZero("0")
+	}
+	r.TotalInputAssetB = scommon.DecimalAdd(r.TotalInputAssetB, scommon.NewDefaultDecimal(item.InValue))
+	if item.InAmt != nil {
+		if r.TotalInputAssetA == nil {
+			r.TotalInputAssetA = parseDecimalOrZero("0")
+		}
+		r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.InAmt)
+	}
+	switch item.OrderType {
+	case OrderTypeBuy, OrderTypeSell:
+		if item.Done == ItemStatusDealt {
+			if item.OutAmt != nil {
+				if r.TotalDealAssetA == nil {
+					r.TotalDealAssetA = parseDecimalOrZero("0")
+				}
+				r.TotalDealAssetA = scommon.DecimalAdd(r.TotalDealAssetA, item.OutAmt)
+			}
+			if r.TotalDealAssetB == nil {
+				r.TotalDealAssetB = parseDecimalOrZero("0")
+			}
+			r.TotalDealAssetB = scommon.DecimalAdd(r.TotalDealAssetB, scommon.NewDefaultDecimal(item.OutValue))
+			r.TotalDealCount++
+		} else if item.Done == ItemStatusRefunded || item.Done == ItemStatusCancelled {
+			if r.TotalRefundAssetB == nil {
+				r.TotalRefundAssetB = parseDecimalOrZero("0")
+			}
+			r.TotalRefundAssetB = scommon.DecimalAdd(r.TotalRefundAssetB, scommon.NewDefaultDecimal(item.OutValue+item.RemainingValue))
+		}
+	case OrderTypeRefund:
+		if r.TotalRefundAssetB == nil {
+			r.TotalRefundAssetB = parseDecimalOrZero("0")
+		}
+		r.TotalRefundAssetB = scommon.DecimalAdd(r.TotalRefundAssetB, scommon.NewDefaultDecimal(item.OutValue+item.RemainingValue))
+	}
+}
+
+func (c *LimitOrderContract) ApplyRunningData(state *TemplateRuntimeState, item *InvokeItem) bool {
+	if state == nil {
 		return true
 	}
-	r.Apply(item)
+	running := state.LimitOrderData()
+	applyLimitOrderRunningStats(running, item)
 	if item == nil || item.Reason == InvokeReasonInvalid {
 		return true
 	}
 	switch item.OrderType {
 	case OrderTypeBuy:
 		if item.RemainingValue > 0 {
-			if r.AssetBInPool == nil {
-				r.AssetBInPool = parseDecimalOrZero("0")
+			if running.AssetBInPool == nil {
+				running.AssetBInPool = parseDecimalOrZero("0")
 			}
-			r.AssetBInPool = scommon.DecimalAdd(r.AssetBInPool, scommon.NewDefaultDecimal(item.RemainingValue))
+			running.AssetBInPool = scommon.DecimalAdd(running.AssetBInPool, scommon.NewDefaultDecimal(item.RemainingValue))
 		}
 	case OrderTypeSell:
 		if item.RemainingAmt != nil && item.RemainingAmt.Sign() > 0 {
-			if r.AssetAInPool == nil {
-				r.AssetAInPool = parseDecimalOrZero("0")
+			if running.AssetAInPool == nil {
+				running.AssetAInPool = parseDecimalOrZero("0")
 			}
-			r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.RemainingAmt)
+			running.AssetAInPool = scommon.DecimalAdd(running.AssetAInPool, item.RemainingAmt)
 		}
 	}
 	return true
 }
 
-func (r *RunningData) ApplyForContract(contract Contract, item *InvokeItem) {
-	if applier, ok := contract.(RunningDataApplier); ok && applier.ApplyRunningData(r, item) {
+func (s *TemplateRuntimeState) ApplyForContract(contract Contract, item *InvokeItem) {
+	if applier, ok := contract.(RuntimeStateApplier); ok && applier.ApplyRunningData(s, item) {
 		return
 	}
-	r.Apply(item)
 }
 
-func (r *RunningData) applyDefaultInvokeRetention(item *InvokeItem) {
-	if item.RetainedAssetA != nil && item.RetainedAssetA.Sign() > 0 {
-		if r.AssetAInPool == nil {
-			r.AssetAInPool = parseDecimalOrZero("0")
-		}
-		r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.RetainedAssetA)
+func (s *TemplateRuntimeState) recomputeActivePools(contract Contract) {
+	if s == nil {
+		return
 	}
-	if item.RetainedAssetB != nil && item.RetainedAssetB.Sign() > 0 {
-		if r.AssetBInPool == nil {
-			r.AssetBInPool = parseDecimalOrZero("0")
+	switch contract.(type) {
+	case *LimitOrderContract:
+		running := s.LimitOrderData()
+		running.AssetAInPool = nil
+		running.AssetBInPool = nil
+		for i := range s.Items {
+			item := &s.Items[i]
+			if item.Finished() || item.Reason != InvokeReasonNormal {
+				continue
+			}
+			switch item.OrderType {
+			case OrderTypeBuy:
+				if item.RemainingValue > 0 {
+					running.AssetBInPool = decimalAddAllowNil(running.AssetBInPool, scommon.NewDefaultDecimal(item.RemainingValue))
+				}
+			case OrderTypeSell:
+				if item.RemainingAmt != nil && item.RemainingAmt.Sign() > 0 {
+					running.AssetAInPool = decimalAddAllowNil(running.AssetAInPool, item.RemainingAmt)
+				}
+			}
 		}
-		r.AssetBInPool = scommon.DecimalAdd(r.AssetBInPool, item.RetainedAssetB)
 	}
+}
+
+func (s *TemplateRuntimeState) applyFinishedItemStats(contract Contract) {
+	if s == nil {
+		return
+	}
+	for i := range s.Items {
+		item := &s.Items[i]
+		if !item.Finished() || item.StatsApplied {
+			continue
+		}
+		switch contract.(type) {
+		case *LimitOrderContract:
+			applyLimitOrderFinishedStats(s.LimitOrderData(), item)
+		case *AMMContract:
+			applyAMMFinishedStats(s.AMMData(), item)
+		case *ExchangeContract:
+			applyExchangeFinishedStats(s.ExchangeData(), item)
+		}
+		item.StatsApplied = true
+	}
+}
+
+func applyLimitOrderFinishedStats(r *LimitOrderRunningData, item *InvokeItem) {
+	if r == nil || item == nil || item.Reason == InvokeReasonInvalid {
+		return
+	}
+	switch item.OrderType {
+	case OrderTypeBuy, OrderTypeSell:
+		switch item.Done {
+		case ItemStatusDealt:
+			addDealStats(&r.TotalDealAssetA, &r.TotalDealAssetB, &r.TotalDealCount, item)
+		case ItemStatusRefunded, ItemStatusCancelled:
+			addRefundStats(&r.TotalRefundAssetB, item)
+		}
+	case OrderTypeRefund:
+		addRefundStats(&r.TotalRefundAssetB, item)
+	}
+}
+
+func applyAMMFinishedStats(r *AMMRunningData, item *InvokeItem) {
+	if r == nil || item == nil || item.Reason == InvokeReasonInvalid {
+		return
+	}
+	switch item.OrderType {
+	case OrderTypeBuy, OrderTypeSell:
+		switch item.Done {
+		case ItemStatusDealt:
+			addDealStats(&r.TotalDealAssetA, &r.TotalDealAssetB, &r.TotalDealCount, item)
+		case ItemStatusRefunded, ItemStatusCancelled:
+			addRefundStats(&r.TotalRefundAssetB, item)
+		}
+	case OrderTypeRefund:
+		addRefundStats(&r.TotalRefundAssetB, item)
+	}
+}
+
+func applyExchangeFinishedStats(r *ExchangeRunningData, item *InvokeItem) {
+	if r == nil || item == nil || item.Reason == InvokeReasonInvalid {
+		return
+	}
+	if item.Done == ItemStatusRefunded || item.Done == ItemStatusCancelled || item.OrderType == OrderTypeRefund {
+		addRefundStats(&r.TotalRefundAssetB, item)
+	}
+}
+
+func addDealStats(totalA **scommon.Decimal, totalB **scommon.Decimal, count *int, item *InvokeItem) {
+	if item.OutAmt != nil {
+		*totalA = decimalAddAllowNil(*totalA, item.OutAmt)
+	}
+	*totalB = decimalAddAllowNil(*totalB, scommon.NewDefaultDecimal(item.OutValue))
+	*count = *count + 1
+}
+
+func addRefundStats(total **scommon.Decimal, item *InvokeItem) {
+	if item == nil {
+		return
+	}
+	*total = decimalAddAllowNil(*total, scommon.NewDefaultDecimal(item.OutValue+item.RemainingValue))
 }
 
 func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeItem, error) {
@@ -463,7 +730,7 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
-	state.Running.ApplyForContract(r.contract, item)
+	state.ApplyForContract(r.contract, item)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err
 	}
@@ -503,7 +770,7 @@ func (r *ContractRuntime) ApplyInvalidInvoke(req ApplyInvokeRequest, gasAssetNam
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
-	state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gasBalance)
+	addRunningGasBalance(r.contract, &state, gasBalance)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err
 	}
@@ -934,6 +1201,39 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		if inputA.Sign() > 0 {
 			item.OutAmt = inputA
 		}
+	case InvokeAPIConfig:
+		autopay, ok := contract.(*AutopayContract)
+		if !ok {
+			return nil, fmt.Errorf("config action requires autopay contract")
+		}
+		var param AutopayConfigInvokeParam
+		if err := param.Decode(req.Param); err != nil {
+			return nil, err
+		}
+		amount := parseDecimalOrZero(param.AmountPerBlock)
+		if amount.Cmp(autopay.minAmountPerBlock()) < 0 {
+			item.Reason = InvokeReasonInvalid
+		}
+		item.OrderType = OrderTypeValidate
+		item.ExpectedAmt = amount
+		item.Done = ItemStatusDealt
+		item.GasFee = nil
+		if req.ResultGasFee != nil {
+			item.GasFee = req.ResultGasFee.Clone()
+		}
+		item.RemainingValue = fundingValue(req.FundingOutput)
+	case InvokeAPICancel:
+		if _, ok := contract.(*AutopayContract); !ok {
+			return nil, fmt.Errorf("cancel action requires autopay contract")
+		}
+		item.OrderType = OrderTypeCancel
+		item.AssetName = assetName
+		item.InAmt = nil
+		item.GasFee = nil
+		if req.ResultGasFee != nil {
+			item.GasFee = req.ResultGasFee.Clone()
+		}
+		item.RemainingValue = fundingValue(req.FundingOutput)
 	case InvokeAPIClose:
 		if exchange, ok := contract.(*ExchangeContract); ok {
 			inputA, inputB, inUtxos, err := exchangeFundingAmounts(exchange, req.FundingOutput)
@@ -1138,20 +1438,15 @@ func (r *ContractRuntime) RuntimeState() (TemplateRuntimeState, error) {
 func (r *ContractRuntime) initializeRuntimeState() error {
 	switch c := r.contract.(type) {
 	case *AMMContract:
-		state := TemplateRuntimeState{
-			Running: RunningData{
-				RequiredAssetA: parseDecimalOrZero(c.AssetAmt),
-				RequiredAssetB: scommon.NewDefaultDecimal(c.SatValue),
-				K:              parseDecimalOrZero(c.K),
-			},
-		}
+		state := TemplateRuntimeState{}
+		running := state.AMMData()
+		running.RequiredAssetA = parseDecimalOrZero(c.AssetAmt)
+		running.RequiredAssetB = scommon.NewDefaultDecimal(c.SatValue)
+		running.K = parseDecimalOrZero(c.K)
 		return r.saveRuntimeState(state)
 	case *AutopayContract:
-		state := TemplateRuntimeState{
-			Running: RunningData{
-				AutopayStatus: AutopayStatusFunding,
-			},
-		}
+		state := TemplateRuntimeState{}
+		state.AutopayData().AutopayStatus = AutopayStatusFunding
 		return r.saveRuntimeState(state)
 	default:
 		return nil
@@ -1162,6 +1457,15 @@ func (r *ContractRuntime) ApplyFunding(output ContractOutput, gasAssetName strin
 	state, err := r.loadRuntimeState()
 	if err != nil {
 		return err
+	}
+	if applier, ok := r.contract.(AddressFundingStateApplier); ok {
+		handled, err := applier.ApplyFundingStateForAddress(&state, r.base.Deployer(), output, gasAssetName)
+		if err != nil || handled {
+			if err != nil {
+				return err
+			}
+			return r.saveRuntimeState(state)
+		}
 	}
 	if applier, ok := r.contract.(FundingStateApplier); ok {
 		handled, err := applier.ApplyFundingState(&state, output, gasAssetName)
@@ -1174,20 +1478,21 @@ func (r *ContractRuntime) ApplyFunding(output ContractOutput, gasAssetName strin
 	}
 	assetName := contractAssetName(r.contract)
 	if _, ok := r.contract.(*AMMContract); ok {
-		if state.Running.AssetBInPool == nil {
-			state.Running.AssetBInPool = parseDecimalOrZero("0")
+		running := state.AMMData()
+		if running.AssetBInPool == nil {
+			running.AssetBInPool = parseDecimalOrZero("0")
 		}
-		state.Running.AssetBInPool = scommon.DecimalAdd(state.Running.AssetBInPool, scommon.NewDefaultDecimal(output.PlainValue()))
+		running.AssetBInPool = scommon.DecimalAdd(running.AssetBInPool, scommon.NewDefaultDecimal(output.PlainValue()))
 		if assetName != "" {
 			amt, err := output.AssetAmount(assetName)
 			if err != nil {
 				return err
 			}
 			amt = parseDecimalOrZero(amt.String())
-			if state.Running.AssetAInPool == nil {
-				state.Running.AssetAInPool = parseDecimalOrZero("0")
+			if running.AssetAInPool == nil {
+				running.AssetAInPool = parseDecimalOrZero("0")
 			}
-			state.Running.AssetAInPool = scommon.DecimalAdd(state.Running.AssetAInPool, amt)
+			running.AssetAInPool = scommon.DecimalAdd(running.AssetAInPool, amt)
 		}
 	}
 	if gasAssetName != "" {
@@ -1195,29 +1500,33 @@ func (r *ContractRuntime) ApplyFunding(output ContractOutput, gasAssetName strin
 		if err != nil {
 			return err
 		}
-		state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
-	}
-	if !state.Running.TradingReady {
-		state.Running.TradingReady = state.Running.ammTradingReady()
+		addRunningGasBalance(r.contract, &state, gas)
 	}
 	if _, ok := r.contract.(*AMMContract); ok {
+		if amm := state.AMMData(); !amm.TradingReady {
+			amm.TradingReady = amm.ammTradingReady()
+		}
 		initializeAMMInitialLP(&state, r.base.Deployer())
 	}
 	return r.saveRuntimeState(state)
 }
 
 func initializeAMMInitialLP(state *TemplateRuntimeState, deployer string) {
-	if state == nil || deployer == "" || !state.Running.TradingReady {
+	if state == nil || deployer == "" {
 		return
 	}
-	if state.Running.TotalLPTAmt != nil && state.Running.TotalLPTAmt.Sign() > 0 {
+	running := state.AMMData()
+	if !running.TradingReady {
 		return
 	}
-	if len(state.Running.LPBalances) != 0 {
+	if running.TotalLPTAmt != nil && running.TotalLPTAmt.Sign() > 0 {
 		return
 	}
-	poolAsset := state.Running.AssetAInPool
-	poolGas := decimalInt64(state.Running.AssetBInPool)
+	if len(running.LPBalances) != 0 {
+		return
+	}
+	poolAsset := running.AssetAInPool
+	poolGas := decimalInt64(running.AssetBInPool)
 	if poolAsset == nil || poolAsset.Sign() <= 0 || poolGas <= 0 {
 		return
 	}
@@ -1225,9 +1534,9 @@ func initializeAMMInitialLP(state *TemplateRuntimeState, deployer string) {
 	if initialLPT.Sign() <= 0 {
 		return
 	}
-	state.Running.TotalLPTAmt = initialLPT
-	state.Running.LPBalances = map[string]*scommon.Decimal{deployer: initialLPT.Clone()}
-	state.Running.LPCosts = map[string]int64{deployer: ammLiquidityCost(poolAsset, poolGas)}
+	running.TotalLPTAmt = initialLPT
+	running.LPBalances = map[string]*scommon.Decimal{deployer: initialLPT.Clone()}
+	running.LPCosts = map[string]int64{deployer: ammLiquidityCost(poolAsset, poolGas)}
 }
 
 func (r *ContractRuntime) ApplyGasFunding(output ContractOutput, gasAssetName string) error {
@@ -1251,7 +1560,7 @@ func (r *ContractRuntime) ApplyGasFunding(output ContractOutput, gasAssetName st
 	if err != nil {
 		return err
 	}
-	state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
+	addRunningGasBalance(r.contract, &state, gas)
 	return r.saveRuntimeState(state)
 }
 
@@ -1268,6 +1577,7 @@ func (r *ContractRuntime) loadRuntimeState() (TemplateRuntimeState, error) {
 }
 
 func (r *ContractRuntime) saveRuntimeState(state TemplateRuntimeState) error {
+	state.applyFinishedItemStats(r.contract)
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -1379,6 +1689,54 @@ func parseStateDecimalMap(field string, in map[string]string) (map[string]*scomm
 	return out, nil
 }
 
+func autopayDelegateJSONMap(in map[string]AutopayDelegate) map[string]autopayDelegateJSON {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]autopayDelegateJSON, len(in))
+	for address, delegate := range in {
+		out[address] = autopayDelegateJSON{
+			AmountPerBlock: decimalString(delegate.AmountPerBlock),
+			Balance:        decimalString(delegate.Balance),
+			TotalPaid:      decimalString(delegate.TotalPaid),
+			PaidBlockCount: delegate.PaidBlockCount,
+			LastPayHeight:  delegate.LastPayHeight,
+			Status:         delegate.Status,
+		}
+	}
+	return out
+}
+
+func parseAutopayDelegateJSONMap(in map[string]autopayDelegateJSON) (map[string]AutopayDelegate, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]AutopayDelegate, len(in))
+	for address, item := range in {
+		amount, err := parseOptionalStateDecimal("autopayDelegates."+address+".amountPerBlock", item.AmountPerBlock)
+		if err != nil {
+			return nil, err
+		}
+		balance, err := parseOptionalStateDecimal("autopayDelegates."+address+".balance", item.Balance)
+		if err != nil {
+			return nil, err
+		}
+		totalPaid, err := parseOptionalStateDecimal("autopayDelegates."+address+".totalPaid", item.TotalPaid)
+		if err != nil {
+			return nil, err
+		}
+		out[address] = AutopayDelegate{
+			AmountPerBlock: amount,
+			Balance:        balance,
+			TotalPaid:      totalPaid,
+			PaidBlockCount: item.PaidBlockCount,
+			LastPayHeight:  item.LastPayHeight,
+			Status:         item.Status,
+		}
+	}
+	return out, nil
+}
+
 func decimalInt64(value *scommon.Decimal) int64 {
 	if value == nil {
 		return 0
@@ -1386,7 +1744,7 @@ func decimalInt64(value *scommon.Decimal) int64 {
 	return value.Int64()
 }
 
-func (r RunningData) ammTradingReady() bool {
+func (r AMMRunningData) ammTradingReady() bool {
 	requiredAssetA := r.RequiredAssetA
 	if requiredAssetA == nil {
 		requiredAssetA = parseDecimalOrZero("0")

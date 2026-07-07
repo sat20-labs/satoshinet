@@ -33,6 +33,7 @@ type LLMConfig struct {
 	Model       string
 	APIKey      string
 	Timeout     time.Duration
+	KeepAlive   string
 	Temperature float64
 	MaxTokens   int
 }
@@ -419,6 +420,7 @@ func newLLMClient(cfg LLMConfig, infof func(string, ...interface{})) (agentcontr
 		Model:       cfg.Model,
 		APIKey:      cfg.APIKey,
 		Timeout:     cfg.Timeout,
+		KeepAlive:   cfg.KeepAlive,
 		Temperature: cfg.Temperature,
 		MaxTokens:   cfg.MaxTokens,
 	}
@@ -437,8 +439,8 @@ func newLLMClient(cfg LLMConfig, infof func(string, ...interface{})) (agentcontr
 		return nil, nil
 	}
 	if infof != nil {
-		infof("Agent LLM access is enabled, provider=%s endpoint=%s model=%s",
-			normalized.Provider, normalized.Endpoint, normalized.Model)
+		infof("Agent LLM access is enabled, provider=%s endpoint=%s model=%s keep_alive=%s",
+			normalized.Provider, normalized.Endpoint, normalized.Model, normalized.KeepAlive)
 	}
 	return client, nil
 }

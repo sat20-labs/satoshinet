@@ -26,19 +26,19 @@ func TestSettleLimitOrdersMatchesByPriceAndTime(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:         InvokeAPISwap,
-		Param:          sellParam,
-		CallID:         DeriveInvokeCallID("sell", 1, addr),
+		Action:        InvokeAPISwap,
+		Param:         sellParam,
+		CallID:        DeriveInvokeCallID("sell", 1, addr),
 		FundingOutput: testContractOutput("sell", 1, addr, 0, testAsset("ordx:f:test", 10)),
-		Height:         1,
+		Height:        1,
 	})
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:         InvokeAPISwap,
-		Param:          buyParam,
-		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		Action:        InvokeAPISwap,
+		Param:         buyParam,
+		CallID:        DeriveInvokeCallID("buy", 1, addr),
 		FundingOutput: testContractOutput("buy", 1, addr, 30, nil),
-		Height:         1,
+		Height:        1,
 	})
 	require.NoError(t, err)
 
@@ -65,9 +65,9 @@ func TestSettleLimitOrdersMatchesByPriceAndTime(t *testing.T) {
 	require.Equal(t, ItemStatusDealt, state.Items[1].Done)
 	requireDecimalString(t, "10", state.Items[1].OutAmt)
 	require.Equal(t, int64(10), state.Items[1].OutValue)
-	requireDecimalString(t, "10", state.Running.TotalDealAssetA)
-	requireDecimalString(t, "30", state.Running.TotalDealAssetB)
-	require.Equal(t, 2, state.Running.TotalDealCount)
+	requireDecimalString(t, "10", state.LimitOrderData().TotalDealAssetA)
+	requireDecimalString(t, "30", state.LimitOrderData().TotalDealAssetB)
+	require.Equal(t, 2, state.LimitOrderData().TotalDealCount)
 }
 
 func TestSettleLimitOrdersStopsWhenPriceDoesNotCross(t *testing.T) {
@@ -89,19 +89,19 @@ func TestSettleLimitOrdersStopsWhenPriceDoesNotCross(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:         InvokeAPISwap,
-		Param:          sellParam,
-		CallID:         DeriveInvokeCallID("sell", 1, addr),
+		Action:        InvokeAPISwap,
+		Param:         sellParam,
+		CallID:        DeriveInvokeCallID("sell", 1, addr),
 		FundingOutput: testContractOutput("sell", 1, addr, 0, testAsset("ordx:f:test", 10)),
-		Height:         1,
+		Height:        1,
 	})
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:         InvokeAPISwap,
-		Param:          buyParam,
-		CallID:         DeriveInvokeCallID("buy", 1, addr),
+		Action:        InvokeAPISwap,
+		Param:         buyParam,
+		CallID:        DeriveInvokeCallID("buy", 1, addr),
 		FundingOutput: testContractOutput("buy", 1, addr, 30, nil),
-		Height:         1,
+		Height:        1,
 	})
 	require.NoError(t, err)
 
@@ -283,12 +283,12 @@ func TestSettleLimitOrdersRefundsInvokerOpenOrders(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:         InvokeAPISwap,
-		Param:          buyParam,
-		CallID:         DeriveInvokeCallID("buy", 1, addr),
-		Invoker:        "alice",
+		Action:        InvokeAPISwap,
+		Param:         buyParam,
+		CallID:        DeriveInvokeCallID("buy", 1, addr),
+		Invoker:       "alice",
 		FundingOutput: testContractOutput("buy", 1, addr, 30, nil),
-		Height:         1,
+		Height:        1,
 	})
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
@@ -314,8 +314,8 @@ func TestSettleLimitOrdersRefundsInvokerOpenOrders(t *testing.T) {
 	require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
 	require.Equal(t, InvokeReasonRefund, state.Items[0].Reason)
 	require.Equal(t, ItemStatusRefunded, state.Items[1].Done)
-	require.Zero(t, state.Running.TotalDealCount)
-	requireDecimalString(t, "30", state.Running.TotalRefundAssetB)
+	require.Zero(t, state.LimitOrderData().TotalDealCount)
+	requireDecimalString(t, "30", state.LimitOrderData().TotalRefundAssetB)
 }
 
 func TestSettleLimitOrdersRefundCanTargetOneOrder(t *testing.T) {
@@ -513,12 +513,12 @@ func applyLimitOrderInvokeForTest(t *testing.T, runtime *ContractRuntime, addr C
 	}).Encode()
 	require.NoError(t, err)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:         InvokeAPISwap,
-		Param:          param,
-		CallID:         DeriveInvokeCallID(callID, 1, addr),
-		Invoker:        invoker,
+		Action:        InvokeAPISwap,
+		Param:         param,
+		CallID:        DeriveInvokeCallID(callID, 1, addr),
+		Invoker:       invoker,
 		FundingOutput: testContractOutput(callID, 1, addr, value, assets),
-		Height:         height,
+		Height:        height,
 	})
 	require.NoError(t, err)
 }

@@ -63,7 +63,7 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 
 	addSettlementInputs(plan, item)
 	plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
-	if state.Running.Closed {
+	if state.ExchangeData().Closed {
 		markExchangeRefunded(state, item, plan, contract, gasAssetName)
 		return nil
 	}
@@ -85,7 +85,7 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 		item.Done = ItemStatusClosedDirectly
 		return nil
 	}
-	availableA := state.Running.AssetAInPool
+	availableA := state.ExchangeData().AssetAInPool
 	if availableA == nil {
 		availableA = parseDecimalOrZero("0")
 	}
@@ -93,7 +93,7 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 		markExchangeRefunded(state, item, plan, contract, gasAssetName)
 		return nil
 	}
-	totalDealA := state.Running.TotalDealAssetA
+	totalDealA := state.ExchangeData().TotalDealAssetA
 	if totalDealA == nil {
 		totalDealA = parseDecimalOrZero("0")
 	}
@@ -111,16 +111,16 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 		return nil
 	}
 	refundB := scommon.DecimalSub(inputB, quote.SpentB)
-	state.Running.AssetAInPool = scommon.DecimalSub(availableA, quote.OutA)
-	if state.Running.TotalDealAssetA == nil {
-		state.Running.TotalDealAssetA = parseDecimalOrZero("0")
+	state.ExchangeData().AssetAInPool = scommon.DecimalSub(availableA, quote.OutA)
+	if state.ExchangeData().TotalDealAssetA == nil {
+		state.ExchangeData().TotalDealAssetA = parseDecimalOrZero("0")
 	}
-	if state.Running.TotalDealAssetB == nil {
-		state.Running.TotalDealAssetB = parseDecimalOrZero("0")
+	if state.ExchangeData().TotalDealAssetB == nil {
+		state.ExchangeData().TotalDealAssetB = parseDecimalOrZero("0")
 	}
-	state.Running.TotalDealAssetA = scommon.DecimalAdd(state.Running.TotalDealAssetA, quote.OutA)
-	state.Running.TotalDealAssetB = scommon.DecimalAdd(state.Running.TotalDealAssetB, quote.SpentB)
-	state.Running.TotalDealCount++
+	state.ExchangeData().TotalDealAssetA = scommon.DecimalAdd(state.ExchangeData().TotalDealAssetA, quote.OutA)
+	state.ExchangeData().TotalDealAssetB = scommon.DecimalAdd(state.ExchangeData().TotalDealAssetB, quote.SpentB)
+	state.ExchangeData().TotalDealCount++
 	item.OutAmt = quote.OutA
 	item.RemainingAmt = nil
 	item.Done = ItemStatusDealt
@@ -149,10 +149,10 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 		})
 	}
 	if refundB.Sign() > 0 {
-		if state.Running.TotalRefundAssetB == nil {
-			state.Running.TotalRefundAssetB = parseDecimalOrZero("0")
+		if state.ExchangeData().TotalRefundAssetB == nil {
+			state.ExchangeData().TotalRefundAssetB = parseDecimalOrZero("0")
 		}
-		state.Running.TotalRefundAssetB = scommon.DecimalAdd(state.Running.TotalRefundAssetB, refundB)
+		state.ExchangeData().TotalRefundAssetB = scommon.DecimalAdd(state.ExchangeData().TotalRefundAssetB, refundB)
 		plan.Transfers = append(plan.Transfers, SettlementTransfer{
 			ItemID:    item.ID,
 			To:        item.Address,
@@ -245,7 +245,7 @@ func settleExchangeClose(state *TemplateRuntimeState, contract *ExchangeContract
 	if err := applyExchangeGasFee(state, contract, item, gasAssetName); err != nil {
 		return err
 	}
-	assetA := state.Running.AssetAInPool
+	assetA := state.ExchangeData().AssetAInPool
 	if assetA == nil {
 		assetA = parseDecimalOrZero("0")
 	}
@@ -258,7 +258,7 @@ func settleExchangeClose(state *TemplateRuntimeState, contract *ExchangeContract
 			Reason:    SettlementReasonDeal,
 		})
 	}
-	assetB := state.Running.AssetBInPool
+	assetB := state.ExchangeData().AssetBInPool
 	if assetB == nil {
 		assetB = parseDecimalOrZero("0")
 	}
@@ -290,9 +290,9 @@ func settleExchangeClose(state *TemplateRuntimeState, contract *ExchangeContract
 			Reason:    SettlementReasonDeal,
 		})
 	}
-	state.Running.AssetAInPool = nil
-	state.Running.AssetBInPool = nil
-	state.Running.Closed = true
+	state.ExchangeData().AssetAInPool = nil
+	state.ExchangeData().AssetBInPool = nil
+	state.ExchangeData().Closed = true
 	item.Done = ItemStatusDealt
 	return nil
 }
@@ -321,10 +321,10 @@ func markExchangeRefunded(state *TemplateRuntimeState, item *InvokeItem, plan *S
 			Reason:    SettlementReasonRefund,
 		})
 	}
-	if state.Running.TotalRefundAssetB == nil {
-		state.Running.TotalRefundAssetB = parseDecimalOrZero("0")
+	if state.ExchangeData().TotalRefundAssetB == nil {
+		state.ExchangeData().TotalRefundAssetB = parseDecimalOrZero("0")
 	}
-	state.Running.TotalRefundAssetB = scommon.DecimalAdd(state.Running.TotalRefundAssetB, refundB)
+	state.ExchangeData().TotalRefundAssetB = scommon.DecimalAdd(state.ExchangeData().TotalRefundAssetB, refundB)
 }
 
 func applyExchangeGasFee(state *TemplateRuntimeState, contract *ExchangeContract, item *InvokeItem, gasAssetName string) error {
@@ -334,21 +334,21 @@ func applyExchangeGasFee(state *TemplateRuntimeState, contract *ExchangeContract
 	}
 	switch gasAssetName {
 	case contract.AssetAName:
-		pool := state.Running.AssetAInPool
+		pool := state.ExchangeData().AssetAInPool
 		if pool == nil {
 			pool = parseDecimalOrZero("0")
 		}
 		if pool.Cmp(fee) < 0 {
 			return fmt.Errorf("insufficient exchange asset A for gas fee")
 		}
-		state.Running.AssetAInPool = pool.SubAlignPrecision(fee)
+		state.ExchangeData().AssetAInPool = pool.SubAlignPrecision(fee)
 	case contract.AssetBName:
 		return nil
 	default:
-		if state.Running.GasBalance == nil || state.Running.GasBalance.Cmp(fee) < 0 {
+		if state.ExchangeData().GasBalance == nil || state.ExchangeData().GasBalance.Cmp(fee) < 0 {
 			return fmt.Errorf("insufficient exchange gas balance")
 		}
-		state.Running.GasBalance = state.Running.GasBalance.SubAlignPrecision(fee)
+		state.ExchangeData().GasBalance = state.ExchangeData().GasBalance.SubAlignPrecision(fee)
 	}
 	return nil
 }

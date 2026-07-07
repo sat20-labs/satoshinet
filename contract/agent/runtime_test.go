@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -128,6 +129,50 @@ func TestRuntimeConfirmSettlesWinnersAndFees(t *testing.T) {
 	assertTransfer(t, plan, "alice", "90000", "winner_payout")
 	if runtime.State().Prediction.Status != PredictionStatusSettled {
 		t.Fatalf("runtime not settled")
+	}
+}
+
+func TestRuntimeConfirmUsesAssetPrecisionForSatoshiPayouts(t *testing.T) {
+	runtime := newTestRuntimeForBetAsset(t, SatoshiAssetName, "1")
+	requireReady(t, runtime)
+	requireBet(t, runtime, "alice", "a", "100")
+	requireBet(t, runtime, "bob", "b", "300")
+	requireBet(t, runtime, "carol", "c", "1000")
+	requireBet(t, runtime, "dave", "b", "100")
+
+	plan, err := runtime.ApplyConfirm(ApplyConfirmRequest{
+		Invoker: "core",
+		Param: PredictionConfirmParam{
+			ResultType: ResultTypeOutcome,
+			OutcomeID:  "b",
+			Result:     "Team B wins",
+			ResultURL:  "https://example.com/match/result/123",
+			ObservedAt: runtime.Contract().EventTime + 1,
+		},
+		TimeValue: runtime.Contract().ConfirmAfter + 100,
+	})
+	if err != nil {
+		t.Fatalf("ApplyConfirm failed: %v", err)
+	}
+	assertTransfer(t, plan, "deployer", "90", "deployer_fee")
+	assertTransfer(t, plan, "agent", "45", "agent_fee")
+	assertTransfer(t, plan, "bootstrap", "15", "bootstrap_fee")
+	assertTransfer(t, plan, "bob", "1013", "winner_payout")
+	assertTransfer(t, plan, "dave", "337", "winner_payout")
+
+	total := int64(0)
+	for _, transfer := range plan.Transfers {
+		if strings.Contains(transfer.AssetAmt, ".") {
+			t.Fatalf("satoshi transfer should use precision 0: %#v", transfer)
+		}
+		amount, err := strconv.ParseInt(transfer.AssetAmt, 10, 64)
+		if err != nil {
+			t.Fatalf("satoshi transfer amount should be an integer: %#v", transfer)
+		}
+		total += amount
+	}
+	if total != 1500 {
+		t.Fatalf("settlement total mismatch: got %d want 1500", total)
 	}
 }
 

@@ -20,14 +20,18 @@ func TestLLMClientOllama(t *testing.T) {
 		if req["model"] != "llama3" {
 			t.Fatalf("model mismatch: %v", req["model"])
 		}
+		if req["keep_alive"] != float64(-1) {
+			t.Fatalf("keep_alive mismatch: %v", req["keep_alive"])
+		}
 		_, _ = w.Write([]byte(`{"message":{"role":"assistant","content":"answer-a"},"done":true}`))
 	}))
 	defer server.Close()
 
 	client, err := NewLLMClient(LLMConfig{
-		Provider: LLMProviderOllama,
-		Endpoint: server.URL,
-		Model:    "llama3",
+		Provider:  LLMProviderOllama,
+		Endpoint:  server.URL,
+		Model:     "llama3",
+		KeepAlive: "-1",
 	})
 	if err != nil {
 		t.Fatalf("NewLLMClient failed: %v", err)

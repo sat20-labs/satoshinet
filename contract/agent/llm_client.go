@@ -26,6 +26,7 @@ type LLMConfig struct {
 	Model       string
 	APIKey      string
 	Timeout     time.Duration
+	KeepAlive   string
 	Temperature float64
 	MaxTokens   int
 }
@@ -75,6 +76,7 @@ func (c LLMConfig) Normalized() (LLMConfig, error) {
 	c.Provider = strings.ToLower(strings.TrimSpace(c.Provider))
 	c.Endpoint = strings.TrimSpace(c.Endpoint)
 	c.Model = strings.TrimSpace(c.Model)
+	c.KeepAlive = strings.TrimSpace(c.KeepAlive)
 	if c.Timeout <= 0 {
 		c.Timeout = DefaultLLMTimeout
 	}
@@ -123,6 +125,13 @@ func (c *HTTPLLMClient) completeOllama(ctx context.Context, req LLMCompletionReq
 		"model":    c.cfg.Model,
 		"messages": req.Messages,
 		"stream":   false,
+	}
+	if c.cfg.KeepAlive != "" {
+		if c.cfg.KeepAlive == "-1" {
+			body["keep_alive"] = -1
+		} else {
+			body["keep_alive"] = c.cfg.KeepAlive
+		}
 	}
 	options := make(map[string]interface{})
 	temperature := requestTemperature(req, c.cfg)

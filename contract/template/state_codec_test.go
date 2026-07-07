@@ -23,8 +23,8 @@ func TestRuntimeStoreMarshalRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	state, err := got.RuntimeState()
 	require.NoError(t, err)
-	require.True(t, state.Running.TradingReady)
-	requireDecimalString(t, "100", state.Running.AssetAInPool)
+	require.True(t, state.AMMData().TradingReady)
+	requireDecimalString(t, "100", state.AMMData().AssetAInPool)
 }
 
 func TestInvokeItemUnmarshalRejectsInvalidDecimal(t *testing.T) {

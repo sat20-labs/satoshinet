@@ -72,3 +72,24 @@ func TestRuntimeBaseStateRootDeterministic(t *testing.T) {
 	b.SetState("b", []byte("2"))
 	require.Equal(t, a.StateRoot(), b.StateRoot())
 }
+
+func TestTemplateStateRootIgnoresFinishedItems(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	addr := runtime.Address()
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "10", "2", 20, nil, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell, "10", "2", 0,
+		testAsset("ordx:f:test", 10), 1)
+
+	_, err := runtime.SettleBlock(2)
+	require.NoError(t, err)
+	rootWithFinishedItems := runtime.StateRoot()
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Len(t, state.Items, 2)
+	state.Items = unfinishedItems(state.Items)
+	require.Empty(t, state.Items)
+	require.NoError(t, runtime.saveRuntimeState(state))
+
+	require.Equal(t, rootWithFinishedItems, runtime.StateRoot())
+}

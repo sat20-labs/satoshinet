@@ -362,6 +362,9 @@ func (e *Backend) Finalize() (BlockExecutionResult, error) {
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
+	if err := e.Store.PruneFinishedItems(); err != nil {
+		return BlockExecutionResult{}, err
+	}
 	return BlockExecutionResult{
 		Records:         records,
 		SettlementPlans: cloneSettlementPlans(plans),

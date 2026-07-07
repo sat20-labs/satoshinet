@@ -128,8 +128,9 @@ func (r *ContractRuntime) settleAMM(height int64,
 		}
 		return plan, nil
 	}
+	running := state.AMMData()
 
-	if state.Running.TradingReady {
+	if running.TradingReady {
 		itemIDs := activeAMMItemIDs(state.Items, height)
 		sort.SliceStable(itemIDs, func(i, j int) bool {
 			a := state.Items[itemIDs[i]]
@@ -143,14 +144,14 @@ func (r *ContractRuntime) settleAMM(height int64,
 			return a.ID < b.ID
 		})
 
-		pricingPoolAsset := state.Running.AssetAInPool
+		pricingPoolAsset := running.AssetAInPool
 		if pricingPoolAsset == nil {
 			pricingPoolAsset = parseDecimalOrZero("0")
 		}
-		pricingPoolGas := decimalInt64(state.Running.AssetBInPool)
+		pricingPoolGas := decimalInt64(running.AssetBInPool)
 		availableAsset := pricingPoolAsset.Clone()
 		availableGas := pricingPoolGas
-		settlementK := ammSettlementK(state.Running, pricingPoolAsset, pricingPoolGas)
+		settlementK := ammSettlementK(*running, pricingPoolAsset, pricingPoolGas)
 		for _, id := range itemIDs {
 			item := &state.Items[id]
 			switch item.OrderType {
@@ -202,13 +203,13 @@ func (r *ContractRuntime) settleAMM(height int64,
 			}
 		}
 		if changed {
-			state.Running.AssetAInPool = availableAsset
-			state.Running.AssetBInPool = scommon.NewDefaultDecimal(availableGas)
+			running.AssetAInPool = availableAsset
+			running.AssetBInPool = scommon.NewDefaultDecimal(availableGas)
 			if availableAsset != nil && availableAsset.Sign() > 0 && availableGas > 0 {
-				state.Running.K = scommon.DecimalMul(availableAsset, scommon.NewDefaultDecimal(availableGas))
+				running.K = scommon.DecimalMul(availableAsset, scommon.NewDefaultDecimal(availableGas))
 			}
 			if availableAsset.Sign() <= 0 || availableGas <= 0 {
-				state.Running.TradingReady = false
+				running.TradingReady = false
 			}
 		}
 	}
@@ -218,16 +219,16 @@ func (r *ContractRuntime) settleAMM(height int64,
 		return nil, err
 	}
 	changed = changed || liquidityChanged
-	if !state.Running.TradingReady {
-		state.Running.TradingReady = state.Running.ammTradingReady()
+	if !running.TradingReady {
+		running.TradingReady = running.ammTradingReady()
 	}
-	if ammPoolEmpty(state.Running) {
-		state.Running.TradingReady = false
+	if ammPoolEmpty(*running) {
+		running.TradingReady = false
 	}
 	if !changed {
 		return plan, nil
 	}
-	recomputeRunningDataPreservePool(r.contract, &state, state.Running.AssetAInPool, state.Running.AssetBInPool)
+	recomputeRunningDataPreservePool(r.contract, &state, running.AssetAInPool, running.AssetBInPool)
 	if err := r.saveRuntimeState(state); err != nil {
 		return nil, err
 	}
@@ -238,23 +239,24 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 	if state == nil || plan == nil {
 		return false, nil
 	}
-	poolAsset := state.Running.AssetAInPool
+	running := state.AMMData()
+	poolAsset := running.AssetAInPool
 	if poolAsset == nil {
 		poolAsset = parseDecimalOrZero("0")
 	}
-	poolGas := decimalInt64(state.Running.AssetBInPool)
-	totalLPT := state.Running.TotalLPTAmt
+	poolGas := decimalInt64(running.AssetBInPool)
+	totalLPT := running.TotalLPTAmt
 	if totalLPT == nil {
 		totalLPT = parseDecimalOrZero("0")
 	}
 	if totalLPT.Sign() == 0 && poolAsset.Sign() > 0 && poolGas > 0 {
 		totalLPT = scommon.DecimalMul(poolAsset, scommon.NewDefaultDecimal(poolGas)).Sqrt()
 	}
-	if state.Running.LPBalances == nil {
-		state.Running.LPBalances = make(map[string]*scommon.Decimal)
+	if running.LPBalances == nil {
+		running.LPBalances = make(map[string]*scommon.Decimal)
 	}
-	if state.Running.LPCosts == nil {
-		state.Running.LPCosts = make(map[string]int64)
+	if running.LPCosts == nil {
+		running.LPCosts = make(map[string]int64)
 	}
 	changed := false
 	for i := range state.Items {
@@ -275,7 +277,7 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 				changed = true
 				continue
 			}
-			reserveAsset, reserveGas, leftAsset, leftGas := reserveAMMLiquidity(addAsset, addGas, poolAsset, poolGas, state.Running)
+			reserveAsset, reserveGas, leftAsset, leftGas := reserveAMMLiquidity(addAsset, addGas, poolAsset, poolGas, *running)
 			minted := mintLPTAmount(reserveAsset, reserveGas, poolAsset, poolGas, totalLPT)
 			if minted.Sign() <= 0 {
 				item.Reason = InvokeReasonNoEnoughAsset
@@ -286,11 +288,11 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 			poolAsset = scommon.DecimalAdd(poolAsset, reserveAsset)
 			poolGas += reserveGas
 			totalLPT = scommon.DecimalAdd(totalLPT, minted)
-			if state.Running.LPBalances[item.Address] == nil {
-				state.Running.LPBalances[item.Address] = parseDecimalOrZero("0")
+			if running.LPBalances[item.Address] == nil {
+				running.LPBalances[item.Address] = parseDecimalOrZero("0")
 			}
-			state.Running.LPBalances[item.Address] = scommon.DecimalAdd(state.Running.LPBalances[item.Address], minted)
-			state.Running.LPCosts[item.Address] += ammLiquidityCost(reserveAsset, reserveGas)
+			running.LPBalances[item.Address] = scommon.DecimalAdd(running.LPBalances[item.Address], minted)
+			running.LPCosts[item.Address] += ammLiquidityCost(reserveAsset, reserveGas)
 			item.OutAmt = minted
 			item.RemainingAmt = nil
 			item.RemainingValue = 0
@@ -309,7 +311,7 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 			}
 			changed = true
 		case OrderTypeRemoveLiquidity:
-			owned := state.Running.LPBalances[item.Address]
+			owned := running.LPBalances[item.Address]
 			if owned == nil {
 				owned = parseDecimalOrZero("0")
 			}
@@ -325,7 +327,7 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 				changed = true
 				continue
 			}
-			cost := state.Running.LPCosts[item.Address]
+			cost := running.LPCosts[item.Address]
 			depositValue := proportionalInt64(cost, remove, owned)
 			ratio := scommon.DecimalDiv(remove, totalLPT)
 			outAsset := scommon.DecimalMul(poolAsset, ratio)
@@ -339,14 +341,14 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 			totalLPT = scommon.DecimalSub(totalLPT, remove)
 			left := scommon.DecimalSub(owned, remove)
 			if left.Sign() > 0 {
-				state.Running.LPBalances[item.Address] = left
-				state.Running.LPCosts[item.Address] = cost - depositValue
-				if state.Running.LPCosts[item.Address] < 0 {
-					state.Running.LPCosts[item.Address] = 0
+				running.LPBalances[item.Address] = left
+				running.LPCosts[item.Address] = cost - depositValue
+				if running.LPCosts[item.Address] < 0 {
+					running.LPCosts[item.Address] = 0
 				}
 			} else {
-				delete(state.Running.LPBalances, item.Address)
-				delete(state.Running.LPCosts, item.Address)
+				delete(running.LPBalances, item.Address)
+				delete(running.LPCosts, item.Address)
 			}
 			item.OutAmt = lpAsset
 			item.OutValue = lpGas
@@ -373,17 +375,17 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 				})
 			}
 			if poolAsset.Sign() <= 0 || poolGas <= 0 || totalLPT.Sign() <= 0 {
-				state.Running.TradingReady = false
+				running.TradingReady = false
 			}
 			changed = true
 		}
 	}
 	if changed {
-		state.Running.AssetAInPool = poolAsset
-		state.Running.AssetBInPool = scommon.NewDefaultDecimal(poolGas)
-		state.Running.TotalLPTAmt = totalLPT
+		running.AssetAInPool = poolAsset
+		running.AssetBInPool = scommon.NewDefaultDecimal(poolGas)
+		running.TotalLPTAmt = totalLPT
 		if poolAsset != nil && poolAsset.Sign() > 0 && poolGas > 0 {
-			state.Running.K = scommon.DecimalMul(poolAsset, scommon.NewDefaultDecimal(poolGas))
+			running.K = scommon.DecimalMul(poolAsset, scommon.NewDefaultDecimal(poolGas))
 		}
 	}
 	return changed, nil
@@ -725,7 +727,7 @@ func invalidRefundTransfers(contract Contract, item *InvokeItem) []SettlementTra
 }
 
 func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64, deployer string) bool {
-	if state == nil || plan == nil || state.Running.Closed {
+	if state == nil || plan == nil || state.ClosedForContract(contract) {
 		return false
 	}
 	for i := range state.Items {
@@ -770,40 +772,61 @@ func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *Settl
 			clearAMMClosedPool(state)
 		}
 		closeItem.Done = ItemStatusDealt
-		state.Running.Closed = true
+		markRunningClosed(contract, state)
 		return true
 	}
 	return false
+}
+
+func markRunningClosed(contract Contract, state *TemplateRuntimeState) {
+	if state == nil {
+		return
+	}
+	switch contract.(type) {
+	case *LimitOrderContract:
+		state.LimitOrderData().Closed = true
+	case *AMMContract:
+		state.AMMData().Closed = true
+	case *ExchangeContract:
+		state.ExchangeData().Closed = true
+	case *AutopayContract:
+		state.AutopayData().Closed = true
+	}
 }
 
 func clearAMMClosedPool(state *TemplateRuntimeState) {
 	if state == nil {
 		return
 	}
-	state.Running.AssetAInPool = nil
-	state.Running.AssetBInPool = nil
-	state.Running.TradingReady = false
-	state.Running.TotalLPTAmt = nil
-	state.Running.LPBalances = nil
-	state.Running.LPCosts = nil
+	running := state.AMMData()
+	running.AssetAInPool = nil
+	running.AssetBInPool = nil
+	running.TradingReady = false
+	running.TotalLPTAmt = nil
+	running.LPBalances = nil
+	running.LPCosts = nil
 }
 
 func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan, item *InvokeItem, assetName string) {
-	if state == nil || plan == nil || state.Running.TotalLPTAmt == nil || state.Running.TotalLPTAmt.Sign() <= 0 {
+	if state == nil || plan == nil {
 		return
 	}
-	poolAsset := state.Running.AssetAInPool
+	running := state.AMMData()
+	if running.TotalLPTAmt == nil || running.TotalLPTAmt.Sign() <= 0 {
+		return
+	}
+	poolAsset := running.AssetAInPool
 	if poolAsset == nil {
 		poolAsset = parseDecimalOrZero("0")
 	}
-	poolGas := decimalInt64(state.Running.AssetBInPool)
-	for address, balance := range state.Running.LPBalances {
+	poolGas := decimalInt64(running.AssetBInPool)
+	for address, balance := range running.LPBalances {
 		if address == "" || balance == nil || balance.Sign() <= 0 {
 			continue
 		}
-		ratio := scommon.DecimalDiv(balance, state.Running.TotalLPTAmt)
+		ratio := scommon.DecimalDiv(balance, running.TotalLPTAmt)
 		assetOut := decimalMulAssetRatio(poolAsset, ratio)
-		gasOut := proportionalInt64(poolGas, balance, state.Running.TotalLPTAmt)
+		gasOut := proportionalInt64(poolGas, balance, running.TotalLPTAmt)
 		if assetOut.Sign() <= 0 && gasOut <= 0 {
 			continue
 		}
@@ -886,17 +909,28 @@ func appendAMMRefundTransfer(plan *SettlementPlan, item *InvokeItem, transfer Se
 }
 
 func recomputeRunningData(contract Contract, state *TemplateRuntimeState) {
-	var running RunningData
-	for i := range state.Items {
-		running.ApplyForContract(contract, &state.Items[i])
+	if state == nil {
+		return
 	}
-	state.Running = running
+	state.recomputeActivePools(contract)
 }
 
 func recomputeRunningDataPreserveGas(contract Contract, state *TemplateRuntimeState) {
-	gasBalance := state.Running.GasBalance
+	if state == nil {
+		return
+	}
+	gasBalance := state.GasBalanceForContract(contract)
 	recomputeRunningData(contract, state)
-	state.Running.GasBalance = gasBalance
+	switch contract.(type) {
+	case *LimitOrderContract:
+		state.LimitOrderData().GasBalance = gasBalance
+	case *AMMContract:
+		state.AMMData().GasBalance = gasBalance
+	case *ExchangeContract:
+		state.ExchangeData().GasBalance = gasBalance
+	case *AutopayContract:
+		state.AutopayData().GasBalance = gasBalance
+	}
 }
 
 func activeAMMItemIDs(items []InvokeItem, height int64) []int {
@@ -920,7 +954,7 @@ func activeAMMItemIDs(items []InvokeItem, height int64) []int {
 	return ids
 }
 
-func ammSettlementK(running RunningData, poolAsset *scommon.Decimal, poolGas int64) *scommon.Decimal {
+func ammSettlementK(running AMMRunningData, poolAsset *scommon.Decimal, poolGas int64) *scommon.Decimal {
 	if running.K != nil && running.K.Sign() > 0 {
 		return running.K.Clone()
 	}
@@ -1192,7 +1226,7 @@ func mintLPTAmount(addAsset *scommon.Decimal, addGas int64, poolAsset *scommon.D
 	return minDecimal(byAsset, byGas)
 }
 
-func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *scommon.Decimal, poolGas int64, running RunningData) (*scommon.Decimal, int64, *scommon.Decimal, int64) {
+func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *scommon.Decimal, poolGas int64, running AMMRunningData) (*scommon.Decimal, int64, *scommon.Decimal, int64) {
 	if addAsset == nil || addAsset.Sign() <= 0 || addGas <= 0 {
 		return parseDecimalOrZero("0"), 0, parseDecimalOrZero("0"), 0
 	}
@@ -1224,7 +1258,7 @@ func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *sco
 	return reserveAsset, reserveGas, leftAsset, leftGas
 }
 
-func ammPoolPrice(poolAsset *scommon.Decimal, poolGas int64, running RunningData) *scommon.Decimal {
+func ammPoolPrice(poolAsset *scommon.Decimal, poolGas int64, running AMMRunningData) *scommon.Decimal {
 	if poolAsset != nil && poolAsset.Sign() > 0 && poolGas > 0 {
 		return scommon.DecimalDiv(
 			scommon.NewDecimal(poolGas, MaxPriceDivisibility),
@@ -1296,7 +1330,7 @@ func decimalMulAssetRatio(asset, ratio *scommon.Decimal) *scommon.Decimal {
 	return scommon.DecimalMul(asset, ratio)
 }
 
-func ammPoolEmpty(r RunningData) bool {
+func ammPoolEmpty(r AMMRunningData) bool {
 	assetA := r.AssetAInPool
 	if assetA == nil {
 		assetA = parseDecimalOrZero("0")
@@ -1335,25 +1369,27 @@ func realSwapAmt(amt *scommon.Decimal) *scommon.Decimal {
 }
 
 func recomputeRunningDataPreservePool(contract Contract, state *TemplateRuntimeState, assetA *scommon.Decimal, assetB *scommon.Decimal) {
-	requiredAssetA := state.Running.RequiredAssetA
-	requiredAssetB := state.Running.RequiredAssetB
-	k := state.Running.K
-	ready := state.Running.TradingReady
-	gasBalance := state.Running.GasBalance
-	totalLPT := state.Running.TotalLPTAmt
-	lpBalances := cloneLPBalances(state.Running.LPBalances)
-	lpCosts := cloneLPCosts(state.Running.LPCosts)
+	running := state.AMMData()
+	requiredAssetA := running.RequiredAssetA
+	requiredAssetB := running.RequiredAssetB
+	k := running.K
+	ready := running.TradingReady
+	gasBalance := running.GasBalance
+	totalLPT := running.TotalLPTAmt
+	lpBalances := cloneLPBalances(running.LPBalances)
+	lpCosts := cloneLPCosts(running.LPCosts)
 	recomputeRunningData(contract, state)
-	state.Running.AssetAInPool = assetA
-	state.Running.AssetBInPool = assetB
-	state.Running.RequiredAssetA = requiredAssetA
-	state.Running.RequiredAssetB = requiredAssetB
-	state.Running.K = k
-	state.Running.TradingReady = ready
-	state.Running.GasBalance = gasBalance
-	state.Running.TotalLPTAmt = totalLPT
-	state.Running.LPBalances = lpBalances
-	state.Running.LPCosts = lpCosts
+	running = state.AMMData()
+	running.AssetAInPool = assetA
+	running.AssetBInPool = assetB
+	running.RequiredAssetA = requiredAssetA
+	running.RequiredAssetB = requiredAssetB
+	running.K = k
+	running.TradingReady = ready
+	running.GasBalance = gasBalance
+	running.TotalLPTAmt = totalLPT
+	running.LPBalances = lpBalances
+	running.LPCosts = lpCosts
 }
 
 func cloneLPBalances(in map[string]*scommon.Decimal) map[string]*scommon.Decimal {

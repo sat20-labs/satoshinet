@@ -35,6 +35,8 @@ const (
 	InvokeAPIRemoveLiquidity = contractcommon.TemplateInvokeAPIRemoveLiquidity
 	InvokeAPIProfit          = contractcommon.TemplateInvokeAPIProfit
 	InvokeAPIExchange        = contractcommon.TemplateInvokeAPIExchange
+	InvokeAPIConfig          = contractcommon.TemplateInvokeAPIConfig
+	InvokeAPICancel          = contractcommon.TemplateInvokeAPICancel
 	InvokeAPIClose           = contractcommon.TemplateInvokeAPIClose
 )
 
@@ -61,7 +63,8 @@ const (
 	OrderTypeBind            = 19
 	OrderTypeClose           = 20
 	OrderTypeExchange        = 21
-	OrderTypeUnused          = 22
+	OrderTypeCancel          = 22
+	OrderTypeUnused          = 23
 )
 
 const (
@@ -154,6 +157,7 @@ type TxOrderInfo = contractframework.TxOrderInfo
 
 type DeployPayload = contractcommon.DeployPayload
 type InvokePayload = contractcommon.InvokePayload
+type AutopayConfigInvokeParam = contractcommon.TemplateAutopayConfigInvokeParam
 
 const AddressHashLen = 32
 
@@ -360,12 +364,16 @@ type FundingStateApplier interface {
 	ApplyFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error)
 }
 
+type AddressFundingStateApplier interface {
+	ApplyFundingStateForAddress(state *TemplateRuntimeState, address string, output ContractOutput, gasAssetName string) (bool, error)
+}
+
 type GasFundingStateApplier interface {
 	ApplyGasFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error)
 }
 
-type RunningDataApplier interface {
-	ApplyRunningData(running *RunningData, item *InvokeItem) bool
+type RuntimeStateApplier interface {
+	ApplyRunningData(state *TemplateRuntimeState, item *InvokeItem) bool
 }
 
 type InvokableContract interface {

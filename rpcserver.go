@@ -1165,6 +1165,7 @@ func newPredictionReadyReviewLLMClient() (agentcontract.LLMClient, error) {
 		Model:       cfg.AgentLLMModel,
 		APIKey:      cfg.AgentLLMAPIKey,
 		Timeout:     cfg.AgentLLMTimeout,
+		KeepAlive:   cfg.AgentLLMKeepAlive,
 		Temperature: cfg.AgentLLMTemperature,
 		MaxTokens:   cfg.AgentLLMMaxTokens,
 	}

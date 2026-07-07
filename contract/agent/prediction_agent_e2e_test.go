@@ -185,7 +185,8 @@ func TestPredictionAgentSearchesSameSiteResultLinkWhenSourcePending(t *testing.T
 
 	client := &sequenceLLMClient{responses: []string{
 		`{"result_type":"pending","reason":"preview page has no final score"}`,
-		`{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`,
+		`{"result_type":"outcome","result":"Team A 101, Team B 98","reason":"Team A won"}`,
+		`{"result_type":"outcome","outcome_id":"a","reason":"Team A won matches outcome a"}`,
 	}}
 	contract := predictionContractForResultServer(resultServer.URL)
 	corenodeAgent := NewPredictionAgent(client)
@@ -203,7 +204,7 @@ func TestPredictionAgentSearchesSameSiteResultLinkWhenSourcePending(t *testing.T
 	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "a" {
 		t.Fatalf("decision mismatch: %#v", param)
 	}
-	if client.calls != 2 {
+	if client.calls != 3 {
 		t.Fatalf("llm call count mismatch: %d", client.calls)
 	}
 }
@@ -223,7 +224,8 @@ func TestPredictionAgentSearchesSiteWhenSourceHasNoResultLink(t *testing.T) {
 	defer resultServer.Close()
 
 	client := &sequenceLLMClient{responses: []string{
-		`{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`,
+		`{"result_type":"outcome","result":"Team A 101, Team B 98","reason":"Team A won"}`,
+		`{"result_type":"outcome","outcome_id":"a","reason":"Team A won matches outcome a"}`,
 	}}
 	contract := predictionContractForResultServer(resultServer.URL)
 	corenodeAgent := NewPredictionAgent(client)
@@ -240,7 +242,7 @@ func TestPredictionAgentSearchesSiteWhenSourceHasNoResultLink(t *testing.T) {
 	if param.ResultURL != resultServer.URL+"/match/result/123" || param.OutcomeID != "a" {
 		t.Fatalf("unexpected confirm param: %#v", param)
 	}
-	if client.calls != 1 {
+	if client.calls != 2 {
 		t.Fatalf("llm call count mismatch: %d", client.calls)
 	}
 }
@@ -352,6 +354,238 @@ func TestPredictionEvidenceUsesDescriptionAndOutcomes(t *testing.T) {
 	}
 }
 
+func TestPredictionAgentSearchFallbackAfterCandidateLimit(t *testing.T) {
+	contract := validPredictionContract()
+	contract.Title = "墨西哥 vs 英格兰"
+	contract.Description = "2026世界杯1/8决赛，墨西哥 vs 英格兰。根据比赛最终结果判断墨西哥胜、英格兰胜或平局。"
+	contract.SourceURL = "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "墨西哥胜"},
+		{ID: "b", Text: "英格兰胜"},
+		{ID: "c", Text: "平局"},
+	}
+
+	sourceLinks := make([]string, 0, DefaultPredictionAgentMaxCandidates)
+	for i := 0; i < DefaultPredictionAgentMaxCandidates; i++ {
+		sourceLinks = append(sourceLinks, contract.SourceURL+"?tab="+string(rune('1'+i)))
+	}
+	resultURL := "https://worldcup.cctv.com/2026/match/index.shtml?matchid=24003594"
+	fetcher := &mapPredictionFetcher{results: map[string]PredictionResultFetchResult{
+		contract.SourceURL: {
+			FinalURL: contract.SourceURL,
+			Text:     "央视世界杯赛程页面",
+			Links:    sourceLinks,
+		},
+		resultURL: {
+			FinalURL: resultURL,
+			Text:     `{"gameName":"墨西哥vs英格兰","gameRound":"1/8决赛","statusDesc":"已结束","homeName":"墨西哥","guestName":"英格兰","homeScore":2,"guestScore":3}`,
+		},
+	}}
+	for _, link := range sourceLinks {
+		fetcher.results[link] = PredictionResultFetchResult{
+			FinalURL: link,
+			Text:     "generic schedule tab without contract participants",
+		}
+	}
+
+	corenodeAgent := NewPredictionAgent(&fakeLLMClient{
+		response: `{"result_type":"outcome","outcome_id":"b","result":"墨西哥 2-3 英格兰","reason":"英格兰获胜"}`,
+	})
+	corenodeAgent.Fetcher = fetcher
+	corenodeAgent.Searcher = staticPredictionSearcher{urls: []string{resultURL}}
+
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.OutcomeID != "b" || param.Result != "墨西哥 2-3 英格兰" {
+		t.Fatalf("unexpected confirm param: %#v", param)
+	}
+	if fetcher.calls[resultURL] != 1 {
+		t.Fatalf("search result was not fetched, calls=%#v", fetcher.calls)
+	}
+}
+
+func TestPredictionAgentUsesStructuredCCTVScore(t *testing.T) {
+	contract := validPredictionContract()
+	contract.Title = "墨西哥 vs 英格兰"
+	contract.Description = "2026世界杯1/8决赛，墨西哥 vs 英格兰。根据比赛最终结果判断墨西哥胜、英格兰胜或平局。"
+	contract.SourceURL = "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "墨西哥胜"},
+		{ID: "b", Text: "英格兰胜"},
+		{ID: "c", Text: "平局"},
+	}
+
+	resultURL := "https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400&season=2026&client=pc"
+	fetcher := &mapPredictionFetcher{results: map[string]PredictionResultFetchResult{
+		contract.SourceURL: {
+			FinalURL: contract.SourceURL,
+			Text:     "央视世界杯赛程页面",
+			Links:    []string{resultURL},
+		},
+		resultURL: {
+			FinalURL: resultURL,
+			Text: `{
+				"code": 0,
+				"data": {
+					"list": [
+						{"gameName":"西班牙vs沙特阿拉伯","statusDesc":"已结束","homeName":"西班牙","guestName":"沙特阿拉伯","homeScore":1,"guestScore":0},
+						{"gameName":"墨西哥vs英格兰","gameRound":"1/8决赛","statusDesc":"已结束","homeName":"墨西哥","guestName":"英格兰","homeScore":2,"guestScore":3}
+					]
+				}
+			}`,
+		},
+	}}
+
+	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"b","result":"墨西哥 2-3 英格兰","reason":"结构化比分显示英格兰获胜"}`}
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = fetcher
+	corenodeAgent.RetryAttempts = 1
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.OutcomeID != "b" || param.Result != "墨西哥 2-3 英格兰" {
+		t.Fatalf("unexpected confirm param: %#v", param)
+	}
+	if len(client.reqs) != 2 {
+		t.Fatalf("structured score should call llm twice, calls=%d", len(client.reqs))
+	}
+	lastMessage := client.reqs[1].Messages[len(client.reqs[1].Messages)-1].Content
+	if !strings.Contains(lastMessage, "墨西哥 2-3 英格兰") {
+		t.Fatalf("llm prompt missing structured score: %s", lastMessage)
+	}
+	if !strings.Contains(lastMessage, "outcome_id must be one of the exact allowed outcome ids") {
+		t.Fatalf("llm prompt missing strict outcome id guidance: %s", lastMessage)
+	}
+}
+
+func TestPredictionAgentKeepsStructuredEvidenceAuthoritative(t *testing.T) {
+	contract := validPredictionContract()
+	contract.Title = "墨西哥 vs 英格兰"
+	contract.Description = "2026世界杯1/8决赛，墨西哥 vs 英格兰。根据比赛最终结果判断墨西哥胜、英格兰胜或平局。"
+	contract.SourceURL = "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "墨西哥胜"},
+		{ID: "b", Text: "英格兰胜"},
+		{ID: "c", Text: "平局"},
+	}
+
+	structuredURL := "https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400&season=2026&client=pc"
+	weakURL := "https://worldcup.cctv.com/2026/match/24003594/index.shtml"
+	fetcher := &mapPredictionFetcher{results: map[string]PredictionResultFetchResult{
+		contract.SourceURL: {
+			FinalURL: contract.SourceURL,
+			Text:     "央视世界杯赛程页面",
+			Links:    []string{weakURL},
+		},
+		structuredURL: {
+			FinalURL: structuredURL,
+			Text: `{
+				"data": {
+					"list": [
+						{"gameName":"墨西哥vs英格兰","statusDesc":"已结束","homeName":"墨西哥","guestName":"英格兰","homeScore":2,"guestScore":3}
+					]
+				}
+			}`,
+		},
+		weakURL: {
+			FinalURL: weakURL,
+			Text:     "墨西哥 vs 英格兰 页面包含赛前新闻和错误摘要",
+		},
+	}}
+
+	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"c","result":"平局","reason":"比赛最终结果尚未公布，无法确定最终比分。"}`}
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = fetcher
+	corenodeAgent.RetryAttempts = 1
+	_, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err == nil {
+		t.Fatalf("expected inconsistent structured LLM outcome to fail")
+	}
+	if !strings.Contains(err.Error(), "structured prediction evidence could not be matched") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fetcher.calls[weakURL] != 0 {
+		t.Fatalf("weak evidence should not be fetched after structured evidence fails, calls=%#v", fetcher.calls)
+	}
+}
+
+func TestPredictionAgentRetriesStructuredMismatch(t *testing.T) {
+	contract := validPredictionContract()
+	contract.Title = "墨西哥 vs 英格兰"
+	contract.Description = "2026世界杯1/8决赛，墨西哥 vs 英格兰。根据比赛最终结果判断墨西哥胜、英格兰胜或平局。"
+	contract.SourceURL = "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "墨西哥胜"},
+		{ID: "b", Text: "英格兰胜"},
+		{ID: "c", Text: "平局"},
+	}
+
+	structuredURL := "https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400&season=2026&client=pc"
+	fetcher := &mapPredictionFetcher{results: map[string]PredictionResultFetchResult{
+		contract.SourceURL: {
+			FinalURL: contract.SourceURL,
+			Text:     "央视世界杯赛程页面",
+			Links:    []string{structuredURL},
+		},
+		structuredURL: {
+			FinalURL: structuredURL,
+			Text: `{
+				"data": {
+					"list": [
+						{"gameName":"墨西哥vs英格兰","statusDesc":"已结束","homeName":"墨西哥","guestName":"英格兰","homeScore":2,"guestScore":3}
+					]
+				}
+			}`,
+		},
+	}}
+
+	client := &fakeLLMClient{responses: []string{
+		`{"result_type":"outcome","result":"墨西哥 2-3 英格兰","reason":"结构化比分显示英格兰获胜"}`,
+		`{"result_type":"outcome","outcome_id":"c","reason":"误判为平局"}`,
+		`{"result_type":"outcome","result":"墨西哥 2-3 英格兰","reason":"结构化比分显示英格兰获胜"}`,
+		`{"result_type":"outcome","outcome_id":"b","reason":"重新比较比分后，英格兰获胜"}`,
+	}}
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = fetcher
+	corenodeAgent.RetryAttempts = 1
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.OutcomeID != "b" {
+		t.Fatalf("unexpected outcome: %#v", param)
+	}
+	if len(client.reqs) != 4 {
+		t.Fatalf("expected structured retries, got %d calls", len(client.reqs))
+	}
+	lastPrompt := client.reqs[3].Messages[len(client.reqs[3].Messages)-1].Content
+	if !strings.Contains(lastPrompt, "与结构化最终比分矛盾") {
+		t.Fatalf("retry prompt missing mismatch guidance: %s", lastPrompt)
+	}
+	if !strings.Contains(lastPrompt, "墨西哥没有获胜") || !strings.Contains(lastPrompt, "英格兰获胜") {
+		t.Fatalf("retry prompt missing outcome facts: %s", lastPrompt)
+	}
+}
+
 func TestPredictionAgentFollowsStaticScriptDataURL(t *testing.T) {
 	var resultServer *httptest.Server
 	resultServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +609,8 @@ func TestPredictionAgentFollowsStaticScriptDataURL(t *testing.T) {
 	defer resultServer.Close()
 
 	client := &sequenceLLMClient{responses: []string{
-		`{"result_type":"outcome","outcome_id":"a","result":"阿根廷 3-2 佛得角","reason":"阿根廷获胜"}`,
+		`{"result_type":"outcome","result":"阿根廷 3-2 佛得角","reason":"阿根廷获胜"}`,
+		`{"result_type":"outcome","outcome_id":"a","reason":"阿根廷获胜匹配 outcome a"}`,
 	}}
 	contract := validPredictionContract()
 	contract.Title = "Argentina vs Cabo Verde"
@@ -418,7 +653,8 @@ func TestPredictionAgentUsesTrustedExternalEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &sequenceLLMClient{responses: []string{
-		`{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98","reason":"Team A won"}`,
+		`{"result_type":"outcome","result":"Team A 101, Team B 98","reason":"Team A won"}`,
+		`{"result_type":"outcome","outcome_id":"a","reason":"Team A won matches outcome a"}`,
 	}}
 	contract := predictionContractForResultServer(sourceServer.URL)
 	corenodeAgent := NewPredictionAgent(client)
@@ -639,7 +875,7 @@ func TestPredictionAgentRetriesLLMAndAudits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConfirmParam failed: %v", err)
 	}
-	if param.OutcomeID != "a" || client.calls != 2 {
+	if param.OutcomeID != "a" || client.calls != 3 {
 		t.Fatalf("unexpected result outcome=%s llm_calls=%d", param.OutcomeID, client.calls)
 	}
 	if !auditStageSeen(events, "llm_error") || !auditStageSeen(events, "llm_decision") {
@@ -672,6 +908,23 @@ func (f *retryPredictionFetcher) FetchPredictionResult(ctx context.Context, resu
 		return PredictionResultFetchResult{}, errors.New("temporary fetch failure")
 	}
 	return f.result, nil
+}
+
+type mapPredictionFetcher struct {
+	results map[string]PredictionResultFetchResult
+	calls   map[string]int
+}
+
+func (f *mapPredictionFetcher) FetchPredictionResult(ctx context.Context, resultURL string) (PredictionResultFetchResult, error) {
+	if f.calls == nil {
+		f.calls = make(map[string]int)
+	}
+	f.calls[resultURL]++
+	result, ok := f.results[resultURL]
+	if !ok {
+		return PredictionResultFetchResult{}, ErrPredictionEvidenceUnavailable
+	}
+	return result, nil
 }
 
 type retryLLMClient struct {

@@ -2,7 +2,7 @@ package template
 
 import (
 	"fmt"
-	"math/big"
+	"sort"
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -11,35 +11,29 @@ import (
 )
 
 const (
-	AutopayScheduleFixed  = contractcommon.AutopayScheduleFixed
-	AutopayScheduleLinear = contractcommon.AutopayScheduleLinear
-
 	AutopayStatusFunding = "funding"
 	AutopayStatusActive  = "active"
 	AutopayStatusExpired = "expired"
 	AutopayStatusClosed  = "closed"
 
-	AutopayReasonPayment  = "autopay"
-	AutopayReasonMinerFee = "miner_fee"
+	AutopayReasonPayment   = "autopay"
+	AutopayReasonMinerFee  = "miner_fee"
+	AutopayMaxCloseOutputs = 1000
 )
 
 type AutopayContract struct {
-	Recipient    string `json:"recipient"`
-	FeeAssetName string `json:"feeAssetName"`
-	ScheduleMode string `json:"scheduleMode"`
-	BaseAmount   string `json:"baseAmount"`
-	StepAmount   string `json:"stepAmount,omitempty"`
-	EndHeight    int64  `json:"endHeight,omitempty"`
+	ServiceName       string `json:"serviceName"`
+	Recipient         string `json:"recipient"`
+	FeeAssetName      string `json:"feeAssetName"`
+	MinAmountPerBlock string `json:"minAmountPerBlock"`
 }
 
-func NewAutopayContract(recipient, feeAssetName, scheduleMode, baseAmount, stepAmount string, endHeight int64) *AutopayContract {
+func NewAutopayContract(serviceName, recipient, feeAssetName, minAmountPerBlock string) *AutopayContract {
 	return &AutopayContract{
-		Recipient:    recipient,
-		FeeAssetName: feeAssetName,
-		ScheduleMode: scheduleMode,
-		BaseAmount:   baseAmount,
-		StepAmount:   stepAmount,
-		EndHeight:    endHeight,
+		ServiceName:       serviceName,
+		Recipient:         recipient,
+		FeeAssetName:      feeAssetName,
+		MinAmountPerBlock: minAmountPerBlock,
 	}
 }
 
@@ -48,7 +42,7 @@ func (c *AutopayContract) TemplateName() string {
 }
 
 func (c *AutopayContract) NetworkExclusive() bool {
-	return true
+	return false
 }
 
 func (c *AutopayContract) BaseGasConfig() contractframework.BaseGasConfig {
@@ -64,17 +58,19 @@ func (c *AutopayContract) Encode() ([]byte, error) {
 		return nil, err
 	}
 	return txscript.NewScriptBuilder().
+		AddData([]byte(c.ServiceName)).
 		AddData([]byte(c.Recipient)).
 		AddData([]byte(c.FeeAssetName)).
-		AddData([]byte(c.ScheduleMode)).
-		AddData([]byte(c.BaseAmount)).
-		AddData([]byte(c.StepAmount)).
-		AddInt64(c.EndHeight).
+		AddData([]byte(c.MinAmountPerBlock)).
 		Script()
 }
 
 func (c *AutopayContract) Decode(data []byte) error {
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing service name")
+	}
+	c.ServiceName = string(tokenizer.Data())
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing recipient")
 	}
@@ -84,37 +80,35 @@ func (c *AutopayContract) Decode(data []byte) error {
 	}
 	c.FeeAssetName = string(tokenizer.Data())
 	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return fmt.Errorf("missing schedule mode")
+		return fmt.Errorf("missing minimum amount per block")
 	}
-	c.ScheduleMode = string(tokenizer.Data())
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return fmt.Errorf("missing base amount")
-	}
-	c.BaseAmount = string(tokenizer.Data())
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return fmt.Errorf("missing step amount")
-	}
-	c.StepAmount = string(tokenizer.Data())
-	if !tokenizer.Next() || tokenizer.Err() != nil {
-		return fmt.Errorf("missing end height")
-	}
-	c.EndHeight = tokenizer.ExtractInt64()
+	c.MinAmountPerBlock = string(tokenizer.Data())
 	return tokenizer.Err()
 }
 
 func (c *AutopayContract) CheckContent() error {
 	return (contractcommon.TemplateAutopayContract{
-		Recipient:    c.Recipient,
-		FeeAssetName: c.FeeAssetName,
-		ScheduleMode: c.ScheduleMode,
-		BaseAmount:   c.BaseAmount,
-		StepAmount:   c.StepAmount,
-		EndHeight:    c.EndHeight,
+		ServiceName:       c.ServiceName,
+		Recipient:         c.Recipient,
+		FeeAssetName:      c.FeeAssetName,
+		MinAmountPerBlock: c.MinAmountPerBlock,
 	}).Check()
 }
 
 func (c *AutopayContract) CheckInvoke(action string, param []byte) error {
 	switch action {
+	case InvokeAPIConfig:
+		var config AutopayConfigInvokeParam
+		if err := config.Decode(param); err != nil {
+			return err
+		}
+		amount := parseDecimalOrZero(config.AmountPerBlock)
+		if amount.Cmp(c.minAmountPerBlock()) < 0 {
+			return fmt.Errorf("autopay amount below minimum")
+		}
+		return nil
+	case InvokeAPICancel:
+		return (&CloseInvokeParam{}).Decode(param)
 	case InvokeAPIClose:
 		return (&CloseInvokeParam{}).Decode(param)
 	default:
@@ -123,10 +117,14 @@ func (c *AutopayContract) CheckInvoke(action string, param []byte) error {
 }
 
 func (c *AutopayContract) ApplyFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error) {
+	return c.ApplyFundingStateForAddress(state, "", output, gasAssetName)
+}
+
+func (c *AutopayContract) ApplyFundingStateForAddress(state *TemplateRuntimeState, address string, output ContractOutput, gasAssetName string) (bool, error) {
 	if state == nil {
 		return true, nil
 	}
-	if err := c.addFunding(state, output, gasAssetName); err != nil {
+	if err := c.addFunding(state, address, output, gasAssetName); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -143,44 +141,106 @@ func (c *AutopayContract) ApplyGasFundingState(state *TemplateRuntimeState, outp
 	if err != nil {
 		return true, err
 	}
-	state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
+	state.AutopayData().GasBalance = decimalAddAllowNil(state.AutopayData().GasBalance, gas)
 	return true, nil
 }
 
-func (c *AutopayContract) ApplyRunningData(running *RunningData, item *InvokeItem) bool {
-	if running == nil || item == nil {
+func (c *AutopayContract) ApplyRunningData(state *TemplateRuntimeState, item *InvokeItem) bool {
+	if state == nil || item == nil {
 		return true
 	}
 	if item.Reason == InvokeReasonInvalid {
 		return true
 	}
+	autopay := state.AutopayData()
 	switch item.OrderType {
 	case OrderTypeFund:
-		running.FeeBalance = decimalAddAllowNil(running.FeeBalance, item.InAmt)
+		c.addDelegateBalance(autopay, item.Address, item.InAmt)
+	case OrderTypeValidate:
+		c.setDelegateAmount(autopay, item.Address, item.ExpectedAmt)
+	case OrderTypeCancel:
 	case OrderTypeClose:
 	default:
-		running.Apply(item)
 	}
 	return true
 }
 
-func (c *AutopayContract) addFunding(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) error {
+func (c *AutopayContract) addFunding(state *TemplateRuntimeState, address string, output ContractOutput, gasAssetName string) error {
 	fee, err := output.AssetAmount(c.FeeAssetName)
 	if err != nil {
 		return err
 	}
-	state.Running.FeeBalance = decimalAddAllowNil(state.Running.FeeBalance, fee)
+	if address != "" {
+		c.addDelegateBalance(state.AutopayData(), address, fee)
+	}
 	if gasAssetName != "" && gasAssetName != c.FeeAssetName {
 		gas, err := output.AssetAmount(gasAssetName)
 		if err != nil {
 			return err
 		}
-		state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
+		state.AutopayData().GasBalance = decimalAddAllowNil(state.AutopayData().GasBalance, gas)
 	}
-	if state.Running.AutopayStatus == "" {
-		state.Running.AutopayStatus = AutopayStatusFunding
+	if state.AutopayData().AutopayStatus == "" {
+		state.AutopayData().AutopayStatus = AutopayStatusFunding
 	}
 	return nil
+}
+
+func (c *AutopayContract) ensureDelegate(running *AutopayRunningData, address string) AutopayDelegate {
+	if running.AutopayDelegates == nil {
+		running.AutopayDelegates = make(map[string]AutopayDelegate)
+	}
+	delegate := running.AutopayDelegates[address]
+	if delegate.AmountPerBlock == nil {
+		delegate.AmountPerBlock = c.minAmountPerBlock()
+	}
+	if delegate.Status == "" {
+		delegate.Status = AutopayStatusFunding
+	}
+	return delegate
+}
+
+func (c *AutopayContract) setDelegateAmount(running *AutopayRunningData, address string, amount *scommon.Decimal) {
+	if running == nil || address == "" || amount == nil || amount.Sign() <= 0 {
+		return
+	}
+	delegate := c.ensureDelegate(running, address)
+	delegate.AmountPerBlock = amount.Clone()
+	delegate.Status = c.delegateStatus(delegate)
+	running.AutopayDelegates[address] = delegate
+}
+
+func (c *AutopayContract) addDelegateBalance(running *AutopayRunningData, address string, amount *scommon.Decimal) {
+	if running == nil || address == "" || amount == nil || amount.Sign() <= 0 {
+		return
+	}
+	delegate := c.ensureDelegate(running, address)
+	delegate.Balance = decimalAddAllowNil(delegate.Balance, amount)
+	delegate.Status = c.delegateStatus(delegate)
+	running.AutopayDelegates[address] = delegate
+	running.FeeBalance = c.totalDelegateBalance(running)
+}
+
+func (c *AutopayContract) delegateStatus(delegate AutopayDelegate) string {
+	if decimalOrZero(delegate.Balance).Cmp(decimalOrZero(delegate.AmountPerBlock)) >= 0 {
+		return AutopayStatusActive
+	}
+	return AutopayStatusFunding
+}
+
+func (c *AutopayContract) minAmountPerBlock() *scommon.Decimal {
+	return parseDecimalOrZero(c.MinAmountPerBlock)
+}
+
+func (c *AutopayContract) totalDelegateBalance(running *AutopayRunningData) *scommon.Decimal {
+	total := parseDecimalOrZero("0")
+	if running == nil {
+		return total
+	}
+	for _, delegate := range running.AutopayDelegates {
+		total = total.AddAlignPrecision(decimalOrZero(delegate.Balance))
+	}
+	return total
 }
 
 func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *TemplateRuntimeState,
@@ -192,10 +252,16 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 		return plan, nil
 	}
 	if c.applyAutopayClose(runtime, state, plan, height, gasConfig) {
+		state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
 		return plan, nil
 	}
-	if state.Running.Closed || state.Running.AutopayStatus == AutopayStatusClosed ||
-		state.Running.AutopayStatus == AutopayStatusExpired {
+	if c.applyAutopayCancels(state, plan, height) {
+		state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
+		state.AutopayData().AutopayStatus = c.autopayFundingStatus(state, gasConfig, height)
+		return plan, nil
+	}
+	if state.AutopayData().Closed || state.AutopayData().AutopayStatus == AutopayStatusClosed ||
+		state.AutopayData().AutopayStatus == AutopayStatusExpired {
 		return plan, nil
 	}
 
@@ -204,49 +270,46 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 	if err != nil {
 		return nil, err
 	}
-	if err := c.rebalanceGasReserve(state, gasConfig, height); err != nil {
+	if err := c.rebalanceGasReserve(state, gasConfig, triggerGasFee); err != nil {
 		return nil, err
 	}
-	next := state.Running.NextPayHeight
+	next := state.AutopayData().NextPayHeight
 	if next == 0 {
-		state.Running.ActiveHeight = height
-		state.Running.NextPayHeight = height + 1
-		next = state.Running.NextPayHeight
-	}
-	if c.EndHeight > 0 && next > c.EndHeight {
-		state.Running.AutopayStatus = AutopayStatusExpired
-		return plan, nil
+		state.AutopayData().ActiveHeight = height
+		state.AutopayData().NextPayHeight = height + 1
+		next = state.AutopayData().NextPayHeight
 	}
 	if height < next {
-		state.Running.AutopayStatus = c.autopayFundingStatus(state, gasConfig, height)
+		state.AutopayData().AutopayStatus = c.autopayFundingStatus(state, gasConfig, height)
 		return plan, nil
 	}
-	fee := c.feeAmountForHeight(state.Running.ActiveHeight, height)
-	if !c.hasFeeAndGas(state, fee, triggerGasFee) {
-		state.Running.AutopayStatus = AutopayStatusFunding
+	if decimalOrZero(state.AutopayData().GasBalance).Cmp(triggerGasFee) < 0 {
+		state.AutopayData().AutopayStatus = AutopayStatusFunding
 		return plan, nil
 	}
-	if err := c.deductFeeBalance(state, fee); err != nil {
+	total, err := c.collectAutopayFees(state, height)
+	if err != nil {
 		return nil, err
 	}
-	state.Running.GasBalance = decimalSubAllowNil(state.Running.GasBalance, triggerGasFee)
-	plan.GasFee = triggerGasFee.Clone()
-	plan.Transfers = append(plan.Transfers, c.autopayPaymentTransfer(fee))
-	state.Running.PaidBlockCount++
-	state.Running.LastPayHeight = height
-	state.Running.NextPayHeight = height + 1
-	if c.EndHeight > 0 && state.Running.NextPayHeight > c.EndHeight {
-		state.Running.AutopayStatus = AutopayStatusExpired
-	} else {
-		state.Running.AutopayStatus = c.autopayFundingStatus(state, gasConfig, height)
+	if total.Sign() <= 0 {
+		state.AutopayData().AutopayStatus = AutopayStatusFunding
+		return plan, nil
 	}
+	state.AutopayData().GasBalance = decimalSubAllowNil(state.AutopayData().GasBalance, triggerGasFee)
+	plan.GasFee = triggerGasFee.Clone()
+	plan.Transfers = append(plan.Transfers, c.autopayPaymentTransfer(total))
+	state.AutopayData().PaidBlockCount++
+	state.AutopayData().LastPayHeight = height
+	state.AutopayData().NextPayHeight = height + 1
+	state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
+	state.AutopayData().AutopayStatus = c.autopayFundingStatus(state, gasConfig, height)
 	return plan, nil
 }
 
 func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *TemplateRuntimeState,
 	plan *SettlementPlan, height int64, gasConfig GasConfig) bool {
 
-	if state == nil || plan == nil || state.Running.Closed {
+	if state == nil || plan == nil || state.AutopayData().Closed {
 		return false
 	}
 	deployer := runtime.RuntimeBase().Deployer()
@@ -256,38 +319,87 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 			item.OrderType != OrderTypeClose || item.Height > height {
 			continue
 		}
-		addSettlementInputs(plan, item)
+		if !state.AutopayData().AutopayCloseStarted {
+			addSettlementInputs(plan, item)
+		}
 		plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
 		if item.Address != deployer {
 			item.Reason = InvokeReasonInvalid
 			item.Done = ItemStatusClosedDirectly
 			return true
 		}
-		gasAssetName := runtimeGasAssetName(gasConfig)
-		if c.FeeAssetName == gasAssetName {
-			c.appendBalanceTransfer(plan, deployer, c.FeeAssetName,
-				decimalAddAllowNil(state.Running.FeeBalance, state.Running.GasBalance), false)
-		} else {
-			c.appendBalanceTransfer(plan, deployer, c.FeeAssetName, state.Running.FeeBalance, false)
-			c.appendBalanceTransfer(plan, deployer, gasAssetName, state.Running.GasBalance, true)
+		gasFee, err := c.closeBatchGasFee(state, item, gasConfig, height)
+		if err == nil && gasFee != nil && gasFee.Sign() > 0 {
+			plan.GasFee = gasFee
+			state.AutopayData().GasBalance = decimalSubAllowNil(state.AutopayData().GasBalance, gasFee)
 		}
-		state.Running.FeeBalance = nil
-		state.Running.GasBalance = nil
-		state.Running.Closed = true
-		state.Running.AutopayStatus = AutopayStatusClosed
-		item.Done = ItemStatusDealt
+		state.AutopayData().AutopayCloseStarted = true
+		processed := 0
+		for _, address := range c.sortedDelegateAddresses(state.AutopayData()) {
+			if processed >= AutopayMaxCloseOutputs {
+				break
+			}
+			delegate := state.AutopayData().AutopayDelegates[address]
+			balance := decimalOrZero(delegate.Balance)
+			if balance.Sign() <= 0 {
+				continue
+			}
+			c.appendBalanceTransfer(plan, address, c.FeeAssetName, balance, false)
+			delegate.Balance = nil
+			delegate.Status = AutopayStatusClosed
+			state.AutopayData().AutopayDelegates[address] = delegate
+			processed++
+		}
+		state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
+		if !c.hasPendingDelegateBalance(state.AutopayData()) {
+			gasAssetName := runtimeGasAssetName(gasConfig)
+			c.appendBalanceTransfer(plan, deployer, gasAssetName, state.AutopayData().GasBalance, true)
+			state.AutopayData().GasBalance = nil
+			state.AutopayData().Closed = true
+			state.AutopayData().AutopayStatus = AutopayStatusClosed
+			item.Done = ItemStatusDealt
+		} else {
+			state.AutopayData().AutopayStatus = AutopayStatusActive
+		}
 		return true
 	}
 	return false
+}
+
+func (c *AutopayContract) applyAutopayCancels(state *TemplateRuntimeState, plan *SettlementPlan, height int64) bool {
+	if state == nil || plan == nil {
+		return false
+	}
+	changed := false
+	for i := range state.Items {
+		item := &state.Items[i]
+		if item.Finished() || item.Reason != InvokeReasonNormal ||
+			item.OrderType != OrderTypeCancel || item.Height > height {
+			continue
+		}
+		addSettlementInputs(plan, item)
+		plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
+		delegate := state.AutopayData().AutopayDelegates[item.Address]
+		balance := decimalOrZero(delegate.Balance)
+		if balance.Sign() > 0 {
+			c.appendBalanceTransfer(plan, item.Address, c.FeeAssetName, balance, false)
+		}
+		delegate.Balance = nil
+		delegate.Status = AutopayStatusClosed
+		if state.AutopayData().AutopayDelegates == nil {
+			state.AutopayData().AutopayDelegates = make(map[string]AutopayDelegate)
+		}
+		state.AutopayData().AutopayDelegates[item.Address] = delegate
+		item.Done = ItemStatusCancelled
+		changed = true
+	}
+	return changed
 }
 
 func (c *AutopayContract) appendBalanceTransfer(plan *SettlementPlan, to, assetName string,
 	amount *scommon.Decimal, gas bool) {
 
 	if plan == nil || to == "" || assetName == "" || amount == nil || amount.Sign() <= 0 {
-		return
-	}
-	if c.FeeAssetName == assetName && gas {
 		return
 	}
 	plan.Transfers = append(plan.Transfers, autopayTransfer(to, assetName, amount))
@@ -297,124 +409,149 @@ func (c *AutopayContract) autopayFundingStatus(state *TemplateRuntimeState, gasC
 	if state == nil {
 		return AutopayStatusFunding
 	}
-	next := state.Running.NextPayHeight
-	if next == 0 {
-		next = height + 1
-	}
-	if c.EndHeight > 0 && next > c.EndHeight {
-		return AutopayStatusExpired
-	}
-	fee, err := c.requiredFeeReserve(state, height)
-	if err != nil {
-		return AutopayStatusFunding
-	}
 	gasFee, err := c.requiredGasReserve(state, gasConfig, height)
 	if err != nil {
 		return AutopayStatusFunding
 	}
-	if c.hasFeeAndGas(state, fee, gasFee) {
+	if c.FeeAssetName == gasConfig.Normalize().GasAssetName {
+		availableGas := decimalOrZero(state.AutopayData().GasBalance).AddAlignPrecision(c.totalDelegateBalance(state.AutopayData()))
+		if availableGas.Cmp(gasFee) >= 0 && c.hasActiveDelegate(state.AutopayData()) {
+			return AutopayStatusActive
+		}
+		return AutopayStatusFunding
+	}
+	if decimalOrZero(state.AutopayData().GasBalance).Cmp(gasFee) >= 0 && c.hasActiveDelegate(state.AutopayData()) {
 		return AutopayStatusActive
 	}
 	return AutopayStatusFunding
 }
 
-func (c *AutopayContract) rebalanceGasReserve(state *TemplateRuntimeState, gasConfig GasConfig, height int64) error {
+func (c *AutopayContract) rebalanceGasReserve(state *TemplateRuntimeState, gasConfig GasConfig, needed *scommon.Decimal) error {
 	if state == nil || c.FeeAssetName != gasConfig.GasAssetName {
 		return nil
 	}
-	needed, err := c.requiredGasReserve(state, gasConfig, height)
-	if err != nil {
-		return err
-	}
-	current := decimalOrZero(state.Running.GasBalance)
+	current := decimalOrZero(state.AutopayData().GasBalance)
 	if current.Cmp(needed) >= 0 {
 		return nil
 	}
 	missing := needed.SubAlignPrecision(current)
-	feeBalance := decimalOrZero(state.Running.FeeBalance)
-	if feeBalance.Sign() <= 0 {
-		return nil
+	for _, address := range c.sortedDelegateAddresses(state.AutopayData()) {
+		if missing.Sign() <= 0 {
+			break
+		}
+		delegate := state.AutopayData().AutopayDelegates[address]
+		balance := decimalOrZero(delegate.Balance)
+		if balance.Sign() <= 0 {
+			continue
+		}
+		take := missing
+		if balance.Cmp(take) < 0 {
+			take = balance
+		}
+		delegate.Balance = balance.SubAlignPrecision(take)
+		delegate.Status = c.delegateStatus(delegate)
+		state.AutopayData().AutopayDelegates[address] = delegate
+		state.AutopayData().GasBalance = decimalAddAllowNil(state.AutopayData().GasBalance, take)
+		missing = missing.SubAlignPrecision(take)
 	}
-	if feeBalance.Cmp(missing) < 0 {
-		missing = feeBalance.Clone()
-	}
-	state.Running.FeeBalance = feeBalance.SubAlignPrecision(missing)
-	state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, missing)
+	state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
 	return nil
 }
 
 func (c *AutopayContract) requiredGasReserve(state *TemplateRuntimeState, gasConfig GasConfig, height int64) (*scommon.Decimal, error) {
-	next := state.Running.NextPayHeight
+	next := state.AutopayData().NextPayHeight
 	if next == 0 {
 		next = height + 1
 	}
-	if c.EndHeight == 0 {
-		return gasConfig.ContractFundingFee(ExecutionKindTrigger, gasConfig.TriggerBaseGas, true, uint64(next))
+	return gasConfig.ContractFundingFee(ExecutionKindTrigger, gasConfig.TriggerBaseGas, true, uint64(next))
+}
+
+func (c *AutopayContract) closeBatchGasFee(state *TemplateRuntimeState, item *InvokeItem, gasConfig GasConfig, height int64) (*scommon.Decimal, error) {
+	if state == nil || item == nil {
+		return nil, nil
 	}
+	if !state.AutopayData().AutopayCloseStarted && item.GasFee != nil && item.GasFee.Sign() > 0 {
+		return nil, nil
+	}
+	fee, err := gasConfig.ContractFundingFee(ExecutionKindTrigger, gasConfig.TriggerBaseGas, true, uint64(height))
+	if err != nil {
+		return nil, err
+	}
+	if decimalOrZero(state.AutopayData().GasBalance).Cmp(fee) < 0 {
+		return nil, nil
+	}
+	return fee, nil
+}
+
+func (c *AutopayContract) collectAutopayFees(state *TemplateRuntimeState, height int64) (*scommon.Decimal, error) {
 	total := parseDecimalOrZero("0")
-	for h := next; h <= c.EndHeight; h++ {
-		fee, err := gasConfig.ContractFundingFee(ExecutionKindTrigger, gasConfig.TriggerBaseGas, true, uint64(h))
-		if err != nil {
-			return nil, err
+	if state == nil {
+		return total, nil
+	}
+	for _, address := range c.sortedDelegateAddresses(state.AutopayData()) {
+		delegate := state.AutopayData().AutopayDelegates[address]
+		amount := decimalOrZero(delegate.AmountPerBlock)
+		if amount.Sign() <= 0 {
+			amount = c.minAmountPerBlock()
 		}
-		total = total.AddAlignPrecision(fee)
+		balance := decimalOrZero(delegate.Balance)
+		if balance.Cmp(amount) < 0 {
+			delegate.Status = AutopayStatusFunding
+			state.AutopayData().AutopayDelegates[address] = delegate
+			continue
+		}
+		if c.FeeAssetName == SatoshiAssetName {
+			if _, err := contractframework.DecimalToInt64(*amount); err != nil {
+				return nil, err
+			}
+		}
+		delegate.Balance = balance.SubAlignPrecision(amount)
+		delegate.TotalPaid = decimalAddAllowNil(delegate.TotalPaid, amount)
+		delegate.PaidBlockCount++
+		delegate.LastPayHeight = height
+		delegate.Status = c.delegateStatus(delegate)
+		state.AutopayData().AutopayDelegates[address] = delegate
+		total = total.AddAlignPrecision(amount)
 	}
 	return total, nil
 }
 
-func (c *AutopayContract) requiredFeeReserve(state *TemplateRuntimeState, height int64) (*scommon.Decimal, error) {
-	if state == nil {
-		return parseDecimalOrZero("0"), nil
-	}
-	next := state.Running.NextPayHeight
-	if next == 0 {
-		next = height + 1
-	}
-	if c.EndHeight == 0 {
-		return c.feeAmountForHeight(state.Running.ActiveHeight, next), nil
-	}
-	total := parseDecimalOrZero("0")
-	for h := next; h <= c.EndHeight; h++ {
-		total = total.AddAlignPrecision(c.feeAmountForHeight(state.Running.ActiveHeight, h))
-	}
-	return total, nil
-}
-
-func (c *AutopayContract) hasFeeAndGas(state *TemplateRuntimeState, fee, gasFee *scommon.Decimal) bool {
-	if state == nil {
-		return false
-	}
-	return decimalOrZero(state.Running.FeeBalance).Cmp(decimalOrZero(fee)) >= 0 &&
-		decimalOrZero(state.Running.GasBalance).Cmp(decimalOrZero(gasFee)) >= 0
-}
-
-func (c *AutopayContract) deductFeeBalance(state *TemplateRuntimeState, fee *scommon.Decimal) error {
-	if state == nil || fee == nil || fee.Sign() <= 0 {
+func (c *AutopayContract) sortedDelegateAddresses(running *AutopayRunningData) []string {
+	if running == nil || len(running.AutopayDelegates) == 0 {
 		return nil
 	}
-	if c.FeeAssetName == SatoshiAssetName {
-		if _, err := contractframework.DecimalToInt64(*fee); err != nil {
-			return err
+	addresses := make([]string, 0, len(running.AutopayDelegates))
+	for address := range running.AutopayDelegates {
+		if address != "" {
+			addresses = append(addresses, address)
 		}
 	}
-	state.Running.FeeBalance = decimalSubAllowNil(state.Running.FeeBalance, fee)
-	return nil
+	sort.Strings(addresses)
+	return addresses
 }
 
-func (c *AutopayContract) feeAmountForHeight(activeHeight, height int64) *scommon.Decimal {
-	base := parseDecimalOrZero(c.BaseAmount)
-	if c.ScheduleMode != AutopayScheduleLinear {
-		return base
+func (c *AutopayContract) hasActiveDelegate(running *AutopayRunningData) bool {
+	if running == nil {
+		return false
 	}
-	offset := height - (activeHeight + 1)
-	if offset < 0 {
-		offset = 0
+	for _, delegate := range running.AutopayDelegates {
+		if decimalOrZero(delegate.Balance).Cmp(decimalOrZero(delegate.AmountPerBlock)) >= 0 {
+			return true
+		}
 	}
-	step := parseDecimalOrZero("0")
-	if c.StepAmount != "" {
-		step = parseDecimalOrZero(c.StepAmount)
+	return false
+}
+
+func (c *AutopayContract) hasPendingDelegateBalance(running *AutopayRunningData) bool {
+	if running == nil {
+		return false
 	}
-	return base.AddAlignPrecision(step.MulBigInt(big.NewInt(offset)))
+	for _, delegate := range running.AutopayDelegates {
+		if decimalOrZero(delegate.Balance).Sign() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func autopayTransfer(to, assetName string, amount *scommon.Decimal) SettlementTransfer {

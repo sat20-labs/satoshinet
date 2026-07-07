@@ -121,6 +121,7 @@ type config struct {
 	AgentLLMModel                  string        `long:"agentllmmodel" description:"Natural-language contract Agent LLM model name."`
 	AgentLLMAPIKey                 string        `long:"agentllmapikey" default-mask:"-" description:"Natural-language contract Agent LLM API key for OpenAI-compatible endpoints."`
 	AgentLLMTimeout                time.Duration `long:"agentllmtimeout" description:"Natural-language contract Agent LLM request timeout. Valid time units are {s, m, h}."`
+	AgentLLMKeepAlive              string        `long:"agentllmkeepalive" description:"Ollama keep_alive value for natural-language contract Agent LLM, such as 30m or -1. Empty uses Ollama default."`
 	AgentLLMTemperature            float64       `long:"agentllmtemperature" description:"Natural-language contract Agent LLM sampling temperature."`
 	AgentLLMMaxTokens              int           `long:"agentllmmaxtokens" description:"Natural-language contract Agent LLM maximum response tokens. Zero uses provider default."`
 	AgentCheckInterval             time.Duration `long:"agentcheckinterval" description:"Natural-language contract Agent polling interval. Valid time units are {s, m, h}."`
@@ -215,6 +216,7 @@ type config struct {
 	ShowVersion                    bool          `short:"V" long:"version" description:"Display version information and exit"`
 	Whitelists                     []string      `long:"whitelist" description:"Add an IP network or IP that will not be banned. (eg. 192.168.1.0/24 or ::1)"`
 	SaveMempool                    bool          `long:"savemempool" description:"Save mempool when shutting down"`
+	SyncToHeight                   int32         `long:"synctoheight" description:"Stop and gracefully exit after the chain and SatoshiNet indexer sync to this height. Zero syncs to tip."`
 
 	lookup         func(string) ([]net.IP, error)
 	oniondial      func(string, string, time.Duration) (net.Conn, error)
@@ -698,6 +700,7 @@ func loadConfig() (*config, []string, error) {
 	cfg.AgentLLMProvider = strings.ToLower(strings.TrimSpace(cfg.AgentLLMProvider))
 	cfg.AgentLLMEndpoint = strings.TrimSpace(cfg.AgentLLMEndpoint)
 	cfg.AgentLLMModel = strings.TrimSpace(cfg.AgentLLMModel)
+	cfg.AgentLLMKeepAlive = strings.TrimSpace(cfg.AgentLLMKeepAlive)
 	switch cfg.AgentLLMProvider {
 	case "", "ollama", "openai":
 	default:
@@ -722,6 +725,13 @@ func loadConfig() (*config, []string, error) {
 	}
 	if cfg.AgentLLMMaxTokens < 0 {
 		str := "%s: agentllmmaxtokens cannot be negative"
+		err := fmt.Errorf(str, funcName)
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+	if cfg.SyncToHeight < 0 {
+		str := "%s: synctoheight cannot be negative"
 		err := fmt.Errorf(str, funcName)
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, usageMessage)

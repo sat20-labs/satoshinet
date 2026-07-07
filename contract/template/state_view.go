@@ -52,20 +52,28 @@ type AMMStateView struct {
 
 type AutopayStateView struct {
 	TemplateStateView
-	Recipient     string `json:"recipient"`
-	FeeAssetName  string `json:"feeAssetName"`
-	ScheduleMode  string `json:"scheduleMode"`
-	BaseAmount    string `json:"baseAmount"`
-	StepAmount    string `json:"stepAmount,omitempty"`
-	EndHeight     int64  `json:"endHeight,omitempty"`
-	Status        string `json:"status"`
-	FeeBalance    string `json:"feeBalance,omitempty"`
-	GasBalance    string `json:"gasBalance,omitempty"`
-	ActiveHeight  int64  `json:"activeHeight,omitempty"`
-	NextPayHeight int64  `json:"nextPayHeight,omitempty"`
-	LastPayHeight int64  `json:"lastPayHeight,omitempty"`
-	PaidBlocks    int64  `json:"paidBlocks,omitempty"`
-	Closed        bool   `json:"closed,omitempty"`
+	ServiceName       string                         `json:"serviceName"`
+	Recipient         string                         `json:"recipient"`
+	FeeAssetName      string                         `json:"feeAssetName"`
+	MinAmountPerBlock string                         `json:"minAmountPerBlock"`
+	Status            string                         `json:"status"`
+	FeeBalance        string                         `json:"feeBalance,omitempty"`
+	GasBalance        string                         `json:"gasBalance,omitempty"`
+	ActiveHeight      int64                          `json:"activeHeight,omitempty"`
+	NextPayHeight     int64                          `json:"nextPayHeight,omitempty"`
+	LastPayHeight     int64                          `json:"lastPayHeight,omitempty"`
+	PaidBlocks        int64                          `json:"paidBlocks,omitempty"`
+	Closed            bool                           `json:"closed,omitempty"`
+	Delegates         map[string]AutopayDelegateView `json:"delegates,omitempty"`
+}
+
+type AutopayDelegateView struct {
+	AmountPerBlock string `json:"amountPerBlock,omitempty"`
+	Balance        string `json:"balance,omitempty"`
+	TotalPaid      string `json:"totalPaid,omitempty"`
+	PaidBlockCount int64  `json:"paidBlockCount,omitempty"`
+	LastPayHeight  int64  `json:"lastPayHeight,omitempty"`
+	Status         string `json:"status,omitempty"`
 }
 
 func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (interface{}, error) {
@@ -76,61 +84,63 @@ func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (int
 	base := r.templateStateViewBase(state)
 	switch contract := r.Contract().(type) {
 	case *AMMContract:
+		running := state.AMMData()
 		view := AMMStateView{
 			TemplateStateView: base,
-			TradingReady:      state.Running.TradingReady,
-			AssetAInPool:      decimalString(state.Running.AssetAInPool),
-			AssetBInPool:      decimalString(state.Running.AssetBInPool),
-			RequiredAssetA:    decimalString(state.Running.RequiredAssetA),
-			RequiredAssetB:    decimalString(state.Running.RequiredAssetB),
-			K:                 decimalString(state.Running.K),
-			TotalLPTAmt:       decimalString(state.Running.TotalLPTAmt),
-			LPBalances:        decimalStringMap(state.Running.LPBalances),
-			TotalDealCount:    state.Running.TotalDealCount,
-			Closed:            state.Running.Closed,
+			TradingReady:      running.TradingReady,
+			AssetAInPool:      decimalString(running.AssetAInPool),
+			AssetBInPool:      decimalString(running.AssetBInPool),
+			RequiredAssetA:    decimalString(running.RequiredAssetA),
+			RequiredAssetB:    decimalString(running.RequiredAssetB),
+			K:                 decimalString(running.K),
+			TotalLPTAmt:       decimalString(running.TotalLPTAmt),
+			LPBalances:        decimalStringMap(running.LPBalances),
+			TotalDealCount:    running.TotalDealCount,
+			Closed:            running.Closed,
 		}
 		view.AssetName = contract.AssetName
 		view.Assets = templateViewAssets(contract.AssetName, SatoshiAssetName)
 		return view, nil
 	case *LimitOrderContract:
+		running := state.LimitOrderData()
 		buyIDs, sellIDs := activeLimitOrderIDs(state.Items, ctx.Height)
 		sortLimitOrders(state.Items, buyIDs, true)
 		sortLimitOrders(state.Items, sellIDs, false)
 		view := LimitOrderStateView{
 			TemplateStateView: base,
-			TradingReady:      state.Running.TradingReady,
+			TradingReady:      running.TradingReady,
 			ActiveBuyCount:    len(buyIDs),
 			ActiveSellCount:   len(sellIDs),
 			BuyDepth:          limitOrderDepth(state.Items, buyIDs, true),
 			SellDepth:         limitOrderDepth(state.Items, sellIDs, false),
-			AssetAInPool:      decimalString(state.Running.AssetAInPool),
-			AssetBInPool:      decimalString(state.Running.AssetBInPool),
-			TotalDealCount:    state.Running.TotalDealCount,
+			AssetAInPool:      decimalString(running.AssetAInPool),
+			AssetBInPool:      decimalString(running.AssetBInPool),
+			TotalDealCount:    running.TotalDealCount,
 		}
 		view.AssetName = contract.AssetName
 		view.Assets = templateViewAssets(contract.AssetName, SatoshiAssetName)
 		return view, nil
 	case *AutopayContract:
-		status := state.Running.AutopayStatus
+		running := state.AutopayData()
+		status := running.AutopayStatus
 		if status == "" {
 			status = AutopayStatusFunding
 		}
 		view := AutopayStateView{
 			TemplateStateView: base,
+			ServiceName:       contract.ServiceName,
 			Recipient:         contract.Recipient,
 			FeeAssetName:      contract.FeeAssetName,
-			ScheduleMode:      contract.ScheduleMode,
-			BaseAmount:        contract.BaseAmount,
-			StepAmount:        contract.StepAmount,
-			EndHeight:         contract.EndHeight,
+			MinAmountPerBlock: contract.MinAmountPerBlock,
 			Status:            status,
-			FeeBalance:        decimalString(state.Running.FeeBalance),
-			GasBalance:        decimalString(state.Running.GasBalance),
-			ActiveHeight:      state.Running.ActiveHeight,
-			NextPayHeight:     state.Running.NextPayHeight,
-			LastPayHeight:     state.Running.LastPayHeight,
-			PaidBlocks:        state.Running.PaidBlockCount,
-			Closed:            state.Running.Closed,
+			FeeBalance:        decimalString(running.FeeBalance),
+			GasBalance:        decimalString(running.GasBalance),
+			ActiveHeight:      running.ActiveHeight,
+			NextPayHeight:     running.NextPayHeight,
+			LastPayHeight:     running.LastPayHeight,
+			PaidBlocks:        running.PaidBlockCount,
+			Closed:            running.Closed,
+			Delegates:         autopayDelegateViewMap(running.AutopayDelegates),
 		}
 		view.AssetName = contract.FeeAssetName
 		view.Assets = templateViewAssets(contract.FeeAssetName)
@@ -138,6 +148,24 @@ func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (int
 	default:
 		return base, nil
 	}
+}
+
+func autopayDelegateViewMap(in map[string]AutopayDelegate) map[string]AutopayDelegateView {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]AutopayDelegateView, len(in))
+	for address, delegate := range in {
+		out[address] = AutopayDelegateView{
+			AmountPerBlock: decimalString(delegate.AmountPerBlock),
+			Balance:        decimalString(delegate.Balance),
+			TotalPaid:      decimalString(delegate.TotalPaid),
+			PaidBlockCount: delegate.PaidBlockCount,
+			LastPayHeight:  delegate.LastPayHeight,
+			Status:         delegate.Status,
+		}
+	}
+	return out
 }
 
 func (r *ContractRuntime) templateStateViewBase(state TemplateRuntimeState) TemplateStateView {

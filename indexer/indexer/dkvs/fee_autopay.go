@@ -26,24 +26,32 @@ type RPCAutopayStateProvider struct {
 }
 
 type AutopayContractState struct {
-	Contract      string `json:"contract,omitempty"`
-	TemplateName  string `json:"templateName"`
-	Deployer      string `json:"deployer,omitempty"`
-	CurrentBlock  int64  `json:"currentBlock,omitempty"`
-	Recipient     string `json:"recipient"`
-	FeeAssetName  string `json:"feeAssetName"`
-	ScheduleMode  string `json:"scheduleMode"`
-	BaseAmount    string `json:"baseAmount"`
-	StepAmount    string `json:"stepAmount,omitempty"`
-	EndHeight     int64  `json:"endHeight,omitempty"`
-	Status        string `json:"status"`
-	FeeBalance    string `json:"feeBalance,omitempty"`
-	GasBalance    string `json:"gasBalance,omitempty"`
-	ActiveHeight  int64  `json:"activeHeight,omitempty"`
-	NextPayHeight int64  `json:"nextPayHeight,omitempty"`
-	LastPayHeight int64  `json:"lastPayHeight,omitempty"`
-	PaidBlocks    int64  `json:"paidBlocks,omitempty"`
-	Closed        bool   `json:"closed,omitempty"`
+	Contract          string                          `json:"contract,omitempty"`
+	TemplateName      string                          `json:"templateName"`
+	Deployer          string                          `json:"deployer,omitempty"`
+	CurrentBlock      int64                           `json:"currentBlock,omitempty"`
+	ServiceName       string                          `json:"serviceName,omitempty"`
+	Recipient         string                          `json:"recipient"`
+	FeeAssetName      string                          `json:"feeAssetName"`
+	MinAmountPerBlock string                          `json:"minAmountPerBlock"`
+	Status            string                          `json:"status"`
+	FeeBalance        string                          `json:"feeBalance,omitempty"`
+	GasBalance        string                          `json:"gasBalance,omitempty"`
+	ActiveHeight      int64                           `json:"activeHeight,omitempty"`
+	NextPayHeight     int64                           `json:"nextPayHeight,omitempty"`
+	LastPayHeight     int64                           `json:"lastPayHeight,omitempty"`
+	PaidBlocks        int64                           `json:"paidBlocks,omitempty"`
+	Closed            bool                            `json:"closed,omitempty"`
+	Delegates         map[string]AutopayDelegateState `json:"delegates,omitempty"`
+}
+
+type AutopayDelegateState struct {
+	AmountPerBlock string `json:"amountPerBlock,omitempty"`
+	Balance        string `json:"balance,omitempty"`
+	TotalPaid      string `json:"totalPaid,omitempty"`
+	PaidBlockCount int64  `json:"paidBlockCount,omitempty"`
+	LastPayHeight  int64  `json:"lastPayHeight,omitempty"`
+	Status         string `json:"status,omitempty"`
 }
 
 type AutopayFeeVerifier struct {
@@ -199,7 +207,7 @@ func (v AutopayFeeVerifier) verifyProofForRecord(record *wire.DKVSRecord, parsed
 	if err != nil {
 		return proof, capacity, err
 	}
-	maxRecords, err := v.maxRecordsForState(state)
+	maxRecords, err := v.maxRecordsForState(state, payer)
 	if err != nil {
 		return proof, capacity, err
 	}
@@ -224,7 +232,8 @@ func (v AutopayFeeVerifier) verifyState(proof *FeeProof, payer string, expiryHei
 		state.Closed {
 		return state, ErrInvalidFeeProof
 	}
-	if !strings.EqualFold(strings.TrimSpace(state.Deployer), strings.TrimSpace(payer)) {
+	delegate, ok := state.Delegates[strings.TrimSpace(payer)]
+	if !ok || !strings.EqualFold(strings.TrimSpace(delegate.Status), autopayStatusActive) {
 		return state, ErrInvalidFeeProof
 	}
 	if expected := strings.TrimSpace(v.Recipient); expected != "" &&
@@ -235,17 +244,30 @@ func (v AutopayFeeVerifier) verifyState(proof *FeeProof, payer string, expiryHei
 		strings.TrimSpace(state.FeeAssetName) != expected {
 		return state, ErrInvalidFeeProof
 	}
-	if state.EndHeight > 0 && expiryHeight > uint64(state.EndHeight) {
+	amount, err := positiveRat(delegate.AmountPerBlock)
+	if err != nil {
+		return state, err
+	}
+	balance, err := nonNegativeRat(delegate.Balance)
+	if err != nil {
+		return state, err
+	}
+	if balance.Cmp(amount) < 0 {
 		return state, ErrInvalidFeeProof
 	}
+	_ = expiryHeight
 	return state, nil
 }
 
-func (v AutopayFeeVerifier) maxRecordsForState(state *AutopayContractState) (uint64, error) {
+func (v AutopayFeeVerifier) maxRecordsForState(state *AutopayContractState, payer string) (uint64, error) {
 	if state == nil {
 		return 0, ErrInvalidFeeProof
 	}
-	amount, err := autopayAmountPerBlock(state)
+	delegate, ok := state.Delegates[strings.TrimSpace(payer)]
+	if !ok {
+		return 0, ErrInvalidFeeProof
+	}
+	amount, err := positiveRat(delegate.AmountPerBlock)
 	if err != nil {
 		return 0, err
 	}
@@ -259,28 +281,6 @@ func (v AutopayFeeVerifier) maxRecordsForState(state *AutopayContractState) (uin
 		return ^uint64(0), nil
 	}
 	return maxRecords.Uint64(), nil
-}
-
-func autopayAmountPerBlock(state *AutopayContractState) (*big.Rat, error) {
-	base, err := positiveRat(state.BaseAmount)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(state.ScheduleMode) != "linear" {
-		return base, nil
-	}
-	step, err := nonNegativeRat(state.StepAmount)
-	if err != nil {
-		return nil, err
-	}
-	offset := state.CurrentBlock - (state.ActiveHeight + 1)
-	if offset < 0 {
-		offset = 0
-	}
-	if offset == 0 || step.Sign() == 0 {
-		return base, nil
-	}
-	return base.Add(base, new(big.Rat).Mul(step, new(big.Rat).SetInt64(offset))), nil
 }
 
 func positiveRat(value string) (*big.Rat, error) {

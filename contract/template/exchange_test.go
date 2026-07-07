@@ -49,10 +49,10 @@ func TestExchangeDefaultFundAndBuy(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "88.12", state.Running.AssetAInPool)
-	requireDecimalString(t, "0.24", state.Running.AssetBInPool)
-	requireDecimalString(t, "11.88", state.Running.TotalDealAssetA)
-	require.Empty(t, state.Running.GasBalance)
+	requireDecimalString(t, "88.12", state.ExchangeData().AssetAInPool)
+	requireDecimalString(t, "0.24", state.ExchangeData().AssetBInPool)
+	requireDecimalString(t, "11.88", state.ExchangeData().TotalDealAssetA)
+	require.Empty(t, state.ExchangeData().GasBalance)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
@@ -99,9 +99,9 @@ func TestExchangeDefaultInvokeRetainsAssetB(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "89.5005", state.Running.AssetAInPool)
-	require.Empty(t, state.Running.AssetBInPool)
-	requireDecimalString(t, "10.4995", state.Running.TotalDealAssetA)
+	requireDecimalString(t, "89.5005", state.ExchangeData().AssetAInPool)
+	require.Empty(t, state.ExchangeData().AssetBInPool)
+	requireDecimalString(t, "10.4995", state.ExchangeData().TotalDealAssetA)
 }
 
 func TestExchangeDefaultInvokeRetainsAssetA(t *testing.T) {
@@ -141,9 +141,9 @@ func TestExchangeDefaultInvokeRetainsAssetA(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "91.099", state.Running.AssetAInPool)
-	requireDecimalString(t, "0.2", state.Running.AssetBInPool)
-	requireDecimalString(t, "9.9", state.Running.TotalDealAssetA)
+	requireDecimalString(t, "91.099", state.ExchangeData().AssetAInPool)
+	requireDecimalString(t, "0.2", state.ExchangeData().AssetBInPool)
+	requireDecimalString(t, "9.9", state.ExchangeData().TotalDealAssetA)
 }
 
 func TestExchangeDefaultBuyWithSatoshiAssetB(t *testing.T) {
@@ -185,8 +185,8 @@ func TestExchangeDefaultBuyWithSatoshiAssetB(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, 1, state.Running.TotalDealCount)
-	requireDecimalString(t, "10000", state.Running.TotalDealAssetA)
+	require.Equal(t, 1, state.ExchangeData().TotalDealCount)
+	requireDecimalString(t, "10000", state.ExchangeData().TotalDealAssetA)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, buyTx}, TestnetContractPrefix, ContractTypeTemplate)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)
@@ -237,9 +237,9 @@ func TestExchangeSoldAmountPriceTiersWithinSingleInvoke(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "80", state.Running.AssetAInPool)
-	requireDecimalString(t, "20", state.Running.TotalDealAssetA)
-	requireDecimalString(t, "50", state.Running.TotalDealAssetB)
+	requireDecimalString(t, "80", state.ExchangeData().AssetAInPool)
+	requireDecimalString(t, "20", state.ExchangeData().TotalDealAssetA)
+	requireDecimalString(t, "50", state.ExchangeData().TotalDealAssetB)
 }
 
 func TestExchangeCloseReturnsRemainingAssetAToDeployer(t *testing.T) {
@@ -270,8 +270,8 @@ func TestExchangeCloseReturnsRemainingAssetAToDeployer(t *testing.T) {
 	require.True(t, ok)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.True(t, state.Running.Closed)
-	require.Empty(t, state.Running.AssetAInPool)
+	require.True(t, state.ExchangeData().Closed)
+	require.Empty(t, state.ExchangeData().AssetAInPool)
 
 	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{deployTx, fundTx, closeTx}, TestnetContractPrefix, ContractTypeTemplate)
 	plans, err := AugmentResultPlans(result.ResultPlans, store, gasConfig, provider, nil)

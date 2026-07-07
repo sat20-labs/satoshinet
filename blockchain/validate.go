@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/anchortx"
@@ -1212,6 +1213,10 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 		if !hasPayload {
 			return nil
 		}
+		// TODO 最好不要特殊处理
+		if class.ContractType == contractcommon.ContractTypeAgent && isAgentConfirmInvokeTx(tx) {
+			return nil
+		}
 	}
 	var baseGas int64
 	switch class.TxType {
@@ -1243,6 +1248,34 @@ func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int
 			class.TxType, required, gasAssetName))
 	}
 	return nil
+}
+
+func isAgentConfirmInvokeTx(tx *wire.MsgTx) bool {
+	if tx == nil {
+		return false
+	}
+	payload := make([]byte, 0)
+	for _, txOut := range tx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		txType, content, err := contractcommon.ReadNullDataScript(txOut.PkScript)
+		if err != nil {
+			continue
+		}
+		if txType != contractcommon.TxTypeInvoke {
+			return false
+		}
+		payload = append(payload, content...)
+	}
+	if len(payload) == 0 {
+		return false
+	}
+	invoke, err := contractcommon.DecodeInvokePayload(payload)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(invoke.Action) == contractcommon.AgentInvokeAPIConfirm
 }
 
 func contractGasAssetNameForParams(params *chaincfg.Params) string {

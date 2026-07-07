@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +51,8 @@ type PredictionAgentAuditFunc func(PredictionAgentAuditEvent)
 type PredictionResultTextFetcher interface {
 	FetchResultText(ctx context.Context, resultURL string) (string, error)
 }
+
+var ErrPredictionStructuredEvidenceUnresolved = errors.New("structured prediction evidence could not be matched to an outcome")
 
 type PredictionResultFetchResult struct {
 	FinalURL string
@@ -325,6 +329,9 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 	if err == nil {
 		return param, nil
 	}
+	if errors.Is(err, ErrPredictionStructuredEvidenceUnresolved) {
+		return PredictionConfirmParam{}, err
+	}
 	candidateURLs := a.candidateResultURLs(req.Contract, fetched.Links)
 	a.audit(PredictionAgentAuditEvent{Stage: "candidate_urls", CandidateCount: len(candidateURLs)})
 	lastErr := err
@@ -333,9 +340,14 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 		candidateURLs = a.appendSearchResultURLs(ctx, req.Contract, candidateURLs)
 		searched = true
 	}
-	for i := 0; i < len(candidateURLs) && i < a.maxCandidateURLs(); i++ {
+	maxCandidateFetches := a.maxCandidateURLs()
+	if a.Searcher != nil {
+		maxCandidateFetches += a.maxCandidateURLs()
+	}
+	for i, fetchedCandidates := 0, 0; i < len(candidateURLs) && fetchedCandidates < maxCandidateFetches; i++ {
 		candidateURL := candidateURLs[i]
 		next, fetchErr := a.fetchWithRetry(ctx, fetcher, candidateURL)
+		fetchedCandidates++
 		if fetchErr != nil {
 			lastErr = fetchErr
 			continue
@@ -343,6 +355,9 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 		param, resolveErr := a.resolveFetchedResult(ctx, req, next, candidateURL)
 		if resolveErr == nil {
 			return param, nil
+		}
+		if errors.Is(resolveErr, ErrPredictionStructuredEvidenceUnresolved) {
+			return PredictionConfirmParam{}, resolveErr
 		}
 		lastErr = resolveErr
 		candidateURLs = appendCandidateResultURLs(candidateURLs, next.Links, req.Contract.SourceURL, a.trustedSources(), a.maxCandidateURLs())
@@ -402,22 +417,115 @@ func (a *PredictionAgent) resolveFetchedResult(ctx context.Context, req Predicti
 		})
 		return PredictionConfirmParam{}, ErrPredictionEvidenceUnavailable
 	}
+	resultText := fetched.Text
+	var structuredScore predictionStructuredScore
+	hasStructuredScore := false
+	if structuredText, score, ok := buildStructuredScoreResultText(req.Contract, fetched.Text); ok {
+		resultText = structuredText
+		structuredScore = score
+		hasStructuredScore = true
+		a.audit(PredictionAgentAuditEvent{
+			Stage:        "structured_evidence",
+			ResultURL:    resultURL,
+			Result:       structuredText,
+			TextBytes:    len(fetched.Text),
+			CleanedBytes: len(CleanPredictionResultText(structuredText)),
+		})
+	}
 	resolveReq := PredictionLLMResolveRequest{
 		Contract:   req.Contract,
 		SourceURL:  req.Contract.SourceURL,
 		ResultURL:  paramResultURL,
-		ResultText: fetched.Text,
+		ResultText: resultText,
 		ObservedAt: req.ObservedAt,
 	}
-	cleanedBytes := len(CleanPredictionResultText(fetched.Text))
-	param, decision, err := a.resolveWithRetry(ctx, resolveReq, resultURL, len(fetched.Text), cleanedBytes)
+	cleanedBytes := len(CleanPredictionResultText(resultText))
+	param, decision, err := a.resolveWithRetry(ctx, resolveReq, resultURL, len(resultText), cleanedBytes)
 	if err != nil {
+		if resultText != fetched.Text {
+			return PredictionConfirmParam{}, fmt.Errorf("%w: %v", ErrPredictionStructuredEvidenceUnresolved, err)
+		}
 		return PredictionConfirmParam{}, err
+	}
+	if hasStructuredScore {
+		param, decision, err = a.ensureStructuredOutcomeConsistent(ctx, resolveReq, structuredScore, param, decision, resultURL, len(resultText), cleanedBytes)
+		if err != nil {
+			return PredictionConfirmParam{}, err
+		}
 	}
 	param.AgentVersion = req.AgentVersion
 	param.ModelVersion = req.ModelVersion
 	a.audit(PredictionAgentAuditEvent{Stage: "llm_decision", ResultURL: resultURL, ResultType: param.ResultType, OutcomeID: param.OutcomeID, Result: param.Result, Reason: decision.Reason, TextBytes: len(fetched.Text), CleanedBytes: cleanedBytes})
 	return param, nil
+}
+
+func (a *PredictionAgent) ensureStructuredOutcomeConsistent(ctx context.Context, req PredictionLLMResolveRequest, score predictionStructuredScore,
+	param PredictionConfirmParam, decision predictionLLMDecision, resultURL string, textBytes, cleanedBytes int) (PredictionConfirmParam, predictionLLMDecision, error) {
+
+	if structuredScoreOutcomeConsistent(req.Contract, score, param.OutcomeID) {
+		return param, decision, nil
+	}
+	attempts := a.retryAttempts()
+	if attempts < 3 {
+		attempts = 3
+	}
+	lastParam := param
+	lastDecision := decision
+	lastOutcome := param.OutcomeID
+	for attempt := 2; attempt <= attempts; attempt++ {
+		retryReq := req
+		retryReq.ResultText = fmt.Sprintf("%s\n\n%s",
+			req.ResultText, structuredScoreRetryGuidance(req.Contract, score, lastOutcome))
+		nextParam, nextDecision, err := a.Resolver.ResolveDecision(ctx, retryReq)
+		if err != nil {
+			a.audit(PredictionAgentAuditEvent{
+				Stage:        "llm_error",
+				ResultURL:    resultURL,
+				ResultType:   nextDecision.ResultType,
+				OutcomeID:    nextDecision.OutcomeID,
+				Reason:       nextDecision.Reason,
+				TextBytes:    textBytes,
+				CleanedBytes: cleanedBytes,
+				Attempt:      attempt,
+				Error:        err.Error(),
+			})
+			lastDecision = nextDecision
+			continue
+		}
+		lastParam = nextParam
+		lastDecision = nextDecision
+		lastOutcome = nextParam.OutcomeID
+		if structuredScoreOutcomeConsistent(req.Contract, score, nextParam.OutcomeID) {
+			return nextParam, nextDecision, nil
+		}
+		a.audit(PredictionAgentAuditEvent{
+			Stage:        "llm_inconsistent",
+			ResultURL:    resultURL,
+			ResultType:   nextParam.ResultType,
+			OutcomeID:    nextParam.OutcomeID,
+			Reason:       nextDecision.Reason,
+			TextBytes:    textBytes,
+			CleanedBytes: cleanedBytes,
+			Attempt:      attempt,
+			Error:        "structured score does not match outcome",
+		})
+	}
+	return PredictionConfirmParam{}, lastDecision, fmt.Errorf("%w: structured score %s does not match outcome %s",
+		ErrPredictionStructuredEvidenceUnresolved, req.ResultText, lastParam.OutcomeID)
+}
+
+func structuredScoreRetryGuidance(contract PredictionContract, score predictionStructuredScore, lastOutcome string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "上一轮返回的 outcome_id=%q 与结构化最终比分矛盾。\n", lastOutcome)
+	fmt.Fprintf(&b, "结构化最终比分事实：%s %s-%s %s。%s。\n",
+		score.HomeName, score.HomeScore, score.GuestScore, score.GuestName, structuredScoreFact(score))
+	b.WriteString("请只根据这个比分事实重新匹配 allowed outcomes。逐项事实如下：\n")
+	for _, outcome := range contract.Outcomes {
+		fmt.Fprintf(&b, "- outcome_id=%s, text=%s: %s\n",
+			outcome.ID, outcome.Text, structuredScoreOutcomeGuidance(score, outcome.Text))
+	}
+	b.WriteString("必须返回紧凑 JSON：result_type=\"outcome\"，outcome_id 必须是上面 allowed outcomes 中与比分事实匹配的那个 id。")
+	return b.String()
 }
 
 func (a *PredictionAgent) resolveWithRetry(ctx context.Context, req PredictionLLMResolveRequest,
@@ -461,13 +569,276 @@ func (a *PredictionAgent) resolveWithRetry(ctx context.Context, req PredictionLL
 	return PredictionConfirmParam{}, lastDecision, lastErr
 }
 
+type predictionStructuredScore struct {
+	HomeName   string
+	GuestName  string
+	HomeScore  string
+	GuestScore string
+	Done       bool
+}
+
+func buildStructuredScoreResultText(contract PredictionContract, text string) (string, predictionStructuredScore, bool) {
+	score, ok := extractPredictionStructuredScore(contract, text)
+	if !ok {
+		return "", predictionStructuredScore{}, false
+	}
+	result := fmt.Sprintf("Verified final score facts:\n- %s %s-%s %s\n- %s scored %s\n- %s scored %s\n- %s\nUse only these final score facts to choose the matching allowed outcome_id.",
+		score.HomeName, score.HomeScore, score.GuestScore, score.GuestName,
+		score.HomeName, score.HomeScore,
+		score.GuestName, score.GuestScore,
+		structuredScoreFact(score))
+	return result, score, true
+}
+
+func extractPredictionStructuredScore(contract PredictionContract, text string) (predictionStructuredScore, bool) {
+	var data interface{}
+	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(text)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&data); err != nil {
+		return predictionStructuredScore{}, false
+	}
+	contractText := normalizePredictionEvidenceText(contract.Title + " " + contract.Description + " " + predictionOutcomeText(contract))
+	return walkPredictionStructuredScore(data, contractText)
+}
+
+func walkPredictionStructuredScore(value interface{}, contractText string) (predictionStructuredScore, bool) {
+	switch typed := value.(type) {
+	case []interface{}:
+		for _, item := range typed {
+			if score, ok := walkPredictionStructuredScore(item, contractText); ok {
+				return score, true
+			}
+		}
+	case map[string]interface{}:
+		if score, ok := predictionStructuredScoreFromMap(typed, contractText); ok {
+			return score, true
+		}
+		for _, item := range typed {
+			if score, ok := walkPredictionStructuredScore(item, contractText); ok {
+				return score, true
+			}
+		}
+	}
+	return predictionStructuredScore{}, false
+}
+
+func predictionStructuredScoreFromMap(item map[string]interface{}, contractText string) (predictionStructuredScore, bool) {
+	homeName := predictionStructuredString(item, "homeName", "home_name", "hostName", "teamA", "home")
+	guestName := predictionStructuredString(item, "guestName", "guest_name", "awayName", "teamB", "guest", "away")
+	homeScore, homeOK := predictionStructuredScoreValue(item, "homeScore", "home_score", "hostScore", "scoreA")
+	guestScore, guestOK := predictionStructuredScoreValue(item, "guestScore", "guest_score", "awayScore", "scoreB")
+	if homeName == "" || guestName == "" || !homeOK || !guestOK {
+		return predictionStructuredScore{}, false
+	}
+	homeNorm := normalizePredictionEvidenceText(homeName)
+	guestNorm := normalizePredictionEvidenceText(guestName)
+	if homeNorm == "" || guestNorm == "" || !strings.Contains(contractText, homeNorm) || !strings.Contains(contractText, guestNorm) {
+		return predictionStructuredScore{}, false
+	}
+	if !predictionStructuredMatchDone(item) {
+		return predictionStructuredScore{}, false
+	}
+	return predictionStructuredScore{
+		HomeName:   homeName,
+		GuestName:  guestName,
+		HomeScore:  homeScore,
+		GuestScore: guestScore,
+		Done:       true,
+	}, true
+}
+
+func predictionStructuredString(item map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		value, ok := item[key]
+		if !ok {
+			continue
+		}
+		if text, ok := value.(string); ok {
+			return strings.TrimSpace(text)
+		}
+	}
+	return ""
+}
+
+func predictionStructuredScoreValue(item map[string]interface{}, keys ...string) (string, bool) {
+	for _, key := range keys {
+		value, ok := item[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case json.Number:
+			return typed.String(), true
+		case string:
+			typed = strings.TrimSpace(typed)
+			return typed, typed != ""
+		case float64:
+			return fmt.Sprintf("%.0f", typed), true
+		}
+	}
+	return "", false
+}
+
+func predictionStructuredMatchDone(item map[string]interface{}) bool {
+	status := normalizePredictionEvidenceText(predictionStructuredString(item,
+		"statusDesc", "status", "gameStatus", "matchStatus", "state", "period"))
+	if status == "" {
+		return true
+	}
+	for _, token := range []string{"已结束", "完场", "结束", "final", "fulltime", "ft", "ended", "complete", "completed"} {
+		if strings.Contains(status, normalizePredictionEvidenceText(token)) {
+			return true
+		}
+	}
+	for _, token := range []string{"未开始", "未赛", "待赛", "赛前", "upcoming", "scheduled", "pending"} {
+		if strings.Contains(status, normalizePredictionEvidenceText(token)) {
+			return false
+		}
+	}
+	return true
+}
+
+func predictionOutcomeText(contract PredictionContract) string {
+	parts := make([]string, 0, len(contract.Outcomes))
+	for _, outcome := range contract.Outcomes {
+		parts = append(parts, outcome.Text)
+	}
+	return strings.Join(parts, " ")
+}
+
+func structuredScoreFact(score predictionStructuredScore) string {
+	homeCmp, homeOK := parseStructuredScoreInt(score.HomeScore)
+	guestCmp, guestOK := parseStructuredScoreInt(score.GuestScore)
+	if !homeOK || !guestOK {
+		return "最终比分已公布"
+	}
+	if homeCmp == guestCmp {
+		return "双方战平"
+	}
+	if homeCmp > guestCmp {
+		return score.HomeName + "获胜"
+	}
+	return score.GuestName + "获胜"
+}
+
+func structuredScoreOutcomeGuidance(score predictionStructuredScore, outcomeText string) string {
+	homeCmp, homeOK := parseStructuredScoreInt(score.HomeScore)
+	guestCmp, guestOK := parseStructuredScoreInt(score.GuestScore)
+	if !homeOK || !guestOK {
+		return "比分已公布，但比分格式无法做数值比较，请结合选项文本判断"
+	}
+	if homeCmp == guestCmp {
+		if predictionOutcomeTextIndicatesDraw(outcomeText) {
+			return "该选项表示平局，且比分相等"
+		}
+		return "该选项不是平局，但比分相等"
+	}
+	winner := score.HomeName
+	loser := score.GuestName
+	if guestCmp > homeCmp {
+		winner = score.GuestName
+		loser = score.HomeName
+	}
+	text := normalizePredictionEvidenceText(outcomeText)
+	winnerText := normalizePredictionEvidenceText(winner)
+	loserText := normalizePredictionEvidenceText(loser)
+	if predictionOutcomeTextIndicatesDraw(outcomeText) {
+		return "该选项表示平局，但比分不是平局"
+	}
+	if loserText != "" && strings.Contains(text, loserText) && predictionOutcomeTextHasWinWord(outcomeText) {
+		return loser + "没有获胜，该选项不匹配"
+	}
+	if winnerText != "" && strings.Contains(text, winnerText) && predictionOutcomeTextHasWinWord(outcomeText) {
+		return winner + "获胜，该选项匹配"
+	}
+	if winnerText != "" && strings.Contains(text, winnerText) && (loserText == "" || !strings.Contains(text, loserText)) {
+		return winner + "获胜，该选项匹配"
+	}
+	return "该选项没有明确表达胜者或平局，需要结合比分事实判断"
+}
+
+func predictionOutcomeTextHasWinWord(outcomeText string) bool {
+	text := normalizePredictionEvidenceText(outcomeText)
+	for _, token := range []string{"win", "wins", "won", "beat", "beats", "胜", "获胜", "赢", "胜出"} {
+		if strings.Contains(text, normalizePredictionEvidenceText(token)) {
+			return true
+		}
+	}
+	return false
+}
+
+func structuredScoreOutcomeConsistent(contract PredictionContract, score predictionStructuredScore, outcomeID string) bool {
+	outcomeText := ""
+	for _, outcome := range contract.Outcomes {
+		if strings.EqualFold(strings.TrimSpace(outcome.ID), strings.TrimSpace(outcomeID)) {
+			outcomeText = outcome.Text
+			break
+		}
+	}
+	if strings.TrimSpace(outcomeText) == "" {
+		return false
+	}
+	homeCmp, homeOK := parseStructuredScoreInt(score.HomeScore)
+	guestCmp, guestOK := parseStructuredScoreInt(score.GuestScore)
+	if !homeOK || !guestOK {
+		return true
+	}
+	if homeCmp == guestCmp {
+		if _, hasDraw := predictionDrawOutcomeID(contract); hasDraw {
+			return predictionOutcomeTextIndicatesDraw(outcomeText)
+		}
+		return true
+	}
+	if predictionOutcomeTextIndicatesDraw(outcomeText) {
+		return false
+	}
+	winner := score.HomeName
+	loser := score.GuestName
+	if guestCmp > homeCmp {
+		winner = score.GuestName
+		loser = score.HomeName
+	}
+	return structuredScoreOutcomeTextAllowsWinner(outcomeText, winner, loser)
+}
+
+func parseStructuredScoreInt(raw string) (int, bool) {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	return value, err == nil
+}
+
+func structuredScoreOutcomeTextAllowsWinner(outcomeText, winner, loser string) bool {
+	text := normalizePredictionEvidenceText(outcomeText)
+	winner = normalizePredictionEvidenceText(winner)
+	loser = normalizePredictionEvidenceText(loser)
+	hasWinner := winner != "" && strings.Contains(text, winner)
+	hasLoser := loser != "" && strings.Contains(text, loser)
+	hasWinWord := false
+	for _, token := range []string{"win", "wins", "won", "beat", "beats", "胜", "获胜", "赢", "胜出"} {
+		if strings.Contains(text, normalizePredictionEvidenceText(token)) {
+			hasWinWord = true
+			break
+		}
+	}
+	if hasWinner && !hasLoser {
+		return true
+	}
+	if hasWinner && hasWinWord {
+		return true
+	}
+	if hasLoser && hasWinWord {
+		return false
+	}
+	return true
+}
+
 func (a *PredictionAgent) candidateResultURLs(contract PredictionContract, links []string) []string {
 	limit := a.maxCandidateURLs()
-	return appendCandidateResultURLs(nil, links, contract.SourceURL, a.trustedSources(), limit)
+	candidates := appendCandidateResultURLs(nil, predictionKnownDataURLs(contract.SourceURL), contract.SourceURL, a.trustedSources(), limit)
+	return appendCandidateResultURLs(candidates, links, contract.SourceURL, a.trustedSources(), limit)
 }
 
 func (a *PredictionAgent) appendSearchResultURLs(ctx context.Context, contract PredictionContract, candidates []string) []string {
-	limit := a.maxCandidateURLs()
+	limit := len(candidates) + a.maxCandidateURLs()
 	for _, candidateURL := range a.searchResultURLs(ctx, contract) {
 		candidates = appendCandidateResultURLs(candidates, []string{candidateURL}, contract.SourceURL, a.trustedSources(), limit)
 	}
@@ -736,16 +1107,68 @@ func appendCandidateResultURLs(candidates []string, urls []string, sourceURL str
 		seen[candidate] = struct{}{}
 	}
 	for _, candidateURL := range urls {
-		if len(candidates) >= limit || !EvidenceURLAllowed(sourceURL, candidateURL, trustedSources) {
+		if !EvidenceURLAllowed(sourceURL, candidateURL, trustedSources) {
 			continue
 		}
 		if _, ok := seen[candidateURL]; ok {
 			continue
 		}
 		seen[candidateURL] = struct{}{}
-		candidates = append(candidates, candidateURL)
+		if !predictionCandidateHighPriority(candidateURL) {
+			if len(candidates) >= limit {
+				continue
+			}
+			candidates = append(candidates, candidateURL)
+			continue
+		}
+		insertAt := len(candidates)
+		for i, existing := range candidates {
+			if !predictionCandidateHighPriority(existing) {
+				insertAt = i
+				break
+			}
+		}
+		candidates = append(candidates, "")
+		copy(candidates[insertAt+1:], candidates[insertAt:])
+		candidates[insertAt] = candidateURL
+		if len(candidates) > limit {
+			delete(seen, candidates[len(candidates)-1])
+			candidates = candidates[:limit]
+		}
 	}
 	return candidates
+}
+
+func predictionCandidateHighPriority(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	path := strings.ToLower(parsed.Path)
+	query := strings.ToLower(parsed.RawQuery)
+	if strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".json") {
+		return true
+	}
+	for _, token := range []string{"season_game_list", "game_status_list", "/api/", "/game/", "/match/",
+		"/score", "/result", "/schedule", "/fixture"} {
+		if strings.Contains(path, token) || strings.Contains(query, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func predictionKnownDataURLs(sourceURL string) []string {
+	parsed, err := url.Parse(sourceURL)
+	if err != nil {
+		return nil
+	}
+	host := strings.ToLower(parsed.Hostname())
+	path := strings.ToLower(parsed.Path)
+	if strings.Contains(host, "cctv.com") && strings.Contains(path, "/2026/") {
+		return []string{"https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400&season=2026&client=pc"}
+	}
+	return nil
 }
 
 func EvidenceURLAllowed(sourceURL, resultURL string, trustedSources []TrustedEvidenceSource) bool {
@@ -1036,6 +1459,9 @@ func extractPredictionDataURLsFromScript(raw string, base *url.URL) []string {
 		}
 	}
 	if base != nil && strings.Contains(raw, "season_game_list") && strings.Contains(base.Hostname(), "cctv.com") {
+		appendRaw("https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400&season=2026&client=pc")
+	}
+	if base != nil && strings.Contains(raw, `BASE_URL_PC+"/game/season_game_list`) && strings.Contains(base.Hostname(), "cctv.com") {
 		appendRaw("https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400&season=2026&client=pc")
 	}
 	if base != nil && strings.Contains(raw, "game_status_list") && strings.Contains(base.Hostname(), "cctv.com") {

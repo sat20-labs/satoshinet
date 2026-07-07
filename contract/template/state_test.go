@@ -75,8 +75,8 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	require.Equal(t, int64(1), state.NextItemID)
 	require.Equal(t, uint64(1), state.InvokeCount)
 	require.Len(t, state.Items, 1)
-	requireDecimalString(t, "30", state.Running.TotalInputAssetB)
-	requireDecimalString(t, "20", state.Running.AssetBInPool)
+	requireDecimalString(t, "30", state.LimitOrderData().TotalInputAssetB)
+	requireDecimalString(t, "20", state.LimitOrderData().AssetBInPool)
 }
 
 func TestApplyInvokeRecordsLimitOrderBuyExcessForRefund(t *testing.T) {
@@ -180,10 +180,10 @@ func TestApplyInvokeRecordsAMMAddLiquidityItem(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Empty(t, state.Running.AssetAInPool)
-	require.Zero(t, state.Running.AssetBInPool)
-	requireDecimalString(t, "10", state.Running.TotalInputAssetA)
-	requireDecimalString(t, "25", state.Running.TotalInputAssetB)
+	require.Empty(t, state.AMMData().AssetAInPool)
+	require.Zero(t, state.AMMData().AssetBInPool)
+	requireDecimalString(t, "10", state.AMMData().TotalInputAssetA)
+	requireDecimalString(t, "25", state.AMMData().TotalInputAssetB)
 }
 
 func TestApplyInvokeMarksAMMAddLiquidityInvalidWhenDeclaredAssetMissing(t *testing.T) {
@@ -245,9 +245,9 @@ func TestApplyFundingTracksTemplateGasSeparately(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "50", state.Running.GasBalance)
-	require.Empty(t, state.Running.AssetAInPool)
-	require.Zero(t, state.Running.AssetBInPool)
+	requireDecimalString(t, "50", state.LimitOrderData().GasBalance)
+	require.Empty(t, state.LimitOrderData().AssetAInPool)
+	require.Zero(t, state.LimitOrderData().AssetBInPool)
 }
 
 func TestApplyGasFundingDoesNotChangeAMMPool(t *testing.T) {
@@ -260,10 +260,10 @@ func TestApplyGasFundingDoesNotChangeAMMPool(t *testing.T) {
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "100", state.Running.AssetAInPool)
-	requireDecimalString(t, "20", state.Running.AssetBInPool)
-	require.Empty(t, state.Running.GasBalance)
-	require.True(t, state.Running.TradingReady)
+	requireDecimalString(t, "100", state.AMMData().AssetAInPool)
+	requireDecimalString(t, "20", state.AMMData().AssetBInPool)
+	require.Empty(t, state.AMMData().GasBalance)
+	require.True(t, state.AMMData().TradingReady)
 }
 
 func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
@@ -271,9 +271,10 @@ func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
 	fundAMMRuntime(t, runtime)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	state.Running.AssetAInPool = parseDecimalOrZero("1")
-	state.Running.AssetBInPool = scommon.NewDefaultDecimal(2)
-	state.Running.GasBalance = parseDecimalOrZero("3")
+	running := state.AMMData()
+	running.AssetAInPool = parseDecimalOrZero("1")
+	running.AssetBInPool = scommon.NewDefaultDecimal(2)
+	running.GasBalance = parseDecimalOrZero("3")
 	require.NoError(t, runtime.saveRuntimeState(state))
 
 	store := NewRuntimeStore()
@@ -288,9 +289,9 @@ func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
 
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "77", state.Running.AssetAInPool)
-	requireDecimalString(t, "33", state.Running.AssetBInPool)
-	requireDecimalString(t, "5", state.Running.GasBalance)
+	requireDecimalString(t, "77", state.AMMData().AssetAInPool)
+	requireDecimalString(t, "33", state.AMMData().AssetBInPool)
+	requireDecimalString(t, "5", state.AMMData().GasBalance)
 }
 
 func testLimitOrderRuntime(t *testing.T) *ContractRuntime {

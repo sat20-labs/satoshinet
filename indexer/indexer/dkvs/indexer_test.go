@@ -686,14 +686,20 @@ func TestAutopayFeeVerifierCapacity(t *testing.T) {
 		FeeVerifier: AutopayFeeVerifier{
 			StateProvider: testAutopayStateProvider{states: map[string]*AutopayContractState{
 				contract: {
-					TemplateName: "autopay.tc",
-					Deployer:     payer,
-					Recipient:    recipient,
-					FeeAssetName: "sat",
-					ScheduleMode: "fixed",
-					BaseAmount:   "2",
-					Status:       "active",
-					CurrentBlock: 10,
+					TemplateName:      "autopay.tc",
+					Deployer:          "deployer",
+					Recipient:         recipient,
+					FeeAssetName:      "sat",
+					MinAmountPerBlock: "1",
+					Status:            "active",
+					CurrentBlock:      10,
+					Delegates: map[string]AutopayDelegateState{
+						payer: {
+							AmountPerBlock: "2",
+							Balance:        "10",
+							Status:         "active",
+						},
+					},
 				},
 			}},
 			Recipient:             recipient,
@@ -734,14 +740,20 @@ func TestAutopayFeeVerifierRejectsInvalidStateAndPayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	baseState := AutopayContractState{
-		TemplateName: "autopay.tc",
-		Deployer:     payer,
-		Recipient:    recipient,
-		FeeAssetName: "sat",
-		ScheduleMode: "fixed",
-		BaseAmount:   "1",
-		Status:       "active",
-		CurrentBlock: 10,
+		TemplateName:      "autopay.tc",
+		Deployer:          "deployer",
+		Recipient:         recipient,
+		FeeAssetName:      "sat",
+		MinAmountPerBlock: "1",
+		Status:            "active",
+		CurrentBlock:      10,
+		Delegates: map[string]AutopayDelegateState{
+			payer: {
+				AmountPerBlock: "1",
+				Balance:        "10",
+				Status:         "active",
+			},
+		},
 	}
 	tests := []struct {
 		name   string
@@ -753,16 +765,36 @@ func TestAutopayFeeVerifierRejectsInvalidStateAndPayer(t *testing.T) {
 			state: func() AutopayContractState { s := baseState; s.Status = "funding"; return s }(),
 		},
 		{
-			name:  "wrong deployer",
-			state: func() AutopayContractState { s := baseState; s.Deployer = "tb1pwrong"; return s }(),
+			name: "missing delegate",
+			state: func() AutopayContractState {
+				s := baseState
+				s.Delegates = nil
+				return s
+			}(),
 		},
 		{
 			name:  "wrong recipient",
 			state: func() AutopayContractState { s := baseState; s.Recipient = "other-recipient"; return s }(),
 		},
 		{
-			name:  "expiry exceeds end height",
-			state: func() AutopayContractState { s := baseState; s.EndHeight = 50; return s }(),
+			name: "delegate funding",
+			state: func() AutopayContractState {
+				s := baseState
+				delegate := s.Delegates[payer]
+				delegate.Status = "funding"
+				s.Delegates = map[string]AutopayDelegateState{payer: delegate}
+				return s
+			}(),
+		},
+		{
+			name: "insufficient delegate balance",
+			state: func() AutopayContractState {
+				s := baseState
+				delegate := s.Delegates[payer]
+				delegate.Balance = "0.5"
+				s.Delegates = map[string]AutopayDelegateState{payer: delegate}
+				return s
+			}(),
 		},
 	}
 	for _, tt := range tests {

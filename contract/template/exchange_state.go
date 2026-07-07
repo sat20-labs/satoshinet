@@ -9,17 +9,17 @@ func (c *ExchangeContract) ApplyFundingState(state *TemplateRuntimeState, output
 	}
 	amt = parseDecimalOrZero(amt.String())
 	if amt.Sign() > 0 {
-		if state.Running.AssetAInPool == nil {
-			state.Running.AssetAInPool = parseDecimalOrZero("0")
+		if state.ExchangeData().AssetAInPool == nil {
+			state.ExchangeData().AssetAInPool = parseDecimalOrZero("0")
 		}
-		state.Running.AssetAInPool = scommon.DecimalAdd(state.Running.AssetAInPool, amt)
+		state.ExchangeData().AssetAInPool = scommon.DecimalAdd(state.ExchangeData().AssetAInPool, amt)
 	}
 	if gasAssetName != "" && gasAssetName != c.AssetAName && gasAssetName != c.AssetBName {
 		gas, err := output.AssetAmount(gasAssetName)
 		if err != nil {
 			return true, err
 		}
-		state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
+		state.ExchangeData().GasBalance = decimalAddAllowNil(state.ExchangeData().GasBalance, gas)
 	}
 	return true, nil
 }
@@ -35,61 +35,62 @@ func (c *ExchangeContract) ApplyGasFundingState(state *TemplateRuntimeState, out
 	if err != nil {
 		return true, err
 	}
-	state.Running.GasBalance = decimalAddAllowNil(state.Running.GasBalance, gas)
+	state.ExchangeData().GasBalance = decimalAddAllowNil(state.ExchangeData().GasBalance, gas)
 	return true, nil
 }
 
-func (c *ExchangeContract) ApplyRunningData(r *RunningData, item *InvokeItem) bool {
-	if item == nil {
+func (c *ExchangeContract) ApplyRunningData(state *TemplateRuntimeState, item *InvokeItem) bool {
+	if state == nil || item == nil {
 		return true
 	}
-	r.applyDefaultInvokeRetention(item)
+	exchange := state.ExchangeData()
+	applyDefaultInvokeRetentionToExchange(exchange, item)
 	if item.Reason == InvokeReasonInvalid {
 		return true
 	}
 	switch item.OrderType {
 	case OrderTypeFund:
 		if item.InAmt != nil {
-			if r.TotalInputAssetA == nil {
-				r.TotalInputAssetA = parseDecimalOrZero("0")
+			if exchange.TotalInputAssetA == nil {
+				exchange.TotalInputAssetA = parseDecimalOrZero("0")
 			}
-			if r.AssetAInPool == nil {
-				r.AssetAInPool = parseDecimalOrZero("0")
+			if exchange.AssetAInPool == nil {
+				exchange.AssetAInPool = parseDecimalOrZero("0")
 			}
-			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.InAmt)
-			r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.InAmt)
+			exchange.TotalInputAssetA = scommon.DecimalAdd(exchange.TotalInputAssetA, item.InAmt)
+			exchange.AssetAInPool = scommon.DecimalAdd(exchange.AssetAInPool, item.InAmt)
 		}
 		return true
 	case OrderTypeExchange:
 		if item.OutAmt != nil {
-			if r.TotalInputAssetA == nil {
-				r.TotalInputAssetA = parseDecimalOrZero("0")
+			if exchange.TotalInputAssetA == nil {
+				exchange.TotalInputAssetA = parseDecimalOrZero("0")
 			}
-			if r.AssetAInPool == nil {
-				r.AssetAInPool = parseDecimalOrZero("0")
+			if exchange.AssetAInPool == nil {
+				exchange.AssetAInPool = parseDecimalOrZero("0")
 			}
-			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.OutAmt)
-			r.AssetAInPool = scommon.DecimalAdd(r.AssetAInPool, item.OutAmt)
+			exchange.TotalInputAssetA = scommon.DecimalAdd(exchange.TotalInputAssetA, item.OutAmt)
+			exchange.AssetAInPool = scommon.DecimalAdd(exchange.AssetAInPool, item.OutAmt)
 		}
 		if item.InAmt != nil {
-			if r.TotalInputAssetB == nil {
-				r.TotalInputAssetB = parseDecimalOrZero("0")
+			if exchange.TotalInputAssetB == nil {
+				exchange.TotalInputAssetB = parseDecimalOrZero("0")
 			}
-			r.TotalInputAssetB = scommon.DecimalAdd(r.TotalInputAssetB, item.InAmt)
+			exchange.TotalInputAssetB = scommon.DecimalAdd(exchange.TotalInputAssetB, item.InAmt)
 		}
 		return true
 	case OrderTypeClose:
 		if item.InAmt != nil {
-			if r.TotalInputAssetA == nil {
-				r.TotalInputAssetA = parseDecimalOrZero("0")
+			if exchange.TotalInputAssetA == nil {
+				exchange.TotalInputAssetA = parseDecimalOrZero("0")
 			}
-			r.TotalInputAssetA = scommon.DecimalAdd(r.TotalInputAssetA, item.InAmt)
+			exchange.TotalInputAssetA = scommon.DecimalAdd(exchange.TotalInputAssetA, item.InAmt)
 		}
 		if item.RemainingAmt != nil {
-			if r.TotalInputAssetB == nil {
-				r.TotalInputAssetB = parseDecimalOrZero("0")
+			if exchange.TotalInputAssetB == nil {
+				exchange.TotalInputAssetB = parseDecimalOrZero("0")
 			}
-			r.TotalInputAssetB = scommon.DecimalAdd(r.TotalInputAssetB, item.RemainingAmt)
+			exchange.TotalInputAssetB = scommon.DecimalAdd(exchange.TotalInputAssetB, item.RemainingAmt)
 		}
 		return true
 	default:

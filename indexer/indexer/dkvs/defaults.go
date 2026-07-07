@@ -10,28 +10,25 @@ const (
 	DefaultTestNetAutopayDeployer = "tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g"
 
 	DefaultTestNetAutopayDeployNonce    uint64 = 8888
-	DefaultAutopayScheduleMode                 = contractcommon.AutopayScheduleFixed
-	DefaultAutopayBaseAmount                   = "100"
+	DefaultAutopayServiceName                  = "dkvs"
+	DefaultAutopayMinAmountPerBlock            = "100"
 	DefaultAutopayFullRecordFeePerBlock        = "1"
-	DefaultAutopayEndHeight             int64  = 0
 )
 
 // NetworkDefaults contains DKVS policy defaults that are safe to publish in
 // code. They do not by themselves authorize writes: fee verification still
 // requires a live active autopay contract state.
 type NetworkDefaults struct {
-	Enabled               bool
-	AutopayDeployer       string
-	AutopayRecipient      string
-	AutopayFeeAssetName   string
-	AutopayScheduleMode   string
-	AutopayBaseAmount     string
-	AutopayStepAmount     string
-	AutopayEndHeight      int64
-	AutopayDeployNonce    uint64
-	AutopayContract       string
-	FullRecordFeePerBlock string
-	UseAutopayFeeVerifier bool
+	Enabled                  bool
+	AutopayDeployer          string
+	AutopayRecipient         string
+	AutopayFeeAssetName      string
+	AutopayServiceName       string
+	AutopayMinAmountPerBlock string
+	AutopayDeployNonce       uint64
+	AutopayContract          string
+	FullRecordFeePerBlock    string
+	UseAutopayFeeVerifier    bool
 }
 
 // NetworkDefaultsForParams returns hard-coded DKVS defaults for known
@@ -42,16 +39,15 @@ func NetworkDefaultsForParams(params *chaincfg.Params) NetworkDefaults {
 		return NetworkDefaults{}
 	}
 	defaults := NetworkDefaults{
-		Enabled:               true,
-		AutopayDeployer:       DefaultTestNetAutopayDeployer,
-		AutopayRecipient:      DefaultTestNetAutopayDeployer,
-		AutopayFeeAssetName:   contractcommon.GasAssetNameForNet(params.Net),
-		AutopayScheduleMode:   DefaultAutopayScheduleMode,
-		AutopayBaseAmount:     DefaultAutopayBaseAmount,
-		AutopayEndHeight:      DefaultAutopayEndHeight,
-		AutopayDeployNonce:    DefaultTestNetAutopayDeployNonce,
-		FullRecordFeePerBlock: DefaultAutopayFullRecordFeePerBlock,
-		UseAutopayFeeVerifier: true,
+		Enabled:                  true,
+		AutopayDeployer:          DefaultTestNetAutopayDeployer,
+		AutopayRecipient:         DefaultTestNetAutopayDeployer,
+		AutopayFeeAssetName:      contractcommon.GasAssetNameForNet(params.Net),
+		AutopayServiceName:       DefaultAutopayServiceName,
+		AutopayMinAmountPerBlock: DefaultAutopayMinAmountPerBlock,
+		AutopayDeployNonce:       DefaultTestNetAutopayDeployNonce,
+		FullRecordFeePerBlock:    DefaultAutopayFullRecordFeePerBlock,
+		UseAutopayFeeVerifier:    true,
 	}
 	defaults.AutopayContract = defaults.deriveAutopayContract(params)
 	return defaults
@@ -59,12 +55,10 @@ func NetworkDefaultsForParams(params *chaincfg.Params) NetworkDefaults {
 
 func (d NetworkDefaults) AutopayContent() ([]byte, error) {
 	return contractcommon.EncodeTemplateAutopayContent(contractcommon.TemplateAutopayContract{
-		Recipient:    d.AutopayRecipient,
-		FeeAssetName: d.AutopayFeeAssetName,
-		ScheduleMode: d.AutopayScheduleMode,
-		BaseAmount:   d.AutopayBaseAmount,
-		StepAmount:   d.AutopayStepAmount,
-		EndHeight:    d.AutopayEndHeight,
+		ServiceName:       d.AutopayServiceName,
+		Recipient:         d.AutopayRecipient,
+		FeeAssetName:      d.AutopayFeeAssetName,
+		MinAmountPerBlock: d.AutopayMinAmountPerBlock,
 	})
 }
 

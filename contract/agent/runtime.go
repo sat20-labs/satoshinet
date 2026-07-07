@@ -113,9 +113,11 @@ type ApplyBetRequest struct {
 }
 
 type ApplyConfirmRequest struct {
-	Invoker   string
-	Param     PredictionConfirmParam
-	TimeValue int64
+	Invoker      string
+	Param        PredictionConfirmParam
+	GasAmount    string
+	ResultGasFee string
+	TimeValue    int64
 }
 
 type ApplyCloseRequest struct {
@@ -291,6 +293,8 @@ func (r *Runtime) ApplyConfirm(req ApplyConfirmRequest) (*PredictionSettlementPl
 	if err := req.Param.Check(r.contract); err != nil {
 		return nil, err
 	}
+	r.addGasBalance(req.GasAmount)
+	r.spendGasBalance(req.ResultGasFee)
 	r.state.Prediction.Status = PredictionStatusConfirmed
 	r.state.Prediction.Confirmations = append(r.state.Prediction.Confirmations, PredictionConfirmRecord{
 		Agent:        req.Invoker,
@@ -358,6 +362,26 @@ func (r *Runtime) addGasBalance(amount string) {
 		return
 	}
 	r.state.Prediction.GasBalance = next
+}
+
+func (r *Runtime) spendGasBalance(amount string) {
+	if amount == "" {
+		return
+	}
+	current := parseDecimalOrZero(r.state.Prediction.GasBalance)
+	if current.Sign() <= 0 {
+		r.state.Prediction.GasBalance = ""
+		return
+	}
+	fee := parseDecimalOrZero(amount)
+	if fee.Sign() <= 0 {
+		return
+	}
+	if current.Cmp(fee) <= 0 {
+		r.state.Prediction.GasBalance = ""
+		return
+	}
+	r.state.Prediction.GasBalance = current.SubAlignPrecision(fee).String()
 }
 
 func (r *Runtime) requireCoreNode(invoker string) error {

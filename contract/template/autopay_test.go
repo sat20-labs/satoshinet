@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAutopayPaysFiniteRangeFromNextBlock(t *testing.T) {
+func TestAutopayPaysDelegatedFeesFromNextBlock(t *testing.T) {
 	gasConfig := testAutopayGasConfig()
-	runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:test", AutopayScheduleFixed, "10", "", 102)
+	runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:test", "10")
 	contractAddr := runtime.Address()
 	gasFee, err := gasConfig.ContractFundingFee(ExecutionKindTrigger, gasConfig.TriggerBaseGas, true, 101)
 	require.NoError(t, err)
@@ -26,8 +26,8 @@ func TestAutopayPaysFiniteRangeFromNextBlock(t *testing.T) {
 	require.Empty(t, plan.Transfers)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, AutopayStatusActive, state.Running.AutopayStatus)
-	require.Equal(t, int64(101), state.Running.NextPayHeight)
+	require.Equal(t, AutopayStatusActive, state.AutopayData().AutopayStatus)
+	require.Equal(t, int64(101), state.AutopayData().NextPayHeight)
 
 	plan, err = runtime.SettleBlockWithGasConfig(101, gasConfig)
 	require.NoError(t, err)
@@ -38,24 +38,24 @@ func TestAutopayPaysFiniteRangeFromNextBlock(t *testing.T) {
 	require.Equal(t, gasFee.String(), plan.GasFee.String())
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "10", state.Running.FeeBalance)
-	requireDecimalString(t, "99.998", state.Running.GasBalance)
-	require.Equal(t, int64(102), state.Running.NextPayHeight)
-	require.Equal(t, int64(1), state.Running.PaidBlockCount)
+	requireDecimalString(t, "10", state.AutopayData().FeeBalance)
+	requireDecimalString(t, "99.998", state.AutopayData().GasBalance)
+	require.Equal(t, int64(102), state.AutopayData().NextPayHeight)
+	require.Equal(t, int64(1), state.AutopayData().PaidBlockCount)
 
 	plan, err = runtime.SettleBlockWithGasConfig(102, gasConfig)
 	require.NoError(t, err)
 	require.Len(t, plan.Transfers, 1)
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, AutopayStatusExpired, state.Running.AutopayStatus)
-	requireDecimalString(t, "0", state.Running.FeeBalance)
-	require.Equal(t, int64(2), state.Running.PaidBlockCount)
+	require.Equal(t, AutopayStatusFunding, state.AutopayData().AutopayStatus)
+	requireDecimalString(t, "0", state.AutopayData().FeeBalance)
+	require.Equal(t, int64(2), state.AutopayData().PaidBlockCount)
 }
 
 func TestAutopayDefaultFundingAndCloseReturnsBalances(t *testing.T) {
 	gasConfig := testAutopayGasConfig()
-	runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:test", AutopayScheduleFixed, "10", "", 0)
+	runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:test", "10")
 	contractAddr := runtime.Address()
 	err := runtime.ApplyFunding(testContractOutput("fund", 0, contractAddr, 0, testAssets("ordx:f:test", 10, gasConfig.GasAssetName, 1)),
 		gasConfig.GasAssetName)
@@ -87,21 +87,24 @@ func TestAutopayDefaultFundingAndCloseReturnsBalances(t *testing.T) {
 
 	plan, err := runtime.SettleBlockWithGasConfig(101, gasConfig)
 	require.NoError(t, err)
-	require.Len(t, plan.Transfers, 2)
+	require.Len(t, plan.Transfers, 3)
 	require.Equal(t, "deployer-address", plan.Transfers[0].To)
 	require.Equal(t, "ordx:f:test", plan.Transfers[0].AssetName)
-	require.Equal(t, "25", plan.Transfers[0].AssetAmt)
-	require.Equal(t, gasConfig.GasAssetName, plan.Transfers[1].AssetName)
-	require.Equal(t, "1", plan.Transfers[1].AssetAmt)
+	require.Equal(t, "10", plan.Transfers[0].AssetAmt)
+	require.Equal(t, "funder-address", plan.Transfers[1].To)
+	require.Equal(t, "ordx:f:test", plan.Transfers[1].AssetName)
+	require.Equal(t, "15", plan.Transfers[1].AssetAmt)
+	require.Equal(t, gasConfig.GasAssetName, plan.Transfers[2].AssetName)
+	require.Equal(t, "0.998", plan.Transfers[2].AssetAmt)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	require.True(t, state.Running.Closed)
-	require.Equal(t, AutopayStatusClosed, state.Running.AutopayStatus)
+	require.True(t, state.AutopayData().Closed)
+	require.Equal(t, AutopayStatusClosed, state.AutopayData().AutopayStatus)
 }
 
 func TestAutopayEmptyRecipientPaysMinerFee(t *testing.T) {
 	gasConfig := testAutopayGasConfig()
-	runtime := testAutopayRuntime(t, "", "ordx:f:test", AutopayScheduleFixed, "10", "", 101)
+	runtime := testAutopayRuntime(t, "", "ordx:f:test", "10")
 	contractAddr := runtime.Address()
 	err := runtime.ApplyFunding(
 		testContractOutput("fund", 0, contractAddr, 0, testAssets("ordx:f:test", 20, gasConfig.GasAssetName, 100)),
@@ -140,9 +143,9 @@ func TestAutopayEmptyRecipientPaysMinerFee(t *testing.T) {
 	requireNoResultPlanOutputTo(t, augmented[0], "recipient-address")
 }
 
-func testAutopayRuntime(t *testing.T, recipient, feeAsset, mode, base, step string, endHeight int64) *ContractRuntime {
+func testAutopayRuntime(t *testing.T, recipient, feeAsset, minAmount string) *ContractRuntime {
 	t.Helper()
-	contract := NewAutopayContract(recipient, feeAsset, mode, base, step, endHeight)
+	contract := NewAutopayContract("dkvs", recipient, feeAsset, minAmount)
 	content, err := contract.Encode()
 	require.NoError(t, err)
 	deploy := DeployPayload{

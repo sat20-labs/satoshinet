@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	scommon "github.com/sat20-labs/indexer/common"
@@ -26,11 +27,11 @@ func TestCheckEVMBlockOrder(t *testing.T) {
 	ordinary.AddTxOut(&wire.TxOut{PkScript: []byte{txscript.OP_TRUE}})
 
 	deployScript, err := contract.DeployNullDataScript(contract.DeployPayload{
-		Type:        contract.ContractTypeEVM,
-		SubType:     "sol",
-		GasLimit:    1,
-		DeployNonce: 1,
-		ContractContent:    []byte{0x60, 0x00},
+		Type:            contract.ContractTypeEVM,
+		SubType:         "sol",
+		GasLimit:        1,
+		DeployNonce:     1,
+		ContractContent: []byte{0x60, 0x00},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -124,11 +125,11 @@ func TestCheckTransactionInputsRequiresContractBaseGasFee(t *testing.T) {
 		t.Fatal("invalid gas asset name")
 	}
 	deployScript, err := contract.DeployNullDataScript(contract.DeployPayload{
-		Type:        contract.ContractTypeEVM,
-		SubType:     "sol",
-		GasLimit:    contract.DeployBaseGas,
-		DeployNonce: 1,
-		ContractContent:    []byte{0x60, 0x00},
+		Type:            contract.ContractTypeEVM,
+		SubType:         "sol",
+		GasLimit:        contract.DeployBaseGas,
+		DeployNonce:     1,
+		ContractContent: []byte{0x60, 0x00},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,4 +219,49 @@ func TestCheckTransactionInputsAllowsEVMDefaultInvokeWithPlainSatsFee(t *testing
 	if err != nil {
 		t.Fatalf("unexpected default invoke fee error: %v", err)
 	}
+}
+
+func TestCheckContractBaseGasFeeAllowsAgentConfirmWithoutGasFee(t *testing.T) {
+	tx := newAgentInvokeTx(t, contract.AgentInvokeAPIConfirm)
+	if err := checkContractBaseGasFee(tx, nil, 100, &chaincfg.TestNetParams); err != nil {
+		t.Fatalf("agent confirm should not require ordinary invoke base gas: %v", err)
+	}
+}
+
+func TestCheckContractBaseGasFeeRequiresAgentBetGasFee(t *testing.T) {
+	tx := newAgentInvokeTx(t, contract.AgentInvokeAPIBet)
+	err := checkContractBaseGasFee(tx, nil, 100, &chaincfg.TestNetParams)
+	if err == nil {
+		t.Fatal("expected agent bet to require ordinary invoke base gas")
+	}
+	if !strings.Contains(err.Error(), "requires at least") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func newAgentInvokeTx(t *testing.T, action string) *wire.MsgTx {
+	t.Helper()
+	invokeScript, err := contract.InvokeNullDataScript(contract.InvokePayload{
+		GasLimit:  contract.InvokeBaseGas,
+		CallNonce: 1,
+		Action:    action,
+	})
+	if err != nil {
+		t.Fatalf("InvokeNullDataScript failed: %v", err)
+	}
+	c, err := contract.NewContractAddress(contract.TestnetContractPrefix,
+		contract.AddressVersionV1, contract.ContractTypeAgent, contract.EVMAddress{7})
+	if err != nil {
+		t.Fatalf("NewContractAddress failed: %v", err)
+	}
+	contractOut, err := contract.NewContractTxOut(0, nil, c)
+	if err != nil {
+		t.Fatalf("NewContractTxOut failed: %v", err)
+	}
+	prevOut := wire.OutPoint{Hash: chainhash.Hash{7}, Index: 0}
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&prevOut, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(0, nil, invokeScript))
+	tx.AddTxOut(contractOut)
+	return tx
 }

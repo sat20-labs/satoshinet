@@ -208,13 +208,11 @@ func TestCanonicalResultVerifierAllowsExtraInputs(t *testing.T) {
 func TestAugmentClosedAMMCloseOutputsRejectInsufficientContractBalance(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	addr := runtime.Address()
-	state := TemplateRuntimeState{
-		Running: RunningData{
-			Closed:       true,
-			AssetAInPool: parseDecimalOrZero("100"),
-			AssetBInPool: parseDecimalOrZero("20"),
-		},
-	}
+	state := TemplateRuntimeState{}
+	running := state.AMMData()
+	running.Closed = true
+	running.AssetAInPool = parseDecimalOrZero("100")
+	running.AssetBInPool = parseDecimalOrZero("20")
 	require.NoError(t, runtime.saveRuntimeState(state))
 	store := NewRuntimeStore()
 	store.Add(runtime)

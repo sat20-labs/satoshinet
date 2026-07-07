@@ -13,12 +13,14 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sat20-labs/indexer/share/btclucky"
 	"github.com/sat20-labs/satoshinet/addrmgr"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/blockchain/indexers"
 	"github.com/sat20-labs/satoshinet/connmgr"
 	"github.com/sat20-labs/satoshinet/database"
+	assetIndexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/mempool"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/mining/cpuminer"
@@ -26,7 +28,6 @@ import (
 	"github.com/sat20-labs/satoshinet/netsync"
 	"github.com/sat20-labs/satoshinet/peer"
 	"github.com/sat20-labs/satoshinet/txscript"
-	assetIndexer "github.com/sat20-labs/satoshinet/indexer/common"
 
 	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/sirupsen/logrus"
@@ -65,7 +66,6 @@ func (f *CustomTextFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-
 // Loggers per subsystem.  A single backend logger is created and all subsystem
 // loggers created from it will write to the backend.  When adding new
 // subsystems, add the subsystem logger variable here and to the
@@ -75,28 +75,29 @@ func (f *CustomTextFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 // log file.  This must be performed early during application startup by calling
 // initLogRotator.
 var (
-	adxrLog   = GetLoggerEntry("ADXR")
-	amgrLog   = GetLoggerEntry("AMGR")
-	cmgrLog   = GetLoggerEntry("CMGR")
-	bcdbLog   = GetLoggerEntry("BCDB")
-	btcdLog   = GetLoggerEntry("SNET")
-	chanLog   = GetLoggerEntry("CHAN")
-	discLog   = GetLoggerEntry("DISC")
-	indxLog   = GetLoggerEntry("INDX")
-	minrLog   = GetLoggerEntry("MINR")
-	peerLog   = GetLoggerEntry("PEER")
-	rpcsLog   = GetLoggerEntry("RPCS")
-	scrpLog   = GetLoggerEntry("SCRP")
-	srvrLog   = GetLoggerEntry("SRVR")
-	syncLog   = GetLoggerEntry("SYNC")
-	txmpLog   = GetLoggerEntry("TXMP")
-	anchorLog = GetLoggerEntry("ANCH")
+	adxrLog         = GetLoggerEntry("ADXR")
+	amgrLog         = GetLoggerEntry("AMGR")
+	cmgrLog         = GetLoggerEntry("CMGR")
+	bcdbLog         = GetLoggerEntry("BCDB")
+	btcdLog         = GetLoggerEntry("SNET")
+	btclLog         = GetLoggerEntry("BTCL")
+	chanLog         = GetLoggerEntry("CHAN")
+	discLog         = GetLoggerEntry("DISC")
+	indxLog         = GetLoggerEntry("INDX")
+	minrLog         = GetLoggerEntry("MINR")
+	peerLog         = GetLoggerEntry("PEER")
+	rpcsLog         = GetLoggerEntry("RPCS")
+	scrpLog         = GetLoggerEntry("SCRP")
+	srvrLog         = GetLoggerEntry("SRVR")
+	syncLog         = GetLoggerEntry("SYNC")
+	txmpLog         = GetLoggerEntry("TXMP")
+	anchorLog       = GetLoggerEntry("ANCH")
 	assetIndexerLog = GetLoggerEntry("AIDX")
 )
 
 // Initialize package-global logger variables.
 func init() {
-	
+
 	addrmgr.UseLogger(amgrLog)
 	connmgr.UseLogger(cmgrLog)
 	database.UseLogger(bcdbLog)
@@ -111,6 +112,7 @@ func init() {
 	mempool.UseLogger(txmpLog)
 	anchortx.UseLogger(anchorLog)
 	assetIndexer.UseLogger(assetIndexerLog)
+	btclucky.UseLogger(btclLog)
 
 }
 
@@ -121,6 +123,7 @@ var subsystemLoggers = map[string]*logrus.Entry{
 	"CMGR": cmgrLog,
 	"BCDB": bcdbLog,
 	"BTCD": btcdLog,
+	"BTCL": btclLog,
 	"CHAN": chanLog,
 	"DISC": discLog,
 	"INDX": indxLog,
@@ -145,7 +148,7 @@ func initLogRotator(logFile string) {
 		fmt.Fprintf(os.Stderr, "failed to create log directory: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	fileHook, err := rotatelogs.New(
 		logDir+"/"+file+".%Y%m%d%H%M.log",
 		rotatelogs.WithLinkName(logDir+"/"+file+".log"),

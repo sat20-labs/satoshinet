@@ -31,7 +31,7 @@ func NewDefaultRegistry() *Registry {
 	mustRegister(r, TemplateLimitOrder, func() Contract { return NewLimitOrderContract("") })
 	mustRegister(r, TemplateAMM, func() Contract { return NewAMMContract("", "", 0, "") })
 	mustRegister(r, TemplateExchange, func() Contract { return NewExchangeContract("", "", "", nil) })
-	mustRegister(r, TemplateAutopay, func() Contract { return NewAutopayContract("", "", "", "", "", 0) })
+	mustRegister(r, TemplateAutopay, func() Contract { return NewAutopayContract("", "", "", "") })
 	return r
 }
 

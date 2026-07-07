@@ -102,7 +102,7 @@ func (r *ContractRuntime) NetworkExclusiveActive() bool {
 	if err != nil {
 		return false
 	}
-	return !state.Running.Closed
+	return !state.ClosedForContract(r.Contract())
 }
 
 func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
@@ -190,8 +190,12 @@ func (s *RuntimeStore) reconcileAssetCaches(contractUTXOs ContractUTXOProvider, 
 		if !reconcileRunningAssetCache(runtime.Contract(), &state, utxos, gasAssetName) {
 			continue
 		}
-		if !state.Running.TradingReady {
-			state.Running.TradingReady = state.Running.ammTradingReady()
+		if amm, ok := runtime.Contract().(*AMMContract); ok {
+			_ = amm
+			running := state.AMMData()
+			if !running.TradingReady {
+				running.TradingReady = running.ammTradingReady()
+			}
 		}
 		if err := runtime.saveRuntimeState(state); err != nil {
 			return err
@@ -204,7 +208,6 @@ func reconcileRunningAssetCache(contract Contract, state *TemplateRuntimeState, 
 	if state == nil {
 		return false
 	}
-	running := &state.Running
 	assetA, assetB, ok := runtimePoolAssets(contract)
 	if !ok {
 		return false
@@ -213,18 +216,55 @@ func reconcileRunningAssetCache(contract Contract, state *TemplateRuntimeState, 
 	assetAAmount, assetAOK := sumUTXOAssetAmount(utxos, assetA)
 	assetBAmount, assetBOK := sumUTXOAssetAmount(utxos, assetB)
 	changed := false
-	if assetAOK && !decimalEqualAllowNil(running.AssetAInPool, assetAAmount) {
-		running.AssetAInPool = assetAAmount
+	getPools := func() (*scommon.Decimal, *scommon.Decimal, *scommon.Decimal) {
+		switch contract.(type) {
+		case *AMMContract:
+			running := state.AMMData()
+			return running.AssetAInPool, running.AssetBInPool, running.GasBalance
+		case *ExchangeContract:
+			running := state.ExchangeData()
+			return running.AssetAInPool, running.AssetBInPool, running.GasBalance
+		default:
+			return nil, nil, nil
+		}
+	}
+	setAssetA := func(v *scommon.Decimal) {
+		switch contract.(type) {
+		case *AMMContract:
+			state.AMMData().AssetAInPool = v
+		case *ExchangeContract:
+			state.ExchangeData().AssetAInPool = v
+		}
+	}
+	setAssetB := func(v *scommon.Decimal) {
+		switch contract.(type) {
+		case *AMMContract:
+			state.AMMData().AssetBInPool = v
+		case *ExchangeContract:
+			state.ExchangeData().AssetBInPool = v
+		}
+	}
+	setGas := func(v *scommon.Decimal) {
+		switch contract.(type) {
+		case *AMMContract:
+			state.AMMData().GasBalance = v
+		case *ExchangeContract:
+			state.ExchangeData().GasBalance = v
+		}
+	}
+	currentA, currentB, currentGas := getPools()
+	if assetAOK && !decimalEqualAllowNil(currentA, assetAAmount) {
+		setAssetA(assetAAmount)
 		changed = true
 	}
-	if assetBOK && !decimalEqualAllowNil(running.AssetBInPool, assetBAmount) {
-		running.AssetBInPool = assetBAmount
+	if assetBOK && !decimalEqualAllowNil(currentB, assetBAmount) {
+		setAssetB(assetBAmount)
 		changed = true
 	}
 	if gasAssetName != "" && gasAssetName != assetA && gasAssetName != assetB {
 		gasAmount, ok := sumUTXOAssetAmount(utxos, gasAssetName)
-		if ok && !decimalEqualAllowNil(running.GasBalance, gasAmount) {
-			running.GasBalance = gasAmount
+		if ok && !decimalEqualAllowNil(currentGas, gasAmount) {
+			setGas(gasAmount)
 			changed = true
 		}
 	}

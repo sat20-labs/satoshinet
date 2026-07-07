@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -45,6 +46,19 @@ func TestPredictionLLMResolverBuildsConfirmParam(t *testing.T) {
 	}
 	if len(client.req.Messages) != 2 {
 		t.Fatalf("message count mismatch: %d", len(client.req.Messages))
+	}
+}
+
+func TestPredictionResolvePromptUsesDescriptionNotTitle(t *testing.T) {
+	contract := validPredictionContract()
+	contract.Title = "SHORT TITLE SHOULD NOT BE SENT"
+	contract.Description = "Complete event description for the oracle LLM."
+	prompt := predictionResolvePrompt(contract, "Team A won 101-98.")
+	if strings.Contains(prompt, contract.Title) {
+		t.Fatalf("prompt leaked title: %s", prompt)
+	}
+	if !strings.Contains(prompt, contract.Description) {
+		t.Fatalf("prompt missing description: %s", prompt)
 	}
 }
 
@@ -125,8 +139,103 @@ func TestPredictionLLMResolverOverridesWrongOutcomeWhenResultIsDraw(t *testing.T
 	}
 }
 
-func TestPredictionLLMResolverSingleStepCanMismatchResultAndOutcome(t *testing.T) {
-	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"c","result":"England wins","reason":"Official final result: England beat Croatia 2-1."}`}
+func TestPredictionLLMResolverInfersChineseWinnerFromReason(t *testing.T) {
+	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"2","result":"","reason":"根据比赛最终结果，英格兰获胜。"}`}
+	resolver := NewPredictionLLMResolver(client)
+	contract := validPredictionContract()
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "墨西哥胜"},
+		{ID: "b", Text: "英格兰胜"},
+		{ID: "c", Text: "平局"},
+	}
+	param, err := resolver.Resolve(context.Background(), PredictionLLMResolveRequest{
+		Contract:   contract,
+		ResultURL:  "https://example.com/match/result/123",
+		ResultText: "结构化最终比分：墨西哥 2-3 英格兰。英格兰获胜。",
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "b" {
+		t.Fatalf("decision mismatch: %#v", param)
+	}
+}
+
+func TestPredictionLLMResolverCompletesPartialOutcome(t *testing.T) {
+	client := &fakeLLMClient{response: `{"outcome_id":"b"}`}
+	resolver := NewPredictionLLMResolver(client)
+	contract := validPredictionContract()
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "墨西哥胜"},
+		{ID: "b", Text: "英格兰胜"},
+		{ID: "c", Text: "平局"},
+	}
+	param, err := resolver.Resolve(context.Background(), PredictionLLMResolveRequest{
+		Contract:   contract,
+		ResultURL:  "https://example.com/match/result/123",
+		ResultText: "结构化最终比分：墨西哥 2-3 英格兰。英格兰获胜。",
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "b" || param.Result == "" {
+		t.Fatalf("decision mismatch: %#v", param)
+	}
+}
+
+func TestPredictionLLMResolverFixesInvalidTypeWithValidOutcome(t *testing.T) {
+	client := &fakeLLMClient{response: `{"result_type":"outcome_id","outcome_id":"b","result":"英格兰胜","reason":"英格兰获胜"}`}
+	resolver := NewPredictionLLMResolver(client)
+	contract := validPredictionContract()
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "墨西哥胜"},
+		{ID: "b", Text: "英格兰胜"},
+		{ID: "c", Text: "平局"},
+	}
+	param, err := resolver.Resolve(context.Background(), PredictionLLMResolveRequest{
+		Contract:   contract,
+		ResultURL:  "https://example.com/match/result/123",
+		ResultText: "结构化最终比分：墨西哥 2-3 英格兰。英格兰获胜。",
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "b" {
+		t.Fatalf("decision mismatch: %#v", param)
+	}
+}
+
+func TestPredictionLLMResolverExtractsJSONObject(t *testing.T) {
+	client := &fakeLLMClient{response: "Here is the answer:\n```json\n{\"result_type\":\"outcome\",\"outcome_id\":\"b\",\"result\":\"英格兰胜\",\"reason\":\"英格兰获胜\"}\n```\nDone."}
+	resolver := NewPredictionLLMResolver(client)
+	contract := validPredictionContract()
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "墨西哥胜"},
+		{ID: "b", Text: "英格兰胜"},
+		{ID: "c", Text: "平局"},
+	}
+	param, err := resolver.Resolve(context.Background(), PredictionLLMResolveRequest{
+		Contract:   contract,
+		ResultURL:  "https://example.com/match/result/123",
+		ResultText: "结构化最终比分：墨西哥 2-3 英格兰。英格兰获胜。",
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("Resolve failed: %v", err)
+	}
+	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "b" {
+		t.Fatalf("decision mismatch: %#v", param)
+	}
+}
+
+func TestPredictionLLMResolverSeparatesResultAndOutcome(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{
+		`{"result_type":"outcome","outcome_id":"c","result":"England wins","reason":"Official final result: England beat Croatia 2-1."}`,
+		`{"result_type":"outcome","outcome_id":"a","reason":"England wins matches outcome a."}`,
+	}}
 	resolver := NewPredictionLLMResolver(client)
 	contract := predictionOutcomeListFixtureContract()
 	param, err := resolver.Resolve(context.Background(), PredictionLLMResolveRequest{
@@ -138,8 +247,11 @@ func TestPredictionLLMResolverSingleStepCanMismatchResultAndOutcome(t *testing.T
 	if err != nil {
 		t.Fatalf("Resolve failed: %v", err)
 	}
-	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "c" || param.Result != "England wins" {
+	if param.ResultType != ResultTypeOutcome || param.OutcomeID != "a" || param.Result != "England wins" {
 		t.Fatalf("decision mismatch: %#v", param)
+	}
+	if len(client.reqs) != 2 {
+		t.Fatalf("LLM call count mismatch: got %d want 2", len(client.reqs))
 	}
 }
 

@@ -542,25 +542,46 @@ func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, inv
 	if err != nil {
 		return nil, err
 	}
-	probe := runtime.Clone()
+	gasAmount, err := confirmGasFundingAmount(validated.FundingOutput, e.GasConfig.Normalize().GasAssetName)
+	if err != nil {
+		return nil, err
+	}
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return nil, err
+	}
+	resultFeeAmount := ""
+	if resultFee != nil && resultFee.Sign() > 0 {
+		resultFeeAmount = resultFee.String()
+	}
+	probeStore := e.Store.Clone()
+	probe, ok := probeStore.Get(validated.Contract)
+	if !ok {
+		return nil, fmt.Errorf("agent contract runtime is missing")
+	}
 	settlement, err := probe.ApplyConfirm(ApplyConfirmRequest{
-		Invoker:   invoker,
-		Param:     param,
-		TimeValue: e.predictionTimeValue(runtime.Contract()),
+		Invoker:      invoker,
+		Param:        param,
+		GasAmount:    gasAmount,
+		ResultGasFee: resultFeeAmount,
+		TimeValue:    e.predictionTimeValue(runtime.Contract()),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := e.checkSettlementFunding(settlement); err != nil {
+	settlement.Inputs = append(settlement.Inputs, validated.FundingOutput.OutPoint)
+	if err := e.checkSettlementFunding(settlement, probeStore); err != nil {
 		return nil, err
 	}
 	if _, err := contractframework.BuildSettlementAssetIntents(settlement, e.settlementResultOptions()); err != nil {
 		return nil, err
 	}
 	return runtime.ApplyConfirm(ApplyConfirmRequest{
-		Invoker:   invoker,
-		Param:     param,
-		TimeValue: e.predictionTimeValue(runtime.Contract()),
+		Invoker:      invoker,
+		Param:        param,
+		GasAmount:    gasAmount,
+		ResultGasFee: resultFeeAmount,
+		TimeValue:    e.predictionTimeValue(runtime.Contract()),
 	})
 }
 
@@ -576,7 +597,7 @@ func (e *Backend) applyClose(runtime *Runtime, validated InvokeValidation, invok
 	return plan, nil
 }
 
-func (e *Backend) checkSettlementFunding(settlement *PredictionSettlementPlan) error {
+func (e *Backend) checkSettlementFunding(settlement *PredictionSettlementPlan, store *RuntimeStore) error {
 	if settlement == nil || e.ContractUTXOs == nil {
 		return nil
 	}
@@ -589,7 +610,10 @@ func (e *Backend) checkSettlementFunding(settlement *PredictionSettlementPlan) e
 		return err
 	}
 	plan.GasFee = resultFee
-	_, err = AugmentResultPlans([]ResultPlan{plan}, e.ContractUTXOs, e.Store, e.AssetPrecision,
+	if store == nil {
+		store = e.Store
+	}
+	_, err = AugmentResultPlans([]ResultPlan{plan}, e.ContractUTXOs, store, e.AssetPrecision,
 		e.GasConfig.Normalize().GasAssetName, e.RuntimeConfig.BootstrapAddress)
 	return err
 }
@@ -652,6 +676,20 @@ func betAndGasFundingAmount(output ContractOutput, betAssetName, gasAssetName st
 			betTotal.String(), gasReserve.String())
 	}
 	return betTotal.SubAlignPrecision(gasReserve).String(), gasReserve.String(), nil
+}
+
+func confirmGasFundingAmount(output ContractOutput, gasAssetName string) (string, error) {
+	if gasAssetName == "" {
+		return "", nil
+	}
+	amount, err := fundingAmount(output, gasAssetName)
+	if err != nil {
+		return "", err
+	}
+	if parseDecimalOrZero(amount).Sign() == 0 {
+		return "", nil
+	}
+	return amount, nil
 }
 
 func stateResultPlan(contract ContractAddress, output ContractOutput) (ResultPlan, bool) {

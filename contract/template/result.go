@@ -353,7 +353,7 @@ func closedContractChangeRecipient(contract ContractAddress, store *RuntimeStore
 	if err != nil {
 		return false, "", err
 	}
-	return state.Running.Closed, runtime.RuntimeBase().Deployer(), nil
+	return state.ClosedForContract(runtime.Contract()), runtime.RuntimeBase().Deployer(), nil
 }
 
 func splitClosedProfitChange(change ResultOutput, deployer, bootstrap string) []ResultOutput {
@@ -463,9 +463,10 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 
 	assets := wire.TxAssets{}
 	if autopay, ok := runtime.Contract().(*AutopayContract); ok {
-		if state.Running.FeeBalance != nil && state.Running.FeeBalance.Sign() > 0 &&
+		running := state.AutopayData()
+		if running.FeeBalance != nil && running.FeeBalance.Sign() > 0 &&
 			autopay.FeeAssetName != SatoshiAssetName {
-			feeAssets, err := newAssetSet(autopay.FeeAssetName, state.Running.FeeBalance.String())
+			feeAssets, err := newAssetSet(autopay.FeeAssetName, running.FeeBalance.String())
 			if err != nil {
 				return ResultOutput{}, err
 			}
@@ -477,9 +478,9 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 		if gasAssetName == "" {
 			gasAssetName = DefaultGasConfig().GasAssetName
 		}
-		if state.Running.GasBalance != nil && state.Running.GasBalance.Sign() > 0 &&
+		if running.GasBalance != nil && running.GasBalance.Sign() > 0 &&
 			gasAssetName != SatoshiAssetName {
-			gasAssets, err := newGasAssetSet(gasAssetName, state.Running.GasBalance.String())
+			gasAssets, err := newGasAssetSet(gasAssetName, running.GasBalance.String())
 			if err != nil {
 				return ResultOutput{}, err
 			}
@@ -493,21 +494,22 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 			assets = capAssetsByAvailable(assets, availableAssets)
 		}
 		to := contract.MustEncode()
-		if state.Running.Closed {
+		if running.Closed {
 			to = runtime.RuntimeBase().Deployer()
 		}
 		value := int64(0)
 		if autopay.FeeAssetName == SatoshiAssetName {
-			value += decimalInt64(state.Running.FeeBalance)
+			value += decimalInt64(running.FeeBalance)
 		}
 		if gasAssetName == SatoshiAssetName {
-			value += decimalInt64(state.Running.GasBalance)
+			value += decimalInt64(running.GasBalance)
 		}
 		return ResultOutput{To: to, Value: value, Assets: assets}, nil
 	}
 	assetName := contractAssetName(runtime.Contract())
-	if assetName != "" && state.Running.AssetAInPool != nil && state.Running.AssetAInPool.Sign() > 0 {
-		poolAssets, err := newAssetSet(assetName, state.Running.AssetAInPool.String())
+	assetAInPool, assetBInPool := state.PoolBalancesForContract(runtime.Contract())
+	if assetName != "" && assetAInPool != nil && assetAInPool.Sign() > 0 {
+		poolAssets, err := newAssetSet(assetName, assetAInPool.String())
 		if err != nil {
 			return ResultOutput{}, err
 		}
@@ -518,9 +520,9 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	if exchange, ok := runtime.Contract().(*ExchangeContract); ok &&
 		exchange.AssetBName != "" &&
 		exchange.AssetBName != SatoshiAssetName &&
-		state.Running.AssetBInPool != nil &&
-		state.Running.AssetBInPool.Sign() > 0 {
-		poolAssets, err := newAssetSet(exchange.AssetBName, state.Running.AssetBInPool.String())
+		assetBInPool != nil &&
+		assetBInPool.Sign() > 0 {
+		poolAssets, err := newAssetSet(exchange.AssetBName, assetBInPool.String())
 		if err != nil {
 			return ResultOutput{}, err
 		}
@@ -541,8 +543,9 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	if gasAssetName == "" {
 		gasAssetName = DefaultGasConfig().GasAssetName
 	}
-	if state.Running.GasBalance != nil && state.Running.GasBalance.Sign() > 0 {
-		gasAssets, err := newGasAssetSet(gasAssetName, state.Running.GasBalance.String())
+	gasBalance := state.GasBalanceForContract(runtime.Contract())
+	if gasBalance != nil && gasBalance.Sign() > 0 {
+		gasAssets, err := newGasAssetSet(gasAssetName, gasBalance.String())
 		if err != nil {
 			return ResultOutput{}, err
 		}
@@ -556,12 +559,12 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 		assets = capAssetsByAvailable(assets, availableAssets)
 	}
 	to := contract.MustEncode()
-	if state.Running.Closed {
+	if state.ClosedForContract(runtime.Contract()) {
 		to = runtime.RuntimeBase().Deployer()
 	}
 	return ResultOutput{
 		To:     to,
-		Value:  contractChangeValue(runtime.Contract(), state.Running.AssetBInPool) + openValue,
+		Value:  contractChangeValue(runtime.Contract(), assetBInPool) + openValue,
 		Assets: assets,
 	}, nil
 }

@@ -198,6 +198,8 @@ type BlockChain struct {
 	// certain blockchain events.
 	notificationsLock sync.RWMutex
 	notifications     []NotificationCallback
+
+	onBlockConnected func(int32)
 }
 
 // HaveBlock returns whether or not the chain instance has the block represented
@@ -745,9 +747,17 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 
 	// Since we may have changed the UTXO cache, we make sure it didn't exceed its
 	// maximum size.  If we're pruned and have flushed already, this will be a no-op.
-	return b.db.Update(func(dbTx database.Tx) error {
+	err = b.db.Update(func(dbTx database.Tx) error {
 		return b.utxoCache.flush(dbTx, FlushIfNeeded, state)
 	})
+	if err != nil {
+		return err
+	}
+
+	if b.onBlockConnected != nil {
+		b.onBlockConnected(block.Height())
+	}
+	return nil
 }
 
 // disconnectBlock handles disconnecting the passed node/block from the end of
@@ -2266,6 +2276,10 @@ type Config struct {
 	// will target for with block files.  Prune at 0 specifies that no
 	// blocks will be deleted.
 	Prune uint64
+
+	// OnBlockConnected is called after a best-chain block, optional indexes,
+	// SatoshiNet indexer, and UTXO cache flush have completed.
+	OnBlockConnected func(int32)
 }
 
 // New returns a BlockChain instance using the provided configuration details.
@@ -2321,6 +2335,7 @@ func New(config *Config) (*BlockChain, error) {
 		utxoCache:              newUtxoCache(config.DB, config.UtxoCacheMaxSize),
 		hashCache:              config.HashCache,
 		bestChain:              newChainView(nil),
+		onBlockConnected:       config.OnBlockConnected,
 		orphans:                make(map[chainhash.Hash]*orphanBlock),
 		prevOrphans:            make(map[chainhash.Hash][]*orphanBlock),
 		warningCaches:          newThresholdCaches(vbNumBits),
