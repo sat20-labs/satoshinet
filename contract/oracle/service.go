@@ -23,8 +23,10 @@ const (
 )
 
 type TipContext struct {
-	Height int64
-	Unix   int64
+	Height    int64
+	Unix      int64
+	BlockUnix int64
+	LocalUnix int64
 }
 
 type LLMConfig struct {
@@ -142,10 +144,10 @@ func (s *Service) processOnce(quit <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
-	if err := s.processReadyContracts(quit, runtimeStore, corenodeAgent, tip.Unix); err != nil {
+	if err := s.processReadyContracts(quit, runtimeStore, corenodeAgent, tip.oracleUnix()); err != nil {
 		return err
 	}
-	candidates, err := runtimeStore.PendingPredictionConfirms(tip.Height, tip.Unix)
+	candidates, err := runtimeStore.PendingPredictionConfirms(tip.Height, tip.oracleUnix())
 	if err != nil {
 		return err
 	}
@@ -183,10 +185,7 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 	corenodeAgent.Audit = func(event agentcontract.PredictionAgentAuditEvent) {
 		s.audit(contractAddr, event)
 	}
-	observedAt := tip.Height
-	if candidate.Contract.TimeBase == agentcontract.TimeBaseUnix {
-		observedAt = tip.Unix
-	}
+	observedAt := tip.observedAt(candidate.Contract)
 	if len(candidate.State.Prediction.Bets) == 0 {
 		param := noBetConfirmParam(candidate.Contract, observedAt, s.cfg.LLM.Model)
 		tx, err := s.submitConfirm(candidate, param)
@@ -305,6 +304,23 @@ func (s *Service) processReadyContracts(quit <-chan struct{}, runtimeStore *agen
 		}
 	}
 	return nil
+}
+
+func (t TipContext) oracleUnix() int64 {
+	if t.LocalUnix != 0 {
+		return t.LocalUnix
+	}
+	if t.Unix != 0 {
+		return t.Unix
+	}
+	return t.BlockUnix
+}
+
+func (t TipContext) observedAt(contract agentcontract.PredictionContract) int64 {
+	if contract.TimeBase == agentcontract.TimeBaseUnix {
+		return t.oracleUnix()
+	}
+	return t.Height
 }
 
 func isQuit(quit <-chan struct{}) bool {

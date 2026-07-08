@@ -431,7 +431,7 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		err = fmt.Errorf("unsupported agent action %s", validated.Payload.Action)
 	}
 	if err != nil {
-		return nil
+		return e.executeInvalidInvoke(tx, validated, invoker)
 	}
 	if settlement != nil {
 		e.settlementPlans = append(e.settlementPlans, settlement)
@@ -492,6 +492,66 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 
 func (e *Backend) appendOutcome(outcome contractframework.ExecutionOutcome) {
 	e.records = append(e.records, outcome.ToRecord())
+}
+
+func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, validated InvokeValidation, invoker string) error {
+	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return err
+	}
+	gasConfig := e.GasConfig.Normalize()
+	hasResultGas, err := contractframework.OutputHasRequiredGas(validated.FundingOutput, gasConfig.GasAssetName, resultFee)
+	if err != nil {
+		return err
+	}
+	if !hasResultGas {
+		return nil
+	}
+	refundIntents, err := contractframework.NonGasFundingRefundIntents(validated.Contract,
+		[]ContractOutput{validated.FundingOutput}, gasConfig.GasAssetName, invoker)
+	if err != nil {
+		return err
+	}
+	refundOutputs, err := resultOutputsFromAssetIntents(refundIntents)
+	if err != nil {
+		return err
+	}
+	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract)
+	e.resultPlans = append(e.resultPlans, ResultPlan{
+		Contract: validated.Contract.EncodeAddress(),
+		Outputs:  refundOutputs,
+	})
+	outcome := contractframework.ExecutionOutcome{
+		Height:             e.BlockHeight,
+		TxID:               tx.TxID(),
+		Type:               TxTypeInvoke,
+		Kind:               ExecutionKindInvoke,
+		CallID:             callID,
+		Contract:           validated.Contract,
+		Status:             ResultStatusInvalid,
+		GasLimit:           validated.Payload.GasLimit,
+		GasFee:             resultFee,
+		FundingInputs:      []OutPoint{validated.FundingOutput.OutPoint},
+		GasRefundRecipient: invoker,
+		AssetIntents:       refundIntents,
+		RequiresResult:     true,
+	}
+	e.appendOutcome(outcome)
+	return nil
+}
+
+func resultOutputsFromAssetIntents(intents []AssetIntent) ([]ResultOutput, error) {
+	outputs := make([]ResultOutput, 0, len(intents))
+	for _, intent := range intents {
+		output := ResultOutput{To: intent.To, Reason: "refund"}
+		if err := output.AddAsset(intent.AssetName, intent.Amount); err != nil {
+			return nil, err
+		}
+		if !contractframework.ResultOutputIsZero(output) {
+			outputs = append(outputs, output)
+		}
+	}
+	return outputs, nil
 }
 
 func (e *Backend) lastOutcomeSince(before int) (contractframework.ExecutionOutcome, error) {

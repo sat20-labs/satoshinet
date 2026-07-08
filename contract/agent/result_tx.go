@@ -35,7 +35,7 @@ func AugmentResultPlans(plans []ResultPlan, contractUTXOs ContractUTXOProvider,
 		if contractUTXOs == nil {
 			continue
 		}
-		if len(out[i].Outputs) == 0 {
+		if len(out[i].Outputs) == 0 && len(out[i].GasRefunds) == 0 {
 			out[i].Inputs = contractframework.UniqueOutPoints(out[i].Inputs)
 			continue
 		}

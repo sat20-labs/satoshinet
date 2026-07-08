@@ -870,7 +870,6 @@ func TestBuildBlockResultTxsIgnoresBetWithoutFundingAmount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial block failed: %v", err)
 	}
-
 	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
 		Txs:           []*wire.MsgTx{betTx},
 		Store:         store,
@@ -892,6 +891,164 @@ func TestBuildBlockResultTxsIgnoresBetWithoutFundingAmount(t *testing.T) {
 	}
 	if len(runtime.State().Prediction.Bets) != 0 {
 		t.Fatalf("invalid bet changed state: %#v", runtime.State())
+	}
+}
+
+func TestBuildBlockResultTxsRefundsBetAfterClosed(t *testing.T) {
+	deployTx, addr := testAgentDeployTx(t)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	contract := validPredictionContract()
+	resultGas := testAgentGasFeeAtHeight(t, DefaultGasConfig().ResultBaseGas, contract.BetDeadline+1).String()
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000,
+		mustAssetSet(t, DefaultGasConfig().GasAssetName, resultGas, contractcommon.GasFeePrecision))
+
+	store := NewRuntimeStore()
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
+		BlockHeight:   contract.BetDeadline,
+		BlockTime:     contract.BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("initial block failed: %v", err)
+	}
+	info, err := ClassifyTxForBlockOrder(betTx, TestnetContractPrefix)
+	if err != nil || !info.IsAgent || info.Type != TxTypeInvoke {
+		t.Fatalf("late bet classify mismatch: info=%+v err=%v", info, err)
+	}
+	if !store.Exists(addr) {
+		t.Fatalf("runtime missing before late bet")
+	}
+	parsedBet, err := ParseTx(betTx, StandardContractScriptResolver(TestnetContractPrefix))
+	if err != nil {
+		t.Fatalf("late bet parse failed: %v", err)
+	}
+	validatedBet, err := ValidateParsedInvokeTxBasic(parsedBet, store.Exists, GasConfig{})
+	if err != nil {
+		t.Fatalf("late bet validate failed: %v", err)
+	}
+	normalizedGas := GasConfig{}.Normalize()
+	requiredGas, err := normalizedGas.ResultFee(contract.BetDeadline + 1)
+	if err != nil {
+		t.Fatalf("result fee failed: %v", err)
+	}
+	hasGas, err := contractframework.OutputHasRequiredGas(validatedBet.FundingOutput,
+		normalizedGas.GasAssetName, requiredGas)
+	if err != nil || !hasGas {
+		t.Fatalf("late bet gas mismatch: has=%v err=%v required=%v output=%+v", hasGas, err, requiredGas, validatedBet.FundingOutput)
+	}
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{betTx},
+		Store:         store,
+		BlockHeight:   contract.BetDeadline + 1,
+		BlockTime:     contract.BetDeadline + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			betTx.TxID(): "alice",
+		}),
+		ResolveScript: testResultScriptResolver,
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.Execution.Records) != 1 {
+		t.Fatalf("record count mismatch: %d records=%+v plans=%+v", len(built.Execution.Records),
+			built.Execution.Records, built.Execution.ResultPlans)
+	}
+	record := built.Execution.Records[0]
+	if record.Status != ResultStatusInvalid || !record.RequiresResult {
+		t.Fatalf("late bet should be invalid result record: %+v", record)
+	}
+	if record.GasRefundRecipient != "alice" {
+		t.Fatalf("gas refund recipient mismatch: %q", record.GasRefundRecipient)
+	}
+	if len(record.AssetIntents) != 1 || record.AssetIntents[0].To != "alice" ||
+		record.AssetIntents[0].AssetName != SatoshiAssetName || record.AssetIntents[0].Amount.String() != "60000" {
+		t.Fatalf("refund intent mismatch: %+v", record.AssetIntents)
+	}
+	if len(built.Execution.ResultPlans) != 1 {
+		t.Fatalf("result plan count mismatch: %d", len(built.Execution.ResultPlans))
+	}
+	if len(built.ResultTxs) != 1 {
+		t.Fatalf("result tx count mismatch: %d records=%+v plans=%+v", len(built.ResultTxs),
+			built.Execution.Records, built.Execution.ResultPlans)
+	}
+	outputs := built.Execution.ResultPlans[0].Outputs
+	if len(outputs) != 1 || outputs[0].To != "alice" || outputs[0].Value != 60000 {
+		t.Fatalf("refund output mismatch: %+v", outputs)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	if len(runtime.State().Prediction.Bets) != 0 {
+		t.Fatalf("late bet changed state: %#v", runtime.State().Prediction.Bets)
+	}
+}
+
+func TestBuildBlockResultTxsRefundsLateGasAssetBet(t *testing.T) {
+	contract := validPredictionContract()
+	contract.BetAsset = DefaultGasConfig().GasAssetName
+	deployTx, addr := testAgentDeployTxForContract(t, contract)
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
+	resultGas := testAgentGasFeeAtHeight(t, DefaultGasConfig().ResultBaseGas, contract.BetDeadline+1)
+	totalFunding := scommon.NewDefaultDecimal(60000).AddAlignPrecision(resultGas).String()
+	betTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 0,
+		mustAssetSet(t, DefaultGasConfig().GasAssetName, totalFunding, contractcommon.GasFeePrecision))
+
+	store := NewRuntimeStore()
+	_, err := testAgentExecuteBlock(BlockExecutionRequest{
+		Txs:           []*wire.MsgTx{deployTx, readyTx},
+		Store:         store,
+		BlockHeight:   contract.BetDeadline,
+		BlockTime:     contract.BetDeadline,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			readyTx.TxID(): "core",
+		}),
+	})
+	if err != nil {
+		t.Fatalf("initial block failed: %v", err)
+	}
+
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Txs:           []*wire.MsgTx{betTx},
+		Store:         store,
+		BlockHeight:   contract.BetDeadline + 1,
+		BlockTime:     contract.BetDeadline + 1,
+		RuntimeConfig: testRuntimeConfig(),
+		ResolveInvoker: testInvokerResolver(map[string]string{
+			betTx.TxID(): "alice",
+		}),
+		ResolveScript: testResultScriptResolver,
+	})
+	if err != nil {
+		t.Fatalf("BuildBlockResultTxs failed: %v", err)
+	}
+	if len(built.Execution.Records) != 1 || built.Execution.Records[0].Status != ResultStatusInvalid {
+		t.Fatalf("late gas bet should be invalid: %+v", built.Execution.Records)
+	}
+	if len(built.Execution.ResultPlans) != 1 {
+		t.Fatalf("result plan count mismatch: %d", len(built.Execution.ResultPlans))
+	}
+	outputs := built.Execution.ResultPlans[0].Outputs
+	if len(outputs) != 1 || outputs[0].To != "alice" || len(outputs[0].Assets) != 1 ||
+		outputs[0].Assets[0].Name.String() != DefaultGasConfig().GasAssetName ||
+		outputs[0].Assets[0].Amount.String() != "60000" {
+		t.Fatalf("gas refund output mismatch: outputs=%+v records=%+v plans=%+v",
+			outputs, built.Execution.Records, built.Execution.ResultPlans)
+	}
+	runtime, ok := store.Get(addr)
+	if !ok {
+		t.Fatalf("missing runtime")
+	}
+	if len(runtime.State().Prediction.Bets) != 0 {
+		t.Fatalf("late gas bet changed state: %#v", runtime.State().Prediction.Bets)
 	}
 }
 

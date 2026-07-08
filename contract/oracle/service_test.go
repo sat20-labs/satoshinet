@@ -35,6 +35,37 @@ func TestNoBetConfirmParamIsValid(t *testing.T) {
 	}
 }
 
+func TestTipContextUsesLocalUnixForUnixPrediction(t *testing.T) {
+	tip := TipContext{
+		Height:    123,
+		Unix:      1000,
+		BlockUnix: 1000,
+		LocalUnix: 2000,
+	}
+	contract := testPredictionContract()
+	if got := tip.oracleUnix(); got != 2000 {
+		t.Fatalf("oracle unix mismatch: got %d want 2000", got)
+	}
+	if got := tip.observedAt(contract); got != 2000 {
+		t.Fatalf("unix prediction observed_at mismatch: got %d want 2000", got)
+	}
+
+	contract.TimeBase = agentcontract.TimeBaseHeight
+	if got := tip.observedAt(contract); got != 123 {
+		t.Fatalf("height prediction observed_at mismatch: got %d want 123", got)
+	}
+}
+
+func TestTipContextFallsBackToLegacyUnix(t *testing.T) {
+	tip := TipContext{
+		Height: 123,
+		Unix:   1000,
+	}
+	if got := tip.oracleUnix(); got != 1000 {
+		t.Fatalf("legacy unix fallback mismatch: got %d want 1000", got)
+	}
+}
+
 func testPredictionContract() agentcontract.PredictionContract {
 	return agentcontract.PredictionContract{
 		Subtype:      agentcontract.SubtypePrediction,

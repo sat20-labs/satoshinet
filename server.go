@@ -3097,15 +3097,18 @@ func (s *server) agentOracleTipContext() (contractoracle.TipContext, error) {
 		return contractoracle.TipContext{}, nil
 	}
 	best := s.chain.BestSnapshot()
-	unixValue := time.Now().Unix()
+	localUnix := time.Now().Unix()
+	blockUnix := localUnix
 	if tipBlock, err := s.chain.BlockByHash(&best.Hash); err == nil && tipBlock != nil {
-		unixValue = tipBlock.MsgBlock().Header.Timestamp.Unix()
+		blockUnix = tipBlock.MsgBlock().Header.Timestamp.Unix()
 	} else if !best.MedianTime.IsZero() {
-		unixValue = best.MedianTime.Unix()
+		blockUnix = best.MedianTime.Unix()
 	}
 	return contractoracle.TipContext{
-		Height: int64(best.Height),
-		Unix:   unixValue,
+		Height:    int64(best.Height),
+		Unix:      blockUnix,
+		BlockUnix: blockUnix,
+		LocalUnix: localUnix,
 	}, nil
 }
 
