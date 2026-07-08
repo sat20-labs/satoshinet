@@ -30,6 +30,10 @@ type BlockStateProvider interface {
 	BlockPostState(hash *chainhash.Hash) (contractframework.RuntimeStore, bool)
 }
 
+type ParentStateProvider interface {
+	ParentState(block *btcutil.Block, view *blockchain.UtxoViewpoint) (contractframework.RuntimeStore, bool, error)
+}
+
 type CompositeContractBlockValidator struct {
 	cfg CompositeContractBlockValidatorConfig
 }
@@ -70,7 +74,7 @@ func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.B
 		}
 	}
 	if activity.Template || activity.EVM || activity.Agent {
-		return v.verifyCombinedStateRoot(block, activity.Template, activity.EVM, activity.Agent)
+		return v.verifyCombinedStateRoot(block, view, activity.Template, activity.EVM, activity.Agent)
 	}
 	return nil
 }
@@ -100,30 +104,50 @@ func moduleBlockPostState(validator ContractModuleBlockValidator,
 	return provider.BlockPostState(hash)
 }
 
-func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil.Block, hasTemplateWork, hasEVMWork, hasAgentWork bool) error {
-	var templateRoot [32]byte
-	if hasTemplateWork {
-		postState, ok := moduleBlockPostState(v.cfg.TemplateValidator, block.Hash())
-		if !ok || postState == nil {
-			return contractBlockRuleError("missing template post-state")
-		}
-		templateRoot = postState.Root()
+func moduleParentState(validator ContractModuleBlockValidator, block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (contractframework.EngineState, bool, error) {
+
+	provider, ok := validator.(ParentStateProvider)
+	if !ok {
+		return nil, false, nil
 	}
-	var evmRoot [32]byte
-	if hasEVMWork {
-		postState, ok := moduleBlockPostState(v.cfg.EVMValidator, block.Hash())
+	return provider.ParentState(block, view)
+}
+
+func moduleCombinedRoot(validator ContractModuleBlockValidator, label string,
+	block *btcutil.Block, view *blockchain.UtxoViewpoint, hasWork bool) ([32]byte, error) {
+
+	if hasWork {
+		postState, ok := moduleBlockPostState(validator, block.Hash())
 		if !ok || postState == nil {
-			return contractBlockRuleError("missing EVM post-state")
+			return [32]byte{}, contractBlockRuleError("missing %s post-state", label)
 		}
-		evmRoot = postState.Root()
+		return postState.Root(), nil
 	}
-	var agentRoot [32]byte
-	if hasAgentWork {
-		postState, ok := moduleBlockPostState(v.cfg.AgentValidator, block.Hash())
-		if !ok || postState == nil {
-			return contractBlockRuleError("missing agent post-state")
-		}
-		agentRoot = postState.Root()
+	parentState, ok, err := moduleParentState(validator, block, view)
+	if err != nil {
+		return [32]byte{}, contractBlockRuleError("load %s parent-state: %v", label, err)
+	}
+	if !ok || parentState == nil {
+		return [32]byte{}, nil
+	}
+	return parentState.Root(), nil
+}
+
+func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint, hasTemplateWork, hasEVMWork, hasAgentWork bool) error {
+
+	templateRoot, err := moduleCombinedRoot(v.cfg.TemplateValidator, "template", block, view, hasTemplateWork)
+	if err != nil {
+		return err
+	}
+	evmRoot, err := moduleCombinedRoot(v.cfg.EVMValidator, "EVM", block, view, hasEVMWork)
+	if err != nil {
+		return err
+	}
+	agentRoot, err := moduleCombinedRoot(v.cfg.AgentValidator, "agent", block, view, hasAgentWork)
+	if err != nil {
+		return err
 	}
 	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot, agentRoot)
 	payload, found, err := contractapi.FindCoinbaseStateRoot(block.Transactions()[0].MsgTx())

@@ -50,52 +50,60 @@ func TestAgentConfirmFundingOutputAllowsEmptyTopUp(t *testing.T) {
 	}
 }
 
-func TestAgentConfirmExternalGasFundingUsesOnlyTopUp(t *testing.T) {
-	if got := agentConfirmExternalGasFunding(nil); got != nil {
-		t.Fatalf("nil top-up should not require external gas funding: %s", got.String())
+func TestAgentConfirmExternalGasFundingIncludesInvokeFee(t *testing.T) {
+	if got, err := agentConfirmExternalGasFunding(nil, nil); err != nil || got != nil {
+		t.Fatalf("nil fees should not require external gas funding: got=%v err=%v", got, err)
 	}
-	if got := agentConfirmExternalGasFunding(common.NewDecimal(0, 0)); got != nil {
-		t.Fatalf("zero top-up should not require external gas funding: %s", got.String())
+	invokeFee := common.NewDecimal(100, 0)
+	if got, err := agentConfirmExternalGasFunding(invokeFee, nil); err != nil || got == nil || got.Cmp(invokeFee) != 0 {
+		t.Fatalf("unexpected invoke-only gas funding: got=%v err=%v want=%s", got, err, invokeFee.String())
 	}
 	topUp := common.NewDecimal(37, 0)
-	got := agentConfirmExternalGasFunding(topUp)
-	if got == nil || got.Cmp(topUp) != 0 {
-		t.Fatalf("unexpected external gas funding: got %v want %s", got, topUp.String())
+	want := common.NewDecimal(137, 0)
+	got, err := agentConfirmExternalGasFunding(invokeFee, topUp)
+	if err != nil || got == nil || got.Cmp(want) != 0 {
+		t.Fatalf("unexpected invoke plus top-up gas funding: got=%v err=%v want=%s", got, err, want.String())
 	}
 }
 
-func TestAgentConfirmFundingAllowsPlainAnchorWithoutGasTopUp(t *testing.T) {
+func TestAgentConfirmFundingRequiresGasForInvokeFee(t *testing.T) {
 	changeScript := []byte{0x51}
+	gasAssetName := contractnode.DefaultGasConfig().GasAssetName
 	plain := testAgentConfirmFundingUTXO(1, 1000, changeScript, nil)
+	gas := testAgentConfirmFundingUTXO(2, 0, changeScript, wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(gasAssetName),
+		Amount: *common.NewDecimal(150, 0),
+	}})
 
 	selection, err := selectAgentConfirmFundingFromAvailable(
-		[]contractcommon.FundingUTXO{plain},
-		nil,
-		contractnode.DefaultGasConfig().GasAssetName,
+		[]contractcommon.FundingUTXO{plain, gas},
+		common.NewDecimal(100, 0),
+		gasAssetName,
 		changeScript,
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("plain anchor should be accepted without gas top-up: %v", err)
+		t.Fatalf("gas invoke fee selection failed: %v", err)
 	}
 	if len(selection.Inputs) != 1 {
 		t.Fatalf("unexpected input count: got %d want 1", len(selection.Inputs))
 	}
-	if selection.Inputs[0].OutPoint != plain.OutPoint {
-		t.Fatalf("unexpected selected input: got %v want %v", selection.Inputs[0].OutPoint, plain.OutPoint)
+	if selection.Inputs[0].OutPoint != gas.OutPoint {
+		t.Fatalf("unexpected selected input: got %v want %v", selection.Inputs[0].OutPoint, gas.OutPoint)
 	}
 	if selection.ChangeOutput == nil {
 		t.Fatalf("expected change output")
 	}
-	if selection.ChangeOutput.Value != plain.OutValue.Value {
-		t.Fatalf("unexpected change value: got %d want %d", selection.ChangeOutput.Value, plain.OutValue.Value)
+	asset, err := selection.ChangeOutput.Assets.Find(wire.NewAssetNameFromString(gasAssetName))
+	if err != nil {
+		t.Fatalf("expected gas change asset: %v", err)
 	}
-	if len(selection.ChangeOutput.Assets) != 0 {
-		t.Fatalf("plain anchor should not create gas change: %v", selection.ChangeOutput.Assets)
+	if got, want := asset.Amount.String(), "50"; got != want {
+		t.Fatalf("unexpected gas change: got %s want %s", got, want)
 	}
 }
 
-func TestAgentConfirmFundingRequiresGasOnlyForTopUp(t *testing.T) {
+func TestAgentConfirmFundingRequiresGasForInvokeFeeAndTopUp(t *testing.T) {
 	changeScript := []byte{0x51}
 	gasAssetName := contractnode.DefaultGasConfig().GasAssetName
 	plain := testAgentConfirmFundingUTXO(1, 1000, changeScript, nil)
@@ -106,7 +114,7 @@ func TestAgentConfirmFundingRequiresGasOnlyForTopUp(t *testing.T) {
 
 	selection, err := selectAgentConfirmFundingFromAvailable(
 		[]contractcommon.FundingUTXO{plain, gas},
-		common.NewDecimal(50, 0),
+		common.NewDecimal(90, 0),
 		gasAssetName,
 		changeScript,
 		nil,
@@ -127,7 +135,7 @@ func TestAgentConfirmFundingRequiresGasOnlyForTopUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected gas change asset: %v", err)
 	}
-	if got, want := asset.Amount.String(), "50"; got != want {
+	if got, want := asset.Amount.String(), "10"; got != want {
 		t.Fatalf("unexpected gas change: got %s want %s", got, want)
 	}
 }

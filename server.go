@@ -3124,7 +3124,15 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 	if err != nil {
 		return nil, err
 	}
-	funding, err := s.selectAgentConfirmFundingUTXOs(agentConfirmExternalGasFunding(topUpGas))
+	invokeFee, err := gasConfig.InvokeFee(int64(s.chain.BestSnapshot().Height) + 1)
+	if err != nil {
+		return nil, err
+	}
+	externalGas, err := agentConfirmExternalGasFunding(invokeFee, topUpGas)
+	if err != nil {
+		return nil, err
+	}
+	funding, err := s.selectAgentConfirmFundingUTXOs(externalGas)
 	if err != nil {
 		return nil, err
 	}
@@ -3198,11 +3206,24 @@ func agentConfirmFundingOutput(topUpGas *common.Decimal, gasAssetName string) (w
 	}, nil
 }
 
-func agentConfirmExternalGasFunding(topUpGas *common.Decimal) *common.Decimal {
-	if topUpGas == nil || topUpGas.Sign() <= 0 {
-		return nil
+func agentConfirmExternalGasFunding(invokeFee, topUpGas *common.Decimal) (*common.Decimal, error) {
+	required := common.NewDecimal(0, 0)
+	if invokeFee != nil {
+		if invokeFee.Sign() < 0 {
+			return nil, fmt.Errorf("invalid agent invoke gas fee")
+		}
+		required = invokeFee.Clone()
 	}
-	return topUpGas.Clone()
+	if topUpGas != nil {
+		if topUpGas.Sign() < 0 {
+			return nil, fmt.Errorf("invalid agent confirm gas top up")
+		}
+		required = required.AddAlignPrecision(topUpGas)
+	}
+	if required.Sign() <= 0 {
+		return nil, nil
+	}
+	return required, nil
 }
 
 func (s *server) agentConfirmGasTopUp(contract contractcommon.ContractAddress, action string,
@@ -3991,6 +4012,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		ChainParams:        s.chainParams,
 		DisableCheckpoints: cfg.DisableCheckpoints,
 		MaxPeers:           cfg.MaxPeers,
+		SyncToHeight:       cfg.SyncToHeight,
 		FeeEstimator:       s.feeEstimator,
 	})
 	if err != nil {

@@ -166,6 +166,19 @@ func (v *AgentBlockExecutionValidator) BlockPostState(hash *chainhash.Hash) (con
 	return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
 }
 
+func (v *AgentBlockExecutionValidator) ParentState(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (contractframework.EngineState, bool, error) {
+
+	store, err := v.runtime(block, view)
+	if err != nil {
+		return nil, false, err
+	}
+	if store == nil {
+		return nil, false, nil
+	}
+	return contractframework.RootEngineState{StateRoot: store.StateRoot(), StateSnapshot: store.Clone()}, true, nil
+}
+
 func (v *AgentBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, state *agent.RuntimeStore) {
 	if hash == nil || state == nil {
 		return

@@ -236,6 +236,19 @@ func (v *EVMBlockExecutionValidator) BlockPostState(hash *chainhash.Hash) (contr
 	return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
 }
 
+func (v *EVMBlockExecutionValidator) ParentState(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (contractframework.EngineState, bool, error) {
+
+	runtime, err := v.runtime(block, view)
+	if err != nil {
+		return nil, false, err
+	}
+	if runtime == nil || runtime.State == nil {
+		return nil, false, nil
+	}
+	return contractframework.RootEngineState{StateRoot: runtime.State.StateRoot(), StateSnapshot: runtime.State.Clone()}, true, nil
+}
+
 func (v *EVMBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, state *evm.MemoryStateDB) {
 	if hash == nil || state == nil {
 		return

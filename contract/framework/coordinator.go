@@ -103,12 +103,8 @@ func (c *BlockCoordinator) BuildResults(req ResultCoordinatorBuildRequest) (Resu
 			}
 			resultTxs = append(resultTxs, result.ResultTxs...)
 			executions[module.Type()] = exec
-			stateRoot := result.StateRoot
-			if stateRoot == ([32]byte{}) && moduleParticipated(split, module.Type()) {
-				stateRoot = module.StateRoot(exec)
-			}
 			state.SetEngine(module.Type(), RootEngineState{
-				StateRoot:     stateRoot,
+				StateRoot:     module.StateRoot(exec),
 				StateSnapshot: exec.PostState,
 			})
 			continue

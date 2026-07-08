@@ -185,6 +185,7 @@ type SyncManager struct {
 	chain          *blockchain.BlockChain
 	txMemPool      *mempool.TxPool
 	chainParams    *chaincfg.Params
+	syncToHeight   int32
 	progressLogger *blockProgressLogger
 	msgChan        chan interface{}
 	wg             sync.WaitGroup
@@ -771,6 +772,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	if sm.syncPeer != nil {
 		lastBlock := int(sm.syncPeer.LastBlock())
 		sm.chain.SetTipHeight(lastBlock)
+	}
+	if exceeds, height := sm.exceedsSyncToHeight(bmsg.block); exceeds {
+		log.Infof("Skipping block %v at height %d above sync-to-height target %d",
+			blockHash, height, sm.syncToHeight)
+		return
 	}
 	_, isOrphan, err := sm.chain.ProcessBlock(bmsg.block, behaviorFlags)
 	if err != nil {
@@ -1431,6 +1437,13 @@ out:
 					lastBlock := int(sm.syncPeer.LastBlock())
 					sm.chain.SetTipHeight(lastBlock)
 				}
+				if exceeds, _ := sm.exceedsSyncToHeight(msg.block); exceeds {
+					msg.reply <- processBlockResponse{
+						isOrphan: false,
+						err:      nil,
+					}
+					continue
+				}
 				_, isOrphan, err := sm.chain.ProcessBlock(
 					msg.block, msg.flags)
 				if err != nil {
@@ -1694,6 +1707,26 @@ func (sm *SyncManager) ProcessBlock(block *btcutil.Block, flags blockchain.Behav
 	return response.isOrphan, response.err
 }
 
+func (sm *SyncManager) exceedsSyncToHeight(block *btcutil.Block) (bool, int32) {
+	if sm.syncToHeight <= 0 {
+		return false, 0
+	}
+	if sm.chain.BestSnapshot().Height < sm.syncToHeight {
+		return false, 0
+	}
+
+	height := block.Height()
+	if height <= 0 {
+		cbHeight, err := blockchain.ExtractCoinbaseHeight(block.Transactions()[0])
+		if err != nil {
+			log.Warnf("Unable to extract block height while checking sync-to-height target: %v", err)
+			return false, 0
+		}
+		height = cbHeight
+	}
+	return height > sm.syncToHeight, height
+}
+
 // IsCurrent returns whether or not the sync manager believes it is synced with
 // the connected peers.
 func (sm *SyncManager) IsCurrent() bool {
@@ -1720,6 +1753,7 @@ func New(config *Config) (*SyncManager, error) {
 		chain:           config.Chain,
 		txMemPool:       config.TxMemPool,
 		chainParams:     config.ChainParams,
+		syncToHeight:    config.SyncToHeight,
 		rejectedTxns:    make(map[chainhash.Hash]struct{}),
 		requestedTxns:   make(map[chainhash.Hash]struct{}),
 		requestedBlocks: make(map[chainhash.Hash]struct{}),

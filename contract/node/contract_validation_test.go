@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -13,6 +14,7 @@ import (
 	contractengine "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/agent"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -146,6 +148,70 @@ func TestCompositeContractBlockActivityIncludesDueAgentHeightTrigger(t *testing.
 	}
 }
 
+func TestTemplateBlockActivityIncludesDueAutopayTrigger(t *testing.T) {
+	gasConfig := testNodeAutopayGasConfig()
+	runtime := testNodeAutopayRuntime(t, "recipient-address", "ordx:f:test", "10")
+	contractAddr := runtime.Address()
+	if err := runtime.ApplyFunding(testNodeContractOutput("fund", 0, contractAddr, 0,
+		testNodeAssets("ordx:f:test", 20, gasConfig.GasAssetName, 100)), gasConfig.GasAssetName); err != nil {
+		t.Fatalf("apply autopay funding: %v", err)
+	}
+	if _, err := runtime.SettleBlockWithGasConfig(100, gasConfig); err != nil {
+		t.Fatalf("settle autopay activation: %v", err)
+	}
+	store := template.NewRuntimeStore()
+	store.Add(runtime)
+	before := store.StateRoot()
+
+	validator := NewTemplateBlockExecutionValidator(TemplateBlockExecutionConfig{
+		ChainParams: &chaincfg.TestNetParams,
+		GasConfig:   gasConfig,
+		NewRuntime: func(*btcutil.Block, *blockchain.UtxoViewpoint) (*template.RuntimeStore, error) {
+			return store.Clone(), nil
+		},
+	})
+	block := btcutil.NewBlock(&wire.MsgBlock{
+		Header:       wire.BlockHeader{Timestamp: time.Unix(1710000000, 0)},
+		Transactions: []*wire.MsgTx{testEVMCoinbaseTx()},
+	})
+	block.SetHeight(101)
+
+	active, err := validator.HasContractBlockActivity(block, blockchain.NewUtxoViewpoint())
+	if err != nil {
+		t.Fatalf("template block activity failed: %v", err)
+	}
+	if !active {
+		t.Fatalf("expected due autopay trigger to mark template active")
+	}
+	if store.StateRoot() != before {
+		t.Fatalf("activity probe mutated parent store")
+	}
+}
+
+func TestCompositeContractStateRootUsesInactiveParentRoots(t *testing.T) {
+	templateRoot := testHashRoot(0x11)
+	evmRoot := testHashRoot(0x22)
+	agentRoot := testHashRoot(0x33)
+	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot, agentRoot)
+
+	coinbase := testEVMCoinbaseTx()
+	if err := contractengine.UpsertCoinbaseStateRoot(coinbase, expected); err != nil {
+		t.Fatal(err)
+	}
+	block := btcutil.NewBlock(&wire.MsgBlock{
+		Transactions: []*wire.MsgTx{coinbase},
+	})
+
+	validator := NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
+		TemplateValidator: testRootValidator{parentRoot: templateRoot},
+		EVMValidator:      testRootValidator{postRoot: evmRoot},
+		AgentValidator:    testRootValidator{parentRoot: agentRoot},
+	})
+	if err := validator.verifyCombinedStateRoot(block, blockchain.NewUtxoViewpoint(), false, true, false); err != nil {
+		t.Fatalf("verifyCombinedStateRoot failed: %v", err)
+	}
+}
+
 func TestAgentValidatorRejectsMissingRootForDueHeightTrigger(t *testing.T) {
 	store := testReadyAgentRuntimeStore(t, agent.TimeBaseHeight, 10, 30)
 	block := btcutil.NewBlock(&wire.MsgBlock{
@@ -266,6 +332,96 @@ func TestAgentValidatorRejectsUnexpectedResultWithoutPlan(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unexpected agent RESULT transaction") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+type testRootValidator struct {
+	parentRoot [32]byte
+	postRoot   [32]byte
+}
+
+func (v testRootValidator) ValidateContractModuleBlock(*btcutil.Block, *blockchain.UtxoViewpoint) error {
+	return nil
+}
+
+func (v testRootValidator) ParentState(*btcutil.Block,
+	*blockchain.UtxoViewpoint) (contractframework.RuntimeStore, bool, error) {
+
+	return contractframework.RootEngineState{StateRoot: v.parentRoot}, true, nil
+}
+
+func (v testRootValidator) BlockPostState(*chainhash.Hash) (contractframework.RuntimeStore, bool) {
+	return contractframework.RootEngineState{StateRoot: v.postRoot}, true
+}
+
+func testHashRoot(value byte) [32]byte {
+	var root [32]byte
+	for i := range root {
+		root[i] = value
+	}
+	return root
+}
+
+func testNodeAutopayRuntime(t *testing.T, recipient, feeAsset, minAmount string) *template.ContractRuntime {
+	t.Helper()
+	contract := template.NewAutopayContract("dkvs", recipient, feeAsset, minAmount)
+	content, err := contract.Encode()
+	if err != nil {
+		t.Fatalf("encode autopay contract: %v", err)
+	}
+	deploy := template.DeployPayload{
+		GasLimit:        1000,
+		SubType:         template.TemplateAutopay,
+		Version:         template.CurrentTemplateVersion,
+		DeployNonce:     7,
+		ContractContent: content,
+	}
+	addr, _, err := template.DeriveContractAddress(contractcommon.TestnetContractPrefix,
+		deploy.ContractContent, "deployer-address", deploy.DeployNonce)
+	if err != nil {
+		t.Fatalf("derive autopay address: %v", err)
+	}
+	runtime, err := template.NewRuntimeWithDeployer(addr, deploy, template.NewDefaultRegistry(), "deployer-address")
+	if err != nil {
+		t.Fatalf("new autopay runtime: %v", err)
+	}
+	return runtime
+}
+
+func testNodeAutopayGasConfig() template.GasConfig {
+	cfg := template.DefaultGasConfig()
+	cfg.GasAssetName = "ordx:f:gas"
+	cfg.DeployBaseGas = 1
+	cfg.InvokeBaseGas = 1
+	cfg.ResultBaseGas = 1
+	cfg.TriggerBaseGas = 1
+	return cfg
+}
+
+func testNodeAssets(assetNameA string, amountA int64, assetNameB string, amountB int64) wire.TxAssets {
+	assets := testNodeAsset(assetNameA, amountA)
+	if err := assets.Merge(testNodeAsset(assetNameB, amountB)); err != nil {
+		panic(err)
+	}
+	return assets
+}
+
+func testNodeAsset(assetName string, amount int64) wire.TxAssets {
+	return wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(assetName),
+		Amount: *scommon.NewDefaultDecimal(amount),
+	}}
+}
+
+func testNodeContractOutput(txid string, vout uint32, contractAddr template.ContractAddress,
+	value int64, assets wire.TxAssets) template.ContractOutput {
+
+	return contractframework.ContractOutputFromFunding(contractcommon.FundingOutput{
+		OutPoint: contractcommon.TxOutPoint{TxID: txid, Vout: vout},
+		Vout:     vout,
+		Contract: contractAddr,
+		Value:    value,
+		Assets:   assets,
+	})
 }
 
 func testReadyAgentRuntimeStore(t *testing.T, timeBase string, betDeadline, confirmAfter int64) *agent.RuntimeStore {

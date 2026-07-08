@@ -138,7 +138,31 @@ func (v *TemplateBlockExecutionValidator) HasContractBlockActivity(block *btcuti
 	if view == nil {
 		return false, templateBlockRuleError("missing UTXO view")
 	}
-	return false, nil
+	store, err := v.runtime(block, view)
+	if err != nil {
+		return false, templateBlockRuleError("load template runtime: %v", err)
+	}
+	if store == nil {
+		return false, nil
+	}
+	probe := store.Clone()
+	before := probe.StateRoot()
+
+	gasConfig := v.cfg.GasConfig
+	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
+	if v.cfg.ContractUTXOs != nil {
+		contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(
+			v.cfg.ContractUTXOs, nil, v.contractPrefix(), template.ContractTypeTemplate)
+		if err := probe.ReconcileAssetCaches(contractUTXOs, gasConfig); err != nil {
+			return false, templateBlockRuleError("template activity reconcile: %v", err)
+		}
+	}
+	plans, err := probe.SettleBlockWithGasConfigAndPrecision(
+		int64(block.Height()), gasConfig.Normalize(), v.cfg.AssetPrecision)
+	if err != nil {
+		return false, templateBlockRuleError("template activity settle: %v", err)
+	}
+	return probe.StateRoot() != before || len(plans) != 0, nil
 }
 
 func (v *TemplateBlockExecutionValidator) TemplateBlockPostState(hash *chainhash.Hash) (*template.RuntimeStore, bool) {
@@ -160,6 +184,19 @@ func (v *TemplateBlockExecutionValidator) BlockPostState(hash *chainhash.Hash) (
 		return nil, false
 	}
 	return contractframework.RootEngineState{StateRoot: state.StateRoot(), StateSnapshot: state}, true
+}
+
+func (v *TemplateBlockExecutionValidator) ParentState(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (contractframework.EngineState, bool, error) {
+
+	store, err := v.runtime(block, view)
+	if err != nil {
+		return nil, false, err
+	}
+	if store == nil {
+		return nil, false, nil
+	}
+	return contractframework.RootEngineState{StateRoot: store.StateRoot(), StateSnapshot: store.Clone()}, true, nil
 }
 
 func (v *TemplateBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, state *template.RuntimeStore) {
