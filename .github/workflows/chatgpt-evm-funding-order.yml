@@ -1,4 +1,5 @@
 name: ChatGPT EVM funding-order fix
+# Re-run the committed source state through the complete test suite.
 
 on:
   pull_request:
