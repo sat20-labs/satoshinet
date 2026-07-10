@@ -231,11 +231,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 	}
 	runtime.ContractPrefix = prefix
 
-	overlay := contractframework.NewContractUTXOOverlay(contractframework.ContractUTXOOverlayConfig{
-		Prefix:       prefix,
-		ContractType: ContractTypeEVM,
-		Base:         req.ContractUTXOs,
-	})
+	overlay := newEVMBlockUTXOOverlay(prefix, req.ContractUTXOs, req.Txs)
 	resolveOutput := req.ResolveOutput
 	if resolveOutput == nil {
 		resolveOutput = func(resultTx *wire.MsgTx) ([]ResultOutput, error) {
@@ -276,10 +272,10 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		if err != nil {
 			continue
 		}
-		if err := overlay.AddTxOutputs(tx, int64(req.Block.Number)); err != nil {
+		if err := executor.ExecuteParsedTx(tx, parsed); err != nil {
 			return BlockResultBuildResult{}, err
 		}
-		if err := executor.ExecuteParsedTx(tx, parsed); err != nil {
+		if err := overlay.AddTxOutputs(tx, int64(req.Block.Number)); err != nil {
 			return BlockResultBuildResult{}, err
 		}
 	}
@@ -342,12 +338,80 @@ func blockResultStatus(records []ExecutionRecord) ResultStatus {
 }
 
 func ExecuteWorkBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
+	prefix := req.ContractPrefix
+	if prefix == "" {
+		prefix = TestnetContractPrefix
+	}
+	hasContractUTXOProvider := req.ContractUTXOs != nil
+	overlay := newEVMBlockUTXOOverlay(prefix, req.ContractUTXOs, req.Txs)
+	req.ContractPrefix = prefix
+	req.ContractUTXOs = overlay.Provider
 	executor := NewBackend(req)
+	// Preserve the existing trigger policy when no physical UTXO provider is
+	// configured. Runtime balance reads still use the sequential overlay, while
+	// trigger gas-budget checks remain disabled just as they were before.
+	if !hasContractUTXOProvider {
+		executor.ContractUTXOs = nil
+	}
 	frameworkExecutor := contractframework.NewExecutor(executor.executorConfig())
-	if _, err := frameworkExecutor.ExecuteBlock(req.Txs); err != nil {
+	for _, tx := range req.Txs {
+		if err := frameworkExecutor.ExecuteTx(tx); err != nil {
+			return BlockExecutionResult{}, err
+		}
+		if err := overlay.AddTxOutputs(tx, int64(req.Block.Number)); err != nil {
+			return BlockExecutionResult{}, err
+		}
+	}
+	if _, err := executor.FinalizeBlock(contractframework.ExecutionContext{}); err != nil {
 		return BlockExecutionResult{}, err
 	}
 	return executor.FinalizeWork()
+}
+
+func newEVMBlockUTXOOverlay(prefix string, base ContractUTXOProvider,
+	txs []*wire.MsgTx) *contractframework.ContractUTXOOverlay {
+
+	return contractframework.NewContractUTXOOverlay(contractframework.ContractUTXOOverlayConfig{
+		Prefix:       prefix,
+		ContractType: ContractTypeEVM,
+		Base:         contractUTXOProviderWithoutWorkOutputs(base, txs),
+	})
+}
+
+// contractUTXOProviderWithoutWorkOutputs removes outputs created by this work
+// block from an optionally preloaded provider. The sequential overlay adds each
+// transaction only after its execution, so a call sees parent state, prior work
+// outputs, and its own explicit funding exactly once, but never future funding.
+func contractUTXOProviderWithoutWorkOutputs(base ContractUTXOProvider,
+	txs []*wire.MsgTx) ContractUTXOProvider {
+
+	if base == nil || len(txs) == 0 {
+		return base
+	}
+	excluded := make(map[OutPoint]struct{})
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		txID := tx.TxID()
+		for vout := range tx.TxOut {
+			excluded[OutPoint{TxID: txID, Vout: uint32(vout)}] = struct{}{}
+		}
+	}
+	return func(contractAddr ContractAddress) ([]UTXO, error) {
+		utxos, err := base(contractAddr)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]UTXO, 0, len(utxos))
+		for _, utxo := range utxos {
+			if _, skip := excluded[utxo.OutPoint]; skip {
+				continue
+			}
+			out = append(out, utxo.Clone())
+		}
+		return out, nil
+	}
 }
 
 func NewBackend(req BlockExecutionRequest) *Backend {
@@ -633,12 +697,13 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	}
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Deploy(DeployRequest{
-		CallerAddress: callerAddress,
-		CallID:        callID,
-		InitCode:      validated.Payload.ContractContent,
-		Gas:           validated.Payload.GasLimit,
-		DeployNonce:   validated.Payload.DeployNonce,
-		Block:         e.Block,
+		CallerAddress:  callerAddress,
+		CallID:         callID,
+		InitCode:       validated.Payload.ContractContent,
+		Gas:            validated.Payload.GasLimit,
+		DeployNonce:    validated.Payload.DeployNonce,
+		FundingOutputs: fundingOutputs,
+		Block:          e.Block,
 	})
 	if !result.Contract.Equal(expectedContract) {
 		return fmt.Errorf("deploy contract mismatch: got %s want %s",
