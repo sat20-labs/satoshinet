@@ -51,6 +51,12 @@ jobs:
         working-directory: satoshinet
         run: |
           python3 .github/scripts/apply_evm_funding_order_fix.py
+          gofmt -w \
+            contract/evm/backend.go \
+            contract/evm/runtime.go \
+            contract/evm/funding_order_test.go \
+            contract/node/services.go \
+            contract/node/evm_validation.go
           python3 .github/scripts/adjust_evm_funding_order_fix.py
           gofmt -w \
             contract/evm/backend.go \
