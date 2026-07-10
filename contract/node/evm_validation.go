@@ -121,7 +121,7 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 			v.cfg.ChainParams, previousOutputScriptResolver(view)),
 		VerifyResult:    verifyResult,
 		ResolveTriggers: v.cfg.ResolveTriggers,
-		ContractUTXOs:   contractOverlay.Provider,
+		ContractUTXOs:   v.cfg.ContractUTXOs,
 		AssetPrecision:  v.cfg.AssetPrecision,
 	}
 	var result evm.BlockExecutionResult
@@ -208,7 +208,7 @@ func (v *EVMBlockExecutionValidator) blockContractOverlay(
 		if parsed.Type == evm.TxTypeResult {
 			continue
 		}
-		if err := overlay.AddTxOutputs(tx, int64(height)); err != nil {
+		if err := overlay.ApplyTx(tx, int64(height)); err != nil {
 			return nil, evmBlockRuleError("build EVM UTXO overlay: %v", err)
 		}
 	}

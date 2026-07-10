@@ -56,13 +56,15 @@ type CallResult struct {
 }
 
 type DeployRequest struct {
-	CallerAddress string
-	CallID        string
-	InitCode      []byte
-	Gas           int64
-	Value         int64
-	DeployNonce   uint64
-	Block         BlockContext
+	CallerAddress    string
+	CallID           string
+	InitCode         []byte
+	Gas              int64
+	Value            int64
+	DeployNonce      uint64
+	ExpectedContract ContractAddress
+	FundingOutputs   []contractframework.ContractOutput
+	Block            BlockContext
 }
 
 type DeployResult struct {
@@ -126,10 +128,16 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	r.State.SetNonce(GethAddress(caller), req.DeployNonce, 0)
 	capturedIntents := make([]AssetIntent, 0)
 	capturedTriggers := make([]Trigger, 0)
+	balances := AssetBalanceReader(r.AssetBalances)
+	if len(req.FundingOutputs) != 0 {
+		funding := NewFundingAssetView(req.FundingOutputs, "", nil)
+		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding,
+			ContractAddressHash(req.ExpectedContract))
+	}
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, nil)
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
 	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), false, req.Block.Time)
-	precompiles := SatoshiNetPrecompiles(r.AssetBalances, nil, "", vm.ActivePrecompiledContracts(rules))
+	precompiles := SatoshiNetPrecompiles(balances, nil, "", vm.ActivePrecompiledContracts(rules))
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), nil, precompileAddresses(precompiles), nil)
 	evm.SetPrecompiles(precompiles)
 	evm.SetTxContext(vm.TxContext{
