@@ -80,13 +80,27 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 		outputs = append(outputs, splitSurplusOutput(managedAssets, managedSurplusRequest(req))...)
 	}
 
-	spentValue := resultOutputsValue(outputs) + resultOutputsValue(feeOutputs)
+	outputValue, err := resultOutputsValue(outputs)
+	if err != nil {
+		return ResultPlan{}, err
+	}
+	feeOutputValue, err := resultOutputsValue(feeOutputs)
+	if err != nil {
+		return ResultPlan{}, err
+	}
+	spentValue, overflow := AddInt64(outputValue, feeOutputValue)
+	if overflow {
+		return ResultPlan{}, fmt.Errorf("contract result output value overflows int64")
+	}
 	if req.GasAssetName == contract.SatoshiAssetName && req.GasFee != nil && req.GasFee.Sign() > 0 {
 		feeValue, err := DecimalToInt64(*req.GasFee)
 		if err != nil {
 			return ResultPlan{}, err
 		}
-		spentValue += feeValue
+		spentValue, overflow = AddInt64(spentValue, feeValue)
+		if overflow {
+			return ResultPlan{}, fmt.Errorf("contract result output and fee value overflows int64")
+		}
 	}
 	if spentValue > req.View.Value {
 		return ResultPlan{}, fmt.Errorf("contract result outputs spend %d sats but only %d sats are available",
@@ -123,7 +137,10 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 		Assets: NormalizeAssetSetPrecision(surplusAssets, req.Precision),
 	}
 	outputs = append(outputs, splitSurplusOutput(surplus, req)...)
-	out.Outputs = CompactResultOutputs(outputs)
+	out.Outputs, err = CompactResultOutputs(outputs)
+	if err != nil {
+		return ResultPlan{}, err
+	}
 	out.Inputs = UniqueOutPoints(out.Inputs)
 	return out, nil
 }
@@ -167,13 +184,20 @@ func physicalRemainderAfterOutputs(view ResultPlanUTXOView, outputs []ResultOutp
 	gasFee *scommon.Decimal) (int64, wire.TxAssets, error) {
 
 	remainingValue := view.Value
-	spentValue := resultOutputsValue(outputs)
+	spentValue, err := resultOutputsValue(outputs)
+	if err != nil {
+		return 0, nil, err
+	}
 	if gasAssetName == contract.SatoshiAssetName && gasFee != nil && gasFee.Sign() > 0 {
 		feeValue, err := DecimalToInt64(*gasFee)
 		if err != nil {
 			return 0, nil, err
 		}
-		spentValue += feeValue
+		var overflow bool
+		spentValue, overflow = AddInt64(spentValue, feeValue)
+		if overflow {
+			return 0, nil, fmt.Errorf("result output and fee value overflows int64")
+		}
 	}
 	if spentValue > remainingValue {
 		return 0, nil, fmt.Errorf("contract result outputs spend %d sats but only %d sats are available",
@@ -329,7 +353,7 @@ func splitSurplusOutput(surplus ResultOutput, req ManagedResultAugmentRequest) [
 
 	deployerOut := ResultOutput{To: req.DeployerAddress}
 	bootstrapOut := ResultOutput{To: req.BootstrapAddress}
-	deployerOut.Value = surplus.Value * DefaultDeployerProfitBPS / TotalProfitBPS
+	deployerOut.Value = splitInt64ByBPS(surplus.Value, DefaultDeployerProfitBPS)
 	bootstrapOut.Value = surplus.Value - deployerOut.Value
 	deployerOut.Assets, bootstrapOut.Assets = SplitAssetsByBPS(surplus.Assets, DefaultDeployerProfitBPS)
 	deployerOut = NormalizeResultOutputPrecision(deployerOut, req.Precision)
@@ -345,12 +369,31 @@ func splitSurplusOutput(surplus ResultOutput, req ManagedResultAugmentRequest) [
 	return out
 }
 
-func resultOutputsValue(outputs []ResultOutput) int64 {
+func resultOutputsValue(outputs []ResultOutput) (int64, error) {
 	var value int64
 	for _, output := range outputs {
-		value += output.Value
+		if output.Value < 0 {
+			return 0, fmt.Errorf("result output value is negative")
+		}
+		next, overflow := AddInt64(value, output.Value)
+		if overflow {
+			return 0, fmt.Errorf("result output value overflows int64")
+		}
+		value = next
 	}
-	return value
+	return value, nil
+}
+
+func splitInt64ByBPS(value, bps int64) int64 {
+	if value <= 0 || bps <= 0 {
+		return 0
+	}
+	if bps >= TotalProfitBPS {
+		return value
+	}
+	out := new(big.Int).Mul(big.NewInt(value), big.NewInt(bps))
+	out.Div(out, big.NewInt(TotalProfitBPS))
+	return out.Int64()
 }
 
 func resultOutputsAssets(outputs []ResultOutput) (wire.TxAssets, error) {

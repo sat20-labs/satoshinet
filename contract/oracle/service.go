@@ -47,6 +47,7 @@ type Config struct {
 
 	LLM                    LLMConfig
 	TrustedEvidenceSources []string
+	AllowPrivateEvidence   bool
 
 	TipContext   func() (TipContext, error)
 	SubmitInvoke func(contractcommon.ContractAddress, string, []byte) (*wire.MsgTx, error)
@@ -162,6 +163,7 @@ func (s *Service) processOnce(quit <-chan struct{}) error {
 
 func (s *Service) newPredictionAgent() (*agentcontract.PredictionAgent, error) {
 	corenodeAgent := agentcontract.NewPredictionAgent(s.client)
+	corenodeAgent.Fetcher = agentcontract.HTTPPredictionResultTextFetcher{RequirePublicNetwork: !s.cfg.AllowPrivateEvidence}
 	if len(s.cfg.TrustedEvidenceSources) == 0 {
 		return corenodeAgent, nil
 	}
@@ -170,7 +172,10 @@ func (s *Service) newPredictionAgent() (*agentcontract.PredictionAgent, error) {
 		return nil, err
 	}
 	corenodeAgent.TrustedSources = trustedSources
-	corenodeAgent.Searcher = agentcontract.HTTPPredictionResultSearcher{TrustedSources: trustedSources}
+	corenodeAgent.Searcher = agentcontract.HTTPPredictionResultSearcher{
+		TrustedSources:       trustedSources,
+		RequirePublicNetwork: !s.cfg.AllowPrivateEvidence,
+	}
 	return corenodeAgent, nil
 }
 
@@ -224,12 +229,6 @@ func (s *Service) processConfirmCandidate(corenodeAgent *agentcontract.Predictio
 		} else {
 			s.warnf("Agent contract %s confirm build failed: %v, retry_after=%s", contractAddr, err, delay)
 		}
-		return
-	}
-	if param.ResultType == agentcontract.ResultTypeUnverifiable {
-		err := agentcontract.ErrPredictionEvidenceUnavailable
-		delay := s.recordFailure(contractAddr, err)
-		s.infof("Agent contract %s LLM returned unverifiable, keep pending, retry_after=%s", contractAddr, delay)
 		return
 	}
 	tx, err := s.submitConfirm(candidate, param)

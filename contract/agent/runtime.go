@@ -121,7 +121,8 @@ type ApplyConfirmRequest struct {
 }
 
 type ApplyCloseRequest struct {
-	Invoker string
+	Invoker   string
+	TimeValue int64
 }
 
 func NewRuntime(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig) (*Runtime, error) {
@@ -318,6 +319,9 @@ func (r *Runtime) ApplyConfirm(req ApplyConfirmRequest) (*PredictionSettlementPl
 func (r *Runtime) ApplyClose(req ApplyCloseRequest) (*PredictionSettlementPlan, error) {
 	if req.Invoker == "" || req.Invoker != r.deployer {
 		return nil, fmt.Errorf("invoker is not deployer")
+	}
+	if req.TimeValue > r.contract.BetDeadline {
+		return nil, fmt.Errorf("prediction deployer close is disabled after bet deadline")
 	}
 	if r.state.Status == StatusCompleted || r.state.Status == StatusRejected {
 		return &PredictionSettlementPlan{

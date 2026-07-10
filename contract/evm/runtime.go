@@ -2,6 +2,7 @@ package evm
 
 import (
 	"errors"
+	"fmt"
 	"math/big"
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
@@ -113,7 +114,6 @@ func (r *Runtime) DueTriggerCalls(block BlockContext) []TriggerCall {
 
 func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	caller := EVMAddressFromAddressString(req.CallerAddress)
-	r.State.SetNonce(GethAddress(caller), req.DeployNonce, 0)
 	gasLimit, err := contractframework.GasUnitsUint64(req.Gas)
 	if err != nil {
 		return DeployResult{Status: ResultStatusInvalid, Err: err}
@@ -121,15 +121,17 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	if _, err := contractframework.SatoshiAmountUint64(req.Value); err != nil {
 		return DeployResult{Status: ResultStatusInvalid, Err: err}
 	}
+	stateSnapshot := r.State.Snapshot()
+	intentSnapshot := len(r.AssetIntents)
+	r.State.SetNonce(GethAddress(caller), req.DeployNonce, 0)
 	capturedIntents := make([]AssetIntent, 0)
 	capturedTriggers := make([]Trigger, 0)
-	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers)
+	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, nil)
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
-	evm.SetPrecompiles(SatoshiNetPrecompiles(r.AssetBalances, nil, "", vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
-		new(big.Int).SetUint64(req.Block.Number),
-		false,
-		req.Block.Time,
-	))))
+	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), false, req.Block.Time)
+	precompiles := SatoshiNetPrecompiles(r.AssetBalances, nil, "", vm.ActivePrecompiledContracts(rules))
+	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), nil, precompileAddresses(precompiles), nil)
+	evm.SetPrecompiles(precompiles)
 	evm.SetTxContext(vm.TxContext{
 		Origin:   GethAddress(caller),
 		GasPrice: uint256.NewInt(req.Block.FixedGasPrice),
@@ -145,11 +147,18 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 		for i := range capturedTriggers {
 			capturedTriggers[i].Contract = contract
 		}
-		err = r.commitCapturedEffects(capturedIntents, capturedTriggers)
+		err = r.commitCapturedEffects(capturedIntents, capturedTriggers, r.AssetBalances)
 	}
 	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
 	if gasLeftErr != nil && err == nil {
 		err = gasLeftErr
+	}
+	if err != nil {
+		r.State.RevertToSnapshot(stateSnapshot)
+		r.AssetIntents = r.AssetIntents[:intentSnapshot]
+	} else {
+		r.State.Finalise(true)
+		r.State.DiscardSnapshot(stateSnapshot)
 	}
 	return DeployResult{
 		Contract:    contract,
@@ -173,19 +182,26 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	}
 	capturedIntents := make([]AssetIntent, 0)
 	capturedTriggers := make([]Trigger, 0)
-	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers)
-	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
 	funding := NewFundingAssetView(contractframework.OptionalContractOutputSlice(req.FundingOutput),
 		req.GasAssetName, req.GasFeeReserve)
+	stateSnapshot := r.State.Snapshot()
+	intentSnapshot := len(r.AssetIntents)
+	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, funding)
+	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
 	balances := AssetBalanceReader(r.AssetBalances)
 	if req.FundingOutput != nil {
 		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding, target)
 	}
-	evm.SetPrecompiles(SatoshiNetPrecompiles(balances, funding, req.CallerAddress, vm.ActivePrecompiledContracts(r.ChainConfig.Rules(
-		new(big.Int).SetUint64(req.Block.Number),
-		false,
-		req.Block.Time,
-	))))
+	pendingBalances := pendingIntentAssetBalanceView{
+		Base:    balances,
+		Prior:   r.AssetIntents,
+		Intents: &capturedIntents,
+	}
+	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), false, req.Block.Time)
+	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, vm.ActivePrecompiledContracts(rules))
+	targetAddress := GethAddress(target)
+	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), &targetAddress, precompileAddresses(precompiles), nil)
+	evm.SetPrecompiles(precompiles)
 	evm.SetTxContext(vm.TxContext{
 		Origin:   GethAddress(caller),
 		GasPrice: uint256.NewInt(req.Block.FixedGasPrice),
@@ -203,11 +219,19 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 				capturedTriggers[i].Contract = r.contractAddressFromGeth(GethAddress(target))
 			}
 		}
-		err = r.commitCapturedEffects(capturedIntents, capturedTriggers)
+		err = r.commitCapturedEffects(capturedIntents, capturedTriggers, balances)
 	}
 	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
 	if gasLeftErr != nil && err == nil {
 		err = gasLeftErr
+	}
+	if err != nil {
+		r.State.RevertToSnapshot(stateSnapshot)
+		r.AssetIntents = r.AssetIntents[:intentSnapshot]
+		funding.RevertTo(nil)
+	} else {
+		r.State.Finalise(true)
+		r.State.DiscardSnapshot(stateSnapshot)
 	}
 	var retainedGas *scommon.Decimal
 	if err == nil && req.GasAssetName != "" {
@@ -243,11 +267,32 @@ func gasUsed(initial, left int64) int64 {
 	return initial - left
 }
 
-func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedTriggers []Trigger) error {
+func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedTriggers []Trigger,
+	balances AssetBalanceReader) error {
+
+	allIntents := append(contractframework.CloneAssetIntents(r.AssetIntents), capturedIntents...)
+	if err := validateCapturedAssetIntents(allIntents, balances); err != nil {
+		return err
+	}
+	seenTriggers := make(map[triggerKey]struct{}, len(capturedTriggers))
 	for _, trigger := range capturedTriggers {
+		if err := trigger.Validate(); err != nil {
+			return err
+		}
 		if err := contractframework.ValidateTriggerGasLimit(trigger.GasLimit, r.GasConfig); err != nil {
 			return err
 		}
+		key := newTriggerKey(trigger.Contract, trigger.ID)
+		if _, exists := seenTriggers[key]; exists {
+			return fmt.Errorf("duplicate captured trigger %s", trigger.ID)
+		}
+		if _, exists := r.State.Trigger(trigger.Contract, trigger.ID); exists {
+			return fmt.Errorf("captured trigger %s already exists", trigger.ID)
+		}
+		seenTriggers[key] = struct{}{}
+	}
+	if uint64(len(r.AssetIntents))+uint64(len(capturedIntents)) > uint64(^uint32(0)) {
+		return fmt.Errorf("too many EVM asset intents")
 	}
 	for i := range capturedIntents {
 		capturedIntents[i].IntentIndex = uint32(len(r.AssetIntents) + i)
@@ -261,14 +306,84 @@ func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedT
 	return nil
 }
 
+func validateCapturedAssetIntents(intents []AssetIntent, balances AssetBalanceReader) error {
+	if balances == nil || len(intents) == 0 {
+		return nil
+	}
+	totals := make(map[string]*scommon.Decimal)
+	owners := make(map[string]EVMAddress)
+	assets := make(map[string]string)
+	for _, intent := range intents {
+		if intent.AssetName == "" || intent.Amount == nil || intent.Amount.Sign() <= 0 {
+			return fmt.Errorf("invalid captured asset intent")
+		}
+		owner := ContractAddressHash(intent.From)
+		key := fmt.Sprintf("%x\x00%s", owner[:], intent.AssetName)
+		owners[key] = owner
+		assets[key] = intent.AssetName
+		totals[key] = contractframework.DecimalAddAllowNil(totals[key], intent.Amount)
+	}
+	for key, total := range totals {
+		available, err := balances.AssetBalance(owners[key], assets[key])
+		if err != nil {
+			return err
+		}
+		if available == nil || available.Cmp(total) < 0 {
+			return fmt.Errorf("captured asset intents spend %s %s but only %s is available",
+				total.String(), assets[key], contractframework.CloneDecimal(available).String())
+		}
+	}
+	return nil
+}
+
+type pendingIntentAssetBalanceView struct {
+	Base    AssetBalanceReader
+	Prior   []AssetIntent
+	Intents *[]AssetIntent
+}
+
+func (v pendingIntentAssetBalanceView) AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error) {
+	available := zeroDecimal()
+	if v.Base != nil {
+		base, err := v.Base.AssetBalance(owner, assetName)
+		if err != nil {
+			return nil, err
+		}
+		if base != nil {
+			available = base.Clone()
+		}
+	}
+	for _, intent := range v.Prior {
+		if ContractAddressHash(intent.From) != owner || intent.AssetName != assetName || intent.Amount == nil {
+			continue
+		}
+		available = available.SubAlignPrecision(intent.Amount)
+	}
+	if v.Intents != nil {
+		for _, intent := range *v.Intents {
+			if ContractAddressHash(intent.From) != owner || intent.AssetName != assetName || intent.Amount == nil {
+				continue
+			}
+			available = available.SubAlignPrecision(intent.Amount)
+		}
+	}
+	if available.Sign() < 0 {
+		return nil, fmt.Errorf("pending asset transfers exceed %s balance", assetName)
+	}
+	return available, nil
+}
+
 type assetTraceFrame struct {
-	from  gethcommon.Address
-	to    gethcommon.Address
-	input []byte
+	from            gethcommon.Address
+	to              gethcommon.Address
+	input           []byte
+	intentLen       int
+	triggerLen      int
+	fundingSnapshot fundingAssetSnapshot
 }
 
 func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]AssetIntent,
-	capturedTriggers *[]Trigger) vm.Config {
+	capturedTriggers *[]Trigger, funding *FundingAssetView) vm.Config {
 	config := r.Config
 	base := config.Tracer
 	tracer := &tracing.Hooks{}
@@ -284,9 +399,12 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 			baseOnEnter(depth, typ, from, to, input, gas, value)
 		}
 		frames = append(frames, assetTraceFrame{
-			from:  from,
-			to:    to,
-			input: contractframework.CloneBytes(input),
+			from:            from,
+			to:              to,
+			input:           contractframework.CloneBytes(input),
+			intentLen:       len(*capturedIntents),
+			triggerLen:      len(*capturedTriggers),
+			fundingSnapshot: funding.Snapshot(),
 		})
 	}
 	tracer.OnExit = func(depth int, output []byte, gasUsed uint64, err error, reverted bool) {
@@ -299,6 +417,9 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 			baseOnExit(depth, output, gasUsed, err, reverted)
 		}
 		if err != nil || reverted {
+			*capturedIntents = (*capturedIntents)[:frame.intentLen]
+			*capturedTriggers = (*capturedTriggers)[:frame.triggerLen]
+			funding.RevertTo(frame.fundingSnapshot)
 			return
 		}
 		switch frame.to {
@@ -333,6 +454,14 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 	}
 	config.Tracer = tracer
 	return config
+}
+
+func precompileAddresses(precompiles vm.PrecompiledContracts) []gethcommon.Address {
+	out := make([]gethcommon.Address, 0, len(precompiles))
+	for addr := range precompiles {
+		out = append(out, addr)
+	}
+	return out
 }
 
 func (r *Runtime) contractAddressFromGeth(addr gethcommon.Address) ContractAddress {

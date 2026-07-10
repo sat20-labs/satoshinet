@@ -84,7 +84,16 @@ func (s *MemoryStateDB) RegisterTrigger(trigger Trigger) error {
 	if s.triggers == nil {
 		s.triggers = make(map[triggerKey]Trigger)
 	}
-	s.triggers[newTriggerKey(trigger.Contract, trigger.ID)] = trigger.Clone()
+	key := newTriggerKey(trigger.Contract, trigger.ID)
+	previous, existed := s.triggers[key]
+	s.appendJournal(func() {
+		if existed {
+			s.triggers[key] = previous
+		} else {
+			delete(s.triggers, key)
+		}
+	})
+	s.triggers[key] = trigger.Clone()
 	return nil
 }
 
@@ -92,7 +101,21 @@ func (s *MemoryStateDB) RemoveTrigger(contract ContractAddress, id string) {
 	if s == nil || s.triggers == nil {
 		return
 	}
-	delete(s.triggers, newTriggerKey(contract, id))
+	key := newTriggerKey(contract, id)
+	previous, existed := s.triggers[key]
+	if !existed {
+		return
+	}
+	s.appendJournal(func() { s.triggers[key] = previous })
+	delete(s.triggers, key)
+}
+
+func (s *MemoryStateDB) Trigger(contract ContractAddress, id string) (Trigger, bool) {
+	if s == nil {
+		return Trigger{}, false
+	}
+	trigger, ok := s.triggers[newTriggerKey(contract, id)]
+	return trigger.Clone(), ok
 }
 
 func (s *MemoryStateDB) Triggers() []Trigger {

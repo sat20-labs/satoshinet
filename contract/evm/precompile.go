@@ -59,6 +59,8 @@ type FundingAssetView struct {
 	claimed       map[string]*scommon.Decimal
 }
 
+type fundingAssetSnapshot map[string]*scommon.Decimal
+
 func NewFundingAssetView(outputs []contractframework.ContractOutput, gasAssetName string,
 	gasFeeReserve *scommon.Decimal) *FundingAssetView {
 
@@ -239,6 +241,27 @@ func (v *FundingAssetView) ClaimedAssetAmount(assetName string) *scommon.Decimal
 		return amount.Clone()
 	}
 	return zeroDecimal()
+}
+
+func (v *FundingAssetView) Snapshot() fundingAssetSnapshot {
+	if v == nil || len(v.claimed) == 0 {
+		return nil
+	}
+	out := make(fundingAssetSnapshot, len(v.claimed))
+	for name, amount := range v.claimed {
+		out[name] = contractframework.CloneDecimal(amount)
+	}
+	return out
+}
+
+func (v *FundingAssetView) RevertTo(snapshot fundingAssetSnapshot) {
+	if v == nil {
+		return
+	}
+	v.claimed = make(map[string]*scommon.Decimal, len(snapshot))
+	for name, amount := range snapshot {
+		v.claimed[name] = contractframework.CloneDecimal(amount)
+	}
 }
 
 type AssetPrecompile struct {

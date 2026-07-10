@@ -239,7 +239,12 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	outputs = append(outputs, intentBuilder.Outputs()...)
 	outputs = append(outputs, changeBuilder.Outputs()...)
 	outputs = NormalizeResultOutputsPrecision(outputs, req.Precision)
-	return ResultPlan{InputUTXOs: inputs, Outputs: outputs}, nil
+	return ResultPlan{
+		Contract:   req.Contract.MustEncode(),
+		GasFee:     CloneDecimal(req.GasFee),
+		InputUTXOs: inputs,
+		Outputs:    outputs,
+	}, nil
 }
 
 func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultPlan, error) {
@@ -253,7 +258,8 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 		if !record.RequiresResult {
 			continue
 		}
-		if len(record.AssetIntents) == 0 && len(record.FundingInputs) == 0 && record.GasUsed == 0 {
+		if (record.Kind == 0 || record.Kind == ExecutionKindDeploy) &&
+			len(record.AssetIntents) == 0 && len(record.FundingInputs) == 0 && record.GasUsed == 0 {
 			continue
 		}
 		key := ContractResultKey(record.Contract)

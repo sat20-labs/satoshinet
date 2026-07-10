@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -872,6 +873,14 @@ func (e *Backend) ExecuteTrigger(call TriggerCall) error {
 	if !call.Trigger.Due(env) {
 		return fmt.Errorf("trigger %s is not due", call.Trigger.ID)
 	}
+	registered, exists := e.Runtime.State.Trigger(call.Trigger.Contract, call.Trigger.ID)
+	if !exists {
+		return nil
+	}
+	if registered.Kind != call.Trigger.Kind || registered.Height != call.Trigger.Height ||
+		registered.GasLimit != call.GasLimit || !bytes.Equal(registered.Calldata, call.Calldata) {
+		return fmt.Errorf("trigger %s does not match registered state", call.Trigger.ID)
+	}
 	if call.GasLimit <= 0 {
 		return errors.New("trigger gas limit is zero")
 	}
@@ -886,10 +895,10 @@ func (e *Backend) ExecuteTrigger(call TriggerCall) error {
 	if err != nil {
 		return err
 	}
-	e.Runtime.State.RemoveTrigger(call.Trigger.Contract, call.Trigger.ID)
 	if !ready {
 		return nil
 	}
+	e.Runtime.State.RemoveTrigger(call.Trigger.Contract, call.Trigger.ID)
 
 	callID := DeriveTriggerCallID(call.Trigger.Contract, call.Trigger.ID, int64(e.Block.Number))
 	intentStart := len(e.Runtime.AssetIntents)

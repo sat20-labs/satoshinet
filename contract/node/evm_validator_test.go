@@ -168,12 +168,36 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	contract := testContractAddressForBlockchain(t)
 	runtime := evm.NewRuntime(nil)
 	runtime.SetCode(evm.ContractAddressHash(contract), []byte{0x00})
+	if err := runtime.State.RegisterTrigger(evm.Trigger{
+		ID:       "vault-release",
+		Contract: contract,
+		Kind:     evm.TriggerAtHeight,
+		Height:   100,
+		GasLimit: evm.DefaultGasConfig().TriggerBaseGas,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	blockTime := time.Unix(1710000000, 0)
 	triggerGasInput := wire.OutPoint{Hash: chainhash.Hash{9}, Index: 0}
 	gasAsset := evm.DefaultGasConfig().GasAssetName
+	gasConfig := evm.DefaultGasConfig()
+	gasConfig.FixedGasPrice = 1
 	triggerGasFee := testEVMValidatorContractFundingFee(t,
 		evm.ExecutionKindTrigger, evm.DefaultGasConfig().TriggerBaseGas, true, 100)
 	resultTx := testEVMResultTxWithInputs(t, evm.ResultStatusSuccess, 1, []wire.OutPoint{triggerGasInput})
+	contractScript, err := evm.ContractPkScript(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultFee, err := evm.DefaultGasConfig().ResultFee(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := triggerGasFee.SubAlignPrecision(resultFee)
+	resultTx.TxOut = append([]*wire.TxOut{wire.NewTxOut(0, wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(gasAsset),
+		Amount: *change,
+	}}, contractScript)}, resultTx.TxOut...)
 	contractUTXOs := func(got evm.ContractAddress) ([]evm.UTXO, error) {
 		if !contract.Equal(got) {
 			t.Fatalf("unexpected contract %s", got.MustEncode())
@@ -190,8 +214,9 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	}
 
 	executed, err := evm.ExecuteBlock(evm.BlockExecutionRequest{
-		Runtime: runtime.Clone(),
-		Block:   evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: evm.DefaultGasConfig().MaxGasPerBlock, FixedGasPrice: 1},
+		Runtime:   runtime.Clone(),
+		GasConfig: gasConfig,
+		Block:     evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: evm.DefaultGasConfig().MaxGasPerBlock, FixedGasPrice: 1},
 		ResolveTriggers: func(evm.TriggerResolutionContext) ([]evm.TriggerCall, error) {
 			return []evm.TriggerCall{{
 				Trigger:  evm.Trigger{ID: "vault-release", Contract: contract, Kind: evm.TriggerAtHeight, Height: 100},
@@ -214,7 +239,7 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 	block.SetHeight(100)
 
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
-		GasConfig: evm.GasConfig{GasAssetName: gasAsset, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
+		GasConfig: gasConfig,
 		NewRuntime: func(*btcutil.Block, *blockchain.UtxoViewpoint) (*evm.Runtime, error) {
 			return runtime.Clone(), nil
 		},
@@ -227,10 +252,6 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 		ContractUTXOs: contractUTXOs,
 	})
 	view := blockchain.NewUtxoViewpoint()
-	contractScript, err := evm.ContractPkScript(contract)
-	if err != nil {
-		t.Fatal(err)
-	}
 	view.Entries()[triggerGasInput] = blockchain.NewUtxoEntry(wire.NewTxOut(1, wire.TxAssets{{
 		Name:   *wire.NewAssetNameFromString(gasAsset),
 		Amount: *triggerGasFee,
@@ -272,8 +293,8 @@ func TestEVMBlockExecutionValidatorAdvancesDueTriggerWithoutResult(t *testing.T)
 	if len(executed.Records) != 0 {
 		t.Fatalf("expected state-only trigger, got records: %#v", executed.Records)
 	}
-	if executed.StateRoot == parentRoot {
-		t.Fatal("expected trigger removal to change state root")
+	if executed.StateRoot != parentRoot {
+		t.Fatal("gas-starved trigger must remain pending without changing state root")
 	}
 
 	missingRootBlock := btcutil.NewBlock(&wire.MsgBlock{

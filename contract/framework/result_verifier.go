@@ -145,6 +145,16 @@ func VerifySingleResultTx(req SingleResultTxVerifyRequest) error {
 }
 
 func VerifyCanonicalResultTx(req CanonicalResultVerifyRequest) error {
+	if req.ResultTx == nil {
+		return fmt.Errorf("missing result transaction")
+	}
+	if req.ResultTx.Version != 2 {
+		return fmt.Errorf("non-canonical result version %d", req.ResultTx.Version)
+	}
+	if req.ResultTx.LockTime != 0 {
+		return fmt.Errorf("non-canonical result locktime %d", req.ResultTx.LockTime)
+	}
+	req.Plans = MergeResultPlansByContract(req.Plans)
 	if req.CheckPayload {
 		payload, err := ResultPayloadFromTx(req.ResultTx, req.Label)
 		if err != nil {
@@ -177,10 +187,8 @@ func VerifyCanonicalResultTx(req CanonicalResultVerifyRequest) error {
 		}
 		expectedOutputs = append(expectedOutputs, plan.Outputs...)
 	}
-	if len(expectedInputs) != 0 {
-		if err := VerifyResultInputsContain(req.ResultTx, expectedInputs); err != nil {
-			return err
-		}
+	if err := VerifyResultInputsExact(req.ResultTx, expectedInputs); err != nil {
+		return err
 	}
 	if len(expectedUTXOs) != 0 {
 		if err := VerifyResultInputCoverage(expectedUTXOs, expectedOutputs,
@@ -197,12 +205,35 @@ func VerifyCanonicalResultTx(req CanonicalResultVerifyRequest) error {
 			return err
 		}
 	}
+	if resultTxHasPayload(req.ResultTx) {
+		if err := verifyCanonicalResultPayloadPosition(req.ResultTx, len(expectedOutputs)); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func resultTxHasPayload(tx *wire.MsgTx) bool {
+	if tx == nil {
+		return false
+	}
+	for _, output := range tx.TxOut {
+		if output == nil {
+			continue
+		}
+		if _, err := contract.ReadResultNullDataScript(output.PkScript); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func canonicalResultPlanCount(plan ResultPlan, count func(ResultPlan) int) int {
 	if count != nil {
 		return count(plan)
+	}
+	if plan.ResultCount > 0 {
+		return plan.ResultCount
 	}
 	return 1
 }
@@ -241,23 +272,62 @@ func resultPlansGasFee(plans []ResultPlan) *scommon.Decimal {
 	return total
 }
 
-// VerifyResultInputsContain checks only that the result spends the inputs the
-// execution plan depends on. Extra inputs are allowed because they do not change
-// contract semantics; output verification remains strict.
-func VerifyResultInputsContain(tx *wire.MsgTx, expected []OutPoint) error {
+// VerifyResultInputsExact checks the complete canonical input sequence. Result
+// inputs are VM-authorized spends, so an extra or reordered input changes both
+// the authorization set and the resulting txid.
+func VerifyResultInputsExact(tx *wire.MsgTx, expected []OutPoint) error {
 	if tx == nil {
 		return fmt.Errorf("missing result transaction")
 	}
-	actual := make(map[OutPoint]struct{}, len(tx.TxIn))
+	if len(tx.TxIn) != len(expected) {
+		return fmt.Errorf("result input count mismatch: got %d want %d", len(tx.TxIn), len(expected))
+	}
+	seen := make(map[OutPoint]struct{}, len(tx.TxIn))
 	for i, txIn := range tx.TxIn {
 		if txIn == nil {
 			return fmt.Errorf("nil result input %d", i)
 		}
-		actual[WireOutPointToFramework(txIn.PreviousOutPoint)] = struct{}{}
+		actual := WireOutPointToFramework(txIn.PreviousOutPoint)
+		if _, ok := seen[actual]; ok {
+			return fmt.Errorf("duplicate result input %s", actual)
+		}
+		seen[actual] = struct{}{}
+		if actual != expected[i] {
+			return fmt.Errorf("result input %d mismatch: got %s want %s", i, actual, expected[i])
+		}
+		if txIn.Sequence != wire.MaxTxInSequenceNum {
+			return fmt.Errorf("non-canonical result input %d sequence %d", i, txIn.Sequence)
+		}
+		if len(txIn.SignatureScript) != 0 {
+			return fmt.Errorf("non-canonical result input %d signature script", i)
+		}
+		if len(txIn.Witness) != 0 {
+			return fmt.Errorf("non-canonical result input %d witness", i)
+		}
 	}
-	for _, expectedInput := range UniqueOutPoints(expected) {
-		if _, ok := actual[expectedInput]; !ok {
-			return fmt.Errorf("missing result input %s", expectedInput)
+	return nil
+}
+
+func verifyCanonicalResultPayloadPosition(tx *wire.MsgTx, semanticOutputCount int) error {
+	if len(tx.TxOut) != semanticOutputCount+1 {
+		return fmt.Errorf("result output count mismatch: got %d want %d", len(tx.TxOut), semanticOutputCount+1)
+	}
+	last := len(tx.TxOut) - 1
+	for i, output := range tx.TxOut {
+		if output == nil {
+			return fmt.Errorf("nil result output %d", i)
+		}
+		if i != last {
+			if txscript.IsUnspendable(output.PkScript) {
+				return fmt.Errorf("non-canonical unspendable result output %d", i)
+			}
+			continue
+		}
+		if output.Value != 0 || len(output.Assets) != 0 {
+			return fmt.Errorf("non-canonical result payload value or assets")
+		}
+		if _, err := contract.ReadResultNullDataScript(output.PkScript); err != nil {
+			return fmt.Errorf("result payload must be the final output: %w", err)
 		}
 	}
 	return nil
@@ -287,7 +357,10 @@ func VerifyResultInputCoverage(inputs []UTXO, outputs []ResultOutput, gasFee *sc
 		}
 	}
 
-	requiredValue := resultOutputsValue(outputs)
+	requiredValue, err := resultOutputsValue(outputs)
+	if err != nil {
+		return err
+	}
 	requiredAssets, err := resultOutputsAssets(outputs)
 	if err != nil {
 		return err

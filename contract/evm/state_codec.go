@@ -22,11 +22,12 @@ func (s *MemoryStateDB) Clone() *MemoryStateDB {
 		return NewMemoryStateDB()
 	}
 	return &MemoryStateDB{
-		accounts:  cloneAccounts(s.accounts),
-		triggers:  cloneTriggers(s.triggers),
-		logs:      cloneLogs(s.logs),
-		refund:    s.refund,
-		snapshots: cloneSnapshots(s.snapshots),
+		accounts:   cloneAccounts(s.accounts),
+		triggers:   cloneTriggers(s.triggers),
+		logs:       cloneLogs(s.logs),
+		refund:     s.refund,
+		accessList: make(map[gethcommon.Address]map[gethcommon.Hash]struct{}),
+		committed:  cloneCommittedStorage(s.accounts),
 	}
 }
 
@@ -88,7 +89,11 @@ func (s *MemoryStateDB) UnmarshalBinary(data []byte) error {
 	s.triggers = decoded.triggers
 	s.logs = nil
 	s.refund = 0
-	s.snapshots = nil
+	s.journal = nil
+	s.revisions = nil
+	s.nextRevID = 0
+	s.accessList = make(map[gethcommon.Address]map[gethcommon.Hash]struct{})
+	s.committed = cloneCommittedStorage(s.accounts)
 	return nil
 }
 
@@ -228,22 +233,6 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 		return nil, errors.New("trailing EVM state bytes")
 	}
 	return state, nil
-}
-
-func cloneSnapshots(src []memorySnapshot) []memorySnapshot {
-	if src == nil {
-		return nil
-	}
-	dst := make([]memorySnapshot, len(src))
-	for i, snap := range src {
-		dst[i] = memorySnapshot{
-			accounts: cloneAccounts(snap.accounts),
-			triggers: cloneTriggers(snap.triggers),
-			logs:     cloneLogs(snap.logs),
-			refund:   snap.refund,
-		}
-	}
-	return dst
 }
 
 func sortedStateAddresses(accounts map[gethcommon.Address]*memoryAccount) []gethcommon.Address {

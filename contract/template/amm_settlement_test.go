@@ -34,17 +34,15 @@ func TestSettleAMMBuyUsesConstantProductPool(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)
 	require.Equal(t, int64(0), plan.Deals[0].BuyItemID)
-	require.Equal(t, "30", plan.Deals[0].AssetAmt)
-	require.Equal(t, int64(9), plan.Deals[0].SatValue)
-	require.Len(t, plan.Transfers, 2)
-	require.Equal(t, "30", plan.Transfers[0].AssetAmt)
-	require.Equal(t, int64(1), plan.Transfers[1].SatValue)
-	require.Equal(t, SettlementReasonRefund, plan.Transfers[1].Reason)
+	require.Equal(t, "33.155080214", plan.Deals[0].AssetAmt)
+	require.Equal(t, int64(10), plan.Deals[0].SatValue)
+	require.Len(t, plan.Transfers, 1)
+	require.Equal(t, "33.155080214", plan.Transfers[0].AssetAmt)
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "70", state.AMMData().AssetAInPool)
-	requireDecimalString(t, "29", state.AMMData().AssetBInPool)
+	requireDecimalString(t, "66.844919786", state.AMMData().AssetAInPool)
+	requireDecimalString(t, "30", state.AMMData().AssetBInPool)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
 }
 
@@ -81,16 +79,14 @@ func TestSettleAMMBuyResultOutputsUseAssetPrecision(t *testing.T) {
 	resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), nil, assetPrecision)
 	require.NoError(t, err)
 	require.Len(t, resultPlans, 1)
-	require.Len(t, resultPlans[0].Outputs, 3)
+	require.Len(t, resultPlans[0].Outputs, 2)
 	require.Equal(t, "buyer", resultPlans[0].Outputs[0].To)
-	require.Equal(t, "30", resultPlans[0].Outputs[0].AssetAmt)
+	require.Equal(t, "33", resultPlans[0].Outputs[0].AssetAmt)
 	require.Len(t, resultPlans[0].Outputs[0].Assets, 1)
-	require.Equal(t, "30", resultPlans[0].Outputs[0].Assets[0].Amount.String())
-	require.Equal(t, "buyer", resultPlans[0].Outputs[1].To)
-	require.Equal(t, int64(1), resultPlans[0].Outputs[1].Value)
-	require.Equal(t, addr.MustEncode(), resultPlans[0].Outputs[2].To)
-	require.Len(t, resultPlans[0].Outputs[2].Assets, 1)
-	require.Equal(t, "70", resultPlans[0].Outputs[2].Assets[0].Amount.String())
+	require.Equal(t, "33", resultPlans[0].Outputs[0].Assets[0].Amount.String())
+	require.Equal(t, addr.MustEncode(), resultPlans[0].Outputs[1].To)
+	require.Len(t, resultPlans[0].Outputs[1].Assets, 1)
+	require.Equal(t, "66", resultPlans[0].Outputs[1].Assets[0].Amount.String())
 }
 
 func TestSettleAMMSellUsesConstantProductPool(t *testing.T) {
@@ -207,14 +203,14 @@ func TestSettleAMMBuyNeedsFeeAdjustedFunding(t *testing.T) {
 		require.Equal(t, ItemStatusRefunded, state.Items[0].Done)
 	})
 
-	t.Run("101 sats buys the requested 100 integer assets", func(t *testing.T) {
+	t.Run("101 sats uses the full input once minimum output is met", func(t *testing.T) {
 		runtime := newRuntime(t)
 		plan := applyBuy(t, runtime, 101)
 		require.Len(t, plan.Deals, 1)
 		require.Equal(t, int64(101), plan.Deals[0].SatValue)
-		require.Equal(t, "100", plan.Deals[0].AssetAmt)
+		require.Equal(t, "100.0917161078", plan.Deals[0].AssetAmt)
 		require.Len(t, plan.Transfers, 1)
-		require.Equal(t, "100", plan.Transfers[0].AssetAmt)
+		require.Equal(t, "100.0917161078", plan.Transfers[0].AssetAmt)
 		state, err := runtime.RuntimeState()
 		require.NoError(t, err)
 		require.Equal(t, ItemStatusDealt, state.Items[0].Done)
@@ -234,25 +230,22 @@ func TestSettleAMMBuyNeedsFeeAdjustedFunding(t *testing.T) {
 		require.Equal(t, "100", resultPlans[0].Outputs[0].AssetAmt)
 	})
 
-	t.Run("surplus sats are refunded after buying the requested assets", func(t *testing.T) {
+	t.Run("input above the minimum is fully swapped", func(t *testing.T) {
 		runtime := newRuntime(t)
 		plan := applyBuy(t, runtime, 110)
 		require.Len(t, plan.Deals, 1)
-		require.Equal(t, int64(101), plan.Deals[0].SatValue)
-		require.Equal(t, "100", plan.Deals[0].AssetAmt)
-		require.Len(t, plan.Transfers, 2)
+		require.Equal(t, int64(110), plan.Deals[0].SatValue)
+		require.True(t, parseDecimalOrZero(plan.Deals[0].AssetAmt).Cmp(parseDecimalOrZero("100")) > 0)
+		require.Len(t, plan.Transfers, 1)
 		require.Equal(t, "buyer", plan.Transfers[0].To)
-		require.Equal(t, "100", plan.Transfers[0].AssetAmt)
+		require.Equal(t, plan.Deals[0].AssetAmt, plan.Transfers[0].AssetAmt)
 		require.Equal(t, SettlementReasonDeal, plan.Transfers[0].Reason)
-		require.Equal(t, "buyer", plan.Transfers[1].To)
-		require.Equal(t, int64(9), plan.Transfers[1].SatValue)
-		require.Equal(t, SettlementReasonRefund, plan.Transfers[1].Reason)
 
 		state, err := runtime.RuntimeState()
 		require.NoError(t, err)
 		require.Equal(t, ItemStatusDealt, state.Items[0].Done)
-		requireDecimalString(t, "99900", state.AMMData().AssetAInPool)
-		requireDecimalString(t, "100101", state.AMMData().AssetBInPool)
+		require.True(t, state.AMMData().AssetAInPool.Cmp(parseDecimalOrZero("99900")) < 0)
+		requireDecimalString(t, "100110", state.AMMData().AssetBInPool)
 	})
 }
 
@@ -819,7 +812,7 @@ func TestSettleAMMRejectsSellSlippage(t *testing.T) {
 	requireDecimalString(t, "20", state.AMMData().AssetBInPool)
 }
 
-func TestSettleAMMProcessesBatchSwapsAgainstSnapshotPool(t *testing.T) {
+func TestSettleAMMProcessesBatchSwapsSequentially(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	fundAMMRuntime(t, runtime)
 	addr := runtime.Address()
@@ -832,7 +825,7 @@ func TestSettleAMMProcessesBatchSwapsAgainstSnapshotPool(t *testing.T) {
 	require.Equal(t, int64(0), plan.Deals[0].BuyItemID)
 	require.Equal(t, int64(1), plan.Deals[1].BuyItemID)
 	require.Equal(t, "33.155080214", plan.Deals[0].AssetAmt)
-	require.Equal(t, "33.155080214", plan.Deals[1].AssetAmt)
+	require.Equal(t, "16.6107616302", plan.Deals[1].AssetAmt)
 	require.Equal(t, "alice", plan.Transfers[0].To)
 	require.Equal(t, "bob", plan.Transfers[1].To)
 
@@ -842,7 +835,7 @@ func TestSettleAMMProcessesBatchSwapsAgainstSnapshotPool(t *testing.T) {
 	require.Equal(t, ItemStatusDealt, state.Items[1].Done)
 	requireDecimalString(t, "40", state.AMMData().AssetBInPool)
 	require.NotNil(t, state.AMMData().AssetAInPool)
-	requireDecimalString(t, "33.689839572", state.AMMData().AssetAInPool)
+	requireDecimalString(t, "50.2341581558", state.AMMData().AssetAInPool)
 }
 
 func TestSettleAMMRemoveLiquidityCapsAtOwnedAmount(t *testing.T) {
@@ -991,6 +984,26 @@ func TestSettleAMMCloseClearsPoolState(t *testing.T) {
 	require.Empty(t, state.AMMData().TotalLPTAmt)
 	require.Empty(t, state.AMMData().LPBalances)
 	require.Empty(t, state.AMMData().LPCosts)
+}
+
+func TestAMMCloseSortsLPsAndAssignsExactRemainder(t *testing.T) {
+	state := TemplateRuntimeState{}
+	running := state.AMMData()
+	running.AssetAInPool = parseDecimalOrZero("10")
+	running.AssetBInPool = scommon.NewDefaultDecimal(11)
+	running.TotalLPTAmt = parseDecimalOrZero("3")
+	running.LPBalances = map[string]*scommon.Decimal{
+		"bob":   parseDecimalOrZero("2"),
+		"alice": parseDecimalOrZero("1"),
+	}
+	plan := &SettlementPlan{}
+	appendAMMLPCloseTransfers(&state, plan, &InvokeItem{ID: 9}, "ordx:f:test")
+	require.Len(t, plan.Transfers, 2)
+	require.Equal(t, "alice", plan.Transfers[0].To)
+	require.Equal(t, "bob", plan.Transfers[1].To)
+	require.Equal(t, int64(11), plan.Transfers[0].SatValue+plan.Transfers[1].SatValue)
+	totalAsset := parseDecimalOrZero(plan.Transfers[0].AssetAmt).AddAlignPrecision(parseDecimalOrZero(plan.Transfers[1].AssetAmt))
+	require.Zero(t, totalAsset.Cmp(parseDecimalOrZero("10")))
 }
 
 func applyAMMSwapInvokeForTest(t *testing.T, runtime *ContractRuntime, addr ContractAddress,

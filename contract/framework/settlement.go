@@ -209,7 +209,7 @@ func BuildSettlementAssetIntentsByItem(plan *SettlementPlan,
 }
 
 func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []ResultPlan {
-	out := CloneResultPlans(plans)
+	out := MergeResultPlansByContract(plans)
 	index := make(map[string]int)
 	for i, plan := range out {
 		index[plan.Contract] = i
@@ -370,7 +370,7 @@ func ScaleResultOutputsToPool(outputs []ResultOutput, assetName string, pool *sc
 			return nil, err
 		}
 	}
-	return CompactResultOutputs(out), nil
+	return CompactResultOutputs(out)
 }
 
 func RebuildResultOutputAsset(output *ResultOutput, opts SettlementResultOptions) error {

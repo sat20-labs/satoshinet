@@ -74,6 +74,7 @@ func TestBuildCanonicalResultPlan(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	require.Equal(t, contractAddr.MustEncode(), plan.Contract)
 	require.Len(t, plan.InputUTXOs, 2)
 	require.Equal(t, OutPoint{TxID: "invoke", Vout: 1}, plan.InputUTXOs[0].OutPoint)
 	require.Equal(t, OutPoint{TxID: "a", Vout: 0}, plan.InputUTXOs[1].OutPoint)

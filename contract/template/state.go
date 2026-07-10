@@ -6,6 +6,7 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -1295,7 +1296,11 @@ func checkInvokeFunding(contract Contract, action string, param []byte, output C
 			if _, isAMM := contract.(*AMMContract); isAMM {
 				requiredValue = parseDecimalOrZero(invokeParam.UnitPrice).Int64()
 			} else {
-				requiredValue += calcSwapServiceFee(requiredValue)
+				var overflow bool
+				requiredValue, overflow = contractframework.AddInt64(requiredValue, calcSwapServiceFee(requiredValue))
+				if overflow {
+					return fmt.Errorf("limit order required funding overflows int64")
+				}
 			}
 			if requiredValue <= 0 || fundingValue(output) < requiredValue {
 				return fmt.Errorf("invoke funding value %d is less than declared value %d", fundingValue(output), requiredValue)
@@ -1381,7 +1386,13 @@ func (i *InvokeItem) applySwapFundingValidation(param LimitOrderInvokeParam, isA
 		if isAMM {
 			requiredValue = parseDecimalOrZero(param.UnitPrice).Int64()
 		}
-		expected := requiredValue + i.ServiceFee
+		expected, overflow := contractframework.AddInt64(requiredValue, i.ServiceFee)
+		if overflow {
+			i.Reason = InvokeReasonInvalid
+			i.RemainingValue = 0
+			i.OutValue = 0
+			return
+		}
 		if isAMM {
 			if expected <= 0 || !valueWithinTolerance(i.InValue, expected, 5) {
 				i.Reason = InvokeReasonInvalid
@@ -1506,37 +1517,44 @@ func (r *ContractRuntime) ApplyFunding(output ContractOutput, gasAssetName strin
 		if amm := state.AMMData(); !amm.TradingReady {
 			amm.TradingReady = amm.ammTradingReady()
 		}
-		initializeAMMInitialLP(&state, r.base.Deployer())
+		if err := initializeAMMInitialLP(&state, r.base.Deployer()); err != nil {
+			return err
+		}
 	}
 	return r.saveRuntimeState(state)
 }
 
-func initializeAMMInitialLP(state *TemplateRuntimeState, deployer string) {
+func initializeAMMInitialLP(state *TemplateRuntimeState, deployer string) error {
 	if state == nil || deployer == "" {
-		return
+		return nil
 	}
 	running := state.AMMData()
 	if !running.TradingReady {
-		return
+		return nil
 	}
 	if running.TotalLPTAmt != nil && running.TotalLPTAmt.Sign() > 0 {
-		return
+		return nil
 	}
 	if len(running.LPBalances) != 0 {
-		return
+		return nil
 	}
 	poolAsset := running.AssetAInPool
 	poolGas := decimalInt64(running.AssetBInPool)
 	if poolAsset == nil || poolAsset.Sign() <= 0 || poolGas <= 0 {
-		return
+		return nil
 	}
 	initialLPT := scommon.DecimalMul(poolAsset, scommon.NewDefaultDecimal(poolGas)).Sqrt()
 	if initialLPT.Sign() <= 0 {
-		return
+		return nil
 	}
 	running.TotalLPTAmt = initialLPT
 	running.LPBalances = map[string]*scommon.Decimal{deployer: initialLPT.Clone()}
-	running.LPCosts = map[string]int64{deployer: ammLiquidityCost(poolAsset, poolGas)}
+	cost, err := ammLiquidityCost(poolAsset, poolGas)
+	if err != nil {
+		return err
+	}
+	running.LPCosts = map[string]int64{deployer: cost}
+	return nil
 }
 
 func (r *ContractRuntime) ApplyGasFunding(output ContractOutput, gasAssetName string) error {

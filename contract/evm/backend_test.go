@@ -21,7 +21,7 @@ func executeWorkAndVerifyResults(t *testing.T, req BlockExecutionRequest,
 		Execution:      executed,
 		ContractPrefix: req.ContractPrefix,
 		VerifyResult:   req.VerifyResult,
-	}))
+	}), "execution records: %+v", executed.Records)
 	return executed
 }
 
@@ -286,6 +286,10 @@ func TestBackendAssetIntentRequiresResultAndVerifier(t *testing.T) {
 		Runtime:       runtime,
 		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
+		ContractUTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return []UTXO{mustUTXO(t, OutPoint{TxID: chainhash.Hash{7}.String(), Vout: 0}, contract, SatoshiAssetName, 100, 1)}, nil
+		},
 		VerifyResult: func(resultTx *wire.MsgTx, settled []ExecutionRecord) error {
 			verifierCalled = true
 			require.Len(t, settled, 1)
@@ -305,6 +309,14 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
+		ID:       "vault-release",
+		Contract: contract,
+		Kind:     TriggerAtHeight,
+		Height:   100,
+		GasLimit: DefaultGasConfig().TriggerBaseGas,
+		Calldata: EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+	}))
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
 		GasLimit:  DefaultGasConfig().InvokeBaseGas,
@@ -385,6 +397,14 @@ func TestBackendTriggerRequiresResultWithoutInvokeFunding(t *testing.T) {
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
+		ID:       "vault-release",
+		Contract: contract,
+		Kind:     TriggerAtHeight,
+		Height:   100,
+		GasLimit: DefaultGasConfig().TriggerBaseGas,
+		Calldata: EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+	}))
 
 	executor := NewBackend(BlockExecutionRequest{
 		Runtime: runtime,
@@ -415,7 +435,7 @@ func TestBackendTriggerRequiresResultWithoutInvokeFunding(t *testing.T) {
 	require.Equal(t, ExecutionKindTrigger, executed.Records[0].Kind)
 }
 
-func TestBackendTerminatesTriggerWhenContractGasIsInsufficient(t *testing.T) {
+func TestBackendKeepsTriggerWhenContractGasIsInsufficient(t *testing.T) {
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
@@ -444,12 +464,22 @@ func TestBackendTerminatesTriggerWhenContractGasIsInsufficient(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, executor.pending)
 	require.Empty(t, executor.records)
-	require.Empty(t, runtime.State.Triggers())
+	require.Len(t, runtime.State.Triggers(), 1)
 }
 
 func TestBackendRejectsOverLimitTriggerExecution(t *testing.T) {
 	contract := testContract(t)
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
+		ID:       "vault-release",
+		Contract: contract,
+		Kind:     TriggerAtHeight,
+		Height:   100,
+		GasLimit: 11,
+	}))
 	executor := NewBackend(BlockExecutionRequest{
+		Runtime:   runtime,
 		GasConfig: GasConfig{MaxGasPerTrigger: 10},
 		Block:     testBlockContext(100),
 	})

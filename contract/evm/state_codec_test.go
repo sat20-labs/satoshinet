@@ -116,3 +116,33 @@ func TestMemoryStateDBCloneIsIndependent(t *testing.T) {
 	require.Len(t, state.Triggers(), 1)
 	require.Empty(t, cloned.Triggers())
 }
+
+func TestMemoryStateDBReadDoesNotCreateAccount(t *testing.T) {
+	state := NewMemoryStateDB()
+	addr := gethcommon.HexToAddress("0x11112233445566778899aabbccddeeff00112233")
+	root := state.StateRoot()
+	require.Zero(t, state.GetNonce(addr))
+	require.True(t, state.GetBalance(addr).IsZero())
+	require.Empty(t, state.GetCode(addr))
+	require.Zero(t, state.GetState(addr, gethcommon.HexToHash("0x01")))
+	require.False(t, state.Exist(addr))
+	require.Empty(t, state.accounts)
+	require.Equal(t, root, state.StateRoot())
+}
+
+func TestMemoryStateDBSnapshotUsesJournalAndRevertsChanges(t *testing.T) {
+	state := NewMemoryStateDB()
+	addr := gethcommon.HexToAddress("0x11112233445566778899aabbccddeeff00112233")
+	state.SetState(addr, gethcommon.HexToHash("0x01"), gethcommon.HexToHash("0x11"))
+	snapshot := state.Snapshot()
+	require.Empty(t, state.journal)
+	require.Len(t, state.revisions, 1)
+	state.SetState(addr, gethcommon.HexToHash("0x01"), gethcommon.HexToHash("0x22"))
+	state.SetNonce(addr, 7, 0)
+	require.Len(t, state.journal, 2)
+	state.RevertToSnapshot(snapshot)
+	require.Equal(t, gethcommon.HexToHash("0x11"), state.GetState(addr, gethcommon.HexToHash("0x01")))
+	require.Zero(t, state.GetNonce(addr))
+	require.Empty(t, state.journal)
+	require.Empty(t, state.revisions)
+}

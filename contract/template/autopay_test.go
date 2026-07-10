@@ -143,6 +143,15 @@ func TestAutopayEmptyRecipientPaysMinerFee(t *testing.T) {
 	requireNoResultPlanOutputTo(t, augmented[0], "recipient-address")
 }
 
+func TestAutopayCloseBatchRequiresGasBeforeRefunding(t *testing.T) {
+	contract := NewAutopayContract("dkvs", "recipient", "ordx:f:test", "1")
+	state := &TemplateRuntimeState{}
+	state.AutopayData().AutopayCloseStarted = true
+	state.AutopayData().GasBalance = parseDecimalOrZero("0")
+	_, err := contract.closeBatchGasFee(state, &InvokeItem{}, testAutopayGasConfig(), 100)
+	require.ErrorContains(t, err, "insufficient autopay gas")
+}
+
 func testAutopayRuntime(t *testing.T, recipient, feeAsset, minAmount string) *ContractRuntime {
 	t.Helper()
 	contract := NewAutopayContract("dkvs", recipient, feeAsset, minAmount)

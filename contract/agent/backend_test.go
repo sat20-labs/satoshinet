@@ -14,7 +14,25 @@ func testAgentExecuteBlock(req BlockExecutionRequest) (BlockExecutionResult, err
 	if req.ResolveInvoker == nil {
 		req.ResolveInvoker = testInvokerResolver(nil)
 	}
+	if req.BlockTime == 0 {
+		req.BlockTime = req.BlockHeight
+	}
 	return ExecuteBlock(req)
+}
+
+func TestPredictionUnixTimeRejectsMissingBlockTime(t *testing.T) {
+	backend := &Backend{BlockHeight: 123}
+	contract := validPredictionContract()
+	contract.TimeBase = TimeBaseUnix
+	_, err := backend.predictionTimeValue(contract)
+	if err == nil {
+		t.Fatal("expected unix prediction without block time to fail")
+	}
+	contract.TimeBase = TimeBaseHeight
+	value, err := backend.predictionTimeValue(contract)
+	if err != nil || value != 123 {
+		t.Fatalf("height time mismatch: value=%d err=%v", value, err)
+	}
 }
 
 func TestBackendPredictionE2EShape(t *testing.T) {
@@ -48,7 +66,7 @@ func TestBackendPredictionE2EShape(t *testing.T) {
 	if len(first.SettlementPlans) != 0 {
 		t.Fatalf("unexpected first block settlement plans")
 	}
-	if len(first.ResultPlans) != 2 {
+	if len(first.ResultPlans) != 1 {
 		t.Fatalf("first block result plan count mismatch: %d", len(first.ResultPlans))
 	}
 	result, err := testAgentExecuteBlock(BlockExecutionRequest{
@@ -178,8 +196,9 @@ func TestBackendNonExclusiveDeployAllowsSameConfigAfterClose(t *testing.T) {
 	store := NewRuntimeStore()
 
 	_, err := testAgentExecuteBlock(BlockExecutionRequest{
-		Txs:   []*wire.MsgTx{deployTx, closeTx},
-		Store: store,
+		Txs:       []*wire.MsgTx{deployTx, closeTx},
+		Store:     store,
+		BlockTime: contract.BetDeadline,
 		ResolveInvoker: testInvokerResolver(map[string]string{
 			closeTx.TxID(): "deployer",
 		}),
@@ -664,7 +683,7 @@ func TestBuildBlockResultTxsConfirmUsesSatoshiPrecision(t *testing.T) {
 	}
 }
 
-func TestAgentCloseResult(t *testing.T) {
+func TestAgentCloseAfterBetDeadlineIsRejected(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
 	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
 	resultGas := testAgentGasFee(t, DefaultGasConfig().ResultBaseGas).Int64()
@@ -706,22 +725,16 @@ func TestAgentCloseResult(t *testing.T) {
 	if len(built.ResultTxs) != 1 {
 		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
 	}
-	if len(built.Execution.Records) != 1 || !built.Execution.Records[0].CloseContract {
+	if len(built.Execution.Records) != 1 || built.Execution.Records[0].Status != ResultStatusInvalid ||
+		built.Execution.Records[0].CloseContract {
 		t.Fatalf("close record mismatch: %+v", built.Execution.Records)
 	}
-	outputs := built.Execution.ResultPlans[0].Outputs
-	satOutputs := outputsByRecipientAndReason(outputs, SatoshiAssetName)
-	assertOutputAmount(t, satOutputs, "alice/refund", "60000")
-	assertOutputAmount(t, satOutputs, "bob/refund", "40000")
-	gasOutputs := outputsByRecipientAndReason(outputs, DefaultGasConfig().GasAssetName)
-	assertOutputAmount(t, gasOutputs, "deployer/", "59.997")
-	assertOutputAmount(t, gasOutputs, "bootstrap/", "139.998")
 	runtime, ok := store.Get(addr)
 	if !ok {
 		t.Fatalf("missing runtime")
 	}
-	if runtime.State().Status != StatusCompleted {
-		t.Fatalf("close did not complete runtime: %#v", runtime.State())
+	if runtime.State().Status != StatusReady || len(runtime.State().Prediction.Bets) != 2 {
+		t.Fatalf("rejected close changed runtime: %#v", runtime.State())
 	}
 }
 
@@ -834,10 +847,10 @@ func TestBuildBlockResultTxsForDeployAndReady(t *testing.T) {
 	if len(built.ResultTxs) != 1 {
 		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
 	}
-	if len(built.Execution.ResultPlans) != 2 {
+	if len(built.Execution.ResultPlans) != 1 {
 		t.Fatalf("result plan count mismatch: %d", len(built.Execution.ResultPlans))
 	}
-	if len(built.ResultTxs[0].TxIn) != 3 {
+	if len(built.ResultTxs[0].TxIn) != 2 {
 		t.Fatalf("result input count mismatch: %d", len(built.ResultTxs[0].TxIn))
 	}
 	if len(built.ResultTxs[0].TxOut) != 1 {
@@ -1079,6 +1092,7 @@ func TestBuildBlockResultTxsIgnoresUnfundedConfirm(t *testing.T) {
 		Txs:           []*wire.MsgTx{confirmTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
+		BlockTime:     validPredictionContract().ConfirmAfter + 1,
 		RuntimeConfig: testRuntimeConfig(),
 		ContractUTXOs: func(contract ContractAddress) ([]UTXO, error) {
 			return nil, nil
@@ -1130,6 +1144,7 @@ func TestBuildBlockResultTxsUsesPhysicalGasWhenManagedGasMissing(t *testing.T) {
 		Txs:           []*wire.MsgTx{confirmTx},
 		Store:         store,
 		BlockHeight:   validPredictionContract().ConfirmAfter + 1,
+		BlockTime:     validPredictionContract().ConfirmAfter + 1,
 		RuntimeConfig: testRuntimeConfig(),
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(func(contract ContractAddress) ([]UTXO, error) {
 			outpoint := OutPoint{TxID: chainhash.Hash{7}.String(), Vout: 0}
@@ -1198,6 +1213,7 @@ func TestBuildBlockResultTxsUsesConfirmTopUpGas(t *testing.T) {
 		Txs:           []*wire.MsgTx{confirmTx},
 		Store:         store,
 		BlockHeight:   resultHeight,
+		BlockTime:     resultHeight,
 		RuntimeConfig: testRuntimeConfig(),
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(nil,
 			[]*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),

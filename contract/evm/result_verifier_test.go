@@ -61,7 +61,7 @@ func TestCanonicalResultVerifier(t *testing.T) {
 	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
 
 	tx.TxIn[0], tx.TxIn[1] = tx.TxIn[1], tx.TxIn[0]
-	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
+	require.Error(t, verifier.Verify(tx, []ExecutionRecord{record}))
 
 	tx.TxIn[1] = wire.NewTxIn(&wire.OutPoint{Hash: chainhash.Hash{3}, Index: 0}, nil, nil)
 	require.Error(t, verifier.Verify(tx, []ExecutionRecord{record}))
@@ -309,6 +309,7 @@ func TestBackendWithCanonicalResultVerifier(t *testing.T) {
 		Runtime:       runtime,
 		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
+		ContractUTXOs: verifier.UTXOs,
 	})
 	require.NoError(t, err)
 	require.NoError(t, VerifyResultTxs(ResultVerifyRequest{

@@ -35,7 +35,7 @@ func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionReco
 }
 
 func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []ResultPlan {
-	out := contractframework.CloneResultPlans(plans)
+	out := contractframework.MergeResultPlansByContract(plans)
 	coveredItems := make(map[int64]struct{})
 	planByContract := make(map[string]int)
 	for i := range out {
@@ -212,17 +212,22 @@ func templateManagedGasPaid(contract ContractAddress, store *RuntimeStore, plan 
 	return false
 }
 
-func capClosedResultOutputsByAvailable(outputs []ResultOutput, availableAssets wire.TxAssets, availableValue int64, gasAssetName string, gasFee *scommon.Decimal) []ResultOutput {
+func capClosedResultOutputsByAvailable(outputs []ResultOutput, availableAssets wire.TxAssets, availableValue int64, gasAssetName string, gasFee *scommon.Decimal) ([]ResultOutput, error) {
 	out := contractframework.CloneResultOutputs(outputs)
-	capResultOutputValuesByAvailable(out, availableValue)
+	if err := capResultOutputValuesByAvailable(out, availableValue); err != nil {
+		return nil, err
+	}
 	capResultOutputAssetsByAvailable(out, availableAssets, gasAssetName, gasFee)
 	return contractframework.CompactResultOutputs(out)
 }
 
-func capResultOutputValuesByAvailable(outputs []ResultOutput, availableValue int64) {
-	total := resultOutputsValue(outputs)
+func capResultOutputValuesByAvailable(outputs []ResultOutput, availableValue int64) error {
+	total, err := resultOutputsValue(outputs)
+	if err != nil {
+		return err
+	}
 	if total <= 0 || availableValue < 0 || total <= availableValue {
-		return
+		return nil
 	}
 	originalValues := make([]int64, len(outputs))
 	remaining := availableValue
@@ -247,6 +252,7 @@ func capResultOutputValuesByAvailable(outputs []ResultOutput, availableValue int
 		outputs[i].Value++
 		remaining--
 	}
+	return nil
 }
 
 func capResultOutputAssetsByAvailable(outputs []ResultOutput, availableAssets wire.TxAssets, gasAssetName string, gasFee *scommon.Decimal) {
@@ -440,12 +446,16 @@ func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput, gasAsse
 	return change, nil
 }
 
-func resultOutputsValue(outputs []ResultOutput) int64 {
+func resultOutputsValue(outputs []ResultOutput) (int64, error) {
 	value := int64(0)
 	for _, output := range outputs {
-		value += output.Value
+		next, overflow := contractframework.AddInt64(value, output.Value)
+		if overflow {
+			return 0, fmt.Errorf("template result output value overflows int64")
+		}
+		value = next
 	}
-	return value
+	return value, nil
 }
 
 func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConfig GasConfig, availableAssets wire.TxAssets) (ResultOutput, error) {
@@ -499,10 +509,18 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 		}
 		value := int64(0)
 		if autopay.FeeAssetName == SatoshiAssetName {
-			value += decimalInt64(running.FeeBalance)
+			var overflow bool
+			value, overflow = contractframework.AddInt64(value, decimalInt64(running.FeeBalance))
+			if overflow {
+				return ResultOutput{}, fmt.Errorf("autopay fee balance overflows int64")
+			}
 		}
 		if gasAssetName == SatoshiAssetName {
-			value += decimalInt64(running.GasBalance)
+			var overflow bool
+			value, overflow = contractframework.AddInt64(value, decimalInt64(running.GasBalance))
+			if overflow {
+				return ResultOutput{}, fmt.Errorf("autopay gas balance overflows int64")
+			}
 		}
 		return ResultOutput{To: to, Value: value, Assets: assets}, nil
 	}
@@ -586,7 +604,11 @@ func openOrderManagedAssets(contract Contract, state *TemplateRuntimeState) (int
 		}
 		switch item.OrderType {
 		case OrderTypeBuy:
-			value += item.RemainingValue
+			var overflow bool
+			value, overflow = contractframework.AddInt64(value, item.RemainingValue)
+			if overflow {
+				return 0, nil, fmt.Errorf("open limit order value overflows int64")
+			}
 		case OrderTypeSell:
 			if item.RemainingAmt == nil || item.RemainingAmt.Sign() <= 0 {
 				continue

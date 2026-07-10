@@ -103,6 +103,26 @@ func TestRuntimeBetAggregatesByAddressAndOutcome(t *testing.T) {
 	}
 }
 
+func TestRuntimeDeployerCloseAllowedThroughBetDeadline(t *testing.T) {
+	runtime := newTestRuntime(t)
+	requireReady(t, runtime)
+	requireBet(t, runtime, "alice", "a", "10000")
+
+	plan, err := runtime.ApplyClose(ApplyCloseRequest{
+		Invoker:   "deployer",
+		TimeValue: runtime.Contract().BetDeadline,
+	})
+	if err != nil {
+		t.Fatalf("ApplyClose failed: %v", err)
+	}
+	if !plan.Refund || len(plan.Transfers) != 1 || plan.Transfers[0].To != "alice" {
+		t.Fatalf("unexpected close refund plan: %#v", plan)
+	}
+	if runtime.State().Status != StatusCompleted || runtime.State().Prediction.Status != PredictionStatusRefundable {
+		t.Fatalf("unexpected close state: %#v", runtime.State())
+	}
+}
+
 func TestRuntimeConfirmSettlesWinnersAndFees(t *testing.T) {
 	runtime := newTestRuntime(t)
 	requireReady(t, runtime)

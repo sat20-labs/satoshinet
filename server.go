@@ -3324,10 +3324,18 @@ func (s *server) selectAgentConfirmFundingUTXOs(minGasFee *common.Decimal) (cont
 			})
 		}
 	}
-	return selectAgentConfirmFundingFromAvailable(available, minGasFee, gasAssetName.String(), expectedScript, func(utxo contractcommon.FundingUTXO) bool {
+	selection, err := selectAgentConfirmFundingFromAvailable(available, minGasFee, gasAssetName.String(), expectedScript, func(utxo contractcommon.FundingUTXO) bool {
 		outpoint := utxo.OutPoint
 		return s.txMemPool.CheckSpend(outpoint) == nil
 	})
+	if err != nil {
+		return contractcommon.FundingSelection{}, agentConfirmFundingUnavailableError(address, gasAssetName.String())
+	}
+	return selection, nil
+}
+
+func agentConfirmFundingUnavailableError(coreAddress, gasAssetName string) error {
+	return fmt.Errorf("core node %s has no spendable %s UTXO for agent invoke gas", coreAddress, gasAssetName)
 }
 
 func selectAgentConfirmFundingFromAvailable(available []contractcommon.FundingUTXO, minGasFee *common.Decimal,
@@ -3888,6 +3896,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 			MaxTokens:   cfg.AgentLLMMaxTokens,
 		},
 		TrustedEvidenceSources: cfg.AgentTrustedEvidence,
+		AllowPrivateEvidence:   cfg.AgentAllowPrivateEvidence,
 		TipContext: func() (contractoracle.TipContext, error) {
 			return s.agentOracleTipContext()
 		},

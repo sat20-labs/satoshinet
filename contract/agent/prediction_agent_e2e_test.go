@@ -80,6 +80,7 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 
 	contract := predictionContractForResultServer(resultServer.URL)
 	corenodeAgent := NewPredictionAgent(llmClient)
+	corenodeAgent.Fetcher = HTTPPredictionResultTextFetcher{}
 	confirmParam, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
 		Contract:   contract,
 		ResultURL:  resultServer.URL + "/match/result/123",
@@ -153,6 +154,7 @@ func TestPredictionAgentUsesFinalRedirectURL(t *testing.T) {
 	client := &fakeLLMClient{response: `{"result_type":"outcome","outcome_id":"a","result":"Team A wins"}`}
 	contract := predictionContractForResultServer(resultServer.URL)
 	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = HTTPPredictionResultTextFetcher{}
 	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
 		Contract:   contract,
 		ResultURL:  contract.SourceURL,
@@ -190,6 +192,7 @@ func TestPredictionAgentSearchesSameSiteResultLinkWhenSourcePending(t *testing.T
 	}}
 	contract := predictionContractForResultServer(resultServer.URL)
 	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = HTTPPredictionResultTextFetcher{}
 	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
 		Contract:   contract,
 		ResultURL:  contract.SourceURL,
@@ -229,6 +232,7 @@ func TestPredictionAgentSearchesSiteWhenSourceHasNoResultLink(t *testing.T) {
 	}}
 	contract := predictionContractForResultServer(resultServer.URL)
 	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = HTTPPredictionResultTextFetcher{}
 	corenodeAgent.RetryAttempts = 1
 	corenodeAgent.Searcher = staticPredictionSearcher{urls: []string{resultServer.URL + "/match/result/123"}}
 	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
@@ -474,7 +478,7 @@ func TestPredictionAgentNormalizesCrossLanguageStructuredScore(t *testing.T) {
 	contract.Title = "Short display title"
 	contract.Description = "2026 World Cup quarterfinal: France vs Morocco. Resolve the final result into France wins, Morocco wins, or draw."
 	contract.SourceURL = "https://worldcup.cctv.com/2026/schedule/index.shtml"
-	contract.EventTime = time.Date(2026, time.July, 10, 4, 0, 0, 0, time.Local).Unix()
+	contract.EventTime = time.Date(2026, time.July, 10, 4, 0, 0, 0, time.UTC).Unix()
 	contract.BetDeadline = contract.EventTime - 300
 	contract.ConfirmAfter = contract.EventTime + 7200
 	contract.Outcomes = []PredictionOutcome{
@@ -527,6 +531,43 @@ func TestPredictionAgentNormalizesCrossLanguageStructuredScore(t *testing.T) {
 	if second := client.reqs[1].Messages[len(client.reqs[1].Messages)-1].Content; !strings.Contains(second, "France 2-0 Morocco") ||
 		!strings.Contains(second, "France wins") {
 		t.Fatalf("unexpected outcome-match prompt: %s", second)
+	}
+}
+
+func TestPredictionStructuredEvidenceRejectsAmbiguousMatches(t *testing.T) {
+	contract := validPredictionContract()
+	contract.Title = "France vs Morocco"
+	contract.Description = "France vs Morocco final result"
+	contract.EventTime = time.Date(2026, time.July, 10, 4, 0, 0, 0, time.UTC).Unix()
+	text := `{"events":[
+		{"homeName":"France","guestName":"Morocco","homeScore":2,"guestScore":0,"status":"final"},
+		{"homeName":"France","guestName":"Morocco","homeScore":1,"guestScore":0,"status":"final"}
+	]}`
+	if _, ok := extractPredictionStructuredScore(contract, text); ok {
+		t.Fatal("ambiguous structured matches must not select the first map/list entry")
+	}
+	unknown := `{"homeName":"France","guestName":"Morocco","homeScore":2,"guestScore":0,"status":"unknown"}`
+	if _, ok := extractPredictionStructuredScore(contract, unknown); ok {
+		t.Fatal("unknown structured match status must fail closed")
+	}
+}
+
+func TestPredictionFetchURLRejectsPrivateTargets(t *testing.T) {
+	for _, rawURL := range []string{
+		"http://127.0.0.1/",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.0.0.1/",
+		"http://100.64.0.1/",
+		"http://[::1]/",
+		"https://user:pass@example.com/",
+		"https://example.com:8443/result",
+	} {
+		if _, err := validatePredictionFetchURL(rawURL); err == nil {
+			t.Fatalf("expected private or unsafe URL to fail: %s", rawURL)
+		}
+	}
+	if _, err := validatePredictionFetchURL("https://example.com/result"); err != nil {
+		t.Fatalf("public https URL rejected: %v", err)
 	}
 }
 
@@ -685,6 +726,7 @@ func TestPredictionAgentFollowsStaticScriptDataURL(t *testing.T) {
 	corenodeAgent := NewPredictionAgent(client)
 	corenodeAgent.RetryAttempts = 1
 	corenodeAgent.MaxCandidateURLs = 8
+	corenodeAgent.Fetcher = HTTPPredictionResultTextFetcher{}
 	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
 		Contract:   contract,
 		ResultURL:  contract.SourceURL,

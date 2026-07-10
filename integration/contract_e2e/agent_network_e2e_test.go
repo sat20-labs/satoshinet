@@ -110,7 +110,7 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	resultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/match/result/123", r.URL.Path)
 		w.Header().Set("Content-Type", "text/html")
-		_, _ = w.Write([]byte(`<html><body><h1>Final</h1><p>Team A 101, Team B 98.</p></body></html>`))
+		_, _ = w.Write([]byte(`<html><body><h1>Agent E2E basketball prediction final score</h1><p>Team A 101, Team B 98.</p></body></html>`))
 	}))
 	defer resultServer.Close()
 
@@ -209,7 +209,7 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 		return
 	}
 
-	waitForAgentPredictionReady(t, bootstrapNode, agentAddress.EncodeAddress())
+	waitForAgentPredictionReady(t, bootstrapNode, coreNode, agentAddress.EncodeAddress())
 
 	resultGas := networkGasFeeAmount(t, agentcontract.DefaultGasConfig().ResultBaseGas)
 	aliceBet := mustAgentBetParam(t, "a")
@@ -273,6 +273,7 @@ func startAgentSatoshiNetNetwork(t *testing.T, fakeL1 *httptest.Server, llmEndpo
 		"--agentllmendpoint=" + llmEndpoint,
 		"--agentllmmodel=fake-agent",
 		"--agentcheckinterval=1s",
+		"--agentallowprivateevidence",
 	})
 	require.NoError(t, rpctest.ConnectNode(coreNode, bootstrapNode))
 	require.NoError(t, rpctest.JoinNodes([]*rpctest.Harness{bootstrapNode, coreNode}, rpctest.Blocks))
@@ -474,7 +475,7 @@ func waitForAgentPredictionContractQueries(t *testing.T, node, coreNode *rpctest
 	require.NoError(t, lastErr)
 }
 
-func waitForAgentPredictionReady(t *testing.T, node *rpctest.Harness, contract string) {
+func waitForAgentPredictionReady(t *testing.T, node, coreNode *rpctest.Harness, contract string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
@@ -498,6 +499,13 @@ func waitForAgentPredictionReady(t *testing.T, node *rpctest.Harness, contract s
 		}
 		lastErr = fmt.Errorf("agent contract %s is not ready yet", contract)
 		time.Sleep(300 * time.Millisecond)
+	}
+	if coreNode != nil {
+		if logPath := coreNode.LogFile(); logPath != "" {
+			if data, err := os.ReadFile(logPath); err == nil {
+				t.Logf("agent ready timeout core log:\n%s", filterAgentLogLines(string(data), 12000))
+			}
+		}
 	}
 	require.NoError(t, lastErr)
 }
@@ -579,7 +587,7 @@ func checkAgentPredictionContractQueries(node *rpctest.Harness, contract, alice,
 	if err != nil {
 		return err
 	}
-	if len(state.State.Prediction.Confirmations) == 0 {
+	if state.State.Prediction.LatestConfirm == nil {
 		return fmt.Errorf("missing prediction runtime confirmation: %+v", state.State.Prediction)
 	}
 
@@ -629,9 +637,9 @@ type agentPredictionStateResp struct {
 	State struct {
 		Status     string `json:"status"`
 		Prediction struct {
-			Status        string            `json:"status"`
-			Confirmations []json.RawMessage `json:"confirmations,omitempty"`
-			Rejections    []json.RawMessage `json:"rejections,omitempty"`
+			Status          string           `json:"status"`
+			LatestConfirm   *json.RawMessage `json:"latestConfirm,omitempty"`
+			LatestRejection *json.RawMessage `json:"latestRejection,omitempty"`
 		} `json:"prediction"`
 	} `json:"state"`
 	Details map[string]interface{} `json:"details,omitempty"`

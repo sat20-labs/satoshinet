@@ -44,16 +44,17 @@ const (
 )
 
 type ResultPlan struct {
-	Contract   string            `json:"contract,omitempty"`
-	Height     int64             `json:"height,omitempty"`
-	ItemIDs    []int64           `json:"itemIds,omitempty"`
-	GasFee     *scommon.Decimal  `json:"gasFee,omitempty"`
-	GasRefunds []ResultGasRefund `json:"gasRefunds,omitempty"`
-	InputScope ResultInputScope  `json:"inputScope,omitempty"`
-	Inputs     []OutPoint        `json:"inputs,omitempty"`
-	InputUTXOs []UTXO            `json:"inputUtxos,omitempty"`
-	FeeOutputs []ResultOutput    `json:"feeOutputs,omitempty"`
-	Outputs    []ResultOutput    `json:"outputs,omitempty"`
+	Contract    string            `json:"contract,omitempty"`
+	ResultCount int               `json:"resultCount,omitempty"`
+	Height      int64             `json:"height,omitempty"`
+	ItemIDs     []int64           `json:"itemIds,omitempty"`
+	GasFee      *scommon.Decimal  `json:"gasFee,omitempty"`
+	GasRefunds  []ResultGasRefund `json:"gasRefunds,omitempty"`
+	InputScope  ResultInputScope  `json:"inputScope,omitempty"`
+	Inputs      []OutPoint        `json:"inputs,omitempty"`
+	InputUTXOs  []UTXO            `json:"inputUtxos,omitempty"`
+	FeeOutputs  []ResultOutput    `json:"feeOutputs,omitempty"`
+	Outputs     []ResultOutput    `json:"outputs,omitempty"`
 }
 
 func CloneResultPlans(plans []ResultPlan) []ResultPlan {
@@ -62,6 +63,85 @@ func CloneResultPlans(plans []ResultPlan) []ResultPlan {
 		out[i] = CloneResultPlan(plans[i])
 	}
 	return out
+}
+
+// MergeResultPlansByContract collapses all result work for one contract into a
+// single plan while preserving the first-seen contract and output order.  A
+// Result TX spends contract UTXOs once, so allowing multiple independent plans
+// for the same contract can otherwise duplicate inputs during augmentation.
+func MergeResultPlansByContract(plans []ResultPlan) []ResultPlan {
+	out := make([]ResultPlan, 0, len(plans))
+	index := make(map[string]int, len(plans))
+	for _, plan := range plans {
+		if plan.Contract == "" {
+			cloned := CloneResultPlan(plan)
+			if cloned.ResultCount == 0 {
+				cloned.ResultCount = 1
+			}
+			out = append(out, cloned)
+			continue
+		}
+		i, ok := index[plan.Contract]
+		if !ok {
+			index[plan.Contract] = len(out)
+			cloned := CloneResultPlan(plan)
+			if cloned.ResultCount == 0 {
+				cloned.ResultCount = 1
+			}
+			out = append(out, cloned)
+			continue
+		}
+		merged := &out[i]
+		count := plan.ResultCount
+		if count == 0 {
+			count = 1
+		}
+		merged.ResultCount += count
+		if merged.Height == 0 {
+			merged.Height = plan.Height
+		}
+		merged.ItemIDs = appendUniqueInt64s(merged.ItemIDs, plan.ItemIDs)
+		merged.GasFee = DecimalAddAllowNil(merged.GasFee, plan.GasFee)
+		merged.GasRefunds = append(merged.GasRefunds, CloneResultGasRefunds(plan.GasRefunds)...)
+		if merged.InputScope != plan.InputScope {
+			merged.InputScope = ResultInputScopeAllContractUTXOs
+		}
+		merged.Inputs = UniqueOutPoints(append(merged.Inputs, plan.Inputs...))
+		merged.InputUTXOs = appendUniqueUTXOs(merged.InputUTXOs, plan.InputUTXOs)
+		merged.FeeOutputs = append(merged.FeeOutputs, CloneResultOutputs(plan.FeeOutputs)...)
+		merged.Outputs = append(merged.Outputs, CloneResultOutputs(plan.Outputs)...)
+	}
+	return out
+}
+
+func appendUniqueInt64s(dst, src []int64) []int64 {
+	seen := make(map[int64]struct{}, len(dst)+len(src))
+	for _, value := range dst {
+		seen[value] = struct{}{}
+	}
+	for _, value := range src {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		dst = append(dst, value)
+	}
+	return dst
+}
+
+func appendUniqueUTXOs(dst, src []UTXO) []UTXO {
+	seen := make(map[OutPoint]struct{}, len(dst)+len(src))
+	for _, input := range dst {
+		seen[input.OutPoint] = struct{}{}
+	}
+	for _, input := range src {
+		if _, ok := seen[input.OutPoint]; ok {
+			continue
+		}
+		seen[input.OutPoint] = struct{}{}
+		dst = append(dst, input.Clone())
+	}
+	return dst
 }
 
 func CloneResultPlan(plan ResultPlan) ResultPlan {
@@ -219,7 +299,7 @@ func ResultOutputIsZero(output ResultOutput) bool {
 	return output.Value == 0 && len(output.Assets) == 0
 }
 
-func CompactResultOutputs(outputs []ResultOutput) []ResultOutput {
+func CompactResultOutputs(outputs []ResultOutput) ([]ResultOutput, error) {
 	out := make([]ResultOutput, 0, len(outputs))
 	index := make(map[string]int)
 	for _, output := range outputs {
@@ -233,19 +313,29 @@ func CompactResultOutputs(outputs []ResultOutput) []ResultOutput {
 			continue
 		}
 		if existing, found := index[key]; found {
-			out[existing].Value += output.Value
+			value, overflow := AddInt64(out[existing].Value, output.Value)
+			if overflow {
+				return nil, fmt.Errorf("compacted result output value overflows int64")
+			}
+			out[existing].Value = value
 			if len(output.Assets) != 0 {
 				builder := scommon.NewTxAssetsBuilder(len(out[existing].Assets) + len(output.Assets))
 				builder.AddSlice(out[existing].Assets)
 				builder.AddSlice(output.Assets)
-				out[existing].Assets = builder.Build()
+				merged := builder.Build()
+				for _, asset := range merged {
+					if err := ValidateAssetDecimal(asset.Amount); err != nil {
+						return nil, fmt.Errorf("compacted result asset %s: %w", asset.Name.String(), err)
+					}
+				}
+				out[existing].Assets = merged
 			}
 			continue
 		}
 		index[key] = len(out)
 		out = append(out, output)
 	}
-	return out
+	return out, nil
 }
 
 func compactResultOutputKey(output ResultOutput) (string, bool) {

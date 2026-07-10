@@ -174,7 +174,7 @@ func TestCanonicalResultVerifierRejectsInputMismatch(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestCanonicalResultVerifierAllowsExtraInputs(t *testing.T) {
+func TestCanonicalResultVerifierRejectsExtraInputs(t *testing.T) {
 	plans := []ResultPlan{{
 		ItemIDs: []int64{1},
 		Inputs:  []OutPoint{{TxID: testHash(1), Vout: 0}},
@@ -202,7 +202,7 @@ func TestCanonicalResultVerifierAllowsExtraInputs(t *testing.T) {
 		PlanCount:    resultPlanCount,
 		CheckPayload: true,
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
 }
 
 func TestAugmentClosedAMMCloseOutputsRejectInsufficientContractBalance(t *testing.T) {

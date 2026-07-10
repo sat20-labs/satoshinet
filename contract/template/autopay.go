@@ -251,7 +251,11 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 	if state == nil {
 		return plan, nil
 	}
-	if c.applyAutopayClose(runtime, state, plan, height, gasConfig) {
+	closed, err := c.applyAutopayClose(runtime, state, plan, height, gasConfig)
+	if err != nil {
+		return nil, err
+	}
+	if closed {
 		state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
 		return plan, nil
 	}
@@ -307,10 +311,10 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 }
 
 func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *TemplateRuntimeState,
-	plan *SettlementPlan, height int64, gasConfig GasConfig) bool {
+	plan *SettlementPlan, height int64, gasConfig GasConfig) (bool, error) {
 
 	if state == nil || plan == nil || state.AutopayData().Closed {
-		return false
+		return false, nil
 	}
 	deployer := runtime.RuntimeBase().Deployer()
 	for i := range state.Items {
@@ -326,10 +330,13 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 		if item.Address != deployer {
 			item.Reason = InvokeReasonInvalid
 			item.Done = ItemStatusClosedDirectly
-			return true
+			return true, nil
 		}
 		gasFee, err := c.closeBatchGasFee(state, item, gasConfig, height)
-		if err == nil && gasFee != nil && gasFee.Sign() > 0 {
+		if err != nil {
+			return false, err
+		}
+		if gasFee != nil && gasFee.Sign() > 0 {
 			plan.GasFee = gasFee
 			state.AutopayData().GasBalance = decimalSubAllowNil(state.AutopayData().GasBalance, gasFee)
 		}
@@ -361,9 +368,9 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 		} else {
 			state.AutopayData().AutopayStatus = AutopayStatusActive
 		}
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 func (c *AutopayContract) applyAutopayCancels(state *TemplateRuntimeState, plan *SettlementPlan, height int64) bool {
@@ -478,7 +485,7 @@ func (c *AutopayContract) closeBatchGasFee(state *TemplateRuntimeState, item *In
 		return nil, err
 	}
 	if decimalOrZero(state.AutopayData().GasBalance).Cmp(fee) < 0 {
-		return nil, nil
+		return nil, fmt.Errorf("insufficient autopay gas for close batch")
 	}
 	return fee, nil
 }

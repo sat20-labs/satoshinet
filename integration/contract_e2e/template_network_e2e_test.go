@@ -678,7 +678,7 @@ func TestNetworkTemplateAMMContract(t *testing.T) {
 	fixture.requireNodesSynced(t)
 }
 
-func TestNetworkAMMSameBlockFixedK(t *testing.T) {
+func TestNetworkAMMSameBlockSequentialPricing(t *testing.T) {
 	fixture := newTemplateNetworkFixture(t, map[string]int64{
 		"ordx:f:ammfixed": 100000,
 	})
@@ -742,7 +742,12 @@ func TestNetworkAMMSameBlockFixedK(t *testing.T) {
 	amountA := templateResultAssetAmountTo(t, outputs, traderAAddr, ammAsset)
 	amountB := templateResultAssetAmountTo(t, outputs, traderBAddr, ammAsset)
 	requirePositiveDecimalString(t, amountA)
-	require.Equal(t, amountA, amountB)
+	amountADecimal, err := indexercommon.NewDecimalFromString(amountA, tmplcontract.MaxPriceDivisibility)
+	require.NoError(t, err)
+	amountBDecimal, err := indexercommon.NewDecimalFromString(amountB, tmplcontract.MaxPriceDivisibility)
+	require.NoError(t, err)
+	require.NotZero(t, amountADecimal.Cmp(amountBDecimal),
+		"same-block swaps should be sequentially repriced: traderA=%s traderB=%s", amountA, amountB)
 	fixture.requireNodesSynced(t)
 }
 

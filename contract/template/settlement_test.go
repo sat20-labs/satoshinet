@@ -208,6 +208,26 @@ func TestSettleLimitOrdersLargeSellFilledByMultipleSmallBuys(t *testing.T) {
 	require.Empty(t, state.Items[0].RemainingAmt)
 }
 
+func TestSettleLimitOrdersRefundsSellerDustRemainder(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	addr := runtime.Address()
+	dustAsset := wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString("ordx:f:test"),
+		Amount: *parseDecimalOrZero("1.1"),
+	}}
+	applyLimitOrderInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell, "1.1", "1", 0, dustAsset, 1)
+	applyLimitOrderInvokeForTest(t, runtime, addr, "buy", "buyer", OrderTypeBuy, "1", "1", 1, nil, 1)
+
+	plan, err := runtime.SettleBlock(1)
+	require.NoError(t, err)
+	require.Len(t, plan.Deals, 1)
+	require.Equal(t, "1", plan.Deals[0].AssetAmt)
+	require.Len(t, plan.Transfers, 3)
+	require.Equal(t, "seller", plan.Transfers[2].To)
+	require.Equal(t, "0.1", plan.Transfers[2].AssetAmt)
+	require.Equal(t, SettlementReasonRefund, plan.Transfers[2].Reason)
+}
+
 func TestSettleLimitOrdersBuyTakesLowerSellPricesAndLeavesRemainder(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
 	addr := runtime.Address()

@@ -569,6 +569,63 @@ func TestRuntimeDiscardsAssetIntentOnOuterRevert(t *testing.T) {
 	require.Empty(t, runtime.AssetIntents)
 }
 
+func TestRuntimeRollsBackStorageWhenEffectCommitFails(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	runtime := NewRuntime(nil)
+	runtime.GasConfig = GasConfig{MaxGasPerTrigger: 10}
+	runtime.SetCode(ContractAddressHash(contract), storeThenCallTriggerPrecompileCode())
+
+	result := runtime.Call(CallRequest{
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "call-rollback",
+		Input:         EncodeRegisterHeightTriggerCall("vault-release", 100, 11, nil),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
+	})
+	require.ErrorContains(t, result.Err, "trigger gas limit exceeds maximum")
+	require.Zero(t, runtime.State.GetState(GethAddress(ContractAddressHash(contract)), gethcommon.Hash{}))
+	require.Empty(t, runtime.State.Triggers())
+	require.Empty(t, runtime.State.journal)
+	require.Empty(t, runtime.State.revisions)
+}
+
+func TestRuntimePendingAssetLedgerSpansCalls(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	runtime.AssetBalances = NewUTXOAssetView([]UTXO{
+		mustUTXO(t, OutPoint{TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Vout: 0},
+			contract, SatoshiAssetName, 100, 1),
+	})
+
+	first := runtime.Call(CallRequest{
+		CallerAddress: caller.String(), TargetAddress: contract.MustEncode(), CallID: "first",
+		Input: EncodeTransferAssetCall(SatoshiAssetName, "tb1qone", "60", nil),
+		Gas:   100000, Block: BlockContext{GasLimit: 1000000},
+	})
+	require.NoError(t, first.Err)
+	require.Len(t, runtime.AssetIntents, 1)
+
+	balance := runtime.Call(CallRequest{
+		CallerAddress: caller.String(), TargetAddress: evmAddressFromGeth(AssetPrecompileAddress).String(), CallID: "balance",
+		Input: EncodeBalanceOfCall(ContractAddressHash(contract), SatoshiAssetName),
+		Gas:   100000, Block: BlockContext{GasLimit: 1000000},
+	})
+	require.NoError(t, balance.Err)
+	require.Equal(t, "40", abiRawDynamicString(t, balance.ReturnData))
+
+	second := runtime.Call(CallRequest{
+		CallerAddress: caller.String(), TargetAddress: contract.MustEncode(), CallID: "second",
+		Input: EncodeTransferAssetCall(SatoshiAssetName, "tb1qtwo", "50", nil),
+		Gas:   100000, Block: BlockContext{GasLimit: 1000000},
+	})
+	require.ErrorContains(t, second.Err, "only 100 is available")
+	require.Len(t, runtime.AssetIntents, 1)
+}
+
 func evmAddressFromGeth(addr [20]byte) EVMAddress {
 	var out EVMAddress
 	copy(out[:], addr[:])
@@ -637,6 +694,15 @@ func callTriggerPrecompileCode() []byte {
 
 func callTriggerPrecompileThenRevertCode() []byte {
 	return callPrecompileCode(TriggerPrecompileAddress, true)
+}
+
+func storeThenCallTriggerPrecompileCode() []byte {
+	code := []byte{
+		0x60, 0x01, // PUSH1 value 1
+		0x60, 0x00, // PUSH1 slot 0
+		0x55, // SSTORE
+	}
+	return append(code, callTriggerPrecompileCode()...)
 }
 
 func callPrecompileCode(addr gethcommon.Address, revert bool) []byte {

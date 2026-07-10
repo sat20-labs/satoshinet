@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sat20-labs/indexer/common"
@@ -9,6 +10,16 @@ import (
 	contractnode "github.com/sat20-labs/satoshinet/contract/node"
 	"github.com/sat20-labs/satoshinet/wire"
 )
+
+func TestAgentConfirmFundingUnavailableError(t *testing.T) {
+	err := agentConfirmFundingUnavailableError("tc1pcore", "brc20:f:sgas")
+	if got, want := err.Error(), "core node tc1pcore has no spendable brc20:f:sgas UTXO for agent invoke gas"; got != want {
+		t.Fatalf("unexpected error: got %q want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "contract funding") {
+		t.Fatalf("error must identify core-node gas funding, got %q", err)
+	}
+}
 
 func TestAgentConfirmFundingOutput(t *testing.T) {
 	gasFee := common.NewDecimal(50, 0)

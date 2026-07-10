@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -65,16 +67,18 @@ type PredictionResultFetcher interface {
 }
 
 type HTTPPredictionResultTextFetcher struct {
-	Client   *http.Client
-	MaxBytes int64
+	Client               *http.Client
+	MaxBytes             int64
+	RequirePublicNetwork bool
 }
 
 type HTTPPredictionResultSearcher struct {
-	Client         *http.Client
-	Endpoint       string
-	MaxBytes       int64
-	MaxResults     int
-	TrustedSources []TrustedEvidenceSource
+	Client               *http.Client
+	Endpoint             string
+	MaxBytes             int64
+	MaxResults           int
+	TrustedSources       []TrustedEvidenceSource
+	RequirePublicNetwork bool
 }
 
 type PredictionAgent struct {
@@ -201,8 +205,8 @@ func NewPredictionAgent(client LLMClient) *PredictionAgent {
 	trustedSources := DefaultTrustedEvidenceSources()
 	return &PredictionAgent{
 		Resolver:         NewPredictionLLMResolver(client),
-		Fetcher:          HTTPPredictionResultTextFetcher{},
-		Searcher:         HTTPPredictionResultSearcher{TrustedSources: trustedSources},
+		Fetcher:          HTTPPredictionResultTextFetcher{RequirePublicNetwork: true},
+		Searcher:         HTTPPredictionResultSearcher{TrustedSources: trustedSources, RequirePublicNetwork: true},
 		TrustedSources:   trustedSources,
 		RetryAttempts:    DefaultPredictionAgentRetryAttempts,
 		RetryBackoff:     DefaultPredictionAgentRetryBackoff,
@@ -228,7 +232,7 @@ func (a *PredictionAgent) ReviewReadyResult(ctx context.Context, req PredictionA
 
 	fetcher := a.Fetcher
 	if fetcher == nil {
-		fetcher = HTTPPredictionResultTextFetcher{}
+		fetcher = HTTPPredictionResultTextFetcher{RequirePublicNetwork: true}
 	}
 	fetched, err := a.fetchWithRetry(ctx, fetcher, req.Contract.SourceURL)
 	if err != nil {
@@ -319,7 +323,7 @@ func (a *PredictionAgent) BuildConfirmParam(ctx context.Context, req PredictionA
 	}
 	fetcher := a.Fetcher
 	if fetcher == nil {
-		fetcher = HTTPPredictionResultTextFetcher{}
+		fetcher = HTTPPredictionResultTextFetcher{RequirePublicNetwork: true}
 	}
 	fetched, err := a.fetchWithRetry(ctx, fetcher, req.ResultURL)
 	if err != nil {
@@ -598,28 +602,45 @@ func extractPredictionStructuredScore(contract PredictionContract, text string) 
 		return predictionStructuredScore{}, false
 	}
 	contractText := normalizePredictionEvidenceText(contract.Title + " " + contract.Description + " " + predictionOutcomeText(contract))
-	return walkPredictionStructuredScore(data, contractText, contract.EventTime)
+	candidates := make([]predictionStructuredScore, 0, 2)
+	collectPredictionStructuredScores(data, contractText, contract.EventTime, &candidates)
+	unique := make(map[string]predictionStructuredScore, len(candidates))
+	for _, candidate := range candidates {
+		key := normalizePredictionEvidenceText(candidate.HomeName) + "\x00" +
+			normalizePredictionEvidenceText(candidate.GuestName) + "\x00" +
+			candidate.HomeScore + "\x00" + candidate.GuestScore
+		unique[key] = candidate
+	}
+	if len(unique) != 1 {
+		return predictionStructuredScore{}, false
+	}
+	for _, candidate := range unique {
+		return candidate, true
+	}
+	return predictionStructuredScore{}, false
 }
 
-func walkPredictionStructuredScore(value interface{}, contractText string, eventTime int64) (predictionStructuredScore, bool) {
+func collectPredictionStructuredScores(value interface{}, contractText string, eventTime int64,
+	out *[]predictionStructuredScore) {
+
 	switch typed := value.(type) {
 	case []interface{}:
 		for _, item := range typed {
-			if score, ok := walkPredictionStructuredScore(item, contractText, eventTime); ok {
-				return score, true
-			}
+			collectPredictionStructuredScores(item, contractText, eventTime, out)
 		}
 	case map[string]interface{}:
 		if score, ok := predictionStructuredScoreFromMap(typed, contractText, eventTime); ok {
-			return score, true
+			*out = append(*out, score)
 		}
-		for _, item := range typed {
-			if score, ok := walkPredictionStructuredScore(item, contractText, eventTime); ok {
-				return score, true
-			}
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			collectPredictionStructuredScores(typed[key], contractText, eventTime, out)
 		}
 	}
-	return predictionStructuredScore{}, false
 }
 
 func predictionStructuredScoreFromMap(item map[string]interface{}, contractText string, eventTime int64) (predictionStructuredScore, bool) {
@@ -685,7 +706,7 @@ func predictionStructuredUnixTime(value interface{}) (int64, bool) {
 			return unix, true
 		}
 		for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339} {
-			parsed, err := time.ParseInLocation(layout, value, time.Local)
+			parsed, err := time.ParseInLocation(layout, value, time.UTC)
 			if err == nil {
 				return parsed.Unix(), true
 			}
@@ -730,7 +751,7 @@ func predictionStructuredMatchDone(item map[string]interface{}) bool {
 	status := normalizePredictionEvidenceText(predictionStructuredString(item,
 		"statusDesc", "status", "gameStatus", "matchStatus", "state", "period"))
 	if status == "" {
-		return true
+		return false
 	}
 	for _, token := range []string{"已结束", "完场", "结束", "final", "fulltime", "ft", "ended", "complete", "completed"} {
 		if strings.Contains(status, normalizePredictionEvidenceText(token)) {
@@ -742,7 +763,7 @@ func predictionStructuredMatchDone(item map[string]interface{}) bool {
 			return false
 		}
 	}
-	return true
+	return false
 }
 
 func predictionOutcomeText(contract PredictionContract) string {
@@ -959,10 +980,14 @@ func (f HTTPPredictionResultTextFetcher) FetchResultText(ctx context.Context, re
 }
 
 func (f HTTPPredictionResultTextFetcher) FetchPredictionResult(ctx context.Context, resultURL string) (PredictionResultFetchResult, error) {
-	client := f.Client
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+	validateURL := parseHTTPURL
+	if f.RequirePublicNetwork {
+		validateURL = validatePredictionFetchURL
 	}
+	if _, err := validateURL(resultURL); err != nil {
+		return PredictionResultFetchResult{}, err
+	}
+	client := predictionFetchHTTPClient(f.Client, f.RequirePublicNetwork)
 	maxBytes := f.MaxBytes
 	if maxBytes <= 0 {
 		maxBytes = DefaultPredictionResultMaxBytes
@@ -999,6 +1024,92 @@ func (f HTTPPredictionResultTextFetcher) FetchPredictionResult(ctx context.Conte
 	}, nil
 }
 
+func predictionFetchHTTPClient(base *http.Client, requirePublic bool) *http.Client {
+	client := &http.Client{Timeout: 10 * time.Second}
+	if base != nil {
+		*client = *base
+		if client.Timeout == 0 {
+			client.Timeout = 10 * time.Second
+		}
+	}
+	if !requirePublic {
+		return client
+	}
+	var transport *http.Transport
+	if configured, ok := client.Transport.(*http.Transport); ok && configured != nil {
+		transport = configured.Clone()
+	} else {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	}
+	transport.Proxy = nil
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		if err != nil {
+			return nil, err
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("prediction evidence host %s has no IP address", host)
+		}
+		for _, ip := range ips {
+			if !predictionPublicIP(ip) {
+				return nil, fmt.Errorf("prediction evidence host %s resolves to non-public IP %s", host, ip)
+			}
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+	}
+	client.Transport = transport
+	previousRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if _, err := validatePredictionFetchURL(req.URL.String()); err != nil {
+			return err
+		}
+		if previousRedirect != nil {
+			return previousRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return client
+}
+
+func validatePredictionFetchURL(raw string) (*url.URL, error) {
+	parsed, err := parseHTTPURL(raw)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.User != nil {
+		return nil, errors.New("prediction evidence URL userinfo is not allowed")
+	}
+	if port := parsed.Port(); port != "" &&
+		!((parsed.Scheme == "http" && port == "80") || (parsed.Scheme == "https" && port == "443")) {
+		return nil, fmt.Errorf("prediction evidence URL port %s is not allowed", port)
+	}
+	if ip := net.ParseIP(parsed.Hostname()); ip != nil && !predictionPublicIP(ip) {
+		return nil, fmt.Errorf("prediction evidence URL uses non-public IP %s", ip)
+	}
+	return parsed, nil
+}
+
+func predictionPublicIP(ip net.IP) bool {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return true
+	}
+	// 100.64.0.0/10 is carrier-grade NAT and is not publicly routable.
+	return !(ipv4[0] == 100 && ipv4[1]&0xc0 == 0x40)
+}
+
 func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context, contract PredictionContract) ([]string, error) {
 	if err := contract.Check(); err != nil {
 		return nil, err
@@ -1012,9 +1123,9 @@ func (s HTTPPredictionResultSearcher) SearchPredictionResult(ctx context.Context
 		return nil, err
 	}
 	searchDomains := predictionSearchDomains(searchDomain, s.trustedSources())
-	client := s.Client
-	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+	client := predictionFetchHTTPClient(s.Client, s.RequirePublicNetwork)
+	if client.Timeout > 5*time.Second {
+		client.Timeout = 5 * time.Second
 	}
 	maxBytes := s.MaxBytes
 	if maxBytes <= 0 {

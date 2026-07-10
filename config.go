@@ -126,6 +126,7 @@ type config struct {
 	AgentLLMMaxTokens              int           `long:"agentllmmaxtokens" description:"Natural-language contract Agent LLM maximum response tokens. Zero uses provider default."`
 	AgentCheckInterval             time.Duration `long:"agentcheckinterval" description:"Natural-language contract Agent polling interval. Valid time units are {s, m, h}."`
 	AgentTrustedEvidence           []string      `long:"agenttrustedevidence" description:"Trusted evidence source for natural-language contract oracle search. Repeatable. Examples: reuters.com, sec.gov, who.int. Empty uses built-in defaults."`
+	AgentAllowPrivateEvidence      bool          `long:"agentallowprivateevidence" description:"Allow Agent oracle evidence fetches from private or local networks. Unsafe; intended only for isolated test environments."`
 	BanDuration                    time.Duration `long:"banduration" description:"How long to ban misbehaving peers.  Valid time units are {s, m, h}.  Minimum 1 second"`
 	BanThreshold                   uint32        `long:"banthreshold" description:"Maximum allowed ban score before disconnecting and banning misbehaving peers."`
 	BlockMaxSize                   uint32        `long:"blockmaxsize" description:"Maximum block size in bytes to be used when creating a block"`

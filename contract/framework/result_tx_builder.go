@@ -52,12 +52,15 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 	if len(req.Plans) == 0 && req.ResultCount == 0 {
 		return nil, fmt.Errorf("missing result plans")
 	}
-	tx := wire.NewMsgTx(2)
 	resultCount := 0
-	for _, plan := range req.Plans {
-		if req.ResultCount == 0 {
+	if req.ResultCount == 0 {
+		for _, plan := range req.Plans {
 			resultCount += resultPlanCount(plan, opts.PlanCount)
 		}
+	}
+	req.Plans = MergeResultPlansByContract(req.Plans)
+	tx := wire.NewMsgTx(2)
+	for _, plan := range req.Plans {
 		if opts.UseInputUTXOs {
 			for _, input := range plan.InputUTXOs {
 				outpoint, err := ResultWireOutPoint(input.OutPoint)
@@ -103,6 +106,9 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 func resultPlanCount(plan ResultPlan, count func(ResultPlan) int) int {
 	if count != nil {
 		return count(plan)
+	}
+	if plan.ResultCount > 0 {
+		return plan.ResultCount
 	}
 	return 1
 }

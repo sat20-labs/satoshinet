@@ -589,18 +589,26 @@ func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker
 	if err != nil {
 		return nil, err
 	}
+	timeValue, err := e.predictionTimeValue(runtime.Contract())
+	if err != nil {
+		return nil, err
+	}
 	return nil, runtime.ApplyBet(ApplyBetRequest{
 		Invoker:   invoker,
 		Param:     param,
 		AssetName: runtime.Contract().BetAsset,
 		Amount:    amount,
 		GasAmount: gasAmount,
-		TimeValue: e.predictionTimeValue(runtime.Contract()),
+		TimeValue: timeValue,
 	})
 }
 
 func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, invoker string) (*PredictionSettlementPlan, error) {
 	param, err := DecodePredictionConfirmParam(validated.Payload.Param)
+	if err != nil {
+		return nil, err
+	}
+	timeValue, err := e.predictionTimeValue(runtime.Contract())
 	if err != nil {
 		return nil, err
 	}
@@ -626,7 +634,7 @@ func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, inv
 		Param:        param,
 		GasAmount:    gasAmount,
 		ResultGasFee: resultFeeAmount,
-		TimeValue:    e.predictionTimeValue(runtime.Contract()),
+		TimeValue:    timeValue,
 	})
 	if err != nil {
 		return nil, err
@@ -643,7 +651,7 @@ func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, inv
 		Param:        param,
 		GasAmount:    gasAmount,
 		ResultGasFee: resultFeeAmount,
-		TimeValue:    e.predictionTimeValue(runtime.Contract()),
+		TimeValue:    timeValue,
 	})
 }
 
@@ -651,7 +659,11 @@ func (e *Backend) applyClose(runtime *Runtime, validated InvokeValidation, invok
 	if len(validated.Payload.Param) != 0 {
 		return nil, fmt.Errorf("agent close takes no parameters")
 	}
-	plan, err := runtime.ApplyClose(ApplyCloseRequest{Invoker: invoker})
+	timeValue, err := e.predictionTimeValue(runtime.Contract())
+	if err != nil {
+		return nil, err
+	}
+	plan, err := runtime.ApplyClose(ApplyCloseRequest{Invoker: invoker, TimeValue: timeValue})
 	if err != nil {
 		return nil, err
 	}
@@ -684,14 +696,14 @@ func (e *Backend) settlementResultOptions() contractframework.SettlementResultOp
 	return agentSettlementResultOptions(e.AssetPrecision)
 }
 
-func (e *Backend) predictionTimeValue(contract PredictionContract) int64 {
+func (e *Backend) predictionTimeValue(contract PredictionContract) (int64, error) {
 	if contract.TimeBase != TimeBaseUnix {
-		return e.BlockHeight
+		return e.BlockHeight, nil
 	}
 	if e.BlockTime != 0 {
-		return e.BlockTime
+		return e.BlockTime, nil
 	}
-	return e.BlockHeight
+	return 0, fmt.Errorf("unix prediction requires block time")
 }
 
 func agentDeployRuntime(validated DeployValidation) (*Runtime, error) {
