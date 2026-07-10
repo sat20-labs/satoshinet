@@ -1,0 +1,29 @@
+name: OpenAI sandbox source export
+
+on:
+  push:
+    branches:
+      - openai/evm-funding-order-fix-20260710
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Archive source
+        run: |
+          git archive --format=zip --output=satoshinet-source.zip HEAD
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: satoshinet-source
+          path: satoshinet-source.zip
+          if-no-files-found: error
+          retention-days: 1
