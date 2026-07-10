@@ -155,7 +155,7 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 		for i := range capturedTriggers {
 			capturedTriggers[i].Contract = contract
 		}
-		err = r.commitCapturedEffects(capturedIntents, capturedTriggers, r.AssetBalances)
+		err = r.commitCapturedEffects(capturedIntents, capturedTriggers, balances)
 	}
 	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
 	if gasLeftErr != nil && err == nil {

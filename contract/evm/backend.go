@@ -347,9 +347,9 @@ func newEVMBlockUTXOOverlay(prefix string, base ContractUTXOProvider,
 	})
 }
 
-// withoutEVMBlockOutputs makes the execution API defensive against callers that
-// accidentally pass a post-work UTXO view. Current and future work outputs are
-// reintroduced only by the sequential overlay after their transaction executes.
+// withoutEVMBlockOutputs strips outputs created by this work block from a
+// caller-supplied base view. The sequential overlay reintroduces each output
+// only after its transaction executes.
 func withoutEVMBlockOutputs(base ContractUTXOProvider, txs []*wire.MsgTx) ContractUTXOProvider {
 	if base == nil || len(txs) == 0 {
 		return base
