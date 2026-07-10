@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - openai/evm-funding-order-fix-20260710
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
