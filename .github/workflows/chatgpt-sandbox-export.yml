@@ -46,6 +46,11 @@ jobs:
         working-directory: satoshinet
         run: go mod vendor
 
+      - name: Pack Go toolchain for the isolated sandbox
+        run: |
+          GOROOT="$(go env GOROOT)"
+          tar -czf /tmp/go1.24.13-linux-amd64.tar.gz -C "$GOROOT" .
+
       - name: Remove checkout metadata
         run: rm -rf satoshinet/.git
 
@@ -56,4 +61,13 @@ jobs:
           path: satoshinet
           if-no-files-found: error
           compression-level: 6
+          retention-days: 1
+
+      - name: Upload Go toolchain
+        uses: actions/upload-artifact@v4
+        with:
+          name: go1.24.13-linux-amd64
+          path: /tmp/go1.24.13-linux-amd64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
           retention-days: 1
