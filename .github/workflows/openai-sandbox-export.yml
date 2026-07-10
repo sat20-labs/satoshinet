@@ -16,20 +16,38 @@ jobs:
   export-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out satoshinet
         uses: actions/checkout@v4
         with:
+          path: workspace/satoshinet
           fetch-depth: 0
+      - name: Check out indexer replacement
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: workspace/indexer
+      - name: Check out sat20wallet replacement
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/sat20wallet
+          path: workspace/sat20wallet
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.13'
           cache: false
-      - name: Archive source and Go toolchain
+      - name: Archive source, Go toolchain, and vendored dependencies
+        shell: bash
         run: |
-          git archive --format=zip --output=satoshinet-source.zip HEAD
+          set -euo pipefail
+          git -C workspace/satoshinet archive --format=zip --output="$GITHUB_WORKSPACE/satoshinet-source.zip" HEAD
           goroot="$(go env GOROOT)"
-          tar -czf go1.24.13-linux-amd64.tar.gz -C "$(dirname "$goroot")" "$(basename "$goroot")"
+          tar -czf "$GITHUB_WORKSPACE/go1.24.13-linux-amd64.tar.gz" -C "$(dirname "$goroot")" "$(basename "$goroot")"
+          (
+            cd workspace/satoshinet
+            go mod vendor
+          )
+          tar -czf "$GITHUB_WORKSPACE/satoshinet-vendor.tar.gz" -C workspace/satoshinet vendor
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
@@ -42,5 +60,12 @@ jobs:
         with:
           name: go1.24.13-linux-amd64
           path: go1.24.13-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload vendored dependencies
+        uses: actions/upload-artifact@v4
+        with:
+          name: satoshinet-vendor
+          path: satoshinet-vendor.tar.gz
           if-no-files-found: error
           retention-days: 1
