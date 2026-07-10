@@ -231,11 +231,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 	}
 	runtime.ContractPrefix = prefix
 
-	overlay := contractframework.NewContractUTXOOverlay(contractframework.ContractUTXOOverlayConfig{
-		Prefix:       prefix,
-		ContractType: ContractTypeEVM,
-		Base:         req.ContractUTXOs,
-	})
+	overlay := newEVMBlockUTXOOverlay(prefix, req.ContractUTXOs, req.Txs)
 	resolveOutput := req.ResolveOutput
 	if resolveOutput == nil {
 		resolveOutput = func(resultTx *wire.MsgTx) ([]ResultOutput, error) {
@@ -276,10 +272,10 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		if err != nil {
 			continue
 		}
-		if err := overlay.AddTxOutputs(tx, int64(req.Block.Number)); err != nil {
+		if err := executor.ExecuteParsedTx(tx, parsed); err != nil {
 			return BlockResultBuildResult{}, err
 		}
-		if err := executor.ExecuteParsedTx(tx, parsed); err != nil {
+		if err := overlay.ApplyTx(tx, int64(req.Block.Number)); err != nil {
 			return BlockResultBuildResult{}, err
 		}
 	}
@@ -341,10 +337,73 @@ func blockResultStatus(records []ExecutionRecord) ResultStatus {
 	return ResultStatusSuccess
 }
 
+func newEVMBlockUTXOOverlay(prefix string, base ContractUTXOProvider,
+	txs []*wire.MsgTx) *contractframework.ContractUTXOOverlay {
+
+	return contractframework.NewContractUTXOOverlay(contractframework.ContractUTXOOverlayConfig{
+		Prefix:       prefix,
+		ContractType: ContractTypeEVM,
+		Base:         withoutEVMBlockOutputs(base, txs),
+	})
+}
+
+// withoutEVMBlockOutputs strips outputs created by this work block from a
+// caller-supplied base view. The sequential overlay reintroduces each output
+// only after its transaction executes.
+func withoutEVMBlockOutputs(base ContractUTXOProvider, txs []*wire.MsgTx) ContractUTXOProvider {
+	if base == nil || len(txs) == 0 {
+		return base
+	}
+	excluded := make(map[OutPoint]struct{})
+	for _, tx := range txs {
+		if tx == nil {
+			continue
+		}
+		txID := tx.TxID()
+		for vout := range tx.TxOut {
+			excluded[OutPoint{TxID: txID, Vout: uint32(vout)}] = struct{}{}
+		}
+	}
+	if len(excluded) == 0 {
+		return base
+	}
+	return func(contractAddr ContractAddress) ([]UTXO, error) {
+		utxos, err := base(contractAddr)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]UTXO, 0, len(utxos))
+		for _, utxo := range utxos {
+			if _, blocked := excluded[utxo.OutPoint]; blocked {
+				continue
+			}
+			out = append(out, utxo.Clone())
+		}
+		return out, nil
+	}
+}
+
 func ExecuteWorkBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
+	prefix := req.ContractPrefix
+	if prefix == "" {
+		prefix = TestnetContractPrefix
+	}
+	overlay := newEVMBlockUTXOOverlay(prefix, req.ContractUTXOs, req.Txs)
+	req.ContractPrefix = prefix
+	if req.ContractUTXOs != nil {
+		req.ContractUTXOs = overlay.Provider
+	}
 	executor := NewBackend(req)
 	frameworkExecutor := contractframework.NewExecutor(executor.executorConfig())
-	if _, err := frameworkExecutor.ExecuteBlock(req.Txs); err != nil {
+	for _, tx := range req.Txs {
+		if err := frameworkExecutor.ExecuteTx(tx); err != nil {
+			return BlockExecutionResult{}, err
+		}
+		if err := overlay.ApplyTx(tx, int64(req.Block.Number)); err != nil {
+			return BlockExecutionResult{}, err
+		}
+	}
+	if _, err := executor.FinalizeBlock(contractframework.ExecutionContext{}); err != nil {
 		return BlockExecutionResult{}, err
 	}
 	return executor.FinalizeWork()
@@ -633,12 +692,14 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	}
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Deploy(DeployRequest{
-		CallerAddress: callerAddress,
-		CallID:        callID,
-		InitCode:      validated.Payload.ContractContent,
-		Gas:           validated.Payload.GasLimit,
-		DeployNonce:   validated.Payload.DeployNonce,
-		Block:         e.Block,
+		CallerAddress:    callerAddress,
+		CallID:           callID,
+		InitCode:         validated.Payload.ContractContent,
+		Gas:              validated.Payload.GasLimit,
+		DeployNonce:      validated.Payload.DeployNonce,
+		ExpectedContract: expectedContract,
+		FundingOutputs:   fundingOutputs,
+		Block:            e.Block,
 	})
 	if !result.Contract.Equal(expectedContract) {
 		return fmt.Errorf("deploy contract mismatch: got %s want %s",
