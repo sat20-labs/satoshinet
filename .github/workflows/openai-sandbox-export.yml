@@ -1,0 +1,27 @@
+name: OpenAI sandbox source export
+
+on:
+  push:
+    branches:
+      - chatgpt/fix-evm-funding-order
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out satoshinet
+        uses: actions/checkout@v4
+      - name: Archive source
+        shell: bash
+        run: git archive --format=zip --output="$GITHUB_WORKSPACE/satoshinet-pr2-source.zip" HEAD
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: satoshinet-pr2-source
+          path: satoshinet-pr2-source.zip
+          if-no-files-found: error
+          retention-days: 1
