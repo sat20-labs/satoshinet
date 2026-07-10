@@ -41,3 +41,40 @@ func TestContractUTXOOverlayAddsOutputsAndRemovesSpentInputs(t *testing.T) {
 	require.Equal(t, uint32(0), utxos[0].OutPoint.Vout)
 	require.Equal(t, int64(100), utxos[0].Height)
 }
+
+func TestCollectResultPlanUTXOsUsesExplicitInputs(t *testing.T) {
+	addr := testContractAddress(t, ModuleAgent, 1)
+	first := OutPoint{TxID: chainhash.Hash{1}.String(), Vout: 0}
+	second := OutPoint{TxID: chainhash.Hash{2}.String(), Vout: 1}
+	provider := func(got contract.ContractAddress) ([]UTXO, error) {
+		require.True(t, addr.Equal(got))
+		return []UTXO{
+			UTXOFromTxOutput(first, addr, 10, &wire.TxOut{Value: 1000}),
+			UTXOFromTxOutput(second, addr, 11, &wire.TxOut{Value: 200}),
+		}, nil
+	}
+
+	view, err := CollectResultPlanUTXOs(ResultPlan{
+		Contract:   addr.MustEncode(),
+		InputScope: ResultInputScopeExplicit,
+		Inputs:     []OutPoint{second},
+	}, provider)
+	require.NoError(t, err)
+	require.Equal(t, []OutPoint{second}, view.Inputs)
+	require.Equal(t, int64(200), view.Value)
+	require.Len(t, view.UTXOs, 1)
+	require.Equal(t, second, view.UTXOs[0].OutPoint)
+}
+
+func TestCollectResultPlanUTXOsRejectsMissingExplicitInput(t *testing.T) {
+	addr := testContractAddress(t, ModuleAgent, 1)
+	missing := OutPoint{TxID: chainhash.Hash{3}.String(), Vout: 0}
+	_, err := CollectResultPlanUTXOs(ResultPlan{
+		Contract:   addr.MustEncode(),
+		InputScope: ResultInputScopeExplicit,
+		Inputs:     []OutPoint{missing},
+	}, func(contract.ContractAddress) ([]UTXO, error) {
+		return nil, nil
+	})
+	require.ErrorContains(t, err, "explicit result input is not available")
+}

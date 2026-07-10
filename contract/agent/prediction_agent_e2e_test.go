@@ -469,6 +469,67 @@ func TestPredictionAgentUsesStructuredCCTVScore(t *testing.T) {
 	}
 }
 
+func TestPredictionAgentNormalizesCrossLanguageStructuredScore(t *testing.T) {
+	contract := validPredictionContract()
+	contract.Title = "Short display title"
+	contract.Description = "2026 World Cup quarterfinal: France vs Morocco. Resolve the final result into France wins, Morocco wins, or draw."
+	contract.SourceURL = "https://worldcup.cctv.com/2026/schedule/index.shtml"
+	contract.EventTime = time.Date(2026, time.July, 10, 4, 0, 0, 0, time.Local).Unix()
+	contract.BetDeadline = contract.EventTime - 300
+	contract.ConfirmAfter = contract.EventTime + 7200
+	contract.Outcomes = []PredictionOutcome{
+		{ID: "a", Text: "France wins"},
+		{ID: "b", Text: "Morocco wins"},
+		{ID: "c", Text: "Draw"},
+	}
+
+	resultURL := "https://cbs-u.sports.cctv.com/pc/game/season_game_list?leagueId=3400&season=2026&client=pc"
+	resultText := `{
+		"data": {"list": [
+			{"gameName":"西班牙vs沙特阿拉伯","startTime":"2026-07-10 03:00:00","statusDesc":"已结束","homeName":"西班牙","guestName":"沙特阿拉伯","homeScore":1,"guestScore":0},
+			{"gameName":"法国vs摩洛哥","startTime":"2026-07-10 04:00:00","statusDesc":"已结束","homeName":"法国","guestName":"摩洛哥","homeScore":2,"guestScore":0}
+		]}}
+	}`
+	if predictionEvidenceLooksRelevant(contract, resultText) {
+		t.Fatal("cross-language evidence unexpectedly passed literal relevance check")
+	}
+
+	fetcher := &mapPredictionFetcher{results: map[string]PredictionResultFetchResult{
+		contract.SourceURL: {FinalURL: contract.SourceURL, Text: "央视世界杯赛程页面"},
+		resultURL:          {FinalURL: resultURL, Text: resultText},
+	}}
+	client := &fakeLLMClient{responses: []string{
+		`{"result_type":"outcome","result":"France 2-0 Morocco","reason":"normalized from the source score"}`,
+		`{"result_type":"outcome","outcome_id":"a","reason":"France won"}`,
+	}}
+	corenodeAgent := NewPredictionAgent(client)
+	corenodeAgent.Fetcher = fetcher
+	corenodeAgent.RetryAttempts = 1
+
+	param, err := corenodeAgent.BuildConfirmParam(context.Background(), PredictionAgentConfirmRequest{
+		Contract:   contract,
+		ResultURL:  contract.SourceURL,
+		ObservedAt: contract.ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildConfirmParam failed: %v", err)
+	}
+	if param.OutcomeID != "a" || param.Result != "France 2-0 Morocco" {
+		t.Fatalf("unexpected confirm param: %#v", param)
+	}
+	if len(client.reqs) != 2 {
+		t.Fatalf("cross-language structured score should call llm twice, calls=%d", len(client.reqs))
+	}
+	if first := client.reqs[0].Messages[len(client.reqs[0].Messages)-1].Content; !strings.Contains(first, "法国 2-0 摩洛哥") ||
+		!strings.Contains(first, "normalize participant names") || strings.Contains(first, contract.Title) {
+		t.Fatalf("unexpected factual-result prompt: %s", first)
+	}
+	if second := client.reqs[1].Messages[len(client.reqs[1].Messages)-1].Content; !strings.Contains(second, "France 2-0 Morocco") ||
+		!strings.Contains(second, "France wins") {
+		t.Fatalf("unexpected outcome-match prompt: %s", second)
+	}
+}
+
 func TestPredictionAgentKeepsStructuredEvidenceAuthoritative(t *testing.T) {
 	contract := validPredictionContract()
 	contract.Title = "墨西哥 vs 英格兰"

@@ -293,6 +293,15 @@ func CollectResultPlanUTXOs(plan ResultPlan, provider ContractUTXOProvider) (Res
 	if provider == nil {
 		return view, nil
 	}
+	requested := make(map[OutPoint]struct{})
+	if plan.InputScope == ResultInputScopeExplicit {
+		if len(plan.Inputs) == 0 {
+			return ResultPlanUTXOView{}, fmt.Errorf("explicit result input scope has no inputs")
+		}
+		for _, input := range plan.Inputs {
+			requested[input] = struct{}{}
+		}
+	}
 	utxos, err := provider(contractAddr)
 	if err != nil {
 		return ResultPlanUTXOView{}, err
@@ -301,6 +310,11 @@ func CollectResultPlanUTXOs(plan ResultPlan, provider ContractUTXOProvider) (Res
 	for _, utxo := range utxos {
 		if !utxo.Contract.Equal(contractAddr) {
 			continue
+		}
+		if plan.InputScope == ResultInputScopeExplicit {
+			if _, ok := requested[utxo.OutPoint]; !ok {
+				continue
+			}
 		}
 		nextValue, overflow := AddInt64(view.Value, utxo.PhysicalValue())
 		if overflow {
@@ -317,6 +331,9 @@ func CollectResultPlanUTXOs(plan ResultPlan, provider ContractUTXOProvider) (Res
 		}
 	}
 	view.Inputs = UniqueOutPoints(view.Inputs)
+	if plan.InputScope == ResultInputScopeExplicit && len(view.Inputs) != len(requested) {
+		return ResultPlanUTXOView{}, fmt.Errorf("explicit result input is not available")
+	}
 	return view, nil
 }
 

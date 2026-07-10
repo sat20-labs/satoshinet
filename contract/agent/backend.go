@@ -518,8 +518,10 @@ func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, validated InvokeValidatio
 	}
 	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract)
 	e.resultPlans = append(e.resultPlans, ResultPlan{
-		Contract: validated.Contract.EncodeAddress(),
-		Outputs:  refundOutputs,
+		Contract:   validated.Contract.EncodeAddress(),
+		InputScope: contractframework.ResultInputScopeExplicit,
+		Inputs:     []OutPoint{validated.FundingOutput.OutPoint},
+		Outputs:    refundOutputs,
 	})
 	outcome := contractframework.ExecutionOutcome{
 		Height:             e.BlockHeight,

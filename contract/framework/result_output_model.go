@@ -33,12 +33,23 @@ type ResultGasRefund struct {
 	RetainedGasFunding *scommon.Decimal `json:"retainedGasFunding,omitempty"`
 }
 
+// ResultInputScope specifies which contract UTXOs a result plan may spend.
+// Most settlement plans rebuild the full contract balance. Refund-only plans
+// must be limited to the funding UTXOs that caused the invalid call.
+type ResultInputScope byte
+
+const (
+	ResultInputScopeAllContractUTXOs ResultInputScope = iota
+	ResultInputScopeExplicit
+)
+
 type ResultPlan struct {
 	Contract   string            `json:"contract,omitempty"`
 	Height     int64             `json:"height,omitempty"`
 	ItemIDs    []int64           `json:"itemIds,omitempty"`
 	GasFee     *scommon.Decimal  `json:"gasFee,omitempty"`
 	GasRefunds []ResultGasRefund `json:"gasRefunds,omitempty"`
+	InputScope ResultInputScope  `json:"inputScope,omitempty"`
 	Inputs     []OutPoint        `json:"inputs,omitempty"`
 	InputUTXOs []UTXO            `json:"inputUtxos,omitempty"`
 	FeeOutputs []ResultOutput    `json:"feeOutputs,omitempty"`

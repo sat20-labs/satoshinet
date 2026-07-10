@@ -10,6 +10,7 @@ import (
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildResultTxFromPredictionSettlementPlan(t *testing.T) {
@@ -211,6 +212,67 @@ func TestAugmentResultPlansUsesManagedPredictionPoolAndGas(t *testing.T) {
 	if got := sumOutputAmounts(augmented[0].Outputs, betAsset); got != "379.99" {
 		t.Fatalf("output total mismatch: got %s want 379.99 in %#v", got, augmented[0].Outputs)
 	}
+}
+
+func TestInvalidRefundUsesOnlyFundingUTXO(t *testing.T) {
+	const gasAsset = "brc20:f:sgas"
+	runtime := newTestRuntime(t)
+	runtime.state.Prediction.GasBalance = "50"
+	runtime.addBet("valid-bettor", "a", "1000")
+	store := NewRuntimeStore()
+	store.Add(runtime)
+
+	contract := runtime.Address()
+	managed := OutPoint{TxID: chainhash.Hash{5}.String(), Vout: 1}
+	invalidFunding := OutPoint{TxID: chainhash.Hash{6}.String(), Vout: 1}
+	plans, err := AugmentResultPlans([]ResultPlan{{
+		Contract:   contract.MustEncode(),
+		InputScope: contractframework.ResultInputScopeExplicit,
+		Inputs:     []OutPoint{invalidFunding},
+		GasFee:     mustDecimal(t, "50", 0),
+		Outputs: []ResultOutput{{
+			To:     "invalid-invoker",
+			Value:  200,
+			Reason: "refund",
+		}},
+	}}, func(got ContractAddress) ([]UTXO, error) {
+		if !got.Equal(contract) {
+			t.Fatalf("unexpected contract %s", got.EncodeAddress())
+		}
+		return []UTXO{
+			contractframework.UTXOFromTxOutput(managed, contract, 10,
+				&wire.TxOut{Value: 1000, Assets: mustAssetSet(t, gasAsset, "50", 0)}),
+			contractframework.UTXOFromTxOutput(invalidFunding, contract, 11,
+				&wire.TxOut{Value: 200, Assets: mustAssetSet(t, gasAsset, "50", 0)}),
+		}, nil
+	}, store, func(name string) (int, bool) {
+		return 0, name == gasAsset
+	}, gasAsset, "bootstrap")
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	require.Equal(t, []OutPoint{invalidFunding}, plans[0].Inputs)
+
+	for _, output := range plans[0].Outputs {
+		require.NotEqual(t, "bootstrap", output.To)
+	}
+	require.Len(t, plans[0].Outputs, 1)
+	require.Equal(t, "invalid-invoker", plans[0].Outputs[0].To)
+	require.Equal(t, int64(200), plans[0].Outputs[0].Value)
+}
+
+func TestAgentManagedAssetsIncludesBetAndGas(t *testing.T) {
+	const gasAsset = "brc20:f:sgas"
+	runtime := newTestRuntime(t)
+	runtime.state.Prediction.GasBalance = "50"
+	runtime.addBet("bettor", "a", "1000")
+
+	managed := agentManagedAssets(runtime, gasAsset)
+	address := runtime.Address()
+	require.Equal(t, address.EncodeAddress(), managed.To)
+	require.Equal(t, int64(1000), managed.Value)
+	require.Len(t, managed.Assets, 1)
+	require.Equal(t, gasAsset, managed.Assets[0].Name.String())
+	require.Equal(t, "50", managed.Assets[0].Amount.String())
 }
 
 func testResultScriptResolver(output ResultOutput) ([]byte, error) {

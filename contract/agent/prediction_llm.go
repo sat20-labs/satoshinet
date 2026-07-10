@@ -579,6 +579,7 @@ func predictionResultExtractionPrompt(contract PredictionContract, cleanedText s
 	b.WriteString(cleanedText)
 	b.WriteString("\n\nExtract only the factual event result. ")
 	b.WriteString("Return result_type \"outcome\" and a short factual result when the final result is clear. ")
+	b.WriteString("When the evidence uses a different language, normalize participant names and the factual result into the language used by Description where possible; do not add facts. ")
 	b.WriteString("Do not choose an outcome_id in this step. ")
 	b.WriteString("Set result to a short factual final result, limited to 128 bytes. ")
 	b.WriteString("Use result_type \"pending\" when the event result is not available yet. ")

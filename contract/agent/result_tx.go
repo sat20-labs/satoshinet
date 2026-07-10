@@ -98,32 +98,24 @@ func agentManagedRetain(plan ResultPlan, store *RuntimeStore, gasAssetName strin
 	if closePlan {
 		return agentCloseManagedAssets(runtime, gasAssetName), runtime.deployer
 	}
-	return agentManagedGasAsset(runtime, gasAssetName), runtime.deployer
+	return agentManagedAssets(runtime, gasAssetName), runtime.deployer
 }
 
-func agentManagedGasAsset(runtime *Runtime, gasAssetName string) ResultOutput {
-	if runtime == nil || gasAssetName == "" {
+func agentManagedAssets(runtime *Runtime, gasAssetName string) ResultOutput {
+	if runtime == nil {
 		return ResultOutput{}
 	}
 	addr := runtime.Address()
 	contractAddress := addr.EncodeAddress()
-	gasBalance := parseDecimalOrZero(runtime.State().Prediction.GasBalance)
-	if gasBalance.Sign() <= 0 {
-		return ResultOutput{}
+	out := ResultOutput{To: contractAddress}
+	if gasAssetName != "" {
+		addAgentManagedAmount(&out, contractAddress, gasAssetName,
+			parseDecimalOrZero(runtime.State().Prediction.GasBalance), runtime.config.AssetPrecision)
 	}
-	if gasAssetName == SatoshiAssetName {
-		value, err := contractframework.DecimalToInt64(*gasBalance)
-		if err != nil {
-			return ResultOutput{}
-		}
-		return ResultOutput{To: contractAddress, Value: value}
+	if betAsset := runtime.Contract().BetAsset; betAsset != "" {
+		addAgentManagedAmount(&out, contractAddress, betAsset, runtime.totalBetAmount(), runtime.config.AssetPrecision)
 	}
-	assets, err := contractframework.NewAssetSetWithPrecisionPolicy(gasAssetName, gasBalance.String(),
-		agentSettlementResultOptions(runtime.config.AssetPrecision).Precision, ErrInvalidAsset)
-	if err != nil {
-		return ResultOutput{}
-	}
-	return ResultOutput{To: contractAddress, Assets: assets}
+	return out
 }
 
 func agentCloseManagedAssets(runtime *Runtime, gasAssetName string) ResultOutput {

@@ -408,15 +408,6 @@ func (a *PredictionAgent) resolveFetchedResult(ctx context.Context, req Predicti
 	if !ResultURLAllowed(req.Contract.SourceURL, paramResultURL) {
 		paramResultURL = req.Contract.SourceURL
 	}
-	if !predictionEvidenceLooksRelevant(req.Contract, fetched.Text) {
-		a.audit(PredictionAgentAuditEvent{
-			Stage:        "evidence_irrelevant",
-			ResultURL:    resultURL,
-			TextBytes:    len(fetched.Text),
-			CleanedBytes: len(CleanPredictionResultText(fetched.Text)),
-		})
-		return PredictionConfirmParam{}, ErrPredictionEvidenceUnavailable
-	}
 	resultText := fetched.Text
 	var structuredScore predictionStructuredScore
 	hasStructuredScore := false
@@ -431,6 +422,15 @@ func (a *PredictionAgent) resolveFetchedResult(ctx context.Context, req Predicti
 			TextBytes:    len(fetched.Text),
 			CleanedBytes: len(CleanPredictionResultText(structuredText)),
 		})
+	}
+	if !hasStructuredScore && !predictionEvidenceLooksRelevant(req.Contract, fetched.Text) {
+		a.audit(PredictionAgentAuditEvent{
+			Stage:        "evidence_irrelevant",
+			ResultURL:    resultURL,
+			TextBytes:    len(fetched.Text),
+			CleanedBytes: len(CleanPredictionResultText(fetched.Text)),
+		})
+		return PredictionConfirmParam{}, ErrPredictionEvidenceUnavailable
 	}
 	resolveReq := PredictionLLMResolveRequest{
 		Contract:   req.Contract,
@@ -598,23 +598,23 @@ func extractPredictionStructuredScore(contract PredictionContract, text string) 
 		return predictionStructuredScore{}, false
 	}
 	contractText := normalizePredictionEvidenceText(contract.Title + " " + contract.Description + " " + predictionOutcomeText(contract))
-	return walkPredictionStructuredScore(data, contractText)
+	return walkPredictionStructuredScore(data, contractText, contract.EventTime)
 }
 
-func walkPredictionStructuredScore(value interface{}, contractText string) (predictionStructuredScore, bool) {
+func walkPredictionStructuredScore(value interface{}, contractText string, eventTime int64) (predictionStructuredScore, bool) {
 	switch typed := value.(type) {
 	case []interface{}:
 		for _, item := range typed {
-			if score, ok := walkPredictionStructuredScore(item, contractText); ok {
+			if score, ok := walkPredictionStructuredScore(item, contractText, eventTime); ok {
 				return score, true
 			}
 		}
 	case map[string]interface{}:
-		if score, ok := predictionStructuredScoreFromMap(typed, contractText); ok {
+		if score, ok := predictionStructuredScoreFromMap(typed, contractText, eventTime); ok {
 			return score, true
 		}
 		for _, item := range typed {
-			if score, ok := walkPredictionStructuredScore(item, contractText); ok {
+			if score, ok := walkPredictionStructuredScore(item, contractText, eventTime); ok {
 				return score, true
 			}
 		}
@@ -622,7 +622,7 @@ func walkPredictionStructuredScore(value interface{}, contractText string) (pred
 	return predictionStructuredScore{}, false
 }
 
-func predictionStructuredScoreFromMap(item map[string]interface{}, contractText string) (predictionStructuredScore, bool) {
+func predictionStructuredScoreFromMap(item map[string]interface{}, contractText string, eventTime int64) (predictionStructuredScore, bool) {
 	homeName := predictionStructuredString(item, "homeName", "home_name", "hostName", "teamA", "home")
 	guestName := predictionStructuredString(item, "guestName", "guest_name", "awayName", "teamB", "guest", "away")
 	homeScore, homeOK := predictionStructuredScoreValue(item, "homeScore", "home_score", "hostScore", "scoreA")
@@ -630,12 +630,14 @@ func predictionStructuredScoreFromMap(item map[string]interface{}, contractText 
 	if homeName == "" || guestName == "" || !homeOK || !guestOK {
 		return predictionStructuredScore{}, false
 	}
-	homeNorm := normalizePredictionEvidenceText(homeName)
-	guestNorm := normalizePredictionEvidenceText(guestName)
-	if homeNorm == "" || guestNorm == "" || !strings.Contains(contractText, homeNorm) || !strings.Contains(contractText, guestNorm) {
+	if !predictionStructuredMatchDone(item) {
 		return predictionStructuredScore{}, false
 	}
-	if !predictionStructuredMatchDone(item) {
+	homeNorm := normalizePredictionEvidenceText(homeName)
+	guestNorm := normalizePredictionEvidenceText(guestName)
+	nameMatched := homeNorm != "" && guestNorm != "" &&
+		strings.Contains(contractText, homeNorm) && strings.Contains(contractText, guestNorm)
+	if !nameMatched && !predictionStructuredEventTimeMatches(item, eventTime) {
 		return predictionStructuredScore{}, false
 	}
 	return predictionStructuredScore{
@@ -645,6 +647,51 @@ func predictionStructuredScoreFromMap(item map[string]interface{}, contractText 
 		GuestScore: guestScore,
 		Done:       true,
 	}, true
+}
+
+// A source can use a different language for participant names.  For a completed
+// structured record, the contract event time is an independent, language-neutral
+// way to select the exact event before the LLM normalizes the factual result.
+func predictionStructuredEventTimeMatches(item map[string]interface{}, eventTime int64) bool {
+	if eventTime <= 0 {
+		return false
+	}
+	for _, key := range []string{"startTime", "start_time", "eventTime", "event_time", "beginTime", "begin_time"} {
+		value, ok := item[key]
+		if !ok {
+			continue
+		}
+		candidate, ok := predictionStructuredUnixTime(value)
+		if !ok {
+			continue
+		}
+		if delta := candidate - eventTime; delta >= -5*60 && delta <= 5*60 {
+			return true
+		}
+	}
+	return false
+}
+
+func predictionStructuredUnixTime(value interface{}) (int64, bool) {
+	switch typed := value.(type) {
+	case json.Number:
+		unix, err := typed.Int64()
+		return unix, err == nil
+	case float64:
+		return int64(typed), true
+	case string:
+		value := strings.TrimSpace(typed)
+		if unix, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return unix, true
+		}
+		for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339} {
+			parsed, err := time.ParseInLocation(layout, value, time.Local)
+			if err == nil {
+				return parsed.Unix(), true
+			}
+		}
+	}
+	return 0, false
 }
 
 func predictionStructuredString(item map[string]interface{}, keys ...string) string {
