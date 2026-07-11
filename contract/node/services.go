@@ -131,6 +131,15 @@ func newBlockValidator(cfg Config) (blockchain.ContractBlockValidator, error) {
 }
 
 func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
+	if cfg.EVMContractUTXOs == nil {
+		return nil, fmt.Errorf("missing EVM contract UTXO provider")
+	}
+	if cfg.EVMResolveRecipient == nil {
+		return nil, fmt.Errorf("missing EVM result recipient resolver")
+	}
+	if cfg.AssetPrecision == nil {
+		return nil, fmt.Errorf("missing EVM asset precision resolver")
+	}
 	gasConfig := evmGasConfigFromCommon(cfg.GasConfig)
 	if gasConfig == (evm.GasConfig{}) {
 		gasConfig = evm.DefaultGasConfig()
@@ -146,6 +155,8 @@ func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 		NewRuntime:          stateStore.RuntimeFactory(),
 		ContractUTXOs:       evmContractUTXOProvider(cfg.EVMContractUTXOs),
 		ResolveRecipient:    contractframework.ScriptRecipientResolver(cfg.EVMResolveRecipient),
+		ResolveResultOutput: evmResultOutputResolver(cfg),
+		ResolveResultScript: evmResultScriptResolver(cfg.ChainParams),
 		AssetPrecision:      cfg.AssetPrecision,
 		SkipStateRootVerify: cfg.SkipStateRootVerify,
 	}), nil
@@ -305,6 +316,7 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 		Time:          uint64(req.Timestamp.Unix()),
 		GasLimit:      blockGasConfig.MaxGasPerBlock,
 		FixedGasPrice: blockGasConfig.FixedGasPrice,
+		ParentHash:    [32]byte(req.PrevHash),
 	}
 	resolveCaller := evm.LastInputPreviousOutputCallerResolver(cfg.ChainParams,
 		previousOutputScriptResolver(req.UtxoView))
@@ -740,6 +752,7 @@ func NewEVMResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
 				Time:          uint64(req.Timestamp.Unix()),
 				GasLimit:      blockGasConfig.MaxGasPerBlock,
 				FixedGasPrice: blockGasConfig.FixedGasPrice,
+				ParentHash:    [32]byte(req.PrevHash),
 			},
 			ResolveCaller: evm.LastInputPreviousOutputCallerResolver(cfg.ChainParams,
 				previousOutputScriptResolver(req.UtxoView)),

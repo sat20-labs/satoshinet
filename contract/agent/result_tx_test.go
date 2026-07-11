@@ -77,11 +77,12 @@ func TestBuildResultTxFromPredictionSettlementPlan(t *testing.T) {
 		t.Fatalf("missing result payload: %v", err)
 	}
 	if err := contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-		Label:        "agent",
-		ResultTx:     resultTx,
-		Status:       ResultStatusSuccess,
-		Plans:        plans,
-		CheckPayload: true,
+		Label:         "agent",
+		ResultTx:      resultTx,
+		Status:        ResultStatusSuccess,
+		Plans:         plans,
+		ResolveScript: testResultScriptResolver,
+		CheckPayload:  true,
 	}); err != nil {
 		t.Fatalf("Verify failed: %v", err)
 	}

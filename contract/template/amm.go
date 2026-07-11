@@ -40,7 +40,9 @@ func (c *AMMContract) ApplyRunningData(state *TemplateRuntimeState, item *Invoke
 	if state == nil {
 		return true
 	}
-	applyAMMRunningStats(state.AMMData(), item)
+	running := state.AMMData()
+	applyAMMRunningStats(running, item)
+	syncAMMPoolInvariant(running)
 	return true
 }
 

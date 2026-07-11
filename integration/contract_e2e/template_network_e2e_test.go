@@ -253,7 +253,7 @@ func TestNetworkEVMCloseProfit(t *testing.T) {
 		[]int64{1000}, deployer)
 
 	deployTx, contract, _ := buildTemplateWitnessEVMDeployTx(t, fixture, deployer, 91,
-		testEVMInitCode([]byte{0x00}),
+		testEVMCloseInitCode(),
 		[]wire.OutPoint{gasOuts[0]},
 		wire.TxOut{
 			Value:  0,
@@ -278,6 +278,18 @@ func TestNetworkEVMCloseProfit(t *testing.T) {
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, profitAsset, "60")
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, bootstrapAddr, profitAsset, "40")
 	fixture.requireNodesSynced(t)
+}
+
+func testEVMCloseInitCode() []byte {
+	// Return ABI bool true for the framework close() hook and accept ordinary calls.
+	return testEVMInitCode([]byte{
+		0x60, 0x01, // PUSH1 1
+		0x60, 0x00, // PUSH1 0
+		0x52,       // MSTORE
+		0x60, 0x20, // PUSH1 32
+		0x60, 0x00, // PUSH1 0
+		0xf3, // RETURN
+	})
 }
 
 func TestNetworkTemplateLimitOrderLargeBuyFilledBySmallSells(t *testing.T) {

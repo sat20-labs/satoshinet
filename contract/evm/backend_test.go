@@ -61,7 +61,8 @@ func TestBackendDeployResultThenInvokeRequiresFeeResult(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	invokeResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
+	combinedResultTx := testResultTx(t, ResultStatusSuccess, 2, []wire.OutPoint{
+		{Hash: deployTx.TxHash(), Index: 1},
 		{Hash: invokeTx.TxHash(), Index: 1},
 	})
 	executed = executeWorkAndVerifyResults(t, BlockExecutionRequest{
@@ -70,7 +71,7 @@ func TestBackendDeployResultThenInvokeRequiresFeeResult(t *testing.T) {
 		Block:                     testBlockContext(1),
 		ResolveCaller:             fixedCaller(caller),
 		ResolveGasRefundRecipient: fixedGasRefundRecipient(refundRecipient),
-	}, deployResultTx, invokeResultTx)
+	}, combinedResultTx)
 	require.Len(t, executed.Records, 2)
 	require.True(t, executed.Records[1].RequiresResult)
 	require.Equal(t, refundRecipient, executed.Records[1].GasRefundRecipient)
@@ -106,7 +107,8 @@ func TestBackendDefaultInvokeEmptyCall(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	defaultResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
+	defaultResultTx := testResultTx(t, ResultStatusSuccess, 2, []wire.OutPoint{
+		{Hash: deployTx.TxHash(), Index: 1},
 		{Hash: defaultTx.TxHash(), Index: 0},
 	})
 	executed := executeWorkAndVerifyResults(t, BlockExecutionRequest{
@@ -115,7 +117,7 @@ func TestBackendDefaultInvokeEmptyCall(t *testing.T) {
 		Block:                     testBlockContext(1),
 		ResolveCaller:             fixedCaller(caller),
 		ResolveGasRefundRecipient: fixedGasRefundRecipient("tb1qrefund"),
-	}, deployResultTx, defaultResultTx)
+	}, defaultResultTx)
 	require.Len(t, executed.Records, 2)
 	require.Equal(t, TxTypeInvoke, executed.Records[1].Type)
 	require.True(t, executed.Records[1].RequiresResult)
@@ -192,6 +194,21 @@ func TestBackendRejectsMissingDeployResult(t *testing.T) {
 	require.NoError(t, err)
 	err = VerifyResultTxs(ResultVerifyRequest{Execution: executed})
 	require.Error(t, err)
+}
+
+func TestBackendRejectsSplitResultTransactions(t *testing.T) {
+	contract := testContract(t)
+	execution := BlockExecutionResult{PendingRecords: []ExecutionRecord{
+		{Contract: contract, Status: ResultStatusSuccess, RequiresResult: true},
+		{Contract: contract, Status: ResultStatusSuccess, RequiresResult: true},
+	}}
+	first := testResultTx(t, ResultStatusSuccess, 1, nil)
+	second := testResultTx(t, ResultStatusSuccess, 1, nil)
+	err := VerifyResultTxs(ResultVerifyRequest{
+		ResultTxs: []*wire.MsgTx{first, second},
+		Execution: execution,
+	})
+	require.ErrorContains(t, err, "got 2 want 1")
 }
 
 func TestBackendRejectsExternalResult(t *testing.T) {
@@ -330,6 +347,15 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 		Runtime:       runtime,
 		Block:         testBlockContext(100),
 		ResolveCaller: fixedCaller(caller),
+		ContractUTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return []UTXO{
+				mustUTXO(t, OutPoint{TxID: chainhash.Hash{9}.String(), Vout: 0},
+					contract, DefaultGasConfig().GasAssetName, 100000000, 1),
+				mustUTXO(t, OutPoint{TxID: chainhash.Hash{9}.String(), Vout: 1},
+					contract, SatoshiAssetName, 100, 1),
+			}, nil
+		},
 		ResolveTriggers: func(ctx TriggerResolutionContext) ([]TriggerCall, error) {
 			return []TriggerCall{{
 				Trigger: Trigger{
@@ -380,6 +406,15 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 		Runtime:       runtime,
 		Block:         testBlockContext(100),
 		ResolveCaller: fixedCaller(caller),
+		ContractUTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contract.Equal(got))
+			return []UTXO{
+				mustUTXO(t, OutPoint{TxID: chainhash.Hash{10}.String(), Vout: 0},
+					contract, DefaultGasConfig().GasAssetName, 100000000, 1),
+				mustUTXO(t, OutPoint{TxID: chainhash.Hash{10}.String(), Vout: 1},
+					contract, SatoshiAssetName, 100, 1),
+			}, nil
+		},
 		VerifyResult: func(resultTx *wire.MsgTx, settled []ExecutionRecord) error {
 			require.Len(t, settled, 2)
 			require.Equal(t, ExecutionKindInvoke, settled[0].Kind)

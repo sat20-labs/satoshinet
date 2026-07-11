@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"crypto/sha256"
 	"testing"
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
@@ -32,4 +33,13 @@ func TestMemoryStateDBStateRootChanges(t *testing.T) {
 	after := state.StateRoot()
 
 	require.NotEqual(t, before, after)
+}
+
+func TestStateRootUsesVersionedCanonicalEncoding(t *testing.T) {
+	state := NewMemoryStateDB()
+	state.SetNonce(gethcommon.HexToAddress("0x1234"), 7, 0)
+	encoded, err := state.MarshalBinary()
+	require.NoError(t, err)
+	want := sha256.Sum256(append([]byte("SATOSHINET:EVM_STATE_ROOT:V1\x00"), encoded...))
+	require.Equal(t, want, state.StateRoot())
 }

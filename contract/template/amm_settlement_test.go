@@ -46,6 +46,71 @@ func TestSettleAMMBuyUsesConstantProductPool(t *testing.T) {
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
 }
 
+func TestAMMOverfundUsesActualPoolK(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	addr := runtime.Address()
+	require.NoError(t, runtime.ApplyFunding(
+		testContractOutput("deploy", 1, addr, 20, testAsset("ordx:f:test", 110)), ""))
+
+	before, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "2000", before.AMMData().RequiredK)
+	requireDecimalString(t, "2200", before.AMMData().K)
+	requireDecimalString(t, "46.9041575982", before.AMMData().TotalLPTAmt)
+
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeBuy,
+		AssetName: "ordx:f:test",
+		Amt:       "30",
+		UnitPrice: "10",
+	}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:        InvokeAPISwap,
+		Param:         param,
+		CallID:        DeriveInvokeCallID("buy", 1, addr),
+		Invoker:       "buyer",
+		FundingOutput: testContractOutput("buy", 1, addr, 10, nil),
+		Height:        1,
+	})
+	require.NoError(t, err)
+
+	plan, err := runtime.SettleBlock(1)
+	require.NoError(t, err)
+	require.Len(t, plan.Deals, 1)
+	require.True(t, parseDecimalOrZero(plan.Deals[0].AssetAmt).Cmp(parseDecimalOrZero("43.155080214")) < 0)
+	after, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireAMMPoolInvariant(t, after.AMMData())
+	require.True(t, after.AMMData().K.Cmp(before.AMMData().K) >= 0)
+}
+
+func TestAMMDirectFundingCannotBeCaptured(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	fundAMMRuntime(t, runtime)
+	addr := runtime.Address()
+	require.NoError(t, runtime.ApplyFunding(
+		testContractOutput("donation", 1, addr, 0, testAsset("ordx:f:test", 10)), ""))
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "2200", state.AMMData().K)
+	requireAMMPoolInvariant(t, state.AMMData())
+}
+
+func TestAMMRetentionUpdatesPoolK(t *testing.T) {
+	state := TemplateRuntimeState{}
+	running := state.AMMData()
+	running.AssetAInPool = parseDecimalOrZero("100")
+	running.AssetBInPool = parseDecimalOrZero("20")
+	running.K = parseDecimalOrZero("2000")
+	contract := NewAMMContract("ordx:f:test", "100", 20, "2000")
+
+	contract.ApplyRunningData(&state, &InvokeItem{RetainedAssetA: parseDecimalOrZero("10")})
+	requireDecimalString(t, "2200", state.AMMData().K)
+	requireAMMPoolInvariant(t, state.AMMData())
+}
+
 func TestSettleAMMBuyResultOutputsUseAssetPrecision(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	fundAMMRuntime(t, runtime)
@@ -1026,6 +1091,16 @@ func applyAMMSwapInvokeForTest(t *testing.T, runtime *ContractRuntime, addr Cont
 		Height:        height,
 	})
 	require.NoError(t, err)
+}
+
+func requireAMMPoolInvariant(t *testing.T, running *AMMRunningData) {
+	t.Helper()
+	require.NotNil(t, running)
+	require.NotNil(t, running.AssetAInPool)
+	require.NotNil(t, running.AssetBInPool)
+	require.NotNil(t, running.K)
+	want := scommon.DecimalMul(running.AssetAInPool, running.AssetBInPool)
+	require.Zero(t, running.K.Cmp(want))
 }
 
 func applyAMMAddLiquidityForTest(t *testing.T, runtime *ContractRuntime, addr ContractAddress,

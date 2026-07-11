@@ -268,6 +268,7 @@ type AssetPrecompile struct {
 	Balances      AssetBalanceReader
 	Funding       FundingAmountReader
 	CallerAddress string
+	callContext   *precompileCallContext
 }
 
 func NewAssetPrecompile(balances AssetBalanceReader, funding FundingAmountReader, callerAddress ...string) *AssetPrecompile {
@@ -276,6 +277,17 @@ func NewAssetPrecompile(balances AssetBalanceReader, funding FundingAmountReader
 		addr = callerAddress[0]
 	}
 	return &AssetPrecompile{Balances: balances, Funding: funding, CallerAddress: addr}
+}
+
+func newAssetPrecompile(balances AssetBalanceReader, funding FundingAmountReader, callerAddress string,
+	callContext *precompileCallContext) *AssetPrecompile {
+
+	return &AssetPrecompile{
+		Balances:      balances,
+		Funding:       funding,
+		CallerAddress: callerAddress,
+		callContext:   callContext,
+	}
 }
 
 func (p *AssetPrecompile) RequiredGas(input []byte) uint64 {
@@ -306,11 +318,17 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 		}
 		return abiEncodeDynamicBytes([]byte(balance.String())), nil
 	case assetTransferAssetSelector:
+		if p.callContext.readOnly() {
+			return nil, vm.ErrWriteProtection
+		}
 		if _, _, _, _, err := DecodeTransferAssetCall(input); err != nil {
 			return nil, err
 		}
 		return abiEncodeBool(true), nil
 	case assetTransferAssetsSelector:
+		if p.callContext.readOnly() {
+			return nil, vm.ErrWriteProtection
+		}
 		if _, err := DecodeTransferAssetsCall(input); err != nil {
 			return nil, err
 		}
@@ -351,6 +369,9 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 		}
 		return abiEncodeUint64(uint64(value)), nil
 	case assetClaimFundingSelector:
+		if p.callContext.readOnly() {
+			return nil, vm.ErrWriteProtection
+		}
 		assetName, err := abiReadString(args, 0)
 		if err != nil {
 			return nil, err
@@ -477,10 +498,16 @@ func (p *AssetPrecompile) Name() string {
 	return "satoshinetAsset"
 }
 
-type TriggerPrecompile struct{}
+type TriggerPrecompile struct {
+	callContext *precompileCallContext
+}
 
 func NewTriggerPrecompile() *TriggerPrecompile {
 	return &TriggerPrecompile{}
+}
+
+func newTriggerPrecompile(callContext *precompileCallContext) *TriggerPrecompile {
+	return &TriggerPrecompile{callContext: callContext}
 }
 
 func (p *TriggerPrecompile) RequiredGas(input []byte) uint64 {
@@ -489,6 +516,9 @@ func (p *TriggerPrecompile) RequiredGas(input []byte) uint64 {
 }
 
 func (p *TriggerPrecompile) Run(input []byte) ([]byte, error) {
+	if p.callContext.readOnly() {
+		return nil, vm.ErrWriteProtection
+	}
 	if _, err := DecodeTriggerRegistrationCall(input); err != nil {
 		return nil, err
 	}
@@ -500,14 +530,14 @@ func (p *TriggerPrecompile) Name() string {
 }
 
 func SatoshiNetPrecompiles(balances AssetBalanceReader, funding FundingAmountReader, callerAddress string,
-	rules vm.PrecompiledContracts) vm.PrecompiledContracts {
+	callContext *precompileCallContext, rules vm.PrecompiledContracts) vm.PrecompiledContracts {
 
 	out := make(vm.PrecompiledContracts, len(rules)+2)
 	for addr, p := range rules {
 		out[addr] = p
 	}
-	out[AssetPrecompileAddress] = NewAssetPrecompile(balances, funding, callerAddress)
-	out[TriggerPrecompileAddress] = NewTriggerPrecompile()
+	out[AssetPrecompileAddress] = newAssetPrecompile(balances, funding, callerAddress, callContext)
+	out[TriggerPrecompileAddress] = newTriggerPrecompile(callContext)
 	return out
 }
 

@@ -243,6 +243,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		UTXOs:         overlay.Provider,
 		Precision:     SettlementPrecision(req.AssetPrecision),
 		ResolveOutput: resolveOutput,
+		ResolveScript: req.ResolveScript,
 	}
 	executor := NewBackend(BlockExecutionRequest{
 		Runtime:                   runtime,
@@ -331,10 +332,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 }
 
 func blockResultStatus(records []ExecutionRecord) ResultStatus {
-	if len(records) == 1 {
-		return records[0].Status
-	}
-	return ResultStatusSuccess
+	return contractframework.AggregateResultStatus(records)
 }
 
 func newEVMBlockUTXOOverlay(prefix string, base ContractUTXOProvider,
@@ -390,9 +388,7 @@ func ExecuteWorkBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
 	}
 	overlay := newEVMBlockUTXOOverlay(prefix, req.ContractUTXOs, req.Txs)
 	req.ContractPrefix = prefix
-	if req.ContractUTXOs != nil {
-		req.ContractUTXOs = overlay.Provider
-	}
+	req.ContractUTXOs = overlay.Provider
 	executor := NewBackend(req)
 	frameworkExecutor := contractframework.NewExecutor(executor.executorConfig())
 	for _, tx := range req.Txs {

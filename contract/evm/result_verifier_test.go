@@ -108,6 +108,11 @@ func TestCanonicalResultVerifierDeployUsesFundingUTXO(t *testing.T) {
 			}, nil
 		},
 	}
+	plans, err := verifier.BuildPlans([]ExecutionRecord{record})
+	require.NoError(t, err)
+	verifier.ResolveOutput = func(*wire.MsgTx) ([]ResultOutput, error) {
+		return plans[0].Outputs, nil
+	}
 	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
 }
 
@@ -256,6 +261,11 @@ func TestCanonicalResultVerifierTriggerUsesContractGasUTXO(t *testing.T) {
 				mustUTXO(t, gasInput, contract, gasAssetName, 100, 10),
 			}, nil
 		},
+	}
+	plans, err := verifier.BuildPlans([]ExecutionRecord{record})
+	require.NoError(t, err)
+	verifier.ResolveOutput = func(*wire.MsgTx) ([]ResultOutput, error) {
+		return plans[0].Outputs, nil
 	}
 	require.NoError(t, verifier.Verify(tx, []ExecutionRecord{record}))
 }

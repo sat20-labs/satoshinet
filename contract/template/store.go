@@ -268,6 +268,9 @@ func reconcileRunningAssetCache(contract Contract, state *TemplateRuntimeState, 
 			changed = true
 		}
 	}
+	if _, ok := contract.(*AMMContract); ok && syncAMMPoolInvariant(state.AMMData()) {
+		changed = true
+	}
 	return changed
 }
 

@@ -158,6 +158,42 @@ func TestBuildCanonicalResultPlanTruncatesOutputsToAssetPrecision(t *testing.T) 
 	requireCanonicalResultOutputAssetString(t, plan.Outputs[1], assetName, "7")
 }
 
+func TestCanonicalGasFeeRoundsUpAtAssetBoundary(t *testing.T) {
+	contractAddr := testContractAddress(t, ModuleEVM, 1)
+	gasAssetName := "brc20:f:sgas"
+	input := OutPoint{TxID: "invoke", Vout: 1}
+	available := []UTXO{
+		mustCanonicalUTXODecimal(t, input, contractAddr, gasAssetName, "950", 12),
+	}
+	precision := AssetPrecisionPolicy{
+		Fallback: 8,
+		Resolve: func(name string) (int, bool) {
+			return 0, name == gasAssetName
+		},
+	}
+
+	plan, err := BuildCanonicalResultPlan(ResultPlanRequest{
+		Contract:               contractAddr,
+		Available:              available,
+		GasAssetName:           gasAssetName,
+		GasFee:                 mustCanonicalDecimalString(t, "223.264"),
+		RequiredGasFundingUTXO: []OutPoint{input},
+		Precision:              precision,
+		Intents: []AssetIntent{{
+			From:      contractAddr,
+			To:        "tb1qrefund",
+			AssetName: gasAssetName,
+			Amount:    mustCanonicalDecimalString(t, "726.736"),
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "224", plan.GasFee.String())
+	require.Len(t, plan.Outputs, 1)
+	require.Equal(t, "tb1qrefund", plan.Outputs[0].To)
+	requireCanonicalResultOutputAssetString(t, plan.Outputs[0], gasAssetName, "726")
+	require.NoError(t, VerifyResultInputCoverage(plan.InputUTXOs, plan.Outputs, plan.GasFee, gasAssetName))
+}
+
 func TestCanonicalCloseProfit(t *testing.T) {
 	contractAddr := testContractAddress(t, ModuleEVM, 1)
 	assetName := "ordx:ft:profit"

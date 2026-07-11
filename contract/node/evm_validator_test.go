@@ -72,7 +72,8 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	block.SetHeight(100)
 
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
-		GasConfig: evm.GasConfig{GasAssetName: evm.DefaultGasConfig().GasAssetName, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
+		GasConfig:    evm.GasConfig{GasAssetName: evm.DefaultGasConfig().GasAssetName, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
+		VerifyResult: func(*wire.MsgTx, []evm.ExecutionRecord) error { return nil },
 	})
 	if err := validator.ValidateEVMBlock(block, prevView); err != nil {
 		t.Fatal(err)
@@ -224,6 +225,9 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 			}}, nil
 		},
 		ContractUTXOs: contractUTXOs,
+		AssetPrecision: func(string) (int, bool) {
+			return 0, true
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -250,6 +254,9 @@ func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
 			}}, nil
 		},
 		ContractUTXOs: contractUTXOs,
+		AssetPrecision: func(string) (int, bool) {
+			return 0, true
+		},
 	})
 	view := blockchain.NewUtxoViewpoint()
 	view.Entries()[triggerGasInput] = blockchain.NewUtxoEntry(wire.NewTxOut(1, wire.TxAssets{{

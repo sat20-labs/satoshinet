@@ -27,7 +27,7 @@ func (s *MemoryStateDB) Clone() *MemoryStateDB {
 		logs:       cloneLogs(s.logs),
 		refund:     s.refund,
 		accessList: make(map[gethcommon.Address]map[gethcommon.Hash]struct{}),
-		committed:  cloneCommittedStorage(s.accounts),
+		original:   make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash),
 	}
 }
 
@@ -93,7 +93,7 @@ func (s *MemoryStateDB) UnmarshalBinary(data []byte) error {
 	s.revisions = nil
 	s.nextRevID = 0
 	s.accessList = make(map[gethcommon.Address]map[gethcommon.Hash]struct{})
-	s.committed = cloneCommittedStorage(s.accounts)
+	s.original = make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash)
 	return nil
 }
 

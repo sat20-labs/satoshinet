@@ -141,6 +141,9 @@ func (r *ContractRuntime) settleAMM(height int64,
 		return plan, nil
 	}
 	running := state.AMMData()
+	if syncAMMPoolInvariant(running) {
+		changed = true
+	}
 
 	if running.TradingReady {
 		itemIDs := activeAMMItemIDs(state.Items, height)
@@ -161,7 +164,7 @@ func (r *ContractRuntime) settleAMM(height int64,
 			poolAsset = parseDecimalOrZero("0")
 		}
 		poolGas := decimalInt64(running.AssetBInPool)
-		poolK := ammSettlementK(*running, poolAsset, poolGas)
+		poolK := ammSettlementK(poolAsset, poolGas)
 		for _, id := range itemIDs {
 			item := &state.Items[id]
 			switch item.OrderType {
@@ -221,9 +224,7 @@ func (r *ContractRuntime) settleAMM(height int64,
 		if changed {
 			running.AssetAInPool = poolAsset
 			running.AssetBInPool = scommon.NewDefaultDecimal(poolGas)
-			if poolAsset != nil && poolAsset.Sign() > 0 && poolGas > 0 {
-				running.K = poolK
-			}
+			syncAMMPoolInvariant(running)
 			if poolAsset.Sign() <= 0 || poolGas <= 0 {
 				running.TradingReady = false
 			}
@@ -240,6 +241,9 @@ func (r *ContractRuntime) settleAMM(height int64,
 	}
 	if ammPoolEmpty(*running) {
 		running.TradingReady = false
+	}
+	if syncAMMPoolInvariant(running) {
+		changed = true
 	}
 	if !changed {
 		return plan, nil
@@ -414,9 +418,7 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 		running.AssetAInPool = poolAsset
 		running.AssetBInPool = scommon.NewDefaultDecimal(poolGas)
 		running.TotalLPTAmt = totalLPT
-		if poolAsset != nil && poolAsset.Sign() > 0 && poolGas > 0 {
-			running.K = scommon.DecimalMul(poolAsset, scommon.NewDefaultDecimal(poolGas))
-		}
+		syncAMMPoolInvariant(running)
 	}
 	return changed, nil
 }
@@ -839,6 +841,7 @@ func clearAMMClosedPool(state *TemplateRuntimeState) {
 	running := state.AMMData()
 	running.AssetAInPool = nil
 	running.AssetBInPool = nil
+	running.K = nil
 	running.TradingReady = false
 	running.TotalLPTAmt = nil
 	running.LPBalances = nil
@@ -1008,10 +1011,7 @@ func activeAMMItemIDs(items []InvokeItem, height int64) []int {
 	return ids
 }
 
-func ammSettlementK(running AMMRunningData, poolAsset *scommon.Decimal, poolGas int64) *scommon.Decimal {
-	if running.K != nil && running.K.Sign() > 0 {
-		return running.K.Clone()
-	}
+func ammSettlementK(poolAsset *scommon.Decimal, poolGas int64) *scommon.Decimal {
 	if poolAsset == nil || poolAsset.Sign() <= 0 || poolGas <= 0 {
 		return nil
 	}
@@ -1373,6 +1373,7 @@ func recomputeRunningDataPreservePool(contract Contract, state *TemplateRuntimeS
 	running := state.AMMData()
 	requiredAssetA := running.RequiredAssetA
 	requiredAssetB := running.RequiredAssetB
+	requiredK := running.RequiredK
 	k := running.K
 	ready := running.TradingReady
 	gasBalance := running.GasBalance
@@ -1385,6 +1386,7 @@ func recomputeRunningDataPreservePool(contract Contract, state *TemplateRuntimeS
 	running.AssetBInPool = assetB
 	running.RequiredAssetA = requiredAssetA
 	running.RequiredAssetB = requiredAssetB
+	running.RequiredK = requiredK
 	running.K = k
 	running.TradingReady = ready
 	running.GasBalance = gasBalance

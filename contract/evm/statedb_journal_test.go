@@ -5,6 +5,8 @@ import (
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +24,48 @@ func TestMemoryStateDBReadsDoNotCreateAccounts(t *testing.T) {
 	require.False(t, state.IsNewContract(addr))
 	require.Empty(t, state.accounts)
 	require.Equal(t, root, state.StateRoot())
+}
+
+func TestMemoryStateDBCodeHashDistinguishesAbsentAndEmpty(t *testing.T) {
+	state := NewMemoryStateDB()
+	absent := gethcommon.HexToAddress("0x1234")
+	empty := gethcommon.HexToAddress("0x5678")
+
+	require.Zero(t, state.GetCodeHash(absent))
+	state.CreateAccount(empty)
+	require.Equal(t, types.EmptyCodeHash, state.GetCodeHash(empty))
+}
+
+func TestMemoryStateDBOriginalStorageIsLazyAndTransactionScoped(t *testing.T) {
+	state := NewMemoryStateDB()
+	addr := gethcommon.HexToAddress("0x1234")
+	key := gethcommon.HexToHash("0x01")
+	original := gethcommon.HexToHash("0x02")
+	updated := gethcommon.HexToHash("0x03")
+	state.SetState(addr, key, original)
+	state.Prepare(params.Rules{}, gethcommon.Address{}, gethcommon.Address{}, nil, nil, nil)
+	require.Empty(t, state.original)
+
+	state.SetState(addr, key, updated)
+	current, committed := state.GetStateAndCommittedState(addr, key)
+	require.Equal(t, updated, current)
+	require.Equal(t, original, committed)
+	require.Len(t, state.original, 1)
+	require.Len(t, state.original[addr], 1)
+}
+
+func TestMemoryStateDBNewContractOriginalStorageIsZero(t *testing.T) {
+	state := NewMemoryStateDB()
+	addr := gethcommon.HexToAddress("0x1234")
+	key := gethcommon.HexToHash("0x01")
+	updated := gethcommon.HexToHash("0x02")
+	state.Prepare(params.Rules{}, gethcommon.Address{}, gethcommon.Address{}, nil, nil, nil)
+	state.CreateContract(addr)
+	state.SetState(addr, key, updated)
+
+	current, committed := state.GetStateAndCommittedState(addr, key)
+	require.Equal(t, updated, current)
+	require.Zero(t, committed)
 }
 
 func TestMemoryStateDBJournalSnapshotsRevertOnlyChanges(t *testing.T) {

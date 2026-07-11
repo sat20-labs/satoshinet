@@ -229,6 +229,7 @@ type AMMRunningData struct {
 	AssetBInPool      *scommon.Decimal            `json:"assetBInPool,omitempty"`
 	RequiredAssetA    *scommon.Decimal            `json:"requiredAssetA,omitempty"`
 	RequiredAssetB    *scommon.Decimal            `json:"requiredAssetB,omitempty"`
+	RequiredK         *scommon.Decimal            `json:"requiredK,omitempty"`
 	K                 *scommon.Decimal            `json:"k,omitempty"`
 	TradingReady      bool                        `json:"tradingReady,omitempty"`
 	GasBalance        *scommon.Decimal            `json:"gasBalance,omitempty"`
@@ -1453,7 +1454,7 @@ func (r *ContractRuntime) initializeRuntimeState() error {
 		running := state.AMMData()
 		running.RequiredAssetA = parseDecimalOrZero(c.AssetAmt)
 		running.RequiredAssetB = scommon.NewDefaultDecimal(c.SatValue)
-		running.K = parseDecimalOrZero(c.K)
+		running.RequiredK = parseDecimalOrZero(c.K)
 		return r.saveRuntimeState(state)
 	case *AutopayContract:
 		state := TemplateRuntimeState{}
@@ -1517,6 +1518,7 @@ func (r *ContractRuntime) ApplyFunding(output ContractOutput, gasAssetName strin
 		if amm := state.AMMData(); !amm.TradingReady {
 			amm.TradingReady = amm.ammTradingReady()
 		}
+		syncAMMPoolInvariant(state.AMMData())
 		if err := initializeAMMInitialLP(&state, r.base.Deployer()); err != nil {
 			return err
 		}
@@ -1785,7 +1787,7 @@ func (r AMMRunningData) ammTradingReady() bool {
 	if assetA.Cmp(requiredAssetA) < 0 || assetB.Cmp(requiredAssetB) < 0 {
 		return false
 	}
-	k := r.K
+	k := r.RequiredK
 	if k == nil {
 		k = parseDecimalOrZero("0")
 	}
@@ -1794,4 +1796,19 @@ func (r AMMRunningData) ammTradingReady() bool {
 	}
 	currentK := scommon.DecimalMul(assetA, assetB)
 	return currentK.Cmp(k) >= 0
+}
+
+func syncAMMPoolInvariant(r *AMMRunningData) bool {
+	if r == nil {
+		return false
+	}
+	var next *scommon.Decimal
+	if r.AssetAInPool != nil && r.AssetAInPool.Sign() > 0 && r.AssetBInPool != nil && r.AssetBInPool.Sign() > 0 {
+		next = scommon.DecimalMul(r.AssetAInPool, r.AssetBInPool)
+	}
+	if decimalEqualAllowNil(r.K, next) {
+		return false
+	}
+	r.K = next
+	return true
 }

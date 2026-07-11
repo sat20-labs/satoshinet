@@ -736,6 +736,7 @@ pragma solidity ^0.8.19;
 
 interface ISatoshiNetAsset {
     function transferAsset(string calldata assetName, string calldata to, string calldata amount, bytes calldata extraData) external returns (bool);
+    function claimFundingAsset(string calldata assetName, string calldata amount) external returns (bool);
 }
 
 contract SatoshiNetTimelockVault {
@@ -768,6 +769,39 @@ contract SatoshiNetTimelockVault {
         emit Released(assetName, recipient, amount);
     }
 
-    function deposit() external payable {}
+    function deposit() external payable {
+        _claimDeposit();
+    }
+
+    receive() external payable {
+        _claimDeposit();
+    }
+
+    fallback() external payable {
+        _claimDeposit();
+    }
+
+    function _claimDeposit() private {
+        (bool ok, bytes memory ret) = address(ASSET).staticcall(
+            abi.encodeWithSignature("fundingAssetAmount(string)", assetName)
+        );
+        require(ok, "funding");
+        string memory funded = string(_readRawDynamicBytes(ret));
+        require(ASSET.claimFundingAsset(assetName, funded), "claim");
+    }
+
+    function _readRawDynamicBytes(bytes memory data) private pure returns (bytes memory) {
+        require(data.length >= 32, "bad response");
+        uint256 size;
+        assembly {
+            size := mload(add(data, 32))
+        }
+        require(data.length >= 32 + size, "short response");
+        bytes memory out = new bytes(size);
+        for (uint256 i = 0; i < size; i++) {
+            out[i] = data[32 + i];
+        }
+        return out;
+    }
 }
 `

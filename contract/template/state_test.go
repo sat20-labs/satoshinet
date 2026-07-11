@@ -292,6 +292,8 @@ func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
 	requireDecimalString(t, "77", state.AMMData().AssetAInPool)
 	requireDecimalString(t, "33", state.AMMData().AssetBInPool)
 	requireDecimalString(t, "5", state.AMMData().GasBalance)
+	requireDecimalString(t, "2541", state.AMMData().K)
+	requireAMMPoolInvariant(t, state.AMMData())
 }
 
 func testLimitOrderRuntime(t *testing.T) *ContractRuntime {

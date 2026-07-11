@@ -133,8 +133,9 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	}
 
 	requiredByAsset := make(map[string]*scommon.Decimal)
-	if req.GasFee != nil && req.GasFee.Sign() > 0 {
-		requiredByAsset[req.GasAssetName] = req.Precision.Normalize(req.GasAssetName, req.GasFee.Clone())
+	gasFee := req.Precision.NormalizeUp(req.GasAssetName, req.GasFee)
+	if gasFee != nil && gasFee.Sign() > 0 {
+		requiredByAsset[req.GasAssetName] = gasFee.Clone()
 	}
 	for _, intent := range req.Intents {
 		if intent.AssetName == "" || intent.Amount == nil {
@@ -241,7 +242,7 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	outputs = NormalizeResultOutputsPrecision(outputs, req.Precision)
 	return ResultPlan{
 		Contract:   req.Contract.MustEncode(),
-		GasFee:     CloneDecimal(req.GasFee),
+		GasFee:     CloneDecimal(gasFee),
 		InputUTXOs: inputs,
 		Outputs:    outputs,
 	}, nil
@@ -309,7 +310,8 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 				if err != nil {
 					return nil, err
 				}
-				recordGasFee := DecimalAddAllowNil(callFee, resultFee)
+				recordGasFee := p.Precision.NormalizeUp(p.GasConfig.GasAssetName,
+					DecimalAddAllowNil(callFee, resultFee))
 				gasFee = DecimalAddAllowNil(gasFee, recordGasFee)
 				refund, err := RecordGasRefund(record, available, p.GasConfig.GasAssetName, recordGasFee)
 				if err != nil {
@@ -326,6 +328,7 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 			if err != nil {
 				return nil, err
 			}
+			plan.ResultCount = len(group.Records)
 			plans = append(plans, plan)
 			continue
 		}
@@ -341,6 +344,7 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 		if err != nil {
 			return nil, err
 		}
+		plan.ResultCount = len(group.Records)
 		plans = append(plans, plan)
 	}
 	return plans, nil

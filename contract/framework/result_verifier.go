@@ -77,11 +77,32 @@ func VerifyResultAgainstPending(req PendingResultVerifyRequest) ([]ExecutionReco
 }
 
 func ValidateResultStatus(result contract.ResultPayload, settled []ExecutionRecord) error {
-	if len(settled) == 1 && result.Status != settled[0].Status {
-		return fmt.Errorf("result status %d does not match execution status %d",
-			result.Status, settled[0].Status)
+	expected := AggregateResultStatus(settled)
+	if result.Status != expected {
+		return fmt.Errorf("result status %d does not match aggregate execution status %d",
+			result.Status, expected)
+	}
+	if result.HasErrorInfo || result.ErrorDigest != ([32]byte{}) {
+		return fmt.Errorf("non-canonical result error digest")
 	}
 	return nil
+}
+
+func AggregateResultStatus(records []ExecutionRecord) contract.ResultStatus {
+	status := contract.ResultStatusSuccess
+	for _, record := range records {
+		switch record.Status {
+		case contract.ResultStatusInvalid:
+			return contract.ResultStatusInvalid
+		case contract.ResultStatusOutOfGas:
+			status = contract.ResultStatusOutOfGas
+		case contract.ResultStatusRevert:
+			if status == contract.ResultStatusSuccess {
+				status = contract.ResultStatusRevert
+			}
+		}
+	}
+	return status
 }
 
 func ValidateResultFundingInputs(tx *wire.MsgTx, settled []ExecutionRecord, label string) error {
@@ -116,15 +137,17 @@ type SingleResultTxVerifyRequest struct {
 }
 
 type CanonicalResultVerifyRequest struct {
-	Label        string
-	ResultTx     *wire.MsgTx
-	Status       contract.ResultStatus
-	Plans        []ResultPlan
-	GasAssetName string
-	Resolve      ResultOutputResolver
-	PlanCount    func(ResultPlan) int
-	UseInputUTXO bool
-	CheckPayload bool
+	Label         string
+	ResultTx      *wire.MsgTx
+	Status        contract.ResultStatus
+	Plans         []ResultPlan
+	GasAssetName  string
+	Resolve       ResultOutputResolver
+	ResolveScript ResultRecipientScriptResolver
+	PlanCount     func(ResultPlan) int
+	ResultCount   int
+	UseInputUTXO  bool
+	CheckPayload  bool
 }
 
 func VerifySingleResultTx(req SingleResultTxVerifyRequest) error {
@@ -163,10 +186,10 @@ func VerifyCanonicalResultTx(req CanonicalResultVerifyRequest) error {
 		if payload.Status != req.Status {
 			return fmt.Errorf("result status mismatch: got %d want %d", payload.Status, req.Status)
 		}
-		expectedCount := 0
-		for _, plan := range req.Plans {
-			expectedCount += canonicalResultPlanCount(plan, req.PlanCount)
+		if payload.HasErrorInfo || payload.ErrorDigest != ([32]byte{}) {
+			return fmt.Errorf("non-canonical result error digest")
 		}
+		expectedCount := canonicalResultExpectedCount(req)
 		if expectedCount > math.MaxUint16 || payload.ResultCount != uint16(expectedCount) {
 			return fmt.Errorf("result count mismatch: got %d want %d", payload.ResultCount, expectedCount)
 		}
@@ -196,6 +219,9 @@ func VerifyCanonicalResultTx(req CanonicalResultVerifyRequest) error {
 			return err
 		}
 	}
+	if len(expectedOutputs) != 0 && req.Resolve == nil && req.ResolveScript == nil {
+		return fmt.Errorf("missing %s result output resolver", req.Label)
+	}
 	if req.Resolve != nil {
 		actualOutputs, err := req.Resolve(req.ResultTx)
 		if err != nil {
@@ -210,7 +236,52 @@ func VerifyCanonicalResultTx(req CanonicalResultVerifyRequest) error {
 			return err
 		}
 	}
+	if req.ResolveScript != nil {
+		expectedCount := canonicalResultExpectedCount(req)
+		if expectedCount <= 0 || expectedCount > math.MaxUint16 {
+			return fmt.Errorf("invalid result count %d", expectedCount)
+		}
+		expected, err := BuildResultTx(ResultTxBuildRequest{
+			Status:        req.Status,
+			ResultCount:   uint16(expectedCount),
+			Plans:         req.Plans,
+			ResolveScript: req.ResolveScript,
+		}, ResultTxBuildOptions{UseInputUTXOs: req.UseInputUTXO, PlanCount: req.PlanCount})
+		if err != nil {
+			return err
+		}
+		actualBytes, err := serializeResultTx(req.ResultTx)
+		if err != nil {
+			return err
+		}
+		expectedBytes, err := serializeResultTx(expected)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(actualBytes, expectedBytes) {
+			return fmt.Errorf("non-canonical %s result transaction", req.Label)
+		}
+	}
 	return nil
+}
+
+func canonicalResultExpectedCount(req CanonicalResultVerifyRequest) int {
+	if req.ResultCount > 0 {
+		return req.ResultCount
+	}
+	count := 0
+	for _, plan := range req.Plans {
+		count += canonicalResultPlanCount(plan, req.PlanCount)
+	}
+	return count
+}
+
+func serializeResultTx(tx *wire.MsgTx) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := tx.Serialize(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func resultTxHasPayload(tx *wire.MsgTx) bool {

@@ -31,6 +31,8 @@ type BlockContext struct {
 	Time          uint64
 	GasLimit      int64
 	FixedGasPrice uint64
+	ParentHash    [32]byte
+	BlockHashes   map[uint64][32]byte
 }
 
 type CallRequest struct {
@@ -82,7 +84,7 @@ func NewRuntime(state *MemoryStateDB) *Runtime {
 	}
 	return &Runtime{
 		State:          state,
-		ChainConfig:    params.AllEthashProtocolChanges,
+		ChainConfig:    newSatoshiNetChainConfigV1(),
 		ContractPrefix: TestnetContractPrefix,
 	}
 }
@@ -134,10 +136,11 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding,
 			ContractAddressHash(req.ExpectedContract))
 	}
-	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, nil)
+	callContext := &precompileCallContext{}
+	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, nil, callContext)
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
-	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), false, req.Block.Time)
-	precompiles := SatoshiNetPrecompiles(balances, nil, "", vm.ActivePrecompiledContracts(rules))
+	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
+	precompiles := SatoshiNetPrecompiles(balances, nil, "", callContext, vm.ActivePrecompiledContracts(rules))
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), nil, precompileAddresses(precompiles), nil)
 	evm.SetPrecompiles(precompiles)
 	evm.SetTxContext(vm.TxContext{
@@ -194,7 +197,8 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		req.GasAssetName, req.GasFeeReserve)
 	stateSnapshot := r.State.Snapshot()
 	intentSnapshot := len(r.AssetIntents)
-	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, funding)
+	callContext := &precompileCallContext{}
+	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, funding, callContext)
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
 	balances := AssetBalanceReader(r.AssetBalances)
 	if req.FundingOutput != nil {
@@ -205,8 +209,9 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		Prior:   r.AssetIntents,
 		Intents: &capturedIntents,
 	}
-	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), false, req.Block.Time)
-	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, vm.ActivePrecompiledContracts(rules))
+	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
+	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, callContext,
+		vm.ActivePrecompiledContracts(rules))
 	targetAddress := GethAddress(target)
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), &targetAddress, precompileAddresses(precompiles), nil)
 	evm.SetPrecompiles(precompiles)
@@ -388,10 +393,35 @@ type assetTraceFrame struct {
 	intentLen       int
 	triggerLen      int
 	fundingSnapshot fundingAssetSnapshot
+	readOnly        bool
+}
+
+type precompileCallContext struct {
+	frames []bool
+}
+
+func (c *precompileCallContext) enter(typ byte) bool {
+	if c == nil {
+		return false
+	}
+	readOnly := c.readOnly() || vm.OpCode(typ) == vm.STATICCALL
+	c.frames = append(c.frames, readOnly)
+	return readOnly
+}
+
+func (c *precompileCallContext) exit() {
+	if c == nil || len(c.frames) == 0 {
+		return
+	}
+	c.frames = c.frames[:len(c.frames)-1]
+}
+
+func (c *precompileCallContext) readOnly() bool {
+	return c != nil && len(c.frames) != 0 && c.frames[len(c.frames)-1]
 }
 
 func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]AssetIntent,
-	capturedTriggers *[]Trigger, funding *FundingAssetView) vm.Config {
+	capturedTriggers *[]Trigger, funding *FundingAssetView, callContext *precompileCallContext) vm.Config {
 	config := r.Config
 	base := config.Tracer
 	tracer := &tracing.Hooks{}
@@ -403,6 +433,7 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 	frames := make([]assetTraceFrame, 0, 4)
 	tracer.OnEnter = func(depth int, typ byte, from gethcommon.Address,
 		to gethcommon.Address, input []byte, gas uint64, value *big.Int) {
+		readOnly := callContext.enter(typ)
 		if baseOnEnter != nil {
 			baseOnEnter(depth, typ, from, to, input, gas, value)
 		}
@@ -413,6 +444,7 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 			intentLen:       len(*capturedIntents),
 			triggerLen:      len(*capturedTriggers),
 			fundingSnapshot: funding.Snapshot(),
+			readOnly:        readOnly,
 		})
 	}
 	tracer.OnExit = func(depth int, output []byte, gasUsed uint64, err error, reverted bool) {
@@ -421,10 +453,17 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 			frame = frames[len(frames)-1]
 			frames = frames[:len(frames)-1]
 		}
+		callContext.exit()
 		if baseOnExit != nil {
 			baseOnExit(depth, output, gasUsed, err, reverted)
 		}
 		if err != nil || reverted {
+			*capturedIntents = (*capturedIntents)[:frame.intentLen]
+			*capturedTriggers = (*capturedTriggers)[:frame.triggerLen]
+			funding.RevertTo(frame.fundingSnapshot)
+			return
+		}
+		if frame.readOnly {
 			*capturedIntents = (*capturedIntents)[:frame.intentLen]
 			*capturedTriggers = (*capturedTriggers)[:frame.triggerLen]
 			funding.RevertTo(frame.fundingSnapshot)
@@ -491,6 +530,7 @@ func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {
 	if err != nil {
 		gasLimit = 0
 	}
+	parentHash := gethcommon.Hash(ctx.ParentHash)
 	return vm.BlockContext{
 		CanTransfer: func(db vm.StateDB, addr gethcommon.Address, amount *uint256.Int) bool {
 			return db.GetBalance(addr).Cmp(amount) >= 0
@@ -499,7 +539,15 @@ func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {
 			db.SubBalance(from, amount, 0)
 			db.AddBalance(to, amount, 0)
 		},
-		GetHash:     func(uint64) gethcommon.Hash { return gethcommon.Hash{} },
+		GetHash: func(number uint64) gethcommon.Hash {
+			if hash, ok := ctx.BlockHashes[number]; ok {
+				return gethcommon.Hash(hash)
+			}
+			if ctx.Number > 0 && number == ctx.Number-1 {
+				return parentHash
+			}
+			return gethcommon.Hash{}
+		},
 		Coinbase:    GethAddress(ctx.Coinbase),
 		GasLimit:    gasLimit,
 		BlockNumber: new(big.Int).SetUint64(ctx.Number),
@@ -507,5 +555,6 @@ func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {
 		Difficulty:  big.NewInt(0),
 		BaseFee:     big.NewInt(0),
 		BlobBaseFee: big.NewInt(0),
+		Random:      &parentHash,
 	}
 }

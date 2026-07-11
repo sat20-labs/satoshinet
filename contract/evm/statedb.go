@@ -2,8 +2,6 @@ package evm
 
 import (
 	stdsha256 "crypto/sha256"
-	"encoding/binary"
-	"sort"
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -28,7 +26,7 @@ type MemoryStateDB struct {
 	revisions  []memoryRevision
 	nextRevID  int
 	accessList map[gethcommon.Address]map[gethcommon.Hash]struct{}
-	committed  map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash
+	original   map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash
 }
 
 type memoryAccount struct {
@@ -50,76 +48,16 @@ type memoryRevision struct {
 }
 
 func (s *MemoryStateDB) StateRoot() [32]byte {
+	encoded, err := s.MarshalBinary()
+	if err != nil {
+		return [32]byte{}
+	}
 	h := stdsha256.New()
-	addresses := make([]gethcommon.Address, 0, len(s.accounts))
-	for addr := range s.accounts {
-		addresses = append(addresses, addr)
-	}
-	sort.Slice(addresses, func(i, j int) bool {
-		return string(addresses[i].Bytes()) < string(addresses[j].Bytes())
-	})
-
-	var tmp [8]byte
-	for _, addr := range addresses {
-		acct := s.accounts[addr]
-		h.Write(addr.Bytes())
-		binary.BigEndian.PutUint64(tmp[:], acct.Nonce)
-		h.Write(tmp[:])
-		writeLengthPrefixed(h, acct.Balance.Bytes())
-		h.Write(crypto.Keccak256(acct.Code))
-		writeLengthPrefixed(h, []byte(acct.DeployerAddr))
-		if acct.Closed {
-			h.Write([]byte{1})
-		} else {
-			h.Write([]byte{0})
-		}
-
-		keys := make([]gethcommon.Hash, 0, len(acct.Storage))
-		for key := range acct.Storage {
-			keys = append(keys, key)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			return string(keys[i].Bytes()) < string(keys[j].Bytes())
-		})
-		for _, key := range keys {
-			h.Write(key.Bytes())
-			h.Write(acct.Storage[key].Bytes())
-		}
-	}
-
-	triggerKeys := sortedTriggerKeys(s.triggers)
-	for _, key := range triggerKeys {
-		trigger := s.triggers[key]
-		contractHash := ContractAddressHash(trigger.Contract)
-		writeLengthPrefixed(h, []byte(trigger.Contract.Prefix()))
-		h.Write([]byte{trigger.Contract.Version(), trigger.Contract.ContractType()})
-		h.Write(contractHash[:])
-		writeLengthPrefixed(h, []byte(trigger.ID))
-		h.Write([]byte{byte(trigger.Kind)})
-		binary.BigEndian.PutUint64(tmp[:], uint64(trigger.Height))
-		h.Write(tmp[:])
-		gasLimit, err := contractframework.GasUnitsUint64(trigger.GasLimit)
-		if err != nil {
-			gasLimit = 0
-		}
-		binary.BigEndian.PutUint64(tmp[:], gasLimit)
-		h.Write(tmp[:])
-		writeLengthPrefixed(h, trigger.Calldata)
-	}
+	h.Write([]byte("SATOSHINET:EVM_STATE_ROOT:V1\x00"))
+	h.Write(encoded)
 	var root [32]byte
 	copy(root[:], h.Sum(nil))
 	return root
-}
-
-type byteWriter interface {
-	Write([]byte) (int, error)
-}
-
-func writeLengthPrefixed(w byteWriter, b []byte) {
-	var lenBuf [8]byte
-	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(b)))
-	w.Write(lenBuf[:])
-	w.Write(b)
 }
 
 func NewMemoryStateDB() *MemoryStateDB {
@@ -127,7 +65,7 @@ func NewMemoryStateDB() *MemoryStateDB {
 		accounts:   make(map[gethcommon.Address]*memoryAccount),
 		triggers:   make(map[triggerKey]Trigger),
 		accessList: make(map[gethcommon.Address]map[gethcommon.Hash]struct{}),
-		committed:  make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash),
+		original:   make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash),
 	}
 }
 
@@ -187,7 +125,7 @@ func (s *MemoryStateDB) GetCodeHash(addr gethcommon.Address) gethcommon.Hash {
 	}
 	code := acct.Code
 	if len(code) == 0 {
-		return gethcommon.Hash{}
+		return types.EmptyCodeHash
 	}
 	return crypto.Keccak256Hash(code)
 }
@@ -236,10 +174,7 @@ func (s *MemoryStateDB) GetRefund() uint64 {
 
 func (s *MemoryStateDB) GetStateAndCommittedState(addr gethcommon.Address, key gethcommon.Hash) (gethcommon.Hash, gethcommon.Hash) {
 	current := s.GetState(addr, key)
-	if storage := s.committed[addr]; storage != nil {
-		return current, storage[key]
-	}
-	return current, current
+	return current, s.originalState(addr, key)
 }
 
 func (s *MemoryStateDB) GetState(addr gethcommon.Address, key gethcommon.Hash) gethcommon.Hash {
@@ -254,6 +189,7 @@ func (s *MemoryStateDB) GetStorageRoot(addr gethcommon.Address) gethcommon.Hash 
 }
 
 func (s *MemoryStateDB) SetState(addr gethcommon.Address, key, value gethcommon.Hash) gethcommon.Hash {
+	s.originalState(addr, key)
 	acct := s.ensure(addr)
 	prev := acct.Storage[key]
 	s.appendJournal(func() {
@@ -391,7 +327,7 @@ func (s *MemoryStateDB) AddSlotToAccessList(addr gethcommon.Address, slot gethco
 func (s *MemoryStateDB) Prepare(rules params.Rules, sender, coinbase gethcommon.Address, dest *gethcommon.Address, precompiles []gethcommon.Address, txAccesses types.AccessList) {
 	s.logs = nil
 	s.accessList = make(map[gethcommon.Address]map[gethcommon.Hash]struct{})
-	s.committed = cloneCommittedStorage(s.accounts)
+	s.original = make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash)
 	s.AddAddressToAccessList(sender)
 	s.AddAddressToAccessList(coinbase)
 	if dest != nil {
@@ -498,6 +434,23 @@ func (s *MemoryStateDB) account(addr gethcommon.Address) *memoryAccount {
 	return s.accounts[addr]
 }
 
+func (s *MemoryStateDB) originalState(addr gethcommon.Address, key gethcommon.Hash) gethcommon.Hash {
+	if s.original == nil {
+		s.original = make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash)
+	}
+	storage := s.original[addr]
+	if storage == nil {
+		storage = make(map[gethcommon.Hash]gethcommon.Hash)
+		s.original[addr] = storage
+	}
+	if value, ok := storage[key]; ok {
+		return value
+	}
+	value := s.GetState(addr, key)
+	storage[key] = value
+	return value
+}
+
 func (s *MemoryStateDB) appendJournal(undo func()) {
 	if s != nil && len(s.revisions) != 0 {
 		s.journal = append(s.journal, undo)
@@ -534,14 +487,6 @@ func cloneHashMap(src map[gethcommon.Hash]gethcommon.Hash) map[gethcommon.Hash]g
 		dst[key] = value
 	}
 	return dst
-}
-
-func cloneCommittedStorage(accounts map[gethcommon.Address]*memoryAccount) map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash {
-	out := make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash, len(accounts))
-	for addr, acct := range accounts {
-		out[addr] = cloneHashMap(acct.Storage)
-	}
-	return out
 }
 
 func cloneLogs(src []*types.Log) []*types.Log {

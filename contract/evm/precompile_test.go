@@ -7,6 +7,7 @@ import (
 
 	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
 	gethcommon "github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/vm"
 	scommon "github.com/sat20-labs/indexer/common"
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
@@ -569,6 +570,108 @@ func TestRuntimeDiscardsAssetIntentOnOuterRevert(t *testing.T) {
 	require.Empty(t, runtime.AssetIntents)
 }
 
+func TestRuntimeStaticCallCannotTransferAssets(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callPrecompileWithOpcodeCode(AssetPrecompileAddress, vm.STATICCALL))
+
+	for _, input := range [][]byte{
+		EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+		EncodeTransferAssetsCall(
+			[]string{SatoshiAssetName, "brc20:f:ooxx"},
+			[]string{"tb1qsats", "tb1qasset"},
+			[]string{"1", "2"},
+			[][]byte{nil, nil},
+		),
+	} {
+		result := runtime.Call(CallRequest{
+			CallerAddress: caller.String(),
+			TargetAddress: contract.MustEncode(),
+			CallID:        "static-transfer",
+			Input:         input,
+			Gas:           100000,
+			Block:         BlockContext{GasLimit: 1000000},
+		})
+		require.NoError(t, result.Err)
+		require.Empty(t, runtime.AssetIntents)
+	}
+}
+
+func TestRuntimeStaticCallCannotClaimFunding(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	gasAsset := "brc20:f:sgas"
+	assets, err := NewAssetSet(gasAsset, scommon.NewDefaultDecimal(1050))
+	require.NoError(t, err)
+	funding := contractframework.ContractOutputFromFunding(evmcommon.FundingOutput{
+		OutPoint: evmcommon.TxOutPoint{
+			TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Vout: 1,
+		},
+		Vout:     1,
+		Contract: contract,
+		Assets:   assets,
+	})
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callPrecompileWithOpcodeCode(AssetPrecompileAddress, vm.STATICCALL))
+
+	result := runtime.Call(CallRequest{
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "static-claim",
+		Input:         EncodeClaimFundingAssetCall(gasAsset, "700"),
+		Gas:           100000,
+		FundingOutput: &funding,
+		GasAssetName:  gasAsset,
+		GasFeeReserve: mustDefaultDecimal(t, 50),
+		Block:         BlockContext{GasLimit: 1000000},
+	})
+	require.NoError(t, result.Err)
+	require.Zero(t, result.RetainedGasFunding.Sign())
+}
+
+func TestRuntimeStaticCallCannotRegisterTrigger(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	contract := testContract(t)
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(contract), callPrecompileWithOpcodeCode(TriggerPrecompileAddress, vm.STATICCALL))
+
+	result := runtime.Call(CallRequest{
+		CallerAddress: caller.String(),
+		TargetAddress: contract.MustEncode(),
+		CallID:        "static-trigger",
+		Input:         EncodeRegisterHeightTriggerCall("readonly", 100, 50000, nil),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
+	})
+	require.NoError(t, result.Err)
+	require.Empty(t, runtime.State.Triggers())
+}
+
+func TestRuntimeNestedStaticCallCannotCreateEffects(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	outer := mustEVMAddress(t, "0x2222222222222222222222222222222222222222")
+	middle := mustEVMAddress(t, "0x3333333333333333333333333333333333333333")
+
+	for _, opcode := range []vm.OpCode{vm.CALL, vm.DELEGATECALL} {
+		runtime := NewRuntime(nil)
+		runtime.SetCode(outer, callPrecompileWithOpcodeCode(gethcommon.Address(middle), vm.STATICCALL))
+		runtime.SetCode(middle, callPrecompileWithOpcodeCode(AssetPrecompileAddress, opcode))
+
+		result := runtime.Call(CallRequest{
+			CallerAddress: caller.String(),
+			TargetAddress: outer.String(),
+			CallID:        "nested-static",
+			Input:         EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+			Gas:           200000,
+			Block:         BlockContext{GasLimit: 1000000},
+		})
+		require.NoError(t, result.Err, opcode.String())
+		require.Empty(t, runtime.AssetIntents, opcode.String())
+	}
+}
+
 func TestRuntimeRollsBackStorageWhenEffectCommitFails(t *testing.T) {
 	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
 	contract := testContract(t)
@@ -733,5 +836,30 @@ func callPrecompileCode(addr gethcommon.Address, revert bool) []byte {
 		return code
 	}
 	code = append(code, 0x00) // STOP
+	return code
+}
+
+func callPrecompileWithOpcodeCode(addr gethcommon.Address, opcode vm.OpCode) []byte {
+	code := []byte{
+		0x36,       // CALLDATASIZE
+		0x60, 0x00, // PUSH1 0
+		0x60, 0x00, // PUSH1 0
+		0x37,       // CALLDATACOPY
+		0x60, 0x00, // PUSH1 0, output size
+		0x60, 0x00, // PUSH1 0, output offset
+		0x36,       // CALLDATASIZE, input size
+		0x60, 0x00, // PUSH1 0, input offset
+	}
+	if opcode == vm.CALL {
+		code = append(code, 0x60, 0x00) // PUSH1 0, value
+	}
+	code = append(code, 0x73) // PUSH20 target address
+	code = append(code, addr.Bytes()...)
+	code = append(code,
+		0x61, 0xc3, 0x50, // PUSH2 50000, gas
+		byte(opcode),
+		0x50, // POP success
+		0x00, // STOP
+	)
 	return code
 }

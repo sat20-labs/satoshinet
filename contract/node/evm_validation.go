@@ -37,6 +37,7 @@ type EVMBlockExecutionConfig struct {
 	ContractUTXOs       evm.ContractUTXOProvider
 	ResolveRecipient    contractframework.ScriptRecipientResolver
 	ResolveResultOutput evm.ResultOutputResolver
+	ResolveResultScript evm.ResultRecipientScriptResolver
 	ResolveTriggers     evm.TriggerResolver
 	AssetPrecision      contractframework.AssetPrecisionResolver
 	VerifyResult        evm.ResultVerifier
@@ -282,6 +283,7 @@ func (v *EVMBlockExecutionValidator) blockContext(block *btcutil.Block) evm.Bloc
 		Time:          uint64(block.MsgBlock().Header.Timestamp.Unix()),
 		GasLimit:      gasLimit,
 		FixedGasPrice: v.cfg.GasConfig.FixedGasPrice,
+		ParentHash:    [32]byte(block.MsgBlock().Header.PrevBlock),
 	}
 }
 
@@ -292,7 +294,14 @@ func (v *EVMBlockExecutionValidator) resultVerifier(prefix string,
 		return v.cfg.VerifyResult
 	}
 	if v.cfg.ContractUTXOs == nil {
-		return nil
+		return func(*wire.MsgTx, []evm.ExecutionRecord) error {
+			return fmt.Errorf("missing EVM contract UTXO provider")
+		}
+	}
+	if v.cfg.AssetPrecision == nil {
+		return func(*wire.MsgTx, []evm.ExecutionRecord) error {
+			return fmt.Errorf("missing EVM asset precision resolver")
+		}
 	}
 	resolveOutput := v.cfg.ResolveResultOutput
 	if resolveOutput == nil {
@@ -306,6 +315,7 @@ func (v *EVMBlockExecutionValidator) resultVerifier(prefix string,
 		UTXOs:         v.cfg.ContractUTXOs,
 		Precision:     evm.SettlementPrecision(v.cfg.AssetPrecision),
 		ResolveOutput: resolveOutput,
+		ResolveScript: v.cfg.ResolveResultScript,
 	}
 	if overlay != nil {
 		verifier.UTXOs = overlay.Provider

@@ -39,6 +39,7 @@ type CanonicalResultVerifier struct {
 	UTXOs         ContractUTXOProvider
 	Precision     contractframework.AssetPrecisionPolicy
 	ResolveOutput ResultOutputResolver
+	ResolveScript ResultRecipientScriptResolver
 }
 
 func VerifyResultTxs(req ResultVerifyRequest) error {
@@ -47,15 +48,23 @@ func VerifyResultTxs(req ResultVerifyRequest) error {
 		prefix = TestnetContractPrefix
 	}
 	pending := contractframework.CloneExecutionRecords(req.Execution.PendingRecords)
-	for _, resultTx := range req.ResultTxs {
-		parsed, err := ParseTx(resultTx, StandardContractScriptResolver(prefix))
-		if err != nil {
-			return err
+	if len(pending) == 0 {
+		if len(req.ResultTxs) != 0 {
+			return fmt.Errorf("unexpected EVM RESULT transactions")
 		}
-		pending, err = verifyResultAgainstPending(resultTx, parsed, pending, req.VerifyResult)
-		if err != nil {
-			return err
-		}
+		return nil
+	}
+	if len(req.ResultTxs) != 1 {
+		return fmt.Errorf("EVM result transaction count mismatch: got %d want 1", len(req.ResultTxs))
+	}
+	resultTx := req.ResultTxs[0]
+	parsed, err := ParseTx(resultTx, StandardContractScriptResolver(prefix))
+	if err != nil {
+		return err
+	}
+	pending, err = verifyResultAgainstPending(resultTx, parsed, pending, req.VerifyResult)
+	if err != nil {
+		return err
 	}
 	if len(pending) != 0 {
 		return fmt.Errorf("%d EVM executions remain unsettled", len(pending))
@@ -69,12 +78,16 @@ func (v CanonicalResultVerifier) Verify(resultTx *wire.MsgTx, settled []Executio
 		return err
 	}
 	return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-		Label:        "EVM",
-		ResultTx:     resultTx,
-		Plans:        plans,
-		GasAssetName: v.GasConfig.Normalize().GasAssetName,
-		Resolve:      v.ResolveOutput,
-		UseInputUTXO: true,
+		Label:         "EVM",
+		ResultTx:      resultTx,
+		Status:        contractframework.AggregateResultStatus(settled),
+		Plans:         plans,
+		GasAssetName:  v.GasConfig.Normalize().GasAssetName,
+		Resolve:       v.ResolveOutput,
+		ResolveScript: v.ResolveScript,
+		ResultCount:   len(settled),
+		UseInputUTXO:  true,
+		CheckPayload:  v.ResolveScript != nil,
 	})
 }
 

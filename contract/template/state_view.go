@@ -43,6 +43,7 @@ type AMMStateView struct {
 	AssetBInPool   string            `json:"assetBInPool,omitempty"`
 	RequiredAssetA string            `json:"requiredAssetA,omitempty"`
 	RequiredAssetB string            `json:"requiredAssetB,omitempty"`
+	RequiredK      string            `json:"requiredK,omitempty"`
 	K              string            `json:"k,omitempty"`
 	TotalLPTAmt    string            `json:"totalLptAmt,omitempty"`
 	LPBalances     map[string]string `json:"lpBalances,omitempty"`
@@ -92,6 +93,7 @@ func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (int
 			AssetBInPool:      decimalString(running.AssetBInPool),
 			RequiredAssetA:    decimalString(running.RequiredAssetA),
 			RequiredAssetB:    decimalString(running.RequiredAssetB),
+			RequiredK:         decimalString(running.RequiredK),
 			K:                 decimalString(running.K),
 			TotalLPTAmt:       decimalString(running.TotalLPTAmt),
 			LPBalances:        decimalStringMap(running.LPBalances),
