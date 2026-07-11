@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - openai/review-3407ecf
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
