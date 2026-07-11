@@ -1,0 +1,81 @@
+name: OpenAI contract review 3407ecf
+
+on:
+  push:
+    branches:
+      - openai/review-3407ecf
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out satoshinet
+        uses: actions/checkout@v4
+        with:
+          path: workspace/satoshinet
+          fetch-depth: 0
+      - name: Check out indexer replacement
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: workspace/indexer
+      - name: Check out sat20wallet replacement
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/sat20wallet
+          path: workspace/sat20wallet
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.13'
+          cache: false
+      - name: Vendor dependencies
+        working-directory: workspace/satoshinet
+        run: go mod vendor
+      - name: Targeted tests
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -mod=vendor -count=1 ./contract/evm ./contract/framework ./contract/template ./contract/node 2>&1 | tee "$GITHUB_WORKSPACE/targeted.log"
+      - name: Full repository tests
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -mod=vendor -count=1 -p=4 ./... 2>&1 | tee "$GITHUB_WORKSPACE/all.log"
+      - name: Vet contract packages
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          set -o pipefail
+          go vet -mod=vendor ./contract/... 2>&1 | tee "$GITHUB_WORKSPACE/vet.log"
+      - name: Race-test contract packages
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -mod=vendor -count=1 -p=4 ./contract/... 2>&1 | tee "$GITHUB_WORKSPACE/race.log"
+      - name: Archive exact source and vendor tree
+        shell: bash
+        run: |
+          git -C workspace/satoshinet archive --format=zip --output="$GITHUB_WORKSPACE/satoshinet-3407ecf-source.zip" HEAD
+          tar -czf "$GITHUB_WORKSPACE/satoshinet-3407ecf-vendor.tar.gz" -C workspace/satoshinet vendor
+      - name: Upload review artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-review-3407ecf
+          path: |
+            targeted.log
+            all.log
+            vet.log
+            race.log
+            satoshinet-3407ecf-source.zip
+            satoshinet-3407ecf-vendor.tar.gz
+          if-no-files-found: error
+          retention-days: 2
