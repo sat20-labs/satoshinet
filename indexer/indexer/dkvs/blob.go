@@ -19,25 +19,23 @@ func (i *Indexer) validateBlobLocked(record *wire.DKVSRecord, parsed ParsedKey, 
 		return nil
 	}
 
-	objectID := parsed.Segments[0]
-	switch parsed.Segments[1] {
+	accountID := parsed.Segments[0]
+	objectID := parsed.Segments[1]
+	switch parsed.Segments[2] {
 	case "manifest":
-		manifest, err := parseBlobManifest(record.Value, i.blob)
-		if err != nil {
-			return err
-		}
-		return i.validateBlobContentLocked(objectID, manifest, -1, nil, height, now)
+		_, err := parseBlobManifest(record.Value, i.blob)
+		return err
 	case "chunk":
 		if len(record.Value) > i.blob.MaxChunkSize {
 			return ErrRecordTooLarge
 		}
-		index, err := strconv.Atoi(parsed.Segments[2])
+		index, err := strconv.Atoi(parsed.Segments[3])
 		if err != nil || index < 0 {
 			return ErrInvalidKey
 		}
-		manifest, err := i.getActiveBlobManifestLocked(objectID, height, now)
+		manifestRecord, manifest, err := i.getActiveBlobManifestLocked(accountID, objectID, height, now)
 		if errors.Is(err, ErrRecordNotFound) {
-			return nil
+			return ErrBlobManifestInvalid
 		}
 		if err != nil {
 			return err
@@ -45,10 +43,14 @@ func (i *Indexer) validateBlobLocked(record *wire.DKVSRecord, parsed ParsedKey, 
 		if index >= int(manifest.ChunkCount) {
 			return ErrBlobChunkInvalid
 		}
+		if !bytes.Equal(record.PubKey, manifestRecord.PubKey) || record.Seq != manifestRecord.Seq ||
+			record.ExpiryHeight != manifestRecord.ExpiryHeight {
+			return ErrBlobChunkInvalid
+		}
 		if err := validateBlobChunkHash(manifest, uint32(index), record.Value); err != nil {
 			return err
 		}
-		return i.validateBlobContentLocked(objectID, manifest, index, record.Value, height, now)
+		return nil
 	default:
 		return ErrInvalidKey
 	}
@@ -78,57 +80,16 @@ func parseBlobManifest(value []byte, policy BlobPolicy) (*BlobManifest, error) {
 	return &manifest, nil
 }
 
-func (i *Indexer) getActiveBlobManifestLocked(objectID string, height, now uint64) (*BlobManifest, error) {
-	record, err := i.getRaw("/blob/" + objectID + "/manifest")
+func (i *Indexer) getActiveBlobManifestLocked(accountID, objectID string, height, now uint64) (*wire.DKVSRecord, *BlobManifest, error) {
+	record, err := i.getRaw("/blob/" + accountID + "/" + objectID + "/manifest")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := i.activeError(record, height, now); err != nil || IsTombstone(record.Flags) {
-		return nil, ErrRecordNotFound
+		return nil, nil, ErrRecordNotFound
 	}
-	return parseBlobManifest(record.Value, i.blob)
-}
-
-func (i *Indexer) validateBlobContentLocked(objectID string, manifest *BlobManifest, pendingIndex int, pendingValue []byte, height, now uint64) error {
-	chunks := make([][]byte, 0, manifest.ChunkCount)
-	allFound := true
-	for n := uint32(0); n < manifest.ChunkCount; n++ {
-		var value []byte
-		if int(n) == pendingIndex {
-			value = pendingValue
-		} else {
-			record, err := i.getRaw("/blob/" + objectID + "/chunk/" + strconv.Itoa(int(n)))
-			if err != nil {
-				allFound = false
-				continue
-			}
-			if err := i.activeError(record, height, now); err != nil || IsTombstone(record.Flags) {
-				allFound = false
-				continue
-			}
-			value = record.Value
-		}
-		if err := validateBlobChunkHash(manifest, n, value); err != nil {
-			return err
-		}
-		chunks = append(chunks, value)
-	}
-	if !allFound {
-		return nil
-	}
-	var content bytes.Buffer
-	for _, chunk := range chunks {
-		content.Write(chunk)
-	}
-	if uint64(content.Len()) != manifest.TotalSize {
-		return ErrBlobChunkInvalid
-	}
-	sum := sha256.Sum256(content.Bytes())
-	want, _ := decodeHashHex(manifest.ContentHash)
-	if !bytes.Equal(sum[:], want) {
-		return ErrBlobChunkInvalid
-	}
-	return nil
+	manifest, err := parseBlobManifest(record.Value, i.blob)
+	return record, manifest, err
 }
 
 func validateBlobChunkHash(manifest *BlobManifest, index uint32, value []byte) error {

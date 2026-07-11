@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -48,6 +49,31 @@ func TestShouldRequestDKVSSync(t *testing.T) {
 	}
 }
 
+func TestShouldRunDKVSAntiEntropy(t *testing.T) {
+	if !shouldRunDKVSAntiEntropy(wire.SFNodeMiner, 0) {
+		t.Fatalf("miner must run DKVS anti-entropy")
+	}
+	if !shouldRunDKVSAntiEntropy(wire.SFNodeNetwork, 1) {
+		t.Fatalf("subscribed ordinary node must run DKVS anti-entropy")
+	}
+	if shouldRunDKVSAntiEntropy(wire.SFNodeNetwork, 0) {
+		t.Fatalf("unsubscribed ordinary node must not run DKVS anti-entropy")
+	}
+}
+
+func TestDKVSSyncSessionExpired(t *testing.T) {
+	now := time.Unix(1000, 0)
+	if dkvsSyncSessionExpired(now.Add(-time.Minute), now, 2*time.Minute) {
+		t.Fatalf("progressing session reported expired")
+	}
+	if !dkvsSyncSessionExpired(now.Add(-2*time.Minute), now, 2*time.Minute) {
+		t.Fatalf("stalled session not expired")
+	}
+	if !dkvsSyncSessionExpired(time.Time{}, now, 2*time.Minute) {
+		t.Fatalf("zero activity session not expired")
+	}
+}
+
 func TestDKVSCheckpointRootMismatch(t *testing.T) {
 	var root chainhash.Hash
 	for i := range root {
@@ -88,16 +114,14 @@ func TestDKVSSyncFilterConversion(t *testing.T) {
 	}
 }
 
-func TestDKVSSyncRequestPayloadLenLegacyBound(t *testing.T) {
-	small := []wire.DKVSSyncFilter{{Type: "prefix", Target: "/tmp/a"}}
-	if got := dkvsSyncRequestPayloadLen(nil, small); got > legacyDKVSSyncRequestMaxPayload {
-		t.Fatalf("small filtered request payload len=%d exceeds legacy max=%d", got, legacyDKVSSyncRequestMaxPayload)
+func TestDKVSSyncRequestPayloadWithinWireBound(t *testing.T) {
+	filters := make([]wire.DKVSSyncFilter, wire.MaxDKVSSyncFilters)
+	for index := range filters {
+		filters[index] = wire.DKVSSyncFilter{Type: "prefix", Target: "/" + string(make([]byte, wire.MaxDKVSKeySize-1))}
 	}
-	large := []wire.DKVSSyncFilter{
-		{Type: "prefix", Target: "/" + string(make([]byte, wire.MaxDKVSKeySize))},
-		{Type: "prefix", Target: "/" + string(make([]byte, wire.MaxDKVSKeySize))},
-	}
-	if got := dkvsSyncRequestPayloadLen(nil, large); got <= legacyDKVSSyncRequestMaxPayload {
-		t.Fatalf("large filtered request payload len=%d should exceed legacy max=%d", got, legacyDKVSSyncRequestMaxPayload)
+	got := dkvsSyncRequestPayloadLen(make([]byte, wire.MaxDKVSCursorSize), filters)
+	max := (&wire.MsgDKVSSyncRequest{}).MaxPayloadLength(wire.ProtocolVersion)
+	if got > int(max) {
+		t.Fatalf("sync request payload=%d max=%d", got, max)
 	}
 }

@@ -56,6 +56,8 @@ type AutopayDelegateState struct {
 
 type AutopayFeeVerifier struct {
 	StateProvider         AutopayStateProvider
+	Contract              string
+	ServiceName           string
 	Recipient             string
 	FeeAssetName          string
 	FullRecordFeePerBlock string
@@ -167,7 +169,11 @@ func (v AutopayFeeVerifier) VerifyFeeCapacity(record *wire.DKVSRecord, parsed Pa
 		if err != nil || candidateProof.Mode != FeeModeAutopay {
 			continue
 		}
-		if strings.TrimSpace(candidateProof.PoolContract) == capacity.Contract {
+		if strings.TrimSpace(candidateProof.PoolContract) != capacity.Contract {
+			continue
+		}
+		candidatePayer, err := P2TRAddressFromPubKeyBytes(candidate.PubKey, v.AddressParams)
+		if err == nil && strings.EqualFold(strings.TrimSpace(candidatePayer), capacity.Payer) {
 			count++
 			if count > capacity.MaxRecords {
 				return ErrFeeCapacityExceeded
@@ -178,8 +184,38 @@ func (v AutopayFeeVerifier) VerifyFeeCapacity(record *wire.DKVSRecord, parsed Pa
 	return nil
 }
 
+func (v AutopayFeeVerifier) FeeCapacity(record *wire.DKVSRecord, parsed ParsedKey) (FeeCapacityDescriptor, error) {
+	_, capacity, err := v.verifyProofForRecord(record, parsed)
+	if err != nil {
+		return FeeCapacityDescriptor{}, err
+	}
+	return FeeCapacityDescriptor{
+		UsageKey:   capacity.Contract + "\x00" + capacity.Payer,
+		MaxRecords: capacity.MaxRecords,
+	}, nil
+}
+
+func (v AutopayFeeVerifier) FeeUsageKey(record *wire.DKVSRecord) (string, error) {
+	if record == nil {
+		return "", ErrInvalidRecord
+	}
+	proof, err := ParseFeeProof(record.FeeProof)
+	if err != nil {
+		return "", err
+	}
+	if proof.Mode != FeeModeAutopay {
+		return "", nil
+	}
+	payer, err := P2TRAddressFromPubKeyBytes(record.PubKey, v.AddressParams)
+	if err != nil {
+		return "", ErrInvalidFeeProof
+	}
+	return strings.TrimSpace(proof.PoolContract) + "\x00" + strings.TrimSpace(payer), nil
+}
+
 type autopayCapacity struct {
 	Contract   string
+	Payer      string
 	MaxRecords uint64
 }
 
@@ -213,6 +249,7 @@ func (v AutopayFeeVerifier) verifyProofForRecord(record *wire.DKVSRecord, parsed
 	}
 	capacity = autopayCapacity{
 		Contract:   strings.TrimSpace(proof.PoolContract),
+		Payer:      strings.TrimSpace(payer),
 		MaxRecords: maxRecords,
 	}
 	return proof, capacity, nil
@@ -220,6 +257,10 @@ func (v AutopayFeeVerifier) verifyProofForRecord(record *wire.DKVSRecord, parsed
 
 func (v AutopayFeeVerifier) verifyState(proof *FeeProof, payer string, expiryHeight uint64) (*AutopayContractState, error) {
 	if v.StateProvider == nil {
+		return nil, ErrInvalidFeeProof
+	}
+	if expected := strings.TrimSpace(v.Contract); expected != "" &&
+		!strings.EqualFold(strings.TrimSpace(proof.PoolContract), expected) {
 		return nil, ErrInvalidFeeProof
 	}
 	state, err := v.StateProvider.GetAutopayState(proof.PoolContract)
@@ -230,6 +271,10 @@ func (v AutopayFeeVerifier) verifyState(proof *FeeProof, payer string, expiryHei
 		strings.TrimSpace(state.TemplateName) != autopayTemplateName ||
 		!strings.EqualFold(strings.TrimSpace(state.Status), autopayStatusActive) ||
 		state.Closed {
+		return state, ErrInvalidFeeProof
+	}
+	if expected := strings.TrimSpace(v.ServiceName); expected != "" &&
+		!strings.EqualFold(strings.TrimSpace(state.ServiceName), expected) {
 		return state, ErrInvalidFeeProof
 	}
 	delegate, ok := state.Delegates[strings.TrimSpace(payer)]

@@ -1,12 +1,50 @@
 package indexer
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 )
+
+func TestDKVSLocalOnlyMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/admin", dkvsLocalOnly, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	for _, test := range []struct {
+		remote string
+		want   int
+	}{
+		{remote: "127.0.0.1:1000", want: http.StatusNoContent},
+		{remote: "[::1]:1000", want: http.StatusNoContent},
+		{remote: "203.0.113.1:1000", want: http.StatusForbidden},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+		req.RemoteAddr = test.remote
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		if resp.Code != test.want {
+			t.Fatalf("remote=%s status=%d want=%d", test.remote, resp.Code, test.want)
+		}
+	}
+}
+
+func TestBindDKVSJSONBodyLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	resp := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(resp)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"value":"too-large"}`))
+	var target map[string]string
+	if err := bindDKVSJSON(ctx, &target, 8); err == nil {
+		t.Fatal("oversized DKVS JSON body accepted")
+	}
+}
 
 func TestContractListFilterSortAndPagination(t *testing.T) {
 	agentTypeID := int(contractcommon.ContractTypeAgent)

@@ -52,17 +52,21 @@ func (p SingleResultTxPolicy) BuildTx(plans []ResultPlan) (*wire.MsgTx, error) {
 
 func (p SingleResultTxPolicy) VerifyTx(tx *wire.MsgTx, plans []ResultPlan) error {
 	if p.ResolveOutput == nil {
-		return nil
+		return fmt.Errorf("missing result output resolver")
+	}
+	if p.ResolveScript == nil {
+		return fmt.Errorf("missing result output script resolver")
 	}
 	return VerifyCanonicalResultTx(CanonicalResultVerifyRequest{
-		Label:        p.Label,
-		ResultTx:     tx,
-		Status:       p.Status,
-		Plans:        plans,
-		GasAssetName: p.GasAssetName,
-		Resolve:      p.ResolveOutput,
-		PlanCount:    p.PlanCount,
-		CheckPayload: true,
+		Label:         p.Label,
+		ResultTx:      tx,
+		Status:        p.Status,
+		Plans:         plans,
+		GasAssetName:  p.GasAssetName,
+		Resolve:       p.ResolveOutput,
+		ResolveScript: p.ResolveScript,
+		PlanCount:     p.PlanCount,
+		CheckPayload:  true,
 	})
 }
 

@@ -44,12 +44,12 @@
 当前阻塞：
 
 - `JSONFeeVerifier` 仍是历史命名；当前只验证 compact fee proof 的基础结构，不做真实 DKVS Pool 支付校验。
-- AUTOPAY template contract verifier 已可通过 `getcontractstate` 校验 `autopay.tc` active、deployer/payer、recipient、fee asset、expiry 和按 full-size record 换算容量。
-- 测试网已有硬编码默认 AUTOPAY 参数；主网仍未定义默认 contract/deployer/recipient/fee asset/full-record fee，也未定义 miner 收益分配。
+- AUTOPAY template contract verifier 已可通过 `getcontractstate` 校验全局 `autopay.tc` 合约、service、recipient 和 fee asset，并校验 signer 对应 p2tr delegate 的 active、余额和独立 full-size record 容量。
+- 测试网已有硬编码默认 AUTOPAY 参数；主网仍未定义默认 global contract/service/recipient/fee asset/full-record fee，也未定义 miner 收益分配。
 
 需要决策：
 
-1. 主网 AUTOPAY 合约默认参数：deployer、recipient、fee asset、full-record fee、默认 nonce/地址。
+1. 主网 AUTOPAY 合约默认参数：global contract、service、recipient、fee asset、full-record fee。
 2. miner 收益分配规则：按区块 miner、按在线 miner 权重、按 core/miner 类型权重，还是由 AUTOPAY/Pool 合约单独结算。
 3. AUTOPAY 是否就是第一版唯一生产 fee proof，还是仍需要 ONESHOT/LEASE。
 4. 如果需要 ONESHOT：payment proof 格式、确认数、可覆盖 namespace/size/expiry 和防重放规则。
@@ -59,7 +59,7 @@
 
 推荐的最小生产接入：
 
-- 第一版以 AUTOPAY verifier 为主：record proof 只提供 contract，节点从 record pubkey 派生 p2tr payer，并读取 contract state 重新校验。
+- 第一版以 AUTOPAY verifier 为主：record proof 只提供 global contract，节点从 record pubkey 派生 p2tr delegate，并读取该 delegate 的独立 contract state 重新校验。
 - miner 收益分配先由 AUTOPAY/Pool 合约内部规则处理，DKVS core 不计算收益。
 - 主网 `AllowFreeLocal=false`，且没有主网默认 AUTOPAY 参数前不自动放行；测试网使用硬编码 AUTOPAY 默认参数，本地仍可显式开启 `FREE_LOCAL`。
 

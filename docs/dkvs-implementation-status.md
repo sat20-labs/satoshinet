@@ -1,6 +1,6 @@
 # DKVS Implementation Status
 
-更新时间：2026-07-04
+更新时间：2026-07-11
 
 本文记录当前 SatoshiNet 内置 indexer DKVS 对 `DKVS_Requirements_and_Design_v0.6.md` 的实现状态。它是项目级实现说明，不替代对外协议文档。
 
@@ -20,14 +20,14 @@
 - `/mail/<mailbox_id>/share/<package_id>/<share_id>` 要求 mailbox owner 写入，受 share quota / TTL / size 限制。
 - `/sys/*` 通过 `SystemVerifier` 授权；默认拒绝普通写入。
 - `/tmp/<random_id>` 作为短期临时数据，要求非零 TTL，默认 TTL 上限 24 小时，受可配置单条 size 限制。
-- `/blob/<object_id>/manifest` 与 `/blob/<object_id>/chunk/<index>`，包含 manifest、chunk hash、content hash、chunk count / size / total size 校验。
-- DKVS fee proof 接口、JSON 结构校验器和 ONESHOT / LEASE / FREE_LOCAL / AUTOPAY proof 构造 helper；helper 会校验传入 namespace 与 key namespace 一致并规整必填字段；`fee_proof.record_hash` 使用 `FeeAnchorHash(record)`，避开 proof 内自引用和 signature 循环；支持可选 payer proof signature，签名覆盖 fee proof 规范字段且不包含 `proof_signature` 自身；AUTOPAY verifier 读取 `autopay.tc` 合约 state，校验 active、deployer/payer、recipient、fee asset、expiry 和按 full-size record 计算的容量。
+- `/blob/<account_id>/<object_id>/manifest` 与 `/blob/<account_id>/<object_id>/chunk/<index>`；`object_id` 是 owner 自定义名称而非内容地址，仅 `sha256(pubkey)==account_id` 可写。manifest 必须先写，chunks 必须与 manifest 使用同一 pubkey、seq 和 expiry，并校验 chunk hash、content hash、chunk count / size / total size。
+- DKVS fee proof 接口和 ONESHOT / LEASE / FREE_LOCAL / AUTOPAY 紧凑二进制 proof helper；record 签名直接覆盖 proof，proof 不重复携带 record hash、key hash、size、expiry、namespace 或独立签名。AUTOPAY verifier 读取全局 `autopay.tc` 合约 state，并按 signer 的 p2tr delegate 独立校验 active、余额和 full-size record 容量。
 - DKVS 提供可选 `HTTPFeeVerifier` 适配器，可把 `record_hash`、`key_hash`、namespace、record size、expiry height 和 raw fee proof 转发给外部 DKVS Pool verifier service；不默认启用，不定义合约语义。
 - DKVS 提供可选 `HTTPSystemVerifier` 适配器，可把 `/sys/*` key 和 record signer pubkey 转发给外部 system authority service；不默认启用，不定义 system signer 治理语义。
 - Checkpoint / snapshot 是未签名的本地计算结果，用于节点视图对账、调试和 snapshot 校验；embedded indexer 不持有 checkpoint/snapshot system signer 私钥，也不自动发布 signed `/sys/*` checkpoint record。
 - DKVS 单测显式覆盖默认非免费策略下无 fee proof 写入失败，避免主网节点误开放免费写入；测试网默认策略使用 AUTOPAY verifier，主网不凭默认值放行，测试环境或本地策略仍可通过 `AllowFreeLocal` 或自定义 `FeeVerifier` 开启。
 - 6 个原生 wire 消息：`dkvsnotify`、`dkvsinv`、`dkvsget`、`dkvsdata`、`dkvssyncreq`、`dkvssyncres`。
-- peer listener 和 serverPeer DKVS 消息分发；miner 新连接后通过 sync request / response 分页同步 active records，完成同步时会对比远端 response checkpoint root 与本地 active root 并记录 mismatch。
+- peer listener 和 serverPeer DKVS 消息分发；miner 新连接后通过带 session id 的 sync request / response 分页同步 active records，分页受 record 数量和 payload bytes 双重限制；节点周期性执行反熵同步并把验证通过的远端更新继续 relay，完成同步时会对比远端 response checkpoint root 与本地 active root 并记录 mismatch。
 - REST API：
   - `POST /v3/dkvs/records`
   - `GET /v3/dkvs/records?key=...`
@@ -48,7 +48,7 @@
 - 普通节点本地 subscription 状态和 notify 过滤；非 miner 只保存订阅范围内的 record。
 - 普通节点如果本地已有 DKVS subscription，连接 miner peer 时会用现有 `MsgDKVSSyncRequest/Response` 拉取当前 active records，并在本地按 subscription 过滤落库；不扩展 wire 协议。
 - 普通节点运行中新增 DKVS subscription 后，会通过 server callback 对已连接 miner peers 发送现有 `MsgDKVSSyncRequest`，收到 response 后仍按本地 subscription 过滤落库；重复订阅不会重复触发远端 sync；不扩展 wire 协议。
-- `MsgDKVSSyncRequest` 兼容追加可选 subscription filters，新 miner 会按 key / prefix / mailbox / service 过滤 sync response；旧格式 payload 仍可解码。主动发起请求时如果 filters 会使 payload 超过旧节点 `MsgDKVSSyncRequest` 上限，则退回旧格式全量 sync，由普通节点本地过滤落库，避免影响旧主网节点。
+- `MsgDKVSSyncRequest/Response` 使用 session id 约束分页会话，并支持 subscription filters；miner 只接受其他已识别 miner 的无过滤全量同步，普通节点必须携带 key / prefix / mailbox / service filters，最多 256 个订阅。
 - DKVS 包内集成测试覆盖普通节点按 exact key 和 prefix 订阅后先用 filtered sync 拉取当前数据、过滤掉未订阅 key/prefix，再通过 notify/get/data 模拟拉取 prefix 下新增 record。
 - DKVS 包内集成测试覆盖普通节点订阅 `/mail/<mailbox_id>` 后先用 filtered sync 拉取 mailbox 当前数据、过滤掉其他 mailbox，再通过 notify/get/data 模拟拉取新增 mailbox message。
 - DKVS 包内集成测试覆盖普通节点订阅 `/svc/<service_name>` 后先用 filtered sync 拉取 service 当前数据、过滤掉其他 service，再通过 notify/get/data 模拟拉取新增 service record；权限仍走 `DIDResolver`，默认未配置 resolver 时 `/svc` 不开放。
@@ -71,7 +71,7 @@
 - 未修改交易、区块、签名、共识、mempool、mining 或 txscript 语义。
 - 未修改 `go.mod` / `go.sum`。
 - `/name`、`/svc`、`/sys` 在未注入真实 resolver / verifier 前仍默认关闭。
-- DKVS wire command 保持当前 6 个原生命令；`MsgDKVSSyncRequest` 只追加兼容的可选 filters 字段，且主动发送时保持旧 payload 上限兼容。
+- DKVS wire command 保持当前 6 个原生命令；首次实现直接采用带 session id、filters 和严格 payload 上限的新编码，不保留尚未发布格式的兼容分支。
 
 ## 已验证
 
@@ -118,10 +118,10 @@
 
 ### DKVS Pool 合约与真实 fee proof
 
-当前已接入 AUTOPAY template contract verifier：record 提交 AUTOPAY proof 后，节点通过 `getcontractstate` 检查 `autopay.tc` 是否 active、deployer 是否为 payer、recipient / fee asset / expiry 是否符合策略，并按每区块 payment 换算可持有 full-size record 数量。仍缺：
+当前已接入 delegate 模式 AUTOPAY template contract verifier：全网使用配置的同一个 `autopay.tc` 合约；record 提交 AUTOPAY proof 后，节点通过 `getcontractstate` 检查合约、service、recipient 和 fee asset，并按 record signer 派生的 p2tr delegate 独立检查 active、余额和每区块 payment。容量以 `(contract, delegate)` 隔离并换算为可持有的 full-size active record 数量，不同委托人不能互相占用。仍缺：
 
-- 主网 DKVS AUTOPAY 合约地址、deployer、recipient、fee asset 与 full record fee 参数；
-- 普通用户部署/续费 AUTOPAY 合约的产品流程和钱包 UX；
+- 主网 DKVS AUTOPAY 全局合约地址、service、recipient、fee asset 与 full record fee 参数；
+- 普通用户 delegate funding / 续费的产品流程和钱包 UX；
 - miner 收益分配规则。
 
 在这些规格明确前，不能把测试网默认参数宣称为主网费用策略。
@@ -130,7 +130,7 @@
 
 ### 普通节点远端订阅同步边界
 
-当前已用 `MsgDKVSSyncRequest` 可选 filters 支持远端 key / prefix / mailbox / service 过滤同步。为了兼容旧节点，主动发送时如果 filters 使 payload 超过旧上限，会退回旧格式全量同步，本地再过滤落库。因此新 miner 之间可获得较小 response；遇到旧 miner 或过滤条件过多时仍会产生一次全量扫描 / 响应，但不会破坏旧 wire command。
+当前用 `MsgDKVSSyncRequest` filters 支持远端 key / prefix / mailbox / service 过滤同步，并用 session id 阻止 unsolicited response、跨会话 cursor 和不前进分页。无过滤全量同步只允许已识别 miner；普通节点最多配置 256 个订阅。节点每分钟执行一次反熵同步，弥补 notify 丢失、短暂断线和分页并发更新。
 
 ### SDK 和应用样本
 

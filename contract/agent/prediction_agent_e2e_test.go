@@ -112,6 +112,7 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 	})
 	if err != nil {
 		t.Fatalf("BuildBlockResultTxs failed: %v", err)

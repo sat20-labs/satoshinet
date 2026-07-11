@@ -168,16 +168,16 @@ async function deleteMailboxMessage(signedTombstoneRecord) {
 
 Blob data is represented by:
 
-- `/blob/<object_id>/manifest`
-- `/blob/<object_id>/chunk/<index>`
+- `/blob/<account_id>/<object_id>/manifest`
+- `/blob/<account_id>/<object_id>/chunk/<index>`
 
-The manifest contains content hash, total size, chunk size, chunk count and chunk hashes. PWA clients should verify the manifest and each chunk hash before using the content.
+`object_id` is an owner-selected name, not a content hash. Only the wallet whose pubkey hashes to `account_id` may write. Upload the manifest first; all chunks must use the same signer, seq and expiry as the manifest. The manifest contains content hash, total size, chunk size, chunk count and chunk hashes. PWA clients should verify the manifest, each chunk hash and final content hash before using the content.
 
 ```js
-async function getChunkedBlob(objectId) {
-  const manifestRecord = await getDKVSRecord(`/blob/${objectId}/manifest`);
+async function getChunkedBlob(accountId, objectId) {
+  const manifestRecord = await getDKVSRecord(`/blob/${accountId}/${objectId}/manifest`);
   const manifest = JSON.parse(atob(manifestRecord.Value));
-  const { records } = await listDKVSRecords(`/blob/${objectId}/chunk`, 0, manifest.chunk_count);
+  const { records } = await listDKVSRecords(`/blob/${accountId}/${objectId}/chunk`, 0, manifest.chunk_count);
   return { manifest, manifestRecord, chunkRecords: records };
 }
 ```

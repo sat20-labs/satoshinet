@@ -120,10 +120,11 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 			v.cfg.ChainParams, previousOutputScriptResolver(view)),
 		ResolveGasRefundRecipient: evm.LastInputPreviousOutputGasRefundRecipientResolver(
 			v.cfg.ChainParams, previousOutputScriptResolver(view)),
-		VerifyResult:    verifyResult,
-		ResolveTriggers: v.cfg.ResolveTriggers,
-		ContractUTXOs:   v.cfg.ContractUTXOs,
-		AssetPrecision:  v.cfg.AssetPrecision,
+		ResolveResultScript: v.cfg.ResolveResultScript,
+		VerifyResult:        verifyResult,
+		ResolveTriggers:     v.cfg.ResolveTriggers,
+		ContractUTXOs:       v.cfg.ContractUTXOs,
+		AssetPrecision:      v.cfg.AssetPrecision,
 	}
 	var result evm.BlockExecutionResult
 	if hasRoot && !v.cfg.SkipStateRootVerify {

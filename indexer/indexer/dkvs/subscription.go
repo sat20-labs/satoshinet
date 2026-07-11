@@ -15,14 +15,17 @@ func newSubscriptionSet() *subscriptionSet {
 	return &subscriptionSet{items: make(map[Subscription]struct{})}
 }
 
-func (s *subscriptionSet) add(sub Subscription) bool {
+func (s *subscriptionSet) add(sub Subscription, max int) (bool, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if _, ok := s.items[sub]; ok {
-		return false
+		return false, nil
+	}
+	if max > 0 && len(s.items) >= max {
+		return false, ErrTooManySubscriptions
 	}
 	s.items[sub] = struct{}{}
-	return true
+	return true, nil
 }
 
 func (s *subscriptionSet) remove(sub Subscription) {

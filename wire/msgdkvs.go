@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -14,10 +15,10 @@ const (
 	MaxDKVSSignatureSize  = 256
 	MaxDKVSPubKeySize     = 128
 	MaxDKVSRecordSize     = 16 * 1024
-	MaxDKVSRecordsPerMsg  = 256
+	MaxDKVSRecordsPerMsg  = 200
 	MaxDKVSItemsPerMsg    = 1024
 	MaxDKVSCursorSize     = 512
-	MaxDKVSSyncFilters    = 64
+	MaxDKVSSyncFilters    = 256
 	MaxDKVSFilterTypeSize = 16
 )
 
@@ -69,12 +70,14 @@ type MsgDKVSData struct {
 }
 
 type MsgDKVSSyncRequest struct {
-	Cursor  []byte
-	Limit   uint32
-	Filters []DKVSSyncFilter
+	SessionID uint64
+	Cursor    []byte
+	Limit     uint32
+	Filters   []DKVSSyncFilter
 }
 
 type MsgDKVSSyncResponse struct {
+	SessionID      uint64
 	Records        []*DKVSRecord
 	NextCursor     []byte
 	Done           bool
@@ -170,6 +173,37 @@ func dkvsRecordSerializeSize(rec *DKVSRecord) int {
 		32 +
 		VarIntSerializeSize(uint64(len(rec.FeeProof))) + len(rec.FeeProof) +
 		4
+}
+
+// DKVSRecordSerializeSize returns the exact encoded size of a DKVS record.
+func DKVSRecordSerializeSize(rec *DKVSRecord) int {
+	return dkvsRecordSerializeSize(rec)
+}
+
+// SerializeDKVSRecord encodes a standalone DKVS record using the wire codec.
+func SerializeDKVSRecord(rec *DKVSRecord) ([]byte, error) {
+	var encoded bytes.Buffer
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	if err := writeDKVSRecord(&encoded, ProtocolVersion, rec, buf); err != nil {
+		return nil, err
+	}
+	return encoded.Bytes(), nil
+}
+
+// DeserializeDKVSRecord decodes one standalone DKVS record.
+func DeserializeDKVSRecord(encoded []byte) (*DKVSRecord, error) {
+	reader := bytes.NewReader(encoded)
+	buf := binarySerializer.Borrow()
+	defer binarySerializer.Return(buf)
+	record, err := readDKVSRecord(reader, ProtocolVersion, buf)
+	if err != nil {
+		return nil, err
+	}
+	if reader.Len() != 0 {
+		return nil, messageError("DeserializeDKVSRecord", "trailing dkvs record bytes")
+	}
+	return record, nil
 }
 
 func readDKVSInvItem(r io.Reader, pver uint32, buf []byte) (DKVSInvItem, error) {
@@ -456,6 +490,9 @@ func (msg *MsgDKVSData) MaxPayloadLength(pver uint32) uint32 {
 func (msg *MsgDKVSSyncRequest) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
+	if err := readElements(r, &msg.SessionID); err != nil {
+		return err
+	}
 	cursor, err := ReadVarBytesBuf(r, pver, buf, MaxDKVSCursorSize, "dkvs cursor")
 	if err != nil {
 		return err
@@ -507,6 +544,9 @@ func (msg *MsgDKVSSyncRequest) BtcEncode(w io.Writer, pver uint32, _ MessageEnco
 	}
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
+	if err := writeElements(w, msg.SessionID); err != nil {
+		return err
+	}
 	if err := WriteVarBytesBuf(w, pver, msg.Cursor, buf); err != nil {
 		return err
 	}
@@ -538,13 +578,16 @@ func (msg *MsgDKVSSyncRequest) BtcEncode(w io.Writer, pver uint32, _ MessageEnco
 
 func (msg *MsgDKVSSyncRequest) Command() string { return CmdDKVSSyncRequest }
 func (msg *MsgDKVSSyncRequest) MaxPayloadLength(pver uint32) uint32 {
-	return MaxVarIntPayload + MaxDKVSCursorSize + 4 + MaxVarIntPayload +
+	return 8 + MaxVarIntPayload + MaxDKVSCursorSize + 4 + MaxVarIntPayload +
 		MaxDKVSSyncFilters*(MaxVarIntPayload+MaxDKVSFilterTypeSize+MaxVarIntPayload+MaxDKVSKeySize)
 }
 
 func (msg *MsgDKVSSyncResponse) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
+	if err := readElements(r, &msg.SessionID); err != nil {
+		return err
+	}
 	count, err := ReadVarIntBuf(r, pver, buf)
 	if err != nil {
 		return err
@@ -582,6 +625,9 @@ func (msg *MsgDKVSSyncResponse) BtcEncode(w io.Writer, pver uint32, _ MessageEnc
 	}
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
+	if err := writeElements(w, msg.SessionID); err != nil {
+		return err
+	}
 	if err := WriteVarIntBuf(w, pver, uint64(len(msg.Records)), buf); err != nil {
 		return err
 	}

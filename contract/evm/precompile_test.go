@@ -2,6 +2,7 @@ package evm
 
 import (
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 
@@ -136,14 +137,14 @@ func TestAssetPrecompileCallerAddress(t *testing.T) {
 }
 
 func TestAssetPrecompileTransferAssetABI(t *testing.T) {
-	call := EncodeTransferAssetCall("ordx:ticker:0", "tb1ptest", "1000", []byte{1, 2, 3})
+	call := EncodeTransferAssetCall("ordx:ticker:0", "tb1ptest", "1000", nil)
 
 	assetName, to, amount, extraData, err := DecodeTransferAssetCall(call)
 	require.NoError(t, err)
 	require.Equal(t, "ordx:ticker:0", assetName)
 	require.Equal(t, "tb1ptest", to)
 	require.Equal(t, "1000", amount.String())
-	require.Equal(t, []byte{1, 2, 3}, extraData)
+	require.Empty(t, extraData)
 
 	ret, err := NewAssetPrecompile(nil, nil).Run(call)
 	require.NoError(t, err)
@@ -167,7 +168,7 @@ func TestAssetPrecompileTransferAssetsABI(t *testing.T) {
 		[]string{SatoshiAssetName, gas, "ordx:f:ooxx", "brc20:f:ooxx", "runes:f:BITCOIN•TESTNET"},
 		[]string{"tb1psats", "tb1pgas", "tb1pordx", "tb1pbrc20", "tb1prunes"},
 		[]string{"1", "50", "1000", "7.5", "3"},
-		[][]byte{nil, []byte("gas"), []byte("ordx"), []byte("brc20"), []byte("runes")},
+		[][]byte{nil, nil, nil, nil, nil},
 	)
 
 	transfers, err := DecodeTransferAssetsCall(call)
@@ -179,7 +180,7 @@ func TestAssetPrecompileTransferAssetsABI(t *testing.T) {
 	require.Equal(t, "brc20:f:ooxx", transfers[3].AssetName)
 	require.Equal(t, "runes:f:BITCOIN•TESTNET", transfers[4].AssetName)
 	require.Equal(t, "7.5", transfers[3].Amount.String())
-	require.Equal(t, []byte("runes"), transfers[4].ExtraData)
+	require.Empty(t, transfers[4].ExtraData)
 
 	ret, err := NewAssetPrecompile(nil, nil).Run(call)
 	require.NoError(t, err)
@@ -203,7 +204,7 @@ func TestAssetPrecompileTransferAssetsSolidityABI(t *testing.T) {
 		[]string{SatoshiAssetName, "brc20:f:sgas"},
 		[]string{"tb1psats", "tb1pgas"},
 		[]string{"1", "50"},
-		[][]byte{nil, []byte("gas")},
+		[][]byte{nil, nil},
 	)
 	require.NoError(t, err)
 	transfers, err := DecodeTransferAssetsCall(input)
@@ -215,7 +216,53 @@ func TestAssetPrecompileTransferAssetsSolidityABI(t *testing.T) {
 	require.Equal(t, "brc20:f:sgas", transfers[1].AssetName)
 	require.Equal(t, "tb1pgas", transfers[1].To)
 	require.Equal(t, "50", transfers[1].Amount.String())
-	require.Equal(t, []byte("gas"), transfers[1].ExtraData)
+	require.Empty(t, transfers[1].ExtraData)
+}
+
+func TestAssetTransfersRejectUnsettleableFields(t *testing.T) {
+	_, _, _, _, err := DecodeTransferAssetCall(EncodeTransferAssetCall("", "tb1pdest", "1", nil))
+	require.ErrorContains(t, err, "asset name is empty")
+	_, _, _, _, err = DecodeTransferAssetCall(EncodeTransferAssetCall(SatoshiAssetName, "", "1", nil))
+	require.ErrorContains(t, err, "recipient is empty")
+	_, _, _, _, err = DecodeTransferAssetCall(EncodeTransferAssetCall(SatoshiAssetName, "tb1pdest", "0", nil))
+	require.ErrorContains(t, err, "must be positive")
+	_, _, _, _, err = DecodeTransferAssetCall(EncodeTransferAssetCall(SatoshiAssetName, "tb1pdest", "1", []byte{1}))
+	require.ErrorContains(t, err, "extra data is not supported")
+}
+
+func TestABIDynamicLengthOverflowRejected(t *testing.T) {
+	args := make([]byte, 64)
+	binary.BigEndian.PutUint64(args[24:32], 32)
+	for i := 32; i < 64; i++ {
+		args[i] = 0xff
+	}
+	_, err := abiReadDynamicBytes(args, 0)
+	require.Error(t, err)
+}
+
+func FuzzABIDynamicReadersNeverPanic(f *testing.F) {
+	f.Add([]byte{0})
+	f.Add(make([]byte, 64))
+	f.Fuzz(func(t *testing.T, args []byte) {
+		_, _ = abiReadDynamicBytes(args, 0)
+		_, _ = abiReadDynamicArray(args, 0, maxTransferAssetCount, maxABIDynamicBytes)
+	})
+}
+
+func FuzzAssetPrecompileNeverPanics(f *testing.F) {
+	f.Add([]byte{0})
+	f.Add(EncodeCompareAmountCall("1:63", "2:63"))
+	f.Fuzz(func(t *testing.T, input []byte) {
+		_, _ = NewAssetPrecompile(nil, nil).Run(input)
+	})
+}
+
+func FuzzTriggerPrecompileNeverPanics(f *testing.F) {
+	f.Add([]byte{0})
+	f.Add(EncodeRegisterHeightTriggerCall("test", 1, 1000, nil))
+	f.Fuzz(func(t *testing.T, input []byte) {
+		_, _ = NewTriggerPrecompile().Run(input)
+	})
 }
 
 func TestAssetPrecompileTransferAssetsRejectsInvalidInput(t *testing.T) {
@@ -237,6 +284,24 @@ func TestAssetPrecompileTransferAssetsRejectsInvalidInput(t *testing.T) {
 		[][]byte{nil},
 	))
 	require.ErrorContains(t, err, "must be positive")
+
+	assets := make([]string, maxTransferAssetCount+1)
+	recipients := make([]string, len(assets))
+	amounts := make([]string, len(assets))
+	extra := make([][]byte, len(assets))
+	for i := range assets {
+		assets[i] = SatoshiAssetName
+		recipients[i] = "tb1pdest"
+		amounts[i] = "1"
+	}
+	_, err = DecodeTransferAssetsCall(EncodeTransferAssetsCall(assets, recipients, amounts, extra))
+	require.ErrorContains(t, err, "length too large")
+}
+
+func TestTriggerCalldataLimit(t *testing.T) {
+	call := EncodeRegisterHeightTriggerCall("test", 1, 1000, make([]byte, maxTriggerCalldataBytes+1))
+	_, err := DecodeTriggerRegistrationCall(call)
+	require.ErrorContains(t, err, "out of bounds")
 }
 
 func TestAssetPrecompileAmountCompare(t *testing.T) {
@@ -283,6 +348,9 @@ func TestAssetPrecompileAmountArithmeticRejectsInvalidResults(t *testing.T) {
 
 	_, err = precompile.Run(EncodeDivAmountCall("1", "0"))
 	require.ErrorContains(t, err, "division by zero")
+
+	_, err = precompile.Run(EncodeMulAmountCall("1:40", "1:40"))
+	require.ErrorContains(t, err, "precision exceeds protocol maximum")
 }
 
 func TestAssetPrecompileAmountUintConversions(t *testing.T) {
@@ -456,7 +524,7 @@ func TestRuntimeCapturesTransferAssetsIntents(t *testing.T) {
 			[]string{SatoshiAssetName, gas, "ordx:f:ooxx", "brc20:f:ooxx", "runes:f:BITCOIN•TESTNET"},
 			[]string{"tb1psats", "tb1pgas", "tb1pordx", "tb1pbrc20", "tb1prunes"},
 			[]string{"1", "50", "1000", "7.5", "3"},
-			[][]byte{nil, []byte("gas"), []byte("ordx"), []byte("brc20"), []byte("runes")},
+			[][]byte{nil, nil, nil, nil, nil},
 		),
 		Gas:   200000,
 		Block: BlockContext{GasLimit: 1000000},
@@ -471,11 +539,32 @@ func TestRuntimeCapturesTransferAssetsIntents(t *testing.T) {
 	require.Equal(t, "brc20:f:ooxx", runtime.AssetIntents[3].AssetName)
 	require.Equal(t, "7.5", runtime.AssetIntents[3].Amount.String())
 	require.Equal(t, "runes:f:BITCOIN•TESTNET", runtime.AssetIntents[4].AssetName)
-	require.Equal(t, []byte("runes"), runtime.AssetIntents[4].ExtraData)
+	require.Empty(t, runtime.AssetIntents[4].ExtraData)
 	for _, intent := range runtime.AssetIntents {
 		require.Equal(t, "call-batch", intent.CallID)
 		require.Equal(t, caller, ContractAddressHash(intent.From))
 	}
+}
+
+func TestRuntimeRejectsUnsettleableIntentBeforeCommit(t *testing.T) {
+	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
+	runtime := NewRuntime(nil)
+	runtime.ResolveResultScript = func(output ResultOutput) ([]byte, error) {
+		if output.To == "bad-recipient" {
+			return nil, errors.New("invalid recipient")
+		}
+		return []byte{0x51}, nil
+	}
+	result := runtime.Call(CallRequest{
+		CallerAddress: caller.String(),
+		TargetAddress: evmAddressFromGeth(AssetPrecompileAddress).String(),
+		CallID:        "unsettleable",
+		Input:         EncodeTransferAssetCall(SatoshiAssetName, "bad-recipient", "1", nil),
+		Gas:           100000,
+		Block:         BlockContext{GasLimit: 1000000},
+	})
+	require.ErrorContains(t, result.Err, "not settleable")
+	require.Empty(t, runtime.AssetIntents)
 }
 
 func TestRuntimeRetainsOnlyClaimedGasFunding(t *testing.T) {

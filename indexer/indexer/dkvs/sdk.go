@@ -177,14 +177,14 @@ func MailShareKey(mailboxID, packageID, shareID string) (string, error) {
 	return key, err
 }
 
-func BlobManifestKey(objectID string) (string, error) {
-	key := "/blob/" + objectID + "/manifest"
+func BlobManifestKey(accountID, objectID string) (string, error) {
+	key := "/blob/" + accountID + "/" + objectID + "/manifest"
 	_, err := ParseKey(key)
 	return key, err
 }
 
-func BlobChunkKey(objectID string, index uint32) (string, error) {
-	key := "/blob/" + objectID + "/chunk/" + strconv.FormatUint(uint64(index), 10)
+func BlobChunkKey(accountID, objectID string, index uint32) (string, error) {
+	key := "/blob/" + accountID + "/" + objectID + "/chunk/" + strconv.FormatUint(uint64(index), 10)
 	_, err := ParseKey(key)
 	return key, err
 }
@@ -271,10 +271,14 @@ func AssembleBlobFromRecords(manifestRecord *wire.DKVSRecord, chunkRecords []*wi
 	if err != nil {
 		return nil, nil, err
 	}
-	if parsed.Namespace != "blob" || len(parsed.Segments) != 2 || parsed.Segments[1] != "manifest" {
+	if parsed.Namespace != "blob" || len(parsed.Segments) != 3 || parsed.Segments[2] != "manifest" {
 		return nil, nil, ErrInvalidKey
 	}
-	objectID := parsed.Segments[0]
+	accountID := parsed.Segments[0]
+	objectID := parsed.Segments[1]
+	if accountID != personalAccountID(manifestRecord.PubKey) {
+		return nil, nil, ErrPermissionDenied
+	}
 	manifest, err := ParseBlobManifestValue(manifestRecord.Value, policy)
 	if err != nil {
 		return nil, nil, err
@@ -291,11 +295,15 @@ func AssembleBlobFromRecords(manifestRecord *wire.DKVSRecord, chunkRecords []*wi
 		if err != nil {
 			return nil, nil, err
 		}
-		if parsed.Namespace != "blob" || len(parsed.Segments) != 3 ||
-			parsed.Segments[0] != objectID || parsed.Segments[1] != "chunk" {
+		if parsed.Namespace != "blob" || len(parsed.Segments) != 4 ||
+			parsed.Segments[0] != accountID || parsed.Segments[1] != objectID || parsed.Segments[2] != "chunk" {
 			return nil, nil, ErrInvalidKey
 		}
-		index64, err := strconv.ParseUint(parsed.Segments[2], 10, 32)
+		if !bytes.Equal(record.PubKey, manifestRecord.PubKey) || record.Seq != manifestRecord.Seq ||
+			record.ExpiryHeight != manifestRecord.ExpiryHeight {
+			return nil, nil, ErrBlobChunkInvalid
+		}
+		index64, err := strconv.ParseUint(parsed.Segments[3], 10, 32)
 		if err != nil || index64 >= uint64(manifest.ChunkCount) {
 			return nil, nil, ErrInvalidKey
 		}

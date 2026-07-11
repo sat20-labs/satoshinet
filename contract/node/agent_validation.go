@@ -25,7 +25,7 @@ type AgentBlockExecutionConfig struct {
 	ResolveInvoker      agent.InvokerResolver
 	ContractUTXOs       agent.ContractUTXOProvider
 	AssetPrecision      contractframework.AssetPrecisionResolver
-	ResolveRecipient    agent.ResultRecipientScriptResolver
+	ResolveResultScript agent.ResultRecipientScriptResolver
 	ResolveResultOutput agent.ResultOutputResolver
 	SkipStateRootVerify bool
 }
@@ -205,14 +205,21 @@ func (v *AgentBlockExecutionValidator) verifyResults(resultTxs []*wire.MsgTx, pl
 	if len(resultTxs) != 1 {
 		return fmt.Errorf("agent result transaction count mismatch: got %d want 1", len(resultTxs))
 	}
+	if v.cfg.ResolveResultOutput == nil {
+		return fmt.Errorf("missing agent result output resolver")
+	}
+	if v.cfg.ResolveResultScript == nil {
+		return fmt.Errorf("missing agent result output script resolver")
+	}
 	return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-		Label:        "agent",
-		ResultTx:     resultTxs[0],
-		Status:       agent.ResultStatusSuccess,
-		Plans:        plans,
-		GasAssetName: contractGasAssetNameForParams(v.cfg.ChainParams),
-		Resolve:      v.cfg.ResolveResultOutput,
-		CheckPayload: true,
+		Label:         "agent",
+		ResultTx:      resultTxs[0],
+		Status:        agent.ResultStatusSuccess,
+		Plans:         plans,
+		GasAssetName:  contractGasAssetNameForParams(v.cfg.ChainParams),
+		Resolve:       v.cfg.ResolveResultOutput,
+		ResolveScript: v.cfg.ResolveResultScript,
+		CheckPayload:  true,
 	})
 }
 

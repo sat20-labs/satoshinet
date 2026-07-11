@@ -8,7 +8,6 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
-	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -277,7 +276,15 @@ func TestAgentManagedAssetsIncludesBetAndGas(t *testing.T) {
 }
 
 func testResultScriptResolver(output ResultOutput) ([]byte, error) {
-	return txscript.NewScriptBuilder().AddOp(txscript.OP_TRUE).Script()
+	return []byte(output.To), nil
+}
+
+func testResultOutputResolver(tx *wire.MsgTx) ([]ResultOutput, error) {
+	return contractframework.ResultOutputsFromTx(tx, TestnetContractPrefix,
+		contractcommon.ParseContractPkScript,
+		func(script []byte) (string, bool, error) {
+			return string(script), len(script) != 0, nil
+		})
 }
 
 func contractcommonReadResultPayload(tx *wire.MsgTx) (int, ResultPayload, error) {

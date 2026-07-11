@@ -111,6 +111,11 @@ func TestDKVSMessagesOversize(t *testing.T) {
 		}
 		if test.name == "data" || test.name == "syncres" {
 			payload.Reset()
+			if test.name == "syncres" {
+				if err := writeElements(&payload, uint64(1)); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := WriteVarInt(&payload, ProtocolVersion, uint64(MaxDKVSRecordsPerMsg)+1); err != nil {
 				t.Fatal(err)
 			}
@@ -121,6 +126,9 @@ func TestDKVSMessagesOversize(t *testing.T) {
 	}
 
 	var syncReqPayload bytes.Buffer
+	if err := writeElements(&syncReqPayload, uint64(1)); err != nil {
+		t.Fatal(err)
+	}
 	if err := WriteVarBytes(&syncReqPayload, ProtocolVersion, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -137,8 +145,11 @@ func TestDKVSMessagesOversize(t *testing.T) {
 	_ = hash
 }
 
-func TestDKVSSyncRequestLegacyPayload(t *testing.T) {
+func TestDKVSSyncRequestWithoutFilters(t *testing.T) {
 	var payload bytes.Buffer
+	if err := writeElements(&payload, uint64(7)); err != nil {
+		t.Fatal(err)
+	}
 	if err := WriteVarBytes(&payload, ProtocolVersion, []byte("cursor")); err != nil {
 		t.Fatal(err)
 	}
@@ -149,8 +160,8 @@ func TestDKVSSyncRequestLegacyPayload(t *testing.T) {
 	if err := decoded.BtcDecode(bytes.NewReader(payload.Bytes()), ProtocolVersion, BaseEncoding); err != nil {
 		t.Fatal(err)
 	}
-	if string(decoded.Cursor) != "cursor" || decoded.Limit != 10 || len(decoded.Filters) != 0 {
-		t.Fatalf("decoded legacy sync request=%#v", decoded)
+	if decoded.SessionID != 7 || string(decoded.Cursor) != "cursor" || decoded.Limit != 10 || len(decoded.Filters) != 0 {
+		t.Fatalf("decoded sync request=%#v", decoded)
 	}
 }
 
@@ -191,7 +202,28 @@ func sampleDKVSMessages() []Message {
 		&MsgDKVSInv{Items: []DKVSInvItem{{Key: record.Key, KeyHash: keyHash, RecordHash: hash, Seq: 10}}},
 		&MsgDKVSGet{Keys: []string{record.Key}, RecordHashes: []chainhash.Hash{hash}},
 		&MsgDKVSData{Records: []*DKVSRecord{record}, NotFound: []chainhash.Hash{hash}},
-		&MsgDKVSSyncRequest{Cursor: []byte("cursor"), Limit: 10},
-		&MsgDKVSSyncResponse{Records: []*DKVSRecord{record}, NextCursor: []byte("next"), Done: true, CheckpointRoot: hash},
+		&MsgDKVSSyncRequest{SessionID: 1, Cursor: []byte("cursor"), Limit: 10},
+		&MsgDKVSSyncResponse{SessionID: 1, Records: []*DKVSRecord{record}, NextCursor: []byte("next"), Done: true, CheckpointRoot: hash},
+	}
+}
+
+func TestStandaloneDKVSRecordCodec(t *testing.T) {
+	record := sampleDKVSMessages()[3].(*MsgDKVSData).Records[0]
+	encoded, err := SerializeDKVSRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DeserializeDKVSRecord(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(record, decoded) {
+		t.Fatalf("decoded=%#v want=%#v", decoded, record)
+	}
+	if DKVSRecordSerializeSize(record) != len(encoded) {
+		t.Fatalf("size=%d encoded=%d", DKVSRecordSerializeSize(record), len(encoded))
+	}
+	if _, err := DeserializeDKVSRecord(append(encoded, 0)); err == nil {
+		t.Fatal("trailing bytes accepted")
 	}
 }

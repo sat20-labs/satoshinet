@@ -20,9 +20,10 @@ type Runtime struct {
 	Config      vm.Config
 	GasConfig   GasConfig
 
-	ContractPrefix string
-	AssetBalances  AssetBalanceReader
-	AssetIntents   []AssetIntent
+	ContractPrefix      string
+	AssetBalances       AssetBalanceReader
+	AssetIntents        []AssetIntent
+	ResolveResultScript ResultRecipientScriptResolver
 }
 
 type BlockContext struct {
@@ -283,6 +284,21 @@ func gasUsed(initial, left int64) int64 {
 func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedTriggers []Trigger,
 	balances AssetBalanceReader) error {
 
+	if len(capturedIntents) > maxExecutionAssetIntents {
+		return fmt.Errorf("too many EVM asset intents: %d", len(capturedIntents))
+	}
+	if r.ResolveResultScript != nil {
+		for i, intent := range capturedIntents {
+			output, err := contractframework.ResultOutputWithAsset(intent.To, intent.AssetName, intent.Amount)
+			if err != nil {
+				return fmt.Errorf("asset intent %d: %w", i, err)
+			}
+			output.ExtraData = contractframework.CloneBytes(intent.ExtraData)
+			if _, err := contractframework.ResultTxOut(output, r.ResolveResultScript); err != nil {
+				return fmt.Errorf("asset intent %d is not settleable: %w", i, err)
+			}
+		}
+	}
 	allIntents := append(contractframework.CloneAssetIntents(r.AssetIntents), capturedIntents...)
 	if err := validateCapturedAssetIntents(allIntents, balances); err != nil {
 		return err

@@ -2,6 +2,7 @@ package wire
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"strings"
 
@@ -82,6 +83,9 @@ func AssetsWriteToBuf(w io.Writer, pver uint32, assets TxAssets, buf []byte) err
 	}
 
 	for _, asset := range assets {
+		if err := asset.Amount.Validate(); err != nil {
+			return fmt.Errorf("invalid asset %s amount: %w", asset.Name.String(), err)
+		}
 		// Write asset, Name（Protocol，Type，Ticker）, Amount, BindingSat
 		err = WriteVarBytesBuf(w, pver, []byte(asset.Name.Protocol), buf)
 		if err != nil {

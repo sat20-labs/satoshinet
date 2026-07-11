@@ -372,8 +372,8 @@ func DecimalToInt64(amount scommon.Decimal) (int64, error) {
 }
 
 func ValidateAssetDecimal(amount scommon.Decimal) error {
-	if amount.Value == nil {
-		return fmt.Errorf("nil decimal value")
+	if err := amount.Validate(); err != nil {
+		return err
 	}
 	if amount.Sign() < 0 {
 		return fmt.Errorf("negative amount")

@@ -20,12 +20,12 @@
 | G6 | miner 全量同步 | Done | `MsgDKVSSyncRequest/Response`、serverPeer sync、包内三 miner startup sync 测试。 |
 | G7 | 普通节点按 key/prefix/mailbox/service 订阅 | Done | subscription set、filtered sync、notify filtering；key/prefix/mailbox/service 集成测试。 |
 | G8 | mailbox 与离线 IM | Done | `/mail/msg`、`/mail/share` 权限/quota/TTL/size；SDK app helpers 和 examples。 |
-| G9 | 小型 blob / chunk | Done | manifest/chunk key、chunk hash/content hash/size/chunk count 校验；SDK blob helper。 |
+| G9 | 小型 blob / chunk | Done | owner-scoped named object key、manifest-first、same-generation chunk、chunk/content hash/size/count 校验；SDK blob helper。 |
 | G10 | 预定义 namespace | Done | `/sys`、`/name`、`/svc`、`/personal`、`/mail`、`/blob`、`/tmp` parser/validator；`/sys` v1 子路径收紧到 params/checkpoint/snapshot/miner/pool。 |
 | G11 | Ordinals DID name/service 权限解析 | Partial | `DIDResolver` 契约、L1 `GET /ns/name/:name` owner-address resolver、p2tr pubkey->address 校验、static resolver tests；ascended-sat owner 和 service 生产规则仍待细化。 |
-| G12 | DKVS Pool 合约收费并向 miner 分配收益 | Partial | AUTOPAY verifier 已校验 template、active、deployer/payer、recipient、fee asset、expiry 和按 full-size record 换算容量；主网合约参数和 miner 收益分配规则仍待定。 |
+| G12 | DKVS Pool 合约收费并向 miner 分配收益 | Partial | AUTOPAY verifier 已校验全局 template、service、recipient、fee asset，以及每个 p2tr delegate 的 active、余额和独立容量；主网合约参数和 miner 收益分配规则仍待定。 |
 | G13 | `MsgDKVSNotify` 通知 | Done | wire command、peer listener、serverPeer notify/get/data flow、notify event helper。 |
-| G14 | checkpoint / snapshot | Partial | 非共识 checkpoint/snapshot API、signed system records、可选自动发布和外部 anchor handoff 已实现；缺真实链上锚定协议。 |
+| G14 | checkpoint / snapshot | Done | 实现未签名的非共识 checkpoint/snapshot API 和同步视图比较；按当前决策不签名、不发布 DKVS system record、不做链上 anchor。 |
 | G15 | SDK / API 给 PWA、钱包、dApp、本地 Agent 使用 | Partial | REST API、record hash 精确读取、Go SDK client/helpers/examples、verified get/list/subscribe、本地 record set 验证、PWA REST API doc、PWA DKVS developer tool；缺真实 DID/Pool 生产样本。 |
 
 ## 迁移实现
@@ -42,7 +42,7 @@
 | M8 | `MsgDKVSNotify` | Done | Command, routing, notify/get/data convergence tests. |
 | M9 | mailbox 容量控制 | Done | `MailboxPolicy`, full behavior, tombstone frees capacity. |
 | M10 | blob chunk | Done | Manifest/chunk validation and SDK assembly. |
-| M11 | checkpoint / snapshot | Partial | Local/non-consensus implementation、optional signed auto publish 和 external anchor handoff done; real chain anchor protocol blocked. |
+| M11 | checkpoint / snapshot | Done | Local non-consensus computed views implemented; signing, auto publish, external handoff and chain anchor are intentionally excluded. |
 
 ## 单元测试要求
 
@@ -102,14 +102,13 @@
 | --- | --- | --- |
 | Ascended-sat DID resolver and service mapping | L2 owner lookup for ascended name sat, service namespace mapping and any non-L1-NS override rules | L1 owner-address resolver is implemented; ascended-sat ownership and service production policy still need explicit rules. |
 | Mainnet DKVS AUTOPAY / Pool policy | Mainnet AUTOPAY contract parameters, recipient, fee asset, full-record fee, product renewal flow, miner revenue distribution, and whether ONESHOT/LEASE are required | Testnet AUTOPAY verification is implemented; mainnet economics and non-AUTOPAY Pool semantics should not be invented inside DKVS core. |
-| Checkpoint chain anchor | Anchor transaction or system contract format, anchor content, signer/miner authority, failure handling | DKVS 已提供默认关闭的外部 anchor handoff；真实链上写入会改变 chain/system behavior，仍需协议设计。 |
+| Checkpoint chain anchor | 当前明确不实现 | checkpoint 仅为未签名的本地 active-view 对账结果；不提供外部 anchor handoff，也不把局部存储视图冒充全局共识根。 |
 | True DID/mainnet fee production samples | Real DID resolver data, mainnet AUTOPAY parameters and production fee UX | UI and SDK examples must not claim production identity/payment coverage before those external rules exist. |
 
 ## Current Safe Next Steps
 
 1. Decide whether L2 ascended-sat ownership overrides L1 `/ns/name/:name`, and define service namespace production mapping.
 2. Provide mainnet AUTOPAY parameters, revenue policy and any non-AUTOPAY Pool proof semantics.
-3. Decide checkpoint chain anchor mechanism, anchor content and system signer/miner authority; then bind the current external anchor handoff to that implementation.
-4. Add production DID/mainnet fee examples after the real resolver and mainnet fee policy are available.
+3. Add production DID/mainnet fee examples after the real resolver and mainnet fee policy are available.
 
 决策问题、推荐最小方案和代码接入点见 `docs/dkvs-open-decisions.md`。

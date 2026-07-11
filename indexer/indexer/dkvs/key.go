@@ -93,6 +93,14 @@ func personalAccountID(pubKey []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func validAccountID(accountID string) bool {
+	if len(accountID) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(accountID)
+	return err == nil
+}
+
 func IsTombstone(flags uint32) bool {
 	return flags&FlagTombstone != 0
 }
@@ -100,7 +108,7 @@ func IsTombstone(flags uint32) bool {
 func validateNamespaceShape(parsed ParsedKey) error {
 	switch parsed.Namespace {
 	case "personal":
-		if len(parsed.Segments) < 2 || len(parsed.Segments[0]) != sha256.Size*2 {
+		if len(parsed.Segments) < 2 || !validAccountID(parsed.Segments[0]) {
 			return ErrInvalidKey
 		}
 	case "name":
@@ -120,11 +128,14 @@ func validateNamespaceShape(parsed ParsedKey) error {
 		}
 		return ErrInvalidKey
 	case "blob":
-		if len(parsed.Segments) == 2 && parsed.Segments[1] == "manifest" {
+		if len(parsed.Segments) < 3 || !validAccountID(parsed.Segments[0]) {
+			return ErrInvalidKey
+		}
+		if len(parsed.Segments) == 3 && parsed.Segments[2] == "manifest" {
 			return nil
 		}
-		if len(parsed.Segments) == 3 && parsed.Segments[1] == "chunk" {
-			if index, err := strconv.Atoi(parsed.Segments[2]); err != nil || index < 0 {
+		if len(parsed.Segments) == 4 && parsed.Segments[2] == "chunk" {
+			if index, err := strconv.Atoi(parsed.Segments[3]); err != nil || index < 0 {
 				return ErrInvalidKey
 			}
 			return nil

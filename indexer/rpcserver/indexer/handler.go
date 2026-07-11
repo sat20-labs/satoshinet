@@ -24,6 +24,18 @@ import (
 
 const QueryParamDefaultLimit = "100"
 
+const (
+	dkvsRecordHTTPBodyLimit       = int64(32 * 1024)
+	dkvsSubscriptionHTTPBodyLimit = int64(4 * 1024)
+	dkvsSnapshotHTTPBodyLimit     = int64(64 * 1024 * 1024)
+	dkvsMaxListLimit              = 1000
+)
+
+func bindDKVSJSON(c *gin.Context, target interface{}, limit int64) error {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+	return c.ShouldBindJSON(target)
+}
+
 func defaultEVMCompilerConfig() contractcommon.EVMCompilerConfig {
 	var cfg contractcommon.EVMCompilerConfig
 	cfg.SolcVersion = "0.8.30"
@@ -306,7 +318,7 @@ type dkvsSnapshotImportResp struct {
 func (s *Handle) putDKVSRecord(c *gin.Context) {
 	resp := &dkvsRecordResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	var record swire.DKVSRecord
-	if err := c.ShouldBindJSON(&record); err != nil {
+	if err := bindDKVSJSON(c, &record, dkvsRecordHTTPBodyLimit); err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
@@ -325,7 +337,7 @@ func (s *Handle) putDKVSRecord(c *gin.Context) {
 func (s *Handle) putDKVSTombstone(c *gin.Context) {
 	resp := &dkvsRecordResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	var record swire.DKVSRecord
-	if err := c.ShouldBindJSON(&record); err != nil {
+	if err := bindDKVSJSON(c, &record, dkvsRecordHTTPBodyLimit); err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
@@ -385,6 +397,9 @@ func (s *Handle) listDKVSRecords(c *gin.Context) {
 	if err != nil {
 		limit = 100
 	}
+	if limit > dkvsMaxListLimit {
+		limit = dkvsMaxListLimit
+	}
 	records, total, err := s.model.ListDKVSRecords(c.Query("prefix"), start, limit)
 	if err != nil {
 		resp.Code = -1
@@ -439,7 +454,7 @@ func (s *Handle) getDKVSSnapshot(c *gin.Context) {
 func (s *Handle) applyDKVSSnapshot(c *gin.Context) {
 	resp := &dkvsSnapshotImportResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	var snapshot dkvsindexer.Snapshot
-	if err := c.ShouldBindJSON(&snapshot); err != nil {
+	if err := bindDKVSJSON(c, &snapshot, dkvsSnapshotHTTPBodyLimit); err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
@@ -472,7 +487,7 @@ func (s *Handle) pruneDKVS(c *gin.Context) {
 func (s *Handle) subscribeDKVS(c *gin.Context) {
 	resp := &dkvsSubscriptionResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	var req dkvsSubscriptionReq
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindDKVSJSON(c, &req, dkvsSubscriptionHTTPBodyLimit); err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
@@ -494,7 +509,7 @@ func (s *Handle) subscribeDKVS(c *gin.Context) {
 func (s *Handle) unsubscribeDKVS(c *gin.Context) {
 	resp := &dkvsSubscriptionResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	var req dkvsSubscriptionReq
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindDKVSJSON(c, &req, dkvsSubscriptionHTTPBodyLimit); err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)

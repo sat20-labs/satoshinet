@@ -26,10 +26,11 @@ const (
 	EventRenewal         = uint32(9)
 	EventExpired         = uint32(10)
 
-	MaxKeySize         = 256
-	MaxKeySegmentSize  = 64
-	MaxNamespaceSize   = 16
-	MaxRecordValueSize = wire.MaxDKVSRecordSize
+	MaxKeySize             = 256
+	MaxKeySegmentSize      = 64
+	MaxNamespaceSize       = 16
+	MaxRecordValueSize     = wire.MaxDKVSRecordSize
+	MaxFutureIssueTimeSkew = uint64(10 * 60 * 1000)
 )
 
 var (
@@ -50,6 +51,7 @@ var (
 	ErrMailboxFull            = errors.New("dkvs mailbox full")
 	ErrBlobManifestInvalid    = errors.New("dkvs blob manifest invalid")
 	ErrBlobChunkInvalid       = errors.New("dkvs blob chunk invalid")
+	ErrTooManySubscriptions   = errors.New("too many dkvs subscriptions")
 )
 
 type DIDIdentity struct {
@@ -99,6 +101,16 @@ type RecordFeeVerifier interface {
 
 type FeeCapacityVerifier interface {
 	VerifyFeeCapacity(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, records []*wire.DKVSRecord, height, now uint64) error
+}
+
+type FeeCapacityDescriptor struct {
+	UsageKey   string
+	MaxRecords uint64
+}
+
+type IndexedFeeCapacityVerifier interface {
+	FeeCapacity(record *wire.DKVSRecord, parsed ParsedKey) (FeeCapacityDescriptor, error)
+	FeeUsageKey(record *wire.DKVSRecord) (string, error)
 }
 
 type SystemVerifier interface {
@@ -229,10 +241,10 @@ type defaultFeeVerifier struct {
 }
 
 func (v defaultFeeVerifier) VerifyFeeProof(_, _ [32]byte, _ string, _ int, _ uint64, feeProof []byte) error {
-	if len(feeProof) == 0 && !v.allowFreeLocal {
-		return ErrFeeProofRequired
+	if v.allowFreeLocal && len(feeProof) == 0 {
+		return nil
 	}
-	return nil
+	return ErrFeeProofRequired
 }
 
 type defaultSystemVerifier struct{}

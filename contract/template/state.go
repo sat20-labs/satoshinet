@@ -1143,7 +1143,11 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 				item.RemainingAmt = parseDecimalOrZero(param.Amt)
 			}
 			if !isAMM {
-				item.ServiceFee = calcSwapServiceFee(calcLimitOrderTradingValue(param.Amt, param.UnitPrice))
+				tradingValue, err := calcLimitOrderTradingValue(param.Amt, param.UnitPrice)
+				if err != nil {
+					return nil, err
+				}
+				item.ServiceFee = calcSwapServiceFee(tradingValue)
 			}
 			item.RemainingValue = inValue - item.ServiceFee
 			if item.RemainingValue < 0 {
@@ -1293,9 +1297,15 @@ func checkInvokeFunding(contract Contract, action string, param []byte, output C
 		}
 		switch invokeParam.OrderType {
 		case OrderTypeBuy:
-			requiredValue := calcLimitOrderTradingValue(invokeParam.Amt, invokeParam.UnitPrice)
+			requiredValue, err := calcLimitOrderTradingValue(invokeParam.Amt, invokeParam.UnitPrice)
+			if err != nil {
+				return err
+			}
 			if _, isAMM := contract.(*AMMContract); isAMM {
-				requiredValue = parseDecimalOrZero(invokeParam.UnitPrice).Int64()
+				requiredValue, err = parseDecimalOrZero(invokeParam.UnitPrice).FloorInt64()
+				if err != nil {
+					return fmt.Errorf("AMM required funding: %w", err)
+				}
 			} else {
 				var overflow bool
 				requiredValue, overflow = contractframework.AddInt64(requiredValue, calcSwapServiceFee(requiredValue))
@@ -1383,9 +1393,21 @@ func (i *InvokeItem) applySwapFundingValidation(param LimitOrderInvokeParam, isA
 	}
 	switch i.OrderType {
 	case OrderTypeBuy:
-		requiredValue := calcLimitOrderTradingValue(param.Amt, param.UnitPrice)
+		requiredValue, err := calcLimitOrderTradingValue(param.Amt, param.UnitPrice)
+		if err != nil {
+			i.Reason = InvokeReasonInvalid
+			i.RemainingValue = 0
+			i.OutValue = 0
+			return
+		}
 		if isAMM {
-			requiredValue = parseDecimalOrZero(param.UnitPrice).Int64()
+			requiredValue, err = parseDecimalOrZero(param.UnitPrice).FloorInt64()
+			if err != nil {
+				i.Reason = InvokeReasonInvalid
+				i.RemainingValue = 0
+				i.OutValue = 0
+				return
+			}
 		}
 		expected, overflow := contractframework.AddInt64(requiredValue, i.ServiceFee)
 		if overflow {

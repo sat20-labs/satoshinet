@@ -573,6 +573,7 @@ func TestBuildBlockResultTxsForConfirm(t *testing.T) {
 				contract, 0, &wire.TxOut{Value: 10000})}, nil
 		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 	})
 	if err != nil {
@@ -642,6 +643,7 @@ func TestBuildBlockResultTxsConfirmUsesSatoshiPrecision(t *testing.T) {
 			[]*wire.MsgTx{aliceBetTx, bobBetTx, carolBetTx, daveBetTx, confirmTx},
 			TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 	})
 	if err != nil {
@@ -717,6 +719,7 @@ func TestAgentCloseAfterBetDeadlineIsRejected(t *testing.T) {
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(nil,
 			[]*wire.MsgTx{aliceBetTx, bobBetTx, closeTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{closeTx.TxID(): "deployer"}),
 	})
 	if err != nil {
@@ -818,6 +821,7 @@ func TestBuildBlockResultTxsForConfirmWithGasBetAsset(t *testing.T) {
 			return nil, nil
 		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 	})
 	if err != nil {
@@ -840,6 +844,8 @@ func TestBuildBlockResultTxsForDeployAndReady(t *testing.T) {
 		BlockHeight:    validPredictionContract().BetDeadline,
 		RuntimeConfig:  testRuntimeConfig(),
 		ResolveInvoker: testInvokerResolver(map[string]string{readyTx.TxID(): "core"}),
+		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 	})
 	if err != nil {
 		t.Fatalf("BuildBlockResultTxs failed: %v", err)
@@ -965,6 +971,7 @@ func TestBuildBlockResultTxsRefundsBetAfterClosed(t *testing.T) {
 			betTx.TxID(): "alice",
 		}),
 		ResolveScript: testResultScriptResolver,
+		ResolveOutput: testResultOutputResolver,
 	})
 	if err != nil {
 		t.Fatalf("BuildBlockResultTxs failed: %v", err)
@@ -1039,6 +1046,7 @@ func TestBuildBlockResultTxsRefundsLateGasAssetBet(t *testing.T) {
 			betTx.TxID(): "alice",
 		}),
 		ResolveScript: testResultScriptResolver,
+		ResolveOutput: testResultOutputResolver,
 	})
 	if err != nil {
 		t.Fatalf("BuildBlockResultTxs failed: %v", err)
@@ -1098,6 +1106,7 @@ func TestBuildBlockResultTxsIgnoresUnfundedConfirm(t *testing.T) {
 			return nil, nil
 		},
 		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 	})
 	if err != nil {
@@ -1152,6 +1161,7 @@ func TestBuildBlockResultTxsUsesPhysicalGasWhenManagedGasMissing(t *testing.T) {
 				contract, 0, &wire.TxOut{Assets: testAgentAsset(DefaultGasConfig().GasAssetName, resultGas)})}, nil
 		}, []*wire.MsgTx{aliceBetTx, bobBetTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 	})
 	if err != nil {
@@ -1218,6 +1228,7 @@ func TestBuildBlockResultTxsUsesConfirmTopUpGas(t *testing.T) {
 		ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(nil,
 			[]*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveScript:  testResultScriptResolver,
+		ResolveOutput:  testResultOutputResolver,
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
 	})
 	if err != nil {

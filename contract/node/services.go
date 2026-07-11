@@ -163,6 +163,15 @@ func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 }
 
 func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
+	if cfg.TemplateContractUTXOs == nil {
+		return nil, fmt.Errorf("missing template contract UTXO provider")
+	}
+	if cfg.TemplateResolveRecipient == nil {
+		return nil, fmt.Errorf("missing template result recipient resolver")
+	}
+	if cfg.AssetPrecision == nil {
+		return nil, fmt.Errorf("missing template asset precision resolver")
+	}
 	gasConfig := templateGasConfigFromCommon(cfg.GasConfig, cfg)
 	if gasConfig == (tmplcontract.GasConfig{}) {
 		gasConfig = tmplcontract.DefaultGasConfig()
@@ -178,6 +187,7 @@ func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error)
 		Registry:            templateRegistry(),
 		NewRuntime:          stateStore.RuntimeFactory(),
 		ResolveOutput:       templateResultOutputResolver(cfg),
+		ResolveResultScript: templateResultScriptResolver(cfg.ChainParams),
 		ContractUTXOs:       templateContractUTXOProvider(cfg.TemplateContractUTXOs),
 		AssetPrecision:      cfg.AssetPrecision,
 		SkipStateRootVerify: cfg.SkipStateRootVerify,
@@ -185,6 +195,15 @@ func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error)
 }
 
 func NewAgentBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
+	if cfg.AgentContractUTXOs == nil {
+		return nil, fmt.Errorf("missing agent contract UTXO provider")
+	}
+	if cfg.AgentResolveRecipient == nil {
+		return nil, fmt.Errorf("missing agent result recipient resolver")
+	}
+	if cfg.AssetPrecision == nil {
+		return nil, fmt.Errorf("missing agent asset precision resolver")
+	}
 	gasConfig := agentGasConfigFromCommon(cfg.GasConfig)
 	if gasConfig == (agentcontract.GasConfig{}) {
 		gasConfig = agentcontract.DefaultGasConfig()
@@ -197,6 +216,7 @@ func NewAgentBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 		GasConfig:           gasConfig,
 		NewRuntime:          stateStore.RuntimeFactory(),
 		ResolveResultOutput: agentResultOutputResolver(cfg),
+		ResolveResultScript: agentResultScriptResolver(cfg.ChainParams),
 		ContractUTXOs:       agentContractUTXOProvider(cfg.AgentContractUTXOs),
 		AssetPrecision:      cfg.AssetPrecision,
 		SkipStateRootVerify: cfg.SkipStateRootVerify,
@@ -337,6 +357,7 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 				Block:                     block,
 				ResolveCaller:             resolveCaller,
 				ResolveGasRefundRecipient: resolveRefund,
+				ResolveResultScript:       resolveScript,
 				ContractUTXOs:             contractUTXOs,
 				AssetPrecision:            cfg.AssetPrecision,
 			})

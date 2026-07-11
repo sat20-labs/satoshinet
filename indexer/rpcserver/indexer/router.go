@@ -1,9 +1,31 @@
 package indexer
 
 import (
+	"net"
+	"net/http"
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 )
+
+func dkvsLocalOnly(c *gin.Context) {
+	remote := strings.TrimSpace(c.Request.RemoteAddr)
+	if remote == "" {
+		c.Next()
+		return
+	}
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		host = strings.Trim(remote, "[]")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": -1, "msg": "dkvs local administration only"})
+		return
+	}
+	c.Next()
+}
 
 type Service struct {
 	handle *Handle
@@ -55,12 +77,12 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/dkvs/usage", s.handle.getDKVSUsage)
 	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
 	r.GET(proxy+"/v3/dkvs/checkpoint", s.handle.getDKVSCheckpoint)
-	r.GET(proxy+"/v3/dkvs/snapshot", s.handle.getDKVSSnapshot)
-	r.POST(proxy+"/v3/dkvs/snapshot", s.handle.applyDKVSSnapshot)
-	r.POST(proxy+"/v3/dkvs/prune", s.handle.pruneDKVS)
-	r.POST(proxy+"/v3/dkvs/subscriptions", s.handle.subscribeDKVS)
-	r.DELETE(proxy+"/v3/dkvs/subscriptions", s.handle.unsubscribeDKVS)
-	r.GET(proxy+"/v3/dkvs/subscriptions", s.handle.listDKVSSubscriptions)
+	r.GET(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.getDKVSSnapshot)
+	r.POST(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.applyDKVSSnapshot)
+	r.POST(proxy+"/v3/dkvs/prune", dkvsLocalOnly, s.handle.pruneDKVS)
+	r.POST(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.subscribeDKVS)
+	r.DELETE(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.unsubscribeDKVS)
+	r.GET(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.listDKVSSubscriptions)
 
 	r.GET(proxy+"/v3/address/summary/:address", s.handle.getAssetSummaryV3)
 	// 获取某个地址上所有utxo数据列表

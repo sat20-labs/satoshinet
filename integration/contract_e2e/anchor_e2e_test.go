@@ -7,6 +7,7 @@ package contract_e2e
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -177,7 +178,7 @@ func generateOrWaitBlockAtLeast(t *testing.T, node *rpctest.Harness, nodes []*rp
 		require.NoError(t, rpctest.JoinNodes(nodes, rpctest.Blocks))
 		return blockHashes
 	}
-	if !strings.Contains(err.Error(), "no any new tx") {
+	if !waitForPOSBlockError(err) {
 		require.NoError(t, err)
 	}
 
@@ -192,6 +193,24 @@ func generateOrWaitBlockAtLeast(t *testing.T, node *rpctest.Harness, nodes []*rp
 	}
 	require.NoError(t, err)
 	return nil
+}
+
+func waitForPOSBlockError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "no any new tx") ||
+		strings.Contains(message, "already in POS mining")
+}
+
+func TestWaitForPOSBlockError(t *testing.T) {
+	require.True(t, waitForPOSBlockError(errors.New("no any new tx")))
+	require.True(t, waitForPOSBlockError(errors.New(
+		"Server is already in POS mining. Please call setgenerate 0 before calling discrete generate commands.",
+	)))
+	require.False(t, waitForPOSBlockError(errors.New("unexpected RPC failure")))
+	require.False(t, waitForPOSBlockError(nil))
 }
 
 func startFakeL1Indexer(t *testing.T, indexerPubKey string,

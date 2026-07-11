@@ -306,8 +306,15 @@ type serverPeer struct {
 	banScore       connmgr.DynamicBanScore
 	quit           chan struct{}
 	// The following chans are used to sync blockmanager and server.
-	txProcessed    chan struct{}
-	blockProcessed chan struct{}
+	txProcessed     chan struct{}
+	blockProcessed  chan struct{}
+	dkvsSyncMtx     sync.Mutex
+	dkvsSyncSession uint64
+	dkvsSyncCursor  []byte
+	dkvsSyncRoot    chainhash.Hash
+	dkvsSyncRootSet bool
+	dkvsSyncActive  bool
+	dkvsSyncUpdated time.Time
 }
 
 // newServerPeer returns a new serverPeer instance. The peer needs to be set by
@@ -1547,12 +1554,14 @@ func (sp *serverPeer) OnDKVSNotify(_ *peer.Peer, msg *wire.MsgDKVSNotify) {
 	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
 		return
 	}
-	get := &wire.MsgDKVSGet{}
-	if msg.Key != "" && sp.shouldFetchDKVSKey(msg.Key) {
-		get.Keys = append(get.Keys, msg.Key)
+	if !sp.needsDKVSRecord(msg.Key, msg.RecordHash) {
+		return
 	}
+	get := &wire.MsgDKVSGet{}
 	if sp.isLocalMiner() && msg.RecordHash != (chainhash.Hash{}) {
-		get.RecordHashes = append(get.RecordHashes, msg.RecordHash)
+		get.RecordHashes = []chainhash.Hash{msg.RecordHash}
+	} else if msg.Key != "" {
+		get.Keys = []string{msg.Key}
 	}
 	if len(get.Keys) != 0 || len(get.RecordHashes) != 0 {
 		sp.QueueMessage(get, nil)
@@ -1565,11 +1574,13 @@ func (sp *serverPeer) OnDKVSInv(_ *peer.Peer, msg *wire.MsgDKVSInv) {
 	}
 	get := &wire.MsgDKVSGet{}
 	for _, item := range msg.Items {
-		if item.Key != "" && sp.shouldFetchDKVSKey(item.Key) {
-			get.Keys = append(get.Keys, item.Key)
+		if !sp.needsDKVSRecord(item.Key, item.RecordHash) {
+			continue
 		}
 		if sp.isLocalMiner() && item.RecordHash != (chainhash.Hash{}) {
 			get.RecordHashes = append(get.RecordHashes, item.RecordHash)
+		} else if item.Key != "" {
+			get.Keys = append(get.Keys, item.Key)
 		}
 	}
 	if len(get.Keys) != 0 || len(get.RecordHashes) != 0 {
@@ -1581,24 +1592,34 @@ func (sp *serverPeer) OnDKVSGet(_ *peer.Peer, msg *wire.MsgDKVSGet) {
 	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
 		return
 	}
-	resp := &wire.MsgDKVSData{}
+	records := make([]*wire.DKVSRecord, 0)
+	notFound := make([]chainhash.Hash, 0)
+	seen := make(map[chainhash.Hash]struct{})
 	for _, key := range msg.Keys {
 		record, err := sp.server.assetIndexer.GetDKVSRecord(key)
 		if err != nil {
-			resp.NotFound = append(resp.NotFound, dkvsKeyHash(key))
+			notFound = append(notFound, dkvsKeyHash(key))
 			continue
 		}
-		resp.Records = append(resp.Records, record)
+		hash := dkvsindexer.RecordHash(record)
+		if _, ok := seen[hash]; !ok {
+			seen[hash] = struct{}{}
+			records = append(records, record)
+		}
 	}
 	for _, hash := range msg.RecordHashes {
 		record, err := sp.server.assetIndexer.GetDKVSRecordByHash(hash)
 		if err != nil {
-			resp.NotFound = append(resp.NotFound, hash)
+			notFound = append(notFound, hash)
 			continue
 		}
-		resp.Records = append(resp.Records, record)
+		recordHash := dkvsindexer.RecordHash(record)
+		if _, ok := seen[recordHash]; !ok {
+			seen[recordHash] = struct{}{}
+			records = append(records, record)
+		}
 	}
-	sp.QueueMessage(resp, nil)
+	sp.queueDKVSData(records, notFound)
 }
 
 func (sp *serverPeer) OnDKVSData(_ *peer.Peer, msg *wire.MsgDKVSData) {
@@ -1609,14 +1630,23 @@ func (sp *serverPeer) OnDKVSData(_ *peer.Peer, msg *wire.MsgDKVSData) {
 		if record == nil || !sp.shouldStoreDKVSKey(record.Key) {
 			continue
 		}
-		if _, err := sp.server.assetIndexer.PutRemoteDKVSRecord(record); err != nil {
+		updated, err := sp.server.assetIndexer.PutRemoteDKVSRecord(record)
+		if err != nil {
 			peerLog.Warnf("reject remote dkvs record %s from %s: %v", record.Key, sp, err)
+			continue
+		}
+		if updated {
+			sp.relayDKVSRecord(record)
 		}
 	}
 }
 
 func (sp *serverPeer) OnDKVSSyncRequest(_ *peer.Peer, msg *wire.MsgDKVSSyncRequest) {
 	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
+		return
+	}
+	if len(msg.Filters) == 0 && (sp.Services()&wire.SFNodeMiner == 0 || sp.ValidatorId() == "") {
+		sp.addBanScore(0, 10, "unfiltered DKVS sync from non-miner")
 		return
 	}
 	records, next, done, root, err := sp.server.assetIndexer.SyncFilteredDKVSRecords(
@@ -1626,6 +1656,7 @@ func (sp *serverPeer) OnDKVSSyncRequest(_ *peer.Peer, msg *wire.MsgDKVSSyncReque
 		return
 	}
 	sp.QueueMessage(&wire.MsgDKVSSyncResponse{
+		SessionID:      msg.SessionID,
 		Records:        records,
 		NextCursor:     next,
 		Done:           done,
@@ -1637,6 +1668,33 @@ func (sp *serverPeer) OnDKVSSyncResponse(_ *peer.Peer, msg *wire.MsgDKVSSyncResp
 	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || msg == nil {
 		return
 	}
+	sp.dkvsSyncMtx.Lock()
+	if !sp.dkvsSyncActive || msg.SessionID == 0 || msg.SessionID != sp.dkvsSyncSession {
+		sp.dkvsSyncMtx.Unlock()
+		sp.addBanScore(0, 5, "unsolicited DKVS sync response")
+		return
+	}
+	if !sp.dkvsSyncRootSet {
+		sp.dkvsSyncRoot = msg.CheckpointRoot
+		sp.dkvsSyncRootSet = true
+	} else if sp.dkvsSyncRoot != msg.CheckpointRoot {
+		sp.dkvsSyncActive = false
+		sp.dkvsSyncMtx.Unlock()
+		sp.queueDKVSSyncRequest(nil)
+		return
+	}
+	if !msg.Done && (len(msg.NextCursor) == 0 || bytes.Equal(msg.NextCursor, sp.dkvsSyncCursor)) {
+		sp.dkvsSyncActive = false
+		sp.dkvsSyncMtx.Unlock()
+		sp.addBanScore(0, 10, "non-progressing DKVS sync cursor")
+		return
+	}
+	if msg.Done {
+		sp.dkvsSyncActive = false
+	} else {
+		sp.dkvsSyncUpdated = time.Now()
+	}
+	sp.dkvsSyncMtx.Unlock()
 	for _, record := range msg.Records {
 		if record == nil || !sp.shouldStoreDKVSKey(record.Key) {
 			continue
@@ -1675,6 +1733,61 @@ func (sp *serverPeer) shouldFetchDKVSKey(key string) bool {
 	return sp.server.assetIndexer.IsDKVSSubscribed(key)
 }
 
+func (sp *serverPeer) needsDKVSRecord(key string, hash chainhash.Hash) bool {
+	if key == "" || !sp.shouldFetchDKVSKey(key) {
+		return false
+	}
+	if hash != (chainhash.Hash{}) {
+		if _, err := sp.server.assetIndexer.GetDKVSRecordByHash(hash); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (sp *serverPeer) queueDKVSData(records []*wire.DKVSRecord, notFound []chainhash.Hash) {
+	const payloadBudget = 3500 * 1000
+	if len(records) == 0 {
+		sp.QueueMessage(&wire.MsgDKVSData{NotFound: notFound}, nil)
+		return
+	}
+	for len(records) > 0 {
+		count := 0
+		size := 16
+		for count < len(records) && count < wire.MaxDKVSRecordsPerMsg {
+			recordSize := wire.DKVSRecordSerializeSize(records[count])
+			if count > 0 && size+recordSize > payloadBudget {
+				break
+			}
+			size += recordSize
+			count++
+		}
+		response := &wire.MsgDKVSData{Records: records[:count]}
+		records = records[count:]
+		if len(records) == 0 {
+			response.NotFound = notFound
+		}
+		sp.QueueMessage(response, nil)
+	}
+}
+
+func (sp *serverPeer) relayDKVSRecord(record *wire.DKVSRecord) {
+	if record == nil || sp.server == nil {
+		return
+	}
+	hash := dkvsindexer.RecordHash(record)
+	sp.server.BroadcastMessage(&wire.MsgDKVSNotify{
+		EventType:    dkvsindexer.EventRecordUpdate,
+		Key:          record.Key,
+		KeyHash:      dkvsindexer.KeyHash(record.Key),
+		RecordHash:   hash,
+		Seq:          record.Seq,
+		ExpiryHeight: record.ExpiryHeight,
+		Size:         uint32(dkvsindexer.RecordSize(record)),
+		Flags:        record.Flags,
+	}, sp)
+}
+
 func (sp *serverPeer) shouldStoreDKVSKey(key string) bool {
 	return sp.shouldFetchDKVSKey(key)
 }
@@ -1683,7 +1796,35 @@ func (sp *serverPeer) queueDKVSSyncRequest(cursor []byte) {
 	if sp == nil {
 		return
 	}
-	sp.QueueMessage(sp.dkvsSyncRequest(cursor), nil)
+	sp.dkvsSyncMtx.Lock()
+	if len(cursor) == 0 {
+		if sp.dkvsSyncActive && !dkvsSyncSessionExpired(sp.dkvsSyncUpdated, time.Now(), 2*time.Minute) {
+			sp.dkvsSyncMtx.Unlock()
+			return
+		}
+		session, err := wire.RandomUint64()
+		if err != nil || session == 0 {
+			sp.dkvsSyncMtx.Unlock()
+			return
+		}
+		sp.dkvsSyncSession = session
+		sp.dkvsSyncRoot = chainhash.Hash{}
+		sp.dkvsSyncRootSet = false
+		sp.dkvsSyncActive = true
+		sp.dkvsSyncUpdated = time.Now()
+	} else if !sp.dkvsSyncActive {
+		sp.dkvsSyncMtx.Unlock()
+		return
+	}
+	sp.dkvsSyncCursor = append(sp.dkvsSyncCursor[:0], cursor...)
+	msg := sp.dkvsSyncRequest(cursor)
+	msg.SessionID = sp.dkvsSyncSession
+	sp.dkvsSyncMtx.Unlock()
+	sp.QueueMessage(msg, nil)
+}
+
+func dkvsSyncSessionExpired(updated, now time.Time, timeout time.Duration) bool {
+	return updated.IsZero() || timeout <= 0 || !now.Before(updated.Add(timeout))
 }
 
 func (sp *serverPeer) dkvsSyncRequest(cursor []byte) *wire.MsgDKVSSyncRequest {
@@ -1694,17 +1835,12 @@ func (sp *serverPeer) dkvsSyncRequest(cursor []byte) *wire.MsgDKVSSyncRequest {
 	if sp == nil || sp.server == nil || sp.server.assetIndexer == nil || sp.isLocalMiner() {
 		return msg
 	}
-	filters := dkvsWireFiltersFromSubscriptions(sp.server.assetIndexer.ListDKVSSubscriptions())
-	if dkvsSyncRequestPayloadLen(cursor, filters) <= legacyDKVSSyncRequestMaxPayload {
-		msg.Filters = filters
-	}
+	msg.Filters = dkvsWireFiltersFromSubscriptions(sp.server.assetIndexer.ListDKVSSubscriptions())
 	return msg
 }
 
-const legacyDKVSSyncRequestMaxPayload = wire.MaxVarIntPayload + wire.MaxDKVSCursorSize + 4
-
 func dkvsSyncRequestPayloadLen(cursor []byte, filters []wire.DKVSSyncFilter) int {
-	size := wire.VarIntSerializeSize(uint64(len(cursor))) + len(cursor) + 4
+	size := 8 + wire.VarIntSerializeSize(uint64(len(cursor))) + len(cursor) + 4
 	if len(filters) == 0 {
 		return size
 	}
@@ -1760,6 +1896,10 @@ func shouldRequestDKVSSync(localServices, remoteServices wire.ServiceFlag, subsc
 		return true
 	}
 	return subscriptionCount > 0
+}
+
+func shouldRunDKVSAntiEntropy(localServices wire.ServiceFlag, subscriptionCount int) bool {
+	return localServices&wire.SFNodeMiner == wire.SFNodeMiner || subscriptionCount > 0
 }
 
 func dkvsCheckpointRootMismatch(localRootHex string, remoteRoot chainhash.Hash) bool {
@@ -2760,6 +2900,23 @@ func (s *server) RequestDKVSSyncFromMinerPeers() {
 	}()
 }
 
+func (s *server) dkvsAntiEntropyHandler(interval time.Duration) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			subscriptionCount := len(s.assetIndexer.ListDKVSSubscriptions())
+			if shouldRunDKVSAntiEntropy(s.services, subscriptionCount) {
+				s.RequestDKVSSyncFromMinerPeers()
+			}
+		case <-s.quit:
+			return
+		}
+	}
+}
+
 // ConnectedCount returns the number of currently connected peers.
 func (s *server) ConnectedCount() int32 {
 	replyChan := make(chan int32)
@@ -2916,6 +3073,8 @@ func (s *server) Start() {
 	}
 
 	s.assetIndexer.Start()
+	s.wg.Add(1)
+	go s.dkvsAntiEntropyHandler(time.Minute)
 
 	if s.btcCpuMiner != nil {
 		st := s.btcCpuMiner.Status()

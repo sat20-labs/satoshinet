@@ -478,7 +478,10 @@ func matchLimitOrderAmount(buy, sell *InvokeItem, price *scommon.Decimal) (*scom
 		return parseDecimalOrZero("0"), 0, nil
 	}
 	matchAmt := sellRemaining
-	sellValue := scommon.DecimalMul(matchAmt, price).Ceil()
+	sellValue, err := scommon.DecimalMul(matchAmt, price).CeilInt64()
+	if err != nil {
+		return nil, 0, fmt.Errorf("match sell value: %w", err)
+	}
 	if sellValue > buy.RemainingValue {
 		toBuy := scommon.NewDecimal(buy.RemainingValue, sellRemaining.Precision)
 		matchAmt = scommon.DecimalDiv(toBuy, price)
@@ -506,7 +509,10 @@ func matchLimitOrderAmount(buy, sell *InvokeItem, price *scommon.Decimal) (*scom
 	if matchAmt.Sign() <= 0 {
 		return parseDecimalOrZero("0"), 0, nil
 	}
-	matchValue := scommon.DecimalMul(price, matchAmt).Ceil()
+	matchValue, err := scommon.DecimalMul(price, matchAmt).CeilInt64()
+	if err != nil {
+		return nil, 0, fmt.Errorf("match value: %w", err)
+	}
 	if matchAmt.Sign() > 0 && matchValue == 0 {
 		matchValue = 1
 	}
@@ -1115,7 +1121,11 @@ func settleAMMSell(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64, 
 	if newPoolGasDecimal == nil {
 		return SettlementDeal{}, SettlementTransfer{}, false, fmt.Errorf("failed to calculate AMM sell output")
 	}
-	outGas := poolGas - newPoolGasDecimal.Ceil()
+	newPoolGas, err := newPoolGasDecimal.CeilInt64()
+	if err != nil {
+		return SettlementDeal{}, SettlementTransfer{}, false, fmt.Errorf("AMM sell pool gas: %w", err)
+	}
+	outGas := poolGas - newPoolGas
 	if outGas <= 0 || outGas > availableGas {
 		item.Reason = InvokeReasonNoEnoughAsset
 		transfer := markItemRefunded(item)
@@ -1192,13 +1202,17 @@ func calcSwapServiceFee(value int64) int64 {
 	return value/1000*SwapServiceFeeRatio + value%1000*SwapServiceFeeRatio/1000
 }
 
-func calcLimitOrderTradingValue(amt, unitPrice string) int64 {
+func calcLimitOrderTradingValue(amt, unitPrice string) (int64, error) {
 	assetAmt := parseDecimalOrZero(amt)
 	price := parseDecimalOrZero(unitPrice)
 	if assetAmt.Sign() == 0 || price.Sign() == 0 {
-		return 0
+		return 0, nil
 	}
-	return scommon.DecimalMul(price, assetAmt).Ceil()
+	value, err := scommon.DecimalMul(price, assetAmt).CeilInt64()
+	if err != nil {
+		return 0, fmt.Errorf("limit order trading value: %w", err)
+	}
+	return value, nil
 }
 
 func mintLPTAmount(addAsset *scommon.Decimal, addGas int64, poolAsset *scommon.Decimal, poolGas int64, totalLPT *scommon.Decimal) *scommon.Decimal {

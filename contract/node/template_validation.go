@@ -25,6 +25,7 @@ type TemplateBlockExecutionConfig struct {
 	NewRuntime          TemplateRuntimeFactory
 	ResolveInvoker      template.InvokerResolver
 	ResolveOutput       template.ResultOutputResolver
+	ResolveResultScript template.ResultRecipientScriptResolver
 	ContractUTXOs       template.ContractUTXOProvider
 	AssetPrecision      contractframework.AssetPrecisionResolver
 	VerifyResult        func(resultTx *wire.MsgTx, expected []template.ResultPlan, status template.ResultStatus) error
@@ -228,15 +229,22 @@ func (v *TemplateBlockExecutionValidator) verifyResults(resultTxs []*wire.MsgTx,
 	if v.cfg.VerifyResult != nil {
 		return v.cfg.VerifyResult(resultTxs[0], plans, template.ResultStatusSuccess)
 	}
+	if v.cfg.ResolveOutput == nil {
+		return fmt.Errorf("missing template result output resolver")
+	}
+	if v.cfg.ResolveResultScript == nil {
+		return fmt.Errorf("missing template result output script resolver")
+	}
 	return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-		Label:        "template",
-		ResultTx:     resultTxs[0],
-		Status:       template.ResultStatusSuccess,
-		Plans:        plans,
-		GasAssetName: contractGasAssetNameForParams(v.cfg.ChainParams),
-		Resolve:      v.cfg.ResolveOutput,
-		PlanCount:    templateResultPlanCount,
-		CheckPayload: true,
+		Label:         "template",
+		ResultTx:      resultTxs[0],
+		Status:        template.ResultStatusSuccess,
+		Plans:         plans,
+		GasAssetName:  contractGasAssetNameForParams(v.cfg.ChainParams),
+		Resolve:       v.cfg.ResolveOutput,
+		ResolveScript: v.cfg.ResolveResultScript,
+		PlanCount:     templateResultPlanCount,
+		CheckPayload:  true,
 	})
 }
 

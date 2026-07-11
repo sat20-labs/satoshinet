@@ -1117,6 +1117,9 @@ func readString(r io.Reader, pver uint32, buf, s []byte,
 		// Empty string
 		return "", nil
 	}
+	if count > uint64(len(s)) {
+		return "", fmt.Errorf("%s is too large: %d > %d", fieldName, count, len(s))
+	}
 
 	_, err = io.ReadFull(r, s[:count])
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -73,8 +74,8 @@ func TestParseKey(t *testing.T) {
 	for _, key := range []string{
 		"/mail/box/msg/msg-1",
 		"/mail/box/share/pkg/share-1",
-		"/blob/object/manifest",
-		"/blob/object/chunk/0",
+		"/blob/" + account + "/object/manifest",
+		"/blob/" + account + "/object/chunk/0",
 		"/tmp/random",
 		"/svc/service/path",
 		"/name/alice",
@@ -99,8 +100,9 @@ func TestParseKey(t *testing.T) {
 		"/mail/box/other/msg-1",
 		"/mail/box/msg",
 		"/mail/box/share/pkg",
-		"/blob/object/chunk/0/extra",
-		"/blob/object",
+		"/blob/" + account + "/object/chunk/0/extra",
+		"/blob/" + account + "/object",
+		"/blob/not-an-account/object/manifest",
 		"/tmp/random/extra",
 		"/svc/service",
 		"/name/alice/profile",
@@ -117,7 +119,7 @@ func TestParseKey(t *testing.T) {
 	for _, prefix := range []string{
 		"/personal/" + account,
 		"/mail/box",
-		"/blob/object",
+		"/blob/" + account + "/object",
 		"/svc/service",
 	} {
 		if _, err := ParsePrefix(prefix); err != nil {
@@ -193,6 +195,36 @@ func TestPersonalPermissionAndCheckpoint(t *testing.T) {
 	}
 	if cp.ActiveRecordCount != 1 || cp.ActiveRecordRoot == "" {
 		t.Fatalf("bad checkpoint %#v", cp)
+	}
+}
+
+func TestCheckpointCacheIsClonedAndInvalidated(t *testing.T) {
+	idx := testIndexer(t)
+	checkpoint, err := idx.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint.NamespaceRoots["personal"] = "corrupt"
+	cached, err := idx.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.NamespaceRoots["personal"] == "corrupt" {
+		t.Fatalf("checkpoint cache exposed mutable map")
+	}
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.PutLocal(signedPersonalRecordWithKey(t, priv, 1, "value", 0)); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := idx.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ActiveRecordCount != 1 {
+		t.Fatalf("checkpoint cache was not invalidated: count=%d", updated.ActiveRecordCount)
 	}
 }
 
@@ -336,6 +368,16 @@ func (v testFeeVerifier) VerifyFeeProof(_, _ [32]byte, _ string, _ int, _ uint64
 type testAutopayStateProvider struct {
 	states map[string]*AutopayContractState
 	err    error
+}
+
+type countingAutopayStateProvider struct {
+	state *AutopayContractState
+	calls int
+}
+
+func (p *countingAutopayStateProvider) GetAutopayState(string) (*AutopayContractState, error) {
+	p.calls++
+	return cloneAutopayState(p.state), nil
 }
 
 func (p testAutopayStateProvider) GetAutopayState(contract string) (*AutopayContractState, error) {
@@ -619,6 +661,20 @@ func TestDefaultFeeVerifierRejectsMissingProof(t *testing.T) {
 	}
 }
 
+func TestDefaultFeeVerifierRejectsArbitraryProof(t *testing.T) {
+	idx := testIndexerWithConfig(t, Config{})
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
+	record.FeeProof = []byte{1}
+	signRecord(t, priv, record)
+	if _, err := idx.PutLocal(record); err != ErrFeeProofRequired {
+		t.Fatalf("arbitrary fee proof err=%v", err)
+	}
+}
+
 func TestJSONFeeVerifierRejectsMalformedProof(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -723,6 +779,124 @@ func TestAutopayFeeVerifierCapacity(t *testing.T) {
 	}
 	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, key1, 2, contract, 100)); err != nil || !updated {
 		t.Fatalf("autopay replacement updated=%v err=%v", updated, err)
+	}
+}
+
+func TestAutopayCapacityIsIndependentPerDelegate(t *testing.T) {
+	first, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := "shared-autopay"
+	recipient := "dkvs-fee-recipient"
+	firstPayer, err := P2TRAddressFromPubKeyBytes(first.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPayer, err := P2TRAddressFromPubKeyBytes(second.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &AutopayContractState{
+		TemplateName: "autopay.tc",
+		ServiceName:  "dkvs",
+		Recipient:    recipient,
+		FeeAssetName: "sat",
+		Status:       "active",
+		Delegates: map[string]AutopayDelegateState{
+			firstPayer:  {AmountPerBlock: "1", Balance: "10", Status: "active"},
+			secondPayer: {AmountPerBlock: "1", Balance: "10", Status: "active"},
+		},
+	}
+	idx := testIndexerWithConfig(t, Config{FeeVerifier: AutopayFeeVerifier{
+		StateProvider:         testAutopayStateProvider{states: map[string]*AutopayContractState{contract: state}},
+		Contract:              contract,
+		ServiceName:           "dkvs",
+		Recipient:             recipient,
+		FeeAssetName:          "sat",
+		FullRecordFeePerBlock: "1",
+		AddressParams:         &chaincfg.TestNetParams,
+	}})
+	firstKey := "/personal/" + AccountID(first.PubKey().SerializeCompressed()) + "/profile"
+	secondKey := "/personal/" + AccountID(second.PubKey().SerializeCompressed()) + "/profile"
+	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, first, firstKey, 1, contract, 100)); err != nil || !updated {
+		t.Fatalf("first delegate updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, second, secondKey, 1, contract, 100)); err != nil || !updated {
+		t.Fatalf("second delegate updated=%v err=%v", updated, err)
+	}
+}
+
+func TestAutopayCapacityReleasesExpiredRecord(t *testing.T) {
+	height := uint64(1)
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := "shared-autopay"
+	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &AutopayContractState{
+		TemplateName: "autopay.tc",
+		Status:       "active",
+		Delegates: map[string]AutopayDelegateState{
+			payer: {AmountPerBlock: "1", Balance: "10", Status: "active"},
+		},
+	}
+	idx := testIndexerWithConfig(t, Config{
+		CurrentHeight: func() uint64 { return height },
+		FeeVerifier: AutopayFeeVerifier{
+			StateProvider:         testAutopayStateProvider{states: map[string]*AutopayContractState{contract: state}},
+			FullRecordFeePerBlock: "1",
+			AddressParams:         &chaincfg.TestNetParams,
+		},
+	})
+	account := AccountID(priv.PubKey().SerializeCompressed())
+	first := signedRecordWithAutopayFee(t, priv, "/personal/"+account+"/first", 1, contract, 2)
+	if _, err := idx.PutLocal(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, "/personal/"+account+"/second", 1, contract, 100)); err != ErrFeeCapacityExceeded {
+		t.Fatalf("capacity before expiry err=%v", err)
+	}
+	height = 2
+	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, "/personal/"+account+"/second", 1, contract, 100)); err != nil || !updated {
+		t.Fatalf("capacity after expiry updated=%v err=%v", updated, err)
+	}
+}
+
+func TestHeightCachedAutopayStateProvider(t *testing.T) {
+	height := uint64(10)
+	base := &countingAutopayStateProvider{state: &AutopayContractState{
+		TemplateName: "autopay.tc",
+		Status:       "active",
+		Delegates:    map[string]AutopayDelegateState{"payer": {Status: "active"}},
+	}}
+	cached := &HeightCachedAutopayStateProvider{Provider: base, CurrentHeight: func() uint64 { return height }}
+	first, err := cached.GetAutopayState("contract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Status = "mutated"
+	second, err := cached.GetAutopayState("contract")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.calls != 1 || second.Status != "active" {
+		t.Fatalf("calls=%d second=%#v", base.calls, second)
+	}
+	height++
+	if _, err := cached.GetAutopayState("contract"); err != nil {
+		t.Fatal(err)
+	}
+	if base.calls != 2 {
+		t.Fatalf("calls after height change=%d", base.calls)
 	}
 }
 
@@ -914,8 +1088,8 @@ func TestSDKKeyBuildersAndSignedRecord(t *testing.T) {
 		func() (string, error) { return ServiceKey("wallet", "config") },
 		func() (string, error) { return MailMsgKey(AccountID(pub), "msg-1") },
 		func() (string, error) { return MailShareKey(AccountID(pub), "pkg", "share-1") },
-		func() (string, error) { return BlobManifestKey("object") },
-		func() (string, error) { return BlobChunkKey("object", 0) },
+		func() (string, error) { return BlobManifestKey(AccountID(pub), "object") },
+		func() (string, error) { return BlobChunkKey(AccountID(pub), "object", 0) },
 		func() (string, error) { return TmpKey("random") },
 		func() (string, error) { return SystemParamsKey(), nil },
 		func() (string, error) { return SystemMinerKey("miner-1") },
@@ -1141,14 +1315,15 @@ func TestSDKBuildSignedBlobRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifestRecord.Key != "/blob/object/manifest" || len(chunkRecords) != 2 {
+	accountID := AccountID(priv.PubKey().SerializeCompressed())
+	if manifestRecord.Key != "/blob/"+accountID+"/object/manifest" || len(chunkRecords) != 2 {
 		t.Fatalf("manifest=%s chunks=%d", manifestRecord.Key, len(chunkRecords))
 	}
 	idx := testIndexer(t)
-	if _, err := idx.PutLocal(chunkRecords[0]); err != nil {
+	if _, err := idx.PutLocal(manifestRecord); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := idx.PutLocal(manifestRecord); err != nil {
+	if _, err := idx.PutLocal(chunkRecords[0]); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := idx.PutLocal(chunkRecords[1]); err != nil {
@@ -1754,6 +1929,38 @@ func TestMailPermissions(t *testing.T) {
 	}
 }
 
+func TestMailboxMessageUpdateAndDeletePermissions(t *testing.T) {
+	idx := testIndexer(t)
+	owner, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attacker, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "/mail/" + AccountID(owner.PubKey().SerializeCompressed()) + "/msg/message-1"
+	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 1, []byte("message"), 0)); err != nil || !updated {
+		t.Fatalf("initial message updated=%v err=%v", updated, err)
+	}
+	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, []byte("replace"), 0)); err != ErrPermissionDenied {
+		t.Fatalf("attacker update err=%v", err)
+	}
+	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, nil, FlagTombstone)); err != ErrPermissionDenied {
+		t.Fatalf("attacker tombstone err=%v", err)
+	}
+	if updated, err := idx.PutLocal(signedRecordWithValue(t, owner, key, 2, nil, FlagTombstone)); err != nil || !updated {
+		t.Fatalf("owner tombstone updated=%v err=%v", updated, err)
+	}
+	if _, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 3, []byte("reused"), 0)); err != ErrPermissionDenied {
+		t.Fatalf("reused message key err=%v", err)
+	}
+}
+
 func TestMailboxQuotaAndTombstone(t *testing.T) {
 	idx := testIndexerWithConfig(t, Config{
 		AllowFreeLocal: true,
@@ -2044,6 +2251,64 @@ func TestNameTombstonePermissionAllowsExistingOwnerAndNewOwnerReplace(t *testing
 	}
 }
 
+func TestNameMultipleCurrentKeysUseNormalSelector(t *testing.T) {
+	oldKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := StaticDIDResolver{Names: map[string]DIDIdentity{
+		"alice": {
+			CanonicalName: "alice",
+			NameID:        "alice",
+			SigningKeys: [][]byte{
+				oldKey.PubKey().SerializeCompressed(),
+				newKey.PubKey().SerializeCompressed(),
+			},
+			Active: true,
+		},
+	}}
+	idx := testIndexerWithConfig(t, Config{AllowFreeLocal: true, Resolver: resolver})
+	if updated, err := idx.PutLocal(signedRecordForKey(t, oldKey, "/name/alice", 10)); err != nil || !updated {
+		t.Fatalf("old key put updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, newKey, "/name/alice", 1)); err != nil || updated {
+		t.Fatalf("second current key low seq updated=%v err=%v", updated, err)
+	}
+	resolver.Names["alice"] = DIDIdentity{
+		CanonicalName: "alice",
+		NameID:        "alice",
+		SigningKeys:   [][]byte{newKey.PubKey().SerializeCompressed()},
+		Active:        true,
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, newKey, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("new owner low seq updated=%v err=%v", updated, err)
+	}
+}
+
+func TestRejectsUnknownFlagsAndFutureIssueTime(t *testing.T) {
+	idx := testIndexer(t)
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownFlag := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
+	unknownFlag.Flags = 1 << 10
+	signRecord(t, priv, unknownFlag)
+	if _, err := idx.PutLocal(unknownFlag); err != ErrInvalidRecord {
+		t.Fatalf("unknown flag err=%v", err)
+	}
+	future := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
+	future.IssueTime = currentUnixMilli() + MaxFutureIssueTimeSkew + 60_000
+	signRecord(t, priv, future)
+	if _, err := idx.PutLocal(future); err != ErrInvalidRecord {
+		t.Fatalf("future issue time err=%v", err)
+	}
+}
+
 func TestBlobManifestAndChunkValidation(t *testing.T) {
 	idx := testIndexer(t)
 	priv, err := btcec.NewPrivateKey()
@@ -2058,44 +2323,58 @@ func TestBlobManifestAndChunkValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, "/blob/object/chunk/0", 1, chunk0, 0)); err != nil || !updated {
-		t.Fatalf("chunk before manifest updated=%v err=%v", updated, err)
+	accountID := AccountID(priv.PubKey().SerializeCompressed())
+	prefix := "/blob/" + accountID + "/object"
+	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/0", 1, chunk0, 0)); err != ErrBlobManifestInvalid {
+		t.Fatalf("chunk before manifest err=%v", err)
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, "/blob/object/manifest", 1, manifestBytes, 0)); err != nil || !updated {
+	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/manifest", 1, manifestBytes, 0)); err != nil || !updated {
 		t.Fatalf("manifest put updated=%v err=%v", updated, err)
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, "/blob/object/chunk/1", 1, chunk1, 0)); err != nil || !updated {
+	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/0", 1, chunk0, 0)); err != nil || !updated {
+		t.Fatalf("chunk 0 after manifest updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/1", 1, chunk1, 0)); err != nil || !updated {
 		t.Fatalf("chunk after manifest updated=%v err=%v", updated, err)
 	}
 
-	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, "/blob/object/chunk/1", 2, []byte("bad"), 0)); err != ErrBlobChunkInvalid {
+	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/1", 2, []byte("bad"), 0)); err != ErrBlobChunkInvalid {
 		t.Fatalf("bad chunk err=%v", err)
 	}
 }
 
-func TestBlobManifestRejectsExistingBadChunk(t *testing.T) {
+func TestBlobRejectsOtherAccountAndMixedGeneration(t *testing.T) {
 	idx := testIndexer(t)
-	priv, err := btcec.NewPrivateKey()
+	owner, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	chunk0 := []byte("hello")
-	chunk1 := []byte(" world")
-	manifest := testBlobManifest(t, chunk0, chunk1)
+	manifest := testBlobManifest(t, chunk0)
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, "/blob/object/chunk/0", 1, []byte("bad"), 0)); err != nil {
+	accountID := AccountID(owner.PubKey().SerializeCompressed())
+	prefix := "/blob/" + accountID + "/object"
+	if _, err := idx.PutLocal(signedRecordWithValue(t, other, prefix+"/manifest", 1, manifestBytes, 0)); err != ErrPermissionDenied {
+		t.Fatalf("other account manifest err=%v", err)
+	}
+	if _, err := idx.PutLocal(signedRecordWithValue(t, owner, prefix+"/manifest", 2, manifestBytes, 0)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, "/blob/object/manifest", 1, manifestBytes, 0)); err != ErrBlobChunkInvalid {
-		t.Fatalf("manifest with bad existing chunk err=%v", err)
+	if _, err := idx.PutLocal(signedRecordWithValue(t, owner, prefix+"/chunk/0", 1, chunk0, 0)); err != ErrBlobChunkInvalid {
+		t.Fatalf("mixed generation chunk err=%v", err)
 	}
 }
 
 func TestBlobKeyRequiresNumericChunkIndex(t *testing.T) {
-	for _, key := range []string{"/blob/object/chunk/a", "/blob/object/chunk/-1"} {
+	accountID := strings.Repeat("a", sha256.Size*2)
+	for _, key := range []string{"/blob/" + accountID + "/object/chunk/a", "/blob/" + accountID + "/object/chunk/-1"} {
 		if _, err := ParseKey(key); err != ErrInvalidKey {
 			t.Fatalf("blob key %s err=%v", key, err)
 		}
@@ -2279,9 +2558,9 @@ func TestSubscriptionValidationAndMatching(t *testing.T) {
 			misses:  []string{"/tmp/other"},
 		},
 		{
-			sub:     Subscription{Type: SubscriptionPrefix, Target: "/blob/object"},
-			matches: []string{"/blob/object/manifest", "/blob/object/chunk/0"},
-			misses:  []string{"/blob/other/manifest"},
+			sub:     Subscription{Type: SubscriptionPrefix, Target: "/blob/account/object"},
+			matches: []string{"/blob/account/object/manifest", "/blob/account/object/chunk/0"},
+			misses:  []string{"/blob/account/other/manifest"},
 		},
 		{
 			sub:     Subscription{Type: SubscriptionMailbox, Target: "box"},
@@ -2395,6 +2674,28 @@ func TestSubscribeNotifiesCallback(t *testing.T) {
 	}
 	if len(notified) != 1 {
 		t.Fatalf("invalid subscription should not notify: %v", notified)
+	}
+}
+
+func TestSubscriptionLimit(t *testing.T) {
+	idx := testIndexer(t)
+	for n := 0; n < wire.MaxDKVSSyncFilters; n++ {
+		key := fmt.Sprintf("/tmp/sub-%d", n)
+		if _, _, err := idx.Subscribe(Subscription{Type: SubscriptionKey, Target: key}); err != nil {
+			t.Fatalf("subscribe %d: %v", n, err)
+		}
+	}
+	if _, _, err := idx.Subscribe(Subscription{Type: SubscriptionKey, Target: "/tmp/overflow"}); err != ErrTooManySubscriptions {
+		t.Fatalf("overflow err=%v want=%v", err, ErrTooManySubscriptions)
+	}
+	if _, _, err := idx.Subscribe(Subscription{Type: SubscriptionKey, Target: "/tmp/sub-0"}); err != nil {
+		t.Fatalf("duplicate subscription at limit: %v", err)
+	}
+}
+
+func TestBlobAccountIDMustBeSHA256Hex(t *testing.T) {
+	if _, err := ParseKey("/blob/" + strings.Repeat("g", 64) + "/photo.jpg/manifest"); err != ErrInvalidKey {
+		t.Fatalf("non-hex blob account id err=%v", err)
 	}
 }
 
@@ -2529,5 +2830,81 @@ func TestUsageFiltersActiveRecordsByPrefix(t *testing.T) {
 	}
 	if _, err := idx.Usage("bad"); err != ErrInvalidKey {
 		t.Fatalf("bad usage prefix err=%v", err)
+	}
+}
+
+func TestListPrefixUsesSegmentBoundaryAndExactTotal(t *testing.T) {
+	idx := testIndexer(t)
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/personal/" + AccountID(priv.PubKey().SerializeCompressed())
+	for seq, key := range []string{base + "/a", base + "/ab", base + "/ac"} {
+		if _, err := idx.PutLocal(signedRecordWithValue(t, priv, key, uint64(seq+1), []byte(key), 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exact, total, err := idx.ListPrefix(base+"/a", 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(exact) != 1 || exact[0].Key != base+"/a" {
+		t.Fatalf("exact records=%v total=%d", exact, total)
+	}
+	all, total, err := idx.ListPrefix(base, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(all) != 1 {
+		t.Fatalf("paged records=%d total=%d", len(all), total)
+	}
+}
+
+func TestExpiredTombstoneFloorPreventsOfflineRecordResurrection(t *testing.T) {
+	height := uint64(1)
+	newIndexer := func(t *testing.T) *Indexer {
+		database := dbpkg.NewKVDB(t.TempDir())
+		if database == nil {
+			t.Fatal("NewKVDB failed")
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		return New(database, Config{AllowFreeLocal: true, CurrentHeight: func() uint64 { return height }})
+	}
+	source := newIndexer(t)
+	offline := newIndexer(t)
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := signedPersonalRecordWithKey(t, priv, 1, "old", 0)
+	old.ExpiryHeight = 100
+	signRecord(t, priv, old)
+	if _, err := offline.PutLocal(old); err != nil {
+		t.Fatal(err)
+	}
+	tombstone := signedPersonalRecordWithKey(t, priv, 2, "", FlagTombstone)
+	tombstone.ExpiryHeight = 2
+	signRecord(t, priv, tombstone)
+	if _, err := source.PutLocal(tombstone); err != nil {
+		t.Fatal(err)
+	}
+	height = 3
+	records, _, done, _, err := source.Sync(nil, 10)
+	if err != nil || !done || len(records) != 1 || !IsTombstone(records[0].Flags) {
+		t.Fatalf("expired tombstone sync records=%d done=%v err=%v", len(records), done, err)
+	}
+	if updated, err := offline.PutRemote(records[0]); err != nil || !updated {
+		t.Fatalf("apply tombstone floor updated=%v err=%v", updated, err)
+	}
+	if updated, err := offline.PutRemote(old); err != nil || updated {
+		t.Fatalf("replayed old record updated=%v err=%v", updated, err)
+	}
+	stored, err := offline.Get(old.Key)
+	if err != nil || !IsTombstone(stored.Flags) {
+		t.Fatalf("stored floor=%#v err=%v", stored, err)
+	}
+	if _, err := source.PutLocal(tombstone); err != ErrExpiredRecord {
+		t.Fatalf("local expired tombstone err=%v", err)
 	}
 }

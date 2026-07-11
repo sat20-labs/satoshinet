@@ -125,6 +125,32 @@ func TestVerifyCanonicalResultTxUsesExactSerialization(t *testing.T) {
 	require.ErrorContains(t, verify(mutated), "non-canonical")
 }
 
+func TestSingleResultPolicyRejectsSemanticScriptSubstitution(t *testing.T) {
+	plan := ResultPlan{
+		Contract: "test",
+		Outputs:  []ResultOutput{{To: "recipient", Value: 1}},
+	}
+	resolveScript := func(ResultOutput) ([]byte, error) {
+		return []byte{txscript.OP_TRUE}, nil
+	}
+	resolveOutput := func(tx *wire.MsgTx) ([]ResultOutput, error) {
+		return []ResultOutput{{To: "recipient", Value: tx.TxOut[0].Value}}, nil
+	}
+	policy := SingleResultTxPolicy{
+		Label:         "test",
+		Status:        contract.ResultStatusSuccess,
+		ResolveScript: resolveScript,
+		ResolveOutput: resolveOutput,
+	}
+	valid, err := policy.BuildTx([]ResultPlan{plan})
+	require.NoError(t, err)
+	require.NoError(t, policy.VerifyTx(valid, []ResultPlan{plan}))
+
+	mutated := valid.Copy()
+	mutated.TxOut[0].PkScript = []byte{txscript.OP_FALSE}
+	require.ErrorContains(t, policy.VerifyTx(mutated, []ResultPlan{plan}), "non-canonical")
+}
+
 func TestVerifyCanonicalResultTxRequiresOutputResolver(t *testing.T) {
 	tx := wire.NewMsgTx(2)
 	input := OutPoint{TxID: "0100000000000000000000000000000000000000000000000000000000000000", Vout: 1}

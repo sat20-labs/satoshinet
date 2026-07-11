@@ -165,6 +165,7 @@ type BlockExecutionRequest struct {
 	Block                     BlockContext
 	ResolveCaller             CallerResolver
 	ResolveGasRefundRecipient GasRefundRecipientResolver
+	ResolveResultScript       ResultRecipientScriptResolver
 	VerifyResult              ResultVerifier
 	ResolveTriggers           TriggerResolver
 	ContractUTXOs             ContractUTXOProvider
@@ -252,6 +253,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		Block:                     req.Block,
 		ResolveCaller:             req.ResolveCaller,
 		ResolveGasRefundRecipient: req.ResolveGasRefundRecipient,
+		ResolveResultScript:       req.ResolveScript,
 		VerifyResult:              verifier.Verify,
 		ResolveTriggers:           req.ResolveTriggers,
 		ContractUTXOs:             overlay.Provider,
@@ -416,6 +418,7 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 	}
 	runtime.ContractPrefix = prefix
 	runtime.GasConfig = req.GasConfig
+	runtime.ResolveResultScript = req.ResolveResultScript
 	if req.ContractUTXOs != nil {
 		runtime.AssetBalances = NewContractUTXOAssetView(prefix, req.ContractUTXOs)
 	}

@@ -37,7 +37,15 @@ var (
 	triggerRegisterHeightSelector  = methodSelector("registerHeightTrigger(string,uint256,uint256,bytes)")
 )
 
-const evmAmountMaxPrecision = scommon.MAX_PRECISION - 1
+const (
+	evmAmountMaxPrecision      = scommon.MAX_PRECISION
+	maxEVMPrecompileInputBytes = 64 * 1024
+	maxABIDynamicBytes         = 4 * 1024
+	maxTransferAssetCount      = 128
+	maxExecutionAssetIntents   = 256
+	maxTriggerIDBytes          = 128
+	maxTriggerCalldataBytes    = 16 * 1024
+)
 
 type AssetBalanceReader interface {
 	AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error)
@@ -296,6 +304,9 @@ func (p *AssetPrecompile) RequiredGas(input []byte) uint64 {
 }
 
 func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
+	if len(input) > maxEVMPrecompileInputBytes {
+		return nil, errors.New("asset precompile input too large")
+	}
 	selector, args, err := splitSelector(input)
 	if err != nil {
 		return nil, err
@@ -433,6 +444,9 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 		return abiEncodeDynamicBytes([]byte(result.String())), nil
 	case assetMulAmountSelector:
 		result, err := runAmountBinaryOp(args, func(left, right *scommon.Decimal) (*scommon.Decimal, error) {
+			if left.Precision > evmAmountMaxPrecision-right.Precision {
+				return nil, errors.New("amount multiplication precision exceeds protocol maximum")
+			}
 			return left.MulV2(right), nil
 		})
 		if err != nil {
@@ -475,7 +489,11 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 		if amount.Sign() < 0 {
 			return nil, errors.New("amount must be non-negative")
 		}
-		return abiEncodeUint64(uint64(amount.Floor())), nil
+		value, err := amount.FloorInt64()
+		if err != nil {
+			return nil, err
+		}
+		return abiEncodeUint64(uint64(value)), nil
 	case assetAmountToUintCeilSelector:
 		amountText, err := abiReadString(args, 0)
 		if err != nil {
@@ -488,7 +506,11 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 		if amount.Sign() < 0 {
 			return nil, errors.New("amount must be non-negative")
 		}
-		return abiEncodeUint64(uint64(amount.Ceil())), nil
+		value, err := amount.CeilInt64()
+		if err != nil {
+			return nil, err
+		}
+		return abiEncodeUint64(uint64(value)), nil
 	default:
 		return nil, fmt.Errorf("unknown asset precompile selector 0x%x", selector)
 	}
@@ -516,6 +538,9 @@ func (p *TriggerPrecompile) RequiredGas(input []byte) uint64 {
 }
 
 func (p *TriggerPrecompile) Run(input []byte) ([]byte, error) {
+	if len(input) > maxEVMPrecompileInputBytes {
+		return nil, errors.New("trigger precompile input too large")
+	}
 	if p.callContext.readOnly() {
 		return nil, vm.ErrWriteProtection
 	}
@@ -565,12 +590,21 @@ func DecodeTransferAssetCall(input []byte) (assetName, to string, amount *scommo
 	if err != nil {
 		return "", "", nil, nil, err
 	}
-	if amount.Sign() < 0 {
-		return "", "", nil, nil, errors.New("asset amount must be non-negative")
+	if assetName == "" {
+		return "", "", nil, nil, errors.New("asset name is empty")
+	}
+	if to == "" {
+		return "", "", nil, nil, errors.New("asset recipient is empty")
+	}
+	if amount.Sign() <= 0 {
+		return "", "", nil, nil, errors.New("asset amount must be positive")
 	}
 	extraData, err = abiReadDynamicBytes(args, 3)
 	if err != nil {
 		return "", "", nil, nil, err
+	}
+	if len(extraData) != 0 {
+		return "", "", nil, nil, errors.New("asset transfer extra data is not supported")
 	}
 	return assetName, to, amount, extraData, nil
 }
@@ -614,6 +648,15 @@ func DecodeTransferAssetsCall(input []byte) ([]AssetTransferRequest, error) {
 	}
 	out := make([]AssetTransferRequest, len(assetNames))
 	for i := range assetNames {
+		if assetNames[i] == "" {
+			return nil, errors.New("transferAssets asset name is empty")
+		}
+		if recipients[i] == "" {
+			return nil, errors.New("transferAssets recipient is empty")
+		}
+		if len(extraData[i]) != 0 {
+			return nil, errors.New("transferAssets extra data is not supported")
+		}
 		amount, err := ParseDecimalAmountString(amountTexts[i])
 		if err != nil {
 			return nil, err
@@ -816,6 +859,9 @@ func runAmountBinaryOp(args []byte, op func(*scommon.Decimal, *scommon.Decimal) 
 	if result == nil {
 		return nil, errors.New("amount operation failed")
 	}
+	if err := result.Validate(); err != nil {
+		return nil, fmt.Errorf("amount operation result: %w", err)
+	}
 	return result, nil
 }
 
@@ -823,6 +869,9 @@ func decodeTriggerRegistration(args []byte) (string, uint64, int64, []byte, erro
 	id, err := abiReadString(args, 0)
 	if err != nil {
 		return "", 0, 0, nil, err
+	}
+	if id == "" || len(id) > maxTriggerIDBytes {
+		return "", 0, 0, nil, errors.New("invalid trigger ID length")
 	}
 	at, err := abiReadUint64(args, 1)
 	if err != nil {
@@ -836,7 +885,7 @@ func decodeTriggerRegistration(args []byte) (string, uint64, int64, []byte, erro
 	if err != nil {
 		return "", 0, 0, nil, err
 	}
-	calldata, err := abiReadDynamicBytes(args, 3)
+	calldata, err := abiReadDynamicBytesLimit(args, 3, maxTriggerCalldataBytes)
 	if err != nil {
 		return "", 0, 0, nil, err
 	}
@@ -911,7 +960,7 @@ func abiReadString(args []byte, index int) (string, error) {
 }
 
 func abiReadStringArray(args []byte, index int) ([]string, error) {
-	raw, err := abiReadDynamicArray(args, index)
+	raw, err := abiReadDynamicArray(args, index, maxTransferAssetCount, maxABIDynamicBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -923,15 +972,16 @@ func abiReadStringArray(args []byte, index int) ([]string, error) {
 }
 
 func abiReadBytesArray(args []byte, index int) ([][]byte, error) {
-	return abiReadDynamicArray(args, index)
+	return abiReadDynamicArray(args, index, maxTransferAssetCount, maxABIDynamicBytes)
 }
 
-func abiReadDynamicArray(args []byte, index int) ([][]byte, error) {
+func abiReadDynamicArray(args []byte, index int, maxCount int, maxItemBytes uint64) ([][]byte, error) {
 	offset, err := abiReadUint64(args, index)
 	if err != nil {
 		return nil, err
 	}
-	if offset > uint64(len(args)) || offset+32 > uint64(len(args)) {
+	limit := uint64(len(args))
+	if offset > limit || limit-offset < 32 {
 		return nil, errors.New("ABI array offset out of bounds")
 	}
 	if offset%32 != 0 {
@@ -941,12 +991,11 @@ func abiReadDynamicArray(args []byte, index int) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if count > uint64(math.MaxInt32) {
+	if count > uint64(maxCount) {
 		return nil, errors.New("ABI array length too large")
 	}
 	headStart := offset + 32
-	headEnd := headStart + count*32
-	if headEnd > uint64(len(args)) {
+	if count > (limit-headStart)/32 {
 		return nil, errors.New("ABI array head out of bounds")
 	}
 	out := make([][]byte, int(count))
@@ -958,8 +1007,11 @@ func abiReadDynamicArray(args []byte, index int) ([][]byte, error) {
 		if itemOffset%32 != 0 {
 			return nil, errors.New("ABI array item offset is not word aligned")
 		}
+		if itemOffset > limit-headStart {
+			return nil, errors.New("ABI array item offset out of bounds")
+		}
 		absolute := headStart + itemOffset
-		if absolute < headStart || absolute+32 > uint64(len(args)) {
+		if limit-absolute < 32 {
 			return nil, errors.New("ABI array item offset out of bounds")
 		}
 		length, err := abiWordToUint64(args[absolute : absolute+32])
@@ -967,11 +1019,11 @@ func abiReadDynamicArray(args []byte, index int) ([][]byte, error) {
 			return nil, err
 		}
 		start := absolute + 32
-		end := start + length
-		if end > uint64(len(args)) {
+		if length > maxItemBytes || length > limit-start {
 			return nil, errors.New("ABI array item out of bounds")
 		}
-		item := make([]byte, length)
+		end := start + length
+		item := make([]byte, int(length))
 		copy(item, args[start:end])
 		out[i] = item
 	}
@@ -979,11 +1031,16 @@ func abiReadDynamicArray(args []byte, index int) ([][]byte, error) {
 }
 
 func abiReadDynamicBytes(args []byte, index int) ([]byte, error) {
+	return abiReadDynamicBytesLimit(args, index, maxABIDynamicBytes)
+}
+
+func abiReadDynamicBytesLimit(args []byte, index int, maxBytes uint64) ([]byte, error) {
 	offset, err := abiReadUint64(args, index)
 	if err != nil {
 		return nil, err
 	}
-	if offset > uint64(len(args)) || offset+32 > uint64(len(args)) {
+	limit := uint64(len(args))
+	if offset > limit || limit-offset < 32 {
 		return nil, errors.New("ABI dynamic offset out of bounds")
 	}
 	if offset%32 != 0 {
@@ -995,11 +1052,11 @@ func abiReadDynamicBytes(args []byte, index int) ([]byte, error) {
 		return nil, err
 	}
 	start := offset + 32
-	end := start + length
-	if end > uint64(len(args)) {
+	if length > maxBytes || length > limit-start {
 		return nil, errors.New("ABI dynamic value out of bounds")
 	}
-	out := make([]byte, length)
+	end := start + length
+	out := make([]byte, int(length))
 	copy(out, args[start:end])
 	return out, nil
 }
@@ -1013,11 +1070,11 @@ func abiReadUint64(args []byte, index int) (uint64, error) {
 }
 
 func abiReadWord(args []byte, index int) ([]byte, error) {
-	start := index * 32
-	end := start + 32
-	if start < 0 || end > len(args) {
+	if index < 0 || len(args) < 32 || index > (len(args)-32)/32 {
 		return nil, errors.New("ABI word out of bounds")
 	}
+	start := index * 32
+	end := start + 32
 	return args[start:end], nil
 }
 

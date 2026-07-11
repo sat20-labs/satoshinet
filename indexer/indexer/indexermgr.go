@@ -43,6 +43,8 @@ type DKVSIntegrationConfig struct {
 	FeeVerifier                  dkvs_indexer.FeeVerifier
 	FeeVerifierHTTPEndpoint      string
 	AutopayStateProvider         dkvs_indexer.AutopayStateProvider
+	AutopayContract              string
+	AutopayServiceName           string
 	AutopayFeeRecipient          string
 	AutopayFeeAssetName          string
 	AutopayFullRecordFeePerBlock string
@@ -211,7 +213,15 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 	autopayFeeRecipient := ext.AutopayFeeRecipient
 	autopayFeeAssetName := ext.AutopayFeeAssetName
 	autopayFullRecordFeePerBlock := ext.AutopayFullRecordFeePerBlock
+	autopayContract := ext.AutopayContract
+	autopayServiceName := ext.AutopayServiceName
 	if defaults.UseAutopayFeeVerifier {
+		if autopayContract == "" {
+			autopayContract = defaults.AutopayContract
+		}
+		if autopayServiceName == "" {
+			autopayServiceName = defaults.AutopayServiceName
+		}
 		if autopayFeeRecipient == "" {
 			autopayFeeRecipient = defaults.AutopayRecipient
 		}
@@ -227,8 +237,16 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 		if stateProvider == nil {
 			stateProvider = dkvs_indexer.RPCAutopayStateProvider{Call: satsnet_rpc.Call}
 		}
+		if _, ok := stateProvider.(*dkvs_indexer.HeightCachedAutopayStateProvider); !ok {
+			stateProvider = &dkvs_indexer.HeightCachedAutopayStateProvider{
+				Provider:      stateProvider,
+				CurrentHeight: cfg.CurrentHeight,
+			}
+		}
 		cfg.FeeVerifier = dkvs_indexer.AutopayFeeVerifier{
 			StateProvider:         stateProvider,
+			Contract:              autopayContract,
+			ServiceName:           autopayServiceName,
 			Recipient:             autopayFeeRecipient,
 			FeeAssetName:          autopayFeeAssetName,
 			FullRecordFeePerBlock: autopayFullRecordFeePerBlock,

@@ -17,11 +17,7 @@ import (
 var signatureDomain = []byte("satoshinet-dkvs-record-v1")
 
 func RecordSize(record *wire.DKVSRecord) int {
-	if record == nil {
-		return 0
-	}
-	return len(record.Key) + len(record.Value) + len(record.PubKey) +
-		len(record.Signature) + len(record.FeeProof) + 64
+	return wire.DKVSRecordSerializeSize(record)
 }
 
 func RecordHash(record *wire.DKVSRecord) chainhash.Hash {
@@ -101,15 +97,11 @@ func IsExpired(record *wire.DKVSRecord, height uint64, now uint64) bool {
 }
 
 func MarshalRecord(record *wire.DKVSRecord) ([]byte, error) {
-	return json.Marshal(record)
+	return wire.SerializeDKVSRecord(record)
 }
 
 func UnmarshalRecord(data []byte) (*wire.DKVSRecord, error) {
-	var record wire.DKVSRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, err
-	}
-	return &record, nil
+	return wire.DeserializeDKVSRecord(data)
 }
 
 func NewNotifyEvent(eventType uint32, record *wire.DKVSRecord, sourceNode string) (*NotifyEvent, error) {
