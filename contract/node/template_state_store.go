@@ -149,6 +149,9 @@ func dbStoreTemplateBlockState(dbTx database.Tx, hash *chainhash.Hash, store *te
 	if err != nil {
 		return err
 	}
+	if err := validatePersistedContractStateSize("template", encoded); err != nil {
+		return err
+	}
 	parent, err := dbTx.Metadata().CreateBucketIfNotExists(templateStateBucketName)
 	if err != nil {
 		return err

@@ -4678,7 +4678,7 @@ func contractAssetPrecisionResolver(assetIndexer *indexer.IndexerMgr) contractno
 		if name == nil {
 			return 0, false
 		}
-		info := assetIndexer.GetTickerInfo(name)
+		info := assetIndexer.GetInternalTickerInfo(name)
 		if info == nil {
 			return 0, false
 		}

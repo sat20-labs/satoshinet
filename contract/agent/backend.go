@@ -264,20 +264,6 @@ func (e *Backend) executeDefaultInvokeOutput(output ContractOutput) error {
 	if !e.Store.Exists(output.Contract) {
 		return errors.New("default invoke target contract does not exist")
 	}
-	fee, err := e.GasConfig.InvokeFee(e.BlockHeight)
-	if err != nil {
-		return err
-	}
-	if fee == nil || fee.Sign() == 0 || e.GasConfig.GasAssetName == "" {
-		return nil
-	}
-	hasRequiredGas, err := contractframework.OutputHasRequiredGas(output, e.GasConfig.GasAssetName, fee)
-	if err != nil {
-		return err
-	}
-	if !hasRequiredGas {
-		return fmt.Errorf("default agent invoke output %s gas below required %s", output.OutPoint, fee.String())
-	}
 	return nil
 }
 

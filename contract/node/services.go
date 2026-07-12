@@ -327,6 +327,7 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 	blockGasConfig = evmGasConfigForBlock(blockGasConfig, cfg)
 	contractPrefix := evmContractPrefix(cfg.ChainParams)
 	block := evm.BlockContext{
+		ChainID:       evmChainID(cfg.ChainParams),
 		Number:        uint64(req.Height),
 		Time:          uint64(req.Timestamp.Unix()),
 		GasLimit:      blockGasConfig.MaxGasPerBlock,
@@ -764,6 +765,7 @@ func NewEVMResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
 			ContractPrefix: contractPrefix,
 			GasConfig:      blockGasConfig,
 			Block: evm.BlockContext{
+				ChainID:       evmChainID(cfg.ChainParams),
 				Number:        uint64(req.Height),
 				Time:          uint64(req.Timestamp.Unix()),
 				GasLimit:      blockGasConfig.MaxGasPerBlock,
@@ -901,6 +903,10 @@ func contractBitcoinNet(params *chaincfg.Params) wire.BitcoinNet {
 		return wire.TestNet
 	}
 	return params.Net
+}
+
+func evmChainID(params *chaincfg.Params) uint64 {
+	return uint64(contractBitcoinNet(params))
 }
 
 func contractGasAssetNameForParams(params *chaincfg.Params) string {

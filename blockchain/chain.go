@@ -716,6 +716,15 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 	if err != nil {
 		return err
 	}
+	if releaser, ok := b.contractBlockValidator.(ContractBlockStateReleaser); ok {
+		for _, module := range []contractframework.ModuleType{
+			contractframework.ModuleTemplate,
+			contractframework.ModuleEVM,
+			contractframework.ModuleAgent,
+		} {
+			releaser.ReleaseContractBlockPostState(module, block.Hash())
+		}
+	}
 
 	// This node is now the end of the best chain.
 	b.bestChain.SetTip(node)
@@ -2183,6 +2192,12 @@ type ContractBlockValidator interface {
 // store type.
 type ContractBlockStateProvider interface {
 	ContractBlockPostState(module contractframework.ModuleType, hash *chainhash.Hash) (contractframework.EngineState, bool)
+}
+
+// ContractBlockStateReleaser releases transient validation snapshots only
+// after the enclosing block database transaction has committed successfully.
+type ContractBlockStateReleaser interface {
+	ReleaseContractBlockPostState(module contractframework.ModuleType, hash *chainhash.Hash)
 }
 
 // ContractStateManager persists and rolls back contract post-state snapshots.

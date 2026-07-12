@@ -695,6 +695,32 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if len(fundingOutputs) == 0 {
 		return nil
 	}
+	if len(fundingOutputs) > 1 {
+		funding := make([]OutPoint, 0, len(fundingOutputs))
+		for _, output := range fundingOutputs {
+			funding = append(funding, output.OutPoint)
+		}
+		intents, err := contractframework.NonGasFundingRefundIntents(expectedContract,
+			fundingOutputs, e.GasConfig.Normalize().GasAssetName, gasRefundRecipient)
+		if err != nil {
+			return err
+		}
+		return e.appendOutcome(contractframework.ExecutionOutcome{
+			Height:             int64(e.Block.Number),
+			TxID:               tx.TxID(),
+			Type:               TxTypeDeploy,
+			Kind:               ExecutionKindDeploy,
+			CallID:             callID,
+			Contract:           expectedContract,
+			Status:             ResultStatusInvalid,
+			GasUsed:            e.GasConfig.Normalize().DeployBaseGas,
+			FundingInputs:      funding,
+			GasRefundRecipient: gasRefundRecipient,
+			AssetIntents:       intents,
+			RequiresResult:     true,
+		})
+	}
+	fundingOutput := fundingOutputs[0]
 	intentStart := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Deploy(DeployRequest{
 		CallerAddress:    callerAddress,
@@ -703,7 +729,7 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		Gas:              validated.Payload.GasLimit,
 		DeployNonce:      validated.Payload.DeployNonce,
 		ExpectedContract: expectedContract,
-		FundingOutputs:   fundingOutputs,
+		FundingOutput:    &fundingOutput,
 		Block:            e.Block,
 	})
 	if !result.Contract.Equal(expectedContract) {

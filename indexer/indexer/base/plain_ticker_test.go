@@ -54,3 +54,14 @@ func TestRpcIndexerGetPlainTickerInfo(t *testing.T) {
 		})
 	}
 }
+
+func TestInternalTickerInfoUsesCompilingView(t *testing.T) {
+	base := &BaseIndexer{tickInfoMap: map[string]*common.TickerInfo{}}
+	asset := indexer.AssetName{Protocol: "brc20", Type: "f", Ticker: "test"}
+	base.tickInfoMap[asset.String()] = &common.TickerInfo{AssetName: asset, Divisibility: 7}
+
+	info := base.GetInternalTickerInfo(&asset)
+	if info == nil || info.Divisibility != 7 {
+		t.Fatalf("internal ticker info = %+v, want divisibility 7", info)
+	}
+}

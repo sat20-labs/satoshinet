@@ -131,6 +131,9 @@ func dbStoreEVMBlockState(dbTx database.Tx, hash *chainhash.Hash, state *evm.Mem
 	if err != nil {
 		return err
 	}
+	if err := validatePersistedContractStateSize("EVM", encoded); err != nil {
+		return err
+	}
 	parent, err := dbTx.Metadata().CreateBucketIfNotExists(evmStateBucketName)
 	if err != nil {
 		return err

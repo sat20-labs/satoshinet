@@ -151,6 +151,9 @@ func dbStoreAgentBlockState(dbTx database.Tx, hash *chainhash.Hash, store *agent
 	if err != nil {
 		return err
 	}
+	if err := validatePersistedContractStateSize("agent", encoded); err != nil {
+		return err
+	}
 	parent, err := dbTx.Metadata().CreateBucketIfNotExists(agentStateBucketName)
 	if err != nil {
 		return err

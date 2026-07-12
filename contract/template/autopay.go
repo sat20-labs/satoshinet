@@ -18,7 +18,12 @@ const (
 
 	AutopayReasonPayment   = "autopay"
 	AutopayReasonMinerFee  = "miner_fee"
-	AutopayMaxCloseOutputs = 1000
+	AutopayMaxCloseOutputs = contractframework.MaxContractResultOutputs
+	// Final close settlement can add deployer and bootstrap outputs after
+	// delegate refunds. Deployer gas and profit are compacted together.
+	AutopayCloseReservedOutputs    = 2
+	AutopayMaxCloseDelegateOutputs = AutopayMaxCloseOutputs - AutopayCloseReservedOutputs
+	AutopayMaxDelegates            = 10000
 )
 
 type AutopayContract struct {
@@ -102,9 +107,17 @@ func (c *AutopayContract) CheckInvoke(action string, param []byte) error {
 		if err := config.Decode(param); err != nil {
 			return err
 		}
-		amount := parseDecimalOrZero(config.AmountPerBlock)
+		amount, err := contractframework.ParseDecimalAmountString(config.AmountPerBlock)
+		if err != nil || amount.Sign() <= 0 {
+			return fmt.Errorf("invalid autopay amount per block")
+		}
 		if amount.Cmp(c.minAmountPerBlock()) < 0 {
 			return fmt.Errorf("autopay amount below minimum")
+		}
+		if c.FeeAssetName == SatoshiAssetName {
+			if _, err := contractframework.DecimalToInt64(*amount); err != nil {
+				return fmt.Errorf("autopay sats amount must be an integer: %w", err)
+			}
 		}
 		return nil
 	case InvokeAPICancel:
@@ -114,6 +127,35 @@ func (c *AutopayContract) CheckInvoke(action string, param []byte) error {
 	default:
 		return fmt.Errorf("unsupported autopay action %s", action)
 	}
+}
+
+func (c *AutopayContract) CheckInvokePrecision(action string, param []byte,
+	resolve contractframework.AssetPrecisionResolver) error {
+
+	if action != InvokeAPIConfig || c.FeeAssetName == SatoshiAssetName {
+		return nil
+	}
+	var config AutopayConfigInvokeParam
+	if err := config.Decode(param); err != nil {
+		return err
+	}
+	amount, err := contractframework.ParseDecimalAmountString(config.AmountPerBlock)
+	if err != nil {
+		return err
+	}
+	if resolve == nil {
+		return fmt.Errorf("missing autopay asset precision resolver")
+	}
+	precision, ok := resolve(c.FeeAssetName)
+	if !ok || precision < 0 {
+		return fmt.Errorf("unknown autopay asset precision for %s", c.FeeAssetName)
+	}
+	canonical := amount.NewPrecision(precision)
+	if canonical.Sign() <= 0 || canonical.Cmp(amount) != 0 {
+		return fmt.Errorf("autopay amount %s is not exactly representable at precision %d",
+			amount.String(), precision)
+	}
+	return nil
 }
 
 func (c *AutopayContract) ApplyFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error) {
@@ -259,7 +301,11 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 		state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
 		return plan, nil
 	}
-	if c.applyAutopayCancels(state, plan, height) {
+	cancelled, err := c.applyAutopayCancels(state, plan, height)
+	if err != nil {
+		return nil, err
+	}
+	if cancelled {
 		state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
 		state.AutopayData().AutopayStatus = c.autopayFundingStatus(state, gasConfig, height)
 		return plan, nil
@@ -301,7 +347,11 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 	}
 	state.AutopayData().GasBalance = decimalSubAllowNil(state.AutopayData().GasBalance, triggerGasFee)
 	plan.GasFee = triggerGasFee.Clone()
-	plan.Transfers = append(plan.Transfers, c.autopayPaymentTransfer(total))
+	transfer, err := c.autopayPaymentTransfer(total)
+	if err != nil {
+		return nil, err
+	}
+	plan.Transfers = append(plan.Transfers, transfer)
 	state.AutopayData().PaidBlockCount++
 	state.AutopayData().LastPayHeight = height
 	state.AutopayData().NextPayHeight = height + 1
@@ -343,7 +393,7 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 		state.AutopayData().AutopayCloseStarted = true
 		processed := 0
 		for _, address := range c.sortedDelegateAddresses(state.AutopayData()) {
-			if processed >= AutopayMaxCloseOutputs {
+			if processed >= AutopayMaxCloseDelegateOutputs {
 				break
 			}
 			delegate := state.AutopayData().AutopayDelegates[address]
@@ -351,7 +401,9 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 			if balance.Sign() <= 0 {
 				continue
 			}
-			c.appendBalanceTransfer(plan, address, c.FeeAssetName, balance, false)
+			if err := c.appendBalanceTransfer(plan, address, c.FeeAssetName, balance, false); err != nil {
+				return false, err
+			}
 			delegate.Balance = nil
 			delegate.Status = AutopayStatusClosed
 			state.AutopayData().AutopayDelegates[address] = delegate
@@ -360,7 +412,9 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 		state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
 		if !c.hasPendingDelegateBalance(state.AutopayData()) {
 			gasAssetName := runtimeGasAssetName(gasConfig)
-			c.appendBalanceTransfer(plan, deployer, gasAssetName, state.AutopayData().GasBalance, true)
+			if err := c.appendBalanceTransfer(plan, deployer, gasAssetName, state.AutopayData().GasBalance, true); err != nil {
+				return false, err
+			}
 			state.AutopayData().GasBalance = nil
 			state.AutopayData().Closed = true
 			state.AutopayData().AutopayStatus = AutopayStatusClosed
@@ -373,9 +427,9 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 	return false, nil
 }
 
-func (c *AutopayContract) applyAutopayCancels(state *TemplateRuntimeState, plan *SettlementPlan, height int64) bool {
+func (c *AutopayContract) applyAutopayCancels(state *TemplateRuntimeState, plan *SettlementPlan, height int64) (bool, error) {
 	if state == nil || plan == nil {
-		return false
+		return false, nil
 	}
 	changed := false
 	for i := range state.Items {
@@ -389,7 +443,9 @@ func (c *AutopayContract) applyAutopayCancels(state *TemplateRuntimeState, plan 
 		delegate := state.AutopayData().AutopayDelegates[item.Address]
 		balance := decimalOrZero(delegate.Balance)
 		if balance.Sign() > 0 {
-			c.appendBalanceTransfer(plan, item.Address, c.FeeAssetName, balance, false)
+			if err := c.appendBalanceTransfer(plan, item.Address, c.FeeAssetName, balance, false); err != nil {
+				return false, err
+			}
 		}
 		delegate.Balance = nil
 		delegate.Status = AutopayStatusClosed
@@ -400,16 +456,21 @@ func (c *AutopayContract) applyAutopayCancels(state *TemplateRuntimeState, plan 
 		item.Done = ItemStatusCancelled
 		changed = true
 	}
-	return changed
+	return changed, nil
 }
 
 func (c *AutopayContract) appendBalanceTransfer(plan *SettlementPlan, to, assetName string,
-	amount *scommon.Decimal, gas bool) {
+	amount *scommon.Decimal, gas bool) error {
 
 	if plan == nil || to == "" || assetName == "" || amount == nil || amount.Sign() <= 0 {
-		return
+		return nil
 	}
-	plan.Transfers = append(plan.Transfers, autopayTransfer(to, assetName, amount))
+	transfer, err := autopayTransfer(to, assetName, amount)
+	if err != nil {
+		return err
+	}
+	plan.Transfers = append(plan.Transfers, transfer)
+	return nil
 }
 
 func (c *AutopayContract) autopayFundingStatus(state *TemplateRuntimeState, gasConfig GasConfig, height int64) string {
@@ -561,7 +622,7 @@ func (c *AutopayContract) hasPendingDelegateBalance(running *AutopayRunningData)
 	return false
 }
 
-func autopayTransfer(to, assetName string, amount *scommon.Decimal) SettlementTransfer {
+func autopayTransfer(to, assetName string, amount *scommon.Decimal) (SettlementTransfer, error) {
 	transfer := SettlementTransfer{
 		To:        to,
 		AssetName: assetName,
@@ -569,23 +630,27 @@ func autopayTransfer(to, assetName string, amount *scommon.Decimal) SettlementTr
 	}
 	if assetName == SatoshiAssetName {
 		value, err := contractframework.DecimalToInt64(*decimalOrZero(amount))
-		if err == nil {
-			transfer.SatValue = value
+		if err != nil {
+			return SettlementTransfer{}, err
 		}
-		return transfer
+		transfer.SatValue = value
+		return transfer, nil
 	}
 	transfer.AssetAmt = decimalString(amount)
-	return transfer
+	return transfer, nil
 }
 
-func (c *AutopayContract) autopayPaymentTransfer(amount *scommon.Decimal) SettlementTransfer {
+func (c *AutopayContract) autopayPaymentTransfer(amount *scommon.Decimal) (SettlementTransfer, error) {
 	if c.Recipient != "" {
 		return autopayTransfer(c.Recipient, c.FeeAssetName, amount)
 	}
-	transfer := autopayTransfer("", c.FeeAssetName, amount)
+	transfer, err := autopayTransfer("", c.FeeAssetName, amount)
+	if err != nil {
+		return SettlementTransfer{}, err
+	}
 	transfer.Reason = AutopayReasonMinerFee
 	transfer.AsFee = true
-	return transfer
+	return transfer, nil
 }
 
 func NewAutopayDefaultInvokeItem(contract *AutopayContract, id int64, req ApplyInvokeRequest) (*InvokeItem, error) {

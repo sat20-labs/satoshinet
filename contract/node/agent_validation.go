@@ -181,6 +181,15 @@ func (v *AgentBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, s
 	v.postStates[*hash] = state.Clone()
 }
 
+func (v *AgentBlockExecutionValidator) ReleaseBlockPostState(hash *chainhash.Hash) {
+	if hash == nil {
+		return
+	}
+	v.postStateMu.Lock()
+	defer v.postStateMu.Unlock()
+	delete(v.postStates, *hash)
+}
+
 func (v *AgentBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*agent.RuntimeStore, error) {
 	if v.cfg.NewRuntime != nil {
 		return v.cfg.NewRuntime(block, view)

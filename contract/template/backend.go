@@ -291,6 +291,17 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 	if err != nil {
 		return err
 	}
+	callID := DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract)
+	if err := checkRuntimeAutopayDelegateCapacity(runtime, invoker); err != nil {
+		return e.executeInvalidInvoke(tx, runtime, InvokeValidation{
+			Contract:      output.Contract,
+			FundingOutput: output,
+			Payload: contractframework.InvokePayload{
+				GasLimit: gasConfig.InvokeBaseGas,
+				Action:   contractcommon.ContractInvokeAPIDefault,
+			},
+		}, invoker, callID, resultFee, gasConfig)
+	}
 	hasResultGas, err := contractframework.OutputHasRequiredGas(output, gasConfig.GasAssetName, resultFee)
 	if err != nil {
 		return err
@@ -302,7 +313,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 	}
 	item, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{
 		Action:                contractcommon.ContractInvokeAPIDefault,
-		CallID:                DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
+		CallID:                callID,
 		Invoker:               invoker,
 		FundingOutput:         fundingOutput,
 		Height:                e.BlockHeight,
@@ -332,7 +343,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 		TxID:               tx.TxID(),
 		Type:               TxTypeInvoke,
 		Kind:               ExecutionKindInvoke,
-		CallID:             DeriveInvokeCallID(tx.TxID(), output.Vout, output.Contract),
+		CallID:             callID,
 		Contract:           output.Contract,
 		GasLimit:           gasConfig.InvokeBaseGas,
 		FundingInputs:      []OutPoint{output.OutPoint},
@@ -614,6 +625,15 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	}
 	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract)
 	if err := runtime.CheckInvoke(validated.Payload.Action, validated.Payload.Param); err != nil {
+		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee, gasConfig)
+	}
+	if autopay, ok := runtime.Contract().(*AutopayContract); ok {
+		if err := autopay.CheckInvokePrecision(validated.Payload.Action,
+			validated.Payload.Param, e.AssetPrecision); err != nil {
+			return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee, gasConfig)
+		}
+	}
+	if err := checkRuntimeAutopayDelegateCapacity(runtime, invoker); err != nil {
 		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee, gasConfig)
 	}
 	if err := runtime.CheckInvokeFunding(validated.Payload.Action, validated.Payload.Param, validated.FundingOutput); err != nil {

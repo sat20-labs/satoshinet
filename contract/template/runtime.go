@@ -119,6 +119,9 @@ func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, erro
 	if err != nil {
 		return nil, err
 	}
+	if err := checkAutopayDelegateCapacity(r.contract, &state, req.Invoker); err != nil {
+		return nil, err
+	}
 	item, err := NewInvokeItemFromRequest(r.contract, state.NextItemID, req)
 	if err != nil {
 		return nil, err
@@ -131,6 +134,28 @@ func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, erro
 		return nil, err
 	}
 	return item, nil
+}
+
+func checkAutopayDelegateCapacity(contract Contract, state *TemplateRuntimeState, address string) error {
+	if _, ok := contract.(*AutopayContract); !ok || state == nil || address == "" {
+		return nil
+	}
+	delegates := state.AutopayData().AutopayDelegates
+	if _, exists := delegates[address]; exists || len(delegates) < AutopayMaxDelegates {
+		return nil
+	}
+	return fmt.Errorf("autopay delegate limit exceeded")
+}
+
+func checkRuntimeAutopayDelegateCapacity(runtime *ContractRuntime, address string) error {
+	if runtime == nil {
+		return nil
+	}
+	state, err := runtime.RuntimeState()
+	if err != nil {
+		return err
+	}
+	return checkAutopayDelegateCapacity(runtime.Contract(), &state, address)
 }
 
 func (r *ContractRuntime) SettleBlock(height int64) (*SettlementPlan, error) {

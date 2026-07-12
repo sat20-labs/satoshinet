@@ -639,7 +639,7 @@ func TestRuntimeCommitRechecksAssetPrecision(t *testing.T) {
 		To:        "tb1pdest",
 		AssetName: "asset0",
 		Amount:    mustDecimalString(t, "1.9"),
-	}}, nil, nil)
+	}}, nil, nil, 0)
 	require.ErrorContains(t, err, "not exactly representable")
 	require.Empty(t, runtime.AssetIntents)
 }
@@ -651,8 +651,31 @@ func TestRuntimeIntentRequiresResultResolver(t *testing.T) {
 		To:        "tb1pdest",
 		AssetName: SatoshiAssetName,
 		Amount:    mustDefaultDecimal(t, 1),
-	}}, nil, nil)
+	}}, nil, nil, 0)
 	require.ErrorContains(t, err, "missing Result script resolver")
+}
+
+func TestRuntimeRejectsTriggerTooFarInFuture(t *testing.T) {
+	runtime := NewRuntime(nil)
+	err := runtime.commitCapturedEffects(nil, []Trigger{{
+		ID:       "far-future",
+		Contract: testContract(t),
+		Kind:     TriggerAtHeight,
+		Height:   MaxEVMTriggerFutureBlocks + 1,
+		GasLimit: 1,
+	}}, nil, 0)
+	require.ErrorContains(t, err, "maximum future range")
+}
+
+func TestRuntimeRejectsBlockAssetIntentLimit(t *testing.T) {
+	runtime := NewRuntime(nil)
+	runtime.AssetIntents = make([]AssetIntent, MaxEVMAssetIntentsPerBlock)
+	runtime.ResolveResultScript = func(ResultOutput) ([]byte, error) { return []byte{0x51}, nil }
+	err := runtime.commitCapturedEffects([]AssetIntent{{
+		From: testContract(t), To: "tb1pdest", AssetName: SatoshiAssetName,
+		Amount: mustDefaultDecimal(t, 1),
+	}}, nil, nil, 0)
+	require.ErrorContains(t, err, "in block")
 }
 
 func TestRuntimeRetainsOnlyClaimedGasFunding(t *testing.T) {

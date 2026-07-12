@@ -1,6 +1,7 @@
 package template
 
 import (
+	"fmt"
 	"testing"
 
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -150,6 +151,104 @@ func TestAutopayCloseBatchRequiresGasBeforeRefunding(t *testing.T) {
 	state.AutopayData().GasBalance = parseDecimalOrZero("0")
 	_, err := contract.closeBatchGasFee(state, &InvokeItem{}, testAutopayGasConfig(), 100)
 	require.ErrorContains(t, err, "insufficient autopay gas")
+}
+
+func TestAutopayCloseFitsResultOutputLimit(t *testing.T) {
+	gasConfig := testAutopayGasConfig()
+	runtime := testAutopayRuntime(t, "recipient", "ordx:f:test", "1")
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	state.AutopayData().AutopayDelegates = make(map[string]AutopayDelegate,
+		AutopayMaxCloseDelegateOutputs)
+	for i := 0; i < AutopayMaxCloseDelegateOutputs; i++ {
+		state.AutopayData().AutopayDelegates[fmt.Sprintf("delegate-%04d", i)] = AutopayDelegate{
+			AmountPerBlock: parseDecimalOrZero("1"),
+			Balance:        parseDecimalOrZero("1"),
+			Status:         AutopayStatusActive,
+		}
+	}
+	state.AutopayData().FeeBalance = parseDecimalOrZero(fmt.Sprintf("%d", AutopayMaxCloseDelegateOutputs))
+	state.AutopayData().GasBalance = parseDecimalOrZero("100")
+	state.AutopayData().AutopayStatus = AutopayStatusActive
+	state.Items = []InvokeItem{{
+		ID:        1,
+		OrderType: OrderTypeClose,
+		Address:   "deployer-address",
+		Height:    100,
+	}}
+	require.NoError(t, runtime.saveRuntimeState(state))
+
+	plan, err := runtime.SettleBlockWithGasConfig(100, gasConfig)
+	require.NoError(t, err)
+	require.Len(t, plan.Transfers, AutopayMaxCloseDelegateOutputs+1)
+
+	plans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, nil, nil)
+	require.NoError(t, err)
+	contractAddr := runtime.Address()
+	provider := contractframework.ContractUTXOProvider(func(contract ContractAddress) ([]contractframework.UTXO, error) {
+		require.True(t, contractAddr.Equal(contract))
+		assets := testAssets("ordx:f:test", int64(AutopayMaxCloseDelegateOutputs),
+			gasConfig.GasAssetName, 100)
+		assets = append(assets, testAsset("ordx:f:extra", 10)...)
+		return []contractframework.UTXO{testContractUTXO(
+			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 0, contractAddr, 0,
+			assets)}, nil
+	})
+	plans, err = AugmentResultPlans(plans, runtimeStoreWith(runtime), gasConfig, provider,
+		func(string) (int, bool) { return 0, true })
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	require.Len(t, plans[0].Outputs, contractframework.MaxContractResultOutputs)
+
+	_, err = contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
+		Status:        ResultStatusSuccess,
+		ResultCount:   1,
+		Plans:         plans,
+		ResolveScript: func(contractframework.ResultOutput) ([]byte, error) { return []byte{0x51}, nil },
+	}, contractframework.ResultTxBuildOptions{})
+	require.NoError(t, err)
+}
+
+func TestAutopayRejectsFractionalSatsConfig(t *testing.T) {
+	contract := NewAutopayContract("service", "recipient", SatoshiAssetName, "1")
+	param, err := (&AutopayConfigInvokeParam{AmountPerBlock: "1.5"}).Encode()
+	require.NoError(t, err)
+	require.ErrorContains(t, contract.CheckInvoke(InvokeAPIConfig, param), "must be an integer")
+
+	param, err = (&AutopayConfigInvokeParam{AmountPerBlock: "2"}).Encode()
+	require.NoError(t, err)
+	require.NoError(t, contract.CheckInvoke(InvokeAPIConfig, param))
+}
+
+func TestAutopayConfigRequiresExactAssetPrecision(t *testing.T) {
+	contract := NewAutopayContract("service", "recipient", "brc20:f:test", "1")
+	param, err := (&AutopayConfigInvokeParam{AmountPerBlock: "1.234"}).Encode()
+	require.NoError(t, err)
+	resolve := func(name string) (int, bool) { return 2, name == "brc20:f:test" }
+	require.ErrorContains(t, contract.CheckInvokePrecision(InvokeAPIConfig, param, resolve), "not exactly representable")
+
+	param, err = (&AutopayConfigInvokeParam{AmountPerBlock: "1.23"}).Encode()
+	require.NoError(t, err)
+	require.NoError(t, contract.CheckInvokePrecision(InvokeAPIConfig, param, resolve))
+	require.ErrorContains(t, contract.CheckInvokePrecision(InvokeAPIConfig, param, nil), "missing")
+}
+
+func TestAutopayTransferRejectsFractionalSats(t *testing.T) {
+	amount, err := contractframework.ParseDecimalAmountString("0.9")
+	require.NoError(t, err)
+	_, err = autopayTransfer("recipient", SatoshiAssetName, amount)
+	require.Error(t, err)
+}
+
+func TestAutopayDelegateLimit(t *testing.T) {
+	contract := NewAutopayContract("service", "recipient", "ordx:f:test", "1")
+	state := &TemplateRuntimeState{}
+	state.AutopayData().AutopayDelegates = make(map[string]AutopayDelegate, AutopayMaxDelegates)
+	for i := 0; i < AutopayMaxDelegates; i++ {
+		state.AutopayData().AutopayDelegates[fmt.Sprintf("delegate-%d", i)] = AutopayDelegate{}
+	}
+	require.ErrorContains(t, checkAutopayDelegateCapacity(contract, state, "new-delegate"), "limit exceeded")
+	require.NoError(t, checkAutopayDelegateCapacity(contract, state, "delegate-1"))
 }
 
 func testAutopayRuntime(t *testing.T, recipient, feeAsset, minAmount string) *ContractRuntime {

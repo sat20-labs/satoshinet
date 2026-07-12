@@ -104,10 +104,7 @@ func TestBackendPredictionE2EShape(t *testing.T) {
 
 func TestBackendDefaultInvokeNoOp(t *testing.T) {
 	deployTx, addr := testAgentDeployTx(t)
-	defaultTx := testAgentDefaultInvokeTx(t, addr, 0, wire.TxAssets{{
-		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
-		Amount: *testAgentGasFee(t, DefaultGasConfig().InvokeBaseGas),
-	}})
+	defaultTx := testAgentDefaultInvokeTx(t, addr, 0, nil)
 
 	result, err := testAgentExecuteBlock(BlockExecutionRequest{
 		Txs:           []*wire.MsgTx{deployTx, defaultTx},

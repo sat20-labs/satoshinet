@@ -14,6 +14,15 @@ import (
 
 type ContractStateManager struct{}
 
+const MaxPersistedContractStateBytes = 16 << 20
+
+func validatePersistedContractStateSize(module string, encoded []byte) error {
+	if len(encoded) > MaxPersistedContractStateBytes {
+		return fmt.Errorf("%s contract state exceeds %d bytes", module, MaxPersistedContractStateBytes)
+	}
+	return nil
+}
+
 func NewContractStateManager() *ContractStateManager {
 	return &ContractStateManager{}
 }

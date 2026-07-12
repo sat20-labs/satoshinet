@@ -22,6 +22,20 @@ func (b *BaseIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 	return b.getUtxoInfo(utxo)
 }
 
+// GetInternalTickerInfo returns ticker metadata from the current compiling
+// view. The exclusive lock keeps consensus-time precision lookups consistent
+// with block indexing and permits lazy ticker-cache population without relying
+// on the externally visible RPC snapshot.
+func (b *BaseIndexer) GetInternalTickerInfo(ticker *indexer.AssetName) *common.TickerInfo {
+	if b == nil || ticker == nil {
+		return nil
+	}
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	return b.getTickerInfo(ticker)
+}
+
 func (b *BaseIndexer) getUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 	if utxoInfo, ok := b.utxoIndex.Index[utxo]; ok {
 		return &common.UtxoInfo{

@@ -266,13 +266,21 @@ func TestAgentManagedAssetsIncludesBetAndGas(t *testing.T) {
 	runtime.state.Prediction.GasBalance = "50"
 	runtime.addBet("bettor", "a", "1000")
 
-	managed := agentManagedAssets(runtime, gasAsset)
+	managed, err := agentManagedAssets(runtime, gasAsset)
+	require.NoError(t, err)
 	address := runtime.Address()
 	require.Equal(t, address.EncodeAddress(), managed.To)
 	require.Equal(t, int64(1000), managed.Value)
 	require.Len(t, managed.Assets, 1)
 	require.Equal(t, gasAsset, managed.Assets[0].Name.String())
 	require.Equal(t, "50", managed.Assets[0].Amount.String())
+}
+
+func TestAgentManagedAssetsRejectsFractionalSats(t *testing.T) {
+	var managed ResultOutput
+	err := addAgentManagedAmount(&managed, "contract", SatoshiAssetName,
+		mustDecimal(t, "0.5", 1), nil)
+	require.ErrorContains(t, err, "managed sats amount")
 }
 
 func testResultScriptResolver(output ResultOutput) ([]byte, error) {

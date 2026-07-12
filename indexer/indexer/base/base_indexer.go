@@ -707,6 +707,10 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 }
 
 func (b *BaseIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
+	return b.getTickerInfo(ticker)
+}
+
+func (b *BaseIndexer) getTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 	ticker = normalizeTickerName(ticker)
 
 	info, ok := b.tickInfoMap[ticker.String()]

@@ -9,7 +9,10 @@ import (
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/contract/agent"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/database"
 	_ "github.com/sat20-labs/satoshinet/database/ffldb"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -85,6 +88,44 @@ func TestEVMStateStoreRuntimeFactoryLoadsParentState(t *testing.T) {
 	}
 }
 
+func TestStateManagerReleasesStoredValidationSnapshots(t *testing.T) {
+	db := testEVMStateDB(t)
+	defer db.Close()
+	hash := chainhash.Hash{7}
+
+	templateValidator := NewTemplateBlockExecutionValidator(TemplateBlockExecutionConfig{})
+	evmValidator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{})
+	agentValidator := NewAgentBlockExecutionValidator(AgentBlockExecutionConfig{})
+	templateValidator.rememberPostState(&hash, template.NewRuntimeStore())
+	evmValidator.rememberPostState(&hash, evm.NewMemoryStateDB())
+	agentValidator.rememberPostState(&hash, agent.NewRuntimeStore())
+	provider := NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
+		TemplateValidator: templateValidator,
+		EVMValidator:      evmValidator,
+		AgentValidator:    agentValidator,
+	})
+
+	err := db.Update(func(dbTx database.Tx) error {
+		return NewContractStateManager().StoreContractBlockState(dbTx, &hash, provider)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, module := range []contractframework.ModuleType{
+		contractframework.ModuleTemplate,
+		contractframework.ModuleEVM,
+		contractframework.ModuleAgent,
+	} {
+		if _, ok := provider.ContractBlockPostState(module, &hash); !ok {
+			t.Fatalf("module %d snapshot released before transaction commit", module)
+		}
+		provider.ReleaseContractBlockPostState(module, &hash)
+		if _, ok := provider.ContractBlockPostState(module, &hash); ok {
+			t.Fatalf("module %d validation snapshot was not released after commit", module)
+		}
+	}
+}
+
 func TestEVMStateStoreDelete(t *testing.T) {
 	db := testEVMStateDB(t)
 	defer db.Close()
@@ -106,6 +147,19 @@ func TestEVMStateStoreDelete(t *testing.T) {
 	}
 	if tip != nil {
 		t.Fatal("deleted tip should clear EVM state tip")
+	}
+}
+
+func TestEVMStateStoreRejectsOversizedState(t *testing.T) {
+	db := testEVMStateDB(t)
+	defer db.Close()
+	store := NewEVMStateStore(db)
+	state := evm.NewMemoryStateDB()
+	addr := gethcommon.HexToAddress("0x11112233445566778899aabbccddeeff00112233")
+	state.SetCode(addr, make([]byte, MaxPersistedContractStateBytes+1), 0)
+	err := store.StoreBlockState(&chainhash.Hash{9}, state)
+	if err == nil {
+		t.Fatal("oversized EVM state should be rejected")
 	}
 }
 

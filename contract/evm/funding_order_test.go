@@ -145,7 +145,7 @@ func TestDeployConstructorSeesCurrentFundingOnce(t *testing.T) {
 		Gas:              500000,
 		DeployNonce:      3,
 		ExpectedContract: expectedContract,
-		FundingOutputs:   []contractframework.ContractOutput{funding},
+		FundingOutput:    &funding,
 		Block: BlockContext{
 			Number:        100,
 			Time:          1,
@@ -186,7 +186,7 @@ func TestDeployConstructorSeesPendingBalance(t *testing.T) {
 		Gas:              500000,
 		DeployNonce:      3,
 		ExpectedContract: expectedContract,
-		FundingOutputs:   []contractframework.ContractOutput{funding},
+		FundingOutput:    &funding,
 		Block:            BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
 	})
 	require.NoError(t, result.Err)
@@ -287,7 +287,7 @@ func TestDeployConstructorRejectsOverspendCurrentFunding(t *testing.T) {
 		Gas:              500000,
 		DeployNonce:      3,
 		ExpectedContract: expectedContract,
-		FundingOutputs:   []contractframework.ContractOutput{funding},
+		FundingOutput:    &funding,
 		Block: BlockContext{
 			Number:        100,
 			Time:          1,

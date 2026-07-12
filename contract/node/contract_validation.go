@@ -30,6 +30,10 @@ type BlockStateProvider interface {
 	BlockPostState(hash *chainhash.Hash) (contractframework.RuntimeStore, bool)
 }
 
+type BlockStateReleaser interface {
+	ReleaseBlockPostState(hash *chainhash.Hash)
+}
+
 type ParentStateProvider interface {
 	ParentState(block *btcutil.Block, view *blockchain.UtxoViewpoint) (contractframework.RuntimeStore, bool, error)
 }
@@ -91,6 +95,29 @@ func (v *CompositeContractBlockValidator) ContractBlockPostState(
 		return moduleBlockPostState(v.cfg.AgentValidator, hash)
 	default:
 		return nil, false
+	}
+}
+
+// ReleaseContractBlockPostState drops the transient validation snapshot after
+// the state manager has durably stored it. Persisted block states remain
+// available through the module state stores for reorg handling.
+func (v *CompositeContractBlockValidator) ReleaseContractBlockPostState(
+	module contractframework.ModuleType, hash *chainhash.Hash) {
+
+	switch module {
+	case contractframework.ModuleTemplate:
+		releaseModuleBlockPostState(v.cfg.TemplateValidator, hash)
+	case contractframework.ModuleEVM:
+		releaseModuleBlockPostState(v.cfg.EVMValidator, hash)
+	case contractframework.ModuleAgent:
+		releaseModuleBlockPostState(v.cfg.AgentValidator, hash)
+	}
+}
+
+func releaseModuleBlockPostState(validator ContractModuleBlockValidator, hash *chainhash.Hash) {
+	releaser, ok := validator.(BlockStateReleaser)
+	if ok {
+		releaser.ReleaseBlockPostState(hash)
 	}
 }
 

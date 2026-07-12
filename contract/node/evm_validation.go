@@ -254,6 +254,15 @@ func (v *EVMBlockExecutionValidator) rememberPostState(hash *chainhash.Hash, sta
 	v.postStates[*hash] = state.Clone()
 }
 
+func (v *EVMBlockExecutionValidator) ReleaseBlockPostState(hash *chainhash.Hash) {
+	if hash == nil {
+		return
+	}
+	v.postStateMu.Lock()
+	defer v.postStateMu.Unlock()
+	delete(v.postStates, *hash)
+}
+
 func (v *EVMBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*evm.Runtime, error) {
 	if v.cfg.NewRuntime != nil {
 		return v.cfg.NewRuntime(block, view)
@@ -274,6 +283,7 @@ func (v *EVMBlockExecutionValidator) blockContext(block *btcutil.Block) evm.Bloc
 		gasLimit = math.MaxInt64
 	}
 	return evm.BlockContext{
+		ChainID:       evmChainID(v.cfg.ChainParams),
 		Number:        uint64(height),
 		Time:          uint64(block.MsgBlock().Header.Timestamp.Unix()),
 		GasLimit:      gasLimit,

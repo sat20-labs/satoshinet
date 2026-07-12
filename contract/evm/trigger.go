@@ -8,6 +8,12 @@ import (
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
+const (
+	MaxEVMTriggersPerContract = 256
+	MaxEVMTriggersTotal       = 4096
+	MaxEVMTriggerFutureBlocks = 1000000
+)
+
 type TriggerKind byte
 
 const (
@@ -86,6 +92,20 @@ func (s *MemoryStateDB) RegisterTrigger(trigger Trigger) error {
 	}
 	key := newTriggerKey(trigger.Contract, trigger.ID)
 	previous, existed := s.triggers[key]
+	if !existed {
+		if len(s.triggers) >= MaxEVMTriggersTotal {
+			return fmt.Errorf("EVM trigger limit exceeded")
+		}
+		contractTriggers := 0
+		for existing := range s.triggers {
+			if existing.contract == key.contract {
+				contractTriggers++
+			}
+		}
+		if contractTriggers >= MaxEVMTriggersPerContract {
+			return fmt.Errorf("EVM contract trigger limit exceeded")
+		}
+	}
 	s.appendJournal(func() {
 		if existed {
 			s.triggers[key] = previous

@@ -714,6 +714,9 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 	if err != nil {
 		return nil, err
 	}
+	if err := checkAutopayDelegateCapacity(r.contract, &state, req.Invoker); err != nil {
+		return nil, err
+	}
 	retention := defaultInvokeRetention{}
 	if req.ApplyDefaultRetention {
 		var fundingOutput ContractOutput

@@ -33,7 +33,7 @@ import (
 
 func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
 	runAgentPredictionAutoConfirmScenario(t, agentPredictionE2EScenario{
-		LLMContent:    `{"result_type":"outcome","outcome_id":"a","reason":"Team A won"}`,
+		LLMContent:    `{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98.","evidence_quote":"Team A 101, Team B 98.","reason":"Team A won"}`,
 		Outcomes:      defaultAgentPredictionOutcomes(),
 		ExpectedAlice: "90000",
 	})
@@ -41,7 +41,7 @@ func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
 
 func TestNetworkAgentPredictionNoWinnerRefund(t *testing.T) {
 	runAgentPredictionAutoConfirmScenario(t, agentPredictionE2EScenario{
-		LLMContent: `{"result_type":"outcome","outcome_id":"c","reason":"Team C won"}`,
+		LLMContent: `{"result_type":"outcome","outcome_id":"c","result":"Team A 101, Team B 98.","evidence_quote":"Team A 101, Team B 98.","reason":"Team C won"}`,
 		Outcomes: []agentcontract.PredictionOutcome{
 			{ID: "a", Text: "Team A wins"},
 			{ID: "b", Text: "Team B wins"},

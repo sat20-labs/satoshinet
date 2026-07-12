@@ -27,7 +27,10 @@ type Runtime struct {
 	ResolveResultScript ResultRecipientScriptResolver
 }
 
+const MaxEVMAssetIntentsPerBlock = 1000
+
 type BlockContext struct {
+	ChainID       uint64
 	Coinbase      EVMAddress
 	Number        uint64
 	Time          uint64
@@ -67,7 +70,7 @@ type DeployRequest struct {
 	Value            int64
 	DeployNonce      uint64
 	ExpectedContract ContractAddress
-	FundingOutputs   []contractframework.ContractOutput
+	FundingOutput    *contractframework.ContractOutput
 	Block            BlockContext
 }
 
@@ -133,20 +136,21 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	capturedIntents := make([]AssetIntent, 0)
 	capturedTriggers := make([]Trigger, 0)
 	balances := AssetBalanceReader(r.AssetBalances)
-	if len(req.FundingOutputs) != 0 {
-		funding := NewFundingAssetView(req.FundingOutputs, "", nil)
+	if req.FundingOutput != nil {
+		funding := NewFundingAssetView(contractframework.OptionalContractOutputSlice(req.FundingOutput), "", nil)
 		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding,
 			ContractAddressHash(req.ExpectedContract))
 	}
 	callContext := &precompileCallContext{}
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, nil, callContext)
-	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
+	chainConfig := r.chainConfig(req.Block)
+	evm := vm.NewEVM(r.blockContext(req.Block), r.State, chainConfig, config)
 	pendingBalances := pendingIntentAssetBalanceView{
 		Base:    balances,
 		Prior:   r.AssetIntents,
 		Intents: &capturedIntents,
 	}
-	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
+	rules := chainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
 	precompiles := SatoshiNetPrecompiles(pendingBalances, nil, "", r.AssetPrecision, callContext,
 		vm.ActivePrecompiledContracts(rules))
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), nil, precompileAddresses(precompiles), nil)
@@ -166,7 +170,7 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 		for i := range capturedTriggers {
 			capturedTriggers[i].Contract = contract
 		}
-		err = r.commitCapturedEffects(capturedIntents, capturedTriggers, balances)
+		err = r.commitCapturedEffects(capturedIntents, capturedTriggers, balances, req.Block.Number)
 	}
 	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
 	if gasLeftErr != nil && err == nil {
@@ -207,7 +211,8 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	intentSnapshot := len(r.AssetIntents)
 	callContext := &precompileCallContext{}
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, funding, callContext)
-	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
+	chainConfig := r.chainConfig(req.Block)
+	evm := vm.NewEVM(r.blockContext(req.Block), r.State, chainConfig, config)
 	balances := AssetBalanceReader(r.AssetBalances)
 	if req.FundingOutput != nil {
 		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding, target)
@@ -217,7 +222,7 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		Prior:   r.AssetIntents,
 		Intents: &capturedIntents,
 	}
-	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
+	rules := chainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
 	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, r.AssetPrecision, callContext,
 		vm.ActivePrecompiledContracts(rules))
 	targetAddress := GethAddress(target)
@@ -240,7 +245,7 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 				capturedTriggers[i].Contract = r.contractAddressFromGeth(GethAddress(target))
 			}
 		}
-		err = r.commitCapturedEffects(capturedIntents, capturedTriggers, balances)
+		err = r.commitCapturedEffects(capturedIntents, capturedTriggers, balances, req.Block.Number)
 	}
 	gasLeft, gasLeftErr := contractframework.GasUnitsInt64(left)
 	if gasLeftErr != nil && err == nil {
@@ -289,10 +294,13 @@ func gasUsed(initial, left int64) int64 {
 }
 
 func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedTriggers []Trigger,
-	balances AssetBalanceReader) error {
+	balances AssetBalanceReader, currentHeight uint64) error {
 
 	if len(capturedIntents) > maxExecutionAssetIntents {
 		return fmt.Errorf("too many EVM asset intents: %d", len(capturedIntents))
+	}
+	if len(r.AssetIntents)+len(capturedIntents) > MaxEVMAssetIntentsPerBlock {
+		return fmt.Errorf("too many EVM asset intents in block")
 	}
 	if len(capturedIntents) > 0 && r.ResolveResultScript == nil {
 		return errors.New("missing Result script resolver")
@@ -323,6 +331,13 @@ func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedT
 		}
 		if err := contractframework.ValidateTriggerGasLimit(trigger.GasLimit, r.GasConfig); err != nil {
 			return err
+		}
+		maxTriggerHeight := currentHeight + MaxEVMTriggerFutureBlocks
+		if maxTriggerHeight < currentHeight {
+			maxTriggerHeight = ^uint64(0)
+		}
+		if uint64(trigger.Height) > maxTriggerHeight {
+			return fmt.Errorf("trigger height %d exceeds maximum future range", trigger.Height)
 		}
 		key := newTriggerKey(trigger.Contract, trigger.ID)
 		if _, exists := seenTriggers[key]; exists {
@@ -560,6 +575,7 @@ func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {
 		gasLimit = 0
 	}
 	parentHash := gethcommon.Hash(ctx.ParentHash)
+	zeroRandom := gethcommon.Hash{}
 	return vm.BlockContext{
 		CanTransfer: func(db vm.StateDB, addr gethcommon.Address, amount *uint256.Int) bool {
 			return db.GetBalance(addr).Cmp(amount) >= 0
@@ -584,6 +600,21 @@ func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {
 		Difficulty:  big.NewInt(0),
 		BaseFee:     big.NewInt(0),
 		BlobBaseFee: big.NewInt(0),
-		Random:      &parentHash,
+		// SatoshiNet does not expose a consensus randomness beacon. Returning
+		// zero avoids presenting the predictable parent hash as secure entropy.
+		Random: &zeroRandom,
 	}
+}
+
+func (r *Runtime) chainConfig(ctx BlockContext) *params.ChainConfig {
+	base := r.ChainConfig
+	if base == nil {
+		base = newSatoshiNetChainConfigV1()
+	}
+	if ctx.ChainID == 0 || (base.ChainID != nil && base.ChainID.Uint64() == ctx.ChainID) {
+		return base
+	}
+	configured := *base
+	configured.ChainID = new(big.Int).SetUint64(ctx.ChainID)
+	return &configured
 }

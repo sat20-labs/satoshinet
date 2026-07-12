@@ -84,6 +84,30 @@ func TestBackendDeployResultThenInvokeRequiresFeeResult(t *testing.T) {
 	require.NotEqual(t, [32]byte{}, executed.StateRoot)
 }
 
+func TestBackendRefundsInvalidMultiOutputDeploy(t *testing.T) {
+	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
+	tx := testDeployTx(t, 3, return42InitCode())
+	tx.AddTxOut(wire.NewTxOut(7, nil, tx.TxOut[1].PkScript))
+
+	result, err := ExecuteBlock(BlockExecutionRequest{
+		Txs:                       []*wire.MsgTx{tx},
+		Runtime:                   NewRuntime(nil),
+		Block:                     testBlockContext(1),
+		ResolveCaller:             fixedCaller(caller),
+		ResolveGasRefundRecipient: fixedGasRefundRecipient("tb1qrefund"),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, ResultStatusInvalid, result.Records[0].Status)
+	require.Len(t, result.Records[0].FundingInputs, 2)
+	require.True(t, result.Records[0].RequiresResult)
+	require.Equal(t, "tb1qrefund", result.Records[0].GasRefundRecipient)
+	require.Len(t, result.Records[0].AssetIntents, 1)
+	require.Equal(t, "tb1qrefund", result.Records[0].AssetIntents[0].To)
+	require.Equal(t, SatoshiAssetName, result.Records[0].AssetIntents[0].AssetName)
+	require.Equal(t, "7", result.Records[0].AssetIntents[0].Amount.String())
+}
+
 func TestBackendDefaultInvokeEmptyCall(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	deployTx := testDeployTx(t, 3, return42InitCode())

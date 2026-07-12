@@ -203,6 +203,15 @@ func (v *TemplateBlockExecutionValidator) rememberPostState(hash *chainhash.Hash
 	v.postStates[*hash] = state.Clone()
 }
 
+func (v *TemplateBlockExecutionValidator) ReleaseBlockPostState(hash *chainhash.Hash) {
+	if hash == nil {
+		return
+	}
+	v.postStateMu.Lock()
+	defer v.postStateMu.Unlock()
+	delete(v.postStates, *hash)
+}
+
 func (v *TemplateBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*template.RuntimeStore, error) {
 	if v.cfg.NewRuntime != nil {
 		return v.cfg.NewRuntime(block, view)

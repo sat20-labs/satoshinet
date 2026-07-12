@@ -14,6 +14,16 @@ func (b *IndexerMgr) GetInternalSyncHeight() int {
 	return b.compiling.GetHeight()
 }
 
+// GetInternalTickerInfo reads ticker metadata from the current compiling view.
+// Consensus and block-building code must use this instead of the stable RPC
+// snapshot, which can lag while a node is syncing.
+func (b *IndexerMgr) GetInternalTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
+	if b == nil || b.compiling == nil || ticker == nil {
+		return nil
+	}
+	return b.compiling.GetInternalTickerInfo(ticker)
+}
+
 // GetInternalAssetUTXOsInAddress returns the current compiling view for
 // consensus and block-building code. External RPC queries should keep using
 // GetAssetUTXOsInAddress, which reads the stable rpcService snapshot.

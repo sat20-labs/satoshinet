@@ -30,5 +30,12 @@ func TestRuntimeBlockContextUsesSatoshiNetHashes(t *testing.T) {
 	require.Equal(t, older, [32]byte(ctx.GetHash(8)))
 	require.Zero(t, ctx.GetHash(7))
 	require.NotNil(t, ctx.Random)
-	require.Equal(t, parent, [32]byte(*ctx.Random))
+	require.Zero(t, *ctx.Random)
+}
+
+func TestRuntimeUsesBlockChainID(t *testing.T) {
+	runtime := NewRuntime(nil)
+	configured := runtime.chainConfig(BlockContext{ChainID: 12345})
+	require.Equal(t, uint64(12345), configured.ChainID.Uint64())
+	require.Equal(t, uint64(1337), runtime.ChainConfig.ChainID.Uint64())
 }
