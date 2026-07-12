@@ -11,6 +11,8 @@ import (
 
 var ErrPredictionResultPending = errors.New("prediction result is pending")
 
+var ErrPredictionResultEvidence = errors.New("prediction result is not supported by source evidence")
+
 var predictionDrawScorePattern = regexp.MustCompile(`(^|[^\d])(\d{1,2})\s*[-:：]\s*(\d{1,2})([^\d]|$)`)
 
 type PredictionLLMResolveRequest struct {
@@ -59,6 +61,11 @@ func (r *PredictionLLMResolver) ResolveDecision(ctx context.Context, req Predict
 	if strings.TrimSpace(resultDecision.ResultType) == "pending" {
 		return PredictionConfirmParam{}, resultDecision, ErrPredictionResultPending
 	}
+	if resultDecision.ResultType == ResultTypeOutcome {
+		if err := r.validatePredictionResultEvidence(ctx, cleaned, resultDecision); err != nil {
+			return PredictionConfirmParam{}, resultDecision, err
+		}
+	}
 	if resultDecision.ResultType != ResultTypeOutcome {
 		param := PredictionConfirmParam{
 			ResultType: strings.TrimSpace(resultDecision.ResultType),
@@ -106,7 +113,8 @@ func (r *PredictionLLMResolver) extractPredictionResult(ctx context.Context, con
 			{
 				Role: "system",
 				Content: "You extract the factual result for a SatoshiNet prediction contract. Return only compact JSON with " +
-					"result_type, result, and reason. result_type must be one of outcome, pending, unverifiable, invalid, or cancelled. " +
+					"result_type, result, evidence_quote, and reason. result_type must be one of outcome, pending, unverifiable, invalid, or cancelled. " +
+					"For outcome, evidence_quote must be a verbatim quote from the evidence text that directly states the final result. " +
 					"Do not choose or return an outcome_id. Do not include markdown.",
 			},
 			{
@@ -225,7 +233,59 @@ type predictionLLMDecision struct {
 	Outcome    string `json:"outcome"`
 	ID         string `json:"id"`
 	Result     string `json:"result"`
+	Evidence   string `json:"evidence_quote"`
 	Reason     string `json:"reason"`
+}
+
+type predictionEvidenceDecision struct {
+	Supported bool   `json:"supported"`
+	Reason    string `json:"reason"`
+}
+
+func (r *PredictionLLMResolver) validatePredictionResultEvidence(ctx context.Context, cleaned string, decision predictionLLMDecision) error {
+	evidence := CleanPredictionResultText(decision.Evidence)
+	result := CleanPredictionResultText(decision.Result)
+	if evidence == "" {
+		if result != "" && strings.Contains(cleaned, result) {
+			evidence = result
+		}
+	}
+	if evidence == "" {
+		return fmt.Errorf("%w: missing evidence_quote", ErrPredictionResultEvidence)
+	}
+	if !strings.Contains(cleaned, evidence) {
+		return fmt.Errorf("%w: evidence_quote is not present in source text", ErrPredictionResultEvidence)
+	}
+	if result != "" && strings.Contains(evidence, result) {
+		return nil
+	}
+	response, err := r.Client.Complete(ctx, LLMCompletionRequest{
+		Messages: []LLMMessage{
+			{
+				Role: "system",
+				Content: "You verify whether a verbatim source quote directly proves a claimed factual result. " +
+					"Return only compact JSON with supported and reason. Do not use outside knowledge or infer from an event description.",
+			},
+			{
+				Role: "user",
+				Content: "/no_think\nClaimed factual result:\n" + result +
+					"\n\nVerbatim source quote:\n" + evidence +
+					"\n\nSet supported=true only when the quote itself directly establishes the claimed final result. " +
+					"Participant names, event titles, schedules, or descriptions without a final result are insufficient.",
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	var verified predictionEvidenceDecision
+	if err := json.Unmarshal([]byte(trimLLMJSON(response.Content)), &verified); err != nil {
+		return fmt.Errorf("decode prediction evidence decision: %w", err)
+	}
+	if !verified.Supported {
+		return fmt.Errorf("%w: %s", ErrPredictionResultEvidence, strings.TrimSpace(verified.Reason))
+	}
+	return nil
 }
 
 func compactPredictionResult(decision predictionLLMDecision) string {
@@ -579,6 +639,8 @@ func predictionResultExtractionPrompt(contract PredictionContract, cleanedText s
 	b.WriteString(cleanedText)
 	b.WriteString("\n\nExtract only the factual event result. ")
 	b.WriteString("Return result_type \"outcome\" and a short factual result when the final result is clear. ")
+	b.WriteString("For outcome, evidence_quote must copy a verbatim passage from Evidence text that directly proves the final result; participant names or event descriptions alone are insufficient. ")
+	b.WriteString("If no such passage exists, return result_type \"pending\" with an empty evidence_quote. ")
 	b.WriteString("When the evidence uses a different language, normalize participant names and the factual result into the language used by Description where possible; do not add facts. ")
 	b.WriteString("Do not choose an outcome_id in this step. ")
 	b.WriteString("Set result to a short factual final result, limited to 128 bytes. ")

@@ -504,7 +504,8 @@ func TestPredictionAgentNormalizesCrossLanguageStructuredScore(t *testing.T) {
 		resultURL:          {FinalURL: resultURL, Text: resultText},
 	}}
 	client := &fakeLLMClient{responses: []string{
-		`{"result_type":"outcome","result":"France 2-0 Morocco","reason":"normalized from the source score"}`,
+		`{"result_type":"outcome","result":"France 2-0 Morocco","evidence_quote":"法国 2-0 摩洛哥","reason":"normalized from the source score"}`,
+		`{"supported":true,"reason":"the quote directly provides the final score"}`,
 		`{"result_type":"outcome","outcome_id":"a","reason":"France won"}`,
 	}}
 	corenodeAgent := NewPredictionAgent(client)
@@ -522,14 +523,14 @@ func TestPredictionAgentNormalizesCrossLanguageStructuredScore(t *testing.T) {
 	if param.OutcomeID != "a" || param.Result != "France 2-0 Morocco" {
 		t.Fatalf("unexpected confirm param: %#v", param)
 	}
-	if len(client.reqs) != 2 {
-		t.Fatalf("cross-language structured score should call llm twice, calls=%d", len(client.reqs))
+	if len(client.reqs) != 3 {
+		t.Fatalf("cross-language structured score should call llm three times, calls=%d", len(client.reqs))
 	}
 	if first := client.reqs[0].Messages[len(client.reqs[0].Messages)-1].Content; !strings.Contains(first, "法国 2-0 摩洛哥") ||
 		!strings.Contains(first, "normalize participant names") || strings.Contains(first, contract.Title) {
 		t.Fatalf("unexpected factual-result prompt: %s", first)
 	}
-	if second := client.reqs[1].Messages[len(client.reqs[1].Messages)-1].Content; !strings.Contains(second, "France 2-0 Morocco") ||
+	if second := client.reqs[2].Messages[len(client.reqs[2].Messages)-1].Content; !strings.Contains(second, "France 2-0 Morocco") ||
 		!strings.Contains(second, "France wins") {
 		t.Fatalf("unexpected outcome-match prompt: %s", second)
 	}
@@ -712,7 +713,8 @@ func TestPredictionAgentFollowsStaticScriptDataURL(t *testing.T) {
 	defer resultServer.Close()
 
 	client := &sequenceLLMClient{responses: []string{
-		`{"result_type":"outcome","result":"阿根廷 3-2 佛得角","reason":"阿根廷获胜"}`,
+		`{"result_type":"outcome","result":"阿根廷 3-2 佛得角","evidence_quote":"\"homeScore\":3,\"guestScore\":2","reason":"阿根廷获胜"}`,
+		`{"supported":true,"reason":"the quote directly provides both final scores"}`,
 		`{"result_type":"outcome","outcome_id":"a","reason":"阿根廷获胜匹配 outcome a"}`,
 	}}
 	contract := validPredictionContract()
