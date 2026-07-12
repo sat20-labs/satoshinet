@@ -257,6 +257,7 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 		VerifyResult:              verifier.Verify,
 		ResolveTriggers:           req.ResolveTriggers,
 		ContractUTXOs:             overlay.Provider,
+		AssetPrecision:            req.AssetPrecision,
 	})
 
 	for _, tx := range req.Txs {
@@ -418,7 +419,12 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 	}
 	runtime.ContractPrefix = prefix
 	runtime.GasConfig = req.GasConfig
-	runtime.ResolveResultScript = req.ResolveResultScript
+	if req.AssetPrecision != nil {
+		runtime.AssetPrecision = SettlementPrecision(req.AssetPrecision)
+	}
+	if req.ResolveResultScript != nil {
+		runtime.ResolveResultScript = req.ResolveResultScript
+	}
 	if req.ContractUTXOs != nil {
 		runtime.AssetBalances = NewContractUTXOAssetView(prefix, req.ContractUTXOs)
 	}

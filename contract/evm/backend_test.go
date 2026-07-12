@@ -14,6 +14,12 @@ func executeWorkAndVerifyResults(t *testing.T, req BlockExecutionRequest,
 	resultTxs ...*wire.MsgTx) BlockExecutionResult {
 
 	t.Helper()
+	if req.ResolveResultScript == nil {
+		req.ResolveResultScript = func(ResultOutput) ([]byte, error) { return []byte{0x51}, nil }
+	}
+	if req.AssetPrecision == nil {
+		req.AssetPrecision = func(string) (int, bool) { return 8, true }
+	}
 	executed, err := ExecuteBlock(req)
 	require.NoError(t, err)
 	require.NoError(t, VerifyResultTxs(ResultVerifyRequest{
@@ -86,10 +92,11 @@ func TestBackendDefaultInvokeEmptyCall(t *testing.T) {
 	})
 
 	deployed := executeWorkAndVerifyResults(t, BlockExecutionRequest{
-		Txs:           []*wire.MsgTx{deployTx},
-		Runtime:       NewRuntime(nil),
-		Block:         testBlockContext(1),
-		ResolveCaller: fixedCaller(caller),
+		Txs:                 []*wire.MsgTx{deployTx},
+		Runtime:             NewRuntime(nil),
+		Block:               testBlockContext(1),
+		ResolveCaller:       fixedCaller(caller),
+		ResolveResultScript: func(ResultOutput) ([]byte, error) { return []byte{0x51}, nil },
 	}, deployResultTx)
 	require.Len(t, deployed.Records, 1)
 	defaultTx := testDefaultInvokeTx(t, deployed.Records[0].Contract, 100, testEVMGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))
@@ -303,6 +310,9 @@ func TestBackendAssetIntentRequiresResultAndVerifier(t *testing.T) {
 		Runtime:       runtime,
 		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
+		ResolveResultScript: func(ResultOutput) ([]byte, error) {
+			return []byte{0x51}, nil
+		},
 		ContractUTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
 			return []UTXO{mustUTXO(t, OutPoint{TxID: chainhash.Hash{7}.String(), Vout: 0}, contract, SatoshiAssetName, 100, 1)}, nil
@@ -431,6 +441,7 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 func TestBackendTriggerRequiresResultWithoutInvokeFunding(t *testing.T) {
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
+	configureTestAssetEffects(runtime)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
 		ID:       "vault-release",

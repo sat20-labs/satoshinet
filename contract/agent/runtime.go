@@ -320,15 +320,15 @@ func (r *Runtime) ApplyClose(req ApplyCloseRequest) (*PredictionSettlementPlan, 
 	if req.Invoker == "" || req.Invoker != r.deployer {
 		return nil, fmt.Errorf("invoker is not deployer")
 	}
-	if req.TimeValue > r.contract.BetDeadline {
-		return nil, fmt.Errorf("prediction deployer close is disabled after bet deadline")
-	}
 	if r.state.Status == StatusCompleted || r.state.Status == StatusRejected {
 		return &PredictionSettlementPlan{
 			Contract:   r.address.EncodeAddress(),
 			AssetName:  r.contract.BetAsset,
 			ResultType: "close",
 		}, nil
+	}
+	if req.TimeValue > r.contract.BetDeadline {
+		return nil, fmt.Errorf("prediction deployer close is disabled after bet deadline")
 	}
 	plan := &PredictionSettlementPlan{
 		Contract:   r.address.EncodeAddress(),

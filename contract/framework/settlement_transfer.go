@@ -30,8 +30,12 @@ func ResultOutputFromTransferFields(req TransferOutputRequest) (ResultOutput, er
 				return ResultOutput{}, err
 			}
 			amt = req.Precision.Normalize(req.AssetName, amt)
+			amountValue, err := DecimalToInt64(*amt)
+			if err != nil {
+				return ResultOutput{}, err
+			}
 			var overflow bool
-			value, overflow = AddInt64(value, amt.Int64())
+			value, overflow = AddInt64(value, amountValue)
 			if overflow {
 				return ResultOutput{}, fmt.Errorf("satoshi transfer output overflows int64")
 			}

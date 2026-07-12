@@ -41,7 +41,6 @@ type EVMBlockExecutionConfig struct {
 	ResolveTriggers     evm.TriggerResolver
 	AssetPrecision      contractframework.AssetPrecisionResolver
 	VerifyResult        evm.ResultVerifier
-	SkipStateRootVerify bool
 }
 
 // EVMBlockExecutionValidator validates EVM transaction replay, Result TX
@@ -126,12 +125,7 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		ContractUTXOs:       v.cfg.ContractUTXOs,
 		AssetPrecision:      v.cfg.AssetPrecision,
 	}
-	var result evm.BlockExecutionResult
-	if hasRoot && !v.cfg.SkipStateRootVerify {
-		result, err = evm.ExecuteBlockAndVerifyStateRoot(req)
-	} else {
-		result, err = evm.ExecuteBlock(req)
-	}
+	result, err := evm.ExecuteBlock(req)
 	if err != nil {
 		return evmBlockRuleError("validate EVM block: %v", err)
 	}

@@ -8,7 +8,6 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractengine "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/agent"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -27,7 +26,6 @@ type AgentBlockExecutionConfig struct {
 	AssetPrecision      contractframework.AssetPrecisionResolver
 	ResolveResultScript agent.ResultRecipientScriptResolver
 	ResolveResultOutput agent.ResultOutputResolver
-	SkipStateRootVerify bool
 }
 
 type AgentBlockExecutionValidator struct {
@@ -97,11 +95,6 @@ func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, 
 	})
 	if err != nil {
 		return agentBlockRuleError("validate agent block: %v", err)
-	}
-	if hasRoot && !v.cfg.SkipStateRootVerify {
-		if err := contractengine.VerifyCoinbaseStateRoot(txs[0].MsgTx(), executed.StateRoot); err != nil {
-			return agentBlockRuleError("agent state root: %v", err)
-		}
 	}
 	resultPlans, err := agent.AugmentResultPlans(executed.ResultPlans, contractUTXOs, store, v.cfg.AssetPrecision,
 		gasConfig.Normalize().GasAssetName, v.cfg.RuntimeConfig.BootstrapAddress)

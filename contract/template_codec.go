@@ -495,8 +495,10 @@ func (c TemplateAutopayContract) Check() error {
 	if err != nil {
 		return err
 	}
-	if c.FeeAssetName == SatoshiAssetName && minAmount.Cmp(indexercommon.NewDefaultDecimal(minAmount.Int64())) != 0 {
-		return fmt.Errorf("satoshi autopay minimum amount must be an integer")
+	if c.FeeAssetName == SatoshiAssetName {
+		if minAmount.Cmp(minAmount.NewPrecision(0)) != 0 {
+			return fmt.Errorf("satoshi autopay minimum amount must be an integer")
+		}
 	}
 	return nil
 }

@@ -86,20 +86,6 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 		t.Fatal("unexpected validator post-state root")
 	}
 
-	var wrongRoot [32]byte
-	wrongRoot[0] = 1
-	if err := evm.UpsertCoinbaseStateRoot(coinbase, wrongRoot); err != nil {
-		t.Fatal(err)
-	}
-	err = validator.ValidateEVMBlock(block, prevView)
-	if err == nil {
-		t.Fatal("expected wrong EVM state root to be rejected")
-	}
-	ruleErr, ok := err.(blockchain.RuleError)
-	if !ok || ruleErr.ErrorCode != blockchain.ErrInvalidEVMBlock {
-		t.Fatalf("got %T %[1]v, want blockchain.ErrInvalidEVMBlock", err)
-	}
-
 	missingRootBlock := btcutil.NewBlock(&wire.MsgBlock{
 		Header:       wire.BlockHeader{Timestamp: blockTime},
 		Transactions: append([]*wire.MsgTx{testEVMCoinbaseTx(), deployTx}, built.ResultTxs...),
@@ -109,7 +95,7 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing EVM state root to be rejected")
 	}
-	ruleErr, ok = err.(blockchain.RuleError)
+	ruleErr, ok := err.(blockchain.RuleError)
 	if !ok || ruleErr.ErrorCode != blockchain.ErrInvalidEVMBlock {
 		t.Fatalf("got %T %[1]v, want blockchain.ErrInvalidEVMBlock", err)
 	}

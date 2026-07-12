@@ -307,6 +307,9 @@ func TestEVMCloseHookTransfersBeforeProfit(t *testing.T) {
 		},
 		ResolveScript: evmTestResultScriptResolver(t, contract),
 		ResolveOutput: evmTestResultOutputResolver(contract),
+		AssetPrecision: func(assetName string) (int, bool) {
+			return 0, assetName == profitAsset || assetName == gasAssetName
+		},
 	})
 	require.NoError(t, err)
 	require.Len(t, result.ResultTxs, 1)

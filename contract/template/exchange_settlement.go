@@ -22,7 +22,10 @@ func (r *ContractRuntime) settleExchange(height int64, gasConfig GasConfig) (*Se
 		Contract: addr.EncodeAddress(),
 		Height:   height,
 	}
-	changed := applyInvalidItems(r.contract, &state, plan, height)
+	changed, err := applyInvalidItems(r.contract, &state, plan, height)
+	if err != nil {
+		return nil, err
+	}
 	for i := range state.Items {
 		item := &state.Items[i]
 		if item.Finished() || item.Height > height {

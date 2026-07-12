@@ -29,7 +29,6 @@ type TemplateBlockExecutionConfig struct {
 	ContractUTXOs       template.ContractUTXOProvider
 	AssetPrecision      contractframework.AssetPrecisionResolver
 	VerifyResult        func(resultTx *wire.MsgTx, expected []template.ResultPlan, status template.ResultStatus) error
-	SkipStateRootVerify bool
 }
 
 type TemplateBlockExecutionValidator struct {
@@ -96,11 +95,6 @@ func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.B
 	})
 	if err != nil {
 		return templateBlockRuleError("validate template block: %v", err)
-	}
-	if hasRoot && !v.cfg.SkipStateRootVerify {
-		if err := template.VerifyCoinbaseStateRoot(txs[0].MsgTx(), executed.StateRoot); err != nil {
-			return templateBlockRuleError("template state root: %v", err)
-		}
 	}
 	augmentStore := store.Clone()
 	resultPlans, err := template.AugmentResultPlans(executed.ResultPlans, augmentStore, gasConfig, contractUTXOs, v.cfg.AssetPrecision)

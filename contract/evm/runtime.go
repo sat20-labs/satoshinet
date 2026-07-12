@@ -23,6 +23,7 @@ type Runtime struct {
 	ContractPrefix      string
 	AssetBalances       AssetBalanceReader
 	AssetIntents        []AssetIntent
+	AssetPrecision      contractframework.AssetPrecisionPolicy
 	ResolveResultScript ResultRecipientScriptResolver
 }
 
@@ -140,8 +141,14 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	callContext := &precompileCallContext{}
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, nil, callContext)
 	evm := vm.NewEVM(r.blockContext(req.Block), r.State, r.ChainConfig, config)
+	pendingBalances := pendingIntentAssetBalanceView{
+		Base:    balances,
+		Prior:   r.AssetIntents,
+		Intents: &capturedIntents,
+	}
 	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
-	precompiles := SatoshiNetPrecompiles(balances, nil, "", callContext, vm.ActivePrecompiledContracts(rules))
+	precompiles := SatoshiNetPrecompiles(pendingBalances, nil, "", r.AssetPrecision, callContext,
+		vm.ActivePrecompiledContracts(rules))
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), nil, precompileAddresses(precompiles), nil)
 	evm.SetPrecompiles(precompiles)
 	evm.SetTxContext(vm.TxContext{
@@ -211,7 +218,7 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		Intents: &capturedIntents,
 	}
 	rules := r.ChainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
-	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, callContext,
+	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, r.AssetPrecision, callContext,
 		vm.ActivePrecompiledContracts(rules))
 	targetAddress := GethAddress(target)
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), &targetAddress, precompileAddresses(precompiles), nil)
@@ -287,8 +294,14 @@ func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedT
 	if len(capturedIntents) > maxExecutionAssetIntents {
 		return fmt.Errorf("too many EVM asset intents: %d", len(capturedIntents))
 	}
-	if r.ResolveResultScript != nil {
+	if len(capturedIntents) > 0 && r.ResolveResultScript == nil {
+		return errors.New("missing Result script resolver")
+	}
+	if len(capturedIntents) > 0 {
 		for i, intent := range capturedIntents {
+			if err := validateExactAssetPrecision(r.AssetPrecision, intent.AssetName, intent.Amount); err != nil {
+				return fmt.Errorf("asset intent %d: %w", i, err)
+			}
 			output, err := contractframework.ResultOutputWithAsset(intent.To, intent.AssetName, intent.Amount)
 			if err != nil {
 				return fmt.Errorf("asset intent %d: %w", i, err)

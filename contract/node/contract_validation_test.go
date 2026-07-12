@@ -210,6 +210,15 @@ func TestCompositeContractStateRootUsesInactiveParentRoots(t *testing.T) {
 	if err := validator.verifyCombinedStateRoot(block, blockchain.NewUtxoViewpoint(), false, true, false); err != nil {
 		t.Fatalf("verifyCombinedStateRoot failed: %v", err)
 	}
+
+	wrongRoot := expected
+	wrongRoot[0] ^= 0xff
+	if err := contractengine.UpsertCoinbaseStateRoot(coinbase, wrongRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := validator.verifyCombinedStateRoot(block, blockchain.NewUtxoViewpoint(), false, true, false); err == nil {
+		t.Fatal("expected wrong combined contract state root to be rejected")
+	}
 }
 
 func TestAgentValidatorRejectsMissingRootForDueHeightTrigger(t *testing.T) {
@@ -304,8 +313,7 @@ func TestTemplateValidatorRejectsUnexpectedResultWithoutPlan(t *testing.T) {
 	block.SetHeight(100)
 
 	err := NewTemplateBlockExecutionValidator(TemplateBlockExecutionConfig{
-		ChainParams:         &chaincfg.TestNetParams,
-		SkipStateRootVerify: true,
+		ChainParams: &chaincfg.TestNetParams,
 	}).ValidateTemplateBlock(block, view)
 	if err == nil || !strings.Contains(err.Error(), "unexpected template RESULT transaction") {
 		t.Fatalf("unexpected error: %v", err)
@@ -326,8 +334,7 @@ func TestAgentValidatorRejectsUnexpectedResultWithoutPlan(t *testing.T) {
 	block.SetHeight(100)
 
 	err := NewAgentBlockExecutionValidator(AgentBlockExecutionConfig{
-		ChainParams:         &chaincfg.TestNetParams,
-		SkipStateRootVerify: true,
+		ChainParams: &chaincfg.TestNetParams,
 	}).ValidateAgentBlock(block, view)
 	if err == nil || !strings.Contains(err.Error(), "unexpected agent RESULT transaction") {
 		t.Fatalf("unexpected error: %v", err)

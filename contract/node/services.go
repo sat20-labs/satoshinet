@@ -69,8 +69,6 @@ type Config struct {
 	ResultBuilder        mining.ContractResultBuilder
 	MempoolPolicy        contractframework.MempoolPolicy
 	QueryService         contractframework.QueryService
-
-	SkipStateRootVerify bool
 }
 
 func NewServices(cfg Config) (*Services, error) {
@@ -158,7 +156,6 @@ func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 		ResolveResultOutput: evmResultOutputResolver(cfg),
 		ResolveResultScript: evmResultScriptResolver(cfg.ChainParams),
 		AssetPrecision:      cfg.AssetPrecision,
-		SkipStateRootVerify: cfg.SkipStateRootVerify,
 	}), nil
 }
 
@@ -190,7 +187,6 @@ func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error)
 		ResolveResultScript: templateResultScriptResolver(cfg.ChainParams),
 		ContractUTXOs:       templateContractUTXOProvider(cfg.TemplateContractUTXOs),
 		AssetPrecision:      cfg.AssetPrecision,
-		SkipStateRootVerify: cfg.SkipStateRootVerify,
 	}), nil
 }
 
@@ -219,7 +215,6 @@ func NewAgentBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 		ResolveResultScript: agentResultScriptResolver(cfg.ChainParams),
 		ContractUTXOs:       agentContractUTXOProvider(cfg.AgentContractUTXOs),
 		AssetPrecision:      cfg.AssetPrecision,
-		SkipStateRootVerify: cfg.SkipStateRootVerify,
 	}), nil
 }
 

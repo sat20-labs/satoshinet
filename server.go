@@ -4081,7 +4081,6 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		EVMResolveRecipient:      evmScriptRecipientResolver(s.chainParams),
 		TemplateResolveRecipient: templateScriptRecipientResolver(s.chainParams),
 		AgentResolveRecipient:    agentScriptRecipientResolver(s.chainParams),
-		SkipStateRootVerify:      true,
 	})
 	if err != nil {
 		return nil, err

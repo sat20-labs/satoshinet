@@ -384,7 +384,11 @@ func RebuildResultOutputAsset(output *ResultOutput, opts SettlementResultOptions
 			return err
 		}
 		output.AssetAmt = amt.String()
-		output.Value = amt.Int64()
+		value, err := DecimalToInt64(*amt)
+		if err != nil {
+			return err
+		}
+		output.Value = value
 		output.Assets = nil
 		return nil
 	}

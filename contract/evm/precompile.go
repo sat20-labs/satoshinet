@@ -276,6 +276,7 @@ type AssetPrecompile struct {
 	Balances      AssetBalanceReader
 	Funding       FundingAmountReader
 	CallerAddress string
+	Precision     contractframework.AssetPrecisionPolicy
 	callContext   *precompileCallContext
 }
 
@@ -288,12 +289,13 @@ func NewAssetPrecompile(balances AssetBalanceReader, funding FundingAmountReader
 }
 
 func newAssetPrecompile(balances AssetBalanceReader, funding FundingAmountReader, callerAddress string,
-	callContext *precompileCallContext) *AssetPrecompile {
+	precision contractframework.AssetPrecisionPolicy, callContext *precompileCallContext) *AssetPrecompile {
 
 	return &AssetPrecompile{
 		Balances:      balances,
 		Funding:       funding,
 		CallerAddress: callerAddress,
+		Precision:     precision,
 		callContext:   callContext,
 	}
 }
@@ -332,7 +334,11 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 		if p.callContext.readOnly() {
 			return nil, vm.ErrWriteProtection
 		}
-		if _, _, _, _, err := DecodeTransferAssetCall(input); err != nil {
+		assetName, _, amount, _, err := DecodeTransferAssetCall(input)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateExactAssetPrecision(p.Precision, assetName, amount); err != nil {
 			return nil, err
 		}
 		return abiEncodeBool(true), nil
@@ -340,8 +346,14 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 		if p.callContext.readOnly() {
 			return nil, vm.ErrWriteProtection
 		}
-		if _, err := DecodeTransferAssetsCall(input); err != nil {
+		transfers, err := DecodeTransferAssetsCall(input)
+		if err != nil {
 			return nil, err
+		}
+		for _, transfer := range transfers {
+			if err := validateExactAssetPrecision(p.Precision, transfer.AssetName, transfer.Amount); err != nil {
+				return nil, err
+			}
 		}
 		return abiEncodeBool(true), nil
 	case assetFundingAssetSelector:
@@ -555,15 +567,37 @@ func (p *TriggerPrecompile) Name() string {
 }
 
 func SatoshiNetPrecompiles(balances AssetBalanceReader, funding FundingAmountReader, callerAddress string,
-	callContext *precompileCallContext, rules vm.PrecompiledContracts) vm.PrecompiledContracts {
+	precision contractframework.AssetPrecisionPolicy, callContext *precompileCallContext,
+	rules vm.PrecompiledContracts) vm.PrecompiledContracts {
 
 	out := make(vm.PrecompiledContracts, len(rules)+2)
 	for addr, p := range rules {
 		out[addr] = p
 	}
-	out[AssetPrecompileAddress] = newAssetPrecompile(balances, funding, callerAddress, callContext)
+	out[AssetPrecompileAddress] = newAssetPrecompile(balances, funding, callerAddress, precision, callContext)
 	out[TriggerPrecompileAddress] = newTriggerPrecompile(callContext)
 	return out
+}
+
+func validateExactAssetPrecision(policy contractframework.AssetPrecisionPolicy, assetName string,
+	amount *scommon.Decimal) error {
+
+	if amount == nil || amount.Sign() <= 0 {
+		return errors.New("asset amount must be positive")
+	}
+	precision := 0
+	if assetName != SatoshiAssetName {
+		var ok bool
+		precision, ok = policy.AssetPrecision(assetName)
+		if !ok {
+			return fmt.Errorf("unknown asset precision for %s", assetName)
+		}
+	}
+	canonical := amount.NewPrecision(precision)
+	if canonical.Sign() <= 0 || canonical.Cmp(amount) != 0 {
+		return fmt.Errorf("asset amount %s is not exactly representable at precision %d", amount.String(), precision)
+	}
+	return nil
 }
 
 func DecodeTransferAssetCall(input []byte) (assetName, to string, amount *scommon.Decimal, extraData []byte, err error) {

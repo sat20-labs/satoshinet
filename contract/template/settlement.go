@@ -34,9 +34,16 @@ func (r *ContractRuntime) settleLimitOrders(height int64,
 		Contract: addr.EncodeAddress(),
 		Height:   height,
 	}
-	changed := applyInvalidItems(r.contract, &state, plan, height)
+	changed, err := applyInvalidItems(r.contract, &state, plan, height)
+	if err != nil {
+		return nil, err
+	}
 	applyRefunds(&state, plan, height)
-	if applyCloseItems(r.contract, &state, plan, height, r.base.Deployer()) {
+	closed, err := applyCloseItems(r.contract, &state, plan, height, r.base.Deployer())
+	if err != nil {
+		return nil, err
+	}
+	if closed {
 		if err := r.saveRuntimeState(state); err != nil {
 			return nil, err
 		}
@@ -131,10 +138,17 @@ func (r *ContractRuntime) settleAMM(height int64,
 		Contract: addr.EncodeAddress(),
 		Height:   height,
 	}
-	changed := applyInvalidItems(r.contract, &state, plan, height)
+	changed, err := applyInvalidItems(r.contract, &state, plan, height)
+	if err != nil {
+		return nil, err
+	}
 	applyRefunds(&state, plan, height)
 	changed = changed || settlementPlanHasChanges(plan)
-	if applyCloseItems(r.contract, &state, plan, height, r.base.Deployer()) {
+	closed, err := applyCloseItems(r.contract, &state, plan, height, r.base.Deployer())
+	if err != nil {
+		return nil, err
+	}
+	if closed {
 		if err := r.saveRuntimeState(state); err != nil {
 			return nil, err
 		}
@@ -163,7 +177,10 @@ func (r *ContractRuntime) settleAMM(height int64,
 		if poolAsset == nil {
 			poolAsset = parseDecimalOrZero("0")
 		}
-		poolGas := decimalInt64(running.AssetBInPool)
+		poolGas, err := decimalInt64(running.AssetBInPool)
+		if err != nil {
+			return nil, fmt.Errorf("AMM pool gas: %w", err)
+		}
 		poolK := ammSettlementK(poolAsset, poolGas)
 		for _, id := range itemIDs {
 			item := &state.Items[id]
@@ -264,7 +281,10 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 	if poolAsset == nil {
 		poolAsset = parseDecimalOrZero("0")
 	}
-	poolGas := decimalInt64(running.AssetBInPool)
+	poolGas, err := decimalInt64(running.AssetBInPool)
+	if err != nil {
+		return false, fmt.Errorf("AMM liquidity pool gas: %w", err)
+	}
 	totalLPT := running.TotalLPTAmt
 	if totalLPT == nil {
 		totalLPT = parseDecimalOrZero("0")
@@ -297,7 +317,10 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 				changed = true
 				continue
 			}
-			reserveAsset, reserveGas, leftAsset, leftGas := reserveAMMLiquidity(addAsset, addGas, poolAsset, poolGas, *running)
+			reserveAsset, reserveGas, leftAsset, leftGas, err := reserveAMMLiquidity(addAsset, addGas, poolAsset, poolGas, *running)
+			if err != nil {
+				return false, err
+			}
 			minted := mintLPTAmount(reserveAsset, reserveGas, poolAsset, poolGas, totalLPT)
 			if minted.Sign() <= 0 {
 				item.Reason = InvokeReasonNoEnoughAsset
@@ -359,10 +382,16 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 				continue
 			}
 			cost := running.LPCosts[item.Address]
-			depositValue := proportionalInt64(cost, remove, owned)
+			depositValue, err := proportionalInt64(cost, remove, owned)
+			if err != nil {
+				return false, err
+			}
 			ratio := scommon.DecimalDiv(remove, totalLPT)
 			outAsset := scommon.DecimalMul(poolAsset, ratio)
-			outGas := scommon.DecimalMul(scommon.NewDefaultDecimal(poolGas), ratio).Int64()
+			outGas, err := scommon.DecimalMul(scommon.NewDefaultDecimal(poolGas), ratio).FloorInt64()
+			if err != nil {
+				return false, fmt.Errorf("AMM remove liquidity gas output: %w", err)
+			}
 			lpAsset, lpGas, foundationAsset, foundationGas, err := splitAMMRemoveLiquidity(outAsset, outGas, depositValue)
 			if err != nil {
 				return false, err
@@ -547,7 +576,11 @@ func applyLimitOrderDeal(buy, sell *InvokeItem, matchAmt *scommon.Decimal, match
 		buy.RemainingValue = 0
 		buy.Done = ItemStatusDealt
 	}
-	if limitOrderSellFinished(sell) {
+	sellFinished, err := limitOrderSellFinished(sell)
+	if err != nil {
+		return err
+	}
+	if sellFinished {
 		sell.OutAmt = sell.RemainingAmt
 		sell.RemainingAmt = nil
 		sell.Done = ItemStatusDealt
@@ -579,19 +612,23 @@ func limitOrderBuyFinished(buy *InvokeItem, price string) bool {
 	return nextAmt == nil || nextAmt.Sign() == 0
 }
 
-func limitOrderSellFinished(sell *InvokeItem) bool {
+func limitOrderSellFinished(sell *InvokeItem) (bool, error) {
 	remaining := sell.RemainingAmt
 	if remaining == nil {
 		remaining = parseDecimalOrZero("0")
 	}
 	if remaining.Sign() == 0 {
-		return true
+		return true, nil
 	}
 	unitPrice := parseDecimalOrZero(sell.UnitPrice)
 	if unitPrice.Sign() <= 0 {
-		return true
+		return true, nil
 	}
-	return scommon.DecimalMul(remaining, unitPrice).Int64() == 0
+	value, err := scommon.DecimalMul(remaining, unitPrice).FloorInt64()
+	if err != nil {
+		return false, fmt.Errorf("limit order remaining value: %w", err)
+	}
+	return value == 0, nil
 }
 
 func addLimitOrderDealTransfers(plan *SettlementPlan, buy, sell *InvokeItem, assetAmt string, satValue int64) {
@@ -720,7 +757,7 @@ func applyRefunds(state *TemplateRuntimeState, plan *SettlementPlan, height int6
 	}
 }
 
-func applyInvalidItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64) bool {
+func applyInvalidItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64) (bool, error) {
 	changed := false
 	for i := range state.Items {
 		item := &state.Items[i]
@@ -728,17 +765,21 @@ func applyInvalidItems(contract Contract, state *TemplateRuntimeState, plan *Set
 			continue
 		}
 		addSettlementInputs(plan, item)
-		plan.Transfers = append(plan.Transfers, invalidRefundTransfers(contract, item)...)
+		transfers, err := invalidRefundTransfers(contract, item)
+		if err != nil {
+			return false, err
+		}
+		plan.Transfers = append(plan.Transfers, transfers...)
 		plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
 		item.Done = ItemStatusRefunded
 		changed = true
 	}
-	return changed
+	return changed, nil
 }
 
-func invalidRefundTransfers(contract Contract, item *InvokeItem) []SettlementTransfer {
+func invalidRefundTransfers(contract Contract, item *InvokeItem) ([]SettlementTransfer, error) {
 	if item == nil {
-		return nil
+		return nil, nil
 	}
 	assetA, assetB := defaultInvokePoolAssets(contract)
 	out := make([]SettlementTransfer, 0, 2)
@@ -753,10 +794,14 @@ func invalidRefundTransfers(contract Contract, item *InvokeItem) []SettlementTra
 	}
 	if item.RetainedAssetB != nil && item.RetainedAssetB.Sign() > 0 && assetB != "" {
 		if assetB == SatoshiAssetName {
+			value, err := decimalInt64(item.RetainedAssetB)
+			if err != nil {
+				return nil, fmt.Errorf("invalid refund satoshi amount: %w", err)
+			}
 			out = append(out, SettlementTransfer{
 				ItemID:   item.ID,
 				To:       item.Address,
-				SatValue: decimalInt64(item.RetainedAssetB),
+				SatValue: value,
 				Reason:   SettlementReasonRefund,
 			})
 		} else if assetB != assetA {
@@ -769,12 +814,12 @@ func invalidRefundTransfers(contract Contract, item *InvokeItem) []SettlementTra
 			})
 		}
 	}
-	return out
+	return out, nil
 }
 
-func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64, deployer string) bool {
+func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64, deployer string) (bool, error) {
 	if state == nil || plan == nil || state.ClosedForContract(contract) {
-		return false
+		return false, nil
 	}
 	for i := range state.Items {
 		closeItem := &state.Items[i]
@@ -787,7 +832,7 @@ func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *Settl
 		if closeItem.Address != deployer {
 			closeItem.Reason = InvokeReasonInvalid
 			closeItem.Done = ItemStatusClosedDirectly
-			return true
+			return true, nil
 		}
 		for j := range state.Items {
 			item := &state.Items[j]
@@ -814,14 +859,16 @@ func applyCloseItems(contract Contract, state *TemplateRuntimeState, plan *Settl
 			plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
 		}
 		if amm, ok := contract.(*AMMContract); ok {
-			appendAMMLPCloseTransfers(state, plan, closeItem, amm.AssetName)
+			if err := appendAMMLPCloseTransfers(state, plan, closeItem, amm.AssetName); err != nil {
+				return false, err
+			}
 			clearAMMClosedPool(state)
 		}
 		closeItem.Done = ItemStatusDealt
 		markRunningClosed(contract, state)
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 func markRunningClosed(contract Contract, state *TemplateRuntimeState) {
@@ -854,19 +901,22 @@ func clearAMMClosedPool(state *TemplateRuntimeState) {
 	running.LPCosts = nil
 }
 
-func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan, item *InvokeItem, assetName string) {
+func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan, item *InvokeItem, assetName string) error {
 	if state == nil || plan == nil {
-		return
+		return nil
 	}
 	running := state.AMMData()
 	if running.TotalLPTAmt == nil || running.TotalLPTAmt.Sign() <= 0 {
-		return
+		return nil
 	}
 	poolAsset := running.AssetAInPool
 	if poolAsset == nil {
 		poolAsset = parseDecimalOrZero("0")
 	}
-	poolGas := decimalInt64(running.AssetBInPool)
+	poolGas, err := decimalInt64(running.AssetBInPool)
+	if err != nil {
+		return fmt.Errorf("AMM close pool gas: %w", err)
+	}
 	addresses := make([]string, 0, len(running.LPBalances))
 	totalLP := parseDecimalOrZero("0")
 	for address, balance := range running.LPBalances {
@@ -886,7 +936,11 @@ func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan
 		if i != len(addresses)-1 {
 			ratio := scommon.DecimalDiv(balance, totalLP)
 			assetOut = decimalMulAssetRatio(poolAsset, ratio)
-			gasOut = proportionalInt64(poolGas, balance, totalLP)
+			var err error
+			gasOut, err = proportionalInt64(poolGas, balance, totalLP)
+			if err != nil {
+				return err
+			}
 			remainingAsset = scommon.DecimalSub(remainingAsset, assetOut)
 			remainingGas -= gasOut
 		}
@@ -902,6 +956,7 @@ func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan
 			Reason:    SettlementReasonRefund,
 		})
 	}
+	return nil
 }
 
 func refundMatchesItem(refund *InvokeItem, itemID int64) bool {
@@ -1135,7 +1190,7 @@ func settleAMMSell(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64, 
 	if minGas == nil {
 		minGas = parseDecimalOrZero("0")
 	}
-	if minGas.Sign() > 0 && outGas < minGas.Int64() {
+	if minGas.Sign() > 0 && scommon.NewDefaultDecimal(outGas).Cmp(minGas) < 0 {
 		item.Reason = InvokeReasonSlippageProtect
 		transfer := markItemRefunded(item)
 		return SettlementDeal{}, transfer, false, nil
@@ -1229,26 +1284,30 @@ func mintLPTAmount(addAsset *scommon.Decimal, addGas int64, poolAsset *scommon.D
 	return minDecimal(byAsset, byGas)
 }
 
-func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *scommon.Decimal, poolGas int64, running AMMRunningData) (*scommon.Decimal, int64, *scommon.Decimal, int64) {
+func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *scommon.Decimal, poolGas int64, running AMMRunningData) (*scommon.Decimal, int64, *scommon.Decimal, int64, error) {
 	if addAsset == nil || addAsset.Sign() <= 0 || addGas <= 0 {
-		return parseDecimalOrZero("0"), 0, parseDecimalOrZero("0"), 0
+		return parseDecimalOrZero("0"), 0, parseDecimalOrZero("0"), 0, nil
 	}
 	if poolAsset == nil || poolAsset.Sign() <= 0 || poolGas <= 0 || !running.TradingReady {
-		return addAsset, addGas, parseDecimalOrZero("0"), 0
+		return addAsset, addGas, parseDecimalOrZero("0"), 0, nil
 	}
 	price := ammPoolPrice(poolAsset, poolGas, running)
 	if price == nil || price.Sign() <= 0 {
-		return addAsset, addGas, parseDecimalOrZero("0"), 0
+		return addAsset, addGas, parseDecimalOrZero("0"), 0, nil
 	}
 	reserveGas := addGas
 	reserveAsset := scommon.DecimalDiv(scommon.NewDecimal(addGas, MaxPriceDivisibility), price)
 	if reserveAsset == nil {
-		return parseDecimalOrZero("0"), 0, addAsset, addGas
+		return parseDecimalOrZero("0"), 0, addAsset, addGas, nil
 	}
 	reserveAsset = reserveAsset.NewPrecision(addAsset.Precision)
 	if reserveAsset.Cmp(addAsset) > 0 {
 		reserveAsset = addAsset
-		reserveGas = scommon.DecimalMul(addAsset, price).Ceil()
+		var err error
+		reserveGas, err = scommon.DecimalMul(addAsset, price).CeilInt64()
+		if err != nil {
+			return nil, 0, nil, 0, fmt.Errorf("AMM liquidity reserve gas: %w", err)
+		}
 		if reserveGas > addGas {
 			reserveGas = addGas
 		}
@@ -1258,7 +1317,7 @@ func reserveAMMLiquidity(addAsset *scommon.Decimal, addGas int64, poolAsset *sco
 	if leftGas < 0 {
 		leftGas = 0
 	}
-	return reserveAsset, reserveGas, leftAsset, leftGas
+	return reserveAsset, reserveGas, leftAsset, leftGas, nil
 }
 
 func ammPoolPrice(poolAsset *scommon.Decimal, poolGas int64, running AMMRunningData) *scommon.Decimal {
@@ -1310,6 +1369,9 @@ func splitAMMRemoveLiquidity(asset *scommon.Decimal, gas int64, depositValue int
 	}
 	foundationProfitBig := new(big.Int).Mul(big.NewInt(profit), big.NewInt(100-AMMProfitShareLP))
 	foundationProfitBig.Div(foundationProfitBig, big.NewInt(100))
+	if !foundationProfitBig.IsInt64() {
+		return nil, 0, nil, 0, fmt.Errorf("AMM foundation profit overflows int64")
+	}
 	foundationProfit := foundationProfitBig.Int64()
 	if foundationProfit <= 0 {
 		return asset, gas, parseDecimalOrZero("0"), 0, nil
@@ -1318,6 +1380,9 @@ func splitAMMRemoveLiquidity(asset *scommon.Decimal, gas int64, depositValue int
 	foundationAsset := decimalMulAssetRatio(asset, ratio)
 	foundationGasBig := new(big.Int).Mul(big.NewInt(gas), big.NewInt(foundationProfit))
 	foundationGasBig.Div(foundationGasBig, big.NewInt(totalValue))
+	if !foundationGasBig.IsInt64() {
+		return nil, 0, nil, 0, fmt.Errorf("AMM foundation gas overflows int64")
+	}
 	foundationGas := foundationGasBig.Int64()
 	if foundationGas > gas {
 		foundationGas = gas
@@ -1330,11 +1395,15 @@ func splitAMMRemoveLiquidity(asset *scommon.Decimal, gas int64, depositValue int
 	return lpAsset, lpGas, foundationAsset, foundationGas, nil
 }
 
-func proportionalInt64(value int64, part, total *scommon.Decimal) int64 {
+func proportionalInt64(value int64, part, total *scommon.Decimal) (int64, error) {
 	if value <= 0 || part == nil || total == nil || part.Sign() <= 0 || total.Sign() <= 0 {
-		return 0
+		return 0, nil
 	}
-	return scommon.DecimalMul(scommon.NewDefaultDecimal(value), scommon.DecimalDiv(part, total)).Floor()
+	out, err := scommon.DecimalMul(scommon.NewDefaultDecimal(value), scommon.DecimalDiv(part, total)).FloorInt64()
+	if err != nil {
+		return 0, fmt.Errorf("proportional value: %w", err)
+	}
+	return out, nil
 }
 
 func decimalMulAssetRatio(asset, ratio *scommon.Decimal) *scommon.Decimal {

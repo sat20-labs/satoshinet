@@ -9,6 +9,8 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
+const MaxContractResultOutputs = 1000
+
 type ResultTxBuildOptions struct {
 	UseInputUTXOs bool
 	PlanCount     func(ResultPlan) int
@@ -60,6 +62,7 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 	}
 	req.Plans = MergeResultPlansByContract(req.Plans)
 	tx := wire.NewMsgTx(2)
+	outputCount := 0
 	for _, plan := range req.Plans {
 		if opts.UseInputUTXOs {
 			for _, input := range plan.InputUTXOs {
@@ -79,11 +82,15 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 			}
 		}
 		for _, output := range plan.Outputs {
+			if outputCount >= MaxContractResultOutputs {
+				return nil, fmt.Errorf("too many contract result outputs: %d", outputCount+1)
+			}
 			txOut, err := ResultTxOut(output, req.ResolveScript)
 			if err != nil {
 				return nil, err
 			}
 			tx.AddTxOut(txOut)
+			outputCount++
 		}
 	}
 	if req.ResultCount != 0 {
@@ -100,6 +107,9 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 		return nil, err
 	}
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	if tx.SerializeSize() > wire.MaxBlockPayload {
+		return nil, fmt.Errorf("contract result transaction is too large: %d", tx.SerializeSize())
+	}
 	return tx, nil
 }
 

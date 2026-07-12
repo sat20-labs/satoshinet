@@ -509,15 +509,23 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 		}
 		value := int64(0)
 		if autopay.FeeAssetName == SatoshiAssetName {
+			feeValue, err := decimalInt64(running.FeeBalance)
+			if err != nil {
+				return ResultOutput{}, fmt.Errorf("autopay fee balance: %w", err)
+			}
 			var overflow bool
-			value, overflow = contractframework.AddInt64(value, decimalInt64(running.FeeBalance))
+			value, overflow = contractframework.AddInt64(value, feeValue)
 			if overflow {
 				return ResultOutput{}, fmt.Errorf("autopay fee balance overflows int64")
 			}
 		}
 		if gasAssetName == SatoshiAssetName {
+			gasValue, err := decimalInt64(running.GasBalance)
+			if err != nil {
+				return ResultOutput{}, fmt.Errorf("autopay gas balance: %w", err)
+			}
 			var overflow bool
-			value, overflow = contractframework.AddInt64(value, decimalInt64(running.GasBalance))
+			value, overflow = contractframework.AddInt64(value, gasValue)
 			if overflow {
 				return ResultOutput{}, fmt.Errorf("autopay gas balance overflows int64")
 			}
@@ -580,9 +588,17 @@ func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConf
 	if state.ClosedForContract(runtime.Contract()) {
 		to = runtime.RuntimeBase().Deployer()
 	}
+	changeValue, err := contractChangeValue(runtime.Contract(), assetBInPool)
+	if err != nil {
+		return ResultOutput{}, err
+	}
+	value, overflow := contractframework.AddInt64(changeValue, openValue)
+	if overflow {
+		return ResultOutput{}, fmt.Errorf("contract change value overflows int64")
+	}
 	return ResultOutput{
 		To:     to,
-		Value:  contractChangeValue(runtime.Contract(), assetBInPool) + openValue,
+		Value:  value,
 		Assets: assets,
 	}, nil
 }
@@ -625,12 +641,12 @@ func openOrderManagedAssets(contract Contract, state *TemplateRuntimeState) (int
 	return value, assets, nil
 }
 
-func contractChangeValue(contract Contract, assetB *scommon.Decimal) int64 {
+func contractChangeValue(contract Contract, assetB *scommon.Decimal) (int64, error) {
 	if exchange, ok := contract.(*ExchangeContract); ok {
 		if exchange.AssetBName == SatoshiAssetName {
 			return decimalInt64(assetB)
 		}
-		return 0
+		return 0, nil
 	}
 	return decimalInt64(assetB)
 }

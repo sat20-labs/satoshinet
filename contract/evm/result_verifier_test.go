@@ -320,6 +320,10 @@ func TestBackendWithCanonicalResultVerifier(t *testing.T) {
 		Block:         testBlockContext(1),
 		ResolveCaller: fixedCaller(caller),
 		ContractUTXOs: verifier.UTXOs,
+		ResolveResultScript: func(ResultOutput) ([]byte, error) {
+			return []byte{0x51}, nil
+		},
+		AssetPrecision: func(string) (int, bool) { return 8, true },
 	})
 	require.NoError(t, err)
 	require.NoError(t, VerifyResultTxs(ResultVerifyRequest{

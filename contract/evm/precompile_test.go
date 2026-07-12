@@ -146,7 +146,9 @@ func TestAssetPrecompileTransferAssetABI(t *testing.T) {
 	require.Equal(t, "1000", amount.String())
 	require.Empty(t, extraData)
 
-	ret, err := NewAssetPrecompile(nil, nil).Run(call)
+	precompile := NewAssetPrecompile(nil, nil)
+	precompile.Precision = testAssetPrecisionPolicy()
+	ret, err := precompile.Run(call)
 	require.NoError(t, err)
 	require.Equal(t, byte(1), ret[31])
 }
@@ -182,9 +184,48 @@ func TestAssetPrecompileTransferAssetsABI(t *testing.T) {
 	require.Equal(t, "7.5", transfers[3].Amount.String())
 	require.Empty(t, transfers[4].ExtraData)
 
-	ret, err := NewAssetPrecompile(nil, nil).Run(call)
+	precompile := NewAssetPrecompile(nil, nil)
+	precompile.Precision = testAssetPrecisionPolicy()
+	ret, err := precompile.Run(call)
 	require.NoError(t, err)
 	require.Equal(t, byte(1), ret[31])
+}
+
+func TestAssetPrecompileRequiresExactPrecision(t *testing.T) {
+	policy := contractframework.AssetPrecisionPolicy{Resolve: func(assetName string) (int, bool) {
+		switch assetName {
+		case "asset0":
+			return 0, true
+		case "asset2":
+			return 2, true
+		default:
+			return 0, false
+		}
+	}}
+	tests := []struct {
+		name      string
+		assetName string
+		amount    string
+		wantErr   string
+	}{
+		{name: "precision zero fraction", assetName: "asset0", amount: "1.9", wantErr: "not exactly representable"},
+		{name: "precision zero rounds to zero", assetName: "asset0", amount: "0.9", wantErr: "not exactly representable"},
+		{name: "precision two exact", assetName: "asset2", amount: "1.23"},
+		{name: "precision two excess", assetName: "asset2", amount: "1.234", wantErr: "not exactly representable"},
+		{name: "unknown asset", assetName: "unknown", amount: "1", wantErr: "unknown asset precision"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			precompile := NewAssetPrecompile(nil, nil)
+			precompile.Precision = policy
+			_, err := precompile.Run(EncodeTransferAssetCall(test.assetName, "tb1pdest", test.amount, nil))
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }
 
 func TestAssetPrecompileTransferAssetsSolidityABI(t *testing.T) {
@@ -493,6 +534,7 @@ func TestAssetPrecompileRejectsMalformedDynamicOffset(t *testing.T) {
 func TestRuntimeCapturesTransferAssetIntent(t *testing.T) {
 	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
 	runtime := NewRuntime(nil)
+	configureTestAssetEffects(runtime)
 
 	result := runtime.Call(CallRequest{
 		CallerAddress: caller.String(),
@@ -514,6 +556,7 @@ func TestRuntimeCapturesTransferAssetIntent(t *testing.T) {
 func TestRuntimeCapturesTransferAssetsIntents(t *testing.T) {
 	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
 	runtime := NewRuntime(nil)
+	configureTestAssetEffects(runtime)
 	gas := DefaultGasConfig().GasAssetName
 
 	result := runtime.Call(CallRequest{
@@ -546,6 +589,24 @@ func TestRuntimeCapturesTransferAssetsIntents(t *testing.T) {
 	}
 }
 
+func testAssetPrecisionPolicy() contractframework.AssetPrecisionPolicy {
+	return contractframework.AssetPrecisionPolicy{Resolve: func(assetName string) (int, bool) {
+		switch assetName {
+		case DefaultGasConfig().GasAssetName, "ordx:ticker:0", "ordx:f:ooxx", "runes:f:BITCOIN•TESTNET":
+			return 0, true
+		case "brc20:f:ooxx":
+			return 1, true
+		default:
+			return 0, false
+		}
+	}}
+}
+
+func configureTestAssetEffects(runtime *Runtime) {
+	runtime.AssetPrecision = testAssetPrecisionPolicy()
+	runtime.ResolveResultScript = func(ResultOutput) ([]byte, error) { return []byte{0x51}, nil }
+}
+
 func TestRuntimeRejectsUnsettleableIntentBeforeCommit(t *testing.T) {
 	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
 	runtime := NewRuntime(nil)
@@ -565,6 +626,33 @@ func TestRuntimeRejectsUnsettleableIntentBeforeCommit(t *testing.T) {
 	})
 	require.ErrorContains(t, result.Err, "not settleable")
 	require.Empty(t, runtime.AssetIntents)
+}
+
+func TestRuntimeCommitRechecksAssetPrecision(t *testing.T) {
+	runtime := NewRuntime(nil)
+	runtime.AssetPrecision = contractframework.AssetPrecisionPolicy{Resolve: func(assetName string) (int, bool) {
+		return 0, assetName == "asset0"
+	}}
+	runtime.ResolveResultScript = func(ResultOutput) ([]byte, error) { return []byte{0x51}, nil }
+	err := runtime.commitCapturedEffects([]AssetIntent{{
+		From:      testContract(t),
+		To:        "tb1pdest",
+		AssetName: "asset0",
+		Amount:    mustDecimalString(t, "1.9"),
+	}}, nil, nil)
+	require.ErrorContains(t, err, "not exactly representable")
+	require.Empty(t, runtime.AssetIntents)
+}
+
+func TestRuntimeIntentRequiresResultResolver(t *testing.T) {
+	runtime := NewRuntime(nil)
+	err := runtime.commitCapturedEffects([]AssetIntent{{
+		From:      testContract(t),
+		To:        "tb1pdest",
+		AssetName: SatoshiAssetName,
+		Amount:    mustDefaultDecimal(t, 1),
+	}}, nil, nil)
+	require.ErrorContains(t, err, "missing Result script resolver")
 }
 
 func TestRuntimeRetainsOnlyClaimedGasFunding(t *testing.T) {
@@ -787,6 +875,7 @@ func TestRuntimePendingAssetLedgerSpansCalls(t *testing.T) {
 	caller := mustEVMAddress(t, "0x1111111111111111111111111111111111111111")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
+	configureTestAssetEffects(runtime)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	runtime.AssetBalances = NewUTXOAssetView([]UTXO{
 		mustUTXO(t, OutPoint{TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Vout: 0},

@@ -1,6 +1,7 @@
 package template
 
 import (
+	"fmt"
 	"sort"
 
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
@@ -108,13 +109,21 @@ func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (int
 		buyIDs, sellIDs := activeLimitOrderIDs(state.Items, ctx.Height)
 		sortLimitOrders(state.Items, buyIDs, true)
 		sortLimitOrders(state.Items, sellIDs, false)
+		buyDepth, err := limitOrderDepth(state.Items, buyIDs, true)
+		if err != nil {
+			return nil, err
+		}
+		sellDepth, err := limitOrderDepth(state.Items, sellIDs, false)
+		if err != nil {
+			return nil, err
+		}
 		view := LimitOrderStateView{
 			TemplateStateView: base,
 			TradingReady:      running.TradingReady,
 			ActiveBuyCount:    len(buyIDs),
 			ActiveSellCount:   len(sellIDs),
-			BuyDepth:          limitOrderDepth(state.Items, buyIDs, true),
-			SellDepth:         limitOrderDepth(state.Items, sellIDs, false),
+			BuyDepth:          buyDepth,
+			SellDepth:         sellDepth,
 			AssetAInPool:      decimalString(running.AssetAInPool),
 			AssetBInPool:      decimalString(running.AssetBInPool),
 			TotalDealCount:    running.TotalDealCount,
@@ -196,7 +205,7 @@ func templateViewAssets(assets ...string) []string {
 	return out
 }
 
-func limitOrderDepth(items []InvokeItem, ids []int, buy bool) []*DepthInfo {
+func limitOrderDepth(items []InvokeItem, ids []int, buy bool) ([]*DepthInfo, error) {
 	type depthRow struct {
 		price string
 		amt   string
@@ -218,7 +227,11 @@ func limitOrderDepth(items []InvokeItem, ids []int, buy bool) []*DepthInfo {
 			rows[price] = row
 		}
 		if buy {
-			row.value += item.RemainingValue
+			var overflow bool
+			row.value, overflow = contractframework.AddInt64(row.value, item.RemainingValue)
+			if overflow {
+				return nil, fmt.Errorf("limit order buy depth value overflows int64")
+			}
 			amt := parseDecimalOrZero("0")
 			if item.ExpectedAmt != nil {
 				amt = item.ExpectedAmt
@@ -231,7 +244,15 @@ func limitOrderDepth(items []InvokeItem, ids []int, buy bool) []*DepthInfo {
 		}
 		if item.RemainingAmt != nil {
 			row.amt = decimalString(parseDecimalOrZero(row.amt).Add(item.RemainingAmt))
-			row.value += parseDecimalOrZero(price).Mul(item.RemainingAmt).Int64()
+			value, err := parseDecimalOrZero(price).Mul(item.RemainingAmt).FloorInt64()
+			if err != nil {
+				return nil, fmt.Errorf("limit order sell depth value: %w", err)
+			}
+			var overflow bool
+			row.value, overflow = contractframework.AddInt64(row.value, value)
+			if overflow {
+				return nil, fmt.Errorf("limit order sell depth value overflows int64")
+			}
 		}
 	}
 	out := make([]*DepthInfo, 0, len(rows))
@@ -245,5 +266,5 @@ func limitOrderDepth(items []InvokeItem, ids []int, buy bool) []*DepthInfo {
 		}
 		return cmp < 0
 	})
-	return out
+	return out, nil
 }

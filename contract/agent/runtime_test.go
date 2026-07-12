@@ -123,6 +123,23 @@ func TestRuntimeDeployerCloseAllowedThroughBetDeadline(t *testing.T) {
 	}
 }
 
+func TestRuntimeTerminalCloseAllowedAfterBetDeadline(t *testing.T) {
+	runtime := newTestRuntime(t)
+	requireReady(t, runtime)
+	runtime.state.Status = StatusCompleted
+	runtime.state.Prediction.Status = PredictionStatusSettled
+	plan, err := runtime.ApplyClose(ApplyCloseRequest{
+		Invoker:   runtime.deployer,
+		TimeValue: runtime.Contract().ConfirmAfter + 1,
+	})
+	if err != nil {
+		t.Fatalf("ApplyClose failed: %v", err)
+	}
+	if plan == nil || plan.ResultType != "close" || plan.Refund {
+		t.Fatalf("unexpected terminal close plan: %#v", plan)
+	}
+}
+
 func TestRuntimeConfirmSettlesWinnersAndFees(t *testing.T) {
 	runtime := newTestRuntime(t)
 	requireReady(t, runtime)

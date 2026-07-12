@@ -1563,7 +1563,10 @@ func initializeAMMInitialLP(state *TemplateRuntimeState, deployer string) error 
 		return nil
 	}
 	poolAsset := running.AssetAInPool
-	poolGas := decimalInt64(running.AssetBInPool)
+	poolGas, err := decimalInt64(running.AssetBInPool)
+	if err != nil {
+		return fmt.Errorf("AMM initial pool gas: %w", err)
+	}
 	if poolAsset == nil || poolAsset.Sign() <= 0 || poolGas <= 0 {
 		return nil
 	}
@@ -1779,11 +1782,18 @@ func parseAutopayDelegateJSONMap(in map[string]autopayDelegateJSON) (map[string]
 	return out, nil
 }
 
-func decimalInt64(value *scommon.Decimal) int64 {
+func decimalInt64(value *scommon.Decimal) (int64, error) {
 	if value == nil {
-		return 0
+		return 0, nil
 	}
-	return value.Int64()
+	out, err := value.FloorInt64()
+	if err != nil {
+		return 0, err
+	}
+	if value.Cmp(scommon.NewDefaultDecimal(out)) != 0 {
+		return 0, fmt.Errorf("fractional decimal cannot be represented as int64")
+	}
+	return out, nil
 }
 
 func (r AMMRunningData) ammTradingReady() bool {

@@ -12,6 +12,7 @@ func TestExecuteWorkBlockExposesCurrentFundingOnce(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	gasConfig := DefaultGasConfig()
 	tx := blockResultInvokeTx(t, contract, InvokePayload{

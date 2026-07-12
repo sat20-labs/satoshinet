@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"strings"
 	"testing"
 
 	scommon "github.com/sat20-labs/indexer/common"
@@ -16,6 +17,7 @@ func TestExecuteWorkBlockCountsCurrentFundingOnce(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	gasConfig := DefaultGasConfig()
 	tx := blockResultInvokeTx(t, contract, InvokePayload{
@@ -47,6 +49,7 @@ func TestExecuteWorkBlockDoesNotExposeLaterFunding(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	gasConfig := DefaultGasConfig()
 	spend := blockResultInvokeTx(t, contract, InvokePayload{
@@ -82,6 +85,7 @@ func TestExecuteWorkBlockExposesEarlierFunding(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	gasConfig := DefaultGasConfig()
 	funding := blockResultInvokeTx(t, contract, InvokePayload{
@@ -132,6 +136,7 @@ func TestDeployConstructorSeesCurrentFundingOnce(t *testing.T) {
 		Assets:   assets,
 	})
 	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
 	result := runtime.Deploy(DeployRequest{
 		CallerAddress: caller.String(),
 		CallID:        "deploy-with-funding",
@@ -158,10 +163,43 @@ func TestDeployConstructorSeesCurrentFundingOnce(t *testing.T) {
 	require.Equal(t, "10", intent.Amount.String())
 }
 
+func TestDeployConstructorSeesPendingBalance(t *testing.T) {
+	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
+	expectedContract, err := DeriveCreateContractAddress(TestnetContractPrefix, caller, 3)
+	require.NoError(t, err)
+	assets, err := NewAssetSet(fundingOrderTestAsset, scommon.NewDefaultDecimal(10))
+	require.NoError(t, err)
+	funding := contractframework.ContractOutputFromFunding(evmcommon.FundingOutput{
+		OutPoint: evmcommon.TxOutPoint{TxID: strings.Repeat("c", 64), Vout: 1},
+		Vout:     1,
+		Contract: expectedContract,
+		Assets:   assets,
+	})
+	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
+	result := runtime.Deploy(DeployRequest{
+		CallerAddress: caller.String(),
+		CallID:        "deploy-pending-balance",
+		InitCode: constructorTransferThenBalanceCode(
+			EncodeTransferAssetCall(fundingOrderTestAsset, "tb1qdest", "6", nil),
+			EncodeBalanceOfCall(ContractAddressHash(expectedContract), fundingOrderTestAsset)),
+		Gas:              500000,
+		DeployNonce:      3,
+		ExpectedContract: expectedContract,
+		FundingOutputs:   []contractframework.ContractOutput{funding},
+		Block:            BlockContext{Number: 100, Time: 1, GasLimit: 1000000, FixedGasPrice: 1},
+	})
+	require.NoError(t, result.Err)
+	require.Equal(t, "4", abiRawDynamicString(t, result.RuntimeCode))
+	require.Len(t, runtime.AssetIntents, 1)
+	require.Equal(t, "6", runtime.AssetIntents[0].Amount.String())
+}
+
 func TestBuildBlockResultTxsCountsCurrentFundingOnce(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	gasConfig := DefaultGasConfig()
 	tx := blockResultInvokeTx(t, contract, InvokePayload{
@@ -191,6 +229,7 @@ func TestBuildBlockResultTxsDoesNotExposeLaterFunding(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
 	gasConfig := DefaultGasConfig()
 	spend := blockResultInvokeTx(t, contract, InvokePayload{
@@ -239,6 +278,7 @@ func TestDeployConstructorRejectsOverspendCurrentFunding(t *testing.T) {
 		Assets:   assets,
 	})
 	runtime := NewRuntime(nil)
+	configureFundingOrderRuntime(runtime)
 	result := runtime.Deploy(DeployRequest{
 		CallerAddress: caller.String(),
 		CallID:        "deploy-overspend-funding",
@@ -258,6 +298,41 @@ func TestDeployConstructorRejectsOverspendCurrentFunding(t *testing.T) {
 	require.Error(t, result.Err)
 	require.Equal(t, ResultStatusInvalid, result.Status)
 	require.Empty(t, runtime.AssetIntents)
+}
+
+func configureFundingOrderRuntime(runtime *Runtime) {
+	runtime.AssetPrecision = contractframework.AssetPrecisionPolicy{Resolve: func(assetName string) (int, bool) {
+		return 0, assetName == fundingOrderTestAsset
+	}}
+	runtime.ResolveResultScript = func(ResultOutput) ([]byte, error) { return []byte{0x51}, nil }
+}
+
+func constructorTransferThenBalanceCode(transfer, balance []byte) []byte {
+	push2 := func(v int) []byte { return []byte{0x61, byte(v >> 8), byte(v)} }
+	code := make([]byte, 0, 128+len(transfer)+len(balance))
+	appendCall := func(input []byte, offsetPos *int) {
+		code = append(code, push2(len(input))...)
+		*offsetPos = len(code) + 1
+		code = append(code, 0x61, 0x00, 0x00, 0x60, 0x00, 0x39)
+		code = append(code, 0x60, 0x80, 0x60, 0x00)
+		code = append(code, push2(len(input))...)
+		code = append(code, 0x60, 0x00, 0x60, 0x00, 0x73)
+		code = append(code, AssetPrecompileAddress.Bytes()...)
+		code = append(code, 0x5a, 0xf1, 0x50)
+	}
+	var transferOffsetPos, balanceOffsetPos int
+	appendCall(transfer, &transferOffsetPos)
+	appendCall(balance, &balanceOffsetPos)
+	code = append(code,
+		0x3d, 0x60, 0x00, 0x60, 0x00, 0x3e,
+		0x3d, 0x60, 0x00, 0xf3,
+	)
+	transferOffset := len(code)
+	balanceOffset := transferOffset + len(transfer)
+	code[transferOffsetPos], code[transferOffsetPos+1] = byte(transferOffset>>8), byte(transferOffset)
+	code[balanceOffsetPos], code[balanceOffsetPos+1] = byte(balanceOffset>>8), byte(balanceOffset)
+	code = append(code, transfer...)
+	return append(code, balance...)
 }
 
 func appendFundingOrderAsset(t *testing.T, tx *wire.MsgTx, assetName string, amount int64) {
