@@ -13,13 +13,18 @@ const (
 	MainnetGasAssetName = "brc20:f:sgas"
 	TestnetGasAssetName = "brc20:f:sgas"
 
-	DeployBaseGas    int64 = 5_000_000
-	InvokeBaseGas    int64 = 100_000
-	ResultBaseGas    int64 = 50_000
-	TriggerBaseGas   int64 = 150_000
-	MaxGasPerInvoke  int64 = 50_000_000
-	MaxGasPerTrigger int64 = 5_000_000
-	MaxGasPerBlock   int64 = 1_000_000_000
+	DeployBaseGas int64 = 5_000_000
+	InvokeBaseGas int64 = 100_000
+	// EVMDefaultInvokeGas is the fixed execution budget for an EVM default
+	// invoke, which carries no OP_RETURN payload through which a caller can
+	// select a gas limit. It deliberately does not change template or agent
+	// default-invoke gas budgets.
+	EVMDefaultInvokeGas int64 = 1_000_000
+	ResultBaseGas       int64 = 50_000
+	TriggerBaseGas      int64 = 150_000
+	MaxGasPerInvoke     int64 = 50_000_000
+	MaxGasPerTrigger    int64 = 5_000_000
+	MaxGasPerBlock      int64 = 1_000_000_000
 
 	ExecutionGasUnitsPerGas int64 = 1000
 	GasFeePrecision         int   = 8
@@ -31,6 +36,16 @@ const (
 	GasPriceDecayNumerator   uint64 = 90
 	GasPriceDecayDenominator uint64 = 100
 )
+
+// DefaultInvokeGasForType returns the consensus gas budget for a contract
+// invocation expressed only by a funding output.  EVM calls need a larger
+// fixed budget because their calldata is intentionally empty.
+func DefaultInvokeGasForType(contractType byte) int64 {
+	if contractType == ContractTypeEVM {
+		return EVMDefaultInvokeGas
+	}
+	return InvokeBaseGas
+}
 
 var activeNet wire.BitcoinNet = wire.TestNet
 

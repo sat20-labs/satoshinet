@@ -43,3 +43,20 @@ func TestClassifyTxForBlockOrder(t *testing.T) {
 		t.Fatalf("empty non-EVM tx classified as EVM")
 	}
 }
+
+func TestClassifyDefaultInvokeUsesEVMGasBudget(t *testing.T) {
+	defaultTx := wire.NewMsgTx(2)
+	defaultTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0}})
+	defaultTx.AddTxOut(wire.NewTxOut(1, nil, testContractScript(testContract(t))))
+
+	info, err := ClassifyTxForBlockOrder(defaultTx, TestnetContractPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsEVM || info.Type != TxTypeInvoke {
+		t.Fatalf("expected EVM default invoke, got %#v", info)
+	}
+	if info.GasLimit != evmcommon.EVMDefaultInvokeGas {
+		t.Fatalf("default EVM gas budget got %d want %d", info.GasLimit, evmcommon.EVMDefaultInvokeGas)
+	}
+}

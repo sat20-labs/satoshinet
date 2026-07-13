@@ -44,7 +44,11 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string, spec TxOrder
 		if err != nil || len(outputs) == 0 {
 			return TxOrderInfo{}, err
 		}
-		info := TxOrderInfo{Type: contract.TxTypeInvoke, GasLimit: spec.DefaultInvokeGas}
+		defaultGas := spec.DefaultInvokeGas
+		if defaultGas == 0 {
+			defaultGas = contract.DefaultInvokeGasForType(spec.ContractType)
+		}
+		info := TxOrderInfo{Type: contract.TxTypeInvoke, GasLimit: defaultGas}
 		if spec.SetModuleFlag != nil {
 			spec.SetModuleFlag(&info)
 		}

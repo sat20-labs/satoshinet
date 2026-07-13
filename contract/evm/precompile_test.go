@@ -114,6 +114,10 @@ func TestAssetPrecompileFundingAssetAmount(t *testing.T) {
 	ret, err = precompile.Run(EncodeFundingSatsCall())
 	require.NoError(t, err)
 	require.Equal(t, uint64(25), binary.BigEndian.Uint64(ret[24:32]))
+
+	ret, err = precompile.Run(EncodeFundingAssetCountCall())
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), binary.BigEndian.Uint64(ret[24:32]))
 	require.Zero(t, funding.ClaimedAssetAmount(gasAsset).Sign())
 
 	ret, err = precompile.Run(EncodeClaimFundingAssetCall(gasAsset, "600"))

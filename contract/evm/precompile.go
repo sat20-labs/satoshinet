@@ -23,6 +23,7 @@ var (
 	assetTransferAssetSelector     = methodSelector("transferAsset(string,string,string,bytes)")
 	assetTransferAssetsSelector    = methodSelector("transferAssets(string[],string[],string[],bytes[])")
 	assetFundingAssetSelector      = methodSelector("fundingAssetAmount(string)")
+	assetFundingAssetCountSelector = methodSelector("fundingAssetCount()")
 	assetFundingSatsSelector       = methodSelector("fundingSats()")
 	assetClaimFundingSelector      = methodSelector("claimFundingAsset(string,string)")
 	assetCallerAddressSelector     = methodSelector("callerAddress()")
@@ -53,6 +54,7 @@ type AssetBalanceReader interface {
 
 type FundingAmountReader interface {
 	FundingAssetAmount(assetName string) (*scommon.Decimal, error)
+	FundingAssetCount() (uint64, error)
 	ClaimFundingAsset(assetName string, amount *scommon.Decimal) error
 }
 
@@ -215,6 +217,33 @@ func (v *FundingAssetView) FundingAssetAmount(assetName string) (*scommon.Decima
 	return total.SubAlignPrecision(reserve), nil
 }
 
+// FundingAssetCount returns the number of positive, spendable asset categories
+// carried by the current funding outputs. Plain sats count as the "::" asset.
+func (v *FundingAssetView) FundingAssetCount() (uint64, error) {
+	if v == nil {
+		return 0, errors.New("funding reader is not configured")
+	}
+	names := map[string]struct{}{SatoshiAssetName: {}}
+	for _, output := range v.Outputs {
+		for _, asset := range output.TxAssets() {
+			if asset.Name.String() != "" {
+				names[asset.Name.String()] = struct{}{}
+			}
+		}
+	}
+	var count uint64
+	for name := range names {
+		amount, err := v.FundingAssetAmount(name)
+		if err != nil {
+			return 0, err
+		}
+		if amount != nil && amount.Sign() > 0 {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (v *FundingAssetView) ClaimFundingAsset(assetName string, amount *scommon.Decimal) error {
 	if v == nil {
 		return errors.New("funding reader is not configured")
@@ -372,6 +401,18 @@ func (p *AssetPrecompile) Run(input []byte) ([]byte, error) {
 			amount = zeroDecimal()
 		}
 		return abiEncodeDynamicBytes([]byte(amount.String())), nil
+	case assetFundingAssetCountSelector:
+		if len(args) != 0 {
+			return nil, errors.New("fundingAssetCount takes no arguments")
+		}
+		if p.Funding == nil {
+			return nil, errors.New("funding reader is not configured")
+		}
+		count, err := p.Funding.FundingAssetCount()
+		if err != nil {
+			return nil, err
+		}
+		return abiEncodeUint64(count), nil
 	case assetFundingSatsSelector:
 		if len(args) != 0 {
 			return nil, errors.New("fundingSats takes no arguments")
@@ -761,6 +802,10 @@ func EncodeFundingAssetAmountCall(assetName string) []byte {
 	putABIUint64(args, 32)
 	args = append(args, abiEncodeDynamicBytes([]byte(assetName))...)
 	return appendMethod(assetFundingAssetSelector, args)
+}
+
+func EncodeFundingAssetCountCall() []byte {
+	return assetFundingAssetCountSelector[:]
 }
 
 func EncodeFundingSatsCall() []byte {

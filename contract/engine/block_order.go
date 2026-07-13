@@ -151,7 +151,7 @@ func classifyDefaultInvokeForBlockOrder(tx *wire.MsgTx, prefix string) (TxClass,
 			ContractType: contractType,
 			TxType:       contractcommon.TxTypeInvoke,
 			Priority:     priorityForContractType(contractType),
-			GasLimit:     int64(contractcommon.InvokeBaseGas),
+			GasLimit:     contractcommon.DefaultInvokeGasForType(contractType),
 		}, true, nil
 	}
 	return TxClass{}, false, nil

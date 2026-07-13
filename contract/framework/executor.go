@@ -98,7 +98,7 @@ func (e *Executor) executeDefaultTx(tx *wire.MsgTx, contractTx contract.Tx) erro
 		defaultTx.Kind = contract.TxTypeInvoke
 		defaultTx.Action = contract.ContractInvokeAPIDefault
 		defaultTx.Contract = output.Contract
-		defaultTx.GasLimit = e.cfg.Context.GasConfig.Normalize().InvokeBaseGas
+		defaultTx.GasLimit = contract.DefaultInvokeGasForType(e.cfg.Backend.ContractType())
 		defaultTx.Funding = ContractFundingOutputs([]ContractOutput{funding})
 		if err := e.resolveActor(tx, ParsedTx{}, &defaultTx); err != nil {
 			return err

@@ -125,7 +125,7 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string) (TxOrderInfo
 		ParseSpec:        evmParseSpec,
 		Resolver:         StandardContractScriptResolver,
 		ContractType:     ContractTypeEVM,
-		DefaultInvokeGas: DefaultGasConfig().InvokeBaseGas,
+		DefaultInvokeGas: evmcommon.DefaultInvokeGasForType(evmcommon.ContractTypeEVM),
 		SetModuleFlag: func(info *TxOrderInfo) {
 			info.IsEVM = true
 		},

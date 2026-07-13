@@ -562,7 +562,7 @@ func (e *Backend) executeDefaultInvokeOutput(tx *wire.MsgTx, output ContractOutp
 		ContractType: ContractTypeEVM,
 		Contract:     output.Contract,
 		Action:       contract.ContractInvokeAPIDefault,
-		GasLimit:     e.GasConfig.Normalize().InvokeBaseGas,
+		GasLimit:     contract.DefaultInvokeGasForType(ContractTypeEVM),
 		Funding:      contractframework.ContractFundingOutputs([]ContractOutput{output}),
 	}
 	return e.executeDefaultInvokeOutputTx(tx, contractTx, output)
@@ -588,7 +588,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx, contractTx contra
 		TargetAddress: output.Contract.MustEncode(),
 		CallID:        callID,
 		Input:         nil,
-		Gas:           e.GasConfig.Normalize().InvokeBaseGas,
+		Gas:           contractTx.GasLimit,
 		Value:         0,
 		FundingOutput: &output,
 		Block:         e.Block,
