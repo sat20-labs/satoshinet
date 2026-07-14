@@ -2,14 +2,17 @@
 
 ## Supported Versions
 
-The last major `btcd` release is to be considered the current support version.
-Given an issue severe enough, a backport will be issued either to the prior
-major release or the set of releases considered utilized enough. 
+SatoshiNet is currently in active testnet development. Security fixes are
+accepted against the current `main` branch.
 
 ## Reporting a Vulnerability
 
-To report security issues, send an email to security@lightning.engineering
-(this list isn't to be used for support). 
+Please submit a GitHub pull request against this repository with a minimal
+reproduction, a regression test where practical, and the proposed fix.
 
-The following key can be used to communicate sensitive information: `91FE 464C
-D751 01DA 6B6B  AB60 555C 6465 E5BC B3AF`. 
+Do not include private keys, passwords, seed phrases, API tokens, or other
+secrets in the pull request. Redact sensitive values from logs and examples.
+
+For issues that cannot safely be described in a public pull request, provide a
+sanitized proof of concept and enough context for maintainers to reproduce the
+problem without exposing user funds or credentials.
