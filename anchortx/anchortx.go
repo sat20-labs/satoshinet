@@ -16,10 +16,10 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/httpclient"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/mining/posminer/bootstrapnode"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
-	sindexer"github.com/sat20-labs/satoshinet/indexer/common"
 
 	"github.com/sat20-labs/indexer/common"
 )
@@ -135,9 +135,59 @@ func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AscendInfo, err
 		log.Errorf("anchor tx assets not equal %v %v", anchorAssets, lockedInfo.TxAssets)
 		return nil, fmt.Errorf("anchor tx assets not equal %v %v", anchorAssets, lockedInfo.TxAssets)
 	}
+	if err := checkAscendingTickerInfo(tx, lockedInfo); err != nil {
+		return nil, err
+	}
 
 	// Check the Anchor tx is valid
 	return lockedInfo, nil
+}
+
+func checkAscendingTickerInfo(tx *wire.MsgTx, lockedInfo *AscendInfo) error {
+	if len(lockedInfo.TxAssets) > 1 {
+		return fmt.Errorf("anchor contains %d assets", len(lockedInfo.TxAssets))
+	}
+
+	var tickerInfo *sindexer.TickerInfo
+	for _, output := range tx.TxOut {
+		contentType, data, err := sindexer.ReadDataFromNullDataScript(output.PkScript)
+		if err != nil || contentType != sindexer.CONTENT_TYPE_ASCENDING {
+			continue
+		}
+		if tickerInfo != nil {
+			return fmt.Errorf("anchor contains duplicate ascending markers")
+		}
+		tickerInfo, err = sindexer.GenTickerInfo(data)
+		if err != nil {
+			return fmt.Errorf("invalid ascending ticker: %w", err)
+		}
+	}
+	if tickerInfo == nil {
+		return fmt.Errorf("anchor is missing ascending ticker")
+	}
+
+	expectedName := &common.ASSET_PLAIN_SAT
+	expectedN := uint32(1)
+	if len(lockedInfo.TxAssets) == 1 {
+		expectedName = &lockedInfo.TxAssets[0].Name
+		expectedN = lockedInfo.TxAssets[0].BindingSat
+	}
+	if !sameAnchorAssetName(&tickerInfo.AssetName, expectedName) {
+		return fmt.Errorf("ascending ticker asset %s does not match anchor asset %s",
+			tickerInfo.AssetName.String(), expectedName.String())
+	}
+	if uint32(tickerInfo.N) != expectedN {
+		return fmt.Errorf("ascending ticker binding sats %d does not match anchor %d",
+			tickerInfo.N, expectedN)
+	}
+	return nil
+}
+
+func sameAnchorAssetName(left, right *wire.AssetName) bool {
+	if common.IsPlainAsset(left) && common.IsPlainAsset(right) {
+		return true
+	}
+	return *left == *right
 }
 
 // The Anchor tx info is record in Anchor tx input script

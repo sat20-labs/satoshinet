@@ -717,11 +717,6 @@ func (b *BaseIndexer) getTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 	if ok {
 		return info
 	}
-	if isPlainTickerName(ticker) {
-		info = newPlainSatTickerInfo()
-		b.tickInfoMap[ticker.String()] = info
-		return info
-	}
 
 	info, err := stp.GetTickerInfoFromDB(b.db, ticker.String())
 	if err != nil {
@@ -1039,32 +1034,8 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 								b.utxoIndex.ChannelLedgerMap[string(stp.GetChannelLedgerDBKey(entry))] = entry
 							}
 
-							var bindingSatNum int64
-							if len(descend.Assets) > 0 {
-								bindingSatNum = descend.Assets.GetBindingSatAmout()
-								for _, asset := range descend.Assets {
-									ticker := b.GetTickerInfo(&asset.Name)
-									if ticker == nil {
-										common.Log.Panicf("GetTickerInfo %s failed", asset.Name.String())
-									}
-									ticker.TotalDescendAmt = ticker.TotalDescendAmt.Add(&asset.Amount)
-									if ticker.TotalDescendAmt.Cmp(ticker.TotalAscendAmt) > 0 {
-										common.Log.Panicf("asset %s invalid amt: ascend %s, but descend %s",
-											asset.Name.String(), ticker.TotalAscendAmt.String(), ticker.TotalDescendAmt.String())
-									}
-								}
-							}
-							value := descend.Value - bindingSatNum
-							if value > 0 {
-								ticker := b.GetTickerInfo(&indexer.ASSET_PLAIN_SAT)
-								if ticker == nil {
-									common.Log.Panicf("GetTickerInfo %s failed", indexer.ASSET_PLAIN_SAT.String())
-								}
-								ticker.TotalDescendAmt = ticker.TotalDescendAmt.Add(indexer.NewDefaultDecimal(value))
-								if ticker.TotalDescendAmt.Cmp(ticker.TotalAscendAmt) > 0 {
-									common.Log.Panicf("sats invalid amt: ascend %s, but descend %s",
-										ticker.TotalAscendAmt.String(), ticker.TotalDescendAmt.String())
-								}
+							if err := b.applyDescendingTicker(descend); err != nil {
+								common.Log.Panicf("invalid descending ticker %s:%d: %v", tx.Txid, i, err)
 							}
 
 							// miner/core node的descending，如果是unstake，必须包含unstake的资产信息，
@@ -1073,23 +1044,12 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 							common.Log.Errorf("GenDescend %s:%d failed, %v", tx.Txid, i, err)
 						}
 					case common.CONTENT_TYPE_ASCENDING:
-						tickerInfo, err := common.GenTickerInfo(data)
-						if err == nil {
-							if ascend != nil {
-								if len(ascend.Assets) != 0 {
-									tickerInfo.TotalAscendAmt = ascend.Assets[0].Amount.Clone()
-								} else {
-									tickerInfo.TotalAscendAmt = indexer.NewDecimal(ascend.Value, 0)
-								}
-							}
-							existingTicker := b.GetTickerInfo(&tickerInfo.AssetName)
-							if existingTicker != nil {
-								existingTicker.TotalAscendAmt = existingTicker.TotalAscendAmt.Add(tickerInfo.TotalAscendAmt)
-							} else {
-								b.tickInfoMap[tickerInfo.AssetName.String()] = tickerInfo
-							}
-						} else {
-							common.Log.Errorf("GenTickerInfo %s:%d failed, %v", tx.Txid, i, err)
+						if ascend == nil {
+							common.Log.Errorf("ignore ascending ticker without anchor input %s:%d", tx.Txid, i)
+							break
+						}
+						if err := b.applyAscendingTicker(ascend, data); err != nil {
+							common.Log.Panicf("invalid ascending ticker %s:%d: %v", tx.Txid, i, err)
 						}
 
 					case common.CONTENT_TYPE_CHANNELID:

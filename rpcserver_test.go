@@ -8,11 +8,103 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcjson"
 	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	evmcontract "github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/mempool"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewEVMEstimateRuntimeMatchesSettlementDependencies(t *testing.T) {
+	precision := contractframework.AssetPrecisionResolver(func(assetName string) (int, bool) {
+		return 0, assetName == "brc20:f:ooxx"
+	})
+	gasConfig := evmcontract.DefaultGasConfig().Normalize()
+	runtime := newEVMEstimateRuntime(
+		evmcontract.NewMemoryStateDB(), &chaincfg.TestNetParams, gasConfig, nil, precision,
+	)
+
+	require.Equal(t, evmcontract.ContractPrefixForNet(chaincfg.TestNetParams.Net), runtime.ContractPrefix)
+	require.Equal(t, gasConfig, runtime.GasConfig)
+	require.NotNil(t, runtime.ResolveResultScript)
+	_, ok := runtime.AssetPrecision.Resolve("brc20:f:ooxx")
+	require.True(t, ok)
+	_, ok = runtime.AssetPrecision.Resolve("unknown:asset")
+	require.False(t, ok)
+	_, err := runtime.ResolveResultScript(evmcontract.ResultOutput{
+		To: "tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g",
+	})
+	require.NoError(t, err)
+}
+
+func TestEVMEstimateRuntimePreflightsNativeAssetTransfer(t *testing.T) {
+	contractAddr, err := evmcontract.NewContractAddress(
+		evmcontract.TestnetContractPrefix,
+		evmcontract.AddressVersionV1,
+		evmcontract.ContractTypeEVM,
+		evmcontract.EVMAddress{1},
+	)
+	require.NoError(t, err)
+	funding, err := evmEstimateFundingOutput(contractAddr, 0, []btcjson.EVMEstimateFundingAsset{{
+		AssetName: "brc20:f:ooxx",
+		Amount:    "1",
+	}})
+	require.NoError(t, err)
+	balances := evmcontract.NewContractUTXOAssetView(
+		evmcontract.TestnetContractPrefix,
+		rpcEVMEstimateUTXOProvider(nil, contractAddr, funding, 1),
+	)
+	precision := contractframework.AssetPrecisionResolver(func(assetName string) (int, bool) {
+		return 0, assetName == "brc20:f:ooxx"
+	})
+	runtime := newEVMEstimateRuntime(
+		evmcontract.NewMemoryStateDB(), &chaincfg.TestNetParams,
+		evmcontract.DefaultGasConfig().Normalize(), balances, precision,
+	)
+	runtime.SetCode(evmcontract.ContractAddressHash(contractAddr), rpcCallAssetPrecompileCode())
+
+	result := runtime.Call(evmcontract.CallRequest{
+		CallerAddress: "0x1111111111111111111111111111111111111111",
+		TargetAddress: contractAddr.MustEncode(),
+		CallID:        "estimate-native-transfer",
+		Input: evmcontract.EncodeTransferAssetCall(
+			"brc20:f:ooxx",
+			"tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g",
+			"1",
+			nil,
+		),
+		Gas:           100000,
+		FundingOutput: funding,
+		Block:         evmcontract.BlockContext{GasLimit: 1000000},
+	})
+	require.Equal(t, evmcontract.ResultStatusSuccess, result.Status)
+	require.NoError(t, result.Err)
+	require.Len(t, runtime.AssetIntents, 1)
+}
+
+func rpcCallAssetPrecompileCode() []byte {
+	code := []byte{
+		0x36,       // CALLDATASIZE
+		0x60, 0x00, // PUSH1 0
+		0x60, 0x00, // PUSH1 0
+		0x37,       // CALLDATACOPY
+		0x60, 0x00, // PUSH1 0, output size
+		0x60, 0x00, // PUSH1 0, output offset
+		0x36,       // CALLDATASIZE, input size
+		0x60, 0x00, // PUSH1 0, input offset
+		0x60, 0x00, // PUSH1 0, value
+		0x73, // PUSH20 precompile address
+	}
+	code = append(code, evmcontract.AssetPrecompileAddress.Bytes()...)
+	code = append(code,
+		0x61, 0xc3, 0x50, // PUSH2 50000, gas
+		0xf1, // CALL
+		0x00, // STOP
+	)
+	return code
+}
 
 // TestHandleTestMempoolAcceptFailDecode checks that when invalid hex string is
 // used as the raw txns, the corresponding error is returned.

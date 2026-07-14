@@ -1008,9 +1008,10 @@ func handleEstimateEVMDeploy(s *rpcServer, cmd interface{}, closeChan <-chan str
 		deployNonce = *req.DeployNonce
 	}
 	try := func(gas int64) evmcontract.DeployResult {
-		runtime := evmcontract.NewRuntime(state.Clone())
-		runtime.ContractPrefix = evmcontract.ContractPrefixForNet(s.cfg.ChainParams.Net)
-		runtime.GasConfig = gasConfig
+		runtime := newEVMEstimateRuntime(
+			state.Clone(), s.cfg.ChainParams, gasConfig, nil,
+			contractAssetPrecisionResolver(s.cfg.AssetIndexManager),
+		)
 		return runtime.Deploy(evmcontract.DeployRequest{
 			CallerAddress: req.Caller,
 			CallID:        "estimate-deploy",
@@ -1079,10 +1080,10 @@ func handleEstimateEVMInvoke(s *rpcServer, cmd interface{}, closeChan <-chan str
 	assetBalances := evmcontract.NewContractUTXOAssetView(evmcontract.ContractPrefixForNet(s.cfg.ChainParams.Net), provider)
 
 	try := func(gas int64) evmcontract.CallResult {
-		runtime := evmcontract.NewRuntime(state.Clone())
-		runtime.ContractPrefix = evmcontract.ContractPrefixForNet(s.cfg.ChainParams.Net)
-		runtime.GasConfig = gasConfig
-		runtime.AssetBalances = assetBalances
+		runtime := newEVMEstimateRuntime(
+			state.Clone(), s.cfg.ChainParams, gasConfig, assetBalances,
+			contractAssetPrecisionResolver(s.cfg.AssetIndexManager),
+		)
 		reserve, reserveErr := gasConfig.ContractFundingFee(contractframework.ExecutionKindInvoke, gas, true, block.Number)
 		if reserveErr != nil {
 			return evmcontract.CallResult{Status: evmcontract.ResultStatusInvalid, Err: reserveErr}
@@ -1107,6 +1108,36 @@ func handleEstimateEVMInvoke(s *rpcServer, cmd interface{}, closeChan <-chan str
 	}
 	result := estimateEVMInvokeGas(try, requestedGas, gasConfig.InvokeBaseGas, gasConfig.MaxGasPerInvoke)
 	return result, nil
+}
+
+// newEVMEstimateRuntime must match the EVM block execution runtime for every
+// dependency that can affect contract execution. In particular, an estimate
+// that captures a native-asset transfer must validate its amount precision and
+// preflight the eventual result output just as block execution does.
+func newEVMEstimateRuntime(state *evmcontract.MemoryStateDB, params *chaincfg.Params,
+	gasConfig evmcontract.GasConfig, balances evmcontract.AssetBalanceReader,
+	assetPrecision contractframework.AssetPrecisionResolver) *evmcontract.Runtime {
+
+	runtime := evmcontract.NewRuntime(state)
+	runtime.ContractPrefix = evmcontract.ContractPrefixForNet(params.Net)
+	runtime.GasConfig = gasConfig
+	runtime.AssetBalances = balances
+	runtime.AssetPrecision = evmcontract.SettlementPrecision(assetPrecision)
+	runtime.ResolveResultScript = evmEstimateResultScriptResolver(params)
+	return runtime
+}
+
+func evmEstimateResultScriptResolver(params *chaincfg.Params) evmcontract.ResultRecipientScriptResolver {
+	return func(output evmcontract.ResultOutput) ([]byte, error) {
+		if contractAddr, err := evmcontract.DecodeContractAddress(output.To); err == nil {
+			return evmcontract.ContractPkScript(contractAddr)
+		}
+		address, err := btcutil.DecodeAddress(output.To, params)
+		if err != nil {
+			return nil, err
+		}
+		return txscript.PayToAddrScript(address)
+	}
 }
 
 func handleReviewPredictionReady(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {

@@ -524,13 +524,6 @@ func (b *RpcIndexer) GetTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 	if ok {
 		return info
 	}
-	if isPlainTickerName(ticker) {
-		info = newPlainSatTickerInfo()
-		b.mutex.Lock()
-		b.tickInfoMap[ticker.String()] = info
-		b.mutex.Unlock()
-		return info
-	}
 
 	info, err := stp.GetTickerInfoFromDB(b.db, ticker.String())
 	if err != nil {
@@ -625,10 +618,6 @@ func (b *RpcIndexer) GetTickerMap() map[string]*common.TickerInfo {
 		if !ok {
 			tickInfoMap[k] = v
 		}
-	}
-	plainName := indexer.ASSET_PLAIN_SAT.String()
-	if _, ok := tickInfoMap[plainName]; !ok {
-		tickInfoMap[plainName] = newPlainSatTickerInfo()
 	}
 	return tickInfoMap
 }

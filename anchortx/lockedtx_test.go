@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil/hdkeychain"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
@@ -87,6 +89,7 @@ func TestCheckAnchorTxValidChecksFakeL1IndexerLockedUTXO(t *testing.T) {
 		SignatureScript:  anchorScript,
 	})
 	tx.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_TRUE}))
+	addAscendingTicker(t, tx, nil)
 
 	ascend, err := CheckAnchorTxValid(tx, true)
 	require.NoError(t, err)
@@ -158,6 +161,7 @@ func TestSameFundingUTXOCanProduceDifferentAnchorTxIDs(t *testing.T) {
 		SignatureScript:  anchorScript,
 	})
 	tx1.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_TRUE}))
+	addAscendingTicker(t, tx1, nil)
 
 	tx2 := wire.NewMsgTx(2)
 	tx2.AddTxIn(&wire.TxIn{
@@ -165,6 +169,7 @@ func TestSameFundingUTXOCanProduceDifferentAnchorTxIDs(t *testing.T) {
 		SignatureScript:  anchorScript,
 	})
 	tx2.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_2}))
+	addAscendingTicker(t, tx2, nil)
 
 	require.NotEqual(t, tx1.TxID(), tx2.TxID())
 	ascend1, err := CheckAnchorTxValid(tx1, true)
@@ -172,6 +177,62 @@ func TestSameFundingUTXOCanProduceDifferentAnchorTxIDs(t *testing.T) {
 	ascend2, err := CheckAnchorTxValid(tx2, true)
 	require.NoError(t, err)
 	require.Equal(t, ascend1.Utxo, ascend2.Utxo)
+}
+
+func TestAscendingTickerMatchesAnchor(t *testing.T) {
+	assetName := *indexercommon.NewAssetNameFromString("brc20:f:test")
+	assets := wire.TxAssets{{
+		Name:       assetName,
+		Amount:     *indexercommon.NewDecimal(100, 0),
+		BindingSat: 0,
+	}}
+
+	t.Run("matching asset", func(t *testing.T) {
+		tx := wire.NewMsgTx(2)
+		addAscendingTicker(t, tx, assets)
+		require.NoError(t, checkAscendingTickerInfo(tx, &AscendInfo{
+			AnchorInfo: AnchorInfo{TxAssets: assets},
+		}))
+	})
+
+	t.Run("mismatched asset", func(t *testing.T) {
+		tx := wire.NewMsgTx(2)
+		addAscendingTicker(t, tx, nil)
+		err := checkAscendingTickerInfo(tx, &AscendInfo{
+			AnchorInfo: AnchorInfo{TxAssets: assets},
+		})
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("missing marker", func(t *testing.T) {
+		err := checkAscendingTickerInfo(wire.NewMsgTx(2), &AscendInfo{})
+		require.ErrorContains(t, err, "missing ascending ticker")
+	})
+
+	t.Run("duplicate marker", func(t *testing.T) {
+		tx := wire.NewMsgTx(2)
+		addAscendingTicker(t, tx, nil)
+		addAscendingTicker(t, tx, nil)
+		err := checkAscendingTickerInfo(tx, &AscendInfo{})
+		require.ErrorContains(t, err, "duplicate ascending markers")
+	})
+}
+
+func addAscendingTicker(t *testing.T, tx *wire.MsgTx, assets wire.TxAssets) {
+	t.Helper()
+	name := indexercommon.ASSET_PLAIN_SAT
+	divisibility := 0
+	n := uint32(1)
+	if len(assets) == 1 {
+		name = assets[0].Name
+		divisibility = assets[0].Amount.Precision
+		n = assets[0].BindingSat
+	}
+	payload := name.String() + "-21000000000000000-" +
+		strconv.Itoa(divisibility) + "-" + strconv.Itoa(int(n))
+	script, err := sindexer.NullDataScript(sindexer.CONTENT_TYPE_ASCENDING, []byte(payload))
+	require.NoError(t, err)
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
 }
 
 func fakeL1IndexerServer(t *testing.T, utxos map[string]*indexercommon.AssetsInUtxo) *httptest.Server {
