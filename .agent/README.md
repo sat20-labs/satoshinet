@@ -1,0 +1,1 @@
+This directory contains a temporary one-time source wiring script for the DKVS review-v2 development branch. It is removed after the branch CI applies and validates the source changes. It is not part of the production runtime.
