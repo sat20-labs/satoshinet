@@ -1,0 +1,124 @@
+name: Force observable DKVS validation
+
+on:
+  push:
+    branches:
+      - agent/dkvs-delete-path-sync
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: force-observable-dkvs-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/dkvs-delete-path-sync
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve PR and mark running
+        id: pr
+        shell: bash
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head agent/dkvs-delete-path-sync --state open --json number --jq '.[0].number')
+          test -n "$pr"
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+          gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --title '[DKVS FORCE RUNNING] Implement physical delete, path metadata, and buffered path sync'
+      - name: Apply implementation
+        id: apply
+        continue-on-error: true
+        run: python3 .github/dkvs_agent_finalize.py
+      - name: Fail apply
+        if: steps.apply.outcome != 'success'
+        run: |
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title '[DKVS FORCE FAIL APPLY] Implement physical delete, path metadata, and buffered path sync'
+          exit 1
+      - name: Format
+        id: format
+        continue-on-error: true
+        run: |
+          gofmt -w indexer/indexer/dkvs/indexer.go indexer/indexer/dkvs/mailbox.go indexer/indexer/dkvs/pathmeta.go indexer/indexer/dkvs/delete.go indexer/indexer/dkvs/delete_prune.go indexer/indexer/dkvs/write_prepare.go indexer/indexer/dkvs/path_sync.go indexer/indexer/dkvs/dkvs_v2_test.go indexer/indexer/dkvs/delete_watermark_test.go indexer/indexer/dkvs/indexer_test.go indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/router.go indexer/rpcserver/indexer/dkvs_admin_security_test.go server.go
+          git diff --check
+      - name: Fail format
+        if: steps.format.outcome != 'success'
+        run: |
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title '[DKVS FORCE FAIL FORMAT] Implement physical delete, path metadata, and buffered path sync'
+          exit 1
+      - name: Focused tests
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./indexer/indexer/dkvs ./indexer/indexer ./indexer/rpcserver/indexer ./wire ./peer 2>&1 | tee /tmp/focused.log
+      - name: Fail focused
+        if: steps.focused.outcome != 'success'
+        shell: bash
+        run: |
+          code=FOCUSED
+          grep -q 'undefined:' /tmp/focused.log && code=FOCUSED_UNDEFINED
+          grep -q 'imported and not used' /tmp/focused.log && code=FOCUSED_UNUSED_IMPORT
+          grep -q 'redeclared in this block' /tmp/focused.log && code=FOCUSED_REDECLARED
+          grep -q 'assignment mismatch' /tmp/focused.log && code=FOCUSED_ASSIGNMENT
+          grep -q 'invalid operation' /tmp/focused.log && code=FOCUSED_INVALID_OPERATION
+          grep -q -- '--- FAIL:' /tmp/focused.log && code=FOCUSED_TEST
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "[DKVS FORCE FAIL ${code}] Implement physical delete, path metadata, and buffered path sync"
+          exit 1
+      - name: Race tests
+        id: race
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race ./indexer/indexer/dkvs ./indexer/rpcserver/indexer 2>&1 | tee /tmp/race.log
+      - name: Fail race
+        if: steps.race.outcome != 'success'
+        run: |
+          code=RACE
+          grep -q 'DATA RACE' /tmp/race.log && code=RACE_DETECTED
+          grep -q -- '--- FAIL:' /tmp/race.log && code=RACE_TEST
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "[DKVS FORCE FAIL ${code}] Implement physical delete, path metadata, and buffered path sync"
+          exit 1
+      - name: Compile all packages
+        id: compile
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... -run '^$' 2>&1 | tee /tmp/compile.log
+      - name: Fail compile
+        if: steps.compile.outcome != 'success'
+        run: |
+          code=COMPILE
+          grep -q 'undefined:' /tmp/compile.log && code=COMPILE_UNDEFINED
+          grep -q 'imported and not used' /tmp/compile.log && code=COMPILE_UNUSED_IMPORT
+          grep -q 'redeclared in this block' /tmp/compile.log && code=COMPILE_REDECLARED
+          grep -q 'assignment mismatch' /tmp/compile.log && code=COMPILE_ASSIGNMENT
+          grep -q 'invalid operation' /tmp/compile.log && code=COMPILE_INVALID_OPERATION
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "[DKVS FORCE FAIL ${code}] Implement physical delete, path metadata, and buffered path sync"
+          exit 1
+      - name: Commit validated code
+        run: |
+          rm -f .github/dkvs_agent_apply.py .github/dkvs_agent_finalize.py .github/dkvs-agent-status.md .github/probe-success-test
+          rm -f .github/workflows/dkvs-agent-apply.yml .github/workflows/dkvs-agent-apply-v2.yml .github/workflows/dkvs-agent-apply-v3.yml .github/workflows/dkvs-agent-finalize.yml .github/workflows/dkvs-ci-status.yml .github/workflows/dkvs-ci-status-force.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'implement dkvs delete path metadata and sync'
+            git push origin HEAD:agent/dkvs-delete-path-sync
+          fi
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title '[DKVS FORCE PASS] Implement physical delete, path metadata, and buffered path sync'
