@@ -19,12 +19,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Create source archive
-        run: tar --exclude=.git --exclude=satoshinet-source.tar.gz -czf satoshinet-source.tar.gz .
+        run: tar --exclude=.git -czf /tmp/satoshinet-source.tar.gz .
 
       - name: Upload source archive
         uses: actions/upload-artifact@v4
         with:
           name: satoshinet-source
-          path: satoshinet-source.tar.gz
+          path: /tmp/satoshinet-source.tar.gz
           if-no-files-found: error
           retention-days: 1
