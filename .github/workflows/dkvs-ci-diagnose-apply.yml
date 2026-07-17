@@ -1,0 +1,71 @@
+name: Diagnose DKVS patch application
+
+on:
+  push:
+    branches:
+      - agent/dkvs-delete-path-sync
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/dkvs-delete-path-sync
+          fetch-depth: 0
+      - name: Resolve PR
+        id: pr
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head agent/dkvs-delete-path-sync --state open --json number --jq '.[0].number')
+          test -n "$pr"
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+      - name: Run patcher and classify
+        shell: bash
+        run: |
+          set +e
+          python3 .github/dkvs_agent_finalize.py > /tmp/apply.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            sleep 20
+            gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title '[DKVS APPLY DIAG PASS] Implement physical delete, path metadata, and buffered path sync'
+            exit 0
+          fi
+
+          code=UNKNOWN
+          grep -q 'SyntaxError' /tmp/apply.log && code=SYNTAX
+          grep -q 'No such file or directory' /tmp/apply.log && code=MISSING_FILE
+          grep -q 'struct not found' /tmp/apply.log && code=STRUCT
+          grep -q 'pattern count=' /tmp/apply.log && code=REGEX
+          grep -q 'tombstone commit branch not found' /tmp/apply.log && code=TOMBSTONE_BRANCH
+          grep -q 'SetResolver' /tmp/apply.log && code=FUNC_SET_RESOLVER
+          grep -q 'SetFeeVerifier' /tmp/apply.log && code=FUNC_SET_FEE
+          grep -q 'SetSystemVerifier' /tmp/apply.log && code=FUNC_SET_SYSTEM
+          grep -q 'PutLocal' /tmp/apply.log && code=FUNC_PUT_LOCAL
+          grep -q 'PutRemote' /tmp/apply.log && code=FUNC_PUT_REMOTE
+          grep -q 'GetByHash' /tmp/apply.log && code=FUNC_GET_HASH
+          grep -q 'ListPrefix' /tmp/apply.log && code=FUNC_LIST_PREFIX
+          grep -q 'Usage' /tmp/apply.log && code=FUNC_USAGE
+          grep -q 'ApplySnapshot' /tmp/apply.log && code=FUNC_SNAPSHOT
+          grep -q 'func (i \*Indexer) put' /tmp/apply.log && code=FUNC_PUT
+          grep -q 'validateAt' /tmp/apply.log && code=FUNC_VALIDATE_AT
+          grep -q 'activeError' /tmp/apply.log && code=FUNC_ACTIVE_ERROR
+          grep -q 'validateStoredPermission' /tmp/apply.log && code=FUNC_STORED_PERMISSION
+          grep -q 'validateMailboxLocked' /tmp/apply.log && code=FUNC_MAILBOX
+          grep -q 'mailboxUsageLocked' /tmp/apply.log && code=FUNC_MAILBOX_USAGE
+          grep -q 'OnDKVSGet' /tmp/apply.log && code=FUNC_P2P_GET
+          grep -q 'OnDKVSSyncRequest' /tmp/apply.log && code=FUNC_P2P_SYNC_REQ
+          grep -q 'OnDKVSSyncResponse' /tmp/apply.log && code=FUNC_P2P_SYNC_RESP
+          grep -q 'queueDKVSSyncRequest' /tmp/apply.log && code=FUNC_P2P_QUEUE
+          grep -q 'dkvsLocalOnly' /tmp/apply.log && code=FUNC_ADMIN
+          grep -q 'TestPutSelectAndTombstone' /tmp/apply.log && code=FUNC_TEST_TOMBSTONE
+          sleep 20
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "[DKVS APPLY DIAG ${code}] Implement physical delete, path metadata, and buffered path sync"
+          exit 1
