@@ -1,0 +1,133 @@
+name: Finalize and validate DKVS implementation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: dkvs-finalize-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'agent/dkvs-delete-path-sync'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply final implementation patch
+        run: python3 .github/dkvs_agent_finalize.py
+
+      - name: Format and inspect
+        run: |
+          gofmt -w \
+            indexer/indexer/dkvs/indexer.go \
+            indexer/indexer/dkvs/mailbox.go \
+            indexer/indexer/dkvs/pathmeta.go \
+            indexer/indexer/dkvs/delete.go \
+            indexer/indexer/dkvs/delete_prune.go \
+            indexer/indexer/dkvs/write_prepare.go \
+            indexer/indexer/dkvs/path_sync.go \
+            indexer/indexer/dkvs/dkvs_v2_test.go \
+            indexer/indexer/dkvs/delete_watermark_test.go \
+            indexer/indexer/dkvs/indexer_test.go \
+            indexer/indexer/dkvs_interface.go \
+            indexer/rpcserver/indexer/router.go \
+            indexer/rpcserver/indexer/dkvs_admin_security_test.go \
+            server.go
+          git diff --check
+
+      - name: Run validation suite
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          go test ./indexer/indexer/dkvs ./indexer/indexer ./indexer/rpcserver/indexer ./wire ./peer 2>&1 | tee /tmp/dkvs-focused.log
+          focused=${PIPESTATUS[0]}
+          go test -race ./indexer/indexer/dkvs ./indexer/rpcserver/indexer 2>&1 | tee /tmp/dkvs-race.log
+          race=${PIPESTATUS[0]}
+          go test ./... -run '^$' 2>&1 | tee /tmp/dkvs-compile.log
+          compile=${PIPESTATUS[0]}
+          set -e
+
+          {
+            echo '# DKVS validation report'
+            echo
+            echo "- Focused tests: ${focused}"
+            echo "- Race tests: ${race}"
+            echo "- Repository compile check: ${compile}"
+            echo
+            echo '## Focused tests'
+            echo '```text'
+            tail -n 200 /tmp/dkvs-focused.log
+            echo '```'
+            echo
+            echo '## Race tests'
+            echo '```text'
+            tail -n 200 /tmp/dkvs-race.log
+            echo '```'
+            echo
+            echo '## Compile check'
+            echo '```text'
+            tail -n 200 /tmp/dkvs-compile.log
+            echo '```'
+          } > .github/dkvs-agent-status.md
+
+          echo "focused=${focused}" >> "$GITHUB_OUTPUT"
+          echo "race=${race}" >> "$GITHUB_OUTPUT"
+          echo "compile=${compile}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish failure report
+        if: steps.tests.outputs.focused != '0' || steps.tests.outputs.race != '0' || steps.tests.outputs.compile != '0'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/dkvs-agent-status.md
+          git commit -m 'report dkvs validation failure' || true
+          git push origin HEAD:${{ github.head_ref }} || true
+          exit 1
+
+      - name: Commit validated code and remove temporary automation
+        if: steps.tests.outputs.focused == '0' && steps.tests.outputs.race == '0' && steps.tests.outputs.compile == '0'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          rm -f \
+            .github/dkvs_agent_apply.py \
+            .github/dkvs_agent_finalize.py \
+            .github/dkvs-agent-status.md \
+            .github/workflows/dkvs-agent-apply.yml \
+            .github/workflows/dkvs-agent-apply-v2.yml \
+            .github/workflows/dkvs-agent-apply-v3.yml \
+            .github/workflows/dkvs-agent-finalize.yml
+
+          git add \
+            indexer/indexer/dkvs \
+            indexer/indexer/dkvs_interface.go \
+            indexer/rpcserver/indexer/router.go \
+            indexer/rpcserver/indexer/dkvs_admin_security_test.go \
+            server.go
+          git add -A .github
+
+          if git diff --cached --quiet; then
+            echo 'Validated implementation is already committed'
+            exit 0
+          fi
+          git commit -m 'implement dkvs delete path metadata and sync'
+          git push origin HEAD:${{ github.head_ref }}
