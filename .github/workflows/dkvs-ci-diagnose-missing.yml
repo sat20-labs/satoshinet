@@ -1,0 +1,44 @@
+name: Identify missing DKVS patch file
+
+on:
+  push:
+    branches:
+      - agent/dkvs-delete-path-sync
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/dkvs-delete-path-sync
+          fetch-depth: 0
+      - name: Diagnose
+        shell: bash
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head agent/dkvs-delete-path-sync --state open --json number --jq '.[0].number')
+          set +e
+          python3 .github/dkvs_agent_finalize.py > /tmp/apply.log 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then code=PASS; else code=MISSING_UNKNOWN; fi
+          grep -q 'dkvs_agent_apply.py' /tmp/apply.log && code=MISSING_APPLY_SCRIPT
+          grep -q 'indexer/indexer/dkvs/indexer.go' /tmp/apply.log && code=MISSING_INDEXER
+          grep -q 'indexer/indexer/dkvs/mailbox.go' /tmp/apply.log && code=MISSING_MAILBOX
+          grep -q 'indexer/indexer/dkvs/pathmeta.go' /tmp/apply.log && code=MISSING_PATHMETA
+          grep -q 'indexer/indexer/dkvs/path_sync.go' /tmp/apply.log && code=MISSING_PATH_SYNC
+          grep -q 'indexer/indexer/dkvs/delete_prune.go' /tmp/apply.log && code=MISSING_DELETE_PRUNE
+          grep -q 'indexer/indexer/dkvs/indexer_test.go' /tmp/apply.log && code=MISSING_INDEXER_TEST
+          grep -q 'indexer/indexer/dkvs_interface.go' /tmp/apply.log && code=MISSING_INTERFACE
+          grep -q 'indexer/rpcserver/indexer/router.go' /tmp/apply.log && code=MISSING_ROUTER
+          grep -q 'server.go' /tmp/apply.log && code=MISSING_SERVER
+          sleep 20
+          gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --title "[DKVS MISSING DIAG ${code}] Implement physical delete, path metadata, and buffered path sync"
+          test "$status" -eq 0
