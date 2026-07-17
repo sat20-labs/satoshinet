@@ -20,6 +20,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
+      - name: Check out local Go module replacements
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf ../indexer ../sat20wallet
+          git clone --depth 1 https://github.com/sat20-labs/indexer.git ../indexer
+          git clone --depth 1 https://github.com/sat20-labs/sat20wallet.git ../sat20wallet
+
       - name: Decide whether edits need applying
         id: guard
         shell: bash
