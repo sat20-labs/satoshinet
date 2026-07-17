@@ -1,0 +1,178 @@
+name: DKVS validation with baseline safeguards
+
+on:
+  push:
+    branches:
+      - agent/dkvs-delete-path-sync
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dkvs-v2-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/dkvs-delete-path-sync
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve PR
+        id: pr
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head agent/dkvs-delete-path-sync --state open --json number --jq '.[0].number')
+          test -n "$pr"
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+          gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --title '[DKVS V2 RUNNING] Implement physical delete, path metadata, and buffered path sync'
+      - name: Ensure mailbox baseline
+        run: |
+          if [ ! -f indexer/indexer/dkvs/mailbox.go ]; then
+            cat > indexer/indexer/dkvs/mailbox.go <<'EOF'
+          package dkvs
+
+          import "github.com/sat20-labs/satoshinet/wire"
+
+          func (i *Indexer) validateMailboxLocked(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, height, now uint64) error {
+          	_ = existing
+          	if len(parsed.Segments) < 2 { return ErrInvalidKey }
+          	if IsTombstone(record.Flags) { return nil }
+          	switch parsed.Segments[1] {
+          	case "msg":
+          		if RecordSize(record) > i.mailbox.MaxMsgSize { return ErrRecordTooLarge }
+          		if i.mailbox.MaxMsgTTL > 0 && record.TTL > i.mailbox.MaxMsgTTL { return ErrInvalidRecord }
+          		usedBytes, usedCount, err := i.mailboxUsageLocked(parsed.Segments[0], "msg", record.Key, height, now)
+          		if err != nil { return err }
+          		if usedCount+1 > i.mailbox.MaxMessages || usedBytes+uint64(RecordSize(record)) > i.mailbox.MaxMsgBytes { return ErrMailboxFull }
+          	case "share":
+          		if RecordSize(record) > i.mailbox.MaxShareSize { return ErrRecordTooLarge }
+          		if i.mailbox.MaxShareTTL > 0 && record.TTL > i.mailbox.MaxShareTTL { return ErrInvalidRecord }
+          		usedBytes, usedCount, err := i.mailboxUsageLocked(parsed.Segments[0], "share", record.Key, height, now)
+          		if err != nil { return err }
+          		if usedCount+1 > i.mailbox.MaxShares || usedBytes+uint64(RecordSize(record)) > i.mailbox.MaxShareBytes { return ErrMailboxFull }
+          	default:
+          		return ErrInvalidKey
+          	}
+          	return nil
+          }
+
+          func (i *Indexer) mailboxUsageLocked(mailboxID, kind, excludeKey string, height, now uint64) (uint64, uint64, error) {
+          	prefix := "/mail/" + mailboxID + "/" + kind + "/"
+          	records, _, _, err := i.scanLocked(prefix, nil, 0, true, height, now)
+          	if err != nil { return 0, 0, err }
+          	var usedBytes, count uint64
+          	for _, record := range records {
+          		if record.Key == excludeKey || IsTombstone(record.Flags) { continue }
+          		count++
+          		usedBytes += uint64(RecordSize(record))
+          	}
+          	return usedBytes, count, nil
+          }
+          EOF
+          fi
+      - name: Apply implementation
+        id: apply
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 .github/dkvs_agent_finalize.py 2>&1 | tee /tmp/apply.log
+      - name: Report apply failure
+        if: steps.apply.outcome != 'success'
+        shell: bash
+        run: |
+          code=APPLY
+          grep -q 'No such file or directory' /tmp/apply.log && code=APPLY_MISSING
+          grep -q 'function not found' /tmp/apply.log && code=APPLY_FUNCTION
+          grep -q 'struct not found' /tmp/apply.log && code=APPLY_STRUCT
+          grep -q 'pattern count=' /tmp/apply.log && code=APPLY_REGEX
+          grep -q 'SyntaxError' /tmp/apply.log && code=APPLY_SYNTAX
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "[DKVS V2 FAIL ${code}] Implement physical delete, path metadata, and buffered path sync"
+          exit 1
+      - name: Format
+        id: format
+        continue-on-error: true
+        run: |
+          gofmt -w indexer/indexer/dkvs/indexer.go indexer/indexer/dkvs/mailbox.go indexer/indexer/dkvs/pathmeta.go indexer/indexer/dkvs/delete.go indexer/indexer/dkvs/delete_prune.go indexer/indexer/dkvs/write_prepare.go indexer/indexer/dkvs/path_sync.go indexer/indexer/dkvs/dkvs_v2_test.go indexer/indexer/dkvs/delete_watermark_test.go indexer/indexer/dkvs/indexer_test.go indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/router.go indexer/rpcserver/indexer/dkvs_admin_security_test.go server.go
+          git diff --check
+      - name: Report format failure
+        if: steps.format.outcome != 'success'
+        run: |
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title '[DKVS V2 FAIL FORMAT] Implement physical delete, path metadata, and buffered path sync'
+          exit 1
+      - name: Focused tests
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./indexer/indexer/dkvs ./indexer/indexer ./indexer/rpcserver/indexer ./wire ./peer 2>&1 | tee /tmp/focused.log
+      - name: Report focused failure
+        if: steps.focused.outcome != 'success'
+        shell: bash
+        run: |
+          code=FOCUSED
+          grep -q 'undefined:' /tmp/focused.log && code=FOCUSED_UNDEFINED
+          grep -q 'imported and not used' /tmp/focused.log && code=FOCUSED_UNUSED
+          grep -q 'redeclared in this block' /tmp/focused.log && code=FOCUSED_REDECLARED
+          grep -q 'assignment mismatch' /tmp/focused.log && code=FOCUSED_ASSIGNMENT
+          grep -q 'invalid operation' /tmp/focused.log && code=FOCUSED_INVALID
+          grep -q -- '--- FAIL:' /tmp/focused.log && code=FOCUSED_TEST
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "[DKVS V2 FAIL ${code}] Implement physical delete, path metadata, and buffered path sync"
+          exit 1
+      - name: Race tests
+        id: race
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race ./indexer/indexer/dkvs ./indexer/rpcserver/indexer 2>&1 | tee /tmp/race.log
+      - name: Report race failure
+        if: steps.race.outcome != 'success'
+        run: |
+          code=RACE
+          grep -q 'DATA RACE' /tmp/race.log && code=RACE_DETECTED
+          grep -q -- '--- FAIL:' /tmp/race.log && code=RACE_TEST
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "[DKVS V2 FAIL ${code}] Implement physical delete, path metadata, and buffered path sync"
+          exit 1
+      - name: Compile all packages
+        id: compile
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... -run '^$' 2>&1 | tee /tmp/compile.log
+      - name: Report compile failure
+        if: steps.compile.outcome != 'success'
+        run: |
+          code=COMPILE
+          grep -q 'undefined:' /tmp/compile.log && code=COMPILE_UNDEFINED
+          grep -q 'imported and not used' /tmp/compile.log && code=COMPILE_UNUSED
+          grep -q 'redeclared in this block' /tmp/compile.log && code=COMPILE_REDECLARED
+          grep -q 'assignment mismatch' /tmp/compile.log && code=COMPILE_ASSIGNMENT
+          grep -q 'invalid operation' /tmp/compile.log && code=COMPILE_INVALID
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "[DKVS V2 FAIL ${code}] Implement physical delete, path metadata, and buffered path sync"
+          exit 1
+      - name: Commit validated implementation
+        run: |
+          rm -f .github/dkvs_agent_apply.py .github/dkvs_agent_finalize.py .github/dkvs-agent-status.md .github/probe-success-test
+          rm -f .github/workflows/dkvs-agent-apply.yml .github/workflows/dkvs-agent-apply-v2.yml .github/workflows/dkvs-agent-apply-v3.yml .github/workflows/dkvs-agent-finalize.yml .github/workflows/dkvs-ci-status.yml .github/workflows/dkvs-ci-status-force.yml .github/workflows/dkvs-ci-diagnose-apply.yml .github/workflows/dkvs-ci-diagnose-missing.yml .github/workflows/dkvs-ci-force-v2.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'implement dkvs delete path metadata and sync'
+            git push origin HEAD:agent/dkvs-delete-path-sync
+          fi
+          gh pr edit '${{ steps.pr.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title '[DKVS V2 PASS] Implement physical delete, path metadata, and buffered path sync'
