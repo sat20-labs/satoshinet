@@ -1,0 +1,86 @@
+name: DKVS agent apply and validate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'agent/dkvs-delete-path-sync'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply DKVS changes
+        run: |
+          python3 .github/dkvs_agent_apply.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('indexer/indexer/dkvs/pathmeta.go')
+          s = p.read_text()
+          s = s.replace('\t"math"\n', '')
+          s = s.replace('math.MaxUint64', '^uint64(0)')
+          s = s.replace('total := int(meta.ActiveCount)\n\tif meta.ActiveCount > uint64(math.MaxInt) {\n\t\ttotal = math.MaxInt\n\t}', 'maxInt := int(^uint(0) >> 1)\n\ttotal := int(meta.ActiveCount)\n\tif meta.ActiveCount > uint64(maxInt) {\n\t\ttotal = maxInt\n\t}')
+          p.write_text(s)
+          PY
+
+      - name: Format and inspect
+        run: |
+          gofmt -w \
+            indexer/indexer/dkvs/indexer.go \
+            indexer/indexer/dkvs/mailbox.go \
+            indexer/indexer/dkvs/pathmeta.go \
+            indexer/indexer/dkvs/delete.go \
+            indexer/indexer/dkvs/write_prepare.go \
+            indexer/indexer/dkvs/path_sync.go \
+            indexer/indexer/dkvs/dkvs_v2_test.go \
+            indexer/indexer/dkvs/indexer_test.go \
+            indexer/indexer/dkvs_interface.go \
+            indexer/rpcserver/indexer/router.go \
+            indexer/rpcserver/indexer/dkvs_admin_security_test.go \
+            server.go
+          git diff --check
+
+      - name: Focused tests
+        run: |
+          go test ./indexer/indexer/dkvs ./indexer/indexer ./indexer/rpcserver/indexer ./wire ./peer
+
+      - name: Race tests
+        run: |
+          go test -race ./indexer/indexer/dkvs ./indexer/rpcserver/indexer
+
+      - name: Repository compile check
+        run: |
+          go test ./... -run '^$'
+
+      - name: Commit validated implementation
+        run: |
+          if git diff --quiet; then
+            echo 'No generated changes to commit'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            indexer/indexer/dkvs \
+            indexer/indexer/dkvs_interface.go \
+            indexer/rpcserver/indexer/router.go \
+            indexer/rpcserver/indexer/dkvs_admin_security_test.go \
+            server.go
+          git commit -m 'implement dkvs delete path metadata and sync'
+          git push origin HEAD:${{ github.head_ref }}
