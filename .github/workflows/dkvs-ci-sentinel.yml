@@ -1,0 +1,168 @@
+name: Isolated DKVS validation sentinel
+
+on:
+  push:
+    branches:
+      - agent/dkvs-delete-path-sync
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: isolated-dkvs-sentinel
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/dkvs-delete-path-sync
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Create isolated status PR
+        id: sentinel
+        shell: bash
+        run: |
+          rm -rf /tmp/dkvs-sentinel
+          git worktree add -B dkvs-ci-sentinel /tmp/dkvs-sentinel origin/main
+          cd /tmp/dkvs-sentinel
+          mkdir -p .github
+          printf 'running\n' > .github/dkvs-ci-sentinel.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/dkvs-ci-sentinel.txt
+          git commit -m 'add dkvs validation sentinel'
+          git push --force origin HEAD:dkvs-ci-sentinel
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head dkvs-ci-sentinel --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            url=$(gh pr create --repo "$GITHUB_REPOSITORY" --draft --base main --head dkvs-ci-sentinel --title 'DKVS SENTINEL RUNNING' --body 'Temporary validation status. Do not merge.')
+            pr=$(gh pr view "$url" --repo "$GITHUB_REPOSITORY" --json number --jq '.number')
+          else
+            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --title 'DKVS SENTINEL RUNNING'
+          fi
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+      - name: Ensure required baseline files
+        shell: bash
+        run: |
+          for file in \
+            indexer/indexer/dkvs/indexer.go \
+            indexer/indexer/dkvs/mailbox.go \
+            indexer/indexer/dkvs/indexer_test.go \
+            indexer/indexer/dkvs_interface.go \
+            indexer/rpcserver/indexer/router.go \
+            server.go \
+            .github/dkvs_agent_apply.py \
+            .github/dkvs_agent_finalize.py; do
+            if [ ! -f "$file" ]; then
+              gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "DKVS SENTINEL FAIL BASELINE $(basename "$file")"
+              exit 1
+            fi
+          done
+      - name: Apply implementation
+        id: apply
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 .github/dkvs_agent_finalize.py 2>&1 | tee /tmp/apply.log
+      - name: Report apply failure
+        if: steps.apply.outcome != 'success'
+        shell: bash
+        run: |
+          code=APPLY
+          grep -q 'No such file or directory' /tmp/apply.log && code=APPLY_MISSING
+          grep -q 'function not found' /tmp/apply.log && code=APPLY_FUNCTION
+          grep -q 'struct not found' /tmp/apply.log && code=APPLY_STRUCT
+          grep -q 'pattern count=' /tmp/apply.log && code=APPLY_REGEX
+          grep -q 'SyntaxError' /tmp/apply.log && code=APPLY_SYNTAX
+          gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "DKVS SENTINEL FAIL ${code}"
+          exit 1
+      - name: Format
+        id: format
+        continue-on-error: true
+        run: |
+          gofmt -w indexer/indexer/dkvs/indexer.go indexer/indexer/dkvs/mailbox.go indexer/indexer/dkvs/pathmeta.go indexer/indexer/dkvs/delete.go indexer/indexer/dkvs/delete_prune.go indexer/indexer/dkvs/write_prepare.go indexer/indexer/dkvs/path_sync.go indexer/indexer/dkvs/dkvs_v2_test.go indexer/indexer/dkvs/delete_watermark_test.go indexer/indexer/dkvs/indexer_test.go indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/router.go indexer/rpcserver/indexer/dkvs_admin_security_test.go server.go
+          git diff --check
+      - name: Report format failure
+        if: steps.format.outcome != 'success'
+        run: |
+          gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title 'DKVS SENTINEL FAIL FORMAT'
+          exit 1
+      - name: Focused tests
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./indexer/indexer/dkvs ./indexer/indexer ./indexer/rpcserver/indexer ./wire ./peer 2>&1 | tee /tmp/focused.log
+      - name: Report focused failure
+        if: steps.focused.outcome != 'success'
+        shell: bash
+        run: |
+          code=FOCUSED
+          grep -q 'undefined:' /tmp/focused.log && code=FOCUSED_UNDEFINED
+          grep -q 'imported and not used' /tmp/focused.log && code=FOCUSED_UNUSED
+          grep -q 'redeclared in this block' /tmp/focused.log && code=FOCUSED_REDECLARED
+          grep -q 'assignment mismatch' /tmp/focused.log && code=FOCUSED_ASSIGNMENT
+          grep -q 'invalid operation' /tmp/focused.log && code=FOCUSED_INVALID
+          grep -q -- '--- FAIL:' /tmp/focused.log && code=FOCUSED_TEST
+          gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "DKVS SENTINEL FAIL ${code}"
+          exit 1
+      - name: Race tests
+        id: race
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race ./indexer/indexer/dkvs ./indexer/rpcserver/indexer 2>&1 | tee /tmp/race.log
+      - name: Report race failure
+        if: steps.race.outcome != 'success'
+        shell: bash
+        run: |
+          code=RACE
+          grep -q 'DATA RACE' /tmp/race.log && code=RACE_DETECTED
+          grep -q -- '--- FAIL:' /tmp/race.log && code=RACE_TEST
+          gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "DKVS SENTINEL FAIL ${code}"
+          exit 1
+      - name: Compile all packages
+        id: compile
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... -run '^$' 2>&1 | tee /tmp/compile.log
+      - name: Report compile failure
+        if: steps.compile.outcome != 'success'
+        shell: bash
+        run: |
+          code=COMPILE
+          grep -q 'undefined:' /tmp/compile.log && code=COMPILE_UNDEFINED
+          grep -q 'imported and not used' /tmp/compile.log && code=COMPILE_UNUSED
+          grep -q 'redeclared in this block' /tmp/compile.log && code=COMPILE_REDECLARED
+          grep -q 'assignment mismatch' /tmp/compile.log && code=COMPILE_ASSIGNMENT
+          grep -q 'invalid operation' /tmp/compile.log && code=COMPILE_INVALID
+          gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "DKVS SENTINEL FAIL ${code}"
+          exit 1
+      - name: Commit validated implementation
+        shell: bash
+        run: |
+          rm -f .github/dkvs_agent_apply.py .github/dkvs_agent_finalize.py .github/dkvs-agent-status.md .github/probe-success-test
+          rm -f .github/workflows/dkvs-agent-apply.yml .github/workflows/dkvs-agent-apply-v2.yml .github/workflows/dkvs-agent-apply-v3.yml .github/workflows/dkvs-agent-finalize.yml .github/workflows/dkvs-ci-status.yml .github/workflows/dkvs-ci-status-force.yml .github/workflows/dkvs-ci-diagnose-apply.yml .github/workflows/dkvs-ci-diagnose-missing.yml .github/workflows/dkvs-ci-force-v2.yml .github/workflows/dkvs-ci-sentinel.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'implement dkvs delete path metadata and sync'
+            git push origin HEAD:agent/dkvs-delete-path-sync
+          fi
+          gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title 'DKVS SENTINEL PASS'
