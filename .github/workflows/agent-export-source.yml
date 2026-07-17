@@ -1,0 +1,29 @@
+name: agent-export-source
+
+on:
+  push:
+    branches:
+      - agent/dkvs-delete-path-sync
+    paths:
+      - .github/workflows/agent-export-source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pack source
+        run: tar --exclude=.git -czf /tmp/satoshinet-source.tar.gz .
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: satoshinet-source
+          path: /tmp/satoshinet-source.tar.gz
+          retention-days: 1
