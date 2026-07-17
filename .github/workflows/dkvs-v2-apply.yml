@@ -1,0 +1,70 @@
+name: DKVS v2 apply and test
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out development branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Decide whether edits need applying
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          message="$(git log -1 --pretty=%B)"
+          if [[ ! -f .agent/apply_dkvs_v2.py ]] || [[ "$message" == *"[dkvs-v2-applied]"* ]] || [[ "$message" == *"[dkvs-v2-cleanup]"* ]]; then
+            echo "apply=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "apply=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.guard.outputs.apply == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Apply DKVS changes
+        if: steps.guard.outputs.apply == 'true'
+        run: python3 .agent/apply_dkvs_v2.py
+
+      - name: Run focused DKVS tests
+        if: steps.guard.outputs.apply == 'true'
+        run: |
+          set -euo pipefail
+          go test ./wire ./peer ./indexer/indexer ./indexer/indexer/dkvs ./indexer/rpcserver/indexer ./indexer/share/indexer
+          go test . -run '^TestDKVS' -count=1
+
+      - name: Run DKVS race tests
+        if: steps.guard.outputs.apply == 'true'
+        run: go test -race ./indexer/indexer/dkvs
+
+      - name: Run repository tests
+        if: steps.guard.outputs.apply == 'true'
+        run: go test ./...
+
+      - name: Commit tested changes
+        if: steps.guard.outputs.apply == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor DKVS deletion and path sync [dkvs-v2-applied]"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
