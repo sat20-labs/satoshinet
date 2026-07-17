@@ -6,6 +6,9 @@ on:
       - agent/dkvs-delete-path-sync
     paths:
       - .github/workflows/agent-export-source.yml
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
