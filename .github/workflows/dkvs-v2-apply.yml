@@ -45,24 +45,64 @@ jobs:
 
       - name: Run focused DKVS tests
         if: steps.guard.outputs.apply == 'true'
+        shell: bash
         run: |
-          set -euo pipefail
-          go test ./wire ./peer ./indexer/indexer ./indexer/indexer/dkvs ./indexer/rpcserver/indexer ./indexer/share/indexer
-          go test . -run '^TestDKVS' -count=1
+          set -o pipefail
+          mkdir -p .ci
+          {
+            go test ./wire ./peer ./indexer/indexer ./indexer/indexer/dkvs ./indexer/rpcserver/indexer ./indexer/share/indexer
+            go test . -run '^TestDKVS' -count=1
+          } 2>&1 | tee .ci/dkvs-focused.log
+
+      - name: Upload focused test diagnostics
+        if: failure() && steps.guard.outputs.apply == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dkvs-focused-diagnostics
+          path: .ci/dkvs-focused.log
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Run DKVS race tests
         if: steps.guard.outputs.apply == 'true'
-        run: go test -race ./indexer/indexer/dkvs
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p .ci
+          go test -race ./indexer/indexer/dkvs 2>&1 | tee .ci/dkvs-race.log
+
+      - name: Upload race diagnostics
+        if: failure() && steps.guard.outputs.apply == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dkvs-race-diagnostics
+          path: .ci/dkvs-race.log
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Run repository tests
         if: steps.guard.outputs.apply == 'true'
-        run: go test ./...
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p .ci
+          go test ./... 2>&1 | tee .ci/dkvs-full.log
+
+      - name: Upload repository diagnostics
+        if: failure() && steps.guard.outputs.apply == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dkvs-full-diagnostics
+          path: .ci/dkvs-full.log
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Commit tested changes
         if: steps.guard.outputs.apply == 'true'
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf .ci
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
