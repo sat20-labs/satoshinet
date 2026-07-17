@@ -1,0 +1,99 @@
+name: Detailed DKVS focused validation sentinel
+
+on:
+  push:
+    branches:
+      - agent/dkvs-delete-path-sync
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/dkvs-delete-path-sync
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Create detailed status PR
+        id: sentinel
+        shell: bash
+        run: |
+          rm -rf /tmp/dkvs-sentinel-v2
+          git worktree add -B dkvs-ci-sentinel-v2 /tmp/dkvs-sentinel-v2 origin/main
+          cd /tmp/dkvs-sentinel-v2
+          mkdir -p .github
+          printf 'running\n' > .github/dkvs-ci-sentinel-v2.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/dkvs-ci-sentinel-v2.txt
+          git commit -m 'add detailed dkvs validation sentinel'
+          git push --force origin HEAD:dkvs-ci-sentinel-v2
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head dkvs-ci-sentinel-v2 --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            url=$(gh pr create --repo "$GITHUB_REPOSITORY" --draft --base main --head dkvs-ci-sentinel-v2 --title 'DKVS S2 RUNNING' --body 'Temporary detailed validation status. Do not merge.')
+            pr=$(gh pr view "$url" --repo "$GITHUB_REPOSITORY" --json number --jq '.number')
+          else
+            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --title 'DKVS S2 RUNNING'
+          fi
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+      - name: Apply and format
+        shell: bash
+        run: |
+          python3 .github/dkvs_agent_finalize.py
+          gofmt -w indexer/indexer/dkvs/indexer.go indexer/indexer/dkvs/mailbox.go indexer/indexer/dkvs/pathmeta.go indexer/indexer/dkvs/delete.go indexer/indexer/dkvs/delete_prune.go indexer/indexer/dkvs/write_prepare.go indexer/indexer/dkvs/path_sync.go indexer/indexer/dkvs/dkvs_v2_test.go indexer/indexer/dkvs/delete_watermark_test.go indexer/indexer/dkvs/indexer_test.go indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/router.go indexer/rpcserver/indexer/dkvs_admin_security_test.go server.go
+      - name: Focused tests
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./indexer/indexer/dkvs ./indexer/indexer ./indexer/rpcserver/indexer ./wire ./peer 2>&1 | tee /tmp/focused.log
+      - name: Report detailed focused failure
+        if: steps.focused.outcome != 'success'
+        shell: bash
+        run: |
+          file=OTHER
+          grep -q 'pathmeta.go:' /tmp/focused.log && file=PATHMETA
+          grep -q 'delete.go:' /tmp/focused.log && file=DELETE
+          grep -q 'delete_prune.go:' /tmp/focused.log && file=DELETE_PRUNE
+          grep -q 'write_prepare.go:' /tmp/focused.log && file=WRITE_PREPARE
+          grep -q 'path_sync.go:' /tmp/focused.log && file=PATH_SYNC
+          grep -q 'mailbox.go:' /tmp/focused.log && file=MAILBOX
+          grep -q 'dkvs_v2_test.go:' /tmp/focused.log && file=V2_TEST
+          grep -q 'delete_watermark_test.go:' /tmp/focused.log && file=WATERMARK_TEST
+          grep -q 'dkvs_interface.go:' /tmp/focused.log && file=INTERFACE
+          grep -q 'router.go:' /tmp/focused.log && file=ROUTER
+          grep -q 'server.go:' /tmp/focused.log && file=SERVER
+          grep -q 'indexer.go:' /tmp/focused.log && file=INDEXER
+
+          kind=OTHER
+          grep -q 'syntax error' /tmp/focused.log && kind=SYNTAX
+          grep -q 'undefined:' /tmp/focused.log && kind=UNDEFINED
+          grep -q 'imported and not used' /tmp/focused.log && kind=UNUSED
+          grep -q 'redeclared in this block' /tmp/focused.log && kind=REDECLARED
+          grep -q 'assignment mismatch' /tmp/focused.log && kind=ASSIGNMENT
+          grep -q 'cannot use' /tmp/focused.log && kind=CANNOT_USE
+          grep -q 'not enough arguments' /tmp/focused.log && kind=NOT_ENOUGH_ARGS
+          grep -q 'too many arguments' /tmp/focused.log && kind=TOO_MANY_ARGS
+          grep -q 'has no field or method' /tmp/focused.log && kind=NO_METHOD
+          grep -q 'does not implement' /tmp/focused.log && kind=NOT_IMPLEMENT
+          grep -q 'expected' /tmp/focused.log && kind=EXPECTED
+          grep -q -- '--- FAIL:' /tmp/focused.log && kind=TEST
+          grep -q 'panic:' /tmp/focused.log && kind=PANIC
+
+          gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title "DKVS S2 FAIL ${file} ${kind}"
+          exit 1
+      - name: Report focused pass
+        if: steps.focused.outcome == 'success'
+        run: gh pr edit '${{ steps.sentinel.outputs.number }}' --repo "$GITHUB_REPOSITORY" --title 'DKVS S2 FOCUSED PASS'
