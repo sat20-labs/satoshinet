@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/dkvs-v2-implementation
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
