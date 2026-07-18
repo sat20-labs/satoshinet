@@ -15,16 +15,30 @@ jobs:
   archive-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
+      - name: Check out SatoshiNet
         uses: actions/checkout@v4
+        with:
+          path: workspace/satoshinet
 
-      - name: Create source archive
-        run: tar --exclude=.git -czf /tmp/satoshinet-source.tar.gz .
+      - name: Check out indexer dependency
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: workspace/indexer
 
-      - name: Upload source archive
+      - name: Check out wallet dependency
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/sat20wallet
+          path: workspace/sat20wallet
+
+      - name: Create development workspace archive
+        run: tar --exclude=.git -czf /tmp/sat20-workspace.tar.gz workspace
+
+      - name: Upload development workspace
         uses: actions/upload-artifact@v4
         with:
-          name: satoshinet-source
-          path: /tmp/satoshinet-source.tar.gz
+          name: sat20-workspace
+          path: /tmp/sat20-workspace.tar.gz
           if-no-files-found: error
           retention-days: 1
