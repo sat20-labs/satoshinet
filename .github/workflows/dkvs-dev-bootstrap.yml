@@ -1,24 +1,25 @@
-name: DKVS implementation validation
+name: DKVS development checks
 
 on:
+  push:
+    branches:
+      - agent/dkvs-v2-implementation
   pull_request:
     branches:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-test-and-commit:
+  dkvs-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Check out implementation branch
+      - name: Check out SatoshiNet
         uses: actions/checkout@v4
         with:
-          ref: agent/dkvs-v2-implementation
           path: workspace/satoshinet
-          fetch-depth: 0
-          persist-credentials: true
 
       - name: Check out indexer dependency
         uses: actions/checkout@v4
@@ -38,19 +39,13 @@ jobs:
           go-version: 1.24.13
           cache: false
 
-      - name: Apply implementation patch
-        working-directory: workspace/satoshinet
-        shell: bash
-        run: |
-          cat .github/dkvs-v2.patch.xz.b64.part* | base64 -d | xz -d > /tmp/dkvs-v2.patch
-          git apply --index --whitespace=error-all /tmp/dkvs-v2.patch
-          git diff --cached --check
-
       - name: Check formatting
         working-directory: workspace/satoshinet
         shell: bash
         run: |
-          unformatted=$(git diff --cached --name-only -- '*.go' | xargs -r gofmt -l)
+          files=$(find indexer/indexer/dkvs -maxdepth 1 -name '*.go' -print)
+          files="$files indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/handler.go indexer/rpcserver/indexer/handler_test.go indexer/rpcserver/indexer/model.go indexer/rpcserver/indexer/router.go indexer/share/indexer/interface.go server.go server_dkvs_test.go"
+          unformatted=$(gofmt -l $files)
           if [[ -n "$unformatted" ]]; then
             printf 'Unformatted files:\n%s\n' "$unformatted"
             exit 1
@@ -76,19 +71,6 @@ jobs:
         working-directory: workspace/satoshinet
         run: go test -race ./indexer/indexer/dkvs -run '^(TestResolverDoesNotHoldIndexerWriteLock|TestPhysicalDeleteFloorAndRecreate|TestPathMetaTracksPutUpdateDelete)$' -count=1
 
-      - name: Stage bootstrap cleanup
+      - name: Run full repository regression
         working-directory: workspace/satoshinet
-        run: |
-          git rm .github/dkvs-v2.patch.xz.b64.part*
-          git diff --cached --check
-
-      - name: Commit validated implementation
-        working-directory: workspace/satoshinet
-        shell: bash
-        run: |
-          set -x
-          git config user.name "ChatGPT DKVS implementation"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git status --short
-          git commit -m "implement DKVS delete state and path sync"
-          git push origin HEAD:agent/dkvs-v2-implementation
+        run: go test ./... -count=1
