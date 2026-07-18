@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - agent/dkvs-v2-implementation
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
@@ -15,9 +12,10 @@ jobs:
   apply-test-and-commit:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out SatoshiNet
+      - name: Check out SatoshiNet branch
         uses: actions/checkout@v4
         with:
+          ref: agent/dkvs-v2-implementation
           path: workspace/satoshinet
           fetch-depth: 0
           persist-credentials: true
@@ -40,21 +38,6 @@ jobs:
           go-version: 1.24.13
           cache: false
 
-      - name: Archive Go toolchain
-        shell: bash
-        run: |
-          goroot=$(go env GOROOT)
-          tar -C "$(dirname "$goroot")" -czf /tmp/go1.24.13-linux-amd64.tar.gz "$(basename "$goroot")"
-          go version
-
-      - name: Upload Go toolchain
-        uses: actions/upload-artifact@v4
-        with:
-          name: go1.24.13-linux-amd64
-          path: /tmp/go1.24.13-linux-amd64.tar.gz
-          if-no-files-found: error
-          retention-days: 1
-
       - name: Apply implementation patch
         working-directory: workspace/satoshinet
         shell: bash
@@ -62,20 +45,6 @@ jobs:
           cat .github/dkvs-v2.patch.xz.b64.part* | base64 -d | xz -d > /tmp/dkvs-v2.patch
           git apply --index --whitespace=error-all /tmp/dkvs-v2.patch
           git diff --cached --check
-
-      - name: Archive applied source
-        if: always()
-        shell: bash
-        run: tar --exclude=.git -czf /tmp/satoshinet-applied.tar.gz -C workspace satoshinet
-
-      - name: Upload applied source
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: satoshinet-applied-source
-          path: /tmp/satoshinet-applied.tar.gz
-          if-no-files-found: error
-          retention-days: 1
 
       - name: Check formatting
         working-directory: workspace/satoshinet
@@ -106,6 +75,22 @@ jobs:
       - name: Run focused race tests
         working-directory: workspace/satoshinet
         run: go test -race ./indexer/indexer/dkvs -run '^(TestResolverDoesNotHoldIndexerWriteLock|TestPhysicalDeleteFloorAndRecreate|TestPathMetaTracksPutUpdateDelete)$' -count=1
+
+      - name: Archive Go module cache
+        if: always()
+        shell: bash
+        run: |
+          gomodcache=$(go env GOMODCACHE)
+          tar -C "$(dirname "$gomodcache")" -czf /tmp/go-mod-cache.tar.gz "$(basename "$gomodcache")"
+
+      - name: Upload Go module cache
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-module-cache
+          path: /tmp/go-mod-cache.tar.gz
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Replace bootstrap workflow with permanent checks
         working-directory: workspace/satoshinet
