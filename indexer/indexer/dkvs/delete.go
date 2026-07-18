@@ -188,18 +188,25 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 	if record == nil {
 		return chainhash.Hash{}, ErrRecordNotFound
 	}
-	meta, err := i.pathMetaForMutationLocked(parsed, record, nil, height, now)
-	if err != nil {
-		return chainhash.Hash{}, err
+	recordsToDelete := []*wire.DKVSRecord{record}
+	if parsed.Namespace == "blob" && len(parsed.Segments) == 3 && parsed.Segments[2] == "manifest" {
+		objectPath := "/blob/" + parsed.Segments[0] + "/" + parsed.Segments[1]
+		objectRecords, _, _, err := i.scanLocked(objectPath, nil, 0, false, height, now)
+		if err != nil {
+			return chainhash.Hash{}, err
+		}
+		recordsToDelete = objectRecords
 	}
 	oldHash := RecordHash(record)
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
-	if err := batch.Delete(recordDBKey(record.Key)); err != nil {
-		return chainhash.Hash{}, err
-	}
-	if err := batch.Delete(hashDBKey(oldHash)); err != nil {
-		return chainhash.Hash{}, err
+	for _, candidate := range recordsToDelete {
+		if err := batch.Delete(recordDBKey(candidate.Key)); err != nil {
+			return chainhash.Hash{}, err
+		}
+		if err := batch.Delete(hashDBKey(RecordHash(candidate))); err != nil {
+			return chainhash.Hash{}, err
+		}
 	}
 	state := &deleteState{FloorSeq: floorSeq, PubKey: append([]byte{}, record.PubKey...)}
 	if retainCommand {
@@ -215,22 +222,62 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 			return chainhash.Hash{}, err
 		}
 	}
-	if err := putPathMetaBatch(batch, meta); err != nil {
+	if len(recordsToDelete) == 1 {
+		meta, err := i.pathMetaForMutationLocked(parsed, record, nil, height, now)
+		if err != nil {
+			return chainhash.Hash{}, err
+		}
+		if err := putPathMetaBatch(batch, meta); err != nil {
+			return chainhash.Hash{}, err
+		}
+	} else if err := i.markPathMetaDirtyLocked(batch, recordsToDelete, height, now); err != nil {
 		return chainhash.Hash{}, err
 	}
 	if err := batch.Flush(); err != nil {
 		return chainhash.Hash{}, err
 	}
-	if i.feeUsageInitialized {
-		i.removeFeeUsageLocked(record.Key)
-	}
-	if i.recordExpiryInitialized {
-		delete(i.recordExpiryEntries, record.Key)
+	for _, candidate := range recordsToDelete {
+		if i.feeUsageInitialized {
+			i.removeFeeUsageLocked(candidate.Key)
+		}
+		if i.recordExpiryInitialized {
+			delete(i.recordExpiryEntries, candidate.Key)
+		}
 	}
 	if deleteRecord != nil {
 		return RecordHash(deleteRecord), nil
 	}
 	return oldHash, nil
+}
+
+// retainDeleteCommandLocked keeps a verified command only for the bounded
+// relay window. It is not part of the durable DKVS record set.
+func (i *Indexer) retainDeleteCommandLocked(record *wire.DKVSRecord, now uint64) (chainhash.Hash, error) {
+	if record == nil || !IsTombstone(record.Flags) {
+		return chainhash.Hash{}, ErrInvalidRecord
+	}
+	previous, err := i.getDeleteStateLocked(record.Key)
+	if err != nil && !errors.Is(err, ErrRecordNotFound) {
+		return chainhash.Hash{}, err
+	}
+	if err == nil && previous.Record != nil && CompareRecords(previous.Record, record) >= 0 {
+		return RecordHash(previous.Record), nil
+	}
+	state := &deleteState{
+		FloorSeq:   record.Seq,
+		RelayUntil: deleteRelayUntil(now),
+		PubKey:     append([]byte{}, record.PubKey...),
+		Record:     record,
+	}
+	batch := i.db.NewWriteBatch()
+	defer batch.Close()
+	if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
+		return chainhash.Hash{}, err
+	}
+	if err := batch.Flush(); err != nil {
+		return chainhash.Hash{}, err
+	}
+	return RecordHash(record), nil
 }
 
 func (i *Indexer) compactExpiredDeleteCommandsLocked(batch indexercommon.WriteBatch, now uint64) (int, error) {
@@ -251,16 +298,17 @@ func (i *Indexer) compactExpiredDeleteCommandsLocked(batch indexercommon.WriteBa
 			!bytesEqual(state.Record.PubKey, state.PubKey)) {
 			return ErrInvalidRecord
 		}
-		if state.Record == nil || state.RelayUntil == 0 || now < state.RelayUntil {
+		if state.Record == nil || state.RelayUntil == 0 {
+			if err := batch.Delete(append([]byte{}, key...)); err != nil {
+				return err
+			}
+			compacted++
 			return nil
 		}
-		state.Record = nil
-		state.RelayUntil = 0
-		encoded, err := marshalDeleteState(state)
-		if err != nil {
-			return err
+		if now < state.RelayUntil {
+			return nil
 		}
-		if err := batch.Put(append([]byte{}, key...), encoded); err != nil {
+		if err := batch.Delete(append([]byte{}, key...)); err != nil {
 			return err
 		}
 		compacted++
@@ -269,19 +317,46 @@ func (i *Indexer) compactExpiredDeleteCommandsLocked(batch indexercommon.WriteBa
 	return compacted, err
 }
 
-func (i *Indexer) deleteExistingLocked(record *wire.DKVSRecord, floorSeq uint64, height, now uint64) (chainhash.Hash, error) {
+func (i *Indexer) deleteMirrorRecordLocked(record *wire.DKVSRecord, height, now uint64) error {
 	if record == nil {
-		return chainhash.Hash{}, ErrRecordNotFound
+		return ErrRecordNotFound
 	}
 	parsed, err := ParseKey(record.Key)
 	if err != nil {
-		return chainhash.Hash{}, err
+		return err
 	}
-	return i.commitDeleteLocked(parsed, record, nil, floorSeq, false, false, height, now)
+	meta, err := i.pathMetaForMutationLocked(parsed, record, nil, height, now)
+	if err != nil {
+		return err
+	}
+	batch := i.db.NewWriteBatch()
+	defer batch.Close()
+	if err := batch.Delete(recordDBKey(record.Key)); err != nil {
+		return err
+	}
+	if err := batch.Delete(hashDBKey(RecordHash(record))); err != nil {
+		return err
+	}
+	if err := deleteDeleteStateBatch(batch, record.Key); err != nil {
+		return err
+	}
+	if err := putPathMetaBatch(batch, meta); err != nil {
+		return err
+	}
+	if err := batch.Flush(); err != nil {
+		return err
+	}
+	if i.feeUsageInitialized {
+		i.removeFeeUsageLocked(record.Key)
+	}
+	if i.recordExpiryInitialized {
+		delete(i.recordExpiryEntries, record.Key)
+	}
+	return nil
 }
 
 // DeleteMirrorKeys removes records omitted by an authoritative mirror sync.
-// It stores only a compact sequence floor, never a synthetic signed tombstone.
+// Omission is not a signed delete command and therefore never creates a floor.
 func (i *Indexer) DeleteMirrorKeys(keys []string) (int, error) {
 	height := i.currentHeight()
 	now := currentUnixMilli()
@@ -299,13 +374,7 @@ func (i *Indexer) DeleteMirrorKeys(keys []string) (int, error) {
 		if err != nil {
 			return deleted, err
 		}
-		floor := record.Seq
-		if previous, err := i.getDeleteStateLocked(key); err == nil && previous.FloorSeq > floor {
-			floor = previous.FloorSeq
-		} else if err != nil && !errors.Is(err, ErrRecordNotFound) {
-			return deleted, err
-		}
-		if _, err := i.deleteExistingLocked(record, floor, height, now); err != nil {
+		if err := i.deleteMirrorRecordLocked(record, height, now); err != nil {
 			return deleted, err
 		}
 		deleted++

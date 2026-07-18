@@ -191,16 +191,17 @@ type Usage struct {
 // PathMeta is the compact aggregate maintained for a logical DKVS collection.
 // It is stored once per collection path rather than once per record.
 type PathMeta struct {
-	Version         uint32 `json:"version"`
-	Path            string `json:"path"`
-	Generation      uint64 `json:"generation"`
-	ActiveRecords   uint64 `json:"active_records"`
-	ActiveTotalSize uint64 `json:"active_total_size"`
-	MinExpiryHeight uint64 `json:"min_expiry_height,omitempty"`
-	MinExpiryTime   uint64 `json:"min_expiry_time,omitempty"`
-	UpdatedHeight   uint64 `json:"updated_height"`
-	UpdatedAt       uint64 `json:"updated_at"`
-	Dirty           bool   `json:"dirty,omitempty"`
+	Version         uint32         `json:"version"`
+	Path            string         `json:"path"`
+	Generation      uint64         `json:"generation"`
+	ActiveRecords   uint64         `json:"active_records"`
+	ActiveTotalSize uint64         `json:"active_total_size"`
+	ActiveRoot      chainhash.Hash `json:"active_root"`
+	MinExpiryHeight uint64         `json:"min_expiry_height,omitempty"`
+	MinExpiryTime   uint64         `json:"min_expiry_time,omitempty"`
+	UpdatedHeight   uint64         `json:"updated_height"`
+	UpdatedAt       uint64         `json:"updated_at"`
+	Dirty           bool           `json:"dirty,omitempty"`
 }
 
 type Snapshot struct {

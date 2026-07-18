@@ -253,18 +253,89 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange) ([
 			return nil, nil, false, chainhash.Hash{}, ErrInvalidRecord
 		}
 	}
-	i.mutex.RUnlock()
-	checkpoint, err := i.Checkpoint()
+	rootRecords, err := i.activeRecordsForRangesLocked(ranges, height, now)
 	if err != nil {
+		i.mutex.RUnlock()
+		return nil, nil, false, chainhash.Hash{}, err
+	}
+	checkpoint, err := checkpointFromRecords(rootRecords, height)
+	if err != nil {
+		i.mutex.RUnlock()
 		return nil, nil, false, chainhash.Hash{}, err
 	}
 	rootBytes, err := hexDecodeRoot(checkpoint.ActiveRecordRoot)
 	if err != nil {
+		i.mutex.RUnlock()
 		return nil, nil, false, chainhash.Hash{}, err
 	}
 	var root chainhash.Hash
 	copy(root[:], rootBytes)
+	i.mutex.RUnlock()
 	return records, nextCursor, done, root, nil
+}
+
+func (i *Indexer) activeRecordsForRangesLocked(ranges []syncRange, height, now uint64) ([]*wire.DKVSRecord, error) {
+	return i.recordsForRangesLocked(ranges, true, height, now)
+}
+
+func (i *Indexer) recordsForRangesLocked(ranges []syncRange, activeOnly bool, height, now uint64) ([]*wire.DKVSRecord, error) {
+	seen := make(map[string]*wire.DKVSRecord)
+	for _, currentRange := range ranges {
+		if currentRange.exact {
+			record, err := i.getRaw(currentRange.target)
+			if errors.Is(err, ErrRecordNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			if !activeOnly || i.activeError(record, height, now) == nil {
+				seen[record.Key] = record
+			}
+			continue
+		}
+		records, _, _, err := i.scanLocked(currentRange.target, nil, 0, activeOnly, height, now)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			seen[record.Key] = record
+		}
+	}
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	records := make([]*wire.DKVSRecord, 0, len(keys))
+	for _, key := range keys {
+		records = append(records, seen[key])
+	}
+	return records, nil
+}
+
+func recordsRoot(records []*wire.DKVSRecord, height uint64) (chainhash.Hash, error) {
+	ordered := append([]*wire.DKVSRecord{}, records...)
+	sort.Slice(ordered, func(a, b int) bool {
+		if ordered[a] == nil {
+			return true
+		}
+		if ordered[b] == nil {
+			return false
+		}
+		return ordered[a].Key < ordered[b].Key
+	})
+	checkpoint, err := checkpointFromRecords(ordered, height)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	rootBytes, err := hexDecodeRoot(checkpoint.ActiveRecordRoot)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	var root chainhash.Hash
+	copy(root[:], rootBytes)
+	return root, nil
 }
 
 func hexDecodeRoot(value string) ([]byte, error) {

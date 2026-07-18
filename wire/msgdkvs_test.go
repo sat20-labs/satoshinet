@@ -30,7 +30,7 @@ func TestDKVSMessagesWire(t *testing.T) {
 		&MsgDKVSGet{Keys: []string{record.Key}, RecordHashes: []chainhash.Hash{hash}},
 		&MsgDKVSData{Records: []*DKVSRecord{record}, NotFound: []chainhash.Hash{hash}},
 		&MsgDKVSSyncRequest{Cursor: []byte("cursor"), Limit: 10, Filters: []DKVSSyncFilter{{Type: "prefix", Target: "/personal/a"}}},
-		&MsgDKVSSyncResponse{Records: []*DKVSRecord{record}, NextCursor: []byte("next"), Done: true, CheckpointRoot: hash},
+		&MsgDKVSSyncResponse{Records: []*DKVSRecord{record}, NextCursor: []byte("next"), Done: true, CheckpointRoot: hash, SourceSignature: []byte{1, 2, 3}},
 	}
 	for _, test := range tests {
 		var buf bytes.Buffer
@@ -88,6 +88,7 @@ func TestDKVSMessagesOversize(t *testing.T) {
 		&MsgDKVSSyncRequest{Filters: []DKVSSyncFilter{{Type: string(bytes.Repeat([]byte("t"), MaxDKVSFilterTypeSize+1)), Target: "/tmp/a"}}},
 		&MsgDKVSSyncRequest{Filters: []DKVSSyncFilter{{Type: "prefix", Target: longKey}}},
 		&MsgDKVSSyncResponse{NextCursor: longCursor},
+		&MsgDKVSSyncResponse{SourceSignature: bytes.Repeat([]byte{1}, MaxDKVSSignatureSize+1)},
 	}
 	for _, test := range tests {
 		if err := test.BtcEncode(&bytes.Buffer{}, ProtocolVersion, BaseEncoding); err == nil {
@@ -203,7 +204,7 @@ func sampleDKVSMessages() []Message {
 		&MsgDKVSGet{Keys: []string{record.Key}, RecordHashes: []chainhash.Hash{hash}},
 		&MsgDKVSData{Records: []*DKVSRecord{record}, NotFound: []chainhash.Hash{hash}},
 		&MsgDKVSSyncRequest{SessionID: 1, Cursor: []byte("cursor"), Limit: 10},
-		&MsgDKVSSyncResponse{SessionID: 1, Records: []*DKVSRecord{record}, NextCursor: []byte("next"), Done: true, CheckpointRoot: hash},
+		&MsgDKVSSyncResponse{SessionID: 1, Records: []*DKVSRecord{record}, NextCursor: []byte("next"), Done: true, CheckpointRoot: hash, SourceSignature: []byte{1, 2, 3}},
 	}
 }
 

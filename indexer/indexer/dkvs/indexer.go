@@ -146,6 +146,9 @@ func (i *Indexer) PutRemote(record *wire.DKVSRecord) (bool, error) {
 func (i *Indexer) NotifyNameTransfers(names []string) error {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
+	batch := i.db.NewWriteBatch()
+	defer batch.Close()
+	changed := false
 	for _, name := range names {
 		name = strings.TrimSpace(strings.ToLower(name))
 		if name == "" {
@@ -155,10 +158,18 @@ func (i *Indexer) NotifyNameTransfers(names []string) error {
 		if len(name) > MaxKeySegmentSize || !validSegment(name) {
 			return ErrInvalidKey
 		}
-		if err := i.db.Write(nameTransferDBKey(name), []byte{1}); err != nil {
+		if err := batch.Put(nameTransferDBKey(name), []byte{1}); err != nil {
 			return err
 		}
+		changed = true
 	}
+	if !changed {
+		return nil
+	}
+	if err := batch.Flush(); err != nil {
+		return err
+	}
+	atomic.AddUint64(&i.generation, 1)
 	return nil
 }
 
@@ -384,21 +395,7 @@ func (i *Indexer) ApplySnapshot(snapshot *Snapshot) (int, error) {
 	if err := ValidateSnapshot(snapshot); err != nil {
 		return 0, err
 	}
-	ordered, err := i.prevalidateSnapshot(snapshot)
-	if err != nil {
-		return 0, err
-	}
-	applied := 0
-	for _, record := range ordered {
-		updated, err := i.PutRemote(record)
-		if err != nil {
-			return applied, err
-		}
-		if updated {
-			applied++
-		}
-	}
-	return applied, nil
+	return i.applyRecordSetAtomic(snapshot.Records, nil, nil, false)
 }
 
 func (i *Indexer) PruneExpired() (int, error) {
@@ -527,18 +524,9 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint32, chain
 			return false, 0, chainhash.Hash{}, err
 		}
 
-		// A delete command for a key this node does not hold is an idempotent
-		// no-op. In particular, it must not create a persistent delete entry for
-		// attacker-selected keys. Nodes that hold the active record validate and
-		// retain the signed command long enough to relay it.
-		if IsTombstone(record.Flags) && snapshot.existing == nil {
-			return false, 0, chainhash.Hash{}, nil
-		}
-
-		// Historical remote delete commands remain useful for anti-entropy after
-		// their record lifetime ends. They do not need a fresh fee proof; all
-		// other writes retain the existing fee-verification policy.
-		if !(remote && IsTombstone(record.Flags) && IsExpired(record, height, now)) {
+		// Delete commands free capacity and are authorized by the current key
+		// owner, so they never require a storage fee proof.
+		if !IsTombstone(record.Flags) {
 			if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
 				return false, 0, chainhash.Hash{}, err
 			}
@@ -580,9 +568,22 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint32, chain
 		clearNameTransfer := snapshot.requiresResolve && parsed.Namespace == "name"
 
 		if IsTombstone(record.Flags) {
-			// Missing-key tombstones were returned above. For the same authority a
-			// delete must advance the sequence; an authorized owner rotation can
-			// replace an older owner's record with a lower local sequence.
+			if existing == nil {
+				if deleteState != nil && deleteState.Record != nil &&
+					CompareRecords(deleteState.Record, record) >= 0 {
+					i.mutex.Unlock()
+					return false, 0, RecordHash(deleteState.Record), nil
+				}
+				hash, err := i.retainDeleteCommandLocked(record, now)
+				i.mutex.Unlock()
+				if err != nil {
+					return false, 0, chainhash.Hash{}, err
+				}
+				return true, EventRecordTombstone, hash, nil
+			}
+			// For the same authority a delete must advance the sequence; an
+			// authorized owner rotation can replace an older owner's record with a
+			// lower local sequence.
 			if !forceReplace && record.Seq <= existing.Seq {
 				if clearNameTransfer {
 					if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {

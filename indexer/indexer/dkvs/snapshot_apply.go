@@ -93,6 +93,12 @@ func validateSnapshotBlobRecords(records map[string]*wire.DKVSRecord, policy Blo
 			if err != nil || manifest.TTL != record.TTL || manifest.ExpiryHeight != record.ExpiryHeight {
 				return ErrBlobManifestInvalid
 			}
+			prefix := "/blob/" + parsed.Segments[0] + "/" + parsed.Segments[1] + "/chunk/"
+			for index := uint32(0); index < manifest.ChunkCount; index++ {
+				if records[prefix+strconv.FormatUint(uint64(index), 10)] == nil {
+					return ErrBlobChunkInvalid
+				}
+			}
 			continue
 		}
 		if parsed.Segments[2] != "chunk" || len(parsed.Segments) != 4 {

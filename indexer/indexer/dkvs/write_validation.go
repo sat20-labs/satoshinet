@@ -19,6 +19,8 @@ type runtimeValidators struct {
 type writeStateSnapshot struct {
 	existing          *wire.DKVSRecord
 	existingHash      chainhash.Hash
+	existingPubKey    []byte
+	existingSeq       uint64
 	deleteState       *deleteState
 	deleteStateHash   chainhash.Hash
 	requiresResolve   bool
@@ -75,6 +77,8 @@ func (i *Indexer) readWriteStateSnapshot(key string, parsed ParsedKey, validator
 	if err == nil {
 		snapshot.existing = existing
 		snapshot.existingHash = RecordHash(existing)
+		snapshot.existingPubKey = append([]byte{}, existing.PubKey...)
+		snapshot.existingSeq = existing.Seq
 	}
 	state, err := i.getDeleteStateLocked(key)
 	if err != nil && !errors.Is(err, ErrRecordNotFound) {
@@ -103,7 +107,8 @@ func (i *Indexer) writeStateStillCurrentLocked(key string, parsed ParsedKey, sna
 	if err != nil && !errors.Is(err, ErrRecordNotFound) {
 		return false, err
 	}
-	if recordStateHash(existing) != snapshot.existingHash {
+	if recordStateHash(existing) != snapshot.existingHash ||
+		(existing != nil && (existing.Seq != snapshot.existingSeq || !bytes.Equal(existing.PubKey, snapshot.existingPubKey))) {
 		return false, nil
 	}
 	state, err := i.getDeleteStateLocked(key)
@@ -369,7 +374,7 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64,
 	if IsTombstone(record.Flags) && len(record.Value) != 0 {
 		return parsed, ErrInvalidRecord
 	}
-	if verifyFee && !(allowExpiredTombstone && IsTombstone(record.Flags) && IsExpired(record, height, now)) {
+	if verifyFee && !IsTombstone(record.Flags) {
 		if err := verifyFeeProofWith(feeVerifier, record, parsed); err != nil {
 			return parsed, err
 		}

@@ -6,10 +6,11 @@ import (
 	"strings"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const pathMetaVersion = uint32(1)
+const pathMetaVersion = uint32(2)
 
 var pathMetaKeyPrefix = []byte("dkvs:pathmeta:")
 
@@ -68,7 +69,7 @@ func marshalPathMeta(meta *PathMeta) ([]byte, error) {
 	if meta == nil || meta.Version != pathMetaVersion || meta.Path == "" {
 		return nil, ErrInvalidRecord
 	}
-	encoded := make([]byte, 4+7*8+1)
+	encoded := make([]byte, 4+7*8+chainhash.HashSize+1)
 	binary.LittleEndian.PutUint32(encoded[0:4], meta.Version)
 	values := []uint64{
 		meta.Generation,
@@ -84,6 +85,8 @@ func marshalPathMeta(meta *PathMeta) ([]byte, error) {
 		binary.LittleEndian.PutUint64(encoded[offset:offset+8], value)
 		offset += 8
 	}
+	copy(encoded[offset:offset+chainhash.HashSize], meta.ActiveRoot[:])
+	offset += chainhash.HashSize
 	if meta.Dirty {
 		encoded[offset] = 1
 	}
@@ -91,7 +94,7 @@ func marshalPathMeta(meta *PathMeta) ([]byte, error) {
 }
 
 func unmarshalPathMeta(path string, encoded []byte) (*PathMeta, error) {
-	if path == "" || len(encoded) != 4+7*8+1 {
+	if path == "" || len(encoded) != 4+7*8+chainhash.HashSize+1 {
 		return nil, ErrInvalidRecord
 	}
 	meta := &PathMeta{Path: path}
@@ -113,6 +116,8 @@ func unmarshalPathMeta(path string, encoded []byte) (*PathMeta, error) {
 		*field = binary.LittleEndian.Uint64(encoded[offset : offset+8])
 		offset += 8
 	}
+	copy(meta.ActiveRoot[:], encoded[offset:offset+chainhash.HashSize])
+	offset += chainhash.HashSize
 	meta.Dirty = encoded[offset] != 0
 	return meta, nil
 }
@@ -157,6 +162,27 @@ func updateMinExpiry(meta *PathMeta, record *wire.DKVSRecord) {
 	}
 }
 
+func pathMetaRecordLeaf(record *wire.DKVSRecord) chainhash.Hash {
+	if record == nil {
+		return chainhash.Hash{}
+	}
+	recordHash := RecordHash(record)
+	payload := make([]byte, 0, len(record.Key)+chainhash.HashSize)
+	payload = append(payload, record.Key...)
+	payload = append(payload, recordHash[:]...)
+	return chainhash.DoubleHashH(payload)
+}
+
+func xorPathMetaRoot(root *chainhash.Hash, record *wire.DKVSRecord) {
+	if root == nil || record == nil {
+		return
+	}
+	leaf := pathMetaRecordLeaf(record)
+	for n := range root {
+		root[n] ^= leaf[n]
+	}
+}
+
 func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathMeta, error) {
 	records, _, _, err := i.scanLocked(path, nil, 0, true, height, now)
 	if err != nil {
@@ -176,6 +202,7 @@ func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathM
 	for _, record := range records {
 		meta.ActiveRecords++
 		meta.ActiveTotalSize += uint64(RecordSize(record))
+		xorPathMetaRoot(&meta.ActiveRoot, record)
 		updateMinExpiry(meta, record)
 	}
 	encoded, err := marshalPathMeta(meta)
@@ -247,6 +274,7 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 	oldActive := existingRecordActive(i, existing, height, now)
 	newActive := next != nil && !IsTombstone(next.Flags) && !IsExpired(next, height, now)
 	if oldActive {
+		xorPathMetaRoot(&meta.ActiveRoot, existing)
 		oldSize := uint64(RecordSize(existing))
 		if meta.ActiveRecords > 0 {
 			meta.ActiveRecords--
@@ -267,6 +295,7 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 	if newActive {
 		meta.ActiveRecords++
 		meta.ActiveTotalSize += uint64(RecordSize(next))
+		xorPathMetaRoot(&meta.ActiveRoot, next)
 		updateMinExpiry(meta, next)
 	}
 	meta.Generation++
