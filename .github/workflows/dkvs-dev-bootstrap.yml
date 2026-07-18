@@ -76,108 +76,19 @@ jobs:
         working-directory: workspace/satoshinet
         run: go test -race ./indexer/indexer/dkvs -run '^(TestResolverDoesNotHoldIndexerWriteLock|TestPhysicalDeleteFloorAndRecreate|TestPathMetaTracksPutUpdateDelete)$' -count=1
 
-      - name: Archive Go module cache
-        if: always()
-        shell: bash
-        run: |
-          gomodcache=$(go env GOMODCACHE)
-          tar -C "$(dirname "$gomodcache")" -czf /tmp/go-mod-cache.tar.gz "$(basename "$gomodcache")"
-
-      - name: Upload Go module cache
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: go-module-cache
-          path: /tmp/go-mod-cache.tar.gz
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Install permanent validation workflow
+      - name: Stage bootstrap cleanup
         working-directory: workspace/satoshinet
-        shell: bash
         run: |
-          cat > .github/workflows/dkvs-dev-bootstrap.yml <<'FINAL_WORKFLOW'
-          name: DKVS development checks
-
-          on:
-            push:
-              branches:
-                - agent/dkvs-v2-implementation
-            pull_request:
-              branches:
-                - main
-
-          permissions:
-            contents: read
-
-          jobs:
-            dkvs-tests:
-              runs-on: ubuntu-latest
-              steps:
-                - name: Check out SatoshiNet
-                  uses: actions/checkout@v4
-                  with:
-                    path: workspace/satoshinet
-
-                - name: Check out indexer dependency
-                  uses: actions/checkout@v4
-                  with:
-                    repository: sat20-labs/indexer
-                    path: workspace/indexer
-
-                - name: Check out wallet dependency
-                  uses: actions/checkout@v4
-                  with:
-                    repository: sat20-labs/sat20wallet
-                    path: workspace/sat20wallet
-
-                - name: Set up Go 1.24.13
-                  uses: actions/setup-go@v5
-                  with:
-                    go-version: 1.24.13
-                    cache: false
-
-                - name: Check formatting
-                  working-directory: workspace/satoshinet
-                  shell: bash
-                  run: |
-                    files=$(find indexer/indexer/dkvs -maxdepth 1 -name '*.go' -print)
-                    files="$files indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/handler.go indexer/rpcserver/indexer/handler_test.go indexer/rpcserver/indexer/model.go indexer/rpcserver/indexer/router.go indexer/share/indexer/interface.go server.go server_dkvs_test.go"
-                    unformatted=$(gofmt -l $files)
-                    if [[ -n "$unformatted" ]]; then
-                      printf 'Unformatted files:\n%s\n' "$unformatted"
-                      exit 1
-                    fi
-
-                - name: Run DKVS package tests
-                  working-directory: workspace/satoshinet
-                  run: go test ./indexer/indexer/dkvs -count=1
-
-                - name: Run DKVS server tests
-                  working-directory: workspace/satoshinet
-                  run: go test . -run '^TestDKVS' -count=1
-
-                - name: Run DKVS HTTP tests
-                  working-directory: workspace/satoshinet
-                  run: go test ./indexer/rpcserver/indexer -run '^(TestDKVSLocalOnlyMiddleware|TestBindDKVSJSONBodyLimit)$' -count=1
-
-                - name: Compile integration packages
-                  working-directory: workspace/satoshinet
-                  run: go test ./wire ./peer ./indexer/indexer ./indexer/share/indexer -run '^$'
-
-                - name: Run focused race tests
-                  working-directory: workspace/satoshinet
-                  run: go test -race ./indexer/indexer/dkvs -run '^(TestResolverDoesNotHoldIndexerWriteLock|TestPhysicalDeleteFloorAndRecreate|TestPathMetaTracksPutUpdateDelete)$' -count=1
-          FINAL_WORKFLOW
           git rm .github/dkvs-v2.patch.xz.b64.part*
-          git add .github/workflows/dkvs-dev-bootstrap.yml
           git diff --cached --check
 
       - name: Commit validated implementation
         working-directory: workspace/satoshinet
         shell: bash
         run: |
+          set -x
           git config user.name "ChatGPT DKVS implementation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git status --short
           git commit -m "implement DKVS delete state and path sync"
           git push origin HEAD:agent/dkvs-v2-implementation
