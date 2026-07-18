@@ -1,9 +1,9 @@
 name: DKVS implementation validation
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/dkvs-v2-implementation
+      - main
 
 permissions:
   contents: write
