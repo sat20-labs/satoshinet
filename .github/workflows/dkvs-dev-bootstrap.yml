@@ -1,9 +1,9 @@
 name: DKVS implementation validation
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/dkvs-v2-implementation
+      - main
 
 permissions:
   contents: write
@@ -12,7 +12,7 @@ jobs:
   apply-test-and-commit:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out SatoshiNet branch
+      - name: Check out implementation branch
         uses: actions/checkout@v4
         with:
           ref: agent/dkvs-v2-implementation
@@ -92,7 +92,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Replace bootstrap workflow with permanent checks
+      - name: Install permanent validation workflow
         working-directory: workspace/satoshinet
         shell: bash
         run: |
@@ -141,34 +141,9 @@ jobs:
                   working-directory: workspace/satoshinet
                   shell: bash
                   run: |
-                    files=(
-                      indexer/indexer/dkvs/blob.go
-                      indexer/indexer/dkvs/delete.go
-                      indexer/indexer/dkvs/dkvs_v2_test.go
-                      indexer/indexer/dkvs/fee_usage.go
-                      indexer/indexer/dkvs/indexer.go
-                      indexer/indexer/dkvs/indexer_test.go
-                      indexer/indexer/dkvs/key.go
-                      indexer/indexer/dkvs/mailbox.go
-                      indexer/indexer/dkvs/pathmeta.go
-                      indexer/indexer/dkvs/sdk.go
-                      indexer/indexer/dkvs/signing_test.go
-                      indexer/indexer/dkvs/snapshot_apply.go
-                      indexer/indexer/dkvs/subscription.go
-                      indexer/indexer/dkvs/sync_integration_test.go
-                      indexer/indexer/dkvs/sync_path.go
-                      indexer/indexer/dkvs/types.go
-                      indexer/indexer/dkvs/write_validation.go
-                      indexer/indexer/dkvs_interface.go
-                      indexer/rpcserver/indexer/handler.go
-                      indexer/rpcserver/indexer/handler_test.go
-                      indexer/rpcserver/indexer/model.go
-                      indexer/rpcserver/indexer/router.go
-                      indexer/share/indexer/interface.go
-                      server.go
-                      server_dkvs_test.go
-                    )
-                    unformatted=$(gofmt -l "${files[@]}")
+                    files=$(find indexer/indexer/dkvs -maxdepth 1 -name '*.go' -print)
+                    files="$files indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/handler.go indexer/rpcserver/indexer/handler_test.go indexer/rpcserver/indexer/model.go indexer/rpcserver/indexer/router.go indexer/share/indexer/interface.go server.go server_dkvs_test.go"
+                    unformatted=$(gofmt -l $files)
                     if [[ -n "$unformatted" ]]; then
                       printf 'Unformatted files:\n%s\n' "$unformatted"
                       exit 1
