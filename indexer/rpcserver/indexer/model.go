@@ -216,6 +216,10 @@ func (s *Model) GetDKVSUsage(prefix string) (*dkvsindexer.Usage, error) {
 	return s.indexer.GetDKVSUsage(prefix)
 }
 
+func (s *Model) GetDKVSPathMeta(path string) (*dkvsindexer.PathMeta, error) {
+	return s.indexer.GetDKVSPathMeta(path)
+}
+
 func (s *Model) GetDKVSCheckpoint() (interface{}, error) {
 	return s.indexer.GetDKVSCheckpoint()
 }

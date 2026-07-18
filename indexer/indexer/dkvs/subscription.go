@@ -105,3 +105,13 @@ func subscriptionMatchesKey(sub Subscription, key string) bool {
 		return false
 	}
 }
+
+// SubscriptionMatchesKey validates a subscription and reports whether it
+// covers key. It is exported for the P2P sync coordinator.
+func SubscriptionMatchesKey(sub Subscription, key string) bool {
+	normalized, err := validateSubscription(sub)
+	if err != nil {
+		return false
+	}
+	return subscriptionMatchesKey(normalized, key)
+}

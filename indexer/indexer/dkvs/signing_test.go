@@ -90,6 +90,9 @@ func AttachSignedFeeProof(record *wire.DKVSRecord, proof *FeeProof, priv *btcec.
 }
 
 func BuildSignedBlobRecords(priv *btcec.PrivateKey, objectID string, chunks [][]byte, metadata json.RawMessage, opts RecordOptions) (*wire.DKVSRecord, []*wire.DKVSRecord, error) {
+	if opts.IssueTime == 0 {
+		opts.IssueTime = currentUnixMilli()
+	}
 	accountID := AccountID(priv.PubKey().SerializeCompressed())
 	manifest, manifestValue, err := BuildBlobManifest(chunks, metadata, opts.TTL, opts.ExpiryHeight)
 	if err != nil {

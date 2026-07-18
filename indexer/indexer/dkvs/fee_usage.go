@@ -55,7 +55,7 @@ func (i *Indexer) ensureFeeUsageLocked(verifier IndexedFeeCapacityVerifier, heig
 		return err
 	}
 	for _, record := range records {
-		if record == nil || (IsExpired(record, height, now) && !IsTombstone(record.Flags)) {
+		if record == nil || IsTombstone(record.Flags) || IsExpired(record, height, now) {
 			continue
 		}
 		usageKey, err := verifier.FeeUsageKey(record)

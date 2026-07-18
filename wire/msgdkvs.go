@@ -77,11 +77,12 @@ type MsgDKVSSyncRequest struct {
 }
 
 type MsgDKVSSyncResponse struct {
-	SessionID      uint64
-	Records        []*DKVSRecord
-	NextCursor     []byte
-	Done           bool
-	CheckpointRoot chainhash.Hash
+	SessionID       uint64
+	Records         []*DKVSRecord
+	NextCursor      []byte
+	Done            bool
+	CheckpointRoot  chainhash.Hash
+	SourceSignature []byte
 }
 
 type DKVSSyncFilter struct {
@@ -612,7 +613,13 @@ func (msg *MsgDKVSSyncResponse) BtcDecode(r io.Reader, pver uint32, _ MessageEnc
 		return err
 	}
 	msg.Done = done != 0
-	_, err = io.ReadFull(r, msg.CheckpointRoot[:])
+	if _, err = io.ReadFull(r, msg.CheckpointRoot[:]); err != nil {
+		return err
+	}
+	msg.SourceSignature, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSSignatureSize, "dkvs sync source signature")
+	if len(msg.SourceSignature) == 0 {
+		msg.SourceSignature = nil
+	}
 	return err
 }
 
@@ -646,8 +653,13 @@ func (msg *MsgDKVSSyncResponse) BtcEncode(w io.Writer, pver uint32, _ MessageEnc
 	if err := writeElements(w, done); err != nil {
 		return err
 	}
-	_, err := w.Write(msg.CheckpointRoot[:])
-	return err
+	if _, err := w.Write(msg.CheckpointRoot[:]); err != nil {
+		return err
+	}
+	if len(msg.SourceSignature) > MaxDKVSSignatureSize {
+		return messageError("MsgDKVSSyncResponse.BtcEncode", "dkvs sync source signature too large")
+	}
+	return WriteVarBytesBuf(w, pver, msg.SourceSignature, buf)
 }
 
 func (msg *MsgDKVSSyncResponse) Command() string { return CmdDKVSSyncResponse }

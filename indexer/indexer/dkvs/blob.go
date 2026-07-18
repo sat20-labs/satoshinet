@@ -23,8 +23,14 @@ func (i *Indexer) validateBlobLocked(record *wire.DKVSRecord, parsed ParsedKey, 
 	objectID := parsed.Segments[1]
 	switch parsed.Segments[2] {
 	case "manifest":
-		_, err := parseBlobManifest(record.Value, i.blob)
-		return err
+		manifest, err := parseBlobManifest(record.Value, i.blob)
+		if err != nil {
+			return err
+		}
+		if manifest.TTL != record.TTL || manifest.ExpiryHeight != record.ExpiryHeight {
+			return ErrBlobManifestInvalid
+		}
+		return nil
 	case "chunk":
 		if len(record.Value) > i.blob.MaxChunkSize {
 			return ErrRecordTooLarge
@@ -44,6 +50,7 @@ func (i *Indexer) validateBlobLocked(record *wire.DKVSRecord, parsed ParsedKey, 
 			return ErrBlobChunkInvalid
 		}
 		if !bytes.Equal(record.PubKey, manifestRecord.PubKey) || record.Seq != manifestRecord.Seq ||
+			record.IssueTime != manifestRecord.IssueTime || record.TTL != manifestRecord.TTL ||
 			record.ExpiryHeight != manifestRecord.ExpiryHeight {
 			return ErrBlobChunkInvalid
 		}
@@ -64,9 +71,13 @@ func parseBlobManifest(value []byte, policy BlobPolicy) (*BlobManifest, error) {
 	if manifest.ContentHash == "" || manifest.ChunkSize == 0 || manifest.ChunkCount == 0 ||
 		uint64(manifest.ChunkSize) > uint64(policy.MaxChunkSize) ||
 		manifest.ChunkCount > policy.MaxChunks ||
-		manifest.TotalSize > policy.MaxTotalSize ||
-		uint64(manifest.ChunkCount)*uint64(manifest.ChunkSize) < manifest.TotalSize ||
+		manifest.TotalSize == 0 || manifest.TotalSize > policy.MaxTotalSize ||
 		len(manifest.ChunkHashes) != int(manifest.ChunkCount) {
+		return nil, ErrBlobManifestInvalid
+	}
+	maxSize := uint64(manifest.ChunkCount) * uint64(manifest.ChunkSize)
+	minSize := uint64(manifest.ChunkCount-1)*uint64(manifest.ChunkSize) + 1
+	if manifest.TotalSize < minSize || manifest.TotalSize > maxSize {
 		return nil, ErrBlobManifestInvalid
 	}
 	if _, err := decodeHashHex(manifest.ContentHash); err != nil {
@@ -94,6 +105,13 @@ func (i *Indexer) getActiveBlobManifestLocked(accountID, objectID string, height
 
 func validateBlobChunkHash(manifest *BlobManifest, index uint32, value []byte) error {
 	if index >= manifest.ChunkCount || int(index) >= len(manifest.ChunkHashes) {
+		return ErrBlobChunkInvalid
+	}
+	expectedSize := uint64(manifest.ChunkSize)
+	if index == manifest.ChunkCount-1 {
+		expectedSize = manifest.TotalSize - uint64(manifest.ChunkCount-1)*uint64(manifest.ChunkSize)
+	}
+	if uint64(len(value)) != expectedSize {
 		return ErrBlobChunkInvalid
 	}
 	sum := sha256.Sum256(value)

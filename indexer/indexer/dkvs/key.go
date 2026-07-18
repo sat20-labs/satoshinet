@@ -135,7 +135,8 @@ func validateNamespaceShape(parsed ParsedKey) error {
 			return nil
 		}
 		if len(parsed.Segments) == 4 && parsed.Segments[2] == "chunk" {
-			if index, err := strconv.Atoi(parsed.Segments[3]); err != nil || index < 0 {
+			index, err := strconv.ParseUint(parsed.Segments[3], 10, 32)
+			if err != nil || strconv.FormatUint(index, 10) != parsed.Segments[3] {
 				return ErrInvalidKey
 			}
 			return nil

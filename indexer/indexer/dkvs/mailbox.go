@@ -3,7 +3,6 @@ package dkvs
 import "github.com/sat20-labs/satoshinet/wire"
 
 func (i *Indexer) validateMailboxLocked(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, height, now uint64) error {
-	_ = existing
 	if len(parsed.Segments) < 2 {
 		return ErrInvalidKey
 	}
@@ -11,17 +10,33 @@ func (i *Indexer) validateMailboxLocked(record *wire.DKVSRecord, parsed ParsedKe
 		return nil
 	}
 
-	switch parsed.Segments[1] {
+	kind := parsed.Segments[1]
+	path := "/mail/" + parsed.Segments[0] + "/" + kind
+	meta, err := i.ensurePathMetaLocked(path, height, now)
+	if err != nil {
+		return err
+	}
+	usedBytes := meta.ActiveTotalSize
+	usedCount := meta.ActiveRecords
+	if existingRecordActive(i, existing, height, now) {
+		existingSize := uint64(RecordSize(existing))
+		if usedCount > 0 {
+			usedCount--
+		}
+		if usedBytes >= existingSize {
+			usedBytes -= existingSize
+		} else {
+			usedBytes = 0
+		}
+	}
+
+	switch kind {
 	case "msg":
 		if RecordSize(record) > i.mailbox.MaxMsgSize {
 			return ErrRecordTooLarge
 		}
-		if i.mailbox.MaxMsgTTL > 0 && record.TTL > i.mailbox.MaxMsgTTL {
+		if record.TTL == 0 || (i.mailbox.MaxMsgTTL > 0 && record.TTL > i.mailbox.MaxMsgTTL) {
 			return ErrInvalidRecord
-		}
-		usedBytes, usedCount, err := i.mailboxUsageLocked(parsed.Segments[0], "msg", record.Key, height, now)
-		if err != nil {
-			return err
 		}
 		if usedCount+1 > i.mailbox.MaxMessages || usedBytes+uint64(RecordSize(record)) > i.mailbox.MaxMsgBytes {
 			return ErrMailboxFull
@@ -30,12 +45,8 @@ func (i *Indexer) validateMailboxLocked(record *wire.DKVSRecord, parsed ParsedKe
 		if RecordSize(record) > i.mailbox.MaxShareSize {
 			return ErrRecordTooLarge
 		}
-		if i.mailbox.MaxShareTTL > 0 && record.TTL > i.mailbox.MaxShareTTL {
+		if record.TTL == 0 || (i.mailbox.MaxShareTTL > 0 && record.TTL > i.mailbox.MaxShareTTL) {
 			return ErrInvalidRecord
-		}
-		usedBytes, usedCount, err := i.mailboxUsageLocked(parsed.Segments[0], "share", record.Key, height, now)
-		if err != nil {
-			return err
 		}
 		if usedCount+1 > i.mailbox.MaxShares || usedBytes+uint64(RecordSize(record)) > i.mailbox.MaxShareBytes {
 			return ErrMailboxFull
@@ -44,22 +55,4 @@ func (i *Indexer) validateMailboxLocked(record *wire.DKVSRecord, parsed ParsedKe
 		return ErrInvalidKey
 	}
 	return nil
-}
-
-func (i *Indexer) mailboxUsageLocked(mailboxID, kind, excludeKey string, height, now uint64) (uint64, uint64, error) {
-	prefix := "/mail/" + mailboxID + "/" + kind + "/"
-	records, _, _, err := i.scanLocked(prefix, nil, 0, true, height, now)
-	if err != nil {
-		return 0, 0, err
-	}
-	var bytes uint64
-	var count uint64
-	for _, record := range records {
-		if record.Key == excludeKey || IsTombstone(record.Flags) {
-			continue
-		}
-		count++
-		bytes += uint64(RecordSize(record))
-	}
-	return bytes, count, nil
 }

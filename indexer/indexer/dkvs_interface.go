@@ -52,6 +52,10 @@ func (b *IndexerMgr) GetDKVSRecord(key string) (*wire.DKVSRecord, error) {
 	return b.dkvsIndexer.Get(key)
 }
 
+func (b *IndexerMgr) GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error) {
+	return b.dkvsIndexer.GetForRelay(key)
+}
+
 func (b *IndexerMgr) GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error) {
 	return b.dkvsIndexer.GetByHash(hash)
 }
@@ -62,6 +66,18 @@ func (b *IndexerMgr) ListDKVSRecords(prefix string, start, limit int) ([]*wire.D
 
 func (b *IndexerMgr) GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error) {
 	return b.dkvsIndexer.Usage(prefix)
+}
+
+func (b *IndexerMgr) GetDKVSPathMeta(path string) (*dkvs_indexer.PathMeta, error) {
+	return b.dkvsIndexer.GetPathMeta(path)
+}
+
+func (b *IndexerMgr) ApplyDKVSMirror(filters []dkvs_indexer.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error) {
+	return b.dkvsIndexer.ApplyMirror(filters, records, root)
+}
+
+func (b *IndexerMgr) ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error) {
+	return b.dkvsIndexer.ApplyRecordSet(records)
 }
 
 func (b *IndexerMgr) SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {

@@ -74,9 +74,13 @@ type Indexer interface {
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	NotifyDKVSNameTransfers(names []string) error
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
+	GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error)
 	ListDKVSRecords(prefix string, start, limit int) ([]*wire.DKVSRecord, int, error)
 	GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error)
+	GetDKVSPathMeta(path string) (*dkvs_indexer.PathMeta, error)
+	ApplyDKVSMirror(filters []dkvs_indexer.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error)
+	ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error)
 	SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
 	SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
 	GetDKVSCheckpoint() (*dkvs_indexer.Checkpoint, error)
