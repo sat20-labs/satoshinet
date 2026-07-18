@@ -125,3 +125,73 @@ func TestDKVSSyncRequestPayloadWithinWireBound(t *testing.T) {
 		t.Fatalf("sync request payload=%d max=%d", got, max)
 	}
 }
+
+func TestDKVSRequestTrackingRejectsUnsolicitedData(t *testing.T) {
+	sp := &serverPeer{}
+	record := &wire.DKVSRecord{Version: dkvsindexer.Version, Key: "/tmp/a", Seq: 1}
+	if sp.consumeDKVSRequest(record) {
+		t.Fatal("unrequested record was accepted")
+	}
+	sp.trackDKVSRequest(&wire.MsgDKVSGet{Keys: []string{record.Key}})
+	if !sp.consumeDKVSRequest(record) {
+		t.Fatal("requested key record was rejected")
+	}
+	if sp.consumeDKVSRequest(record) {
+		t.Fatal("request was reusable")
+	}
+
+	hash := dkvsindexer.RecordHash(record)
+	sp.trackDKVSRequest(&wire.MsgDKVSGet{RecordHashes: []chainhash.Hash{hash}})
+	if !sp.consumeDKVSRequest(record) {
+		t.Fatal("requested record hash was rejected")
+	}
+
+	sp.dkvsRequestMtx.Lock()
+	sp.dkvsRequested = map[chainhash.Hash]time.Time{
+		dkvsKeyHash(record.Key): time.Now().Add(-dkvsRequestTTL - time.Second),
+	}
+	sp.dkvsRequestMtx.Unlock()
+	if sp.consumeDKVSRequest(record) {
+		t.Fatal("expired request was accepted")
+	}
+}
+
+func TestDKVSServeSyncBuffersAndCoalescesNotifications(t *testing.T) {
+	sp := &serverPeer{}
+	filters := []wire.DKVSSyncFilter{{Type: string(dkvsindexer.SubscriptionKey), Target: "/tmp/a"}}
+	request := &wire.MsgDKVSSyncRequest{SessionID: 7, Filters: filters}
+	if !sp.beginDKVSServeSync(request) {
+		t.Fatal("initial serve sync rejected")
+	}
+	if sp.beginDKVSServeSync(&wire.MsgDKVSSyncRequest{
+		SessionID: 7,
+		Cursor:    []byte{1},
+		Filters:   []wire.DKVSSyncFilter{{Type: "key", Target: "/tmp/b"}},
+	}) {
+		t.Fatal("continuation with changed filters accepted")
+	}
+	first := &wire.MsgDKVSNotify{Key: "/tmp/a", Seq: 1, Size: 10}
+	second := &wire.MsgDKVSNotify{Key: "/tmp/a", Seq: 2, Size: 20}
+	if !sp.bufferDKVSNotify(first) || !sp.bufferDKVSNotify(second) {
+		t.Fatal("matching notifications were not buffered")
+	}
+	if sp.bufferDKVSNotify(&wire.MsgDKVSNotify{Key: "/tmp/b", Seq: 1}) {
+		t.Fatal("unrelated notification was buffered")
+	}
+	var rootA, rootB chainhash.Hash
+	rootA[0] = 1
+	rootB[0] = 2
+	if got := sp.fixedDKVSServeRoot(rootA); got != rootA {
+		t.Fatalf("first root=%v", got)
+	}
+	if got := sp.fixedDKVSServeRoot(rootB); got != rootA {
+		t.Fatalf("root changed within session: %v", got)
+	}
+	pending := sp.finishDKVSServeSync(7)
+	if len(pending) != 1 || pending[0].Seq != 2 || pending[0].Key != "/tmp/a" {
+		t.Fatalf("pending=%#v", pending)
+	}
+	if sp.bufferDKVSNotify(first) {
+		t.Fatal("notification buffered after session completion")
+	}
+}

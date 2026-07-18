@@ -45,6 +45,7 @@ type Indexer struct {
 	sourceNode              string
 	mutex                   sync.RWMutex
 	generation              uint64
+	policyGeneration        uint64
 	checkpointMutex         sync.Mutex
 	checkpointGeneration    uint64
 	checkpointHeight        uint64
@@ -102,6 +103,7 @@ func (i *Indexer) SetResolver(resolver DIDResolver) {
 		resolver = defaultResolver{}
 	}
 	i.resolver = resolver
+	atomic.AddUint64(&i.policyGeneration, 1)
 }
 
 func (i *Indexer) SetFeeVerifier(verifier FeeVerifier) {
@@ -112,6 +114,7 @@ func (i *Indexer) SetFeeVerifier(verifier FeeVerifier) {
 	}
 	i.feeVerifier = verifier
 	i.resetFeeUsageLocked()
+	atomic.AddUint64(&i.policyGeneration, 1)
 }
 
 func (i *Indexer) SetSystemVerifier(verifier SystemVerifier) {
@@ -121,6 +124,7 @@ func (i *Indexer) SetSystemVerifier(verifier SystemVerifier) {
 		verifier = defaultSystemVerifier{}
 	}
 	i.system = verifier
+	atomic.AddUint64(&i.policyGeneration, 1)
 }
 
 func (i *Indexer) PutLocal(record *wire.DKVSRecord) (bool, error) {
@@ -207,9 +211,22 @@ func (i *Indexer) ListPrefix(prefix string, start, limit int) ([]*wire.DKVSRecor
 	if limit <= 0 {
 		limit = 100
 	}
+	prefix = strings.TrimSuffix(prefix, "/")
+	height := i.currentHeight()
+	now := currentUnixMilli()
+	totalHint := -1
+	if path := collectionPathForPrefix(prefix); path != "" {
+		meta, err := i.GetPathMeta(path)
+		if err != nil {
+			return nil, 0, err
+		}
+		if meta.ActiveRecords <= uint64(^uint(0)>>1) {
+			totalHint = int(meta.ActiveRecords)
+		}
+	}
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	return i.listPrefixLocked(strings.TrimSuffix(prefix, "/"), start, limit, i.currentHeight(), currentUnixMilli())
+	return i.listPrefixLocked(prefix, start, limit, totalHint, height, now)
 }
 
 func (i *Indexer) Usage(prefix string) (*Usage, error) {
@@ -219,11 +236,23 @@ func (i *Indexer) Usage(prefix string) (*Usage, error) {
 	if _, err := ParsePrefix(prefix); err != nil {
 		return nil, err
 	}
+	prefix = strings.TrimSuffix(prefix, "/")
+	if collectionPathForPrefix(prefix) != "" {
+		meta, err := i.GetPathMeta(prefix)
+		if err != nil {
+			return nil, err
+		}
+		return &Usage{
+			Prefix:          prefix,
+			ActiveRecords:   meta.ActiveRecords,
+			ActiveTotalSize: meta.ActiveTotalSize,
+		}, nil
+	}
 	records, _, _, err := i.scan(prefix, nil, 0, true)
 	if err != nil {
 		return nil, err
 	}
-	usage := &Usage{Prefix: strings.TrimSuffix(prefix, "/")}
+	usage := &Usage{Prefix: prefix}
 	for _, record := range records {
 		usage.ActiveRecords++
 		usage.ActiveTotalSize += uint64(RecordSize(record))
@@ -232,57 +261,22 @@ func (i *Indexer) Usage(prefix string) (*Usage, error) {
 }
 
 func (i *Indexer) Sync(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
-	if limit == 0 || limit > wire.MaxDKVSRecordsPerMsg {
-		limit = 100
-	}
-	records, next, done, err := i.scan("", cursor, int(limit), true)
+	ranges, err := syncRangesForFilters(nil)
 	if err != nil {
 		return nil, nil, false, chainhash.Hash{}, err
 	}
-	cp, err := i.Checkpoint()
-	if err != nil {
-		return nil, nil, false, chainhash.Hash{}, err
-	}
-	rootBytes, _ := hex.DecodeString(cp.ActiveRecordRoot)
-	var root chainhash.Hash
-	copy(root[:], rootBytes)
-	return records, next, done, root, nil
+	return i.syncRanges(cursor, limit, ranges)
 }
 
 func (i *Indexer) SyncFiltered(cursor []byte, limit uint32, filters []Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	if len(filters) == 0 {
 		return i.Sync(cursor, limit)
 	}
-	if limit == 0 || limit > wire.MaxDKVSRecordsPerMsg {
-		limit = 100
-	}
-	normalized := make([]Subscription, 0, len(filters))
-	for _, filter := range filters {
-		sub, err := validateSubscription(filter)
-		if err != nil {
-			return nil, nil, false, chainhash.Hash{}, err
-		}
-		normalized = append(normalized, sub)
-	}
-	records, next, done, err := i.scanFiltered(cursor, int(limit), func(record *wire.DKVSRecord) bool {
-		for _, filter := range normalized {
-			if subscriptionMatchesKey(filter, record.Key) {
-				return true
-			}
-		}
-		return false
-	})
+	ranges, err := syncRangesForFilters(filters)
 	if err != nil {
 		return nil, nil, false, chainhash.Hash{}, err
 	}
-	cp, err := i.Checkpoint()
-	if err != nil {
-		return nil, nil, false, chainhash.Hash{}, err
-	}
-	rootBytes, _ := hex.DecodeString(cp.ActiveRecordRoot)
-	var root chainhash.Hash
-	copy(root[:], rootBytes)
-	return records, next, done, root, nil
+	return i.syncRanges(cursor, limit, ranges)
 }
 
 func (i *Indexer) Subscribe(sub Subscription) ([]*wire.DKVSRecord, int, error) {
@@ -390,18 +384,12 @@ func (i *Indexer) ApplySnapshot(snapshot *Snapshot) (int, error) {
 	if err := ValidateSnapshot(snapshot); err != nil {
 		return 0, err
 	}
-	seen := make(map[string]struct{}, len(snapshot.Records))
-	for _, record := range snapshot.Records {
-		if record == nil {
-			return 0, ErrInvalidSnapshot
-		}
-		if _, ok := seen[record.Key]; ok {
-			return 0, ErrInvalidSnapshot
-		}
-		seen[record.Key] = struct{}{}
+	ordered, err := i.prevalidateSnapshot(snapshot)
+	if err != nil {
+		return 0, err
 	}
 	applied := 0
-	for _, record := range snapshot.Records {
+	for _, record := range ordered {
 		updated, err := i.PutRemote(record)
 		if err != nil {
 			return applied, err
@@ -460,11 +448,28 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 		expiredRecords = append(expiredRecords, expiredRecord{record: record, hash: hash})
 		pruned++
 	}
+	compactedDeletes, err := i.compactExpiredDeleteCommandsLocked(batch, now)
+	if err != nil {
+		i.mutex.Unlock()
+		return pruned, err
+	}
 	if pruned > 0 {
+		metaRecords := make([]*wire.DKVSRecord, 0, len(expiredRecords))
+		for _, expired := range expiredRecords {
+			metaRecords = append(metaRecords, expired.record)
+		}
+		if err := i.markPathMetaDirtyLocked(batch, metaRecords, height, now); err != nil {
+			i.mutex.Unlock()
+			return 0, err
+		}
+	}
+	if pruned > 0 || compactedDeletes > 0 {
 		if err := batch.Flush(); err != nil {
 			i.mutex.Unlock()
 			return 0, err
 		}
+	}
+	if pruned > 0 {
 		atomic.AddUint64(&i.generation, 1)
 	}
 	i.mutex.Unlock()
@@ -511,79 +516,173 @@ func checkpointFromRecords(records []*wire.DKVSRecord, height uint64) (*Checkpoi
 func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint32, chainhash.Hash, error) {
 	height := i.currentHeight()
 	now := currentUnixMilli()
-	parsed, err := i.validateParsedCore(record, height, now, remote, true)
-	if err != nil {
-		return false, 0, chainhash.Hash{}, err
-	}
-	i.mutex.Lock()
-	defer i.mutex.Unlock()
-	existing, err := i.getRaw(record.Key)
-	if err != nil && !errors.Is(err, ErrRecordNotFound) {
-		return false, 0, chainhash.Hash{}, err
-	}
-	forceReplace, err := i.validateWritePermission(parsed, record, existing)
-	if err != nil {
-		return false, 0, chainhash.Hash{}, err
-	}
-	if err := i.validateStatefulLocked(record, parsed, existing, height, now); err != nil {
-		return false, 0, chainhash.Hash{}, err
-	}
-	clearNameTransfer := false
-	if parsed.Namespace == "name" {
-		clearNameTransfer, err = i.nameTransferDirty(parsed.Segments[0])
+	for attempt := 0; attempt < 3; attempt++ {
+		validators := i.snapshotValidators()
+		parsed, err := validateParsedCoreWithVerifier(record, height, now, remote, false, nil)
 		if err != nil {
 			return false, 0, chainhash.Hash{}, err
 		}
-	}
-	if existing != nil && !forceReplace && i.activeError(existing, height, now) == nil && CompareRecords(existing, record) >= 0 {
-		if clearNameTransfer {
-			if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {
-				return false, 0, chainhash.Hash{}, err
-			}
-		}
-		return false, 0, RecordHash(existing), nil
-	}
-	if err := i.validateFeeCapacityLocked(record, parsed, existing, height, now); err != nil {
-		return false, 0, chainhash.Hash{}, err
-	}
-	data, err := MarshalRecord(record)
-	if err != nil {
-		return false, 0, chainhash.Hash{}, err
-	}
-	hash := RecordHash(record)
-	batch := i.db.NewWriteBatch()
-	defer batch.Close()
-	if err := batch.Put(recordDBKey(record.Key), data); err != nil {
-		return false, 0, chainhash.Hash{}, err
-	}
-	if existing != nil {
-		existingHash := RecordHash(existing)
-		if existingHash != hash {
-			if err := batch.Delete(hashDBKey(existingHash)); err != nil {
-				return false, 0, chainhash.Hash{}, err
-			}
-		}
-	}
-	if err := batch.Put(hashDBKey(hash), []byte(record.Key)); err != nil {
-		return false, 0, chainhash.Hash{}, err
-	}
-	if clearNameTransfer {
-		if err := batch.Delete(nameTransferDBKey(parsed.Segments[0])); err != nil {
+		snapshot, err := i.readWriteStateSnapshot(record.Key, parsed, validators)
+		if err != nil {
 			return false, 0, chainhash.Hash{}, err
 		}
+
+		// A delete command for a key this node does not hold is an idempotent
+		// no-op. In particular, it must not create a persistent delete entry for
+		// attacker-selected keys. Nodes that hold the active record validate and
+		// retain the signed command long enough to relay it.
+		if IsTombstone(record.Flags) && snapshot.existing == nil {
+			return false, 0, chainhash.Hash{}, nil
+		}
+
+		// Historical remote delete commands remain useful for anti-entropy after
+		// their record lifetime ends. They do not need a fresh fee proof; all
+		// other writes retain the existing fee-verification policy.
+		if !(remote && IsTombstone(record.Flags) && IsExpired(record, height, now)) {
+			if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
+				return false, 0, chainhash.Hash{}, err
+			}
+		}
+		forceReplace, err := validateWritePermissionWith(
+			parsed, record, snapshot.existing, snapshot.requiresResolve, validators,
+		)
+		if err != nil {
+			return false, 0, chainhash.Hash{}, err
+		}
+		if !IsTombstone(record.Flags) && deleteFloorBlocksRecord(parsed, snapshot.deleteState, record) {
+			return false, 0, chainhash.Hash{}, nil
+		}
+		var preparedCapacity preparedFeeCapacity
+		if !IsTombstone(record.Flags) {
+			preparedCapacity, err = i.prepareFeeCapacity(
+				record, parsed, snapshot.existing, validators.feeVerifier, height, now,
+			)
+			if err != nil {
+				if errors.Is(err, ErrConcurrentUpdate) {
+					continue
+				}
+				return false, 0, chainhash.Hash{}, err
+			}
+		}
+
+		i.mutex.Lock()
+		current, err := i.writeStateStillCurrentLocked(record.Key, parsed, snapshot)
+		if err != nil {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, err
+		}
+		if !current {
+			i.mutex.Unlock()
+			continue
+		}
+		existing := snapshot.existing
+		deleteState := snapshot.deleteState
+		clearNameTransfer := snapshot.requiresResolve && parsed.Namespace == "name"
+
+		if IsTombstone(record.Flags) {
+			// Missing-key tombstones were returned above. For the same authority a
+			// delete must advance the sequence; an authorized owner rotation can
+			// replace an older owner's record with a lower local sequence.
+			if !forceReplace && record.Seq <= existing.Seq {
+				if clearNameTransfer {
+					if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {
+						i.mutex.Unlock()
+						return false, 0, chainhash.Hash{}, err
+					}
+				}
+				i.mutex.Unlock()
+				return false, 0, RecordHash(existing), nil
+			}
+			floorSeq := record.Seq
+			hash, err := i.commitDeleteLocked(
+				parsed, existing, record, floorSeq, true, clearNameTransfer, height, now,
+			)
+			if err == nil {
+				atomic.AddUint64(&i.generation, 1)
+			}
+			i.mutex.Unlock()
+			if err != nil {
+				return false, 0, chainhash.Hash{}, err
+			}
+			return true, EventRecordTombstone, hash, nil
+		}
+
+		if deleteFloorBlocksRecord(parsed, deleteState, record) {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, nil
+		}
+		if err := i.validateStatefulLocked(record, parsed, existing, height, now); err != nil {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, err
+		}
+		if existing != nil && !forceReplace && i.activeError(existing, height, now) == nil && CompareRecords(existing, record) >= 0 {
+			if clearNameTransfer {
+				if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {
+					i.mutex.Unlock()
+					return false, 0, chainhash.Hash{}, err
+				}
+			}
+			i.mutex.Unlock()
+			return false, 0, RecordHash(existing), nil
+		}
+		if err := i.validatePreparedFeeCapacityLocked(record, preparedCapacity, height, now); err != nil {
+			i.mutex.Unlock()
+			if errors.Is(err, ErrConcurrentUpdate) {
+				continue
+			}
+			return false, 0, chainhash.Hash{}, err
+		}
+		meta, err := i.pathMetaForMutationLocked(parsed, existing, record, height, now)
+		if err != nil {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, err
+		}
+		data, err := MarshalRecord(record)
+		if err != nil {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, err
+		}
+		hash := RecordHash(record)
+		batch := i.db.NewWriteBatch()
+		err = batch.Put(recordDBKey(record.Key), data)
+		if err == nil && existing != nil {
+			existingHash := RecordHash(existing)
+			if existingHash != hash {
+				err = batch.Delete(hashDBKey(existingHash))
+			}
+		}
+		if err == nil {
+			err = batch.Put(hashDBKey(hash), []byte(record.Key))
+		}
+		if err == nil && deleteState != nil {
+			err = deleteDeleteStateBatch(batch, record.Key)
+		}
+		if err == nil && clearNameTransfer {
+			err = batch.Delete(nameTransferDBKey(parsed.Segments[0]))
+		}
+		if err == nil {
+			err = putPathMetaBatch(batch, meta)
+		}
+		if err == nil {
+			err = batch.Flush()
+		}
+		batch.Close()
+		if err != nil {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, err
+		}
+		atomic.AddUint64(&i.generation, 1)
+		if preparedCapacity.indexed != nil && i.feeUsageInitialized {
+			i.replaceFeeUsageLocked(preparedCapacity.indexed, record)
+		}
+		if i.recordExpiryInitialized {
+			i.replaceRecordExpiryLocked(record)
+		}
+		eventType := notifyEventType(parsed, record, existing)
+		i.mutex.Unlock()
+		return true, eventType, hash, nil
 	}
-	if err := batch.Flush(); err != nil {
-		return false, 0, chainhash.Hash{}, err
-	}
-	atomic.AddUint64(&i.generation, 1)
-	if verifier, ok := i.feeVerifier.(IndexedFeeCapacityVerifier); ok && i.feeUsageInitialized {
-		i.replaceFeeUsageLocked(verifier, record)
-	}
-	if i.recordExpiryInitialized {
-		i.replaceRecordExpiryLocked(record)
-	}
-	eventType := notifyEventType(parsed, record, existing)
-	return true, eventType, hash, nil
+	return false, 0, chainhash.Hash{}, ErrConcurrentUpdate
 }
 
 func (i *Indexer) validate(record *wire.DKVSRecord) error {
@@ -615,188 +714,39 @@ func (i *Indexer) validateParsedBasic(record *wire.DKVSRecord, height, now uint6
 }
 
 func (i *Indexer) validateParsedCore(record *wire.DKVSRecord, height, now uint64, allowExpiredTombstone, verifyFee bool) (ParsedKey, error) {
-	var parsed ParsedKey
-	if record == nil || record.Version != Version {
-		return parsed, ErrInvalidRecord
+	var verifier FeeVerifier
+	if verifyFee {
+		verifier = i.snapshotValidators().feeVerifier
 	}
-	if len(record.Value) > MaxRecordValueSize || RecordSize(record) > wire.MaxDKVSRecordSize {
-		return parsed, ErrRecordTooLarge
-	}
-	parsed, err := ParseKey(record.Key)
-	if err != nil {
-		return parsed, err
-	}
-	if record.Flags & ^FlagTombstone != 0 || record.IssueTime == 0 ||
-		(now != 0 && record.IssueTime > now+MaxFutureIssueTimeSkew) {
-		return parsed, ErrInvalidRecord
-	}
-	if IsExpired(record, height, now) && !(allowExpiredTombstone && IsTombstone(record.Flags)) {
-		return parsed, ErrExpiredRecord
-	}
-	if err := VerifySignature(record); err != nil {
-		return parsed, err
-	}
-	if IsTombstone(record.Flags) && len(record.Value) != 0 {
-		return parsed, ErrInvalidRecord
-	}
-	if verifyFee && !(allowExpiredTombstone && IsTombstone(record.Flags) && IsExpired(record, height, now)) {
-		if err := i.verifyFeeProof(record, parsed); err != nil {
-			return parsed, err
-		}
-	}
-	return parsed, nil
+	return validateParsedCoreWithVerifier(record, height, now, allowExpiredTombstone, verifyFee, verifier)
 }
 
 func (i *Indexer) verifyFeeProof(record *wire.DKVSRecord, parsed ParsedKey) error {
-	if verifier, ok := i.feeVerifier.(RecordFeeVerifier); ok {
-		return verifier.VerifyRecordFeeProof(record, parsed)
-	}
-	hash := FeeAnchorHash(record)
-	var hash32 [32]byte
-	copy(hash32[:], hash[:])
-	keyHash := KeyHash(record.Key)
-	var keyHash32 [32]byte
-	copy(keyHash32[:], keyHash[:])
-	if err := i.feeVerifier.VerifyFeeProof(hash32, keyHash32, parsed.Namespace, RecordSize(record), record.ExpiryHeight, record.FeeProof); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (i *Indexer) validateFeeCapacityLocked(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, height, now uint64) error {
-	if verifier, ok := i.feeVerifier.(IndexedFeeCapacityVerifier); ok {
-		descriptor, err := verifier.FeeCapacity(record, parsed)
-		if err != nil {
-			return err
-		}
-		if descriptor.UsageKey == "" {
-			return nil
-		}
-		if descriptor.MaxRecords == 0 {
-			return ErrFeeCapacityExceeded
-		}
-		if err := i.ensureFeeUsageLocked(verifier, height, now); err != nil {
-			return err
-		}
-		projected := i.feeUsageCounts[descriptor.UsageKey]
-		entry, replacing := i.feeUsageEntries[record.Key]
-		if !replacing || entry.usageKey != descriptor.UsageKey {
-			projected++
-		}
-		if projected > descriptor.MaxRecords {
-			return ErrFeeCapacityExceeded
-		}
-		_ = existing
-		return nil
-	}
-	verifier, ok := i.feeVerifier.(FeeCapacityVerifier)
-	if !ok {
-		return nil
-	}
-	records, _, _, err := i.scanLocked("", nil, 0, false, height, now)
-	if err != nil {
-		return err
-	}
-	return verifier.VerifyFeeCapacity(record, parsed, existing, records, height, now)
+	return verifyFeeProofWith(i.snapshotValidators().feeVerifier, record, parsed)
 }
 
 func (i *Indexer) activeError(record *wire.DKVSRecord, height, now uint64) error {
+	if record == nil || IsTombstone(record.Flags) {
+		return ErrRecordNotFound
+	}
 	return i.validateAt(record, height, now)
 }
 
 func (i *Indexer) validatePermission(parsed ParsedKey, pubKey []byte) error {
-	switch parsed.Namespace {
-	case "personal":
-		if len(parsed.Segments) < 2 || parsed.Segments[0] != personalAccountID(pubKey) {
-			return ErrPermissionDenied
-		}
-	case "name":
-		identity, err := i.resolver.ResolveName(parsed.Segments[0])
-		if err != nil {
-			return err
-		}
-		if err := validateResolvedIdentity(parsed, identity); err != nil {
-			return err
-		}
-		return identity.CanSign(pubKey)
-	case "svc":
-		identity, err := i.resolver.ResolveService(parsed.Segments[0])
-		if err != nil {
-			return err
-		}
-		if err := validateResolvedIdentity(parsed, identity); err != nil {
-			return err
-		}
-		return identity.CanSign(pubKey)
-	case "mail":
-		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" &&
-			parsed.Segments[0] != personalAccountID(pubKey) {
-			return ErrPermissionDenied
-		}
-	case "blob":
-		if len(parsed.Segments) < 3 || parsed.Segments[0] != personalAccountID(pubKey) {
-			return ErrPermissionDenied
-		}
-	case "sys":
-		return i.system.CanWriteSystem("/"+parsed.Namespace+"/"+strings.Join(parsed.Segments, "/"), pubKey)
-	}
-	return nil
+	validators := i.snapshotValidators()
+	return validatePermissionWith(parsed, pubKey, validators.resolver, validators.system)
 }
 
 func (i *Indexer) validateWritePermission(parsed ParsedKey, record, existing *wire.DKVSRecord) (bool, error) {
-	if record == nil {
-		return false, ErrInvalidRecord
+	requiresResolve, err := i.requiresNameResolve(parsed)
+	if err != nil {
+		return false, err
 	}
-	switch parsed.Namespace {
-	case "name", "svc":
-		requiresResolve, err := i.requiresNameResolve(parsed)
-		if err != nil {
-			return false, err
-		}
-		if existing != nil && bytes.Equal(existing.PubKey, record.PubKey) && !requiresResolve {
-			return false, nil
-		}
-		identity, err := i.resolveIdentity(parsed)
-		if err != nil {
-			return false, err
-		}
-		if err := identity.CanSign(record.PubKey); err != nil {
-			return false, err
-		}
-		if existing == nil || bytes.Equal(existing.PubKey, record.PubKey) {
-			return false, nil
-		}
-		if err := identity.CanSign(existing.PubKey); err == nil {
-			return false, nil
-		}
-		return true, nil
-	case "mail":
-		return false, i.validateMailWritePermission(parsed, record, existing)
-	default:
-		return false, i.validatePermission(parsed, record.PubKey)
-	}
+	return validateWritePermissionWith(parsed, record, existing, requiresResolve, i.snapshotValidators())
 }
 
 func (i *Indexer) resolveIdentity(parsed ParsedKey) (DIDIdentity, error) {
-	var (
-		identity DIDIdentity
-		err      error
-	)
-	switch parsed.Namespace {
-	case "name":
-		identity, err = i.resolver.ResolveName(parsed.Segments[0])
-	case "svc":
-		identity, err = i.resolver.ResolveService(parsed.Segments[0])
-	default:
-		return identity, ErrInvalidNamespace
-	}
-	if err != nil {
-		return identity, err
-	}
-	if err := validateResolvedIdentity(parsed, identity); err != nil {
-		return identity, err
-	}
-	return identity, nil
+	return resolveIdentityWith(parsed, i.snapshotValidators().resolver)
 }
 
 func validateResolvedIdentity(parsed ParsedKey, identity DIDIdentity) error {
@@ -807,28 +757,8 @@ func validateResolvedIdentity(parsed ParsedKey, identity DIDIdentity) error {
 }
 
 func (i *Indexer) validateMailWritePermission(parsed ParsedKey, record, existing *wire.DKVSRecord) error {
-	if len(parsed.Segments) < 2 {
-		return ErrInvalidKey
-	}
-	if parsed.Segments[1] == "share" {
-		return i.validatePermission(parsed, record.PubKey)
-	}
-	if parsed.Segments[1] != "msg" {
-		return ErrInvalidKey
-	}
-	if IsTombstone(record.Flags) {
-		if parsed.Segments[0] != personalAccountID(record.PubKey) {
-			return ErrPermissionDenied
-		}
-		return nil
-	}
-	if existing == nil {
-		return nil
-	}
-	if IsTombstone(existing.Flags) || !bytes.Equal(existing.PubKey, record.PubKey) {
-		return ErrPermissionDenied
-	}
-	return nil
+	validators := i.snapshotValidators()
+	return validateMailWritePermissionWith(parsed, record, existing, validators.resolver, validators.system)
 }
 
 func (i *Indexer) requiresNameResolve(parsed ParsedKey) (bool, error) {
@@ -861,12 +791,30 @@ func (i *Indexer) clearNameTransferDirty(name string) error {
 }
 
 func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRecord) error {
-	switch parsed.Namespace {
-	case "name", "svc":
-		return nil
-	default:
-		return i.validatePermission(parsed, record.PubKey)
+	if record == nil {
+		return ErrInvalidRecord
 	}
+	// External authority checks are performed when a record is accepted. Reads,
+	// scans, and path metadata rebuilds must remain local and must not call HTTP
+	// or RPC services while holding the indexer lock.
+	switch parsed.Namespace {
+	case "name", "svc", "sys", "tmp":
+		return nil
+	case "personal":
+		if len(parsed.Segments) < 2 || parsed.Segments[0] != personalAccountID(record.PubKey) {
+			return ErrPermissionDenied
+		}
+	case "mail":
+		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" &&
+			parsed.Segments[0] != personalAccountID(record.PubKey) {
+			return ErrPermissionDenied
+		}
+	case "blob":
+		if len(parsed.Segments) < 3 || parsed.Segments[0] != personalAccountID(record.PubKey) {
+			return ErrPermissionDenied
+		}
+	}
+	return nil
 }
 
 func (i *Indexer) validateStatefulLocked(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, height, now uint64) error {
@@ -956,7 +904,10 @@ func (i *Indexer) scanLocked(prefix string, cursor []byte, limit int, activeOnly
 	return records, next, done, err
 }
 
-func (i *Indexer) listPrefixLocked(prefix string, start, limit int, height, now uint64) ([]*wire.DKVSRecord, int, error) {
+func (i *Indexer) listPrefixLocked(prefix string, start, limit, totalHint int, height, now uint64) ([]*wire.DKVSRecord, int, error) {
+	if totalHint >= 0 && start >= totalHint {
+		return nil, totalHint, nil
+	}
 	scanPrefix := recordDBKey(prefix)
 	records := make([]*wire.DKVSRecord, 0, limit)
 	total := 0
@@ -975,8 +926,17 @@ func (i *Indexer) listPrefixLocked(prefix string, start, limit int, height, now 
 			records = append(records, record)
 		}
 		total++
+		if totalHint >= 0 && len(records) >= limit {
+			return errStopScan
+		}
 		return nil
 	})
+	if errors.Is(err, errStopScan) {
+		err = nil
+	}
+	if totalHint >= 0 {
+		total = totalHint
+	}
 	return records, total, err
 }
 

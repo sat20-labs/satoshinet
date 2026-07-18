@@ -23,6 +23,7 @@ func TestDKVSLocalOnlyMiddleware(t *testing.T) {
 	}{
 		{remote: "127.0.0.1:1000", want: http.StatusNoContent},
 		{remote: "[::1]:1000", want: http.StatusNoContent},
+		{remote: "", want: http.StatusForbidden},
 		{remote: "203.0.113.1:1000", want: http.StatusForbidden},
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/admin", nil)

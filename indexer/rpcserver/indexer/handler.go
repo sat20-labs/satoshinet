@@ -293,6 +293,11 @@ type dkvsUsageResp struct {
 	Data *dkvsindexer.Usage `json:"data,omitempty"`
 }
 
+type dkvsPathMetaResp struct {
+	indexerwire.BaseResp
+	Data *dkvsindexer.PathMeta `json:"data,omitempty"`
+}
+
 type dkvsSubscriptionReq struct {
 	Type   dkvsindexer.SubscriptionType `json:"type"`
 	Target string                       `json:"target"`
@@ -422,6 +427,19 @@ func (s *Handle) getDKVSUsage(c *gin.Context) {
 		return
 	}
 	resp.Data = usage
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getDKVSPathMeta(c *gin.Context) {
+	resp := &dkvsPathMetaResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	meta, err := s.model.GetDKVSPathMeta(c.Query("path"))
+	if err != nil {
+		resp.Code = -1
+		resp.Msg = err.Error()
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	resp.Data = meta
 	c.JSON(http.StatusOK, resp)
 }
 

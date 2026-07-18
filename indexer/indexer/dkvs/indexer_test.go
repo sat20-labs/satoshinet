@@ -159,12 +159,12 @@ func TestPutSelectAndTombstone(t *testing.T) {
 	if updated, err := idx.PutLocal(tombstone); err != nil || !updated {
 		t.Fatalf("put tombstone updated=%v err=%v", updated, err)
 	}
-	got, err = idx.Get(old.Key)
-	if err != nil {
-		t.Fatalf("get tombstone: %v", err)
+	if _, err := idx.Get(old.Key); err != ErrRecordNotFound {
+		t.Fatalf("deleted record should not be readable: %v", err)
 	}
-	if !IsTombstone(got.Flags) {
-		t.Fatalf("expected tombstone")
+	relay, err := idx.GetForRelay(old.Key)
+	if err != nil || !IsTombstone(relay.Flags) {
+		t.Fatalf("relay tombstone=%#v err=%v", relay, err)
 	}
 	badTombstone := signedPersonalRecordWithKey(t, priv, 4, "not-empty", FlagTombstone)
 	if _, err := idx.PutLocal(badTombstone); err != ErrInvalidRecord {
@@ -1306,7 +1306,7 @@ func TestSDKBuildSignedBlobRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chunks := [][]byte{[]byte("hello"), []byte(" world")}
+	chunks := [][]byte{[]byte("hello "), []byte("world")}
 	manifestRecord, chunkRecords, err := BuildSignedBlobRecords(priv, "object", chunks, nil, RecordOptions{
 		Seq:          1,
 		TTL:          60_000,
@@ -1956,8 +1956,11 @@ func TestMailboxMessageUpdateAndDeletePermissions(t *testing.T) {
 	if updated, err := idx.PutLocal(signedRecordWithValue(t, owner, key, 2, nil, FlagTombstone)); err != nil || !updated {
 		t.Fatalf("owner tombstone updated=%v err=%v", updated, err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 3, []byte("reused"), 0)); err != ErrPermissionDenied {
-		t.Fatalf("reused message key err=%v", err)
+	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 2, []byte("stale"), 0)); err != nil || updated {
+		t.Fatalf("stale message replay updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 3, []byte("reused"), 0)); err != nil || !updated {
+		t.Fatalf("reused message key updated=%v err=%v", updated, err)
 	}
 }
 
@@ -2246,8 +2249,11 @@ func TestNameTombstonePermissionAllowsExistingOwnerAndNewOwnerReplace(t *testing
 	newTombstone.Flags = FlagTombstone
 	hash = SigningHash(newTombstone)
 	newTombstone.Signature = ecdsa.Sign(newPriv, hash[:]).Serialize()
-	if updated, err := idx.PutLocal(newTombstone); err != nil || !updated {
+	if updated, err := idx.PutLocal(newTombstone); err != nil || updated {
 		t.Fatalf("new owner tombstone updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutLocal(signedRecordForKey(t, newPriv, "/name/alice", 1)); err != nil || !updated {
+		t.Fatalf("new owner recreate updated=%v err=%v", updated, err)
 	}
 }
 
@@ -2315,8 +2321,8 @@ func TestBlobManifestAndChunkValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chunk0 := []byte("hello")
-	chunk1 := []byte(" world")
+	chunk0 := []byte("hello ")
+	chunk1 := []byte("world")
 	manifest := testBlobManifest(t, chunk0, chunk1)
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
@@ -2328,13 +2334,20 @@ func TestBlobManifestAndChunkValidation(t *testing.T) {
 	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/0", 1, chunk0, 0)); err != ErrBlobManifestInvalid {
 		t.Fatalf("chunk before manifest err=%v", err)
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/manifest", 1, manifestBytes, 0)); err != nil || !updated {
+	manifestRecord := signedRecordWithValue(t, priv, prefix+"/manifest", 1, manifestBytes, 0)
+	if updated, err := idx.PutLocal(manifestRecord); err != nil || !updated {
 		t.Fatalf("manifest put updated=%v err=%v", updated, err)
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/0", 1, chunk0, 0)); err != nil || !updated {
+	chunkRecord0 := signedRecordWithValue(t, priv, prefix+"/chunk/0", 1, chunk0, 0)
+	chunkRecord0.IssueTime = manifestRecord.IssueTime
+	signRecord(t, priv, chunkRecord0)
+	if updated, err := idx.PutLocal(chunkRecord0); err != nil || !updated {
 		t.Fatalf("chunk 0 after manifest updated=%v err=%v", updated, err)
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/1", 1, chunk1, 0)); err != nil || !updated {
+	chunkRecord1 := signedRecordWithValue(t, priv, prefix+"/chunk/1", 1, chunk1, 0)
+	chunkRecord1.IssueTime = manifestRecord.IssueTime
+	signRecord(t, priv, chunkRecord1)
+	if updated, err := idx.PutLocal(chunkRecord1); err != nil || !updated {
 		t.Fatalf("chunk after manifest updated=%v err=%v", updated, err)
 	}
 
@@ -2701,6 +2714,9 @@ func TestBlobAccountIDMustBeSHA256Hex(t *testing.T) {
 
 func testBlobManifest(t *testing.T, chunks ...[]byte) BlobManifest {
 	t.Helper()
+	if len(chunks) == 0 {
+		t.Fatal("test blob manifest requires chunks")
+	}
 	var all []byte
 	hashes := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -2712,7 +2728,7 @@ func testBlobManifest(t *testing.T, chunks ...[]byte) BlobManifest {
 	return BlobManifest{
 		ContentHash:  hex.EncodeToString(contentHash[:]),
 		TotalSize:    uint64(len(all)),
-		ChunkSize:    uint32(MaxRecordValueSize),
+		ChunkSize:    uint32(len(chunks[0])),
 		ChunkCount:   uint32(len(chunks)),
 		ChunkHashes:  hashes,
 		TTL:          60_000,
@@ -2880,6 +2896,9 @@ func TestExpiredTombstoneFloorPreventsOfflineRecordResurrection(t *testing.T) {
 	old := signedPersonalRecordWithKey(t, priv, 1, "old", 0)
 	old.ExpiryHeight = 100
 	signRecord(t, priv, old)
+	if _, err := source.PutLocal(old); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := offline.PutLocal(old); err != nil {
 		t.Fatal(err)
 	}
@@ -2900,9 +2919,12 @@ func TestExpiredTombstoneFloorPreventsOfflineRecordResurrection(t *testing.T) {
 	if updated, err := offline.PutRemote(old); err != nil || updated {
 		t.Fatalf("replayed old record updated=%v err=%v", updated, err)
 	}
-	stored, err := offline.Get(old.Key)
+	if _, err := offline.Get(old.Key); err != ErrRecordNotFound {
+		t.Fatalf("deleted record should be absent: %v", err)
+	}
+	stored, err := offline.GetForRelay(old.Key)
 	if err != nil || !IsTombstone(stored.Flags) {
-		t.Fatalf("stored floor=%#v err=%v", stored, err)
+		t.Fatalf("stored delete command=%#v err=%v", stored, err)
 	}
 	if _, err := source.PutLocal(tombstone); err != ErrExpiredRecord {
 		t.Fatalf("local expired tombstone err=%v", err)

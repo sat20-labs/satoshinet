@@ -201,13 +201,16 @@ func BuildBlobManifest(chunks [][]byte, metadata json.RawMessage, ttl, expiryHei
 	}
 	var content []byte
 	chunkHashes := make([]string, 0, len(chunks))
-	chunkSize := 0
-	for _, chunk := range chunks {
+	chunkSize := len(chunks[0])
+	for index, chunk := range chunks {
 		if len(chunk) == 0 || len(chunk) > MaxRecordValueSize {
 			return nil, nil, ErrBlobManifestInvalid
 		}
-		if len(chunk) > chunkSize {
-			chunkSize = len(chunk)
+		if index < len(chunks)-1 && len(chunk) != chunkSize {
+			return nil, nil, ErrBlobManifestInvalid
+		}
+		if index == len(chunks)-1 && len(chunk) > chunkSize {
+			return nil, nil, ErrBlobManifestInvalid
 		}
 		sum := sha256.Sum256(chunk)
 		chunkHashes = append(chunkHashes, hex.EncodeToString(sum[:]))
@@ -283,6 +286,9 @@ func AssembleBlobFromRecords(manifestRecord *wire.DKVSRecord, chunkRecords []*wi
 	if err != nil {
 		return nil, nil, err
 	}
+	if manifest.TTL != manifestRecord.TTL || manifest.ExpiryHeight != manifestRecord.ExpiryHeight {
+		return nil, nil, ErrBlobManifestInvalid
+	}
 	chunks := make([][]byte, manifest.ChunkCount)
 	for _, record := range chunkRecords {
 		if record == nil || IsTombstone(record.Flags) {
@@ -300,6 +306,7 @@ func AssembleBlobFromRecords(manifestRecord *wire.DKVSRecord, chunkRecords []*wi
 			return nil, nil, ErrInvalidKey
 		}
 		if !bytes.Equal(record.PubKey, manifestRecord.PubKey) || record.Seq != manifestRecord.Seq ||
+			record.IssueTime != manifestRecord.IssueTime || record.TTL != manifestRecord.TTL ||
 			record.ExpiryHeight != manifestRecord.ExpiryHeight {
 			return nil, nil, ErrBlobChunkInvalid
 		}

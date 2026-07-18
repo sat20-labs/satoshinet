@@ -12,7 +12,7 @@ import (
 func dkvsLocalOnly(c *gin.Context) {
 	remote := strings.TrimSpace(c.Request.RemoteAddr)
 	if remote == "" {
-		c.Next()
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": -1, "msg": "dkvs local administration only"})
 		return
 	}
 	host, _, err := net.SplitHostPort(remote)
@@ -75,6 +75,7 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/dkvs/records", s.handle.getDKVSRecord)
 	r.GET(proxy+"/v3/dkvs/records/prefix", s.handle.listDKVSRecords)
 	r.GET(proxy+"/v3/dkvs/usage", s.handle.getDKVSUsage)
+	r.GET(proxy+"/v3/dkvs/path-meta", s.handle.getDKVSPathMeta)
 	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
 	r.GET(proxy+"/v3/dkvs/checkpoint", s.handle.getDKVSCheckpoint)
 	r.GET(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.getDKVSSnapshot)

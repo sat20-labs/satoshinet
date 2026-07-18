@@ -22,16 +22,11 @@ func testIndexerWithHeight(t *testing.T, height uint64) *Indexer {
 
 func pullByNotify(t *testing.T, source, target *Indexer, key string) {
 	t.Helper()
-	record, err := source.Get(key)
+	record, err := source.GetForRelay(key)
 	if err != nil {
 		t.Fatalf("source get: %v", err)
 	}
-	hash := RecordHash(record)
-	byHash, err := source.GetByHash(hash)
-	if err != nil {
-		t.Fatalf("source get by hash: %v", err)
-	}
-	if updated, err := target.PutRemote(byHash); err != nil || !updated {
+	if updated, err := target.PutRemote(record); err != nil || !updated {
 		t.Fatalf("target put remote updated=%v err=%v", updated, err)
 	}
 }
@@ -143,12 +138,12 @@ func TestThreeMinerNotifyAndStartupSyncConverge(t *testing.T) {
 	pullByNotify(t, minerA, minerB, tombstone.Key)
 	pullByNotify(t, minerA, minerC, tombstone.Key)
 	for _, miner := range []*Indexer{minerA, minerB, minerC} {
-		got, err := miner.Get(tombstone.Key)
-		if err != nil {
-			t.Fatalf("get tombstone: %v", err)
+		if _, err := miner.Get(tombstone.Key); err != ErrRecordNotFound {
+			t.Fatalf("deleted key should be absent: %v", err)
 		}
-		if !IsTombstone(got.Flags) || len(got.Value) != 0 {
-			t.Fatalf("old value returned after tombstone: flags=%d value=%q", got.Flags, got.Value)
+		got, err := miner.GetForRelay(tombstone.Key)
+		if err != nil || !IsTombstone(got.Flags) || len(got.Value) != 0 {
+			t.Fatalf("delete relay record=%#v err=%v", got, err)
 		}
 	}
 }
