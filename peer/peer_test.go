@@ -687,8 +687,8 @@ func TestPeerDKVSListeners(t *testing.T) {
 		listener string
 		msg      wire.Message
 	}{
-		{"OnDKVSNotify", &wire.MsgDKVSNotify{EventType: 1, Key: "/tmp/dkvs", KeyHash: dkvsHash, RecordHash: dkvsHash}},
-		{"OnDKVSInv", &wire.MsgDKVSInv{Items: []wire.DKVSInvItem{{Key: "/tmp/dkvs", KeyHash: dkvsHash, RecordHash: dkvsHash}}}},
+		{"OnDKVSNotify", &wire.MsgDKVSNotify{EventType: 1, Data: []byte("dkvs")}},
+		{"OnDKVSInv", &wire.MsgDKVSInv{Items: []wire.DKVSInvItem{{Key: "/tmp/dkvs", RecordHash: dkvsHash}}}},
 		{"OnDKVSGet", &wire.MsgDKVSGet{Keys: []string{"/tmp/dkvs"}, RecordHashes: []chainhash.Hash{dkvsHash}}},
 		{"OnDKVSData", &wire.MsgDKVSData{NotFound: []chainhash.Hash{dkvsHash}}},
 		{"OnDKVSSyncRequest", &wire.MsgDKVSSyncRequest{Limit: 1, Filters: []wire.DKVSSyncFilter{{Type: "prefix", Target: "/tmp"}}}},

@@ -24,7 +24,7 @@
 | G10 | 预定义 namespace | Done | `/sys`、`/name`、`/svc`、`/personal`、`/mail`、`/blob`、`/tmp` parser/validator；`/sys` v1 子路径收紧到 params/checkpoint/snapshot/miner/pool。 |
 | G11 | Ordinals DID name/service 权限解析 | Partial | `DIDResolver` 契约、L1 `GET /ns/name/:name` owner-address resolver、p2tr pubkey->address 校验、static resolver tests；ascended-sat owner 和 service 生产规则仍待细化。 |
 | G12 | DKVS Pool 合约收费并向 miner 分配收益 | Partial | AUTOPAY verifier 已校验全局 template、service、recipient、fee asset，以及每个 p2tr delegate 的 active、余额和独立容量；主网合约参数和 miner 收益分配规则仍待定。 |
-| G13 | `MsgDKVSNotify` 通知 | Done | wire command、peer listener、serverPeer notify/get/data flow、notify event helper。 |
+| G13 | `MsgDKVSNotify` 通知 | Done | `EventType + Data` 紧凑 wire command、完整 record inline 传播、peer listener、订阅过滤和 notify event helper。 |
 | G14 | checkpoint / snapshot | Done | 实现未签名的非共识 checkpoint/snapshot API 和同步视图比较；按当前决策不签名、不发布 DKVS system record、不做链上 anchor。 |
 | G15 | SDK / API 给 PWA、钱包、dApp、本地 Agent 使用 | Partial | REST API、record hash 精确读取、Go SDK client/helpers/examples、verified get/list/subscribe、本地 record set 验证、PWA REST API doc、PWA DKVS developer tool；缺真实 DID/Pool 生产样本。 |
 
@@ -39,7 +39,7 @@
 | M5 | 接入 DKVS Pool 合约校验 | Partial | AUTOPAY template contract state verifier implemented; mainnet contract parameters and revenue policy remain. |
 | M6 | miner 全量同步 | Done | Sync request/response, pagination, checkpoint root compare. |
 | M7 | 普通节点订阅 | Done | key/prefix/mailbox/service subscription and filtered sync tests. |
-| M8 | `MsgDKVSNotify` | Done | Command, routing, notify/get/data convergence tests. |
+| M8 | `MsgDKVSNotify` | Done | Command、16 KiB payload boundary、direct validation/relay、duplicate suppression 和 subscription routing tests。 |
 | M9 | mailbox 容量控制 | Done | `MailboxPolicy`, full behavior, tombstone frees capacity. |
 | M10 | blob chunk | Done | Manifest/chunk validation and SDK assembly. |
 | M11 | checkpoint / snapshot | Done | Local non-consensus computed views implemented; signing, auto publish, external handoff and chain anchor are intentionally excluded. |
@@ -63,7 +63,7 @@
 | U13 | tombstone | Done | tombstone selection, API and mailbox tombstone tests. |
 | U14 | mailbox full | Done | `TestMailboxQuotaAndTombstone`. |
 | U15 | blob chunk hash | Done | manifest/chunk validation tests. |
-| U16 | notify event 编码 | Done | `NotifyEvent` JSON encode/decode test. |
+| U16 | notify event 编码 | Done | `event_type + data` JSON/wire encode/decode、event/record consistency 和 compact payload tests。 |
 | U17 | personal key owner 校验 | Done | `/personal/<account_id>` owner tests. |
 
 ## 集成测试要求
@@ -74,7 +74,7 @@
 | I2 | 普通节点同步链数据 | Done | Ordinary node subscribed filtered sync tests. Chain data sync is existing SatoshiNet behavior, not changed by DKVS. |
 | I3 | 普通节点订阅 `/mail/<mailbox_id>` | Done | `TestOrdinaryNodeMailboxSubscriptionSyncAndNotify`. |
 | I4 | miner 重启后从 peers 同步 DKVS | Done | Startup sync path covered by new miner sync test. |
-| I5 | DKVS put 后所有 miner 收敛 | Done | notify/get/data convergence in three miner test and real wallet AUTOPAY/name e2e. |
+| I5 | DKVS put 后所有 miner 收敛 | Done | inline notify convergence in P2P handler tests、three miner test 和 real wallet AUTOPAY/name e2e。 |
 | I6 | mailbox 满后发送失败 | Done | mailbox quota tests. |
 | I7 | recovery 数据长期保存和续费 | Done | SDK app helper and renewal tests/examples. |
 | I8 | 临时数据过期清理 | Done | tmp policy and prune tests. |

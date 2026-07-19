@@ -76,7 +76,7 @@ func (s *handlerTestStore) IsDKVSSubscribed(key string) bool {
 	return false
 }
 
-func TestHandlerNotifyDataRoundTrip(t *testing.T) {
+func TestHandlerInlineNotifyStoresAndRelaysWithoutGet(t *testing.T) {
 	store := &handlerTestStore{subscriptions: []dkvs.Subscription{{Type: dkvs.SubscriptionKey, Target: "/tmp/a"}}}
 	var peer PeerState
 	var node NodeState
@@ -90,17 +90,17 @@ func TestHandlerNotifyDataRoundTrip(t *testing.T) {
 		Broadcast: func(msg *wire.MsgDKVSNotify) { relayed = msg },
 	}
 	record := &wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 1}
-	handler.OnNotify(&wire.MsgDKVSNotify{Key: record.Key, RecordHash: dkvs.RecordHash(record)})
-	if len(sent) != 1 {
-		t.Fatalf("get requests=%d", len(sent))
+	handler.OnNotify(NotifyForRecord(record))
+	if len(sent) != 0 {
+		t.Fatalf("unexpected get requests=%d", len(sent))
 	}
-	get, ok := sent[0].(*wire.MsgDKVSGet)
-	if !ok || len(get.Keys) != 1 || get.Keys[0] != record.Key {
-		t.Fatalf("request=%#v", sent[0])
-	}
-	handler.OnData(&wire.MsgDKVSData{Records: []*wire.DKVSRecord{record}})
-	if store.putCount != 1 || relayed == nil || relayed.RecordHash != dkvs.RecordHash(record) {
+	relayedRecord, err := RecordFromNotify(relayed)
+	if store.putCount != 1 || err != nil || dkvs.RecordHash(relayedRecord) != dkvs.RecordHash(record) {
 		t.Fatalf("putCount=%d relayed=%#v", store.putCount, relayed)
+	}
+	handler.OnNotify(NotifyForRecord(record))
+	if store.putCount != 1 {
+		t.Fatalf("duplicate notify putCount=%d", store.putCount)
 	}
 }
 
@@ -115,13 +115,57 @@ func TestHandlerOrdinaryNodeRejectsUntrustedNotify(t *testing.T) {
 		RemoteServices: wire.SFNodeMiner,
 		Send:           func(wire.Message) { sent++ },
 	}
-	handler.OnNotify(&wire.MsgDKVSNotify{Key: "/tmp/a"})
-	if sent != 0 || handler.ShouldRequestSync() {
+	handler.OnNotify(NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 1}))
+	if sent != 0 || store.putCount != 0 || handler.ShouldRequestSync() {
 		t.Fatal("ordinary node accepted an untrusted DKVS source")
 	}
 	handler.TrustedSource = true
 	if !handler.ShouldRequestSync() {
 		t.Fatal("ordinary node rejected a trusted DKVS mirror source")
+	}
+	handler.OnNotify(NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 1}))
+	if store.putCount != 1 {
+		t.Fatal("ordinary node rejected subscribed notify from trusted source")
+	}
+}
+
+func TestHandlerRejectsMalformedAndMismatchedNotify(t *testing.T) {
+	store := &handlerTestStore{}
+	var peer PeerState
+	var node NodeState
+	node.SetReady(true)
+	penalties := 0
+	handler := Handler{
+		Store: store, Peer: &peer, Node: &node, LocalServices: wire.SFNodeMiner,
+		Penalize: func(_, _ uint32, _ string) { penalties++ },
+	}
+	handler.OnNotify(&wire.MsgDKVSNotify{EventType: dkvs.EventRecordUpdate, Data: []byte("not-a-record")})
+	tombstone := &wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 2, Flags: dkvs.FlagTombstone}
+	data, err := wire.SerializeDKVSRecord(tombstone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.OnNotify(&wire.MsgDKVSNotify{EventType: dkvs.EventRecordUpdate, Data: data})
+	if penalties != 2 || store.putCount != 0 {
+		t.Fatalf("penalties=%d putCount=%d", penalties, store.putCount)
+	}
+}
+
+func TestHandlerInlineDeleteRelaysSignedCommand(t *testing.T) {
+	store := &handlerTestStore{}
+	var peer PeerState
+	var node NodeState
+	node.SetReady(true)
+	var relayed *wire.MsgDKVSNotify
+	handler := Handler{
+		Store: store, Peer: &peer, Node: &node, LocalServices: wire.SFNodeMiner,
+		Broadcast: func(msg *wire.MsgDKVSNotify) { relayed = msg },
+	}
+	deleted := &wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 2, Flags: dkvs.FlagTombstone}
+	handler.OnNotify(NotifyForRecord(deleted))
+	record, err := RecordFromNotify(relayed)
+	if err != nil || !dkvs.IsTombstone(record.Flags) || store.putCount != 1 {
+		t.Fatalf("record=%#v putCount=%d err=%v", record, store.putCount, err)
 	}
 }
 

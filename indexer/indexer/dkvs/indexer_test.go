@@ -1995,7 +1995,7 @@ func TestMailboxQuotaAndTombstone(t *testing.T) {
 }
 
 func TestNotifyEventTypes(t *testing.T) {
-	var events []uint32
+	var events []uint8
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -2005,8 +2005,11 @@ func TestNotifyEventTypes(t *testing.T) {
 		SystemVerifier: StaticSystemVerifier{
 			Keys: [][]byte{priv.PubKey().SerializeCompressed()},
 		},
-		Notify: func(eventType uint32, _ string, _ [32]byte, _ uint64, _ uint64, _ uint32, _ uint32) {
-			events = append(events, eventType)
+		Notify: func(event *NotifyEvent) {
+			events = append(events, event.EventType)
+			if _, err := RecordFromNotifyEvent(event); err != nil {
+				t.Errorf("invalid notify event: %v", err)
+			}
 		},
 	})
 	record := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
@@ -2044,7 +2047,7 @@ func TestNotifyEventTypes(t *testing.T) {
 	if _, err := idx.PutLocal(signedRecordForKey(t, priv, "/sys/snapshot/1", 1)); err != nil {
 		t.Fatal(err)
 	}
-	want := []uint32{
+	want := []uint8{
 		EventRecordPut,
 		EventRecordUpdate,
 		EventRenewal,
@@ -2069,20 +2072,16 @@ func TestNotifyEventEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := signedPersonalRecordWithKey(t, priv, 7, "value", 0)
-	event, err := NewNotifyEvent(EventRecordPut, record, "miner-a")
+	event, err := NewNotifyEvent(EventRecordPut, record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.EventType != EventRecordPut ||
-		event.Key != record.Key ||
-		event.KeyHash != KeyHash(record.Key) ||
-		event.RecordHash != RecordHash(record) ||
-		event.Seq != record.Seq ||
-		event.ExpiryHeight != record.ExpiryHeight ||
-		event.Size != uint32(RecordSize(record)) ||
-		event.SourceNode != "miner-a" ||
-		event.Flags != record.Flags {
+	if event.EventType != EventRecordPut || len(event.Data) != RecordSize(record) {
 		t.Fatalf("bad notify event: %#v", event)
+	}
+	notifyRecord, err := RecordFromNotifyEvent(event)
+	if err != nil || RecordHash(notifyRecord) != RecordHash(record) {
+		t.Fatalf("notify record=%#v err=%v", notifyRecord, err)
 	}
 	encoded, err := MarshalNotifyEvent(event)
 	if err != nil {
@@ -2092,17 +2091,20 @@ func TestNotifyEventEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *decoded != *event {
+	if decoded.EventType != event.EventType || !bytes.Equal(decoded.Data, event.Data) {
 		t.Fatalf("decoded=%#v want=%#v", decoded, event)
 	}
-	if _, err := NewNotifyEvent(EventRecordPut, nil, ""); err != ErrInvalidRecord {
+	if _, err := NewNotifyEvent(EventRecordPut, nil); err != ErrInvalidRecord {
 		t.Fatalf("nil notify record err=%v", err)
 	}
 	if _, err := MarshalNotifyEvent(nil); err != ErrInvalidRecord {
 		t.Fatalf("nil notify event err=%v", err)
 	}
-	if _, err := UnmarshalNotifyEvent([]byte(`{"event_type":1}`)); err != ErrInvalidKey {
+	if _, err := UnmarshalNotifyEvent([]byte(`{"event_type":1}`)); err != ErrInvalidRecord {
 		t.Fatalf("bad notify event err=%v", err)
+	}
+	if _, err := NewNotifyEvent(EventRecordTombstone, record); err != ErrInvalidRecord {
+		t.Fatalf("mismatched notify event err=%v", err)
 	}
 }
 
@@ -2487,16 +2489,21 @@ func TestPruneExpiredKeepsPaidRecords(t *testing.T) {
 	}
 }
 
-func TestPruneExpiredEmitsExpiredEvent(t *testing.T) {
+func TestPruneExpiredDoesNotBroadcastExpiredRecord(t *testing.T) {
 	height := uint64(1)
-	var events []uint32
+	var events []uint8
 	var eventKeys []string
 	idx := testIndexerWithConfig(t, Config{
 		AllowFreeLocal: true,
 		CurrentHeight:  func() uint64 { return height },
-		Notify: func(eventType uint32, key string, _ [32]byte, _ uint64, _ uint64, _ uint32, _ uint32) {
-			events = append(events, eventType)
-			eventKeys = append(eventKeys, key)
+		Notify: func(event *NotifyEvent) {
+			events = append(events, event.EventType)
+			notified, err := RecordFromNotifyEvent(event)
+			if err != nil {
+				t.Errorf("invalid notify event: %v", err)
+				return
+			}
+			eventKeys = append(eventKeys, notified.Key)
 		},
 	})
 	priv, err := btcec.NewPrivateKey()
@@ -2513,7 +2520,7 @@ func TestPruneExpiredEmitsExpiredEvent(t *testing.T) {
 	if pruned, err := idx.PruneExpired(); err != nil || pruned != 1 {
 		t.Fatalf("pruned=%d err=%v", pruned, err)
 	}
-	want := []uint32{EventRecordPut, EventExpired}
+	want := []uint8{EventRecordPut}
 	if len(events) != len(want) {
 		t.Fatalf("events=%v want=%v", events, want)
 	}

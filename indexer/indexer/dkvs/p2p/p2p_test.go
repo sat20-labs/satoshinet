@@ -171,17 +171,42 @@ func TestServeSyncBuffersAndCoalescesNotifications(t *testing.T) {
 	}) {
 		t.Fatal("continuation with changed filters accepted")
 	}
-	first := &wire.MsgDKVSNotify{Key: "/tmp/a", Seq: 1, Size: 10}
-	second := &wire.MsgDKVSNotify{Key: "/tmp/a", Seq: 2, Size: 20}
+	first := NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 1})
+	second := NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 2})
 	if !state.BufferNotify(first) || !state.BufferNotify(second) {
 		t.Fatal("matching notifications were not buffered")
 	}
-	if state.BufferNotify(&wire.MsgDKVSNotify{Key: "/tmp/b", Seq: 1}) {
+	if state.BufferNotify(NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/b", Seq: 1})) {
 		t.Fatal("unrelated notification was buffered")
 	}
 	pending := state.FinishServe(7)
-	if len(pending) != 1 || pending[0].Seq != 2 || pending[0].Key != "/tmp/a" {
+	if len(pending) != 1 {
 		t.Fatalf("pending=%#v", pending)
+	}
+	pendingRecord, err := RecordFromNotify(pending[0])
+	if err != nil || pendingRecord.Seq != 2 || pendingRecord.Key != "/tmp/a" {
+		t.Fatalf("pending=%#v", pending)
+	}
+}
+
+func TestNotifyRoutingUsesCompletedSubscription(t *testing.T) {
+	var state PeerState
+	filters := []wire.DKVSSyncFilter{{Type: string(dkvs.SubscriptionPrefix), Target: "/svc/a"}}
+	request := &wire.MsgDKVSSyncRequest{SessionID: 9, Filters: filters}
+	if !state.BeginServe(request) {
+		t.Fatal("serve sync rejected")
+	}
+	matching := NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/svc/a/one", Seq: 1})
+	unrelated := NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/svc/b/one", Seq: 1})
+	if !state.WantsNotify(matching, false) || state.WantsNotify(unrelated, false) {
+		t.Fatal("active subscription routing mismatch")
+	}
+	state.FinishServe(request.SessionID)
+	if !state.WantsNotify(matching, false) || state.WantsNotify(unrelated, false) {
+		t.Fatal("completed subscription routing mismatch")
+	}
+	if !state.WantsNotify(unrelated, true) {
+		t.Fatal("miner did not receive all notifications")
 	}
 }
 

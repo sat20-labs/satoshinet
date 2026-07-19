@@ -95,21 +95,25 @@ func (h Handler) warnf(format string, args ...interface{}) {
 }
 
 func (h Handler) OnNotify(msg *wire.MsgDKVSNotify) {
-	if !h.valid() || msg == nil || !h.Node.Ready() || !h.allowedIncrementalSource() ||
-		!h.needsRecord(msg.Key, msg.RecordHash) {
+	if !h.valid() || msg == nil || !h.Node.Ready() || !h.allowedIncrementalSource() {
 		return
 	}
-	get := &wire.MsgDKVSGet{}
-	if dkvs.IsTombstone(msg.Flags) && msg.Key != "" {
-		get.Keys = []string{msg.Key}
-	} else if h.localMiner() && msg.RecordHash != (chainhash.Hash{}) {
-		get.RecordHashes = []chainhash.Hash{msg.RecordHash}
-	} else if msg.Key != "" {
-		get.Keys = []string{msg.Key}
+	record, err := RecordFromNotify(msg)
+	if err != nil {
+		h.penalize(0, 5, "invalid DKVS notify data")
+		return
 	}
-	if len(get.Keys) != 0 || len(get.RecordHashes) != 0 {
-		h.Peer.TrackRequest(get, time.Now())
-		h.send(get)
+	hash := dkvs.RecordHash(record)
+	if !h.needsRecord(record.Key, hash) {
+		return
+	}
+	updated, err := h.Store.PutRemoteDKVSRecord(record)
+	if err != nil {
+		h.warnf("reject notified dkvs record %s: %v", record.Key, err)
+		return
+	}
+	if updated && h.Broadcast != nil {
+		h.Broadcast(&wire.MsgDKVSNotify{EventType: msg.EventType, Data: append([]byte{}, msg.Data...)})
 	}
 }
 
@@ -188,7 +192,9 @@ func (h Handler) OnData(msg *wire.MsgDKVSData) {
 			continue
 		}
 		if updated && h.Broadcast != nil {
-			h.Broadcast(NotifyForRecord(record))
+			if notify := NotifyForRecord(record); notify != nil {
+				h.Broadcast(notify)
+			}
 		}
 	}
 	h.Peer.ConsumeNotFound(msg.NotFound)

@@ -70,20 +70,50 @@ func DataMessages(records []*wire.DKVSRecord, notFound []chainhash.Hash) []*wire
 	return messages
 }
 
+func notifyEventTypeForRelay(record *wire.DKVSRecord) uint8 {
+	if record == nil {
+		return 0
+	}
+	if dkvs.IsTombstone(record.Flags) {
+		return dkvs.EventRecordTombstone
+	}
+	parsed, err := dkvs.ParseKey(record.Key)
+	if err != nil {
+		return 0
+	}
+	if parsed.Namespace == "mail" && len(parsed.Segments) >= 2 && parsed.Segments[1] == "msg" {
+		return dkvs.EventMailboxMessage
+	}
+	if parsed.Namespace == "sys" && len(parsed.Segments) >= 2 {
+		switch parsed.Segments[0] {
+		case "checkpoint":
+			return dkvs.EventCheckpointReady
+		case "snapshot":
+			return dkvs.EventSnapshotReady
+		}
+	}
+	return dkvs.EventRecordUpdate
+}
+
 func NotifyForRecord(record *wire.DKVSRecord) *wire.MsgDKVSNotify {
 	if record == nil {
 		return nil
 	}
-	return &wire.MsgDKVSNotify{
-		EventType:    dkvs.EventRecordUpdate,
-		Key:          record.Key,
-		KeyHash:      dkvs.KeyHash(record.Key),
-		RecordHash:   dkvs.RecordHash(record),
-		Seq:          record.Seq,
-		ExpiryHeight: record.ExpiryHeight,
-		Size:         uint32(dkvs.RecordSize(record)),
-		Flags:        record.Flags,
+	event, err := dkvs.NewNotifyEvent(notifyEventTypeForRelay(record), record)
+	if err != nil {
+		return nil
 	}
+	return &wire.MsgDKVSNotify{
+		EventType: event.EventType,
+		Data:      event.Data,
+	}
+}
+
+func RecordFromNotify(msg *wire.MsgDKVSNotify) (*wire.DKVSRecord, error) {
+	if msg == nil {
+		return nil, dkvs.ErrInvalidRecord
+	}
+	return dkvs.RecordFromNotifyEvent(&dkvs.NotifyEvent{EventType: msg.EventType, Data: msg.Data})
 }
 
 func FiltersFromSubscriptions(subs []dkvs.Subscription) []wire.DKVSSyncFilter {

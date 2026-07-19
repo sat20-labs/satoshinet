@@ -42,7 +42,6 @@ type Indexer struct {
 	notify                  NotifyFunc
 	subNotify               SubscriptionNotifyFunc
 	height                  func() uint64
-	sourceNode              string
 	mutex                   sync.RWMutex
 	generation              uint64
 	policyGeneration        uint64
@@ -77,7 +76,6 @@ func New(db indexercommon.KVDB, cfg Config) *Indexer {
 		notify:      cfg.Notify,
 		subNotify:   cfg.Subscription,
 		height:      cfg.CurrentHeight,
-		sourceNode:  cfg.SourceNode,
 	}
 	indexer.resetFeeUsageLocked()
 	indexer.resetRecordExpiryLocked()
@@ -128,12 +126,12 @@ func (i *Indexer) SetSystemVerifier(verifier SystemVerifier) {
 }
 
 func (i *Indexer) PutLocal(record *wire.DKVSRecord) (bool, error) {
-	updated, eventType, hash, err := i.put(record, false)
+	updated, eventType, _, err := i.put(record, false)
 	if err != nil {
 		return false, err
 	}
 	if updated {
-		i.emit(eventType, record, hash)
+		i.emit(eventType, record)
 	}
 	return updated, nil
 }
@@ -470,9 +468,6 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 		atomic.AddUint64(&i.generation, 1)
 	}
 	i.mutex.Unlock()
-	for _, expired := range expiredRecords {
-		i.emit(EventExpired, expired.record, expired.hash)
-	}
 	return pruned, nil
 }
 
@@ -510,7 +505,7 @@ func checkpointFromRecords(records []*wire.DKVSRecord, height uint64) (*Checkpoi
 	return cp, nil
 }
 
-func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint32, chainhash.Hash, error) {
+func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainhash.Hash, error) {
 	height := i.currentHeight()
 	now := currentUnixMilli()
 	for attempt := 0; attempt < 3; attempt++ {
@@ -974,20 +969,18 @@ func (i *Indexer) scanFilteredLocked(cursor []byte, limit int, height, now uint6
 	return records, next, done, err
 }
 
-func (i *Indexer) emit(eventType uint32, record *wire.DKVSRecord, hash chainhash.Hash) {
+func (i *Indexer) emit(eventType uint8, record *wire.DKVSRecord) {
 	i.mutex.RLock()
 	notify := i.notify
-	sourceNode := i.sourceNode
 	i.mutex.RUnlock()
 	if notify == nil || record == nil {
 		return
 	}
-	event, err := NewNotifyEvent(eventType, record, sourceNode)
+	event, err := NewNotifyEvent(eventType, record)
 	if err != nil {
 		return
 	}
-	event.RecordHash = hash
-	notify(event.EventType, event.Key, event.RecordHash, event.Seq, event.ExpiryHeight, event.Size, event.Flags)
+	notify(event)
 }
 
 func (i *Indexer) emitSubscription(sub Subscription) {
@@ -1006,7 +999,7 @@ func (i *Indexer) currentHeight() uint64 {
 	return i.height()
 }
 
-func notifyEventType(parsed ParsedKey, record, existing *wire.DKVSRecord) uint32 {
+func notifyEventType(parsed ParsedKey, record, existing *wire.DKVSRecord) uint8 {
 	if IsTombstone(record.Flags) {
 		return EventRecordTombstone
 	}
@@ -1031,7 +1024,7 @@ func notifyEventType(parsed ParsedKey, record, existing *wire.DKVSRecord) uint32
 	return EventRecordPut
 }
 
-func systemReadyEventType(parsed ParsedKey) uint32 {
+func systemReadyEventType(parsed ParsedKey) uint8 {
 	if parsed.Namespace != "sys" || len(parsed.Segments) < 2 {
 		return 0
 	}

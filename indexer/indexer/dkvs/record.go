@@ -104,26 +104,79 @@ func UnmarshalRecord(data []byte) (*wire.DKVSRecord, error) {
 	return wire.DeserializeDKVSRecord(data)
 }
 
-func NewNotifyEvent(eventType uint32, record *wire.DKVSRecord, sourceNode string) (*NotifyEvent, error) {
+func NewNotifyEvent(eventType uint8, record *wire.DKVSRecord) (*NotifyEvent, error) {
 	if record == nil {
 		return nil, ErrInvalidRecord
 	}
+	if err := ValidateNotifyEventRecord(eventType, record); err != nil {
+		return nil, err
+	}
+	data, err := MarshalRecord(record)
+	if err != nil {
+		return nil, err
+	}
 	return &NotifyEvent{
-		EventType:    eventType,
-		Key:          record.Key,
-		KeyHash:      KeyHash(record.Key),
-		RecordHash:   RecordHash(record),
-		Seq:          record.Seq,
-		ExpiryHeight: record.ExpiryHeight,
-		Size:         uint32(RecordSize(record)),
-		SourceNode:   sourceNode,
-		Flags:        record.Flags,
+		EventType: eventType,
+		Data:      data,
 	}, nil
+}
+
+func ValidateNotifyEventRecord(eventType uint8, record *wire.DKVSRecord) error {
+	if record == nil {
+		return ErrInvalidRecord
+	}
+	parsed, err := ParseKey(record.Key)
+	if err != nil {
+		return err
+	}
+	tombstone := IsTombstone(record.Flags)
+	switch eventType {
+	case EventRecordTombstone:
+		if !tombstone || len(record.Value) != 0 {
+			return ErrInvalidRecord
+		}
+	case EventMailboxMessage:
+		if tombstone || parsed.Namespace != "mail" || len(parsed.Segments) < 2 || parsed.Segments[1] != "msg" {
+			return ErrInvalidRecord
+		}
+	case EventCheckpointReady:
+		if tombstone || parsed.Namespace != "sys" || len(parsed.Segments) < 2 || parsed.Segments[0] != "checkpoint" {
+			return ErrInvalidRecord
+		}
+	case EventSnapshotReady:
+		if tombstone || parsed.Namespace != "sys" || len(parsed.Segments) < 2 || parsed.Segments[0] != "snapshot" {
+			return ErrInvalidRecord
+		}
+	case EventRecordPut, EventRecordUpdate, EventRenewal:
+		if tombstone {
+			return ErrInvalidRecord
+		}
+	default:
+		return ErrInvalidRecord
+	}
+	return nil
+}
+
+func RecordFromNotifyEvent(event *NotifyEvent) (*wire.DKVSRecord, error) {
+	if event == nil || len(event.Data) == 0 || len(event.Data) > wire.MaxDKVSNotifyDataSize {
+		return nil, ErrInvalidRecord
+	}
+	record, err := UnmarshalRecord(event.Data)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateNotifyEventRecord(event.EventType, record); err != nil {
+		return nil, err
+	}
+	return record, nil
 }
 
 func MarshalNotifyEvent(event *NotifyEvent) ([]byte, error) {
 	if event == nil {
 		return nil, ErrInvalidRecord
+	}
+	if _, err := RecordFromNotifyEvent(event); err != nil {
+		return nil, err
 	}
 	return json.Marshal(event)
 }
@@ -133,8 +186,8 @@ func UnmarshalNotifyEvent(data []byte) (*NotifyEvent, error) {
 	if err := json.Unmarshal(data, &event); err != nil {
 		return nil, err
 	}
-	if event.Key == "" {
-		return nil, ErrInvalidKey
+	if _, err := RecordFromNotifyEvent(&event); err != nil {
+		return nil, err
 	}
 	return &event, nil
 }

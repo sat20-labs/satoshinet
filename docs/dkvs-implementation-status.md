@@ -26,7 +26,7 @@
 - DKVS 提供可选 `HTTPSystemVerifier` 适配器，可把 `/sys/*` key 和 record signer pubkey 转发给外部 system authority service；不默认启用，不定义 system signer 治理语义。
 - Checkpoint / snapshot 是未签名的本地计算结果，用于节点视图对账、调试和 snapshot 校验；embedded indexer 不持有 checkpoint/snapshot system signer 私钥，也不自动发布 signed `/sys/*` checkpoint record。
 - DKVS 单测显式覆盖默认非免费策略下无 fee proof 写入失败，避免主网节点误开放免费写入；测试网默认策略使用 AUTOPAY verifier，主网不凭默认值放行，测试环境或本地策略仍可通过 `AllowFreeLocal` 或自定义 `FeeVerifier` 开启。
-- 6 个原生 wire 消息：`dkvsnotify`、`dkvsinv`、`dkvsget`、`dkvsdata`、`dkvssyncreq`、`dkvssyncres`。
+- 6 个原生 wire 消息：`dkvsnotify`、`dkvsinv`、`dkvsget`、`dkvsdata`、`dkvssyncreq`、`dkvssyncres`。`dkvsnotify` 使用 1 字节 event type 和最多 16 KiB data，record 事件直接内联完整 DKVSRecord。
 - peer listener 和 serverPeer DKVS 消息分发；miner 新连接后通过带 session id 的 sync request / response 分页同步 active records，分页受 record 数量和 payload bytes 双重限制；节点周期性执行反熵同步并把验证通过的远端更新继续 relay，完成同步时会对比远端 response checkpoint root 与本地 active root 并记录 mismatch。
 - REST API：
   - `POST /v3/dkvs/records`
@@ -49,9 +49,9 @@
 - 普通节点如果本地已有 DKVS subscription，连接 miner peer 时会用现有 `MsgDKVSSyncRequest/Response` 拉取当前 active records，并在本地按 subscription 过滤落库；不扩展 wire 协议。
 - 普通节点运行中新增 DKVS subscription 后，会通过 server callback 对已连接 miner peers 发送现有 `MsgDKVSSyncRequest`，收到 response 后仍按本地 subscription 过滤落库；重复订阅不会重复触发远端 sync；不扩展 wire 协议。
 - `MsgDKVSSyncRequest/Response` 使用 session id 约束分页会话，并支持 subscription filters；miner 只接受其他已识别 miner 的无过滤全量同步，普通节点必须携带 key / prefix / mailbox / service filters，最多 256 个订阅。
-- DKVS 包内集成测试覆盖普通节点按 exact key 和 prefix 订阅后先用 filtered sync 拉取当前数据、过滤掉未订阅 key/prefix，再通过 notify/get/data 模拟拉取 prefix 下新增 record。
-- DKVS 包内集成测试覆盖普通节点订阅 `/mail/<mailbox_id>` 后先用 filtered sync 拉取 mailbox 当前数据、过滤掉其他 mailbox，再通过 notify/get/data 模拟拉取新增 mailbox message。
-- DKVS 包内集成测试覆盖普通节点订阅 `/svc/<service_name>` 后先用 filtered sync 拉取 service 当前数据、过滤掉其他 service，再通过 notify/get/data 模拟拉取新增 service record；权限仍走 `DIDResolver`，默认未配置 resolver 时 `/svc` 不开放。
+- DKVS 包内集成测试覆盖普通节点按 exact key 和 prefix 订阅后先用 filtered sync 拉取当前数据、过滤掉未订阅 key/prefix，再接收 prefix 下新增 record。
+- DKVS 包内集成测试覆盖普通节点订阅 `/mail/<mailbox_id>` 后先用 filtered sync 拉取 mailbox 当前数据、过滤掉其他 mailbox，再接收新增 mailbox message。
+- DKVS 包内集成测试覆盖普通节点订阅 `/svc/<service_name>` 后先用 filtered sync 拉取 service 当前数据、过滤掉其他 service，再接收新增 service record；权限仍走 `DIDResolver`，默认未配置 resolver 时 `/svc` 不开放。
 - 过期 record 手动 prune 和 indexer 低频自动 prune。
 - DKVS Go helper / SDK-style builder：record signing、tombstone、renewal record、fee proof 构造、personal/name/service/mail/blob/tmp key builder、单条 record 本地验证、prefix record set 本地验证、subscription record set 本地验证、blob manifest/chunk record builder、blob manifest 解析、chunk hash 校验和 blob 内容拼接。
 - `sat20wallet/sdk` 新增 SatoshiNet DKVS REST client，覆盖 records、record hash 精确读取、verified record get、verified record hash get、verified prefix list、signed put、signed tombstone、signed renewal、personal record 读写删除续费、prefix usage、key/prefix 订阅、verified subscription initial records、checkpoint、verified snapshot export、snapshot import、prune、subscriptions、mailbox message/share 读写删除订阅、mailbox account_id 创建、signed mailbox message、deleteMessage、blob records 写入、putBlob、putChunkedBlob、getBlob / getChunkedBlob 读取校验拼接、name record 读写、record 级 `ResolveNameRecord(name)`、signed name record、service record 读写列表订阅、signed service record。
@@ -62,8 +62,8 @@
 - `docs/dkvs-external-integration-contracts.md` 新增外部集成契约，明确真实 Ordinals DID resolver、DKVS Pool fee verifier 和 `/sys` system verifier 的接口、输入输出、失败模式和主网默认关闭边界。
 - `docs/dkvs-open-decisions.md` 新增剩余开放决策清单，列出 DID resolver、DKVS Pool、checkpoint anchor、PWA UI 的待确认问题、推荐最小接入和代码接入点。
 - `docs/dkvs-requirements-traceability.md` 新增需求追踪矩阵，按总体目标、迁移实现、单元测试、集成测试和开发阶段逐项标注 Done / Partial / Blocked，并列出证据和外部输入需求。
-- Notify event 常量覆盖文档中的事件类型；mailbox message 写入使用 `MAILBOX_MESSAGE`，tombstone 使用 `RECORD_TOMBSTONE`，同 key / 同 seq / 同 owner / 同 value 的 expiry 延长写入使用 `RENEWAL`，过期 prune 删除 record 后发送 `EXPIRED`。
-- DKVS core 提供 `NotifyEvent` 构造、JSON encode/decode helper；事件字段包含 event_type、key、key_hash、record_hash、seq、expiry_height、size、source_node、flags。现有本地 notify 回调复用同一构造逻辑，wire 层仍使用 `dkvsnotify` 原生命令，不新增协议。
+- Notify event 常量覆盖文档中的 record 事件类型；mailbox message 写入使用 `MAILBOX_MESSAGE`，tombstone 使用 `RECORD_TOMBSTONE`，同 key / 同 seq / 同 owner / 同 value 的 expiry 延长写入使用 `RENEWAL`。过期 prune 不产生可授权远端删除的消息，因此不传播 `EXPIRED`。
+- DKVS core 提供 `NotifyEvent` 构造、JSON encode/decode helper；事件只包含 `event_type` 和紧凑 `data`，record 类 data 是完整 DKVSRecord 编码。key、record hash、seq、expiry、size、flags 都从 record 推导，wire 不再携带冗余 key hash 或 source node。接收端直接完整验证并落库，不再为常规 notify 发起 get/data 往返。
 
 ## 保持主网兼容的边界
 

@@ -10,7 +10,6 @@ import (
 
 func TestDKVSMessagesWire(t *testing.T) {
 	hash := chainhash.DoubleHashH([]byte("record"))
-	keyHash := chainhash.DoubleHashH([]byte("/personal/a/b"))
 	record := &DKVSRecord{
 		Version:      1,
 		Key:          "/personal/a/b",
@@ -24,9 +23,13 @@ func TestDKVSMessagesWire(t *testing.T) {
 		FeeProof:     []byte("fee"),
 		Flags:        1,
 	}
+	recordData, err := SerializeDKVSRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []Message{
-		&MsgDKVSNotify{EventType: 1, Key: record.Key, KeyHash: keyHash, RecordHash: hash, Seq: 10, ExpiryHeight: 40, Size: 100, SourceNode: "node", Flags: 1},
-		&MsgDKVSInv{Items: []DKVSInvItem{{Key: record.Key, KeyHash: keyHash, RecordHash: hash, Seq: 10}}},
+		&MsgDKVSNotify{EventType: 1, Data: recordData},
+		&MsgDKVSInv{Items: []DKVSInvItem{{Key: record.Key, RecordHash: hash, Seq: 10}}},
 		&MsgDKVSGet{Keys: []string{record.Key}, RecordHashes: []chainhash.Hash{hash}},
 		&MsgDKVSData{Records: []*DKVSRecord{record}, NotFound: []chainhash.Hash{hash}},
 		&MsgDKVSSyncRequest{Cursor: []byte("cursor"), Limit: 10, Filters: []DKVSSyncFilter{{Type: "prefix", Target: "/personal/a"}}},
@@ -79,7 +82,8 @@ func TestDKVSMessagesOversize(t *testing.T) {
 	largeRecordValue := bytes.Repeat([]byte("v"), MaxDKVSRecordSize)
 	longCursor := bytes.Repeat([]byte("c"), MaxDKVSCursorSize+1)
 	tests := []Message{
-		&MsgDKVSNotify{Key: longKey},
+		&MsgDKVSNotify{Data: bytes.Repeat([]byte{1}, MaxDKVSNotifyDataSize+1)},
+		&MsgDKVSNotify{EventType: 1},
 		&MsgDKVSInv{Items: []DKVSInvItem{{Key: longKey}}},
 		&MsgDKVSGet{Keys: []string{longKey}},
 		&MsgDKVSData{Records: []*DKVSRecord{{Version: 1, Key: "/personal/a/b", Value: longValue}}},
@@ -184,7 +188,6 @@ func TestDKVSCommandLength(t *testing.T) {
 
 func sampleDKVSMessages() []Message {
 	hash := chainhash.DoubleHashH([]byte("record"))
-	keyHash := chainhash.DoubleHashH([]byte("/personal/a/b"))
 	record := &DKVSRecord{
 		Version:      1,
 		Key:          "/personal/a/b",
@@ -198,9 +201,13 @@ func sampleDKVSMessages() []Message {
 		FeeProof:     []byte("fee"),
 		Flags:        1,
 	}
+	recordData, err := SerializeDKVSRecord(record)
+	if err != nil {
+		panic(err)
+	}
 	return []Message{
-		&MsgDKVSNotify{EventType: 1, Key: record.Key, KeyHash: keyHash, RecordHash: hash, Seq: 10, ExpiryHeight: 40, Size: 100, SourceNode: "node", Flags: 1},
-		&MsgDKVSInv{Items: []DKVSInvItem{{Key: record.Key, KeyHash: keyHash, RecordHash: hash, Seq: 10}}},
+		&MsgDKVSNotify{EventType: 1, Data: recordData},
+		&MsgDKVSInv{Items: []DKVSInvItem{{Key: record.Key, RecordHash: hash, Seq: 10}}},
 		&MsgDKVSGet{Keys: []string{record.Key}, RecordHashes: []chainhash.Hash{hash}},
 		&MsgDKVSData{Records: []*DKVSRecord{record}, NotFound: []chainhash.Hash{hash}},
 		&MsgDKVSSyncRequest{SessionID: 1, Cursor: []byte("cursor"), Limit: 10},
@@ -226,5 +233,22 @@ func TestStandaloneDKVSRecordCodec(t *testing.T) {
 	}
 	if _, err := DeserializeDKVSRecord(append(encoded, 0)); err == nil {
 		t.Fatal("trailing bytes accepted")
+	}
+}
+
+func TestDKVSNotifyCompactPayload(t *testing.T) {
+	record := &DKVSRecord{Version: 1, Key: "/tmp/a", Value: []byte("value"), Seq: 1}
+	data, err := SerializeDKVSRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := &MsgDKVSNotify{EventType: 1, Data: data}
+	var encoded bytes.Buffer
+	if err := msg.BtcEncode(&encoded, ProtocolVersion, BaseEncoding); err != nil {
+		t.Fatal(err)
+	}
+	want := 1 + VarIntSerializeSize(uint64(len(data))) + len(data)
+	if encoded.Len() != want {
+		t.Fatalf("notify size=%d want=%d", encoded.Len(), want)
 	}
 }

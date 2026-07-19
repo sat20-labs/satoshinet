@@ -2150,8 +2150,14 @@ func (s *server) handleBroadcastMsg(state *peerState, bmsg *broadcastMsg) {
 			}
 		}
 
-		if notify, ok := bmsg.message.(*wire.MsgDKVSNotify); ok && sp.dkvsState.BufferNotify(notify) {
-			return
+		if notify, ok := bmsg.message.(*wire.MsgDKVSNotify); ok {
+			remoteMiner := sp.Services()&wire.SFNodeMiner != 0
+			if !sp.dkvsState.WantsNotify(notify, remoteMiner) {
+				return
+			}
+			if sp.dkvsState.BufferNotify(notify) {
+				return
+			}
 		}
 		sp.QueueMessage(bmsg.message, nil)
 	})
@@ -3695,19 +3701,13 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		s.dkvsState.MarkTrusted(time.Now())
 		s.dkvsState.SetReady(true)
 	}
-	assetIndexer.SetDKVSNotifyCallback(func(eventType uint32, key string, recordHash [32]byte, seq uint64, expiryHeight uint64, size uint32, flags uint32) {
-		var hash chainhash.Hash
-		copy(hash[:], recordHash[:])
+	assetIndexer.SetDKVSNotifyCallback(func(event *dkvsindexer.NotifyEvent) {
+		if event == nil {
+			return
+		}
 		s.BroadcastMessage(&wire.MsgDKVSNotify{
-			EventType:    eventType,
-			Key:          key,
-			KeyHash:      dkvsp2p.KeyHash(key),
-			RecordHash:   hash,
-			Seq:          seq,
-			ExpiryHeight: expiryHeight,
-			Size:         size,
-			SourceNode:   cfg.MiningPubKey,
-			Flags:        flags,
+			EventType: event.EventType,
+			Data:      append([]byte{}, event.Data...),
 		})
 	})
 	assetIndexer.SetDKVSSubscriptionCallback(func(_ dkvsindexer.Subscription) {

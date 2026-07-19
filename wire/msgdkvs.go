@@ -20,6 +20,7 @@ const (
 	MaxDKVSCursorSize     = 512
 	MaxDKVSSyncFilters    = 256
 	MaxDKVSFilterTypeSize = 16
+	MaxDKVSNotifyDataSize = MaxDKVSRecordSize
 )
 
 type DKVSRecord struct {
@@ -38,21 +39,13 @@ type DKVSRecord struct {
 
 type DKVSInvItem struct {
 	Key        string
-	KeyHash    chainhash.Hash
 	RecordHash chainhash.Hash
 	Seq        uint64
 }
 
 type MsgDKVSNotify struct {
-	EventType    uint32
-	Key          string
-	KeyHash      chainhash.Hash
-	RecordHash   chainhash.Hash
-	Seq          uint64
-	ExpiryHeight uint64
-	Size         uint32
-	SourceNode   string
-	Flags        uint32
+	EventType uint8
+	Data      []byte
 }
 
 type MsgDKVSInv struct {
@@ -217,9 +210,6 @@ func readDKVSInvItem(r io.Reader, pver uint32, buf []byte) (DKVSInvItem, error) 
 		return item, messageError("readDKVSInvItem", "dkvs key too large")
 	}
 	item.Key = key
-	if _, err := io.ReadFull(r, item.KeyHash[:]); err != nil {
-		return item, err
-	}
 	if _, err := io.ReadFull(r, item.RecordHash[:]); err != nil {
 		return item, err
 	}
@@ -232,9 +222,6 @@ func writeDKVSInvItem(w io.Writer, pver uint32, item DKVSInvItem, buf []byte) er
 		return messageError("writeDKVSInvItem", "dkvs key too large")
 	}
 	if err := writeVarStringBuf(w, pver, item.Key, buf); err != nil {
-		return err
-	}
-	if _, err := w.Write(item.KeyHash[:]); err != nil {
 		return err
 	}
 	if _, err := w.Write(item.RecordHash[:]); err != nil {
@@ -293,61 +280,41 @@ func (msg *MsgDKVSNotify) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding)
 	if err := readElements(r, &msg.EventType); err != nil {
 		return err
 	}
-	key, err := readVarStringBuf(r, pver, buf)
+	if msg.EventType == 0 {
+		return messageError("MsgDKVSNotify.BtcDecode", "missing dkvs notify event type")
+	}
+	data, err := ReadVarBytesBuf(r, pver, buf, MaxDKVSNotifyDataSize, "dkvs notify data")
 	if err != nil {
 		return err
 	}
-	if len(key) > MaxDKVSKeySize {
-		return messageError("MsgDKVSNotify.BtcDecode", "dkvs key too large")
+	if len(data) == 0 {
+		return messageError("MsgDKVSNotify.BtcDecode", "missing dkvs notify data")
 	}
-	msg.Key = key
-	if _, err := io.ReadFull(r, msg.KeyHash[:]); err != nil {
-		return err
-	}
-	if _, err := io.ReadFull(r, msg.RecordHash[:]); err != nil {
-		return err
-	}
-	if err := readElements(r, &msg.Seq, &msg.ExpiryHeight, &msg.Size); err != nil {
-		return err
-	}
-	source, err := readVarStringBuf(r, pver, buf)
-	if err != nil {
-		return err
-	}
-	msg.SourceNode = source
-	return readElements(r, &msg.Flags)
+	msg.Data = data
+	return nil
 }
 
 func (msg *MsgDKVSNotify) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
-	if len(msg.Key) > MaxDKVSKeySize {
-		return messageError("MsgDKVSNotify.BtcEncode", "dkvs key too large")
+	if msg.EventType == 0 {
+		return messageError("MsgDKVSNotify.BtcEncode", "missing dkvs notify event type")
+	}
+	if len(msg.Data) == 0 {
+		return messageError("MsgDKVSNotify.BtcEncode", "missing dkvs notify data")
+	}
+	if len(msg.Data) > MaxDKVSNotifyDataSize {
+		return messageError("MsgDKVSNotify.BtcEncode", "dkvs notify data too large")
 	}
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
 	if err := writeElements(w, msg.EventType); err != nil {
 		return err
 	}
-	if err := writeVarStringBuf(w, pver, msg.Key, buf); err != nil {
-		return err
-	}
-	if _, err := w.Write(msg.KeyHash[:]); err != nil {
-		return err
-	}
-	if _, err := w.Write(msg.RecordHash[:]); err != nil {
-		return err
-	}
-	if err := writeElements(w, msg.Seq, msg.ExpiryHeight, msg.Size); err != nil {
-		return err
-	}
-	if err := writeVarStringBuf(w, pver, msg.SourceNode, buf); err != nil {
-		return err
-	}
-	return writeElements(w, msg.Flags)
+	return WriteVarBytesBuf(w, pver, msg.Data, buf)
 }
 
 func (msg *MsgDKVSNotify) Command() string { return CmdDKVSNotify }
 func (msg *MsgDKVSNotify) MaxPayloadLength(pver uint32) uint32 {
-	return 4 + MaxVarIntPayload + MaxDKVSKeySize + chainhash.HashSize*2 + 8 + 8 + 4 + MaxVarIntPayload + 128 + 4
+	return 1 + MaxVarIntPayload + MaxDKVSNotifyDataSize
 }
 
 func (msg *MsgDKVSInv) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
@@ -390,7 +357,7 @@ func (msg *MsgDKVSInv) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) er
 
 func (msg *MsgDKVSInv) Command() string { return CmdDKVSInv }
 func (msg *MsgDKVSInv) MaxPayloadLength(pver uint32) uint32 {
-	return MaxVarIntPayload + MaxDKVSItemsPerMsg*(MaxVarIntPayload+MaxDKVSKeySize+chainhash.HashSize*2+8)
+	return MaxVarIntPayload + MaxDKVSItemsPerMsg*(MaxVarIntPayload+MaxDKVSKeySize+chainhash.HashSize+8)
 }
 
 func (msg *MsgDKVSGet) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {

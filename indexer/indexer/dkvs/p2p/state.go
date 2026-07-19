@@ -86,12 +86,14 @@ type PeerState struct {
 	requestMtx sync.Mutex
 	requested  map[chainhash.Hash]time.Time
 
-	serveMtx          sync.Mutex
-	serveSession      uint64
-	serveFilters      []wire.DKVSSyncFilter
-	servePending      map[string]*wire.MsgDKVSNotify
-	servePendingBytes int
-	serveActive       bool
+	serveMtx           sync.Mutex
+	serveSession       uint64
+	serveFilters       []wire.DKVSSyncFilter
+	servePending       map[string]*wire.MsgDKVSNotify
+	servePendingBytes  int
+	serveActive        bool
+	notifyFilters      []wire.DKVSSyncFilter
+	notifyFiltersKnown bool
 
 	syncMtx     sync.Mutex
 	syncSession uint64
@@ -214,29 +216,52 @@ func cloneNotify(msg *wire.MsgDKVSNotify) *wire.MsgDKVSNotify {
 		return nil
 	}
 	copyMsg := *msg
+	copyMsg.Data = append([]byte{}, msg.Data...)
 	return &copyMsg
 }
 
 func (s *PeerState) BufferNotify(msg *wire.MsgDKVSNotify) bool {
-	if msg == nil || msg.Key == "" {
+	record, err := RecordFromNotify(msg)
+	if err != nil {
 		return false
 	}
 	s.serveMtx.Lock()
 	defer s.serveMtx.Unlock()
-	if !s.serveActive || !filtersMatchKey(s.serveFilters, msg.Key) {
+	if !s.serveActive || !filtersMatchKey(s.serveFilters, record.Key) {
 		return false
 	}
-	if s.servePending[msg.Key] != nil {
-		s.servePending[msg.Key] = cloneNotify(msg)
+	if previous := s.servePending[record.Key]; previous != nil {
+		nextBytes := s.servePendingBytes + len(msg.Data) - len(previous.Data)
+		if nextBytes > MaxPendingByteHints {
+			return false
+		}
+		s.servePendingBytes = nextBytes
+		s.servePending[record.Key] = cloneNotify(msg)
 		return true
 	}
-	byteHint := len(msg.Key) + 128
+	byteHint := len(msg.Data) + 16
 	if len(s.servePending) >= MaxPendingChanges || s.servePendingBytes+byteHint > MaxPendingByteHints {
 		return false
 	}
-	s.servePending[msg.Key] = cloneNotify(msg)
+	s.servePending[record.Key] = cloneNotify(msg)
 	s.servePendingBytes += byteHint
 	return true
+}
+
+func (s *PeerState) WantsNotify(msg *wire.MsgDKVSNotify, remoteMiner bool) bool {
+	if remoteMiner {
+		return true
+	}
+	record, err := RecordFromNotify(msg)
+	if err != nil {
+		return false
+	}
+	s.serveMtx.Lock()
+	defer s.serveMtx.Unlock()
+	if s.serveActive && filtersMatchKey(s.serveFilters, record.Key) {
+		return true
+	}
+	return s.notifyFiltersKnown && filtersMatchKey(s.notifyFilters, record.Key)
 }
 
 func (s *PeerState) FinishServe(session uint64) []*wire.MsgDKVSNotify {
@@ -254,6 +279,8 @@ func (s *PeerState) FinishServe(session uint64) []*wire.MsgDKVSNotify {
 	for _, key := range keys {
 		pending = append(pending, s.servePending[key])
 	}
+	s.notifyFilters = append(s.notifyFilters[:0], s.serveFilters...)
+	s.notifyFiltersKnown = true
 	s.serveActive = false
 	s.servePending = nil
 	s.servePendingBytes = 0

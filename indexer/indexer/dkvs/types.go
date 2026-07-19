@@ -15,16 +15,16 @@ const (
 
 	FlagTombstone = uint32(1 << 0)
 
-	EventRecordPut       = uint32(1)
-	EventRecordUpdate    = uint32(2)
-	EventRecordTombstone = uint32(3)
-	EventPrefixUpdate    = uint32(4)
-	EventMailboxMessage  = uint32(5)
-	EventSyncHint        = uint32(6)
-	EventCheckpointReady = uint32(7)
-	EventSnapshotReady   = uint32(8)
-	EventRenewal         = uint32(9)
-	EventExpired         = uint32(10)
+	EventRecordPut       = uint8(1)
+	EventRecordUpdate    = uint8(2)
+	EventRecordTombstone = uint8(3)
+	EventPrefixUpdate    = uint8(4)
+	EventMailboxMessage  = uint8(5)
+	EventSyncHint        = uint8(6)
+	EventCheckpointReady = uint8(7)
+	EventSnapshotReady   = uint8(8)
+	EventRenewal         = uint8(9)
+	EventExpired         = uint8(10)
 
 	MaxKeySize             = 256
 	MaxKeySegmentSize      = 64
@@ -118,7 +118,7 @@ type SystemVerifier interface {
 	CanWriteSystem(key string, pubKey []byte) error
 }
 
-type NotifyFunc func(eventType uint32, key string, recordHash [32]byte, seq uint64, expiryHeight uint64, size uint32, flags uint32)
+type NotifyFunc func(event *NotifyEvent)
 
 type SubscriptionNotifyFunc func(sub Subscription)
 
@@ -135,15 +135,8 @@ type FeeProof struct {
 }
 
 type NotifyEvent struct {
-	EventType    uint32         `json:"event_type"`
-	Key          string         `json:"key"`
-	KeyHash      chainhash.Hash `json:"key_hash"`
-	RecordHash   chainhash.Hash `json:"record_hash"`
-	Seq          uint64         `json:"seq"`
-	ExpiryHeight uint64         `json:"expiry_height"`
-	Size         uint32         `json:"size"`
-	SourceNode   string         `json:"source_node,omitempty"`
-	Flags        uint32         `json:"flags"`
+	EventType uint8  `json:"event_type"`
+	Data      []byte `json:"data"`
 }
 
 type Config struct {
@@ -154,7 +147,6 @@ type Config struct {
 	Notify         NotifyFunc
 	Subscription   SubscriptionNotifyFunc
 	CurrentHeight  func() uint64
-	SourceNode     string
 	MailboxPolicy  MailboxPolicy
 	BlobPolicy     BlobPolicy
 	TmpPolicy      TmpPolicy
