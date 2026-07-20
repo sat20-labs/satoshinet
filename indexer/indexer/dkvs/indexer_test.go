@@ -195,7 +195,7 @@ func TestPersonalPermissionAndCheckpoint(t *testing.T) {
 	bad := signedPersonalRecordWithKey(t, priv, 2, "bad", 0)
 	bad.Key = "/personal/" + hex.EncodeToString(make([]byte, 32)) + "/profile"
 	signRecord(t, priv, bad)
-	if _, err := idx.PutLocal(bad); err != ErrInvalidSignature {
+	if _, err := idx.PutLocal(bad); err != ErrPermissionDenied {
 		t.Fatalf("wrong account signer err=%v", err)
 	}
 	cp, err := idx.Checkpoint()
@@ -1929,7 +1929,7 @@ func TestMailPermissions(t *testing.T) {
 	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msgKey, 1)); err != nil || !updated {
 		t.Fatalf("mail msg put updated=%v err=%v", updated, err)
 	}
-	if _, err := idx.PutLocal(signedRecordForKey(t, senderPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordForKey(t, senderPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != ErrInvalidSignature {
 		t.Fatalf("mail share non-owner err=%v", err)
 	}
 	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != nil || !updated {
@@ -1955,10 +1955,10 @@ func TestMailboxMessageUpdateAndDeletePermissions(t *testing.T) {
 	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 1, []byte("message"), 0)); err != nil || !updated {
 		t.Fatalf("initial message updated=%v err=%v", updated, err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, []byte("replace"), 0)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, []byte("replace"), 0)); err != ErrInvalidSignature {
 		t.Fatalf("attacker update err=%v", err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, nil, FlagTombstone)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, nil, FlagTombstone)); err != ErrInvalidSignature {
 		t.Fatalf("attacker tombstone err=%v", err)
 	}
 	if updated, err := idx.PutLocal(signedRecordWithValue(t, owner, key, 2, nil, FlagTombstone)); err != nil || !updated {
@@ -2031,7 +2031,7 @@ func TestMailboxSenderIdentityAndQuotaIsolation(t *testing.T) {
 		t.Fatalf("first sender put updated=%v err=%v", updated, err)
 	}
 	forgedKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), secondSender.PubKey().SerializeCompressed(), "forged")
-	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, forgedKey, 1)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, forgedKey, 1)); err != ErrInvalidSignature {
 		t.Fatalf("forged sender id err=%v", err)
 	}
 	firstSecondKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), firstSender.PubKey().SerializeCompressed(), "second")
@@ -2231,8 +2231,7 @@ func TestMailboxTTLAndSizePolicy(t *testing.T) {
 	}
 	tooLong := signedRecordForKey(t, priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1"), 1)
 	tooLong.TTL = 11
-	hash := SigningHash(tooLong)
-	tooLong.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	signRecord(t, priv, tooLong)
 	if _, err := ttlIdx.PutLocal(tooLong); err != ErrInvalidRecord {
 		t.Fatalf("mail ttl err=%v", err)
 	}
@@ -2487,7 +2486,7 @@ func TestBlobRejectsOtherAccountAndMixedGeneration(t *testing.T) {
 	}
 	accountID := AccountID(owner.PubKey().SerializeCompressed())
 	prefix := "/blob/" + accountID + "/object"
-	if _, err := idx.PutLocal(signedRecordWithValue(t, other, prefix+"/manifest", 1, manifestBytes, 0)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordWithValue(t, other, prefix+"/manifest", 1, manifestBytes, 0)); err != ErrInvalidSignature {
 		t.Fatalf("other account manifest err=%v", err)
 	}
 	if _, err := idx.PutLocal(signedRecordWithValue(t, owner, prefix+"/manifest", 2, manifestBytes, 0)); err != nil {
@@ -2519,8 +2518,7 @@ func TestPruneExpiredRecords(t *testing.T) {
 	}
 	record := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
 	record.ExpiryHeight = 2
-	hash := SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	signRecord(t, priv, record)
 	if _, err := idx.PutLocal(record); err != nil {
 		t.Fatal(err)
 	}
