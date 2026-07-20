@@ -13,10 +13,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-var (
-	signatureDomain   = []byte("satoshinet-dkvs-record-v1")
-	signatureDomainV2 = []byte("satoshinet-dkvs-record-v2")
-)
+var signatureDomain = []byte("satoshinet-dkvs-record-v1")
 
 const notifyEventMagic = "DKNE"
 
@@ -42,14 +39,11 @@ func SigningMessage(record *wire.DKVSRecord) []byte {
 }
 
 func VerifySignature(record *wire.DKVSRecord) error {
-	if record == nil || len(record.Signature) == 0 {
+	if record == nil || record.Version != Version || len(record.Signature) == 0 {
 		return ErrInvalidSignature
 	}
-	if record.Version == VersionV2 {
-		return verifySignatureV2(record)
-	}
-	if record.Version != Version || len(record.PubKey) == 0 {
-		return ErrInvalidSignature
+	if len(record.PubKey) == 0 {
+		return verifyAccountSignature(record)
 	}
 	pubKey, err := btcec.ParsePubKey(record.PubKey)
 	if err != nil {
@@ -221,11 +215,7 @@ func currentUnixMilli() uint64 {
 
 func canonicalRecordBytes(record *wire.DKVSRecord, includeSignature bool) []byte {
 	var buf bytes.Buffer
-	domain := signatureDomain
-	if record != nil && record.Version == VersionV2 {
-		domain = signatureDomainV2
-	}
-	writeBytes(&buf, domain)
+	writeBytes(&buf, signatureDomain)
 	if record == nil {
 		return buf.Bytes()
 	}
