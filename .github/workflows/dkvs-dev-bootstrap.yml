@@ -93,14 +93,23 @@ jobs:
               Path('indexer/indexer/dkvs/account_test.go').write_text(text)
               old_test.unlink()
 
-          # DKVS account IDs are now x-only public keys. All account-scoped
-          # permission and test helpers must use AccountID rather than the
-          # previous sha256(pubkey) helper.
           for path in Path('indexer/indexer/dkvs').glob('*.go'):
               if path.name == 'key.go':
                   continue
               text = path.read_text().replace('personalAccountID(', 'AccountID(')
               path.write_text(text)
+
+          p = Path('indexer/indexer/dkvs/indexer_test.go')
+          text = p.read_text()
+          text = text.replace(
+              'func TestParseKey(t *testing.T) {\n\tpub := make([]byte, 33)\n\taccount := AccountID(pub)\n\tsenderAccount := strings.Repeat("1", sha256.Size*2)',
+              'func TestParseKey(t *testing.T) {\n\tpriv, err := btcec.NewPrivateKey()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\tsender, err := btcec.NewPrivateKey()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\taccount := AccountID(priv.PubKey().SerializeCompressed())\n\tsenderAccount := AccountID(sender.PubKey().SerializeCompressed())',
+          )
+          text = text.replace(
+              'func TestFeeProofBuilders(t *testing.T) {\n\tkey := "/personal/" + AccountID([]byte("pub")) + "/profile"\n\tproof, err := NewOneshotFeeProof',
+              'func TestFeeProofBuilders(t *testing.T) {\n\tpriv, err := btcec.NewPrivateKey()\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\tkey := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"\n\tproof, err := NewOneshotFeeProof',
+          )
+          p.write_text(text)
           PY
           gofmt -w indexer/indexer/dkvs/*.go
           if grep -R -n -E 'VersionV2|AccountIDV2|AccountPubKeyV2|PersonalKeyV2|NewRecordV2' indexer/indexer/dkvs; then
@@ -118,7 +127,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m 'use x-only account IDs throughout DKVS'
+          git commit -m 'migrate DKVS tests to x-only account IDs'
           git push origin HEAD:${GITHUB_REF_NAME}
 
       - name: Run DKVS package tests
