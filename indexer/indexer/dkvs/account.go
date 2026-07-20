@@ -110,6 +110,15 @@ func validAccountNetwork(network string) bool {
 	return err == nil
 }
 
+func isAccountScopedNamespace(namespace string) bool {
+	switch namespace {
+	case "account", "personal", "mail", "blob":
+		return true
+	default:
+		return false
+	}
+}
+
 // NewAccountRecord creates a pubkey-free version-1 account record. The caller
 // signs SigningHash with the private key corresponding to the account ID
 // encoded by the record key or, for /account, by the mapping value.
@@ -209,8 +218,12 @@ func ValidateRecordIdentity(record *wire.DKVSRecord, parsed ParsedKey) error {
 	if record == nil || record.Version != Version {
 		return ErrInvalidRecord
 	}
-	if len(record.PubKey) != 0 {
-		if parsed.Namespace == "account" {
+	accountScoped := isAccountScopedNamespace(parsed.Namespace)
+	if accountScoped && len(record.PubKey) != 0 {
+		return ErrInvalidRecord
+	}
+	if !accountScoped {
+		if len(record.PubKey) == 0 {
 			return ErrInvalidRecord
 		}
 		return nil

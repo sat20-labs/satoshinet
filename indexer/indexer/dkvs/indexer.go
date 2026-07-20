@@ -790,6 +790,9 @@ func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRe
 	if record == nil {
 		return ErrInvalidRecord
 	}
+	if isAccountScopedNamespace(parsed.Namespace) {
+		return ValidateRecordIdentity(record, parsed)
+	}
 	// External authority checks are performed when a record is accepted. Reads,
 	// scans, and path metadata rebuilds must remain local and must not call HTTP
 	// or RPC services while holding the indexer lock.

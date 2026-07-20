@@ -47,21 +47,13 @@ func signedPersonalRecordWithKey(t *testing.T, priv *btcec.PrivateKey, seq uint6
 
 func signedPersonalRecordWithPath(t *testing.T, priv *btcec.PrivateKey, path string, seq uint64, value string, flags uint32) *wire.DKVSRecord {
 	t.Helper()
-	pub := priv.PubKey().SerializeCompressed()
-	key := "/personal/" + AccountID(pub) + "/" + path
-	record := &wire.DKVSRecord{
-		Version:      Version,
-		Key:          key,
-		Value:        []byte(value),
-		PubKey:       pub,
-		Seq:          seq,
-		IssueTime:    currentUnixMilli(),
-		TTL:          60_000,
-		ExpiryHeight: 100,
-		Flags:        flags,
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/" + path
+	record, err := NewSignedRecord(priv, key, []byte(value), RecordOptions{
+		Seq: seq, TTL: 60_000, ExpiryHeight: 100, Flags: flags,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	hash := SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
 	return record
 }
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -12,7 +13,16 @@ func NewSignedRecord(priv *btcec.PrivateKey, key string, value []byte, opts Reco
 	if priv == nil {
 		return nil, ErrInvalidSignature
 	}
-	record, err := NewRecord(key, value, priv.PubKey().SerializeCompressed(), opts)
+	parsed, err := ParseKey(key)
+	if err != nil {
+		return nil, err
+	}
+	var record *wire.DKVSRecord
+	if isAccountScopedNamespace(parsed.Namespace) {
+		record, err = NewAccountRecord(key, value, opts)
+	} else {
+		record, err = NewRecord(key, value, priv.PubKey().SerializeCompressed(), opts)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +46,20 @@ func NewSignedRenewalRecord(priv *btcec.PrivateKey, existing *wire.DKVSRecord, o
 		return nil, err
 	}
 	pubKey := priv.PubKey().SerializeCompressed()
-	if !bytes.Equal(existing.PubKey, pubKey) {
+	parsed, err := ParseKey(existing.Key)
+	if err != nil {
+		return nil, err
+	}
+	if isAccountScopedNamespace(parsed.Namespace) {
+		want, err := RecordSignerAccountID(existing, parsed)
+		if err != nil {
+			return nil, err
+		}
+		got, err := CanonicalAccountID(pubKey)
+		if err != nil || got != want {
+			return nil, ErrPermissionDenied
+		}
+	} else if !bytes.Equal(existing.PubKey, pubKey) {
 		return nil, ErrPermissionDenied
 	}
 	if opts.ExpiryHeight <= existing.ExpiryHeight {
@@ -71,8 +94,22 @@ func SignRecord(priv *btcec.PrivateKey, record *wire.DKVSRecord) {
 	if priv == nil || record == nil {
 		return
 	}
-	record.PubKey = priv.PubKey().SerializeCompressed()
+	parsed, err := ParseKey(record.Key)
+	if err != nil {
+		return
+	}
 	hash := SigningHash(record)
+	if isAccountScopedNamespace(parsed.Namespace) {
+		record.PubKey = nil
+		hash = SigningHash(record)
+		sig, err := schnorr.Sign(priv, hash[:])
+		if err == nil {
+			record.Signature = sig.Serialize()
+		}
+		return
+	}
+	record.PubKey = priv.PubKey().SerializeCompressed()
+	hash = SigningHash(record)
 	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
 }
 
