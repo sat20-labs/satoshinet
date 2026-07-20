@@ -92,6 +92,15 @@ jobs:
                   text = text[:text.index(marker)] + '\n'
               Path('indexer/indexer/dkvs/account_test.go').write_text(text)
               old_test.unlink()
+
+          # DKVS account IDs are now x-only public keys. All account-scoped
+          # permission and test helpers must use AccountID rather than the
+          # previous sha256(pubkey) helper.
+          for path in Path('indexer/indexer/dkvs').glob('*.go'):
+              if path.name == 'key.go':
+                  continue
+              text = path.read_text().replace('personalAccountID(', 'AccountID(')
+              path.write_text(text)
           PY
           gofmt -w indexer/indexer/dkvs/*.go
           if grep -R -n -E 'VersionV2|AccountIDV2|AccountPubKeyV2|PersonalKeyV2|NewRecordV2' indexer/indexer/dkvs; then
@@ -109,7 +118,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m 'finish DKVS v1 account refactor'
+          git commit -m 'use x-only account IDs throughout DKVS'
           git push origin HEAD:${GITHUB_REF_NAME}
 
       - name: Run DKVS package tests
