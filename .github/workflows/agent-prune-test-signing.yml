@@ -1,0 +1,64 @@
+name: Agent prune test signing
+
+on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Use public account record API in prune test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('indexer/indexer/dkvs_prune_test.go')
+          text = p.read_text()
+          text = text.replace(
+              '"github.com/sat20-labs/satoshinet/btcec"\n',
+              '"github.com/sat20-labs/satoshinet/btcec"\n\t"github.com/sat20-labs/satoshinet/btcec/schnorr"\n',
+              1,
+          )
+          text = text.replace(
+              'record, err := dkvs.NewSignedRecord(priv, key, []byte("value"), dkvs.RecordOptions{',
+              'record, err := dkvs.NewAccountRecord(key, []byte("value"), dkvs.RecordOptions{',
+              1,
+          )
+          old = '''func signDKVSTestRecord(t *testing.T, priv *btcec.PrivateKey, record *wire.DKVSRecord) {
+          \tt.Helper()
+          \tdkvs.SignRecord(priv, record)
+          \tif len(record.Signature) == 0 {
+          \t\tt.Fatal("record signing failed")
+          \t}
+          }'''
+          new = '''func signDKVSTestRecord(t *testing.T, priv *btcec.PrivateKey, record *wire.DKVSRecord) {
+          \tt.Helper()
+          \trecord.PubKey = nil
+          \thash := dkvs.SigningHash(record)
+          \tsig, err := schnorr.Sign(priv, hash[:])
+          \tif err != nil {
+          \t\tt.Fatal(err)
+          \t}
+          \trecord.Signature = sig.Serialize()
+          }'''
+          if old not in text:
+              raise SystemExit('missing prune signing helper')
+          p.write_text(text.replace(old, new, 1))
+          PY
+          gofmt -w indexer/indexer/dkvs_prune_test.go
+          rm .github/workflows/agent-prune-test-signing.yml
+      - name: Commit migration
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'sign prune test records with DKVS account format'
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
