@@ -55,6 +55,10 @@ jobs:
             fi
           fi
 
+      - name: Vet DKVS package
+        working-directory: workspace/satoshinet
+        run: go vet ./indexer/indexer/dkvs
+
       - name: Run DKVS package tests
         id: dkvs-package-tests
         working-directory: workspace/satoshinet
