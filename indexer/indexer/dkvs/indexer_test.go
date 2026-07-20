@@ -48,7 +48,7 @@ func signedPersonalRecordWithKey(t *testing.T, priv *btcec.PrivateKey, seq uint6
 func signedPersonalRecordWithPath(t *testing.T, priv *btcec.PrivateKey, path string, seq uint64, value string, flags uint32) *wire.DKVSRecord {
 	t.Helper()
 	pub := priv.PubKey().SerializeCompressed()
-	key := "/personal/" + personalAccountID(pub) + "/" + path
+	key := "/personal/" + AccountID(pub) + "/" + path
 	record := &wire.DKVSRecord{
 		Version:      Version,
 		Key:          key,
@@ -76,7 +76,7 @@ func testMailMsgKey(t *testing.T, mailboxPubKey, senderPubKey []byte, msgID stri
 
 func TestParseKey(t *testing.T) {
 	pub := make([]byte, 33)
-	account := personalAccountID(pub)
+	account := AccountID(pub)
 	senderAccount := strings.Repeat("1", sha256.Size*2)
 	if _, err := ParseKey("/personal/" + account + "/profile"); err != nil {
 		t.Fatalf("valid key rejected: %v", err)
@@ -579,7 +579,7 @@ func TestParseFeeProof(t *testing.T) {
 }
 
 func TestFeeProofBuilders(t *testing.T) {
-	key := "/personal/" + personalAccountID([]byte("pub")) + "/profile"
+	key := "/personal/" + AccountID([]byte("pub")) + "/profile"
 	proof, err := NewOneshotFeeProof(key, "personal", 1024, 100, "pool", "payer", "payment", "10")
 	if err != nil {
 		t.Fatal(err)
@@ -644,7 +644,7 @@ func TestJSONFeeVerifierPutLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	record := signedRecordWithStructuredFee(t, priv, key, 1, FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
@@ -691,7 +691,7 @@ func TestJSONFeeVerifierRejectsMalformedProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	record := signedRecordWithStructuredFee(t, priv, key, 1, FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
@@ -710,7 +710,7 @@ func TestFeeProofCoveredByRecordSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	proof := FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
@@ -742,7 +742,7 @@ func TestAutopayFeeVerifierCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := personalAccountID(priv.PubKey().SerializeCompressed())
+	account := AccountID(priv.PubKey().SerializeCompressed())
 	contract := "autopay-contract"
 	recipient := "dkvs-fee-recipient"
 	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
@@ -916,7 +916,7 @@ func TestAutopayFeeVerifierRejectsInvalidStateAndPayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := personalAccountID(priv.PubKey().SerializeCompressed())
+	account := AccountID(priv.PubKey().SerializeCompressed())
 	key := "/personal/" + account + "/profile"
 	contract := "autopay-contract"
 	recipient := "dkvs-fee-recipient"
@@ -1039,7 +1039,7 @@ func TestHTTPFeeVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	proof := FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
@@ -1928,7 +1928,7 @@ func TestMailPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mailboxID := personalAccountID(ownerPriv.PubKey().SerializeCompressed())
+	mailboxID := AccountID(ownerPriv.PubKey().SerializeCompressed())
 	msgKey := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
 	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msgKey, 1)); err != nil || !updated {
 		t.Fatalf("mail msg put updated=%v err=%v", updated, err)
@@ -2746,7 +2746,7 @@ func TestSubscribePullsCurrentRecordsAndUnsubscribe(t *testing.T) {
 	if _, err := idx.PutLocal(recordB); err != nil {
 		t.Fatal(err)
 	}
-	prefix := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed())
+	prefix := "/personal/" + AccountID(priv.PubKey().SerializeCompressed())
 	records, total, err := idx.Subscribe(Subscription{Type: SubscriptionPrefix, Target: prefix})
 	if err != nil {
 		t.Fatal(err)
@@ -2895,7 +2895,7 @@ func TestSyncFiltered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed())
+	prefix := "/personal/" + AccountID(priv.PubKey().SerializeCompressed())
 	for n, path := range []string{"a", "b"} {
 		record := signedPersonalRecordWithPath(t, priv, path, uint64(n+1), path, 0)
 		if _, err := idx.PutLocal(record); err != nil {
@@ -2957,7 +2957,7 @@ func TestUsageFiltersActiveRecordsByPrefix(t *testing.T) {
 		}
 	}
 	height = 2
-	prefix := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed())
+	prefix := "/personal/" + AccountID(priv.PubKey().SerializeCompressed())
 	usage, err := idx.Usage(prefix + "/")
 	if err != nil {
 		t.Fatal(err)

@@ -287,7 +287,7 @@ func AssembleBlobFromRecords(manifestRecord *wire.DKVSRecord, chunkRecords []*wi
 	}
 	accountID := parsed.Segments[0]
 	objectID := parsed.Segments[1]
-	if accountID != personalAccountID(manifestRecord.PubKey) {
+	if accountID != AccountID(manifestRecord.PubKey) {
 		return nil, nil, ErrPermissionDenied
 	}
 	manifest, err := ParseBlobManifestValue(manifestRecord.Value, policy)

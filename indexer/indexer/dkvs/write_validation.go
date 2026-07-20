@@ -152,7 +152,7 @@ func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolve
 		// Public address mappings are pubkey-free account records.
 		return ErrPermissionDenied
 	case "personal":
-		if len(parsed.Segments) < 2 || parsed.Segments[0] != personalAccountID(pubKey) {
+		if len(parsed.Segments) < 2 || parsed.Segments[0] != AccountID(pubKey) {
 			return ErrPermissionDenied
 		}
 	case "name":
@@ -181,11 +181,11 @@ func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolve
 		return identity.CanSign(pubKey)
 	case "mail":
 		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" &&
-			parsed.Segments[0] != personalAccountID(pubKey) {
+			parsed.Segments[0] != AccountID(pubKey) {
 			return ErrPermissionDenied
 		}
 	case "blob":
-		if len(parsed.Segments) < 3 || parsed.Segments[0] != personalAccountID(pubKey) {
+		if len(parsed.Segments) < 3 || parsed.Segments[0] != AccountID(pubKey) {
 			return ErrPermissionDenied
 		}
 	case "sys":
@@ -244,12 +244,12 @@ func validateMailWritePermissionWith(parsed ParsedKey, record, existing *wire.DK
 		return ErrInvalidKey
 	}
 	if IsTombstone(record.Flags) {
-		if parsed.Segments[0] != personalAccountID(record.PubKey) {
+		if parsed.Segments[0] != AccountID(record.PubKey) {
 			return ErrPermissionDenied
 		}
 		return nil
 	}
-	if len(parsed.Segments) != 4 || parsed.Segments[2] != personalAccountID(record.PubKey) {
+	if len(parsed.Segments) != 4 || parsed.Segments[2] != AccountID(record.PubKey) {
 		return ErrPermissionDenied
 	}
 	if existing == nil || IsTombstone(existing.Flags) {
