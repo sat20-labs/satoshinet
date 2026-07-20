@@ -194,10 +194,9 @@ func TestPersonalPermissionAndCheckpoint(t *testing.T) {
 	}
 	bad := signedPersonalRecordWithKey(t, priv, 2, "bad", 0)
 	bad.Key = "/personal/" + hex.EncodeToString(make([]byte, 32)) + "/profile"
-	hash := SigningHash(bad)
-	bad.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
-	if _, err := idx.PutLocal(bad); err != ErrPermissionDenied {
-		t.Fatalf("permission err=%v", err)
+	signRecord(t, priv, bad)
+	if _, err := idx.PutLocal(bad); err != ErrInvalidSignature {
+		t.Fatalf("wrong account signer err=%v", err)
 	}
 	cp, err := idx.Checkpoint()
 	if err != nil {
@@ -251,8 +250,7 @@ func TestSnapshotMatchesCheckpointAndFiltersInactive(t *testing.T) {
 	active := signedPersonalRecordWithPath(t, priv, "active", 1, "active", 0)
 	expired := signedPersonalRecordWithPath(t, priv, "expired", 1, "expired", 0)
 	expired.ExpiryHeight = 2
-	hash := SigningHash(expired)
-	expired.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	signRecord(t, priv, expired)
 	if _, err := idx.PutLocal(active); err != nil {
 		t.Fatal(err)
 	}
@@ -434,26 +432,21 @@ func signedRecordForKey(t *testing.T, priv *btcec.PrivateKey, key string, seq ui
 
 func signedRecordWithValue(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, value []byte, flags uint32) *wire.DKVSRecord {
 	t.Helper()
-	record := &wire.DKVSRecord{
-		Version:      Version,
-		Key:          key,
-		Value:        value,
-		PubKey:       priv.PubKey().SerializeCompressed(),
-		Seq:          seq,
-		IssueTime:    currentUnixMilli(),
-		TTL:          60_000,
-		ExpiryHeight: 100,
-		Flags:        flags,
+	record, err := NewSignedRecord(priv, key, value, RecordOptions{
+		Seq: seq, TTL: 60_000, ExpiryHeight: 100, Flags: flags,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	hash := SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
 	return record
 }
 
 func signRecord(t *testing.T, priv *btcec.PrivateKey, record *wire.DKVSRecord) {
 	t.Helper()
-	hash := SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	SignRecord(priv, record)
+	if len(record.Signature) == 0 {
+		t.Fatal("record signing failed")
+	}
 }
 
 func signedRecordWithStructuredFee(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, proof FeeProof) *wire.DKVSRecord {

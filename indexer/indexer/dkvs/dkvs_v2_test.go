@@ -575,7 +575,7 @@ func TestApplyMirrorPreservesExpiredPaidRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filter := []Subscription{{Type: SubscriptionPrefix, Target: "/personal/" + AccountID(record.PubKey)}}
+	filter := []Subscription{{Type: SubscriptionPrefix, Target: "/personal/" + AccountID(priv.PubKey().SerializeCompressed())}}
 	if _, err := target.ApplyMirror(filter, nil, root); err != nil {
 		t.Fatal(err)
 	}
