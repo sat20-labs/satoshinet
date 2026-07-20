@@ -1,0 +1,85 @@
+name: Agent DKVS v1 fixup
+
+on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
+
+permissions:
+  contents: write
+
+jobs:
+  fixup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply remaining DKVS v1 edits
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('indexer/indexer/dkvs/write_validation.go')
+          text = p.read_text()
+          text = text.replace('Public address mappings are version-2 Schnorr records only.', 'Public address mappings are pubkey-free account records.')
+          text = text.replace('if record.Version == VersionV2 {\n\t\treturn false, ValidateRecordIdentity(record, parsed)\n\t}', 'if len(record.PubKey) == 0 {\n\t\treturn false, ValidateRecordIdentity(record, parsed)\n\t}')
+          text = text.replace('if record == nil || !IsSupportedRecordVersion(record.Version) {', 'if record == nil || record.Version != Version {')
+          p.write_text(text)
+
+          p = Path('indexer/indexer/dkvs/sdk.go')
+          text = p.read_text()
+          needle = '\tif err := VerifySignature(record); err != nil {\n\t\treturn err\n\t}\n\tif IsTombstone(record.Flags) && len(record.Value) != 0 {'
+          replacement = '\tif err := VerifySignature(record); err != nil {\n\t\treturn err\n\t}\n\tif err := ValidateRecordIdentity(record, parsed); err != nil {\n\t\treturn err\n\t}\n\tif IsTombstone(record.Flags) && len(record.Value) != 0 {'
+          if needle in text:
+              text = text.replace(needle, replacement, 1)
+          old = 'func AccountID(pubKey []byte) string {\n\treturn personalAccountID(pubKey)\n}\n\nfunc PersonalKey(pubKey []byte, path string) (string, error) {\n\tkey := "/personal/" + AccountID(pubKey) + "/" + normalizePath(path)\n\t_, err := ParseKey(key)\n\treturn key, err\n}'
+          new = 'func AccountID(pubKey []byte) string {\n\taccountID, err := CanonicalAccountID(pubKey)\n\tif err != nil {\n\t\treturn ""\n\t}\n\treturn accountID\n}\n\nfunc PersonalKey(pubKey []byte, path string) (string, error) {\n\taccountID, err := CanonicalAccountID(pubKey)\n\tif err != nil {\n\t\treturn "", err\n\t}\n\treturn AccountPersonalKey(accountID, path)\n}'
+          text = text.replace(old, new)
+          p.write_text(text)
+
+          p = Path('indexer/indexer/dkvs/fee_autopay.go')
+          text = p.read_text()
+          if 'func positiveRat(' not in text:
+              text += '''\nfunc positiveRat(value string) (*big.Rat, error) {\n\trat, err := parseRat(value)\n\tif err != nil { return nil, err }\n\tif rat.Sign() <= 0 { return nil, ErrInvalidFeeProof }\n\treturn rat, nil\n}\n\nfunc nonNegativeRat(value string) (*big.Rat, error) {\n\tif strings.TrimSpace(value) == "" { return new(big.Rat), nil }\n\trat, err := parseRat(value)\n\tif err != nil { return nil, err }\n\tif rat.Sign() < 0 { return nil, ErrInvalidFeeProof }\n\treturn rat, nil\n}\n\nfunc parseRat(value string) (*big.Rat, error) {\n\tvalue = strings.TrimSpace(value)\n\tif value == "" { return nil, ErrInvalidFeeProof }\n\trat := new(big.Rat)\n\tif _, ok := rat.SetString(value); !ok { return nil, ErrInvalidFeeProof }\n\treturn rat, nil\n}\n'''
+          p.write_text(text)
+
+          old_test = Path('indexer/indexer/dkvs/account_v2_test.go')
+          if old_test.exists():
+              text = old_test.read_text()
+              pairs = {
+                  'signedAccountRecordV2': 'signedAccountRecord',
+                  'NewRecordV2': 'NewAccountRecord',
+                  'TestAccountIDV2AndAddressMapping': 'TestAccountIDAndAddressMapping',
+                  'AccountIDV2': 'CanonicalAccountID',
+                  'AccountPubKeyV2': 'AccountPubKey',
+                  'TestAccountV2PersonalAndMailboxPermissions': 'TestAccountPersonalAndMailboxPermissions',
+                  'PersonalKeyV2': 'AccountPersonalKey',
+                  'TestAccountV2RejectsForgedAddressMapping': 'TestAccountRejectsForgedAddressMapping',
+              }
+              for old, new in pairs.items():
+                  text = text.replace(old, new)
+              marker = '\nfunc TestAccountV2KeepsVersionOneCompatibility'
+              if marker in text:
+                  text = text[:text.index(marker)] + '\n'
+              Path('indexer/indexer/dkvs/account_test.go').write_text(text)
+              old_test.unlink()
+
+          p = Path('.github/workflows/dkvs-dev-bootstrap.yml')
+          text = p.read_text().replace('rgb11-dkvs-v2', 'rgb11-dkvs-v1').replace('DKVS v2 checks', 'DKVS v1 checks')
+          p.write_text(text)
+          PY
+          gofmt -w indexer/indexer/dkvs/*.go
+          if grep -R -n -E 'VersionV2|AccountIDV2|AccountPubKeyV2|PersonalKeyV2|NewRecordV2' indexer/indexer/dkvs; then
+            exit 1
+          fi
+      - name: Commit fixup
+        shell: bash
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'finish DKVS v1 account refactor'
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
