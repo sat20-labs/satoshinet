@@ -55,6 +55,15 @@ jobs:
             fi
           fi
 
+      - name: Check single-version DKVS API
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          if grep -R -n -E 'VersionV2|AccountIDV2|AccountPubKeyV2|PersonalKeyV2|NewRecordV2|KeepsVersionOneCompatibility' indexer/indexer/dkvs; then
+            echo 'DKVS must expose only the canonical version-1 account format.'
+            exit 1
+          fi
+
       - name: Vet DKVS package
         working-directory: workspace/satoshinet
         run: go vet ./indexer/indexer/dkvs
