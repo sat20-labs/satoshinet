@@ -45,22 +45,19 @@ jobs:
       - name: Format DKVS sources
         working-directory: workspace/satoshinet
         shell: bash
-        run: |
-          files=$(find indexer/indexer/dkvs -maxdepth 1 -name '*.go' -print)
-          files="$files indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/handler.go indexer/rpcserver/indexer/handler_test.go indexer/rpcserver/indexer/model.go indexer/rpcserver/indexer/router.go indexer/share/indexer/interface.go server.go server_dkvs_test.go"
-          gofmt -w $files
+        run: find indexer/indexer/dkvs -maxdepth 1 -name '*.go' -print0 | xargs -0 gofmt -w
 
       - name: Commit formatting
         if: github.event_name == 'push'
         working-directory: workspace/satoshinet
         shell: bash
         run: |
-          if git diff --quiet; then
+          if git diff --quiet -- indexer/indexer/dkvs; then
             exit 0
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -- '*.go'
+          git add indexer/indexer/dkvs/*.go
           git commit -m 'gofmt RGB11 DKVS implementation'
           git push origin HEAD:${GITHUB_REF_NAME}
 
