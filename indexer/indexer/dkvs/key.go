@@ -16,6 +16,7 @@ var allowedNamespaces = map[string]struct{}{
 	"sys":      {},
 	"name":     {},
 	"svc":      {},
+	"account":  {},
 	"personal": {},
 	"mail":     {},
 	"blob":     {},
@@ -107,6 +108,10 @@ func IsTombstone(flags uint32) bool {
 
 func validateNamespaceShape(parsed ParsedKey) error {
 	switch parsed.Namespace {
+	case "account":
+		if len(parsed.Segments) != 2 || !validAccountNetwork(parsed.Segments[0]) {
+			return ErrInvalidKey
+		}
 	case "personal":
 		if len(parsed.Segments) < 2 || !validAccountID(parsed.Segments[0]) {
 			return ErrInvalidKey
