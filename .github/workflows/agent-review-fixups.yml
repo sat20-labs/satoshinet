@@ -1,0 +1,92 @@
+name: Agent review fixups
+
+on:
+  push:
+    branches: [agent/rgb11-dkvs-transfer-a]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Enforce one account-record format
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          account = Path('indexer/indexer/dkvs/account.go')
+          text = account.read_text()
+          marker = 'func validAccountNetwork(network string) bool {\n\t_, _, err := accountNetworkParams(network)\n\treturn err == nil\n}\n'
+          helper = marker + '''\nfunc isAccountScopedNamespace(namespace string) bool {\n\tswitch namespace {\n\tcase "account", "personal", "mail", "blob":\n\t\treturn true\n\tdefault:\n\t\treturn false\n\t}\n}\n'''
+          if 'func isAccountScopedNamespace' not in text:
+              if marker not in text:
+                  raise SystemExit('missing account namespace insertion point')
+              text = text.replace(marker, helper)
+          old = '''\tif len(record.PubKey) != 0 {\n\t\tif parsed.Namespace == "account" {\n\t\t\treturn ErrInvalidRecord\n\t\t}\n\t\treturn nil\n\t}\n\taccountID, err := RecordSignerAccountID(record, parsed)'''
+          new = '''\taccountScoped := isAccountScopedNamespace(parsed.Namespace)\n\tif accountScoped && len(record.PubKey) != 0 {\n\t\treturn ErrInvalidRecord\n\t}\n\tif !accountScoped {\n\t\tif len(record.PubKey) == 0 {\n\t\t\treturn ErrInvalidRecord\n\t\t}\n\t\treturn nil\n\t}\n\taccountID, err := RecordSignerAccountID(record, parsed)'''
+          if old not in text:
+              raise SystemExit('missing ValidateRecordIdentity block')
+          account.write_text(text.replace(old, new))
+
+          indexer = Path('indexer/indexer/dkvs/indexer.go')
+          text = indexer.read_text()
+          old = '''func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRecord) error {\n\tif record == nil {\n\t\treturn ErrInvalidRecord\n\t}\n\t// External authority checks'''
+          new = '''func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRecord) error {\n\tif record == nil {\n\t\treturn ErrInvalidRecord\n\t}\n\tif isAccountScopedNamespace(parsed.Namespace) {\n\t\treturn ValidateRecordIdentity(record, parsed)\n\t}\n\t// External authority checks'''
+          if old not in text:
+              raise SystemExit('missing validateStoredPermission block')
+          indexer.write_text(text.replace(old, new))
+
+          sdk = Path('indexer/indexer/dkvs/sdk.go')
+          text = sdk.read_text()
+          pattern = re.compile(r'func AssembleBlobFromRecords\(manifestRecord \*wire\.DKVSRecord, chunkRecords \[\]\*wire\.DKVSRecord, policy BlobPolicy\) \(\*BlobManifest, \[\]byte, error\) \{.*?\n\}\n\nfunc CheckpointFromRecords', re.S)
+          replacement = '''func AssembleBlobFromRecords(manifestRecord *wire.DKVSRecord, chunkRecords []*wire.DKVSRecord, policy BlobPolicy) (*BlobManifest, []byte, error) {\n\treturn AssembleAccountBlobFromRecords(manifestRecord, chunkRecords, policy, RecordVerificationOptions{})\n}\n\nfunc CheckpointFromRecords'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('missing AssembleBlobFromRecords function')
+          sdk.write_text(text)
+
+          signing = Path('indexer/indexer/dkvs/signing_test.go')
+          text = signing.read_text()
+          text = text.replace('"github.com/sat20-labs/satoshinet/btcec/ecdsa"', '"github.com/sat20-labs/satoshinet/btcec/ecdsa"\n\t"github.com/sat20-labs/satoshinet/btcec/schnorr"')
+          old = '''\trecord, err := NewRecord(key, value, priv.PubKey().SerializeCompressed(), opts)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tSignRecord(priv, record)'''
+          new = '''\tparsed, err := ParseKey(key)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar record *wire.DKVSRecord\n\tif isAccountScopedNamespace(parsed.Namespace) {\n\t\trecord, err = NewAccountRecord(key, value, opts)\n\t} else {\n\t\trecord, err = NewRecord(key, value, priv.PubKey().SerializeCompressed(), opts)\n\t}\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tSignRecord(priv, record)'''
+          if old not in text:
+              raise SystemExit('missing NewSignedRecord body')
+          text = text.replace(old, new)
+          old = '''\tpubKey := priv.PubKey().SerializeCompressed()\n\tif !bytes.Equal(existing.PubKey, pubKey) {\n\t\treturn nil, ErrPermissionDenied\n\t}'''
+          new = '''\tpubKey := priv.PubKey().SerializeCompressed()\n\tparsed, err := ParseKey(existing.Key)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif isAccountScopedNamespace(parsed.Namespace) {\n\t\twant, err := RecordSignerAccountID(existing, parsed)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\tgot, err := CanonicalAccountID(pubKey)\n\t\tif err != nil || got != want {\n\t\t\treturn nil, ErrPermissionDenied\n\t\t}\n\t} else if !bytes.Equal(existing.PubKey, pubKey) {\n\t\treturn nil, ErrPermissionDenied\n\t}'''
+          if old not in text:
+              raise SystemExit('missing renewal signer block')
+          text = text.replace(old, new)
+          old = '''func SignRecord(priv *btcec.PrivateKey, record *wire.DKVSRecord) {\n\tif priv == nil || record == nil {\n\t\treturn\n\t}\n\trecord.PubKey = priv.PubKey().SerializeCompressed()\n\thash := SigningHash(record)\n\trecord.Signature = ecdsa.Sign(priv, hash[:]).Serialize()\n}'''
+          new = '''func SignRecord(priv *btcec.PrivateKey, record *wire.DKVSRecord) {\n\tif priv == nil || record == nil {\n\t\treturn\n\t}\n\tparsed, err := ParseKey(record.Key)\n\tif err != nil {\n\t\treturn\n\t}\n\thash := SigningHash(record)\n\tif isAccountScopedNamespace(parsed.Namespace) {\n\t\trecord.PubKey = nil\n\t\thash = SigningHash(record)\n\t\tsig, err := schnorr.Sign(priv, hash[:])\n\t\tif err == nil {\n\t\t\trecord.Signature = sig.Serialize()\n\t\t}\n\t\treturn\n\t}\n\trecord.PubKey = priv.PubKey().SerializeCompressed()\n\thash = SigningHash(record)\n\trecord.Signature = ecdsa.Sign(priv, hash[:]).Serialize()\n}'''
+          if old not in text:
+              raise SystemExit('missing SignRecord function')
+          signing.write_text(text.replace(old, new))
+
+          tests = Path('indexer/indexer/dkvs/indexer_test.go')
+          text = tests.read_text()
+          pattern = re.compile(r'func signedPersonalRecordWithPath\(t \*testing\.T, priv \*btcec\.PrivateKey, path string, seq uint64, value string, flags uint32\) \*wire\.DKVSRecord \{.*?\n\}', re.S)
+          replacement = '''func signedPersonalRecordWithPath(t *testing.T, priv *btcec.PrivateKey, path string, seq uint64, value string, flags uint32) *wire.DKVSRecord {\n\tt.Helper()\n\tkey := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/" + path\n\trecord, err := NewSignedRecord(priv, key, []byte(value), RecordOptions{\n\t\tSeq: seq, TTL: 60_000, ExpiryHeight: 100, Flags: flags,\n\t})\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn record\n}'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('missing signedPersonalRecordWithPath helper')
+          tests.write_text(text)
+          PY
+          gofmt -w indexer/indexer/dkvs/*.go
+      - name: Commit fixups
+        shell: bash
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'enforce the canonical account record format'
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
