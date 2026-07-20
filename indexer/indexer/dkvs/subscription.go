@@ -79,7 +79,7 @@ func validateSubscription(sub Subscription) (Subscription, error) {
 		sub.Target = strings.TrimSuffix(sub.Target, "/")
 	case SubscriptionMailbox:
 		mailboxID := strings.TrimPrefix(strings.TrimSuffix(sub.Target, "/"), "/mail/")
-		if mailboxID == "" || strings.Contains(mailboxID, "/") || !validSegment(mailboxID) {
+		if !validAccountID(mailboxID) {
 			return sub, ErrInvalidKey
 		}
 		sub.Target = "/mail/" + mailboxID

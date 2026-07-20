@@ -2,7 +2,6 @@ package dkvs
 
 import (
 	"bytes"
-	"encoding/json"
 
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
@@ -89,7 +88,7 @@ func AttachSignedFeeProof(record *wire.DKVSRecord, proof *FeeProof, priv *btcec.
 	return nil
 }
 
-func BuildSignedBlobRecords(priv *btcec.PrivateKey, objectID string, chunks [][]byte, metadata json.RawMessage, opts RecordOptions) (*wire.DKVSRecord, []*wire.DKVSRecord, error) {
+func BuildSignedBlobRecords(priv *btcec.PrivateKey, objectID string, chunks [][]byte, metadata []byte, opts RecordOptions) (*wire.DKVSRecord, []*wire.DKVSRecord, error) {
 	if opts.IssueTime == 0 {
 		opts.IssueTime = currentUnixMilli()
 	}

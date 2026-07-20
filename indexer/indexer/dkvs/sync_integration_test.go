@@ -164,9 +164,7 @@ func TestOrdinaryNodeMailboxSubscriptionSyncAndNotify(t *testing.T) {
 		t.Fatal(err)
 	}
 	mailboxID := personalAccountID(ownerPriv.PubKey().SerializeCompressed())
-	otherMailboxID := personalAccountID(otherOwnerPriv.PubKey().SerializeCompressed())
-
-	msg1 := "/mail/" + mailboxID + "/msg/msg-1"
+	msg1 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
 	if updated, err := miner.PutLocal(signedRecordWithValue(t, senderPriv, msg1, 1, []byte("msg-1"), 0)); err != nil || !updated {
 		t.Fatalf("put msg1 updated=%v err=%v", updated, err)
 	}
@@ -174,7 +172,7 @@ func TestOrdinaryNodeMailboxSubscriptionSyncAndNotify(t *testing.T) {
 	if updated, err := miner.PutLocal(signedRecordWithValue(t, ownerPriv, share1, 1, []byte("share-1"), 0)); err != nil || !updated {
 		t.Fatalf("put share1 updated=%v err=%v", updated, err)
 	}
-	otherMsg := "/mail/" + otherMailboxID + "/msg/msg-1"
+	otherMsg := testMailMsgKey(t, otherOwnerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
 	if updated, err := miner.PutLocal(signedRecordWithValue(t, senderPriv, otherMsg, 1, []byte("other"), 0)); err != nil || !updated {
 		t.Fatalf("put other msg updated=%v err=%v", updated, err)
 	}
@@ -196,7 +194,7 @@ func TestOrdinaryNodeMailboxSubscriptionSyncAndNotify(t *testing.T) {
 		t.Fatalf("ordinary stored unrelated mailbox err=%v", err)
 	}
 
-	msg2 := "/mail/" + mailboxID + "/msg/msg-2"
+	msg2 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-2")
 	record2 := signedRecordWithValue(t, senderPriv, msg2, 2, []byte("msg-2"), 0)
 	if updated, err := miner.PutLocal(record2); err != nil || !updated {
 		t.Fatalf("put msg2 updated=%v err=%v", updated, err)

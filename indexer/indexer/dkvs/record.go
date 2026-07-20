@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -15,6 +14,8 @@ import (
 )
 
 var signatureDomain = []byte("satoshinet-dkvs-record-v1")
+
+const notifyEventMagic = "DKNE"
 
 func RecordSize(record *wire.DKVSRecord) int {
 	return wire.DKVSRecordSerializeSize(record)
@@ -178,18 +179,31 @@ func MarshalNotifyEvent(event *NotifyEvent) ([]byte, error) {
 	if _, err := RecordFromNotifyEvent(event); err != nil {
 		return nil, err
 	}
-	return json.Marshal(event)
+	if len(event.Data) > wire.MaxDKVSNotifyDataSize {
+		return nil, ErrInvalidRecord
+	}
+	buf := make([]byte, len(notifyEventMagic)+1+4+len(event.Data))
+	copy(buf, notifyEventMagic)
+	buf[len(notifyEventMagic)] = event.EventType
+	binary.BigEndian.PutUint32(buf[len(notifyEventMagic)+1:], uint32(len(event.Data)))
+	copy(buf[len(notifyEventMagic)+1+4:], event.Data)
+	return buf, nil
 }
 
 func UnmarshalNotifyEvent(data []byte) (*NotifyEvent, error) {
-	var event NotifyEvent
-	if err := json.Unmarshal(data, &event); err != nil {
+	const headerSize = len(notifyEventMagic) + 1 + 4
+	if len(data) < headerSize || string(data[:len(notifyEventMagic)]) != notifyEventMagic {
+		return nil, ErrInvalidRecord
+	}
+	dataLen := binary.BigEndian.Uint32(data[len(notifyEventMagic)+1:])
+	if int(dataLen) != len(data)-headerSize || dataLen == 0 || dataLen > wire.MaxDKVSNotifyDataSize {
+		return nil, ErrInvalidRecord
+	}
+	event := &NotifyEvent{EventType: data[len(notifyEventMagic)], Data: append([]byte(nil), data[headerSize:]...)}
+	if _, err := RecordFromNotifyEvent(event); err != nil {
 		return nil, err
 	}
-	if _, err := RecordFromNotifyEvent(&event); err != nil {
-		return nil, err
-	}
-	return &event, nil
+	return event, nil
 }
 
 func currentUnixMilli() uint64 {

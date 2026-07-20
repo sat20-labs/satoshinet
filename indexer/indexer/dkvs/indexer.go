@@ -801,9 +801,20 @@ func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRe
 			return ErrPermissionDenied
 		}
 	case "mail":
-		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" &&
-			parsed.Segments[0] != personalAccountID(record.PubKey) {
-			return ErrPermissionDenied
+		if len(parsed.Segments) < 2 {
+			return ErrInvalidKey
+		}
+		switch parsed.Segments[1] {
+		case "msg":
+			if len(parsed.Segments) != 4 || parsed.Segments[2] != personalAccountID(record.PubKey) {
+				return ErrPermissionDenied
+			}
+		case "share":
+			if parsed.Segments[0] != personalAccountID(record.PubKey) {
+				return ErrPermissionDenied
+			}
+		default:
+			return ErrInvalidKey
 		}
 	case "blob":
 		if len(parsed.Segments) < 3 || parsed.Segments[0] != personalAccountID(record.PubKey) {

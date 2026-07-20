@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -165,8 +164,8 @@ func ServiceKey(serviceName, path string) (string, error) {
 	return key, err
 }
 
-func MailMsgKey(mailboxID, msgID string) (string, error) {
-	key := "/mail/" + mailboxID + "/msg/" + msgID
+func MailMsgKey(mailboxID, senderID, msgID string) (string, error) {
+	key := "/mail/" + mailboxID + "/msg/" + senderID + "/" + msgID
 	_, err := ParseKey(key)
 	return key, err
 }
@@ -195,7 +194,7 @@ func TmpKey(randomID string) (string, error) {
 	return key, err
 }
 
-func BuildBlobManifest(chunks [][]byte, metadata json.RawMessage, ttl, expiryHeight uint64) (*BlobManifest, []byte, error) {
+func BuildBlobManifest(chunks [][]byte, metadata []byte, ttl, expiryHeight uint64) (*BlobManifest, []byte, error) {
 	if len(chunks) == 0 {
 		return nil, nil, ErrBlobManifestInvalid
 	}
@@ -225,9 +224,9 @@ func BuildBlobManifest(chunks [][]byte, metadata json.RawMessage, ttl, expiryHei
 		ChunkHashes:  chunkHashes,
 		TTL:          ttl,
 		ExpiryHeight: expiryHeight,
-		Metadata:     metadata,
+		Metadata:     append([]byte(nil), metadata...),
 	}
-	encoded, err := json.Marshal(manifest)
+	encoded, err := encodeBlobManifest(manifest)
 	if err != nil {
 		return nil, nil, err
 	}

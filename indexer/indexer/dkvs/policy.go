@@ -1,14 +1,16 @@
 package dkvs
 
 const (
-	DefaultMailboxMaxMsgBytes   = uint64(1024 * 1024)
-	DefaultMailboxMaxMessages   = uint64(1024)
-	DefaultMailboxMaxMsgSize    = MaxRecordValueSize
-	DefaultMailboxMaxMsgTTL     = uint64(30 * 24 * 60 * 60 * 1000)
-	DefaultMailboxMaxShareBytes = uint64(1024 * 1024)
-	DefaultMailboxMaxShares     = uint64(256)
-	DefaultMailboxMaxShareSize  = MaxRecordValueSize
-	DefaultMailboxMaxShareTTL   = uint64(365 * 24 * 60 * 60 * 1000)
+	DefaultMailboxMaxMsgBytes          = uint64(1024 * 1024)
+	DefaultMailboxMaxMessages          = uint64(1024)
+	DefaultMailboxMaxMsgBytesPerSender = uint64(128 * 1024)
+	DefaultMailboxMaxMessagesPerSender = uint64(128)
+	DefaultMailboxMaxMsgSize           = MaxRecordValueSize
+	DefaultMailboxMaxMsgTTL            = uint64(30 * 24 * 60 * 60 * 1000)
+	DefaultMailboxMaxShareBytes        = uint64(1024 * 1024)
+	DefaultMailboxMaxShares            = uint64(256)
+	DefaultMailboxMaxShareSize         = MaxRecordValueSize
+	DefaultMailboxMaxShareTTL          = uint64(365 * 24 * 60 * 60 * 1000)
 
 	DefaultBlobMaxTotalSize = uint64(1024 * 1024)
 	DefaultBlobMaxChunkSize = MaxRecordValueSize
@@ -24,6 +26,12 @@ func normalizeMailboxPolicy(policy MailboxPolicy) MailboxPolicy {
 	}
 	if policy.MaxMessages == 0 {
 		policy.MaxMessages = DefaultMailboxMaxMessages
+	}
+	if policy.MaxMsgBytesPerSender == 0 {
+		policy.MaxMsgBytesPerSender = DefaultMailboxMaxMsgBytesPerSender
+	}
+	if policy.MaxMessagesPerSender == 0 {
+		policy.MaxMessagesPerSender = DefaultMailboxMaxMessagesPerSender
 	}
 	if policy.MaxMsgSize == 0 {
 		policy.MaxMsgSize = DefaultMailboxMaxMsgSize

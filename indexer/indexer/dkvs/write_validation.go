@@ -231,7 +231,7 @@ func resolveIdentityWith(parsed ParsedKey, resolver DIDResolver) (DIDIdentity, e
 }
 
 func validateMailWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRecord, resolver DIDResolver, system SystemVerifier) error {
-	if len(parsed.Segments) < 2 {
+	if len(parsed.Segments) < 2 || record == nil {
 		return ErrInvalidKey
 	}
 	if parsed.Segments[1] == "share" {
@@ -245,6 +245,9 @@ func validateMailWritePermissionWith(parsed ParsedKey, record, existing *wire.DK
 			return ErrPermissionDenied
 		}
 		return nil
+	}
+	if len(parsed.Segments) != 4 || parsed.Segments[2] != personalAccountID(record.PubKey) {
+		return ErrPermissionDenied
 	}
 	if existing == nil || IsTombstone(existing.Flags) {
 		return nil

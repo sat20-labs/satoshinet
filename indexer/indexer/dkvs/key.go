@@ -120,7 +120,10 @@ func validateNamespaceShape(parsed ParsedKey) error {
 			return ErrInvalidKey
 		}
 	case "mail":
-		if len(parsed.Segments) == 3 && parsed.Segments[1] == "msg" {
+		if !validAccountID(parsed.Segments[0]) {
+			return ErrInvalidKey
+		}
+		if len(parsed.Segments) == 4 && parsed.Segments[1] == "msg" && validAccountID(parsed.Segments[2]) {
 			return nil
 		}
 		if len(parsed.Segments) == 4 && parsed.Segments[1] == "share" {

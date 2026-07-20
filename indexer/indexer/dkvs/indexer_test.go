@@ -65,15 +65,25 @@ func signedPersonalRecordWithPath(t *testing.T, priv *btcec.PrivateKey, path str
 	return record
 }
 
+func testMailMsgKey(t *testing.T, mailboxPubKey, senderPubKey []byte, msgID string) string {
+	t.Helper()
+	key, err := MailMsgKey(AccountID(mailboxPubKey), AccountID(senderPubKey), msgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
 func TestParseKey(t *testing.T) {
 	pub := make([]byte, 33)
 	account := personalAccountID(pub)
+	senderAccount := strings.Repeat("1", sha256.Size*2)
 	if _, err := ParseKey("/personal/" + account + "/profile"); err != nil {
 		t.Fatalf("valid key rejected: %v", err)
 	}
 	for _, key := range []string{
-		"/mail/box/msg/msg-1",
-		"/mail/box/share/pkg/share-1",
+		"/mail/" + account + "/msg/" + senderAccount + "/msg-1",
+		"/mail/" + account + "/share/pkg/share-1",
 		"/blob/" + account + "/object/manifest",
 		"/blob/" + account + "/object/chunk/0",
 		"/tmp/random",
@@ -97,9 +107,10 @@ func TestParseKey(t *testing.T) {
 	}
 	for _, key := range []string{
 		"/personal/abc/profile",
-		"/mail/box/other/msg-1",
-		"/mail/box/msg",
-		"/mail/box/share/pkg",
+		"/mail/" + account + "/other/msg-1",
+		"/mail/" + account + "/msg/msg-1",
+		"/mail/" + account + "/msg/not-an-account/msg-1",
+		"/mail/" + account + "/share/pkg",
 		"/blob/" + account + "/object/chunk/0/extra",
 		"/blob/" + account + "/object",
 		"/blob/not-an-account/object/manifest",
@@ -118,7 +129,7 @@ func TestParseKey(t *testing.T) {
 	}
 	for _, prefix := range []string{
 		"/personal/" + account,
-		"/mail/box",
+		"/mail/" + account,
 		"/blob/" + account + "/object",
 		"/svc/service",
 	} {
@@ -1086,7 +1097,7 @@ func TestSDKKeyBuildersAndSignedRecord(t *testing.T) {
 	for _, build := range []func() (string, error){
 		func() (string, error) { return NameKey("Alice Name") },
 		func() (string, error) { return ServiceKey("wallet", "config") },
-		func() (string, error) { return MailMsgKey(AccountID(pub), "msg-1") },
+		func() (string, error) { return MailMsgKey(AccountID(pub), AccountID(pub), "msg-1") },
 		func() (string, error) { return MailShareKey(AccountID(pub), "pkg", "share-1") },
 		func() (string, error) { return BlobManifestKey(AccountID(pub), "object") },
 		func() (string, error) { return BlobChunkKey(AccountID(pub), "object", 0) },
@@ -1277,7 +1288,7 @@ func TestVerifySubscriptionRecordsForClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	mailboxID := AccountID(priv.PubKey().SerializeCompressed())
-	msg, err := NewSignedRecord(priv, "/mail/"+mailboxID+"/msg/msg-1", []byte("message"), RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	msg, err := NewSignedRecord(priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1"), []byte("message"), RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1918,7 +1929,8 @@ func TestMailPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	mailboxID := personalAccountID(ownerPriv.PubKey().SerializeCompressed())
-	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, "/mail/"+mailboxID+"/msg/msg-1", 1)); err != nil || !updated {
+	msgKey := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
+	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msgKey, 1)); err != nil || !updated {
 		t.Fatalf("mail msg put updated=%v err=%v", updated, err)
 	}
 	if _, err := idx.PutLocal(signedRecordForKey(t, senderPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != ErrPermissionDenied {
@@ -1943,7 +1955,7 @@ func TestMailboxMessageUpdateAndDeletePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/mail/" + AccountID(owner.PubKey().SerializeCompressed()) + "/msg/message-1"
+	key := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), sender.PubKey().SerializeCompressed(), "message-1")
 	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 1, []byte("message"), 0)); err != nil || !updated {
 		t.Fatalf("initial message updated=%v err=%v", updated, err)
 	}
@@ -1977,9 +1989,8 @@ func TestMailboxQuotaAndTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mailboxID := personalAccountID(ownerPriv.PubKey().SerializeCompressed())
-	msg1 := "/mail/" + mailboxID + "/msg/msg-1"
-	msg2 := "/mail/" + mailboxID + "/msg/msg-2"
+	msg1 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
+	msg2 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-2")
 	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msg1, 1)); err != nil || !updated {
 		t.Fatalf("msg1 put updated=%v err=%v", updated, err)
 	}
@@ -1991,6 +2002,112 @@ func TestMailboxQuotaAndTombstone(t *testing.T) {
 	}
 	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msg2, 1)); err != nil || !updated {
 		t.Fatalf("msg2 after tombstone updated=%v err=%v", updated, err)
+	}
+}
+
+func TestMailboxSenderIdentityAndQuotaIsolation(t *testing.T) {
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		MailboxPolicy: MailboxPolicy{
+			MaxMessages:          2,
+			MaxMessagesPerSender: 1,
+		},
+	})
+	owner, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSender, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSender, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	thirdSender, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), firstSender.PubKey().SerializeCompressed(), "same-id")
+	if updated, err := idx.PutLocal(signedRecordForKey(t, firstSender, firstKey, 1)); err != nil || !updated {
+		t.Fatalf("first sender put updated=%v err=%v", updated, err)
+	}
+	forgedKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), secondSender.PubKey().SerializeCompressed(), "forged")
+	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, forgedKey, 1)); err != ErrPermissionDenied {
+		t.Fatalf("forged sender id err=%v", err)
+	}
+	firstSecondKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), firstSender.PubKey().SerializeCompressed(), "second")
+	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, firstSecondKey, 1)); err != ErrMailboxFull {
+		t.Fatalf("per-sender quota err=%v", err)
+	}
+	secondKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), secondSender.PubKey().SerializeCompressed(), "same-id")
+	if updated, err := idx.PutLocal(signedRecordForKey(t, secondSender, secondKey, 1)); err != nil || !updated {
+		t.Fatalf("second sender same msg id updated=%v err=%v", updated, err)
+	}
+	thirdKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), thirdSender.PubKey().SerializeCompressed(), "third")
+	if _, err := idx.PutLocal(signedRecordForKey(t, thirdSender, thirdKey, 1)); err != ErrMailboxFull {
+		t.Fatalf("mailbox-wide quota err=%v", err)
+	}
+
+	mailboxPrefix := "/mail/" + AccountID(owner.PubKey().SerializeCompressed()) + "/msg"
+	records, total, err := idx.ListPrefix(mailboxPrefix, 0, 10)
+	if err != nil || total != 2 || len(records) != 2 {
+		t.Fatalf("mailbox records=%d total=%d err=%v", len(records), total, err)
+	}
+	firstSenderPath := mailboxPrefix + "/" + AccountID(firstSender.PubKey().SerializeCompressed())
+	meta, err := idx.GetPathMeta(firstSenderPath)
+	if err != nil || meta.ActiveRecords != 1 {
+		t.Fatalf("sender path meta=%#v err=%v", meta, err)
+	}
+}
+
+func TestMailboxAutopayChargesSenderAndDeleteReleasesCapacity(t *testing.T) {
+	owner, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := "mailbox-autopay"
+	senderPayer, err := P2TRAddressFromPubKeyBytes(sender.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := testIndexerWithConfig(t, Config{FeeVerifier: AutopayFeeVerifier{
+		StateProvider: testAutopayStateProvider{states: map[string]*AutopayContractState{
+			contract: {
+				TemplateName: "autopay.tc",
+				Status:       "active",
+				Delegates: map[string]AutopayDelegateState{
+					senderPayer: {AmountPerBlock: "1", Balance: "10", Status: "active"},
+				},
+			},
+		}},
+		FullRecordFeePerBlock: "1",
+		AddressParams:         &chaincfg.TestNetParams,
+	}})
+
+	msgKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), sender.PubKey().SerializeCompressed(), "paid")
+	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, sender, msgKey, 1, contract, 100)); err != nil || !updated {
+		t.Fatalf("sender-paid message updated=%v err=%v", updated, err)
+	}
+	secondKey := "/personal/" + AccountID(sender.PubKey().SerializeCompressed()) + "/second"
+	if _, err := idx.PutLocal(signedRecordWithAutopayFee(t, sender, secondKey, 1, contract, 100)); err != ErrFeeCapacityExceeded {
+		t.Fatalf("sender capacity was not consumed err=%v", err)
+	}
+	deleteRecord := signedRecordWithValue(t, owner, msgKey, 2, nil, FlagTombstone)
+	if len(deleteRecord.FeeProof) != 0 {
+		t.Fatal("recipient delete unexpectedly has a fee proof")
+	}
+	if updated, err := idx.PutLocal(deleteRecord); err != nil || !updated {
+		t.Fatalf("recipient free delete updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, sender, secondKey, 1, contract, 100)); err != nil || !updated {
+		t.Fatalf("sender capacity after delete updated=%v err=%v", updated, err)
 	}
 }
 
@@ -2033,8 +2150,7 @@ func TestNotifyEventTypes(t *testing.T) {
 	if got.ExpiryHeight != 200 {
 		t.Fatalf("renewal expiry=%d", got.ExpiryHeight)
 	}
-	mailboxID := personalAccountID(priv.PubKey().SerializeCompressed())
-	mailMsg := "/mail/" + mailboxID + "/msg/msg-1"
+	mailMsg := testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1")
 	if _, err := idx.PutLocal(signedRecordForKey(t, priv, mailMsg, 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -2117,8 +2233,7 @@ func TestMailboxTTLAndSizePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mailboxID := personalAccountID(priv.PubKey().SerializeCompressed())
-	tooLong := signedRecordForKey(t, priv, "/mail/"+mailboxID+"/msg/msg-1", 1)
+	tooLong := signedRecordForKey(t, priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1"), 1)
 	tooLong.TTL = 11
 	hash := SigningHash(tooLong)
 	tooLong.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
@@ -2130,7 +2245,7 @@ func TestMailboxTTLAndSizePolicy(t *testing.T) {
 		AllowFreeLocal: true,
 		MailboxPolicy:  MailboxPolicy{MaxMsgSize: 1},
 	})
-	tooLarge := signedRecordWithValue(t, priv, "/mail/"+mailboxID+"/msg/msg-2", 1, []byte("0123456789abcdef0123456789abcdef0123456789abcdef"), 0)
+	tooLarge := signedRecordWithValue(t, priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-2"), 1, []byte("0123456789abcdef0123456789abcdef0123456789abcdef"), 0)
 	if _, err := sizeIdx.PutLocal(tooLarge); err != ErrRecordTooLarge {
 		t.Fatalf("mail size err=%v", err)
 	}
@@ -2326,7 +2441,7 @@ func TestBlobManifestAndChunkValidation(t *testing.T) {
 	chunk0 := []byte("hello ")
 	chunk1 := []byte("world")
 	manifest := testBlobManifest(t, chunk0, chunk1)
-	manifestBytes, err := json.Marshal(manifest)
+	manifestBytes, err := encodeBlobManifest(&manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2370,7 +2485,7 @@ func TestBlobRejectsOtherAccountAndMixedGeneration(t *testing.T) {
 	}
 	chunk0 := []byte("hello")
 	manifest := testBlobManifest(t, chunk0)
-	manifestBytes, err := json.Marshal(manifest)
+	manifestBytes, err := encodeBlobManifest(&manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2567,6 +2682,9 @@ func TestPruneExpiredDoesNotDeletePermissionInvalidRecord(t *testing.T) {
 }
 
 func TestSubscriptionValidationAndMatching(t *testing.T) {
+	mailboxID := strings.Repeat("1", sha256.Size*2)
+	senderID := strings.Repeat("2", sha256.Size*2)
+	otherMailboxID := strings.Repeat("3", sha256.Size*2)
 	tests := []struct {
 		sub     Subscription
 		matches []string
@@ -2583,9 +2701,9 @@ func TestSubscriptionValidationAndMatching(t *testing.T) {
 			misses:  []string{"/blob/account/other/manifest"},
 		},
 		{
-			sub:     Subscription{Type: SubscriptionMailbox, Target: "box"},
-			matches: []string{"/mail/box/msg/msg-1", "/mail/box/share/pkg/share-1"},
-			misses:  []string{"/mail/other/msg/msg-1"},
+			sub:     Subscription{Type: SubscriptionMailbox, Target: mailboxID},
+			matches: []string{"/mail/" + mailboxID + "/msg/" + senderID + "/msg-1", "/mail/" + mailboxID + "/share/pkg/share-1"},
+			misses:  []string{"/mail/" + otherMailboxID + "/msg/" + senderID + "/msg-1"},
 		},
 		{
 			sub:     Subscription{Type: SubscriptionService, Target: "/svc/wallet"},

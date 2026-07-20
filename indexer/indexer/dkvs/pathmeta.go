@@ -24,8 +24,11 @@ func collectionPath(parsed ParsedKey) string {
 	case "svc":
 		return "/svc/" + parsed.Segments[0]
 	case "mail":
-		if len(parsed.Segments) >= 2 && (parsed.Segments[1] == "msg" || parsed.Segments[1] == "share") {
-			return "/mail/" + parsed.Segments[0] + "/" + parsed.Segments[1]
+		if len(parsed.Segments) >= 3 && parsed.Segments[1] == "msg" {
+			return "/mail/" + parsed.Segments[0] + "/msg/" + parsed.Segments[2]
+		}
+		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" {
+			return "/mail/" + parsed.Segments[0] + "/share"
 		}
 	case "blob":
 		if len(parsed.Segments) >= 2 {
@@ -47,7 +50,10 @@ func collectionPathForPrefix(prefix string) string {
 			return prefix
 		}
 	case "mail":
-		if len(parsed.Segments) == 2 && (parsed.Segments[1] == "msg" || parsed.Segments[1] == "share") {
+		if len(parsed.Segments) == 3 && parsed.Segments[1] == "msg" && validAccountID(parsed.Segments[2]) {
+			return prefix
+		}
+		if len(parsed.Segments) == 2 && parsed.Segments[1] == "share" {
 			return prefix
 		}
 	case "blob":

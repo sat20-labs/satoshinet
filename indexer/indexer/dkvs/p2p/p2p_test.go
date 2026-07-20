@@ -118,7 +118,7 @@ func TestSyncFilterConversionAndPayloadBound(t *testing.T) {
 	subs := []dkvs.Subscription{
 		{Type: dkvs.SubscriptionKey, Target: "/tmp/a"},
 		{Type: dkvs.SubscriptionPrefix, Target: "/personal/abc"},
-		{Type: dkvs.SubscriptionMailbox, Target: "/mail/box"},
+		{Type: dkvs.SubscriptionMailbox, Target: "/mail/" + dkvs.AccountID(make([]byte, 33))},
 		{Type: dkvs.SubscriptionService, Target: "/svc/wallet"},
 	}
 	filters := FiltersFromSubscriptions(subs)

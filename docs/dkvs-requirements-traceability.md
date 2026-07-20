@@ -19,7 +19,7 @@
 | G5 | 费用证明 | Partial | `FeeVerifier`、`JSONFeeVerifier`、ONESHOT/LEASE/FREE_LOCAL/AUTOPAY helper、AUTOPAY template contract verifier 已接入；主网费用参数和收益策略仍待定。 |
 | G6 | miner 全量同步 | Done | `MsgDKVSSyncRequest/Response`、serverPeer sync、包内三 miner startup sync 测试。 |
 | G7 | 普通节点按 key/prefix/mailbox/service 订阅 | Done | subscription set、filtered sync、notify filtering；key/prefix/mailbox/service 集成测试。 |
-| G8 | mailbox 与离线 IM | Done | `/mail/msg`、`/mail/share` 权限/quota/TTL/size；SDK app helpers 和 examples。 |
+| G8 | mailbox 与离线 IM | Done | `/mail/<mailbox_id>/msg/<sender_id>/<msg_id>` 发件人身份绑定、发件人 AUTOPAY、收件人免费删除、双层 quota/TTL/size；`/mail/share` owner 权限；SDK app helpers 和 examples。 |
 | G9 | 小型 blob / chunk | Done | owner-scoped named object key、manifest-first、same-generation chunk、chunk/content hash/size/count 校验；SDK blob helper。 |
 | G10 | 预定义 namespace | Done | `/sys`、`/name`、`/svc`、`/personal`、`/mail`、`/blob`、`/tmp` parser/validator；`/sys` v1 子路径收紧到 params/checkpoint/snapshot/miner/pool。 |
 | G11 | Ordinals DID name/service 权限解析 | Partial | `DIDResolver` 契约、L1 `GET /ns/name/:name` owner-address resolver、p2tr pubkey->address 校验、static resolver tests；ascended-sat owner 和 service 生产规则仍待细化。 |

@@ -2,7 +2,6 @@ package dkvs
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -203,14 +202,16 @@ type Snapshot struct {
 }
 
 type MailboxPolicy struct {
-	MaxMsgBytes   uint64
-	MaxMessages   uint64
-	MaxMsgSize    int
-	MaxMsgTTL     uint64
-	MaxShareBytes uint64
-	MaxShares     uint64
-	MaxShareSize  int
-	MaxShareTTL   uint64
+	MaxMsgBytes          uint64
+	MaxMessages          uint64
+	MaxMsgBytesPerSender uint64
+	MaxMessagesPerSender uint64
+	MaxMsgSize           int
+	MaxMsgTTL            uint64
+	MaxShareBytes        uint64
+	MaxShares            uint64
+	MaxShareSize         int
+	MaxShareTTL          uint64
 }
 
 type BlobPolicy struct {
@@ -225,14 +226,14 @@ type TmpPolicy struct {
 }
 
 type BlobManifest struct {
-	ContentHash  string          `json:"content_hash"`
-	TotalSize    uint64          `json:"total_size"`
-	ChunkSize    uint32          `json:"chunk_size"`
-	ChunkCount   uint32          `json:"chunk_count"`
-	ChunkHashes  []string        `json:"chunk_hashes"`
-	TTL          uint64          `json:"ttl,omitempty"`
-	ExpiryHeight uint64          `json:"expiry_height,omitempty"`
-	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	ContentHash  string   `json:"content_hash"`
+	TotalSize    uint64   `json:"total_size"`
+	ChunkSize    uint32   `json:"chunk_size"`
+	ChunkCount   uint32   `json:"chunk_count"`
+	ChunkHashes  []string `json:"chunk_hashes"`
+	TTL          uint64   `json:"ttl,omitempty"`
+	ExpiryHeight uint64   `json:"expiry_height,omitempty"`
+	Metadata     []byte   `json:"metadata,omitempty"`
 }
 
 type defaultResolver struct{}

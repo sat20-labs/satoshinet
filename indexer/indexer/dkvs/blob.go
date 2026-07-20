@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"strconv"
 
@@ -64,8 +63,8 @@ func (i *Indexer) validateBlobLocked(record *wire.DKVSRecord, parsed ParsedKey, 
 }
 
 func parseBlobManifest(value []byte, policy BlobPolicy) (*BlobManifest, error) {
-	var manifest BlobManifest
-	if err := json.Unmarshal(value, &manifest); err != nil {
+	manifest, err := decodeBlobManifest(value)
+	if err != nil {
 		return nil, ErrBlobManifestInvalid
 	}
 	if manifest.ContentHash == "" || manifest.ChunkSize == 0 || manifest.ChunkCount == 0 ||
@@ -88,7 +87,7 @@ func parseBlobManifest(value []byte, policy BlobPolicy) (*BlobManifest, error) {
 			return nil, ErrBlobManifestInvalid
 		}
 	}
-	return &manifest, nil
+	return manifest, nil
 }
 
 func (i *Indexer) getActiveBlobManifestLocked(accountID, objectID string, height, now uint64) (*wire.DKVSRecord, *BlobManifest, error) {

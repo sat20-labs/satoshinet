@@ -1,6 +1,6 @@
 # DKVS Implementation Status
 
-更新时间：2026-07-11
+更新时间：2026-07-20
 
 本文记录当前 SatoshiNet 内置 indexer DKVS 对 `DKVS_Requirements_and_Design_v0.6.md` 的实现状态。它是项目级实现说明，不替代对外协议文档。
 
@@ -16,7 +16,7 @@
 - DKVS 提供可选 `HTTPDIDResolver` 适配器，支持按 `GET /name/<name>`、`GET /service/<service>` 读取 direct 或 `{code,msg,data}` 包装的 DID identity JSON；identity 可返回 `signing_keys`，也可返回 `owner_addresses` / `address`。
 - DKVS 提供 `L1NSResolver` 适配器，支持接入 L1 indexer `GET /ns/name/:name`，使用 `data.address` 作为 owner，按 record pubkey 派生 p2tr 地址并与 owner address 对比；SatoshiNet 节点启动时若配置了 L1 indexer host/proxy，会把该 endpoint 注入为 DKVS L1 NS resolver base URL。
 - DKVS resolver / fee verifier / system verifier 支持初始化配置和运行期注入：`indexer.Config.DKVS`、`SetDKVSResolver`、`SetDKVSFeeVerifier`、`SetDKVSSystemVerifier`；运行期传入 nil 会恢复保守默认。嵌入式 indexer 配置层还支持 `ResolverL1NSBaseURL` / `ResolverHTTPBaseURL` / `FeeVerifierHTTPEndpoint` / `SystemVerifierHTTPEndpoint`，在未显式注入接口时自动构造 `L1NSResolver` / `HTTPDIDResolver` / `HTTPFeeVerifier` / `HTTPSystemVerifier`。
-- `/mail/<mailbox_id>/msg/<msg_id>` 允许有效 signer 投递，受 mailbox msg quota / TTL / size 限制。
+- `/mail/<mailbox_id>/msg/<sender_id>/<msg_id>` 允许发件人投递；`mailbox_id` 和 `sender_id` 都是 `hex(sha256(pubkey))`，路径中的 `sender_id` 必须匹配 record signer。AUTOPAY 容量按 signer 派生的 p2tr delegate 扣减，收件人不承担消息保存费用；收件人可签名免费删除消息并释放发件人容量。消息同时受收件箱总 quota 和每 sender quota / TTL / size 限制。
 - `/mail/<mailbox_id>/share/<package_id>/<share_id>` 要求 mailbox owner 写入，受 share quota / TTL / size 限制。
 - `/sys/*` 通过 `SystemVerifier` 授权；默认拒绝普通写入。
 - `/tmp/<random_id>` 作为短期临时数据，要求非零 TTL，默认 TTL 上限 24 小时，受可配置单条 size 限制。
@@ -54,7 +54,7 @@
 - DKVS 包内集成测试覆盖普通节点订阅 `/svc/<service_name>` 后先用 filtered sync 拉取 service 当前数据、过滤掉其他 service，再接收新增 service record；权限仍走 `DIDResolver`，默认未配置 resolver 时 `/svc` 不开放。
 - 过期 record 手动 prune 和 indexer 低频自动 prune。
 - DKVS Go helper / SDK-style builder：record signing、tombstone、renewal record、fee proof 构造、personal/name/service/mail/blob/tmp key builder、单条 record 本地验证、prefix record set 本地验证、subscription record set 本地验证、blob manifest/chunk record builder、blob manifest 解析、chunk hash 校验和 blob 内容拼接。
-- `sat20wallet/sdk` 新增 SatoshiNet DKVS REST client，覆盖 records、record hash 精确读取、verified record get、verified record hash get、verified prefix list、signed put、signed tombstone、signed renewal、personal record 读写删除续费、prefix usage、key/prefix 订阅、verified subscription initial records、checkpoint、verified snapshot export、snapshot import、prune、subscriptions、mailbox message/share 读写删除订阅、mailbox account_id 创建、signed mailbox message、deleteMessage、blob records 写入、putBlob、putChunkedBlob、getBlob / getChunkedBlob 读取校验拼接、name record 读写、record 级 `ResolveNameRecord(name)`、signed name record、service record 读写列表订阅、signed service record。
+- `sat20wallet/sdk` 新增 SatoshiNet DKVS REST client，覆盖 records、record hash 精确读取、verified record get、verified record hash get、verified prefix list、signed put、signed tombstone、signed renewal、personal record 读写删除续费、prefix usage、key/prefix 订阅、verified subscription initial records、checkpoint、verified snapshot export、snapshot import、prune、subscriptions、mailbox message/share 读写删除订阅、mailbox account_id 创建、发件人 scoped signed mailbox message、AUTOPAY mailbox/offline message、deleteMessage、blob records 写入、putBlob、putChunkedBlob、getBlob / getChunkedBlob 读取校验拼接、name record 读写、record 级 `ResolveNameRecord(name)`、signed name record、service record 读写列表订阅、signed service record。
 - `sat20wallet/sdk` 新增 DKVS 应用级 Go helper，覆盖 wallet recovery encrypted backup、wallet recovery renewal、guardian mailbox share、offline IM message、service authenticity record 的 record 构造、写入、读取和基础 value 校验；这些 helper 只组合现有 DKVS REST client，不新增 wire command 或链语义。
 - `sat20wallet/sdk` 新增可执行 Go examples，覆盖钱包恢复、Guardian mailbox、离线 IM、服务正版检测和 record 级 name 解析样本；示例使用 fake HTTP，不访问外网，不依赖真实 DID resolver。
 - `docs/dkvs-pwa-api-examples.md` 新增 PWA / dApp REST API 调用样本，覆盖 put/get/tombstone、prefix list、usage、subscription、mailbox、blob、checkpoint/snapshot、name/service record 读取；样本明确 record 签名和 fee proof 应由钱包/SDK 完成，不把 REST 样本等同于前端 UI。

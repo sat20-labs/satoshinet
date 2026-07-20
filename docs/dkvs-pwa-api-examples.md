@@ -144,7 +144,7 @@ await subscribeDKVS("service", "wallet");
 
 ## Mailbox
 
-Mailbox IDs use `hex(sha256(pubkey))`. Message writes can be signed by any valid sender; share writes must be signed by the mailbox owner.
+Mailbox IDs and sender IDs use `hex(sha256(pubkey))`. A message key is `/mail/<mailbox_id>/msg/<sender_id>/<msg_id>`, and `<sender_id>` must match the record signing public key. The sender's AUTOPAY delegate pays for message storage; the recipient does not need a delegate and may submit a fee-free signed tombstone. Share writes remain mailbox-owner paid and signed. Mailbox messages are constrained by both mailbox-wide and per-sender quotas.
 
 ```js
 async function readMailboxMessages(mailboxId, start = 0, limit = 100) {

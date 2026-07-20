@@ -212,8 +212,7 @@ func TestMailboxRejectsZeroTTL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mailbox := AccountID(owner.PubKey().SerializeCompressed())
-	record := signedRecordWithValue(t, sender, "/mail/"+mailbox+"/msg/m1", 1, []byte("message"), 0)
+	record := signedRecordWithValue(t, sender, testMailMsgKey(t, owner.PubKey().SerializeCompressed(), sender.PubKey().SerializeCompressed(), "m1"), 1, []byte("message"), 0)
 	record.TTL = 0
 	signRecord(t, sender, record)
 	if _, err := idx.PutLocal(record); !errors.Is(err, ErrInvalidRecord) {
