@@ -339,3 +339,40 @@ func (v AutopayFeeVerifier) maxRecordsForState(state *AutopayContractState, paye
 	}
 	return maxRecords.Uint64(), nil
 }
+
+func positiveRat(value string) (*big.Rat, error) {
+	rat, err := parseRat(value)
+	if err != nil {
+		return nil, err
+	}
+	if rat.Sign() <= 0 {
+		return nil, ErrInvalidFeeProof
+	}
+	return rat, nil
+}
+
+func nonNegativeRat(value string) (*big.Rat, error) {
+	if strings.TrimSpace(value) == "" {
+		return new(big.Rat), nil
+	}
+	rat, err := parseRat(value)
+	if err != nil {
+		return nil, err
+	}
+	if rat.Sign() < 0 {
+		return nil, ErrInvalidFeeProof
+	}
+	return rat, nil
+}
+
+func parseRat(value string) (*big.Rat, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, ErrInvalidFeeProof
+	}
+	rat := new(big.Rat)
+	if _, ok := rat.SetString(value); !ok {
+		return nil, ErrInvalidFeeProof
+	}
+	return rat, nil
+}

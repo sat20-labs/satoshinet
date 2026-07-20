@@ -10,9 +10,9 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-func signedAccountRecordV2(t *testing.T, priv *btcec.PrivateKey, key string, value []byte, seq uint64) *wire.DKVSRecord {
+func signedAccountRecord(t *testing.T, priv *btcec.PrivateKey, key string, value []byte, seq uint64) *wire.DKVSRecord {
 	t.Helper()
-	record, err := NewRecordV2(key, value, RecordOptions{
+	record, err := NewAccountRecord(key, value, RecordOptions{
 		Seq:          seq,
 		TTL:          60_000,
 		ExpiryHeight: 100,
@@ -29,20 +29,20 @@ func signedAccountRecordV2(t *testing.T, priv *btcec.PrivateKey, key string, val
 	return record
 }
 
-func TestAccountIDV2AndAddressMapping(t *testing.T) {
+func TestAccountIDAndAddressMapping(t *testing.T) {
 	idx := testIndexer(t)
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	accountID, err := AccountIDV2(priv.PubKey().SerializeCompressed())
+	accountID, err := CanonicalAccountID(priv.PubKey().SerializeCompressed())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(accountID) != 64 || accountID != strings.ToLower(accountID) {
 		t.Fatalf("unexpected account ID %q", accountID)
 	}
-	pubKey, err := AccountPubKeyV2(accountID)
+	pubKey, err := AccountPubKey(accountID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestAccountIDV2AndAddressMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := signedAccountRecordV2(t, priv, key, value, 1)
+	record := signedAccountRecord(t, priv, key, value, 1)
 	if len(record.PubKey) != 0 {
 		t.Fatal("version 2 record repeated the signer public key")
 	}
@@ -78,7 +78,7 @@ func TestAccountIDV2AndAddressMapping(t *testing.T) {
 	}
 }
 
-func TestAccountV2PersonalAndMailboxPermissions(t *testing.T) {
+func TestAccountPersonalAndMailboxPermissions(t *testing.T) {
 	idx := testIndexer(t)
 	sender, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -88,14 +88,14 @@ func TestAccountV2PersonalAndMailboxPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	senderID, _ := AccountIDV2(sender.PubKey().SerializeCompressed())
-	receiverID, _ := AccountIDV2(receiver.PubKey().SerializeCompressed())
+	senderID, _ := CanonicalAccountID(sender.PubKey().SerializeCompressed())
+	receiverID, _ := CanonicalAccountID(receiver.PubKey().SerializeCompressed())
 
-	personalKey, err := PersonalKeyV2(senderID, "rgb11/receive")
+	personalKey, err := AccountPersonalKey(senderID, "rgb11/receive")
 	if err != nil {
 		t.Fatal(err)
 	}
-	personal := signedAccountRecordV2(t, sender, personalKey, []byte{1, 1}, 1)
+	personal := signedAccountRecord(t, sender, personalKey, []byte{1, 1}, 1)
 	if updated, err := idx.PutLocal(personal); err != nil || !updated {
 		t.Fatalf("put personal updated=%v err=%v", updated, err)
 	}
@@ -104,7 +104,7 @@ func TestAccountV2PersonalAndMailboxPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mail := signedAccountRecordV2(t, sender, mailKey, []byte("ciphertext"), 1)
+	mail := signedAccountRecord(t, sender, mailKey, []byte("ciphertext"), 1)
 	if updated, err := idx.PutLocal(mail); err != nil || !updated {
 		t.Fatalf("put mail updated=%v err=%v", updated, err)
 	}
@@ -112,13 +112,13 @@ func TestAccountV2PersonalAndMailboxPermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	forged := signedAccountRecordV2(t, receiver, mailKey, []byte("forged"), 2)
+	forged := signedAccountRecord(t, receiver, mailKey, []byte("forged"), 2)
 	if _, err := idx.PutLocal(forged); err == nil {
 		t.Fatal("mail record signed by the wrong account was accepted")
 	}
 }
 
-func TestAccountV2RejectsForgedAddressMapping(t *testing.T) {
+func TestAccountRejectsForgedAddressMapping(t *testing.T) {
 	idx := testIndexer(t)
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -128,9 +128,9 @@ func TestAccountV2RejectsForgedAddressMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accountID, _ := AccountIDV2(priv.PubKey().SerializeCompressed())
-	otherID, _ := AccountIDV2(other.PubKey().SerializeCompressed())
-	otherPub, _ := AccountPubKeyV2(otherID)
+	accountID, _ := CanonicalAccountID(priv.PubKey().SerializeCompressed())
+	otherID, _ := CanonicalAccountID(other.PubKey().SerializeCompressed())
+	otherPub, _ := AccountPubKey(otherID)
 	otherAddress, err := P2TRAddressFromPubKeyBytes(otherPub, &chaincfg.MainNetParams)
 	if err != nil {
 		t.Fatal(err)
@@ -140,19 +140,8 @@ func TestAccountV2RejectsForgedAddressMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	value, _ := EncodeAccountMappingValue(accountID)
-	forged := signedAccountRecordV2(t, priv, key, value, 1)
+	forged := signedAccountRecord(t, priv, key, value, 1)
 	if _, err := idx.PutLocal(forged); err == nil {
 		t.Fatal("mapping to an unrelated address was accepted")
-	}
-}
-
-func TestAccountV2KeepsVersionOneCompatibility(t *testing.T) {
-	idx := testIndexer(t)
-	legacy := signedPersonalRecord(t, 1, "legacy", 0)
-	if updated, err := idx.PutLocal(legacy); err != nil || !updated {
-		t.Fatalf("legacy put updated=%v err=%v", updated, err)
-	}
-	if err := VerifySignature(legacy); err != nil {
-		t.Fatalf("legacy signature failed: %v", err)
 	}
 }

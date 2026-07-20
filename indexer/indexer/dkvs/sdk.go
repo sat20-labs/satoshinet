@@ -75,6 +75,9 @@ func VerifyRecordForClient(record *wire.DKVSRecord, opts RecordVerificationOptio
 	if err := VerifySignature(record); err != nil {
 		return err
 	}
+	if err := ValidateRecordIdentity(record, parsed); err != nil {
+		return err
+	}
 	if IsTombstone(record.Flags) && len(record.Value) != 0 {
 		return ErrInvalidRecord
 	}
@@ -143,13 +146,19 @@ func VerifySubscriptionRecordsForClient(records []*wire.DKVSRecord, sub Subscrip
 }
 
 func AccountID(pubKey []byte) string {
-	return personalAccountID(pubKey)
+	accountID, err := CanonicalAccountID(pubKey)
+	if err != nil {
+		return ""
+	}
+	return accountID
 }
 
 func PersonalKey(pubKey []byte, path string) (string, error) {
-	key := "/personal/" + AccountID(pubKey) + "/" + normalizePath(path)
-	_, err := ParseKey(key)
-	return key, err
+	accountID, err := CanonicalAccountID(pubKey)
+	if err != nil {
+		return "", err
+	}
+	return AccountPersonalKey(accountID, path)
 }
 
 func NameKey(name string) (string, error) {

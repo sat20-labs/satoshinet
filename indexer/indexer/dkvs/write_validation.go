@@ -149,7 +149,7 @@ func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed Pa
 func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolver, system SystemVerifier) error {
 	switch parsed.Namespace {
 	case "account":
-		// Public address mappings are version-2 Schnorr records only.
+		// Public address mappings are pubkey-free account records.
 		return ErrPermissionDenied
 	case "personal":
 		if len(parsed.Segments) < 2 || parsed.Segments[0] != personalAccountID(pubKey) {
@@ -265,7 +265,7 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 	if record == nil {
 		return false, ErrInvalidRecord
 	}
-	if record.Version == VersionV2 {
+	if len(record.PubKey) == 0 {
 		return false, ValidateRecordIdentity(record, parsed)
 	}
 	switch parsed.Namespace {
@@ -359,7 +359,7 @@ func (i *Indexer) validatePreparedFeeCapacityLocked(record *wire.DKVSRecord, pre
 
 func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64, allowExpiredTombstone, verifyFee bool, feeVerifier FeeVerifier) (ParsedKey, error) {
 	var parsed ParsedKey
-	if record == nil || !IsSupportedRecordVersion(record.Version) {
+	if record == nil || record.Version != Version {
 		return parsed, ErrInvalidRecord
 	}
 	if len(record.Value) > MaxRecordValueSize || RecordSize(record) > wire.MaxDKVSRecordSize {
