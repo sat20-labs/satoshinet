@@ -3,7 +3,6 @@ name: DKVS development checks
 on:
   push:
     branches:
-      - agent/dkvs-v2-implementation
       - agent/rgb11-dkvs-transfer-a
   pull_request:
     branches:
@@ -34,6 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: sat20-labs/sat20wallet
+          ref: agent/rgb11-dkvs-transfer-a
           path: workspace/sat20wallet
 
       - name: Set up Go 1.24.13
@@ -42,23 +42,74 @@ jobs:
           go-version: 1.24.13
           cache: false
 
-      - name: Format DKVS sources
+      - name: Apply DKVS v1 source fixups
         working-directory: workspace/satoshinet
         shell: bash
-        run: find indexer/indexer/dkvs -maxdepth 1 -name '*.go' -print0 | xargs -0 gofmt -w
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Commit formatting
+          p = Path('indexer/indexer/dkvs/write_validation.go')
+          text = p.read_text()
+          text = text.replace('Public address mappings are version-2 Schnorr records only.', 'Public address mappings are pubkey-free account records.')
+          text = text.replace('if record.Version == VersionV2 {\n\t\treturn false, ValidateRecordIdentity(record, parsed)\n\t}', 'if len(record.PubKey) == 0 {\n\t\treturn false, ValidateRecordIdentity(record, parsed)\n\t}')
+          text = text.replace('if record == nil || !IsSupportedRecordVersion(record.Version) {', 'if record == nil || record.Version != Version {')
+          p.write_text(text)
+
+          p = Path('indexer/indexer/dkvs/sdk.go')
+          text = p.read_text()
+          needle = '\tif err := VerifySignature(record); err != nil {\n\t\treturn err\n\t}\n\tif IsTombstone(record.Flags) && len(record.Value) != 0 {'
+          replacement = '\tif err := VerifySignature(record); err != nil {\n\t\treturn err\n\t}\n\tif err := ValidateRecordIdentity(record, parsed); err != nil {\n\t\treturn err\n\t}\n\tif IsTombstone(record.Flags) && len(record.Value) != 0 {'
+          if needle in text:
+              text = text.replace(needle, replacement, 1)
+          old = 'func AccountID(pubKey []byte) string {\n\treturn personalAccountID(pubKey)\n}\n\nfunc PersonalKey(pubKey []byte, path string) (string, error) {\n\tkey := "/personal/" + AccountID(pubKey) + "/" + normalizePath(path)\n\t_, err := ParseKey(key)\n\treturn key, err\n}'
+          new = 'func AccountID(pubKey []byte) string {\n\taccountID, err := CanonicalAccountID(pubKey)\n\tif err != nil {\n\t\treturn ""\n\t}\n\treturn accountID\n}\n\nfunc PersonalKey(pubKey []byte, path string) (string, error) {\n\taccountID, err := CanonicalAccountID(pubKey)\n\tif err != nil {\n\t\treturn "", err\n\t}\n\treturn AccountPersonalKey(accountID, path)\n}'
+          text = text.replace(old, new)
+          p.write_text(text)
+
+          p = Path('indexer/indexer/dkvs/fee_autopay.go')
+          text = p.read_text()
+          if 'func positiveRat(' not in text:
+              text += '''\nfunc positiveRat(value string) (*big.Rat, error) {\n\trat, err := parseRat(value)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif rat.Sign() <= 0 {\n\t\treturn nil, ErrInvalidFeeProof\n\t}\n\treturn rat, nil\n}\n\nfunc nonNegativeRat(value string) (*big.Rat, error) {\n\tif strings.TrimSpace(value) == "" {\n\t\treturn new(big.Rat), nil\n\t}\n\trat, err := parseRat(value)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif rat.Sign() < 0 {\n\t\treturn nil, ErrInvalidFeeProof\n\t}\n\treturn rat, nil\n}\n\nfunc parseRat(value string) (*big.Rat, error) {\n\tvalue = strings.TrimSpace(value)\n\tif value == "" {\n\t\treturn nil, ErrInvalidFeeProof\n\t}\n\trat := new(big.Rat)\n\tif _, ok := rat.SetString(value); !ok {\n\t\treturn nil, ErrInvalidFeeProof\n\t}\n\treturn rat, nil\n}\n'''
+          p.write_text(text)
+
+          old_test = Path('indexer/indexer/dkvs/account_v2_test.go')
+          if old_test.exists():
+              text = old_test.read_text()
+              for old, new in {
+                  'signedAccountRecordV2': 'signedAccountRecord',
+                  'NewRecordV2': 'NewAccountRecord',
+                  'TestAccountIDV2AndAddressMapping': 'TestAccountIDAndAddressMapping',
+                  'AccountIDV2': 'CanonicalAccountID',
+                  'AccountPubKeyV2': 'AccountPubKey',
+                  'TestAccountV2PersonalAndMailboxPermissions': 'TestAccountPersonalAndMailboxPermissions',
+                  'PersonalKeyV2': 'AccountPersonalKey',
+                  'TestAccountV2RejectsForgedAddressMapping': 'TestAccountRejectsForgedAddressMapping',
+              }.items():
+                  text = text.replace(old, new)
+              marker = '\nfunc TestAccountV2KeepsVersionOneCompatibility'
+              if marker in text:
+                  text = text[:text.index(marker)] + '\n'
+              Path('indexer/indexer/dkvs/account_test.go').write_text(text)
+              old_test.unlink()
+          PY
+          gofmt -w indexer/indexer/dkvs/*.go
+          if grep -R -n -E 'VersionV2|AccountIDV2|AccountPubKeyV2|PersonalKeyV2|NewRecordV2' indexer/indexer/dkvs; then
+            exit 1
+          fi
+
+      - name: Commit deterministic fixups
         if: github.event_name == 'push'
         working-directory: workspace/satoshinet
         shell: bash
         run: |
-          if git diff --quiet -- indexer/indexer/dkvs; then
+          if git diff --quiet; then
             exit 0
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add indexer/indexer/dkvs/*.go
-          git commit -m 'gofmt RGB11 DKVS implementation'
+          git add -A
+          git commit -m 'finish DKVS v1 account refactor'
           git push origin HEAD:${GITHUB_REF_NAME}
 
       - name: Run DKVS package tests
@@ -98,7 +149,7 @@ jobs:
               repo: context.repo.repo,
               sha: context.sha,
               state,
-              context: 'rgb11-dkvs-v2',
-              description: state === 'success' ? 'DKVS v2 checks passed' : 'DKVS v2 checks failed',
+              context: 'rgb11-dkvs-v1',
+              description: state === 'success' ? 'DKVS v1 checks passed' : 'DKVS v1 checks failed',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
