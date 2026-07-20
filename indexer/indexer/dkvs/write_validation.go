@@ -148,6 +148,9 @@ func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed Pa
 
 func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolver, system SystemVerifier) error {
 	switch parsed.Namespace {
+	case "account":
+		// Public address mappings are version-2 Schnorr records only.
+		return ErrPermissionDenied
 	case "personal":
 		if len(parsed.Segments) < 2 || parsed.Segments[0] != personalAccountID(pubKey) {
 			return ErrPermissionDenied
@@ -262,6 +265,9 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 	if record == nil {
 		return false, ErrInvalidRecord
 	}
+	if record.Version == VersionV2 {
+		return false, ValidateRecordIdentity(record, parsed)
+	}
 	switch parsed.Namespace {
 	case "name", "svc":
 		if existing != nil && bytes.Equal(existing.PubKey, record.PubKey) && !requiresResolve {
@@ -353,7 +359,7 @@ func (i *Indexer) validatePreparedFeeCapacityLocked(record *wire.DKVSRecord, pre
 
 func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64, allowExpiredTombstone, verifyFee bool, feeVerifier FeeVerifier) (ParsedKey, error) {
 	var parsed ParsedKey
-	if record == nil || record.Version != Version {
+	if record == nil || !IsSupportedRecordVersion(record.Version) {
 		return parsed, ErrInvalidRecord
 	}
 	if len(record.Value) > MaxRecordValueSize || RecordSize(record) > wire.MaxDKVSRecordSize {
@@ -372,6 +378,9 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64,
 		return parsed, ErrExpiredRecord
 	}
 	if err := VerifySignature(record); err != nil {
+		return parsed, err
+	}
+	if err := ValidateRecordIdentity(record, parsed); err != nil {
 		return parsed, err
 	}
 	if IsTombstone(record.Flags) && len(record.Value) != 0 {
