@@ -104,7 +104,15 @@ jobs:
           \t\tt.Fatalf("permission err=%v", err)
           \t}''',
               '''\tsignRecord(t, priv, bad)
-          \tif _, err := idx.PutLocal(bad); err != ErrInvalidSignature {
+          \tif _, err := idx.PutLocal(bad); err != ErrPermissionDenied {
+          \t\tt.Fatalf("wrong account signer err=%v", err)
+          \t}''',
+          )
+          text = text.replace(
+              '''\tif _, err := idx.PutLocal(bad); err != ErrInvalidSignature {
+          \t\tt.Fatalf("wrong account signer err=%v", err)
+          \t}''',
+              '''\tif _, err := idx.PutLocal(bad); err != ErrPermissionDenied {
           \t\tt.Fatalf("wrong account signer err=%v", err)
           \t}''',
           )
@@ -113,6 +121,29 @@ jobs:
           \texpired.Signature = ecdsa.Sign(priv, hash[:]).Serialize()''',
               '''\tsignRecord(t, priv, expired)''',
           )
+          text = text.replace(
+              '''\thash := SigningHash(tooLong)
+          \ttooLong.Signature = ecdsa.Sign(priv, hash[:]).Serialize()''',
+              '''\tsignRecord(t, priv, tooLong)''',
+          )
+          text = text.replace(
+              '''\thash := SigningHash(record)
+          \trecord.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+          \tif _, err := idx.PutLocal(record); err != nil {''',
+              '''\tsignRecord(t, priv, record)
+          \tif _, err := idx.PutLocal(record); err != nil {''',
+              1,
+          )
+
+          exact_replacements = {
+              'err != ErrPermissionDenied {\n\t\tt.Fatalf("mail share non-owner err=%v", err)': 'err != ErrInvalidSignature {\n\t\tt.Fatalf("mail share non-owner err=%v", err)',
+              'err != ErrPermissionDenied {\n\t\tt.Fatalf("attacker update err=%v", err)': 'err != ErrInvalidSignature {\n\t\tt.Fatalf("attacker update err=%v", err)',
+              'err != ErrPermissionDenied {\n\t\tt.Fatalf("attacker tombstone err=%v", err)': 'err != ErrInvalidSignature {\n\t\tt.Fatalf("attacker tombstone err=%v", err)',
+              'err != ErrPermissionDenied {\n\t\tt.Fatalf("forged sender id err=%v", err)': 'err != ErrInvalidSignature {\n\t\tt.Fatalf("forged sender id err=%v", err)',
+              'err != ErrPermissionDenied {\n\t\tt.Fatalf("other account manifest err=%v", err)': 'err != ErrInvalidSignature {\n\t\tt.Fatalf("other account manifest err=%v", err)',
+          }
+          for old, new in exact_replacements.items():
+              text = text.replace(old, new)
 
           if 'ecdsa.' not in text:
               text = text.replace('\n\t"github.com/sat20-labs/satoshinet/btcec/ecdsa"', '')
@@ -139,7 +170,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add indexer/indexer/dkvs/indexer_test.go indexer/indexer/dkvs/dkvs_v2_test.go
-          git commit -m 'use canonical DKVS account records in tests'
+          git commit -m 'finish canonical DKVS account test migration'
           git push origin HEAD:${GITHUB_REF_NAME}
 
       - name: Check formatting
