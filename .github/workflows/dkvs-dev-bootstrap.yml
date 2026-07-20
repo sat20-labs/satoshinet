@@ -80,8 +80,20 @@ jobs:
         run: go test ./indexer/rpcserver/indexer -run '^(TestDKVSLocalOnlyMiddleware|TestBindDKVSJSONBodyLimit)$' -count=1
 
       - name: Compile integration packages
+        id: integration-compile
         working-directory: workspace/satoshinet
-        run: go test ./wire ./peer ./indexer/indexer ./indexer/share/indexer -run '^$'
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./wire ./peer ./indexer/indexer ./indexer/share/indexer -run '^$' 2>&1 | tee /tmp/dkvs-integration-compile.log
+
+      - name: Upload integration compile diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dkvs-integration-compile-${{ github.run_id }}
+          path: /tmp/dkvs-integration-compile.log
+          retention-days: 3
 
       - name: Run focused race tests
         working-directory: workspace/satoshinet
