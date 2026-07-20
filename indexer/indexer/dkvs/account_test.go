@@ -46,7 +46,7 @@ func TestAccountIDAndAddressMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	address, err := P2TRAddressFromPubKeyBytes(pubKey, &chaincfg.TestNet4Params)
+	address, err := P2TRAddressFromPubKeyBytes(pubKey, &chaincfg.TestNetParams)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestAccountIDAndAddressMapping(t *testing.T) {
 	}
 	record := signedAccountRecord(t, priv, key, value, 1)
 	if len(record.PubKey) != 0 {
-		t.Fatal("version 2 record repeated the signer public key")
+		t.Fatal("account record repeated the signer public key")
 	}
 	if updated, err := idx.PutLocal(record); err != nil || !updated {
 		t.Fatalf("put mapping updated=%v err=%v", updated, err)
