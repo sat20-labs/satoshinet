@@ -1,4 +1,3 @@
-// go:build rpctest
 //go:build rpctest
 // +build rpctest
 
