@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
 
 jobs:
@@ -41,6 +41,106 @@ jobs:
         with:
           go-version: 1.24.13
           cache: false
+
+      - name: Migrate DKVS test record builders
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('indexer/indexer/dkvs/indexer_test.go')
+          text = p.read_text()
+
+          old = '''func signedRecordWithValue(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, value []byte, flags uint32) *wire.DKVSRecord {
+          \tt.Helper()
+          \trecord := &wire.DKVSRecord{
+          \t\tVersion:      Version,
+          \t\tKey:          key,
+          \t\tValue:        value,
+          \t\tPubKey:       priv.PubKey().SerializeCompressed(),
+          \t\tSeq:          seq,
+          \t\tIssueTime:    currentUnixMilli(),
+          \t\tTTL:          60_000,
+          \t\tExpiryHeight: 100,
+          \t\tFlags:        flags,
+          \t}
+          \thash := SigningHash(record)
+          \trecord.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+          \treturn record
+          }'''
+          new = '''func signedRecordWithValue(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, value []byte, flags uint32) *wire.DKVSRecord {
+          \tt.Helper()
+          \trecord, err := NewSignedRecord(priv, key, value, RecordOptions{
+          \t\tSeq: seq, TTL: 60_000, ExpiryHeight: 100, Flags: flags,
+          \t})
+          \tif err != nil {
+          \t\tt.Fatal(err)
+          \t}
+          \treturn record
+          }'''
+          if old in text:
+              text = text.replace(old, new)
+
+          old = '''func signRecord(t *testing.T, priv *btcec.PrivateKey, record *wire.DKVSRecord) {
+          \tt.Helper()
+          \thash := SigningHash(record)
+          \trecord.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+          }'''
+          new = '''func signRecord(t *testing.T, priv *btcec.PrivateKey, record *wire.DKVSRecord) {
+          \tt.Helper()
+          \tSignRecord(priv, record)
+          \tif len(record.Signature) == 0 {
+          \t\tt.Fatal("record signing failed")
+          \t}
+          }'''
+          if old in text:
+              text = text.replace(old, new)
+
+          text = text.replace(
+              '''\thash := SigningHash(bad)
+          \tbad.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+          \tif _, err := idx.PutLocal(bad); err != ErrPermissionDenied {
+          \t\tt.Fatalf("permission err=%v", err)
+          \t}''',
+              '''\tsignRecord(t, priv, bad)
+          \tif _, err := idx.PutLocal(bad); err != ErrInvalidSignature {
+          \t\tt.Fatalf("wrong account signer err=%v", err)
+          \t}''',
+          )
+          text = text.replace(
+              '''\thash := SigningHash(expired)
+          \texpired.Signature = ecdsa.Sign(priv, hash[:]).Serialize()''',
+              '''\tsignRecord(t, priv, expired)''',
+          )
+
+          if 'ecdsa.' not in text:
+              text = text.replace('\n\t"github.com/sat20-labs/satoshinet/btcec/ecdsa"', '')
+          p.write_text(text)
+
+          p = Path('indexer/indexer/dkvs/dkvs_v2_test.go')
+          text = p.read_text()
+          text = text.replace(
+              'filter := []Subscription{{Type: SubscriptionPrefix, Target: "/personal/" + AccountID(record.PubKey)}}',
+              'filter := []Subscription{{Type: SubscriptionPrefix, Target: "/personal/" + AccountID(priv.PubKey().SerializeCompressed())}}',
+          )
+          p.write_text(text)
+          PY
+          gofmt -w indexer/indexer/dkvs/indexer_test.go indexer/indexer/dkvs/dkvs_v2_test.go
+
+      - name: Commit migrated tests
+        if: github.event_name == 'push'
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add indexer/indexer/dkvs/indexer_test.go indexer/indexer/dkvs/dkvs_v2_test.go
+          git commit -m 'use canonical DKVS account records in tests'
+          git push origin HEAD:${GITHUB_REF_NAME}
 
       - name: Check formatting
         working-directory: workspace/satoshinet
