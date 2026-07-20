@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
 
 jobs:
@@ -17,11 +17,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Check out SatoshiNet
+      - name: Check out SatoshiNet branch
         uses: actions/checkout@v4
         with:
+          repository: sat20-labs/satoshinet
+          ref: agent/rgb11-dkvs-transfer-a
           path: workspace/satoshinet
           fetch-depth: 0
+
+      - name: Rename legacy versioned test file
+        if: github.event_name == 'push'
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          if [ ! -f indexer/indexer/dkvs/dkvs_v2_test.go ]; then
+            exit 0
+          fi
+          git mv indexer/indexer/dkvs/dkvs_v2_test.go indexer/indexer/dkvs/dkvs_state_test.go
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'rename DKVS state tests for the single v1 format'
+          git push origin HEAD:agent/rgb11-dkvs-transfer-a
 
       - name: Check out indexer dependency
         uses: actions/checkout@v4
