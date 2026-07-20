@@ -1,7 +1,6 @@
 package dkvs
 
 import (
-	"bytes"
 	"strconv"
 	"strings"
 
@@ -144,21 +143,5 @@ func AssembleAccountBlobFromRecords(manifestRecord *wire.DKVSRecord, chunkRecord
 	if err != nil {
 		return nil, nil, err
 	}
-	want, err := decodeHashHex(manifest.ContentHash)
-	if err != nil {
-		return nil, nil, err
-	}
-	if sum := hashBytesSHA256(content); !bytes.Equal(sum, want) {
-		return nil, nil, ErrBlobChunkInvalid
-	}
 	return manifest, content, nil
-}
-
-func hashBytesSHA256(value []byte) []byte {
-	hash := sha256Bytes(value)
-	return hash[:]
-}
-
-func sha256Bytes(value []byte) [32]byte {
-	return sha256.Sum256(value)
 }
