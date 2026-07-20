@@ -75,9 +75,16 @@ func testMailMsgKey(t *testing.T, mailboxPubKey, senderPubKey []byte, msgID stri
 }
 
 func TestParseKey(t *testing.T) {
-	pub := make([]byte, 33)
-	account := AccountID(pub)
-	senderAccount := strings.Repeat("1", sha256.Size*2)
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := AccountID(priv.PubKey().SerializeCompressed())
+	senderAccount := AccountID(sender.PubKey().SerializeCompressed())
 	if _, err := ParseKey("/personal/" + account + "/profile"); err != nil {
 		t.Fatalf("valid key rejected: %v", err)
 	}
@@ -579,7 +586,11 @@ func TestParseFeeProof(t *testing.T) {
 }
 
 func TestFeeProofBuilders(t *testing.T) {
-	key := "/personal/" + AccountID([]byte("pub")) + "/profile"
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	proof, err := NewOneshotFeeProof(key, "personal", 1024, 100, "pool", "payer", "payment", "10")
 	if err != nil {
 		t.Fatal(err)
