@@ -39,7 +39,7 @@ func prctl(option, arg2, arg3, arg4, arg5 uintptr) error {
 }
 
 func Init() error {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" || skipProcessHardening {
 		return nil
 	}
 
