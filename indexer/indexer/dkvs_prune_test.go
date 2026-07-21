@@ -5,7 +5,7 @@ import (
 
 	dbpkg "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/btcec"
-	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -222,7 +222,6 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 	if _, ok := explicitCfg.SystemVerifier.(dkvs.StaticSystemVerifier); !ok {
 		t.Fatalf("explicit system verifier not preferred: %T", explicitCfg.SystemVerifier)
 	}
-
 }
 
 func signedDKVSTestPersonalRecord(t *testing.T, priv *btcec.PrivateKey, seq uint64) *wire.DKVSRecord {
@@ -231,7 +230,7 @@ func signedDKVSTestPersonalRecord(t *testing.T, priv *btcec.PrivateKey, seq uint
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := dkvs.NewRecord(key, []byte("value"), priv.PubKey().SerializeCompressed(), dkvs.RecordOptions{
+	record, err := dkvs.NewAccountRecord(key, []byte("value"), dkvs.RecordOptions{
 		Seq:          seq,
 		TTL:          60_000,
 		ExpiryHeight: 100,
@@ -239,12 +238,16 @@ func signedDKVSTestPersonalRecord(t *testing.T, priv *btcec.PrivateKey, seq uint
 	if err != nil {
 		t.Fatal(err)
 	}
-	signDKVSTestRecord(t, priv, record)
 	return record
 }
 
 func signDKVSTestRecord(t *testing.T, priv *btcec.PrivateKey, record *wire.DKVSRecord) {
 	t.Helper()
+	record.PubKey = nil
 	hash := dkvs.SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	sig, err := schnorr.Sign(priv, hash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Signature = sig.Serialize()
 }

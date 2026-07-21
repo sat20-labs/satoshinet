@@ -1,0 +1,295 @@
+package dkvs
+
+import (
+	"encoding/hex"
+	"strings"
+
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
+	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/wire"
+)
+
+const accountIDSize = 32
+
+// CanonicalAccountID returns the lower-case x-only public key used as the
+// account identifier for account-scoped DKVS records.
+func CanonicalAccountID(pubKey []byte) (string, error) {
+	var xonly []byte
+	if len(pubKey) == accountIDSize {
+		if _, err := schnorr.ParsePubKey(pubKey); err != nil {
+			return "", ErrInvalidSignature
+		}
+		xonly = append([]byte(nil), pubKey...)
+	} else {
+		parsed, err := btcec.ParsePubKey(pubKey)
+		if err != nil {
+			return "", ErrInvalidSignature
+		}
+		xonly = schnorr.SerializePubKey(parsed)
+	}
+	return hex.EncodeToString(xonly), nil
+}
+
+// AccountPubKey reconstructs the canonical even-y compressed public key used
+// by BIP340 verification from an x-only account identifier.
+func AccountPubKey(accountID string) ([]byte, error) {
+	raw, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(accountID)))
+	if err != nil || len(raw) != accountIDSize {
+		return nil, ErrInvalidSignature
+	}
+	pubKey, err := schnorr.ParsePubKey(raw)
+	if err != nil {
+		return nil, ErrInvalidSignature
+	}
+	return pubKey.SerializeCompressed(), nil
+}
+
+// AccountPersonalKey builds a personal key whose signer is derived from the
+// x-only account identifier encoded by the key.
+func AccountPersonalKey(accountID, path string) (string, error) {
+	if _, err := AccountPubKey(accountID); err != nil {
+		return "", err
+	}
+	key := "/personal/" + strings.ToLower(accountID) + "/" + normalizePath(path)
+	_, err := ParseKey(key)
+	return key, err
+}
+
+// AccountMappingKey returns the public address-to-account lookup key. The
+// mapping value is the raw 32-byte account ID and the record is signed by that
+// same account.
+func AccountMappingKey(network, address string) (string, error) {
+	canonical, _, err := accountNetworkParams(network)
+	if err != nil {
+		return "", err
+	}
+	address = strings.ToLower(strings.TrimSpace(address))
+	key := "/account/" + canonical + "/" + address
+	_, err = ParseKey(key)
+	return key, err
+}
+
+func EncodeAccountMappingValue(accountID string) ([]byte, error) {
+	if _, err := AccountPubKey(accountID); err != nil {
+		return nil, err
+	}
+	return hex.DecodeString(strings.ToLower(accountID))
+}
+
+func DecodeAccountMappingValue(value []byte) (string, error) {
+	if len(value) != accountIDSize {
+		return "", ErrInvalidRecord
+	}
+	accountID, err := CanonicalAccountID(value)
+	if err != nil {
+		return "", ErrInvalidRecord
+	}
+	return accountID, nil
+}
+
+func accountNetworkParams(network string) (string, *chaincfg.Params, error) {
+	switch strings.ToLower(strings.TrimSpace(network)) {
+	case "mainnet", "bitcoin", "bc":
+		return "mainnet", &chaincfg.MainNetParams, nil
+	case "testnet", "testnet3", "tb3":
+		return "testnet3", &chaincfg.TestNetParams, nil
+	case "testnet4", "tb4":
+		return "testnet4", &chaincfg.TestNetParams, nil
+	case "signet", "sb":
+		return "signet", &chaincfg.SigNetParams, nil
+	case "regtest", "bcrt":
+		return "regtest", &chaincfg.RegressionNetParams, nil
+	default:
+		return "", nil, ErrInvalidKey
+	}
+}
+
+func validAccountNetwork(network string) bool {
+	_, _, err := accountNetworkParams(network)
+	return err == nil
+}
+
+func isAccountScopedNamespace(namespace string) bool {
+	switch namespace {
+	case "account", "personal", "mail", "blob":
+		return true
+	default:
+		return false
+	}
+}
+
+// NewAccountRecord creates a pubkey-free version-1 account record. The caller
+// signs SigningHash with the private key corresponding to the account ID
+// encoded by the record key or, for /account, by the mapping value.
+func NewAccountRecord(key string, value []byte, opts RecordOptions) (*wire.DKVSRecord, error) {
+	if _, err := ParseKey(key); err != nil {
+		return nil, err
+	}
+	record := &wire.DKVSRecord{
+		Version:      Version,
+		Key:          key,
+		Value:        append([]byte(nil), value...),
+		Seq:          opts.Seq,
+		IssueTime:    opts.IssueTime,
+		TTL:          opts.TTL,
+		ExpiryHeight: opts.ExpiryHeight,
+		FeeProof:     append([]byte(nil), opts.FeeProof...),
+		Flags:        opts.Flags,
+	}
+	if record.IssueTime == 0 {
+		record.IssueTime = currentUnixMilli()
+	}
+	if RecordSize(record) > wire.MaxDKVSRecordSize || len(record.Value) > MaxRecordValueSize {
+		return nil, ErrRecordTooLarge
+	}
+	return record, nil
+}
+
+// RecordSignerAccountID derives the signer for a pubkey-free account record.
+func RecordSignerAccountID(record *wire.DKVSRecord, parsed ParsedKey) (string, error) {
+	if record == nil || record.Version != Version || len(record.PubKey) != 0 {
+		return "", ErrInvalidRecord
+	}
+	if parsed.Namespace == "" {
+		var err error
+		parsed, err = ParseKey(record.Key)
+		if err != nil {
+			return "", err
+		}
+	}
+	var accountID string
+	switch parsed.Namespace {
+	case "account":
+		if IsTombstone(record.Flags) {
+			return "", ErrPermissionDenied
+		}
+		var err error
+		accountID, err = DecodeAccountMappingValue(record.Value)
+		if err != nil {
+			return "", err
+		}
+	case "personal", "blob":
+		accountID = parsed.Segments[0]
+	case "mail":
+		if len(parsed.Segments) != 4 {
+			return "", ErrInvalidKey
+		}
+		if parsed.Segments[1] == "share" || IsTombstone(record.Flags) {
+			accountID = parsed.Segments[0]
+		} else if parsed.Segments[1] == "msg" {
+			accountID = parsed.Segments[2]
+		} else {
+			return "", ErrInvalidKey
+		}
+	default:
+		return "", ErrPermissionDenied
+	}
+	if _, err := AccountPubKey(accountID); err != nil {
+		return "", ErrPermissionDenied
+	}
+	return strings.ToLower(accountID), nil
+}
+
+// RecordSignerPubKey returns the effective signer key. Account-scoped records
+// derive it from the key/value; other DKVS namespaces may still carry the
+// authorized key selected by their resolver.
+func RecordSignerPubKey(record *wire.DKVSRecord) ([]byte, error) {
+	if record == nil || record.Version != Version {
+		return nil, ErrInvalidRecord
+	}
+	if len(record.PubKey) != 0 {
+		return append([]byte(nil), record.PubKey...), nil
+	}
+	parsed, err := ParseKey(record.Key)
+	if err != nil {
+		return nil, err
+	}
+	accountID, err := RecordSignerAccountID(record, parsed)
+	if err != nil {
+		return nil, err
+	}
+	return AccountPubKey(accountID)
+}
+
+// ValidateRecordIdentity checks account identity-to-key binding. Records that
+// carry a resolver-selected key are validated by the existing namespace policy.
+func ValidateRecordIdentity(record *wire.DKVSRecord, parsed ParsedKey) error {
+	if record == nil || record.Version != Version {
+		return ErrInvalidRecord
+	}
+	accountScoped := isAccountScopedNamespace(parsed.Namespace)
+	if accountScoped && len(record.PubKey) != 0 {
+		return ErrInvalidRecord
+	}
+	if !accountScoped {
+		if len(record.PubKey) == 0 {
+			return ErrInvalidRecord
+		}
+		return nil
+	}
+	accountID, err := RecordSignerAccountID(record, parsed)
+	if err != nil {
+		return err
+	}
+	switch parsed.Namespace {
+	case "account":
+		if len(parsed.Segments) != 2 || IsTombstone(record.Flags) {
+			return ErrInvalidRecord
+		}
+		_, params, err := accountNetworkParams(parsed.Segments[0])
+		if err != nil {
+			return err
+		}
+		pubKey, err := AccountPubKey(accountID)
+		if err != nil {
+			return err
+		}
+		address, err := P2TRAddressFromPubKeyBytes(pubKey, params)
+		if err != nil || !strings.EqualFold(address, parsed.Segments[1]) {
+			return ErrPermissionDenied
+		}
+	case "personal", "blob":
+		if parsed.Segments[0] != accountID {
+			return ErrPermissionDenied
+		}
+	case "mail":
+		if parsed.Segments[1] == "share" {
+			if parsed.Segments[0] != accountID {
+				return ErrPermissionDenied
+			}
+		} else if IsTombstone(record.Flags) {
+			if parsed.Segments[0] != accountID {
+				return ErrPermissionDenied
+			}
+		} else if parsed.Segments[1] != "msg" || parsed.Segments[2] != accountID {
+			return ErrPermissionDenied
+		}
+	default:
+		return ErrPermissionDenied
+	}
+	return nil
+}
+
+func verifyAccountSignature(record *wire.DKVSRecord) error {
+	if record == nil || record.Version != Version || len(record.PubKey) != 0 || len(record.Signature) == 0 {
+		return ErrInvalidSignature
+	}
+	pubKeyBytes, err := RecordSignerPubKey(record)
+	if err != nil {
+		return err
+	}
+	pubKey, err := btcec.ParsePubKey(pubKeyBytes)
+	if err != nil {
+		return ErrInvalidSignature
+	}
+	sig, err := schnorr.ParseSignature(record.Signature)
+	if err != nil {
+		return ErrInvalidSignature
+	}
+	hash := SigningHash(record)
+	if !sig.Verify(hash[:], pubKey) {
+		return ErrInvalidSignature
+	}
+	return nil
+}

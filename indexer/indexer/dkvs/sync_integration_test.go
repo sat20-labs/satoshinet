@@ -163,7 +163,7 @@ func TestOrdinaryNodeMailboxSubscriptionSyncAndNotify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mailboxID := personalAccountID(ownerPriv.PubKey().SerializeCompressed())
+	mailboxID := AccountID(ownerPriv.PubKey().SerializeCompressed())
 	msg1 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
 	if updated, err := miner.PutLocal(signedRecordWithValue(t, senderPriv, msg1, 1, []byte("msg-1"), 0)); err != nil || !updated {
 		t.Fatalf("put msg1 updated=%v err=%v", updated, err)
@@ -236,7 +236,7 @@ func TestOrdinaryNodeKeyAndPrefixSubscriptionSyncAndNotify(t *testing.T) {
 	if updated, err := miner.PutLocal(signedRecordWithValue(t, tmpPriv, otherTmp, 1, []byte("other"), 0)); err != nil || !updated {
 		t.Fatalf("put other tmp updated=%v err=%v", updated, err)
 	}
-	personalPrefix := "/personal/" + personalAccountID(personalPriv.PubKey().SerializeCompressed())
+	personalPrefix := "/personal/" + AccountID(personalPriv.PubKey().SerializeCompressed())
 	profileKey := personalPrefix + "/profile"
 	if updated, err := miner.PutLocal(signedRecordWithValue(t, personalPriv, profileKey, 1, []byte("profile"), 0)); err != nil || !updated {
 		t.Fatalf("put profile updated=%v err=%v", updated, err)
@@ -245,7 +245,7 @@ func TestOrdinaryNodeKeyAndPrefixSubscriptionSyncAndNotify(t *testing.T) {
 	if updated, err := miner.PutLocal(signedRecordWithValue(t, personalPriv, settingsKey, 2, []byte("settings"), 0)); err != nil || !updated {
 		t.Fatalf("put settings updated=%v err=%v", updated, err)
 	}
-	otherPersonalPrefix := "/personal/" + personalAccountID(otherPersonalPriv.PubKey().SerializeCompressed())
+	otherPersonalPrefix := "/personal/" + AccountID(otherPersonalPriv.PubKey().SerializeCompressed())
 	otherProfileKey := otherPersonalPrefix + "/profile"
 	if updated, err := miner.PutLocal(signedRecordWithValue(t, otherPersonalPriv, otherProfileKey, 1, []byte("other-profile"), 0)); err != nil || !updated {
 		t.Fatalf("put other profile updated=%v err=%v", updated, err)

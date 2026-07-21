@@ -148,8 +148,11 @@ func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed Pa
 
 func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolver, system SystemVerifier) error {
 	switch parsed.Namespace {
+	case "account":
+		// Public address mappings are pubkey-free account records.
+		return ErrPermissionDenied
 	case "personal":
-		if len(parsed.Segments) < 2 || parsed.Segments[0] != personalAccountID(pubKey) {
+		if len(parsed.Segments) < 2 || parsed.Segments[0] != AccountID(pubKey) {
 			return ErrPermissionDenied
 		}
 	case "name":
@@ -178,11 +181,11 @@ func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolve
 		return identity.CanSign(pubKey)
 	case "mail":
 		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" &&
-			parsed.Segments[0] != personalAccountID(pubKey) {
+			parsed.Segments[0] != AccountID(pubKey) {
 			return ErrPermissionDenied
 		}
 	case "blob":
-		if len(parsed.Segments) < 3 || parsed.Segments[0] != personalAccountID(pubKey) {
+		if len(parsed.Segments) < 3 || parsed.Segments[0] != AccountID(pubKey) {
 			return ErrPermissionDenied
 		}
 	case "sys":
@@ -241,12 +244,12 @@ func validateMailWritePermissionWith(parsed ParsedKey, record, existing *wire.DK
 		return ErrInvalidKey
 	}
 	if IsTombstone(record.Flags) {
-		if parsed.Segments[0] != personalAccountID(record.PubKey) {
+		if parsed.Segments[0] != AccountID(record.PubKey) {
 			return ErrPermissionDenied
 		}
 		return nil
 	}
-	if len(parsed.Segments) != 4 || parsed.Segments[2] != personalAccountID(record.PubKey) {
+	if len(parsed.Segments) != 4 || parsed.Segments[2] != AccountID(record.PubKey) {
 		return ErrPermissionDenied
 	}
 	if existing == nil || IsTombstone(existing.Flags) {
@@ -261,6 +264,9 @@ func validateMailWritePermissionWith(parsed ParsedKey, record, existing *wire.DK
 func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRecord, requiresResolve bool, validators runtimeValidators) (bool, error) {
 	if record == nil {
 		return false, ErrInvalidRecord
+	}
+	if len(record.PubKey) == 0 {
+		return false, ValidateRecordIdentity(record, parsed)
 	}
 	switch parsed.Namespace {
 	case "name", "svc":
@@ -372,6 +378,9 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64,
 		return parsed, ErrExpiredRecord
 	}
 	if err := VerifySignature(record); err != nil {
+		return parsed, err
+	}
+	if err := ValidateRecordIdentity(record, parsed); err != nil {
 		return parsed, err
 	}
 	if IsTombstone(record.Flags) && len(record.Value) != 0 {

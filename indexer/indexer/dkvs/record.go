@@ -39,8 +39,11 @@ func SigningMessage(record *wire.DKVSRecord) []byte {
 }
 
 func VerifySignature(record *wire.DKVSRecord) error {
-	if record == nil || len(record.PubKey) == 0 || len(record.Signature) == 0 {
+	if record == nil || record.Version != Version || len(record.Signature) == 0 {
 		return ErrInvalidSignature
+	}
+	if len(record.PubKey) == 0 {
+		return verifyAccountSignature(record)
 	}
 	pubKey, err := btcec.ParsePubKey(record.PubKey)
 	if err != nil {

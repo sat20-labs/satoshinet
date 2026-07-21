@@ -47,21 +47,13 @@ func signedPersonalRecordWithKey(t *testing.T, priv *btcec.PrivateKey, seq uint6
 
 func signedPersonalRecordWithPath(t *testing.T, priv *btcec.PrivateKey, path string, seq uint64, value string, flags uint32) *wire.DKVSRecord {
 	t.Helper()
-	pub := priv.PubKey().SerializeCompressed()
-	key := "/personal/" + personalAccountID(pub) + "/" + path
-	record := &wire.DKVSRecord{
-		Version:      Version,
-		Key:          key,
-		Value:        []byte(value),
-		PubKey:       pub,
-		Seq:          seq,
-		IssueTime:    currentUnixMilli(),
-		TTL:          60_000,
-		ExpiryHeight: 100,
-		Flags:        flags,
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/" + path
+	record, err := NewSignedRecord(priv, key, []byte(value), RecordOptions{
+		Seq: seq, TTL: 60_000, ExpiryHeight: 100, Flags: flags,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	hash := SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
 	return record
 }
 
@@ -75,9 +67,16 @@ func testMailMsgKey(t *testing.T, mailboxPubKey, senderPubKey []byte, msgID stri
 }
 
 func TestParseKey(t *testing.T) {
-	pub := make([]byte, 33)
-	account := personalAccountID(pub)
-	senderAccount := strings.Repeat("1", sha256.Size*2)
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := AccountID(priv.PubKey().SerializeCompressed())
+	senderAccount := AccountID(sender.PubKey().SerializeCompressed())
 	if _, err := ParseKey("/personal/" + account + "/profile"); err != nil {
 		t.Fatalf("valid key rejected: %v", err)
 	}
@@ -195,10 +194,9 @@ func TestPersonalPermissionAndCheckpoint(t *testing.T) {
 	}
 	bad := signedPersonalRecordWithKey(t, priv, 2, "bad", 0)
 	bad.Key = "/personal/" + hex.EncodeToString(make([]byte, 32)) + "/profile"
-	hash := SigningHash(bad)
-	bad.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	signRecord(t, priv, bad)
 	if _, err := idx.PutLocal(bad); err != ErrPermissionDenied {
-		t.Fatalf("permission err=%v", err)
+		t.Fatalf("wrong account signer err=%v", err)
 	}
 	cp, err := idx.Checkpoint()
 	if err != nil {
@@ -252,8 +250,7 @@ func TestSnapshotMatchesCheckpointAndFiltersInactive(t *testing.T) {
 	active := signedPersonalRecordWithPath(t, priv, "active", 1, "active", 0)
 	expired := signedPersonalRecordWithPath(t, priv, "expired", 1, "expired", 0)
 	expired.ExpiryHeight = 2
-	hash := SigningHash(expired)
-	expired.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	signRecord(t, priv, expired)
 	if _, err := idx.PutLocal(active); err != nil {
 		t.Fatal(err)
 	}
@@ -435,26 +432,21 @@ func signedRecordForKey(t *testing.T, priv *btcec.PrivateKey, key string, seq ui
 
 func signedRecordWithValue(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, value []byte, flags uint32) *wire.DKVSRecord {
 	t.Helper()
-	record := &wire.DKVSRecord{
-		Version:      Version,
-		Key:          key,
-		Value:        value,
-		PubKey:       priv.PubKey().SerializeCompressed(),
-		Seq:          seq,
-		IssueTime:    currentUnixMilli(),
-		TTL:          60_000,
-		ExpiryHeight: 100,
-		Flags:        flags,
+	record, err := NewSignedRecord(priv, key, value, RecordOptions{
+		Seq: seq, TTL: 60_000, ExpiryHeight: 100, Flags: flags,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	hash := SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
 	return record
 }
 
 func signRecord(t *testing.T, priv *btcec.PrivateKey, record *wire.DKVSRecord) {
 	t.Helper()
-	hash := SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	SignRecord(priv, record)
+	if len(record.Signature) == 0 {
+		t.Fatal("record signing failed")
+	}
 }
 
 func signedRecordWithStructuredFee(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, proof FeeProof) *wire.DKVSRecord {
@@ -579,7 +571,11 @@ func TestParseFeeProof(t *testing.T) {
 }
 
 func TestFeeProofBuilders(t *testing.T) {
-	key := "/personal/" + personalAccountID([]byte("pub")) + "/profile"
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	proof, err := NewOneshotFeeProof(key, "personal", 1024, 100, "pool", "payer", "payment", "10")
 	if err != nil {
 		t.Fatal(err)
@@ -644,7 +640,7 @@ func TestJSONFeeVerifierPutLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	record := signedRecordWithStructuredFee(t, priv, key, 1, FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
@@ -691,7 +687,7 @@ func TestJSONFeeVerifierRejectsMalformedProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	record := signedRecordWithStructuredFee(t, priv, key, 1, FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
@@ -710,7 +706,7 @@ func TestFeeProofCoveredByRecordSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	proof := FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
@@ -742,7 +738,7 @@ func TestAutopayFeeVerifierCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := personalAccountID(priv.PubKey().SerializeCompressed())
+	account := AccountID(priv.PubKey().SerializeCompressed())
 	contract := "autopay-contract"
 	recipient := "dkvs-fee-recipient"
 	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
@@ -916,7 +912,7 @@ func TestAutopayFeeVerifierRejectsInvalidStateAndPayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := personalAccountID(priv.PubKey().SerializeCompressed())
+	account := AccountID(priv.PubKey().SerializeCompressed())
 	key := "/personal/" + account + "/profile"
 	contract := "autopay-contract"
 	recipient := "dkvs-fee-recipient"
@@ -1039,7 +1035,7 @@ func TestHTTPFeeVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed()) + "/profile"
+	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/profile"
 	proof := FeeProof{
 		Mode:         FeeModeOneshot,
 		PoolContract: "dkvs-pool",
@@ -1928,12 +1924,12 @@ func TestMailPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mailboxID := personalAccountID(ownerPriv.PubKey().SerializeCompressed())
+	mailboxID := AccountID(ownerPriv.PubKey().SerializeCompressed())
 	msgKey := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
 	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msgKey, 1)); err != nil || !updated {
 		t.Fatalf("mail msg put updated=%v err=%v", updated, err)
 	}
-	if _, err := idx.PutLocal(signedRecordForKey(t, senderPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordForKey(t, senderPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != ErrInvalidSignature {
 		t.Fatalf("mail share non-owner err=%v", err)
 	}
 	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != nil || !updated {
@@ -1959,10 +1955,10 @@ func TestMailboxMessageUpdateAndDeletePermissions(t *testing.T) {
 	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 1, []byte("message"), 0)); err != nil || !updated {
 		t.Fatalf("initial message updated=%v err=%v", updated, err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, []byte("replace"), 0)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, []byte("replace"), 0)); err != ErrInvalidSignature {
 		t.Fatalf("attacker update err=%v", err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, nil, FlagTombstone)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, nil, FlagTombstone)); err != ErrInvalidSignature {
 		t.Fatalf("attacker tombstone err=%v", err)
 	}
 	if updated, err := idx.PutLocal(signedRecordWithValue(t, owner, key, 2, nil, FlagTombstone)); err != nil || !updated {
@@ -2035,7 +2031,7 @@ func TestMailboxSenderIdentityAndQuotaIsolation(t *testing.T) {
 		t.Fatalf("first sender put updated=%v err=%v", updated, err)
 	}
 	forgedKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), secondSender.PubKey().SerializeCompressed(), "forged")
-	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, forgedKey, 1)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, forgedKey, 1)); err != ErrInvalidSignature {
 		t.Fatalf("forged sender id err=%v", err)
 	}
 	firstSecondKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), firstSender.PubKey().SerializeCompressed(), "second")
@@ -2235,8 +2231,7 @@ func TestMailboxTTLAndSizePolicy(t *testing.T) {
 	}
 	tooLong := signedRecordForKey(t, priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1"), 1)
 	tooLong.TTL = 11
-	hash := SigningHash(tooLong)
-	tooLong.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	signRecord(t, priv, tooLong)
 	if _, err := ttlIdx.PutLocal(tooLong); err != ErrInvalidRecord {
 		t.Fatalf("mail ttl err=%v", err)
 	}
@@ -2491,7 +2486,7 @@ func TestBlobRejectsOtherAccountAndMixedGeneration(t *testing.T) {
 	}
 	accountID := AccountID(owner.PubKey().SerializeCompressed())
 	prefix := "/blob/" + accountID + "/object"
-	if _, err := idx.PutLocal(signedRecordWithValue(t, other, prefix+"/manifest", 1, manifestBytes, 0)); err != ErrPermissionDenied {
+	if _, err := idx.PutLocal(signedRecordWithValue(t, other, prefix+"/manifest", 1, manifestBytes, 0)); err != ErrInvalidSignature {
 		t.Fatalf("other account manifest err=%v", err)
 	}
 	if _, err := idx.PutLocal(signedRecordWithValue(t, owner, prefix+"/manifest", 2, manifestBytes, 0)); err != nil {
@@ -2523,8 +2518,7 @@ func TestPruneExpiredRecords(t *testing.T) {
 	}
 	record := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
 	record.ExpiryHeight = 2
-	hash := SigningHash(record)
-	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+	signRecord(t, priv, record)
 	if _, err := idx.PutLocal(record); err != nil {
 		t.Fatal(err)
 	}
@@ -2746,7 +2740,7 @@ func TestSubscribePullsCurrentRecordsAndUnsubscribe(t *testing.T) {
 	if _, err := idx.PutLocal(recordB); err != nil {
 		t.Fatal(err)
 	}
-	prefix := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed())
+	prefix := "/personal/" + AccountID(priv.PubKey().SerializeCompressed())
 	records, total, err := idx.Subscribe(Subscription{Type: SubscriptionPrefix, Target: prefix})
 	if err != nil {
 		t.Fatal(err)
@@ -2895,7 +2889,7 @@ func TestSyncFiltered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed())
+	prefix := "/personal/" + AccountID(priv.PubKey().SerializeCompressed())
 	for n, path := range []string{"a", "b"} {
 		record := signedPersonalRecordWithPath(t, priv, path, uint64(n+1), path, 0)
 		if _, err := idx.PutLocal(record); err != nil {
@@ -2957,7 +2951,7 @@ func TestUsageFiltersActiveRecordsByPrefix(t *testing.T) {
 		}
 	}
 	height = 2
-	prefix := "/personal/" + personalAccountID(priv.PubKey().SerializeCompressed())
+	prefix := "/personal/" + AccountID(priv.PubKey().SerializeCompressed())
 	usage, err := idx.Usage(prefix + "/")
 	if err != nil {
 		t.Fatal(err)

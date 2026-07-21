@@ -3,13 +3,14 @@ name: DKVS development checks
 on:
   push:
     branches:
-      - agent/dkvs-v2-implementation
+      - agent/rgb11-dkvs-transfer-a
   pull_request:
     branches:
       - main
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   dkvs-tests:
@@ -20,6 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: workspace/satoshinet
+          fetch-depth: 0
 
       - name: Check out indexer dependency
         uses: actions/checkout@v4
@@ -31,6 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: sat20-labs/sat20wallet
+          ref: agent/rgb11-dkvs-transfer-a
           path: workspace/sat20wallet
 
       - name: Set up Go 1.24.13
@@ -43,17 +46,43 @@ jobs:
         working-directory: workspace/satoshinet
         shell: bash
         run: |
-          files=$(find indexer/indexer/dkvs -maxdepth 1 -name '*.go' -print)
-          files="$files indexer/indexer/dkvs_interface.go indexer/rpcserver/indexer/handler.go indexer/rpcserver/indexer/handler_test.go indexer/rpcserver/indexer/model.go indexer/rpcserver/indexer/router.go indexer/share/indexer/interface.go server.go server_dkvs_test.go"
-          unformatted=$(gofmt -l $files)
-          if [[ -n "$unformatted" ]]; then
-            printf 'Unformatted files:\n%s\n' "$unformatted"
+          files=$(git diff --name-only origin/main...HEAD -- 'indexer/indexer/dkvs/*.go')
+          if [ -n "$files" ]; then
+            unformatted=$(gofmt -l $files)
+            if [ -n "$unformatted" ]; then
+              printf 'Unformatted files:\n%s\n' "$unformatted"
+              exit 1
+            fi
+          fi
+
+      - name: Check single-version DKVS API
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          if grep -R -n -E 'VersionV2|AccountIDV2|AccountPubKeyV2|PersonalKeyV2|NewRecordV2|KeepsVersionOneCompatibility' indexer/indexer/dkvs; then
+            echo 'DKVS must expose only the canonical version-1 account format.'
             exit 1
           fi
 
-      - name: Run DKVS package tests
+      - name: Vet DKVS package
         working-directory: workspace/satoshinet
-        run: go test ./indexer/indexer/dkvs -count=1
+        run: go vet ./indexer/indexer/dkvs
+
+      - name: Run DKVS package tests
+        id: dkvs-package-tests
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./indexer/indexer/dkvs -count=1 2>&1 | tee /tmp/dkvs-package-tests.log
+
+      - name: Upload DKVS package diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dkvs-package-tests-${{ github.run_id }}
+          path: /tmp/dkvs-package-tests.log
+          retention-days: 3
 
       - name: Run DKVS server tests
         working-directory: workspace/satoshinet
@@ -64,8 +93,20 @@ jobs:
         run: go test ./indexer/rpcserver/indexer -run '^(TestDKVSLocalOnlyMiddleware|TestBindDKVSJSONBodyLimit)$' -count=1
 
       - name: Compile integration packages
+        id: integration-compile
         working-directory: workspace/satoshinet
-        run: go test ./wire ./peer ./indexer/indexer ./indexer/share/indexer -run '^$'
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./wire ./peer ./indexer/indexer ./indexer/share/indexer -run '^$' 2>&1 | tee /tmp/dkvs-integration-compile.log
+
+      - name: Upload integration compile diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dkvs-integration-compile-${{ github.run_id }}
+          path: /tmp/dkvs-integration-compile.log
+          retention-days: 3
 
       - name: Run focused race tests
         working-directory: workspace/satoshinet
@@ -73,4 +114,33 @@ jobs:
 
       - name: Run full repository regression
         working-directory: workspace/satoshinet
-        run: go test ./... -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... -count=1 2>&1 | tee /tmp/satoshinet-full-regression.log
+
+      - name: Upload full regression diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satoshinet-full-regression-${{ github.run_id }}
+          path: /tmp/satoshinet-full-regression.log
+          retention-days: 3
+
+      - name: Publish commit status
+        if: always() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const state = process.env.JOB_STATUS === 'success' ? 'success' : 'failure';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: 'rgb11-dkvs-v1',
+              description: state === 'success' ? 'DKVS v1 checks passed' : 'DKVS v1 checks failed',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });

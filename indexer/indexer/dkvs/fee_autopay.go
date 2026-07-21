@@ -172,7 +172,11 @@ func (v AutopayFeeVerifier) VerifyFeeCapacity(record *wire.DKVSRecord, parsed Pa
 		if strings.TrimSpace(candidateProof.PoolContract) != capacity.Contract {
 			continue
 		}
-		candidatePayer, err := P2TRAddressFromPubKeyBytes(candidate.PubKey, v.AddressParams)
+		candidatePubKey, err := RecordSignerPubKey(candidate)
+		if err != nil {
+			continue
+		}
+		candidatePayer, err := P2TRAddressFromPubKeyBytes(candidatePubKey, v.AddressParams)
 		if err == nil && strings.EqualFold(strings.TrimSpace(candidatePayer), capacity.Payer) {
 			count++
 			if count > capacity.MaxRecords {
@@ -206,7 +210,11 @@ func (v AutopayFeeVerifier) FeeUsageKey(record *wire.DKVSRecord) (string, error)
 	if proof.Mode != FeeModeAutopay {
 		return "", nil
 	}
-	payer, err := P2TRAddressFromPubKeyBytes(record.PubKey, v.AddressParams)
+	pubKey, err := RecordSignerPubKey(record)
+	if err != nil {
+		return "", ErrInvalidFeeProof
+	}
+	payer, err := P2TRAddressFromPubKeyBytes(pubKey, v.AddressParams)
 	if err != nil {
 		return "", ErrInvalidFeeProof
 	}
@@ -235,7 +243,11 @@ func (v AutopayFeeVerifier) verifyProofForRecord(record *wire.DKVSRecord, parsed
 	if proof.Mode != FeeModeAutopay || strings.TrimSpace(proof.PoolContract) == "" {
 		return proof, capacity, ErrInvalidFeeProof
 	}
-	payer, err := P2TRAddressFromPubKeyBytes(record.PubKey, v.AddressParams)
+	pubKey, err := RecordSignerPubKey(record)
+	if err != nil {
+		return proof, capacity, ErrInvalidFeeProof
+	}
+	payer, err := P2TRAddressFromPubKeyBytes(pubKey, v.AddressParams)
 	if err != nil {
 		return proof, capacity, ErrInvalidFeeProof
 	}
