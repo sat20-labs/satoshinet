@@ -1,34 +1,146 @@
-name: Temporary paid relay fix
+name: DKVS development checks
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
-  contents: write
+  contents: read
+  statuses: write
 
 jobs:
-  patch-initial-paid-relay:
-    if: github.head_ref == 'feat/dkvs-paid-retention-p0'
+  dkvs-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out SatoshiNet
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          path: workspace/satoshinet
           fetch-depth: 0
-      - name: Prime verified paid records before relay decision
+
+      - name: Check out indexer dependency
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/indexer
+          path: workspace/indexer
+
+      - name: Check out wallet dependency
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/sat20wallet
+          ref: main
+          path: workspace/sat20wallet
+
+      - name: Set up Go 1.24.13
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.13
+          cache: false
+
+      - name: Check formatting
+        working-directory: workspace/satoshinet
         shell: bash
         run: |
-          set -euo pipefail
-          if grep -q 'primePaidRetentionAfterFeeVerification' indexer/indexer/dkvs/indexer.go; then
-            echo 'Initial paid relay priming already applied.'
-            exit 0
+          files=$(git diff --name-only origin/main...HEAD -- 'indexer/indexer/dkvs/*.go')
+          if [ -n "$files" ]; then
+            unformatted=$(gofmt -l $files)
+            if [ -n "$unformatted" ]; then
+              printf 'Unformatted files:\n%s\n' "$unformatted"
+              exit 1
+            fi
           fi
-          echo 'CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKaW5kZXhlciA9IFBhdGgoImluZGV4ZXIvaW5kZXhlci9ka3ZzL2luZGV4ZXIuZ28iKQp0ZXh0ID0gaW5kZXhlci5yZWFkX3RleHQoKQpvbGQgPSAnJydcdFx0aWYgIUlzVG9tYnN0b25lKHJlY29yZC5GbGFncykgewpcdFx0XHRpZiBlcnIgOj0gdmVyaWZ5RmVlUHJvb2ZXaXRoKHZhbGlkYXRvcnMuZmVlVmVyaWZpZXIsIHJlY29yZCwgcGFyc2VkKTsgZXJyICE9IG5pbCB7Clx0XHRcdFx0cmV0dXJuIGZhbHNlLCAwLCBjaGFpbmhhc2guSGFzaHt9LCBmYWxzZSwgZXJyClx0XHRcdH0KXHRcdH0KXHRcdGlmIHJlbW90ZSAmJiBpLmlzTG9jYWxPbmx5UmVjb3JkKHJlY29yZCkgewonJycKbmV3ID0gJycnXHRcdGlmICFJc1RvbWJzdG9uZShyZWNvcmQuRmxhZ3MpIHsKXHRcdFx0aWYgZXJyIDo9IHZlcmlmeUZlZVByb29mV2l0aCh2YWxpZGF0b3JzLmZlZVZlcmlmaWVyLCByZWNvcmQsIHBhcnNlZCk7IGVyciAhPSBuaWwgewpcdFx0XHRcdHJldHVybiBmYWxzZSwgMCwgY2hhaW5oYXNoLkhhc2h7fSwgZmFsc2UsIGVycgpcdFx0XHR9Clx0XHRcdGlmIGVyciA6PSBpLnByaW1lUGFpZFJldGVudGlvbkFmdGVyRmVlVmVyaWZpY2F0aW9uKHJlY29yZCwgcGFyc2VkLCB2YWxpZGF0b3JzLmZlZVZlcmlmaWVyKTsgZXJyICE9IG5pbCB7Clx0XHRcdFx0cmV0dXJuIGZhbHNlLCAwLCBjaGFpbmhhc2guSGFzaHt9LCBmYWxzZSwgZXJyClx0XHRcdH0KXHRcdH0KXHRcdGlmIHJlbW90ZSAmJiBpLmlzTG9jYWxPbmx5UmVjb3JkKHJlY29yZCkgewonJycKaWYgb2xkIG5vdCBpbiB0ZXh0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgiaW5kZXhlciBwdXQgZmVlLXZlcmlmaWNhdGlvbiBpbnNlcnRpb24gcG9pbnQgbm90IGZvdW5kIikKaW5kZXhlci53cml0ZV90ZXh0KHRleHQucmVwbGFjZShvbGQsIG5ldywgMSkpCgpwYWlkID0gUGF0aCgiaW5kZXhlci9pbmRleGVyL2RrdnMvcGFpZF9yZXRlbnRpb24uZ28iKQp0ZXh0ID0gcGFpZC5yZWFkX3RleHQoKQpvbGQgPSAnJydmdW5jIChjICpwYWlkUmV0ZW50aW9uQ2FjaGUpIGdldChrZXkgc3RyaW5nKSAoUGFpZFJlY29yZFJldGVudGlvbiwgYm9vbCkgewpcdGlmIGMgPT0gbmlsIHsKXHRcdHJldHVybiBQYWlkUmVjb3JkUmV0ZW50aW9ue30sIGZhbHNlClx0fQpcdGMubXV0ZXguUkxvY2soKQpcdGVudHJ5LCBvayA6PSBjLmVudHJpZXNba2V5XQpcdGMubXV0ZXguUlVubG9jaygpClx0cmV0dXJuIGVudHJ5LCBvawp9CgpmdW5jIChjICpwYWlkUmV0ZW50aW9uQ2FjaGUpIHJlbW92ZShrZXlzIFtdc3RyaW5nKSB7CicnJwpuZXcgPSAnJydmdW5jIChjICpwYWlkUmV0ZW50aW9uQ2FjaGUpIGdldChrZXkgc3RyaW5nKSAoUGFpZFJlY29yZFJldGVudGlvbiwgYm9vbCkgewpcdGlmIGMgPT0gbmlsIHsKXHRcdHJldHVybiBQYWlkUmVjb3JkUmV0ZW50aW9ue30sIGZhbHNlClx0fQpcdGMubXV0ZXguUkxvY2soKQpcdGVudHJ5LCBvayA6PSBjLmVudHJpZXNba2V5XQpcdGMubXV0ZXguUlVubG9jaygpClx0cmV0dXJuIGVudHJ5LCBvawp9CgpmdW5jIChjICpwYWlkUmV0ZW50aW9uQ2FjaGUpIHNldChrZXkgc3RyaW5nLCByZXRlbnRpb24gUGFpZFJlY29yZFJldGVudGlvbikgewpcdGlmIGMgPT0gbmlsIHx8IGtleSA9PSAiIiB7Clx0XHRyZXR1cm4KXHR9Clx0Yy5tdXRleC5Mb2NrKCkKXHRjLmVudHJpZXNba2V5XSA9IHJldGVudGlvbgpcdGMubXV0ZXguVW5sb2NrKCkKfQoKZnVuYyAoYyAqcGFpZFJldGVudGlvbkNhY2hlKSByZW1vdmUoa2V5cyBbXXN0cmluZykgewonJycKaWYgb2xkIG5vdCBpbiB0ZXh0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgicGFpZCByZXRlbnRpb24gY2FjaGUgaW5zZXJ0aW9uIHBvaW50IG5vdCBmb3VuZCIpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkLCBuZXcsIDEpCm1hcmtlciA9ICcnJ2Z1bmMgaXNBdXRvcGF5UmVjb3JkKHJlY29yZCAqd2lyZS5ES1ZTUmVjb3JkKSBib29sIHsKJycnCmhlbHBlciA9ICcnJy8vIHByaW1lUGFpZFJldGVudGlvbkFmdGVyRmVlVmVyaWZpY2F0aW9uIHJlY29yZHMgdGhlIHNhbWUgY3VycmVudC1ibG9jawovLyBwYXltZW50IHRoYXQgd2FzIGp1c3QgYWNjZXB0ZWQgYnkgdGhlIGZlZSB2ZXJpZmllci4gSXQgcnVucyBiZWZvcmUgdGhlIHJlbGF5Ci8vIGRlY2lzaW9uLCBzbyBhIG5ld2x5IHdyaXR0ZW4gb3IgcmVtb3RlbHkgcmVjZWl2ZWQgcGFpZCByZWNvcmQgY2FuIHByb3BhZ2F0ZQovLyBpbW1lZGlhdGVseS4gUmVjb3JkcyBsb2FkZWQgYWZ0ZXIgcmVzdGFydCBzdGlsbCBmYWlsIGNsb3NlZCB1bnRpbCByZWZyZXNoZWQuCmZ1bmMgKGkgKkluZGV4ZXIpIHByaW1lUGFpZFJldGVudGlvbkFmdGVyRmVlVmVyaWZpY2F0aW9uKHJlY29yZCAqd2lyZS5ES1ZTUmVjb3JkLCBwYXJzZWQgUGFyc2VkS2V5LApcdHZlcmlmaWVyIEZlZVZlcmlmaWVyKSBlcnJvciB7Clx0aWYgIWlzQXV0b3BheVJlY29yZChyZWNvcmQpIHsKXHRcdHJldHVybiBuaWwKXHR9Clx0cmV0ZW50aW9uVmVyaWZpZXIsIG9rIDo9IHZlcmlmaWVyLihQYWlkUmVjb3JkUmV0ZW50aW9uVmVyaWZpZXIpClx0aWYgIW9rIHsKXHRcdHJldHVybiBFcnJJbnZhbGlkRmVlUHJvb2YKXHR9Clx0cmV0ZW50aW9uLCBlcnIgOj0gcmV0ZW50aW9uVmVyaWZpZXIuUGFpZFJlY29yZFJldGVudGlvbihyZWNvcmQsIHBhcnNlZCkKXHRpZiBlcnIgIT0gbmlsIHsKXHRcdHJldHVybiBlcnIKXHR9Clx0aWYgIXBhaWRSZXRlbnRpb25DdXJyZW50KHJldGVudGlvbiwgaS5jdXJyZW50SGVpZ2h0KCkpIHsKXHRcdHJldHVybiBFcnJJbnZhbGlkRmVlUHJvb2YKXHR9Clx0cGFpZFJldGVudGlvbkNhY2hlRm9yKGkpLnNldChyZWNvcmQuS2V5LCByZXRlbnRpb24pClx0cmV0dXJuIG5pbAp9CgonJycKaWYgbWFya2VyIG5vdCBpbiB0ZXh0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgicGFpZCByZXRlbnRpb24gaGVscGVyIGluc2VydGlvbiBwb2ludCBub3QgZm91bmQiKQpwYWlkLndyaXRlX3RleHQodGV4dC5yZXBsYWNlKG1hcmtlciwgaGVscGVyICsgbWFya2VyLCAxKSkKCnRlc3QgPSBQYXRoKCJpbmRleGVyL2luZGV4ZXIvZGt2cy9wYWlkX3JlbGF5X3JlZnJlc2hfdGVzdC5nbyIpCnRleHQgPSB0ZXN0LnJlYWRfdGV4dCgpCm9sZCA9ICcnJ1x0cmVjb3JkIDo9IHNpZ25lZEF1dG9wYXlQZXJzb25hbFJlY29yZCh0LCBwcml2LCAiYXV0b3BheSIsIDEpClx0aWYgXywgZXJyIDo9IGlkeC5QdXRMb2NhbChyZWNvcmQpOyBlcnIgIT0gbmlsIHsKXHRcdHQuRmF0YWxmKCJwdXQgcGFpZCByZWNvcmQ6ICV2IiwgZXJyKQpcdH0KClx0cmVjb3JkcywgXywgZG9uZSwgXywgZXJyIDo9IGlkeC5TeW5jKG5pbCwgMTAwKQonJycKbmV3ID0gJycnXHRyZWNvcmQgOj0gc2lnbmVkQXV0b3BheVBlcnNvbmFsUmVjb3JkKHQsIHByaXYsICJhdXRvcGF5IiwgMSkKXHRpZiBfLCBlcnIgOj0gaWR4LlB1dExvY2FsKHJlY29yZCk7IGVyciAhPSBuaWwgewpcdFx0dC5GYXRhbGYoInB1dCBwYWlkIHJlY29yZDogJXYiLCBlcnIpClx0fQpcdC8vIE1vZGVsIGEgcHJvY2VzcyByZXN0YXJ0OiBwZXJzaXN0ZWQgcmVjb3JkcyByZW1haW4sIGJ1dCB0aGUgZGVyaXZlZApcdC8vIHJldGVudGlvbiBjYWNoZSBpcyBpbnRlbnRpb25hbGx5IGVtcHR5IHVudGlsIGNvbnRyYWN0IHN0YXRlIGlzIHJlZnJlc2hlZC4KXHRwYWlkUmV0ZW50aW9uQ2FjaGVGb3IoaWR4KS5yZXBsYWNlKG1ha2UobWFwW3N0cmluZ11QYWlkUmVjb3JkUmV0ZW50aW9uKSkKClx0cmVjb3JkcywgXywgZG9uZSwgXywgZXJyIDo9IGlkeC5TeW5jKG5pbCwgMTAwKQonJycKaWYgb2xkIG5vdCBpbiB0ZXh0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgiZmFpbC1jbG9zZWQgdGVzdCBpbnNlcnRpb24gcG9pbnQgbm90IGZvdW5kIikKdGVzdC53cml0ZV90ZXh0KHRleHQucmVwbGFjZShvbGQsIG5ldywgMSkpCgpQYXRoKCJpbmRleGVyL2luZGV4ZXIvZGt2cy9wYWlkX2luaXRpYWxfcmVsYXlfdGVzdC5nbyIpLndyaXRlX3RleHQocicnJ3BhY2thZ2UgZGt2cwoKaW1wb3J0ICgKCSJ0ZXN0aW5nIgoKCWRicGtnICJnaXRodWIuY29tL3NhdDIwLWxhYnMvaW5kZXhlci9pbmRleGVyL2RiIgoJImdpdGh1Yi5jb20vc2F0MjAtbGFicy9zYXRvc2hpbmV0L2J0Y2VjIgoJImdpdGh1Yi5jb20vc2F0MjAtbGFicy9zYXRvc2hpbmV0L2NoYWluY2ZnIgopCgpmdW5jIFRlc3RWZXJpZmllZEF1dG9wYXlSZWNvcmRSZWxheXNJbW1lZGlhdGVseSh0ICp0ZXN0aW5nLlQpIHsKCWRhdGFiYXNlIDo9IGRicGtnLk5ld0tWREIodC5UZW1wRGlyKCkpCglpZiBkYXRhYmFzZSA9PSBuaWwgewoJCXQuRmF0YWwoIk5ld0tWREIgZmFpbGVkIikKCX0KCXQuQ2xlYW51cChmdW5jKCkgeyBfID0gZGF0YWJhc2UuQ2xvc2UoKSB9KQoJcHJpdiwgZXJyIDo9IGJ0Y2VjLk5ld1ByaXZhdGVLZXkoKQoJaWYgZXJyICE9IG5pbCB7CgkJdC5GYXRhbChlcnIpCgl9CglwYXllciwgZXJyIDo9IFAyVFJBZGRyZXNzRnJvbVB1YktleUJ5dGVzKHByaXYuUHViS2V5KCkuU2VyaWFsaXplQ29tcHJlc3NlZCgpLCAmY2hhaW5jZmcuVGVzdE5ldFBhcmFtcykKCWlmIGVyciAhPSBuaWwgewoJCXQuRmF0YWwoZXJyKQoJfQoJaGVpZ2h0IDo9IHVpbnQ2NCgxMCkKCXByb3ZpZGVyIDo9ICZtdXRhYmxlQXV0b3BheVN0YXRlUHJvdmlkZXJ7c3RhdGU6ICZBdXRvcGF5Q29udHJhY3RTdGF0ZXsKCQlUZW1wbGF0ZU5hbWU6IGF1dG9wYXlUZW1wbGF0ZU5hbWUsCgkJQ3VycmVudEJsb2NrOiBpbnQ2NChoZWlnaHQpLAoJCVNlcnZpY2VOYW1lOiAgImRrdnMiLAoJCVJlY2lwaWVudDogICAgInJlY2lwaWVudCIsCgkJRmVlQXNzZXROYW1lOiAic2dhcyIsCgkJU3RhdHVzOiAgICAgICAiYWN0aXZlIiwKCQlEZWxlZ2F0ZXM6IG1hcFtzdHJpbmddQXV0b3BheURlbGVnYXRlU3RhdGV7CgkJCXBheWVyOiB7QW1vdW50UGVyQmxvY2s6ICIxIiwgQmFsYW5jZTogIjEwMCIsIExhc3RQYXlIZWlnaHQ6IGludDY0KGhlaWdodCksIFN0YXR1czogImFjdGl2ZSJ9LAoJCX0sCgl9fQoJY2FjaGVkIDo9ICZIZWlnaHRDYWNoZWRBdXRvcGF5U3RhdGVQcm92aWRlcntQcm92aWRlcjogcHJvdmlkZXIsIEN1cnJlbnRIZWlnaHQ6IGZ1bmMoKSB1aW50NjQgeyByZXR1cm4gaGVpZ2h0IH19Cgl2ZXJpZmllciA6PSBMb2NhbENhY2hlQXV0b3BheUZlZVZlcmlmaWVye0F1dG9wYXlGZWVWZXJpZmllcjogQXV0b3BheUZlZVZlcmlmaWVyewoJCVN0YXRlUHJvdmlkZXI6IGNhY2hlZCwgQ29udHJhY3Q6ICJhdXRvcGF5IiwgU2VydmljZU5hbWU6ICJka3ZzIiwgUmVjaXBpZW50OiAicmVjaXBpZW50IiwKCQlGZWVBc3NldE5hbWU6ICJzZ2FzIiwgRnVsbFJlY29yZEZlZVBlckJsb2NrOiAiMSIsIEFkZHJlc3NQYXJhbXM6ICZjaGFpbmNmZy5UZXN0TmV0UGFyYW1zLAoJfSwgQWxsb3dGcmVlTG9jYWw6IHRydWV9CglpZHggOj0gTmV3KGRhdGFiYXNlLCBDb25maWd7CgkJQWxsb3dGcmVlTG9jYWw6IHRydWUsCgkJRnJlZUxvY2FsQ2FjaGU6IEZyZWVMb2NhbENhY2hlUG9saWN5e0VuYWJsZWQ6IHRydWUsIE1heFRUTDogNjBfMDAwLCBNYXhSZWNvcmRzUGVyU2lnbmVyOiAxMCwKCQkJTWF4Qnl0ZXNQZXJTaWduZXI6IDEgPDwgMjAsIE1heFRvdGFsUmVjb3JkczogMTAwLCBNYXhUb3RhbEJ5dGVzOiAxIDw8IDIwfSwKCQlGZWVWZXJpZmllcjogdmVyaWZpZXIsIEN1cnJlbnRIZWlnaHQ6IGZ1bmMoKSB1aW50NjQgeyByZXR1cm4gaGVpZ2h0IH0sCgl9KQoJcmVjb3JkIDo9IHNpZ25lZEF1dG9wYXlQZXJzb25hbFJlY29yZCh0LCBwcml2LCAiYXV0b3BheSIsIDEpCglpZiBfLCBlcnIgOj0gaWR4LlB1dExvY2FsKHJlY29yZCk7IGVyciAhPSBuaWwgewoJCXQuRmF0YWxmKCJwdXQgcGFpZCByZWNvcmQ6ICV2IiwgZXJyKQoJfQoJcmVjb3JkcywgXywgZG9uZSwgXywgZXJyIDo9IGlkeC5TeW5jKG5pbCwgMTAwKQoJaWYgZXJyICE9IG5pbCB8fCAhZG9uZSB7CgkJdC5GYXRhbGYoInN5bmMgcGFpZCByZWNvcmQ6IGRvbmU9JXYgZXJyPSV2IiwgZG9uZSwgZXJyKQoJfQoJaWYgbGVuKHJlY29yZHMpICE9IDEgfHwgcmVjb3Jkc1swXS5LZXkgIT0gcmVjb3JkLktleSB7CgkJdC5GYXRhbGYoIm5ld2x5IHZlcmlmaWVkIHBhaWQgcmVjb3JkIGRpZCBub3QgcmVsYXk6ICUrdiIsIHJlY29yZHMpCgl9Cn0KJycnKQo=' | base64 -d > /tmp/patch_paid_relay.py
-          python3 /tmp/patch_paid_relay.py
-          gofmt -w indexer/indexer/dkvs/indexer.go indexer/indexer/dkvs/paid_retention.go indexer/indexer/dkvs/paid_relay_refresh_test.go indexer/indexer/dkvs/paid_initial_relay_test.go
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add indexer/indexer/dkvs/indexer.go indexer/indexer/dkvs/paid_retention.go indexer/indexer/dkvs/paid_relay_refresh_test.go indexer/indexer/dkvs/paid_initial_relay_test.go
-          git commit -m 'fix: relay newly verified AUTOPAY records'
-          git push origin HEAD:${{ github.head_ref }}
+
+      - name: Check single-version DKVS API
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          if grep -R -n -E 'VersionV2|AccountIDV2|AccountPubKeyV2|PersonalKeyV2|NewRecordV2|KeepsVersionOneCompatibility' indexer/indexer/dkvs; then
+            echo 'DKVS must expose only the canonical version-1 account format.'
+            exit 1
+          fi
+
+      - name: Vet DKVS package
+        working-directory: workspace/satoshinet
+        run: go vet ./indexer/indexer/dkvs
+
+      - name: Run DKVS package tests
+        id: dkvs-package-tests
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./indexer/indexer/dkvs -count=1 2>&1 | tee /tmp/dkvs-package-tests.log
+
+      - name: Upload DKVS package diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dkvs-package-tests-${{ github.run_id }}
+          path: /tmp/dkvs-package-tests.log
+          retention-days: 3
+
+      - name: Run DKVS server tests
+        working-directory: workspace/satoshinet
+        run: go test . -run '^TestDKVS' -count=1
+
+      - name: Run DKVS HTTP tests
+        working-directory: workspace/satoshinet
+        run: go test ./indexer/rpcserver/indexer -run '^(TestDKVSLocalOnlyMiddleware|TestBindDKVSJSONBodyLimit)$' -count=1
+
+      - name: Compile integration packages
+        id: integration-compile
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./wire ./peer ./indexer/indexer ./indexer/share/indexer -run '^$' 2>&1 | tee /tmp/dkvs-integration-compile.log
+
+      - name: Upload integration compile diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dkvs-integration-compile-${{ github.run_id }}
+          path: /tmp/dkvs-integration-compile.log
+          retention-days: 3
+
+      - name: Run focused race tests
+        working-directory: workspace/satoshinet
+        run: go test -race ./indexer/indexer/dkvs -run '^(TestResolverDoesNotHoldIndexerWriteLock|TestPhysicalDeleteFloorAndRecreate|TestPathMetaTracksPutUpdateDelete)$' -count=1
+
+      - name: Run full repository regression
+        working-directory: workspace/satoshinet
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... -count=1 2>&1 | tee /tmp/satoshinet-full-regression.log
+
+      - name: Upload full repository diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: satoshinet-full-regression-${{ github.run_id }}
+          path: /tmp/satoshinet-full-regression.log
+          retention-days: 3
+
+      - name: Publish commit status
+        if: always() && github.event_name == 'push'
+        uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const state = process.env.JOB_STATUS === 'success' ? 'success' : 'failure';
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: 'rgb11-dkvs-v1',
+              description: state === 'success' ? 'DKVS v1 checks passed' : 'DKVS v1 checks failed',
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
