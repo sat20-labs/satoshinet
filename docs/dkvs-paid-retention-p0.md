@@ -1,6 +1,6 @@
 # DKVS Paid Retention P0
 
-状态：实现草案
+状态：Review
 
 ## 目标
 
@@ -20,6 +20,7 @@
 
 - 付费 record 使用 `FeeMode=AUTOPAY`。
 - `TTL=0`、`ExpiryHeight=0`；record 自身不保存未来租期。
+- 节点拒绝携带非零 `TTL` 或 `ExpiryHeight` 的 AUTOPAY record，避免同时存在两套有效期来源。
 - `amount_per_block` 决定该 payer 可占用的 active record slot：
 
 ```text
