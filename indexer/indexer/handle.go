@@ -13,6 +13,11 @@ func (s *IndexerMgr) processBlock(block *common.Block) {
 	if s.contractIndexer != nil {
 		s.contractIndexer.ProcessBlock(block)
 	}
+	if s != nil && s.dkvsIndexer != nil && block != nil && block.Height > 0 {
+		if err := s.dkvsIndexer.RefreshPaidRetentionAt(uint64(block.Height)); err != nil {
+			common.Log.Warningf("DKVS paid-retention refresh at height %d failed: %v", block.Height, err)
+		}
+	}
 	s.pruneExpiredDKVSOnBlock(block)
 }
 
@@ -52,6 +57,9 @@ func (s *IndexerMgr) startDKVSPruneTimer() {
 		for {
 			select {
 			case <-timer.C:
+				if err := s.dkvsIndexer.RefreshPaidRetention(); err != nil {
+					common.Log.Warningf("DKVS timed paid-retention refresh failed: %v", err)
+				}
 				freePruned, err := s.dkvsIndexer.PruneExpired()
 				if err != nil {
 					common.Log.Warningf("DKVS timed free-record prune failed: %v", err)
