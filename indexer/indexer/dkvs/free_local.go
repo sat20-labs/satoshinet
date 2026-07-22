@@ -25,11 +25,14 @@ func isFreeLocalRecord(record *wire.DKVSRecord) bool {
 	return err == nil && proof.Mode == FeeModeFreeLocal
 }
 
-// isLocalOnlyRecord only accepts the explicit FREE_LOCAL proof. Legacy empty
-// proofs are intentionally left to the configured fee verifier so enabling a
-// cache policy cannot silently change their historical relay behavior.
+// isLocalOnlyRecord accepts explicit FREE_LOCAL records and paid records whose
+// payer did not pay the current block. Unpaid AUTOPAY records remain readable
+// from this node during the configured cache grace but are not relayed.
 func (i *Indexer) isLocalOnlyRecord(record *wire.DKVSRecord) bool {
-	return isFreeLocalRecord(record)
+	if isFreeLocalRecord(record) {
+		return true
+	}
+	return isAutopayRecord(record) && !i.paidRecordRelayable(record)
 }
 
 func (i *Indexer) relayableRecords(records []*wire.DKVSRecord) []*wire.DKVSRecord {
