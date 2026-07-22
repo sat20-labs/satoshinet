@@ -11,7 +11,7 @@ const (
 
 	DefaultTestNetAutopayDeployNonce    uint64 = 8888
 	DefaultAutopayServiceName                  = "dkvs"
-	DefaultAutopayMinAmountPerBlock            = "100"
+	DefaultAutopayMinAmountPerBlock            = "1"
 	DefaultAutopayFullRecordFeePerBlock        = "1"
 )
 
