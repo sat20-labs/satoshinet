@@ -22,33 +22,38 @@ var (
 )
 
 type Indexer struct {
-	db                      indexercommon.KVDB
-	resolver                DIDResolver
-	feeVerifier             FeeVerifier
-	feeUsageInitialized     bool
-	feeUsageCounts          map[string]uint64
-	feeUsageEntries         map[string]feeUsageEntry
-	feeExpiryHeights        feeExpiryHeap
-	feeExpiryTimes          feeExpiryHeap
-	recordExpiryInitialized bool
-	recordExpiryEntries     map[string]recordExpiryEntry
-	recordExpiryHeights     feeExpiryHeap
-	recordExpiryTimes       feeExpiryHeap
-	system                  SystemVerifier
-	mailbox                 MailboxPolicy
-	blob                    BlobPolicy
-	tmp                     TmpPolicy
-	subs                    *subscriptionSet
-	notify                  NotifyFunc
-	subNotify               SubscriptionNotifyFunc
-	height                  func() uint64
-	mutex                   sync.RWMutex
-	generation              uint64
-	policyGeneration        uint64
-	checkpointMutex         sync.Mutex
-	checkpointGeneration    uint64
-	checkpointHeight        uint64
-	checkpointCache         *Checkpoint
+	db                        indexercommon.KVDB
+	resolver                  DIDResolver
+	feeVerifier               FeeVerifier
+	feeUsageInitialized       bool
+	feeUsageCounts            map[string]uint64
+	feeUsageEntries           map[string]feeUsageEntry
+	feeExpiryHeights          feeExpiryHeap
+	feeExpiryTimes            feeExpiryHeap
+	freeLocal                 FreeLocalCachePolicy
+	freeLocalUsageInitialized bool
+	freeLocalUsageBySigner    map[string]freeLocalUsage
+	freeLocalUsageEntries     map[string]freeLocalUsageEntry
+	freeLocalTotal            freeLocalUsage
+	recordExpiryInitialized   bool
+	recordExpiryEntries       map[string]recordExpiryEntry
+	recordExpiryHeights       feeExpiryHeap
+	recordExpiryTimes         feeExpiryHeap
+	system                    SystemVerifier
+	mailbox                   MailboxPolicy
+	blob                      BlobPolicy
+	tmp                       TmpPolicy
+	subs                      *subscriptionSet
+	notify                    NotifyFunc
+	subNotify                 SubscriptionNotifyFunc
+	height                    func() uint64
+	mutex                     sync.RWMutex
+	generation                uint64
+	policyGeneration          uint64
+	checkpointMutex           sync.Mutex
+	checkpointGeneration      uint64
+	checkpointHeight          uint64
+	checkpointCache           *Checkpoint
 }
 
 func New(db indexercommon.KVDB, cfg Config) *Indexer {
@@ -56,9 +61,13 @@ func New(db indexercommon.KVDB, cfg Config) *Indexer {
 	if resolver == nil {
 		resolver = defaultResolver{}
 	}
+	freeLocal := normalizeFreeLocalCachePolicy(cfg.FreeLocalCache, cfg.AllowFreeLocal)
 	feeVerifier := cfg.FeeVerifier
 	if feeVerifier == nil {
-		feeVerifier = defaultFeeVerifier{allowFreeLocal: cfg.AllowFreeLocal}
+		feeVerifier = defaultFeeVerifier{
+			allowFreeLocal:     cfg.AllowFreeLocal,
+			allowEmptyFeeProof: !freeLocal.Enabled,
+		}
 	}
 	systemVerifier := cfg.SystemVerifier
 	if systemVerifier == nil {
@@ -72,12 +81,14 @@ func New(db indexercommon.KVDB, cfg Config) *Indexer {
 		mailbox:     normalizeMailboxPolicy(cfg.MailboxPolicy),
 		blob:        normalizeBlobPolicy(cfg.BlobPolicy),
 		tmp:         normalizeTmpPolicy(cfg.TmpPolicy),
+		freeLocal:   freeLocal,
 		subs:        newSubscriptionSet(),
 		notify:      cfg.Notify,
 		subNotify:   cfg.Subscription,
 		height:      cfg.CurrentHeight,
 	}
 	indexer.resetFeeUsageLocked()
+	indexer.resetFreeLocalUsageLocked()
 	indexer.resetRecordExpiryLocked()
 	return indexer
 }
@@ -126,18 +137,18 @@ func (i *Indexer) SetSystemVerifier(verifier SystemVerifier) {
 }
 
 func (i *Indexer) PutLocal(record *wire.DKVSRecord) (bool, error) {
-	updated, eventType, _, err := i.put(record, false)
+	updated, eventType, _, relay, err := i.put(record, false)
 	if err != nil {
 		return false, err
 	}
 	if updated {
-		i.emit(eventType, record)
+		i.emit(eventType, record, relay)
 	}
 	return updated, nil
 }
 
 func (i *Indexer) PutRemote(record *wire.DKVSRecord) (bool, error) {
-	updated, _, _, err := i.put(record, true)
+	updated, _, _, _, err := i.put(record, true)
 	return updated, err
 }
 
@@ -202,6 +213,18 @@ func (i *Indexer) GetByHash(hash chainhash.Hash) (*wire.DKVSRecord, error) {
 		return nil, ErrRecordNotFound
 	}
 	if err := i.activeError(record, i.currentHeight(), currentUnixMilli()); err != nil {
+		return nil, ErrRecordNotFound
+	}
+	return record, nil
+}
+
+// GetByHashForRelay never exposes node-local free-cache records to a peer.
+func (i *Indexer) GetByHashForRelay(hash chainhash.Hash) (*wire.DKVSRecord, error) {
+	record, err := i.GetByHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	if i.isLocalOnlyRecord(record) {
 		return nil, ErrRecordNotFound
 	}
 	return record, nil
@@ -359,6 +382,7 @@ func (i *Indexer) Checkpoint() (*Checkpoint, error) {
 	if err != nil {
 		return nil, err
 	}
+	records = i.relayableRecords(records)
 	checkpoint, err := checkpointFromRecords(records, height)
 	if err != nil {
 		return nil, err
@@ -378,6 +402,7 @@ func (i *Indexer) Snapshot() (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	records = i.relayableRecords(records)
 	checkpoint, err := checkpointFromRecords(records, i.currentHeight())
 	if err != nil {
 		return nil, err
@@ -393,7 +418,7 @@ func (i *Indexer) ApplySnapshot(snapshot *Snapshot) (int, error) {
 	if err := ValidateSnapshot(snapshot); err != nil {
 		return 0, err
 	}
-	return i.applyRecordSetAtomic(snapshot.Records, nil, nil, false)
+	return i.applyRecordSetAtomic(snapshot.Records, nil, nil, false, false)
 }
 
 func (i *Indexer) PruneExpired() (int, error) {
@@ -466,6 +491,11 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 	}
 	if pruned > 0 {
 		atomic.AddUint64(&i.generation, 1)
+		if i.freeLocalUsageInitialized {
+			for _, expired := range expiredRecords {
+				i.removeFreeLocalUsageLocked(expired.record.Key)
+			}
+		}
 	}
 	i.mutex.Unlock()
 	return pruned, nil
@@ -505,35 +535,38 @@ func checkpointFromRecords(records []*wire.DKVSRecord, height uint64) (*Checkpoi
 	return cp, nil
 }
 
-func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainhash.Hash, error) {
+func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainhash.Hash, bool, error) {
 	height := i.currentHeight()
 	now := currentUnixMilli()
 	for attempt := 0; attempt < 3; attempt++ {
 		validators := i.snapshotValidators()
 		parsed, err := validateParsedCoreWithVerifier(record, height, now, remote, false, nil)
 		if err != nil {
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		snapshot, err := i.readWriteStateSnapshot(record.Key, parsed, validators)
 		if err != nil {
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
 		}
 
 		// Delete commands free capacity and are authorized by the current key
 		// owner, so they never require a storage fee proof.
 		if !IsTombstone(record.Flags) {
 			if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
-				return false, 0, chainhash.Hash{}, err
+				return false, 0, chainhash.Hash{}, false, err
 			}
+		}
+		if remote && i.isLocalOnlyRecord(record) {
+			return false, 0, chainhash.Hash{}, false, ErrFreeLocalNotRelayable
 		}
 		forceReplace, err := validateWritePermissionWith(
 			parsed, record, snapshot.existing, snapshot.requiresResolve, validators,
 		)
 		if err != nil {
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		if !IsTombstone(record.Flags) && deleteFloorBlocksRecord(parsed, snapshot.deleteState, record) {
-			return false, 0, chainhash.Hash{}, nil
+			return false, 0, chainhash.Hash{}, false, nil
 		}
 		var preparedCapacity preparedFeeCapacity
 		if !IsTombstone(record.Flags) {
@@ -544,7 +577,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 				if errors.Is(err, ErrConcurrentUpdate) {
 					continue
 				}
-				return false, 0, chainhash.Hash{}, err
+				return false, 0, chainhash.Hash{}, false, err
 			}
 		}
 
@@ -552,7 +585,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		current, err := i.writeStateStillCurrentLocked(record.Key, parsed, snapshot)
 		if err != nil {
 			i.mutex.Unlock()
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		if !current {
 			i.mutex.Unlock()
@@ -561,20 +594,25 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		existing := snapshot.existing
 		deleteState := snapshot.deleteState
 		clearNameTransfer := snapshot.requiresResolve && parsed.Namespace == "name"
+		if remote && IsTombstone(record.Flags) &&
+			((existing != nil && i.isLocalOnlyRecord(existing)) || (deleteState != nil && deleteState.LocalOnly)) {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, false, ErrFreeLocalNotRelayable
+		}
 
 		if IsTombstone(record.Flags) {
 			if existing == nil {
 				if deleteState != nil && deleteState.Record != nil &&
 					CompareRecords(deleteState.Record, record) >= 0 {
 					i.mutex.Unlock()
-					return false, 0, RecordHash(deleteState.Record), nil
+					return false, 0, RecordHash(deleteState.Record), !deleteState.LocalOnly, nil
 				}
-				hash, err := i.retainDeleteCommandLocked(record, now)
+				hash, err := i.retainDeleteCommandLocked(record, now, deleteState != nil && deleteState.LocalOnly)
 				i.mutex.Unlock()
 				if err != nil {
-					return false, 0, chainhash.Hash{}, err
+					return false, 0, chainhash.Hash{}, false, err
 				}
-				return true, EventRecordTombstone, hash, nil
+				return true, EventRecordTombstone, hash, deleteState == nil || !deleteState.LocalOnly, nil
 			}
 			// For the same authority a delete must advance the sequence; an
 			// authorized owner rotation can replace an older owner's record with a
@@ -583,11 +621,11 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 				if clearNameTransfer {
 					if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {
 						i.mutex.Unlock()
-						return false, 0, chainhash.Hash{}, err
+						return false, 0, chainhash.Hash{}, false, err
 					}
 				}
 				i.mutex.Unlock()
-				return false, 0, RecordHash(existing), nil
+				return false, 0, RecordHash(existing), !i.isLocalOnlyRecord(existing), nil
 			}
 			floorSeq := record.Seq
 			hash, err := i.commitDeleteLocked(
@@ -598,45 +636,49 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 			}
 			i.mutex.Unlock()
 			if err != nil {
-				return false, 0, chainhash.Hash{}, err
+				return false, 0, chainhash.Hash{}, false, err
 			}
-			return true, EventRecordTombstone, hash, nil
+			return true, EventRecordTombstone, hash, !i.isLocalOnlyRecord(existing), nil
 		}
 
 		if deleteFloorBlocksRecord(parsed, deleteState, record) {
 			i.mutex.Unlock()
-			return false, 0, chainhash.Hash{}, nil
+			return false, 0, chainhash.Hash{}, false, nil
 		}
 		if err := i.validateStatefulLocked(record, parsed, existing, height, now); err != nil {
 			i.mutex.Unlock()
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		if existing != nil && !forceReplace && i.activeError(existing, height, now) == nil && CompareRecords(existing, record) >= 0 {
 			if clearNameTransfer {
 				if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {
 					i.mutex.Unlock()
-					return false, 0, chainhash.Hash{}, err
+					return false, 0, chainhash.Hash{}, false, err
 				}
 			}
 			i.mutex.Unlock()
-			return false, 0, RecordHash(existing), nil
+			return false, 0, RecordHash(existing), !i.isLocalOnlyRecord(existing), nil
 		}
 		if err := i.validatePreparedFeeCapacityLocked(record, preparedCapacity, height, now); err != nil {
 			i.mutex.Unlock()
 			if errors.Is(err, ErrConcurrentUpdate) {
 				continue
 			}
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
+		}
+		if err := i.validateFreeLocalCapacityLocked(record, parsed, height, now); err != nil {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		meta, err := i.pathMetaForMutationLocked(parsed, existing, record, height, now)
 		if err != nil {
 			i.mutex.Unlock()
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		data, err := MarshalRecord(record)
 		if err != nil {
 			i.mutex.Unlock()
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		hash := RecordHash(record)
 		batch := i.db.NewWriteBatch()
@@ -665,20 +707,24 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		batch.Close()
 		if err != nil {
 			i.mutex.Unlock()
-			return false, 0, chainhash.Hash{}, err
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		atomic.AddUint64(&i.generation, 1)
 		if preparedCapacity.indexed != nil && i.feeUsageInitialized {
 			i.replaceFeeUsageLocked(preparedCapacity.indexed, record)
+		}
+		if err := i.replaceFreeLocalUsageLocked(record, parsed); err != nil {
+			i.mutex.Unlock()
+			return false, 0, chainhash.Hash{}, false, err
 		}
 		if i.recordExpiryInitialized {
 			i.replaceRecordExpiryLocked(record)
 		}
 		eventType := notifyEventType(parsed, record, existing)
 		i.mutex.Unlock()
-		return true, eventType, hash, nil
+		return true, eventType, hash, !i.isLocalOnlyRecord(record), nil
 	}
-	return false, 0, chainhash.Hash{}, ErrConcurrentUpdate
+	return false, 0, chainhash.Hash{}, false, ErrConcurrentUpdate
 }
 
 func (i *Indexer) validate(record *wire.DKVSRecord) error {
@@ -983,7 +1029,7 @@ func (i *Indexer) scanFilteredLocked(cursor []byte, limit int, height, now uint6
 	return records, next, done, err
 }
 
-func (i *Indexer) emit(eventType uint8, record *wire.DKVSRecord) {
+func (i *Indexer) emit(eventType uint8, record *wire.DKVSRecord, relay bool) {
 	i.mutex.RLock()
 	notify := i.notify
 	i.mutex.RUnlock()
@@ -994,6 +1040,7 @@ func (i *Indexer) emit(eventType uint8, record *wire.DKVSRecord) {
 	if err != nil {
 		return
 	}
+	event.Relay = relay
 	notify(event)
 }
 

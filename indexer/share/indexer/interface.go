@@ -76,8 +76,10 @@ type Indexer interface {
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error)
+	GetDKVSRecordByHashForRelay(hash chainhash.Hash) (*wire.DKVSRecord, error)
 	ListDKVSRecords(prefix string, start, limit int) ([]*wire.DKVSRecord, int, error)
 	GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error)
+	GetDKVSFreeLocalCachePolicy() dkvs_indexer.FreeLocalCachePolicy
 	GetDKVSPathMeta(path string) (*dkvs_indexer.PathMeta, error)
 	ApplyDKVSMirror(filters []dkvs_indexer.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error)
 	ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error)

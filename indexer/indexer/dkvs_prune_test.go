@@ -72,13 +72,14 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 		chaincfgParam: &chaincfg.TestNetParams,
 	}
 	testnetCfg := testnetMgr.dkvsConfig()
-	if testnetCfg.AllowFreeLocal {
-		t.Fatalf("testnet dkvs config should require default autopay fee proof")
+	if !testnetCfg.AllowFreeLocal || !testnetCfg.FreeLocalCache.Enabled {
+		t.Fatalf("testnet dkvs config should expose the default free-local cache: %+v", testnetCfg.FreeLocalCache)
 	}
-	defaultAutopayVerifier, ok := testnetCfg.FeeVerifier.(dkvs.AutopayFeeVerifier)
+	defaultLocalVerifier, ok := testnetCfg.FeeVerifier.(dkvs.LocalCacheAutopayFeeVerifier)
 	if !ok {
 		t.Fatalf("testnet default fee verifier not configured: %T", testnetCfg.FeeVerifier)
 	}
+	defaultAutopayVerifier := defaultLocalVerifier.AutopayFeeVerifier
 	defaults := dkvs.NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	if defaultAutopayVerifier.Recipient != defaults.AutopayRecipient ||
 		defaultAutopayVerifier.FeeAssetName != defaults.AutopayFeeAssetName ||
@@ -187,10 +188,11 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 		},
 		chaincfgParam: &chaincfg.TestNetParams,
 	}
-	autopayVerifier, ok := autopayMgr.dkvsConfig().FeeVerifier.(dkvs.AutopayFeeVerifier)
+	autopayLocalVerifier, ok := autopayMgr.dkvsConfig().FeeVerifier.(dkvs.LocalCacheAutopayFeeVerifier)
 	if !ok {
 		t.Fatalf("autopay fee verifier not configured: %T", autopayMgr.dkvsConfig().FeeVerifier)
 	}
+	autopayVerifier := autopayLocalVerifier.AutopayFeeVerifier
 	if autopayVerifier.Recipient != "dkvs-fee-recipient" ||
 		autopayVerifier.FeeAssetName != "sat" ||
 		autopayVerifier.FullRecordFeePerBlock != "1" ||

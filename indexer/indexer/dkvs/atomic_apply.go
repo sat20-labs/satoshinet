@@ -42,7 +42,7 @@ func cloneRecordSet(records []*wire.DKVSRecord) (map[string]*wire.DKVSRecord, []
 	return byKey, ordered, nil
 }
 
-func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord) (preparedRecordSet, error) {
+func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord, rejectFreeLocal bool) (preparedRecordSet, error) {
 	byKey, ordered, err := cloneRecordSet(records)
 	if err != nil {
 		return preparedRecordSet{}, err
@@ -60,6 +60,9 @@ func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord) (preparedReco
 		}
 		if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
 			return preparedRecordSet{}, err
+		}
+		if rejectFreeLocal && i.isLocalOnlyRecord(record) {
+			return preparedRecordSet{}, ErrFreeLocalNotRelayable
 		}
 		state, err := i.readWriteStateSnapshot(record.Key, parsed, validators)
 		if err != nil {
@@ -189,9 +192,9 @@ func (i *Indexer) selectMergeRecordSetLocked(prepared preparedRecordSet, height,
 	return selected, acceptedBlobRanges, nil
 }
 
-func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syncRange, expectedRoot *chainhash.Hash, authoritative bool) (int, error) {
+func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syncRange, expectedRoot *chainhash.Hash, authoritative, rejectFreeLocal bool) (int, error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		prepared, err := i.prevalidateRecordSet(records)
+		prepared, err := i.prevalidateRecordSet(records, rejectFreeLocal)
 		if err != nil {
 			return 0, err
 		}
@@ -240,6 +243,7 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 				i.mutex.Unlock()
 				return 0, err
 			}
+			current = i.relayableRecords(current)
 		}
 		if len(blobReplace) != 0 {
 			blobCurrent, readErr := i.recordsForRangesLocked(blobReplace, false, height, now)
@@ -336,7 +340,7 @@ func (i *Indexer) ApplyMirror(filters []Subscription, records []*wire.DKVSRecord
 	if err != nil {
 		return 0, err
 	}
-	return i.applyRecordSetAtomic(records, ranges, &root, true)
+	return i.applyRecordSetAtomic(records, ranges, &root, true, true)
 }
 
 // ApplyRecordSet atomically merges a validated related record set, such as one
@@ -348,5 +352,5 @@ func (i *Indexer) ApplyRecordSet(records []*wire.DKVSRecord) (int, error) {
 			return 0, ErrInvalidSnapshot
 		}
 	}
-	return i.applyRecordSetAtomic(records, nil, nil, false)
+	return i.applyRecordSetAtomic(records, nil, nil, false, true)
 }

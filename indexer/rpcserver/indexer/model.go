@@ -23,6 +23,10 @@ type Model struct {
 	indexer shareIndexer.Indexer
 }
 
+func (s *Model) GetDKVSFreeLocalCachePolicy() dkvsindexer.FreeLocalCachePolicy {
+	return s.indexer.GetDKVSFreeLocalCachePolicy()
+}
+
 func NewModel(indexer shareIndexer.Indexer) *Model {
 	return &Model{
 		indexer: indexer,

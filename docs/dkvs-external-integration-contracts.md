@@ -206,7 +206,7 @@ A production DKVS Pool verifier must validate at least:
 - `ONESHOT` payment exists, is confirmed enough, has not been replayed outside allowed policy, and covers namespace, size and expiry;
 - `LEASE` contract is active, funded, covers namespace/key scope, size quota and expiry;
 - `AUTOPAY` contract is the configured active global `autopay.tc` template contract; the p2tr address derived from `record.PubKey` has an active delegate entry, recipient, service and fee asset match node policy, and that delegate's independent per-block payment covers its own full-size active records;
-- `FREE_LOCAL` is accepted only under an explicit local policy, normally not for mainnet public writes;
+- `FREE_LOCAL` is accepted only under an explicit local policy, normally not for mainnet public writes. The policy limits TTL, records and bytes per signer plus node-wide records and bytes; it is returned by `GET /v3/dkvs/config`. Such records, including their explicit delete commands, are node-local and must not enter DKVS P2P relay or sync;
 - mailbox quota and daily message quota are enforced consistently with plan state if the plan is quota-based.
 
 ### Default Behavior

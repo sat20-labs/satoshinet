@@ -64,6 +64,56 @@ type AutopayFeeVerifier struct {
 	AddressParams         *chaincfg.Params
 }
 
+// LocalCacheAutopayFeeVerifier keeps AUTOPAY validation for relayable records
+// while allowing only explicit FREE_LOCAL proofs to reach the node-local cache
+// policy. It preserves AUTOPAY's indexed capacity accounting for paid records.
+type LocalCacheAutopayFeeVerifier struct {
+	AutopayFeeVerifier
+	AllowFreeLocal bool
+}
+
+func (v LocalCacheAutopayFeeVerifier) VerifyRecordFeeProof(record *wire.DKVSRecord, parsed ParsedKey) error {
+	if isFreeLocalRecord(record) {
+		if v.AllowFreeLocal {
+			return nil
+		}
+		return ErrFreeLocalDisabled
+	}
+	return v.AutopayFeeVerifier.VerifyRecordFeeProof(record, parsed)
+}
+
+func (v LocalCacheAutopayFeeVerifier) VerifyFeeProof(recordHash, keyHash [32]byte, namespace string, recordSize int, expiryHeight uint64, feeProof []byte) error {
+	proof, err := ParseFeeProof(feeProof)
+	if err == nil && proof.Mode == FeeModeFreeLocal {
+		if v.AllowFreeLocal {
+			return nil
+		}
+		return ErrFreeLocalDisabled
+	}
+	return v.AutopayFeeVerifier.VerifyFeeProof(recordHash, keyHash, namespace, recordSize, expiryHeight, feeProof)
+}
+
+func (v LocalCacheAutopayFeeVerifier) VerifyFeeCapacity(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, records []*wire.DKVSRecord, height, now uint64) error {
+	if isFreeLocalRecord(record) {
+		return nil
+	}
+	return v.AutopayFeeVerifier.VerifyFeeCapacity(record, parsed, existing, records, height, now)
+}
+
+func (v LocalCacheAutopayFeeVerifier) FeeCapacity(record *wire.DKVSRecord, parsed ParsedKey) (FeeCapacityDescriptor, error) {
+	if isFreeLocalRecord(record) {
+		return FeeCapacityDescriptor{}, nil
+	}
+	return v.AutopayFeeVerifier.FeeCapacity(record, parsed)
+}
+
+func (v LocalCacheAutopayFeeVerifier) FeeUsageKey(record *wire.DKVSRecord) (string, error) {
+	if isFreeLocalRecord(record) {
+		return "", nil
+	}
+	return v.AutopayFeeVerifier.FeeUsageKey(record)
+}
+
 func (p RPCAutopayStateProvider) GetAutopayState(contract string) (*AutopayContractState, error) {
 	if p.Call == nil {
 		return nil, ErrInvalidFeeProof

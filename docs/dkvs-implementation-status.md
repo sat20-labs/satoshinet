@@ -22,18 +22,20 @@
 - `/tmp/<random_id>` 作为短期临时数据，要求非零 TTL，默认 TTL 上限 24 小时，受可配置单条 size 限制。
 - `/blob/<account_id>/<object_id>/manifest` 与 `/blob/<account_id>/<object_id>/chunk/<index>`；`object_id` 是 owner 自定义名称而非内容地址，仅 `sha256(pubkey)==account_id` 可写。manifest 必须先写，chunks 必须与 manifest 使用同一 pubkey、seq 和 expiry，并校验 chunk hash、content hash、chunk count / size / total size。
 - DKVS fee proof 接口和 ONESHOT / LEASE / FREE_LOCAL / AUTOPAY 紧凑二进制 proof helper；record 签名直接覆盖 proof，proof 不重复携带 record hash、key hash、size、expiry、namespace 或独立签名。AUTOPAY verifier 读取全局 `autopay.tc` 合约 state，并按 signer 的 p2tr delegate 独立校验 active、余额和 full-size record 容量。
+- `FREE_LOCAL` 是显式签名 fee proof：节点通过 `FreeLocalCachePolicy` 限制最大 TTL、每 signer record/bytes 和全节点 record/bytes。免费 record 只在接受写入的钱包连接节点保存，超过配额拒绝而不静默淘汰；过期后由既有清理器删除。
 - DKVS 提供可选 `HTTPFeeVerifier` 适配器，可把 `record_hash`、`key_hash`、namespace、record size、expiry height 和 raw fee proof 转发给外部 DKVS Pool verifier service；不默认启用，不定义合约语义。
 - DKVS 提供可选 `HTTPSystemVerifier` 适配器，可把 `/sys/*` key 和 record signer pubkey 转发给外部 system authority service；不默认启用，不定义 system signer 治理语义。
 - Checkpoint / snapshot 是未签名的本地计算结果，用于节点视图对账、调试和 snapshot 校验；embedded indexer 不持有 checkpoint/snapshot system signer 私钥，也不自动发布 signed `/sys/*` checkpoint record。
 - DKVS 单测显式覆盖默认非免费策略下无 fee proof 写入失败，避免主网节点误开放免费写入；测试网默认策略使用 AUTOPAY verifier，主网不凭默认值放行，测试环境或本地策略仍可通过 `AllowFreeLocal` 或自定义 `FeeVerifier` 开启。
 - 6 个原生 wire 消息：`dkvsnotify`、`dkvsinv`、`dkvsget`、`dkvsdata`、`dkvssyncreq`、`dkvssyncres`。`dkvsnotify` 使用 1 字节 event type 和最多 16 KiB data，record 事件直接内联完整 DKVSRecord。
-- peer listener 和 serverPeer DKVS 消息分发；miner 新连接后通过带 session id 的 sync request / response 分页同步 active records，分页受 record 数量和 payload bytes 双重限制；节点周期性执行反熵同步并把验证通过的远端更新继续 relay，完成同步时会对比远端 response checkpoint root 与本地 active root 并记录 mismatch。
+- peer listener 和 serverPeer DKVS 消息分发；miner 新连接后通过带 session id 的 sync request / response 分页同步 active records，分页受 record 数量和 payload bytes 双重限制；`FREE_LOCAL` record 与其显式 delete command 不会进入 notify/get/data、miner merge sync、普通节点 mirror sync、checkpoint 或 snapshot，远端收到该类型一律拒绝。
 - REST API：
   - `POST /v3/dkvs/records`
   - `GET /v3/dkvs/records?key=...`
   - `GET /v3/dkvs/records?hash=...`
   - `GET /v3/dkvs/records/prefix?prefix=...&start=...&limit=...`
   - `GET /v3/dkvs/usage?prefix=...`
+  - `GET /v3/dkvs/config`
   - `POST /v3/dkvs/tombstone`
   - `GET /v3/dkvs/checkpoint`
   - `GET /v3/dkvs/snapshot`

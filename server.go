@@ -3702,7 +3702,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		s.dkvsState.SetReady(true)
 	}
 	assetIndexer.SetDKVSNotifyCallback(func(event *dkvsindexer.NotifyEvent) {
-		if event == nil {
+		if event == nil || !event.Relay {
 			return
 		}
 		s.BroadcastMessage(&wire.MsgDKVSNotify{

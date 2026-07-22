@@ -137,9 +137,53 @@ func (i *Indexer) scanActiveSyncRangeLocked(r syncRange, seek []byte, limit int,
 		if i.activeError(record, height, now) != nil {
 			return nil, nil, true, nil
 		}
+		if i.isLocalOnlyRecord(record) {
+			return nil, nil, true, nil
+		}
 		return []*wire.DKVSRecord{record}, nil, true, nil
 	}
-	return i.scanLocked(r.target, seek, limit, true, height, now)
+	return i.scanRelaySyncRangeLocked(r.target, seek, limit, height, now)
+}
+
+func (i *Indexer) scanRelaySyncRangeLocked(prefix string, cursor []byte, limit int, height, now uint64) ([]*wire.DKVSRecord, []byte, bool, error) {
+	scanPrefix := recordKeyPrefix
+	normalizedPrefix := strings.TrimSuffix(prefix, "/")
+	if prefix != "" {
+		scanPrefix = recordDBKey(normalizedPrefix)
+	}
+	seek := cursor
+	if len(seek) == 0 {
+		seek = scanPrefix
+	}
+	records := make([]*wire.DKVSRecord, 0)
+	var next []byte
+	done := true
+	err := i.db.BatchReadV2(scanPrefix, seek, false, func(key, value []byte) error {
+		if len(cursor) != 0 && bytes.Equal(key, cursor) {
+			return nil
+		}
+		record, err := UnmarshalRecord(value)
+		if err != nil {
+			return err
+		}
+		if normalizedPrefix != "" && record.Key != normalizedPrefix && !strings.HasPrefix(record.Key, normalizedPrefix+"/") {
+			return nil
+		}
+		if i.activeError(record, height, now) != nil || i.isLocalOnlyRecord(record) {
+			return nil
+		}
+		records = append(records, record)
+		if limit > 0 && len(records) >= limit {
+			done = false
+			next = append([]byte{}, key...)
+			return errStopScan
+		}
+		return nil
+	})
+	if errors.Is(err, errStopScan) {
+		err = nil
+	}
+	return records, next, done, err
 }
 
 func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int, now uint64) ([]*wire.DKVSRecord, []byte, bool, error) {
@@ -153,6 +197,9 @@ func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
 		}
 		if err != nil {
 			return nil, nil, false, err
+		}
+		if state.LocalOnly {
+			return nil, nil, true, nil
 		}
 		return []*wire.DKVSRecord{state.Record}, nil, true, nil
 	}
@@ -186,7 +233,7 @@ func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
 			!bytesEqual(state.Record.PubKey, state.PubKey)) {
 			return ErrInvalidRecord
 		}
-		if deleteRecordForRelay(state, now) == nil {
+		if state.LocalOnly || deleteRecordForRelay(state, now) == nil {
 			return nil
 		}
 		records = append(records, state.Record)
@@ -275,7 +322,11 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange) ([
 }
 
 func (i *Indexer) activeRecordsForRangesLocked(ranges []syncRange, height, now uint64) ([]*wire.DKVSRecord, error) {
-	return i.recordsForRangesLocked(ranges, true, height, now)
+	records, err := i.recordsForRangesLocked(ranges, true, height, now)
+	if err != nil {
+		return nil, err
+	}
+	return i.relayableRecords(records), nil
 }
 
 func (i *Indexer) recordsForRangesLocked(ranges []syncRange, activeOnly bool, height, now uint64) ([]*wire.DKVSRecord, error) {

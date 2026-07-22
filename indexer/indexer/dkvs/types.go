@@ -52,6 +52,9 @@ var (
 	ErrBlobChunkInvalid       = errors.New("dkvs blob chunk invalid")
 	ErrTooManySubscriptions   = errors.New("too many dkvs subscriptions")
 	ErrConcurrentUpdate       = errors.New("concurrent dkvs update")
+	ErrFreeLocalDisabled      = errors.New("dkvs free local cache is disabled")
+	ErrFreeLocalQuotaExceeded = errors.New("dkvs free local cache quota exceeded")
+	ErrFreeLocalNotRelayable  = errors.New("dkvs free local record is not relayable")
 )
 
 type DIDIdentity struct {
@@ -136,10 +139,38 @@ type FeeProof struct {
 type NotifyEvent struct {
 	EventType uint8  `json:"event_type"`
 	Data      []byte `json:"data"`
+	// Relay is local delivery metadata. It is deliberately not serialized into
+	// MsgDKVSNotify: a peer must independently validate every received record.
+	Relay bool `json:"-"`
+}
+
+// FreeLocalCachePolicy bounds records that have no paid fee proof. Those
+// records are admitted by one node only and are never relayed through DKVS P2P.
+type FreeLocalCachePolicy struct {
+	Enabled             bool   `json:"enabled"`
+	MaxTTL              uint64 `json:"max_ttl_ms"`
+	MaxRecordsPerSigner uint64 `json:"max_records_per_signer"`
+	MaxBytesPerSigner   uint64 `json:"max_bytes_per_signer"`
+	MaxTotalRecords     uint64 `json:"max_total_records"`
+	MaxTotalBytes       uint64 `json:"max_total_bytes"`
+}
+
+// DefaultFreeLocalCachePolicy is intentionally centralized so operators can
+// tune one default before it is exposed to connected wallets.
+func DefaultFreeLocalCachePolicy() FreeLocalCachePolicy {
+	return FreeLocalCachePolicy{
+		Enabled:             true,
+		MaxTTL:              24 * 60 * 60 * 1000,
+		MaxRecordsPerSigner: 100,
+		MaxBytesPerSigner:   1 << 20,
+		MaxTotalRecords:     100000,
+		MaxTotalBytes:       1 << 30,
+	}
 }
 
 type Config struct {
 	AllowFreeLocal bool
+	FreeLocalCache FreeLocalCachePolicy
 	Resolver       DIDResolver
 	FeeVerifier    FeeVerifier
 	SystemVerifier SystemVerifier
@@ -247,12 +278,19 @@ func (defaultResolver) ResolveService(string) (DIDIdentity, error) {
 }
 
 type defaultFeeVerifier struct {
-	allowFreeLocal bool
+	allowFreeLocal     bool
+	allowEmptyFeeProof bool
 }
 
 func (v defaultFeeVerifier) VerifyFeeProof(_, _ [32]byte, _ string, _ int, _ uint64, feeProof []byte) error {
-	if v.allowFreeLocal && len(feeProof) == 0 {
+	if v.allowFreeLocal && len(feeProof) == 0 && v.allowEmptyFeeProof {
 		return nil
+	}
+	if v.allowFreeLocal && len(feeProof) != 0 {
+		proof, err := ParseFeeProof(feeProof)
+		if err == nil && proof.Mode == FeeModeFreeLocal {
+			return nil
+		}
 	}
 	return ErrFeeProofRequired
 }

@@ -60,12 +60,20 @@ func (b *IndexerMgr) GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord,
 	return b.dkvsIndexer.GetByHash(hash)
 }
 
+func (b *IndexerMgr) GetDKVSRecordByHashForRelay(hash chainhash.Hash) (*wire.DKVSRecord, error) {
+	return b.dkvsIndexer.GetByHashForRelay(hash)
+}
+
 func (b *IndexerMgr) ListDKVSRecords(prefix string, start, limit int) ([]*wire.DKVSRecord, int, error) {
 	return b.dkvsIndexer.ListPrefix(prefix, start, limit)
 }
 
 func (b *IndexerMgr) GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error) {
 	return b.dkvsIndexer.Usage(prefix)
+}
+
+func (b *IndexerMgr) GetDKVSFreeLocalCachePolicy() dkvs_indexer.FreeLocalCachePolicy {
+	return b.dkvsIndexer.FreeLocalCachePolicy()
 }
 
 func (b *IndexerMgr) GetDKVSPathMeta(path string) (*dkvs_indexer.PathMeta, error) {

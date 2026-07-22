@@ -293,6 +293,11 @@ type dkvsUsageResp struct {
 	Data *dkvsindexer.Usage `json:"data,omitempty"`
 }
 
+type dkvsConfigResp struct {
+	indexerwire.BaseResp
+	Data *dkvsindexer.FreeLocalCachePolicy `json:"data,omitempty"`
+}
+
 type dkvsPathMetaResp struct {
 	indexerwire.BaseResp
 	Data *dkvsindexer.PathMeta `json:"data,omitempty"`
@@ -427,6 +432,13 @@ func (s *Handle) getDKVSUsage(c *gin.Context) {
 		return
 	}
 	resp.Data = usage
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) getDKVSConfig(c *gin.Context) {
+	resp := &dkvsConfigResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	policy := s.model.GetDKVSFreeLocalCachePolicy()
+	resp.Data = &policy
 	c.JSON(http.StatusOK, resp)
 }
 

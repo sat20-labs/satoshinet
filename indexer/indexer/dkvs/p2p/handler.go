@@ -12,7 +12,7 @@ import (
 type Store interface {
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error)
-	GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error)
+	GetDKVSRecordByHashForRelay(hash chainhash.Hash) (*wire.DKVSRecord, error)
 	ApplyDKVSMirror(filters []dkvs.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error)
 	ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error)
 	SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
@@ -63,7 +63,7 @@ func (h Handler) needsRecord(key string, hash chainhash.Hash) bool {
 		return false
 	}
 	if hash != (chainhash.Hash{}) {
-		if _, err := h.Store.GetDKVSRecordByHash(hash); err == nil {
+		if _, err := h.Store.GetDKVSRecordByHashForRelay(hash); err == nil {
 			return false
 		}
 	}
@@ -158,7 +158,7 @@ func (h Handler) OnGet(msg *wire.MsgDKVSGet) {
 		}
 	}
 	for _, hash := range msg.RecordHashes {
-		record, err := h.Store.GetDKVSRecordByHash(hash)
+		record, err := h.Store.GetDKVSRecordByHashForRelay(hash)
 		if err != nil {
 			notFound = append(notFound, hash)
 			continue

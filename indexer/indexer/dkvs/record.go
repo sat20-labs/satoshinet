@@ -122,6 +122,7 @@ func NewNotifyEvent(eventType uint8, record *wire.DKVSRecord) (*NotifyEvent, err
 	return &NotifyEvent{
 		EventType: eventType,
 		Data:      data,
+		Relay:     true,
 	}, nil
 }
 

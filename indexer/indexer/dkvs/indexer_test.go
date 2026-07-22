@@ -28,7 +28,11 @@ func testIndexer(t *testing.T) *Indexer {
 		t.Fatal("NewKVDB failed")
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return New(db, Config{AllowFreeLocal: true, CurrentHeight: func() uint64 { return 1 }})
+	return New(db, Config{
+		AllowFreeLocal: true,
+		FeeVerifier:    JSONFeeVerifier{AllowFreeLocal: true},
+		CurrentHeight:  func() uint64 { return 1 },
+	})
 }
 
 func signedPersonalRecord(t *testing.T, seq uint64, value string, flags uint32) *wire.DKVSRecord {
@@ -55,6 +59,172 @@ func signedPersonalRecordWithPath(t *testing.T, priv *btcec.PrivateKey, path str
 		t.Fatal(err)
 	}
 	return record
+}
+
+func signedFreePersonalRecord(t *testing.T, priv *btcec.PrivateKey, path string, seq uint64, value string, flags uint32) *wire.DKVSRecord {
+	t.Helper()
+	record := signedPersonalRecordWithPath(t, priv, path, seq, value, flags)
+	parsed, err := ParseKey(record.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := NewFreeLocalFeeProof(record.Key, parsed.Namespace, wire.MaxDKVSRecordSize, record.ExpiryHeight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.FeeProof, err = EncodeFeeProof(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	SignRecord(priv, record)
+	return record
+}
+
+func TestFreeLocalRecordsStayOnAcceptingNode(t *testing.T) {
+	var events []*NotifyEvent
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		FreeLocalCache: FreeLocalCachePolicy{
+			Enabled:             true,
+			MaxTTL:              120_000,
+			MaxRecordsPerSigner: 2,
+			MaxBytesPerSigner:   1 << 20,
+			MaxTotalRecords:     10,
+			MaxTotalBytes:       1 << 20,
+		},
+		Notify: func(event *NotifyEvent) { events = append(events, event) },
+	})
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := signedFreePersonalRecord(t, priv, "local", 1, "value", 0)
+	if updated, err := idx.PutLocal(record); err != nil || !updated {
+		t.Fatalf("put local updated=%v err=%v", updated, err)
+	}
+	if len(events) != 1 || events[0].Relay {
+		t.Fatalf("free local notify must not relay: %#v", events)
+	}
+	if _, err := idx.Get(record.Key); err != nil {
+		t.Fatalf("local get failed: %v", err)
+	}
+	if _, err := idx.GetForRelay(record.Key); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("relay get err=%v", err)
+	}
+	if _, err := idx.GetByHashForRelay(RecordHash(record)); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("relay hash get err=%v", err)
+	}
+	records, _, done, _, err := idx.Sync(nil, 10)
+	if err != nil || !done || len(records) != 0 {
+		t.Fatalf("free local sync records=%d done=%v err=%v", len(records), done, err)
+	}
+	checkpoint, err := idx.Checkpoint()
+	if err != nil || checkpoint.ActiveRecordCount != 0 {
+		t.Fatalf("free local checkpoint=%#v err=%v", checkpoint, err)
+	}
+	snapshot, err := idx.Snapshot()
+	if err != nil || len(snapshot.Records) != 0 {
+		t.Fatalf("free local snapshot=%#v err=%v", snapshot, err)
+	}
+	emptyRoot, err := recordsRoot(nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.ApplyMirror([]Subscription{{Type: SubscriptionKey, Target: record.Key}}, nil, emptyRoot); err != nil {
+		t.Fatalf("mirror free-local omission err=%v", err)
+	}
+	if _, err := idx.Get(record.Key); err != nil {
+		t.Fatalf("mirror removed free-local record: %v", err)
+	}
+	remote := testIndexer(t)
+	if _, err := remote.PutRemote(record); !errors.Is(err, ErrFreeLocalNotRelayable) {
+		t.Fatalf("remote free local err=%v", err)
+	}
+
+	tombstone := signedFreePersonalRecord(t, priv, "local", 2, "", FlagTombstone)
+	if updated, err := idx.PutLocal(tombstone); err != nil || !updated {
+		t.Fatalf("local tombstone updated=%v err=%v", updated, err)
+	}
+	if len(events) != 2 || events[1].Relay {
+		t.Fatalf("free local tombstone must not relay: %#v", events)
+	}
+	if _, err := idx.GetForRelay(record.Key); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("relay tombstone err=%v", err)
+	}
+	if _, err := remote.PutRemote(tombstone); !errors.Is(err, ErrFreeLocalNotRelayable) {
+		t.Fatalf("remote free tombstone err=%v", err)
+	}
+}
+
+func TestFreeLocalCacheQuota(t *testing.T) {
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		FreeLocalCache: FreeLocalCachePolicy{
+			Enabled:             true,
+			MaxTTL:              120_000,
+			MaxRecordsPerSigner: 1,
+			MaxBytesPerSigner:   1 << 20,
+			MaxTotalRecords:     1,
+			MaxTotalBytes:       1 << 20,
+		},
+	})
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := signedFreePersonalRecord(t, priv, "one", 1, "value", 0)
+	if _, err := idx.PutLocal(first); err != nil {
+		t.Fatal(err)
+	}
+	second := signedFreePersonalRecord(t, priv, "two", 1, "value", 0)
+	if _, err := idx.PutLocal(second); !errors.Is(err, ErrFreeLocalQuotaExceeded) {
+		t.Fatalf("per signer quota err=%v", err)
+	}
+	other, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	third := signedFreePersonalRecord(t, other, "one", 1, "value", 0)
+	if _, err := idx.PutLocal(third); !errors.Is(err, ErrFreeLocalQuotaExceeded) {
+		t.Fatalf("total quota err=%v", err)
+	}
+
+	shortTTL := signedFreePersonalRecord(t, other, "two", 1, "value", 0)
+	shortTTL.TTL = 120_001
+	SignRecord(other, shortTTL)
+	if _, err := idx.PutLocal(shortTTL); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("ttl limit err=%v", err)
+	}
+}
+
+func TestLocalCacheAutopayVerifierAcceptsOnlyExplicitFreeLocal(t *testing.T) {
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		FreeLocalCache: FreeLocalCachePolicy{
+			Enabled:             true,
+			MaxTTL:              120_000,
+			MaxRecordsPerSigner: 2,
+			MaxBytesPerSigner:   1 << 20,
+			MaxTotalRecords:     10,
+			MaxTotalBytes:       1 << 20,
+		},
+		FeeVerifier: LocalCacheAutopayFeeVerifier{
+			AutopayFeeVerifier: AutopayFeeVerifier{FullRecordFeePerBlock: "1"},
+			AllowFreeLocal:     true,
+		},
+	})
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	free := signedFreePersonalRecord(t, priv, "autopay-free", 1, "value", 0)
+	if updated, err := idx.PutLocal(free); err != nil || !updated {
+		t.Fatalf("free local autopay wrapper updated=%v err=%v", updated, err)
+	}
+	withoutProof := signedPersonalRecordWithPath(t, priv, "autopay-paid", 1, "value", 0)
+	if _, err := idx.PutLocal(withoutProof); !errors.Is(err, ErrFeeProofRequired) {
+		t.Fatalf("missing proof err=%v", err)
+	}
 }
 
 func testMailMsgKey(t *testing.T, mailboxPubKey, senderPubKey []byte, msgID string) string {
@@ -489,6 +659,9 @@ func testIndexerWithConfig(t *testing.T, cfg Config) *Indexer {
 	t.Cleanup(func() { _ = db.Close() })
 	if cfg.CurrentHeight == nil {
 		cfg.CurrentHeight = func() uint64 { return 1 }
+	}
+	if cfg.FeeVerifier == nil && cfg.AllowFreeLocal {
+		cfg.FeeVerifier = JSONFeeVerifier{AllowFreeLocal: cfg.AllowFreeLocal}
 	}
 	return New(db, cfg)
 }

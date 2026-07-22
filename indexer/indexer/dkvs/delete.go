@@ -11,7 +11,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const deleteStateVersion = uint32(1)
+const deleteStateVersion = uint32(2)
 
 const deleteRelayRetention = uint64((7 * 24 * time.Hour) / time.Millisecond)
 
@@ -22,6 +22,7 @@ type deleteState struct {
 	RelayUntil uint64
 	PubKey     []byte
 	Record     *wire.DKVSRecord
+	LocalOnly  bool
 }
 
 func deleteDBKey(key string) []byte {
@@ -46,36 +47,56 @@ func marshalDeleteState(state *deleteState) ([]byte, error) {
 			return nil, err
 		}
 	}
-	encoded := make([]byte, 4+8+8+2+4+len(state.PubKey)+len(recordBytes))
+	encoded := make([]byte, 4+8+8+1+2+4+len(state.PubKey)+len(recordBytes))
 	binary.LittleEndian.PutUint32(encoded[0:4], deleteStateVersion)
 	binary.LittleEndian.PutUint64(encoded[4:12], state.FloorSeq)
 	binary.LittleEndian.PutUint64(encoded[12:20], state.RelayUntil)
-	binary.LittleEndian.PutUint16(encoded[20:22], uint16(len(state.PubKey)))
-	binary.LittleEndian.PutUint32(encoded[22:26], uint32(len(recordBytes)))
-	copy(encoded[26:], state.PubKey)
-	copy(encoded[26+len(state.PubKey):], recordBytes)
+	if state.LocalOnly {
+		encoded[20] = 1
+	}
+	binary.LittleEndian.PutUint16(encoded[21:23], uint16(len(state.PubKey)))
+	binary.LittleEndian.PutUint32(encoded[23:27], uint32(len(recordBytes)))
+	copy(encoded[27:], state.PubKey)
+	copy(encoded[27+len(state.PubKey):], recordBytes)
 	return encoded, nil
 }
 
 func unmarshalDeleteState(encoded []byte) (*deleteState, error) {
-	if len(encoded) < 26 || binary.LittleEndian.Uint32(encoded[0:4]) != deleteStateVersion {
+	if len(encoded) < 26 {
 		return nil, ErrInvalidRecord
 	}
-	pubKeySize := int(binary.LittleEndian.Uint16(encoded[20:22]))
-	recordSize := int(binary.LittleEndian.Uint32(encoded[22:26]))
+	version := binary.LittleEndian.Uint32(encoded[0:4])
+	pubKeyOffset := 20
+	recordSizeOffset := 22
+	dataOffset := 26
+	localOnly := false
+	if version == deleteStateVersion {
+		if len(encoded) < 27 {
+			return nil, ErrInvalidRecord
+		}
+		localOnly = encoded[20] == 1
+		pubKeyOffset = 21
+		recordSizeOffset = 23
+		dataOffset = 27
+	} else if version != 1 {
+		return nil, ErrInvalidRecord
+	}
+	pubKeySize := int(binary.LittleEndian.Uint16(encoded[pubKeyOffset : pubKeyOffset+2]))
+	recordSize := int(binary.LittleEndian.Uint32(encoded[recordSizeOffset : recordSizeOffset+4]))
 	if pubKeySize < 0 || pubKeySize > wire.MaxDKVSPubKeySize || recordSize < 0 ||
-		26+pubKeySize+recordSize != len(encoded) {
+		dataOffset+pubKeySize+recordSize != len(encoded) {
 		return nil, ErrInvalidRecord
 	}
 	state := &deleteState{
 		FloorSeq:   binary.LittleEndian.Uint64(encoded[4:12]),
 		RelayUntil: binary.LittleEndian.Uint64(encoded[12:20]),
-		PubKey:     append([]byte{}, encoded[26:26+pubKeySize]...),
+		PubKey:     append([]byte{}, encoded[dataOffset:dataOffset+pubKeySize]...),
+		LocalOnly:  localOnly,
 	}
 	if recordSize == 0 {
 		return state, nil
 	}
-	record, err := UnmarshalRecord(encoded[26+pubKeySize:])
+	record, err := UnmarshalRecord(encoded[dataOffset+pubKeySize:])
 	if err != nil || !IsTombstone(record.Flags) || len(record.Value) != 0 {
 		return nil, ErrInvalidRecord
 	}
@@ -169,6 +190,9 @@ func (i *Indexer) GetForRelay(key string) (*wire.DKVSRecord, error) {
 	defer i.mutex.RUnlock()
 	if record, err := i.getRaw(key); err == nil {
 		if i.activeError(record, i.currentHeight(), currentUnixMilli()) == nil {
+			if i.isLocalOnlyRecord(record) {
+				return nil, ErrRecordNotFound
+			}
 			return record, nil
 		}
 	} else if !errors.Is(err, ErrRecordNotFound) {
@@ -179,6 +203,9 @@ func (i *Indexer) GetForRelay(key string) (*wire.DKVSRecord, error) {
 		return nil, err
 	}
 	if deleteRecordForRelay(state, currentUnixMilli()) == nil {
+		return nil, ErrRecordNotFound
+	}
+	if state.LocalOnly {
 		return nil, ErrRecordNotFound
 	}
 	return state.Record, nil
@@ -208,7 +235,11 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 			return chainhash.Hash{}, err
 		}
 	}
-	state := &deleteState{FloorSeq: floorSeq, PubKey: append([]byte{}, record.PubKey...)}
+	state := &deleteState{
+		FloorSeq:  floorSeq,
+		PubKey:    append([]byte{}, record.PubKey...),
+		LocalOnly: i.isLocalOnlyRecord(record) || i.isLocalOnlyRecord(deleteRecord),
+	}
 	if retainCommand {
 		state.PubKey = append(state.PubKey[:0], deleteRecord.PubKey...)
 		state.RelayUntil = deleteRelayUntil(now)
@@ -240,6 +271,9 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 		if i.feeUsageInitialized {
 			i.removeFeeUsageLocked(candidate.Key)
 		}
+		if i.freeLocalUsageInitialized {
+			i.removeFreeLocalUsageLocked(candidate.Key)
+		}
 		if i.recordExpiryInitialized {
 			delete(i.recordExpiryEntries, candidate.Key)
 		}
@@ -252,7 +286,7 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 
 // retainDeleteCommandLocked keeps a verified command only for the bounded
 // relay window. It is not part of the durable DKVS record set.
-func (i *Indexer) retainDeleteCommandLocked(record *wire.DKVSRecord, now uint64) (chainhash.Hash, error) {
+func (i *Indexer) retainDeleteCommandLocked(record *wire.DKVSRecord, now uint64, localOnly bool) (chainhash.Hash, error) {
 	if record == nil || !IsTombstone(record.Flags) {
 		return chainhash.Hash{}, ErrInvalidRecord
 	}
@@ -268,6 +302,7 @@ func (i *Indexer) retainDeleteCommandLocked(record *wire.DKVSRecord, now uint64)
 		RelayUntil: deleteRelayUntil(now),
 		PubKey:     append([]byte{}, record.PubKey...),
 		Record:     record,
+		LocalOnly:  localOnly,
 	}
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
@@ -348,6 +383,9 @@ func (i *Indexer) deleteMirrorRecordLocked(record *wire.DKVSRecord, height, now 
 	}
 	if i.feeUsageInitialized {
 		i.removeFeeUsageLocked(record.Key)
+	}
+	if i.freeLocalUsageInitialized {
+		i.removeFreeLocalUsageLocked(record.Key)
 	}
 	if i.recordExpiryInitialized {
 		delete(i.recordExpiryEntries, record.Key)

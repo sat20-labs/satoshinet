@@ -38,7 +38,7 @@ func (s *handlerTestStore) GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, 
 	return record, nil
 }
 
-func (s *handlerTestStore) GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error) {
+func (s *handlerTestStore) GetDKVSRecordByHashForRelay(hash chainhash.Hash) (*wire.DKVSRecord, error) {
 	for _, record := range s.records {
 		if dkvs.RecordHash(record) == hash {
 			return record, nil

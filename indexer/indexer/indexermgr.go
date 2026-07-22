@@ -54,6 +54,7 @@ type DKVSIntegrationConfig struct {
 	BlobPolicy                   dkvs_indexer.BlobPolicy
 	TmpPolicy                    dkvs_indexer.TmpPolicy
 	AllowFreeLocal               *bool
+	FreeLocalCache               *dkvs_indexer.FreeLocalCachePolicy
 }
 
 type IndexerMgr struct {
@@ -169,6 +170,7 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 	defaults := dkvs_indexer.NetworkDefaultsForParams(b.chaincfgParam)
 	cfg := dkvs_indexer.Config{
 		AllowFreeLocal: b.chaincfgParam.Name != chaincfg.MainNetParams.Name,
+		FreeLocalCache: dkvs_indexer.DefaultFreeLocalCachePolicy(),
 		CurrentHeight: func() uint64 {
 			if b.compiling == nil {
 				return 0
@@ -183,9 +185,6 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 	ext := (*DKVSIntegrationConfig)(nil)
 	if b.cfg != nil {
 		ext = b.cfg.DKVS
-	}
-	if defaults.UseAutopayFeeVerifier {
-		cfg.AllowFreeLocal = false
 	}
 	if ext == nil {
 		ext = &DKVSIntegrationConfig{}
@@ -243,7 +242,7 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 				CurrentHeight: cfg.CurrentHeight,
 			}
 		}
-		cfg.FeeVerifier = dkvs_indexer.AutopayFeeVerifier{
+		autopayVerifier := dkvs_indexer.AutopayFeeVerifier{
 			StateProvider:         stateProvider,
 			Contract:              autopayContract,
 			ServiceName:           autopayServiceName,
@@ -251,6 +250,14 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 			FeeAssetName:          autopayFeeAssetName,
 			FullRecordFeePerBlock: autopayFullRecordFeePerBlock,
 			AddressParams:         b.chaincfgParam,
+		}
+		if cfg.AllowFreeLocal {
+			cfg.FeeVerifier = dkvs_indexer.LocalCacheAutopayFeeVerifier{
+				AutopayFeeVerifier: autopayVerifier,
+				AllowFreeLocal:     true,
+			}
+		} else {
+			cfg.FeeVerifier = autopayVerifier
 		}
 	}
 	if cfg.FeeVerifier == nil && ext.FeeVerifierHTTPEndpoint != "" {
@@ -263,6 +270,9 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 	cfg.MailboxPolicy = ext.MailboxPolicy
 	cfg.BlobPolicy = ext.BlobPolicy
 	cfg.TmpPolicy = ext.TmpPolicy
+	if ext.FreeLocalCache != nil {
+		cfg.FreeLocalCache = *ext.FreeLocalCache
+	}
 	return cfg
 }
 
