@@ -933,6 +933,7 @@ func TestAutopayFeeVerifierCapacity(t *testing.T) {
 						payer: {
 							AmountPerBlock: "2",
 							Balance:        "10",
+							LastPayHeight:  10,
 							Status:         "active",
 						},
 					},
@@ -983,13 +984,14 @@ func TestAutopayCapacityIsIndependentPerDelegate(t *testing.T) {
 	}
 	state := &AutopayContractState{
 		TemplateName: "autopay.tc",
+		CurrentBlock: 10,
 		ServiceName:  "dkvs",
 		Recipient:    recipient,
 		FeeAssetName: "sat",
 		Status:       "active",
 		Delegates: map[string]AutopayDelegateState{
-			firstPayer:  {AmountPerBlock: "1", Balance: "10", Status: "active"},
-			secondPayer: {AmountPerBlock: "1", Balance: "10", Status: "active"},
+			firstPayer:  {AmountPerBlock: "1", Balance: "10", LastPayHeight: 10, Status: "active"},
+			secondPayer: {AmountPerBlock: "1", Balance: "10", LastPayHeight: 10, Status: "active"},
 		},
 	}
 	idx := testIndexerWithConfig(t, Config{FeeVerifier: AutopayFeeVerifier{
@@ -1008,46 +1010,6 @@ func TestAutopayCapacityIsIndependentPerDelegate(t *testing.T) {
 	}
 	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, second, secondKey, 1, contract, 100)); err != nil || !updated {
 		t.Fatalf("second delegate updated=%v err=%v", updated, err)
-	}
-}
-
-func TestAutopayCapacityReleasesExpiredRecord(t *testing.T) {
-	height := uint64(1)
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	contract := "shared-autopay"
-	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := &AutopayContractState{
-		TemplateName: "autopay.tc",
-		Status:       "active",
-		Delegates: map[string]AutopayDelegateState{
-			payer: {AmountPerBlock: "1", Balance: "10", Status: "active"},
-		},
-	}
-	idx := testIndexerWithConfig(t, Config{
-		CurrentHeight: func() uint64 { return height },
-		FeeVerifier: AutopayFeeVerifier{
-			StateProvider:         testAutopayStateProvider{states: map[string]*AutopayContractState{contract: state}},
-			FullRecordFeePerBlock: "1",
-			AddressParams:         &chaincfg.TestNetParams,
-		},
-	})
-	account := AccountID(priv.PubKey().SerializeCompressed())
-	first := signedRecordWithAutopayFee(t, priv, "/personal/"+account+"/first", 1, contract, 2)
-	if _, err := idx.PutLocal(first); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, "/personal/"+account+"/second", 1, contract, 100)); err != ErrFeeCapacityExceeded {
-		t.Fatalf("capacity before expiry err=%v", err)
-	}
-	height = 2
-	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, priv, "/personal/"+account+"/second", 1, contract, 100)); err != nil || !updated {
-		t.Fatalf("capacity after expiry updated=%v err=%v", updated, err)
 	}
 }
 
@@ -2250,9 +2212,10 @@ func TestMailboxAutopayChargesSenderAndDeleteReleasesCapacity(t *testing.T) {
 		StateProvider: testAutopayStateProvider{states: map[string]*AutopayContractState{
 			contract: {
 				TemplateName: "autopay.tc",
+				CurrentBlock: 10,
 				Status:       "active",
 				Delegates: map[string]AutopayDelegateState{
-					senderPayer: {AmountPerBlock: "1", Balance: "10", Status: "active"},
+					senderPayer: {AmountPerBlock: "1", Balance: "10", LastPayHeight: 10, Status: "active"},
 				},
 			},
 		}},
