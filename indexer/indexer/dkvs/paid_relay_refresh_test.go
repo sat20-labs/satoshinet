@@ -8,6 +8,9 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 )
 
+// A paid record is locally readable immediately after admission, but relay is
+// fail-closed until the node refreshes the current-block payment state. This
+// covers startup/restart and the short interval after a new local write.
 func TestAutopayRecordFailsClosedUntilRetentionRefresh(t *testing.T) {
 	database := dbpkg.NewKVDB(t.TempDir())
 	if database == nil {
