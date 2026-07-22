@@ -26,23 +26,24 @@
 max_records = floor(amount_per_block / full_record_fee_per_block)
 ```
 
-- AUTOPAY 每个区块扣除一次 `amount_per_block`，并把该区块费用作为 miner fee 支付给当前区块 miner。
+- AUTOPAY 每个区块扣除一次 `amount_per_block`。
+- DKVS 默认 AUTOPAY 合约的 recipient 为空，因此该区块费用作为 miner fee 支付给当前区块 miner。
 - 不增加 `pay_interval_blocks`；支付周期固定为 1 个区块。
-- 测试网最低 `amount_per_block` 下调为 `1`。
+- 测试网最低 `amount_per_block` 和 `full_record_fee_per_block` 均为 `1`。
 
 ## 付费有效性
 
 AUTOPAY delegate 每成功支付一个区块，更新：
 
 ```text
-last_pay_height = current_height
+last_pay_height = current_block
 paid_block_count += 1
 ```
 
-付费 record 的网络有效状态由合约状态动态决定：
+付费 record 只有在以下条件满足时才可以写入和参与网络 relay：
 
 ```text
-last_pay_height >= current_block - 1
+last_pay_height >= current_block
 ```
 
 新 delegate 必须至少完成一次区块支付后才能写入 AUTOPAY record。
@@ -51,9 +52,9 @@ last_pay_height >= current_block - 1
 
 当 delegate 没有继续按区块支付：
 
-1. record 立即停止作为付费 record relay；
+1. record 从下一次合约状态刷新开始停止 relay；
 2. 已保存 record 在各节点本地进入临时缓存状态；
-3. 本地缓存期限使用该节点 `free_local.max_ttl_ms`；
+3. 本地缓存期限使用该节点 `max_ttl_ms`；
 4. 缓存期内可以从已有节点读取，但不能向新节点同步；
 5. 缓存期结束后物理删除并释放 record slot；
 6. 缓存期内恢复支付，可重新变为 relayable，无需重写 record。
@@ -69,29 +70,25 @@ local_expiry_height = last_pay_height + grace_blocks
 
 - 内容更新：owner 使用 `Seq+1` 重新签名提交。
 - 临时缓存升级为付费：相同 key 使用 `Seq+1`、`FeeMode=AUTOPAY`、`TTL=0`、`ExpiryHeight=0` 重新提交。
+- AUTOPAY record 不执行 record 级续期；持续充值并逐块支付即保持有效。
 - 删除：继续使用签名 tombstone，不收存储费用，并立即释放容量。
 
-## 配置接口
+## 配置来源
 
-`GET /v3/dkvs/config` 返回：
+`GET /v3/dkvs/config` 只返回当前连接节点的 FREE_LOCAL 缓存政策，例如：
 
 ```json
 {
-  "free_local": {
-    "enabled": true,
-    "max_ttl_ms": 2592000000
-  },
-  "paid": {
-    "enabled": true,
-    "autopay_contract": "...",
-    "fee_asset": "SGAS",
-    "min_amount_per_block": "1",
-    "full_record_fee_per_block": "1"
-  }
+  "enabled": true,
+  "max_ttl_ms": 2592000000,
+  "max_records_per_signer": 100,
+  "max_bytes_per_signer": 1048576
 }
 ```
 
-PWA 和 Wallet SDK 只展示节点返回的配置，不自行定义 TTL 或付费规则。
+AUTOPAY 合约地址、费用资产、最低每区块费用和每条 record 费率来自当前网络的 DKVS AUTOPAY 配置及链上合约状态。
+
+PWA 和 Wallet SDK 只展示 SDK 返回的临时缓存和付费保存结果，不自行定义 TTL 或支付规则。
 
 ## P0 不做
 
@@ -101,4 +98,4 @@ PWA 和 Wallet SDK 只展示节点返回的配置，不自行定义 TTL 或付�
 - 不做按字节计费；
 - 不做第三方 payer；
 - 不做不同 namespace 的差异定价；
-- 不兼容旧测试设计和旧合约地址。
+- 不兼容旧测试设计、旧合约内容和旧合约地址。
