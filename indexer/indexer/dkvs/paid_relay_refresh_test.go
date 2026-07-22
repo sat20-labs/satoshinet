@@ -46,7 +46,7 @@ func TestAutopayRecordFailsClosedUntilRetentionRefresh(t *testing.T) {
 		FeeVerifier:   verifier,
 		CurrentHeight: func() uint64 { return height },
 	})
-	record := signedAutopayPersonalRecord(t, priv, "autopay-refresh", 1)
+	record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
 	if _, err := idx.PutLocal(record); err != nil {
 		t.Fatalf("put paid record: %v", err)
 	}
