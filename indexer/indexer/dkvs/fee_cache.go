@@ -56,13 +56,13 @@ func (p *HeightCachedAutopayStateProvider) GetAutopayState(contract string) (*Au
 // The synthetic balance is verifier-local and never changes contract state.
 func normalizeAutopayStateForPaidRetention(state *AutopayContractState) *AutopayContractState {
 	state = cloneAutopayState(state)
-	if state == nil || state.Closed || strings.EqualFold(state.Status, "closed") ||
+	if state == nil || state.CurrentBlock <= 0 || state.Closed || strings.EqualFold(state.Status, "closed") ||
 		strings.EqualFold(state.Status, "expired") {
 		return state
 	}
 	active := false
 	for payer, delegate := range state.Delegates {
-		paidCurrent := state.CurrentBlock > 0 && delegate.LastPayHeight >= state.CurrentBlock
+		paidCurrent := delegate.LastPayHeight >= state.CurrentBlock
 		if !paidCurrent {
 			delegate.Status = "funding"
 			delegate.Balance = "0"
