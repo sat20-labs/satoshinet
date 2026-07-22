@@ -171,17 +171,17 @@ func paidRetentionCurrent(retention PaidRecordRetention, height uint64) bool {
 }
 
 // paidRecordRelayable is intentionally cache-only. Contract state is refreshed
-// outside the indexer lock once per block. A missing entry is allowed for a
-// newly accepted record; its write-time fee verification already proved the
-// current block payment, and the next block refresh will make the status
-// explicit.
+// outside the indexer lock once per block and by the periodic maintenance loop.
+// A missing entry fails closed so records loaded after restart cannot relay until
+// the current-block payment has been verified. Newly accepted records become
+// relayable after the same refresh; local readability is unaffected.
 func (i *Indexer) paidRecordRelayable(record *wire.DKVSRecord) bool {
 	if !isAutopayRecord(record) {
 		return true
 	}
 	retention, ok := paidRetentionCacheFor(i).get(record.Key)
 	if !ok {
-		return true
+		return false
 	}
 	return paidRetentionCurrent(retention, i.currentHeight())
 }
