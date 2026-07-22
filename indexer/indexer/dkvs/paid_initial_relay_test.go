@@ -8,6 +8,8 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 )
 
+// A write that just proved the current block payment must not wait for the next
+// maintenance refresh before it can enter P2P sync.
 func TestVerifiedAutopayRecordRelaysImmediately(t *testing.T) {
 	database := dbpkg.NewKVDB(t.TempDir())
 	if database == nil {
