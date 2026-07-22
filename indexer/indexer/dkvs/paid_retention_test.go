@@ -131,7 +131,7 @@ func TestPruneExpiredAutopayAfterNodeCacheGrace(t *testing.T) {
 		AllowFreeLocal: true,
 		FreeLocalCache: FreeLocalCachePolicy{Enabled: true, MaxTTL: 24_000, MaxRecordsPerSigner: 10,
 			MaxBytesPerSigner: 1 << 20, MaxTotalRecords: 100, MaxTotalBytes: 1 << 20},
-		FeeVerifier: verifier,
+		FeeVerifier:   verifier,
 		CurrentHeight: func() uint64 { return height },
 	})
 	record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
