@@ -23,13 +23,18 @@ func (s *IndexerMgr) pruneExpiredDKVSOnBlock(block *common.Block) {
 	if block.Height%dkvsPruneIntervalBlocks != 0 || block.Height <= s.lastDKVSPruneHeight {
 		return
 	}
-	pruned, err := s.dkvsIndexer.PruneExpiredAt(uint64(block.Height))
+	freePruned, err := s.dkvsIndexer.PruneExpiredAt(uint64(block.Height))
 	if err != nil {
-		common.Log.Warningf("DKVS prune at height %d failed: %v", block.Height, err)
+		common.Log.Warningf("DKVS free-record prune at height %d failed: %v", block.Height, err)
+		return
+	}
+	paidPruned, err := s.dkvsIndexer.PruneExpiredAutopayAt(uint64(block.Height))
+	if err != nil {
+		common.Log.Warningf("DKVS AUTOPAY prune at height %d failed: %v", block.Height, err)
 		return
 	}
 	s.lastDKVSPruneHeight = block.Height
-	if pruned > 0 {
+	if pruned := freePruned + paidPruned; pruned > 0 {
 		common.Log.Infof("DKVS pruned %d expired records at height %d", pruned, block.Height)
 	}
 }
@@ -47,13 +52,18 @@ func (s *IndexerMgr) startDKVSPruneTimer() {
 		for {
 			select {
 			case <-timer.C:
-				pruned, err := s.dkvsIndexer.PruneExpired()
+				freePruned, err := s.dkvsIndexer.PruneExpired()
 				if err != nil {
-					common.Log.Warningf("DKVS timed prune failed: %v", err)
+					common.Log.Warningf("DKVS timed free-record prune failed: %v", err)
 					continue
 				}
-				if pruned > 0 {
-					common.Log.Infof("DKVS timed prune removed %d expired free records", pruned)
+				paidPruned, err := s.dkvsIndexer.PruneExpiredAutopay()
+				if err != nil {
+					common.Log.Warningf("DKVS timed AUTOPAY prune failed: %v", err)
+					continue
+				}
+				if pruned := freePruned + paidPruned; pruned > 0 {
+					common.Log.Infof("DKVS timed prune removed %d expired records", pruned)
 				}
 			case <-stop:
 				return
