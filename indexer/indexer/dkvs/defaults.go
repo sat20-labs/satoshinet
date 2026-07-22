@@ -41,7 +41,7 @@ func NetworkDefaultsForParams(params *chaincfg.Params) NetworkDefaults {
 	defaults := NetworkDefaults{
 		Enabled:                  true,
 		AutopayDeployer:          DefaultTestNetAutopayDeployer,
-		AutopayRecipient:         DefaultTestNetAutopayDeployer,
+		AutopayRecipient:         "",
 		AutopayFeeAssetName:      contractcommon.GasAssetNameForNet(params.Net),
 		AutopayServiceName:       DefaultAutopayServiceName,
 		AutopayMinAmountPerBlock: DefaultAutopayMinAmountPerBlock,
