@@ -3,7 +3,7 @@ name: DKVS development checks
 on:
   push:
     branches:
-      - agent/rgb11-dkvs-transfer-a
+      - main
   pull_request:
     branches:
       - main
