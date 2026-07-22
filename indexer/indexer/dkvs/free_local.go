@@ -140,7 +140,7 @@ func (i *Indexer) replaceFreeLocalUsageLocked(record *wire.DKVSRecord, parsed Pa
 		return nil
 	}
 	i.removeFreeLocalUsageLocked(record.Key)
-	if !i.isLocalOnlyRecord(record) {
+	if !isFreeLocalRecord(record) {
 		return nil
 	}
 	signer, err := freeLocalSigner(record, parsed)
@@ -152,7 +152,7 @@ func (i *Indexer) replaceFreeLocalUsageLocked(record *wire.DKVSRecord, parsed Pa
 }
 
 func (i *Indexer) validateFreeLocalCapacityLocked(record *wire.DKVSRecord, parsed ParsedKey, height, now uint64) error {
-	if !i.isLocalOnlyRecord(record) {
+	if !isFreeLocalRecord(record) {
 		return nil
 	}
 	policy := i.freeLocal
