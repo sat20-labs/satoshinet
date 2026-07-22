@@ -49,6 +49,12 @@ last_pay_height >= current_block
 
 新 delegate 必须至少完成一次区块支付后才能写入 AUTOPAY record。
 
+节点启动、重启或付费状态缓存尚未刷新时采用 fail-closed：
+
+- record 仍可从本地读取；
+- 在当前区块支付得到验证之前不参与 relay；
+- 状态刷新通过后自动恢复 relay，不需要重写 record。
+
 ## 停止付费后的缓存
 
 当 delegate 没有继续按区块支付：
