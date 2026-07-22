@@ -56,6 +56,15 @@ func (c *paidRetentionCache) get(key string) (PaidRecordRetention, bool) {
 	return entry, ok
 }
 
+func (c *paidRetentionCache) set(key string, retention PaidRecordRetention) {
+	if c == nil || key == "" {
+		return
+	}
+	c.mutex.Lock()
+	c.entries[key] = retention
+	c.mutex.Unlock()
+}
+
 func (c *paidRetentionCache) remove(keys []string) {
 	if c == nil || len(keys) == 0 {
 		return
@@ -125,6 +134,30 @@ func (v AutopayFeeVerifier) PaidRecordRetention(record *wire.DKVSRecord, parsed 
 	retention.CurrentBlock = uint64(state.CurrentBlock)
 	retention.LastPayHeight = uint64(delegate.LastPayHeight)
 	return retention, nil
+}
+
+// primePaidRetentionAfterFeeVerification records the same current-block
+// payment that was just accepted by the fee verifier. It runs before the relay
+// decision, so a newly written or remotely received paid record can propagate
+// immediately. Records loaded after restart still fail closed until refreshed.
+func (i *Indexer) primePaidRetentionAfterFeeVerification(record *wire.DKVSRecord, parsed ParsedKey,
+	verifier FeeVerifier) error {
+	if !isAutopayRecord(record) {
+		return nil
+	}
+	retentionVerifier, ok := verifier.(PaidRecordRetentionVerifier)
+	if !ok {
+		return ErrInvalidFeeProof
+	}
+	retention, err := retentionVerifier.PaidRecordRetention(record, parsed)
+	if err != nil {
+		return err
+	}
+	if !paidRetentionCurrent(retention, i.currentHeight()) {
+		return ErrInvalidFeeProof
+	}
+	paidRetentionCacheFor(i).set(record.Key, retention)
+	return nil
 }
 
 func isAutopayRecord(record *wire.DKVSRecord) bool {

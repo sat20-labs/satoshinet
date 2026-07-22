@@ -555,6 +555,9 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 			if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
 				return false, 0, chainhash.Hash{}, false, err
 			}
+			if err := i.primePaidRetentionAfterFeeVerification(record, parsed, validators.feeVerifier); err != nil {
+				return false, 0, chainhash.Hash{}, false, err
+			}
 		}
 		if remote && i.isLocalOnlyRecord(record) {
 			return false, 0, chainhash.Hash{}, false, ErrFreeLocalNotRelayable
