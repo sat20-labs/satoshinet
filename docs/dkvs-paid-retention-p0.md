@@ -52,6 +52,7 @@ last_pay_height >= current_block
 - 新 record 在 fee proof 验证通过后立即把该次当前区块付款登记到本节点 retention cache，因此首次写入可以立即 relay。
 - 远端节点接收 record 时执行相同验证和登记，允许继续向后传播。
 - write-time retention 登记只使用刚刚通过验证的链上状态，不放宽任何付款条件。
+- 测试和调用方也必须提供 `CurrentBlock` 与对应的 `LastPayHeight`，不再接受仅凭 `active + balance` 的旧状态。
 
 节点启动、重启或付费状态缓存尚未刷新时采用 fail-closed：
 
