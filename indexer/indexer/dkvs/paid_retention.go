@@ -3,6 +3,7 @@ package dkvs
 import (
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
@@ -19,6 +20,51 @@ type PaidRecordRetention struct {
 
 type PaidRecordRetentionVerifier interface {
 	PaidRecordRetention(record *wire.DKVSRecord, parsed ParsedKey) (PaidRecordRetention, error)
+}
+
+type paidRetentionCache struct {
+	mutex   sync.RWMutex
+	entries map[string]PaidRecordRetention
+}
+
+var paidRetentionCaches sync.Map
+
+func paidRetentionCacheFor(indexer *Indexer) *paidRetentionCache {
+	if indexer == nil {
+		return nil
+	}
+	value, _ := paidRetentionCaches.LoadOrStore(indexer, &paidRetentionCache{entries: make(map[string]PaidRecordRetention)})
+	return value.(*paidRetentionCache)
+}
+
+func (c *paidRetentionCache) replace(entries map[string]PaidRecordRetention) {
+	if c == nil {
+		return
+	}
+	c.mutex.Lock()
+	c.entries = entries
+	c.mutex.Unlock()
+}
+
+func (c *paidRetentionCache) get(key string) (PaidRecordRetention, bool) {
+	if c == nil {
+		return PaidRecordRetention{}, false
+	}
+	c.mutex.RLock()
+	entry, ok := c.entries[key]
+	c.mutex.RUnlock()
+	return entry, ok
+}
+
+func (c *paidRetentionCache) remove(keys []string) {
+	if c == nil || len(keys) == 0 {
+		return
+	}
+	c.mutex.Lock()
+	for _, key := range keys {
+		delete(c.entries, key)
+	}
+	c.mutex.Unlock()
 }
 
 func (v LocalCacheAutopayFeeVerifier) PaidRecordRetention(record *wire.DKVSRecord, parsed ParsedKey) (PaidRecordRetention, error) {
@@ -51,9 +97,7 @@ func (v AutopayFeeVerifier) PaidRecordRetention(record *wire.DKVSRecord, parsed 
 	if err != nil {
 		return retention, err
 	}
-	if state == nil || strings.TrimSpace(state.TemplateName) != autopayTemplateName || state.Closed ||
-		strings.EqualFold(strings.TrimSpace(state.Status), "closed") ||
-		strings.EqualFold(strings.TrimSpace(state.Status), "expired") {
+	if state == nil || strings.TrimSpace(state.TemplateName) != autopayTemplateName {
 		return retention, ErrInvalidFeeProof
 	}
 	if expected := strings.TrimSpace(v.ServiceName); expected != "" &&
@@ -116,6 +160,83 @@ func paidRetentionExpired(retention PaidRecordRetention, height, graceBlocks uin
 		return false
 	}
 	return current > retention.LastPayHeight+graceBlocks
+}
+
+func paidRetentionCurrent(retention PaidRecordRetention, height uint64) bool {
+	current := height
+	if retention.CurrentBlock > current {
+		current = retention.CurrentBlock
+	}
+	return current != 0 && retention.LastPayHeight >= current
+}
+
+// paidRecordRelayable is intentionally cache-only. Contract state is refreshed
+// outside the indexer lock once per block. A missing entry is allowed for a
+// newly accepted record; its write-time fee verification already proved the
+// current block payment, and the next block refresh will make the status
+// explicit.
+func (i *Indexer) paidRecordRelayable(record *wire.DKVSRecord) bool {
+	if !isAutopayRecord(record) {
+		return true
+	}
+	retention, ok := paidRetentionCacheFor(i).get(record.Key)
+	if !ok {
+		return true
+	}
+	return paidRetentionCurrent(retention, i.currentHeight())
+}
+
+// RefreshPaidRetentionAt reads contract state without holding the indexer lock
+// and atomically refreshes the local relay view for all AUTOPAY records.
+func (i *Indexer) RefreshPaidRetentionAt(height uint64) error {
+	if i == nil {
+		return nil
+	}
+	validators := i.snapshotValidators()
+	verifier, ok := validators.feeVerifier.(PaidRecordRetentionVerifier)
+	if !ok {
+		paidRetentionCacheFor(i).replace(make(map[string]PaidRecordRetention))
+		return nil
+	}
+	records, _, _, err := i.scan("", nil, 0, false)
+	if err != nil {
+		return err
+	}
+	entries := make(map[string]PaidRecordRetention)
+	var firstErr error
+	for _, record := range records {
+		if !isAutopayRecord(record) || IsTombstone(record.Flags) {
+			continue
+		}
+		parsed, err := ParseKey(record.Key)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			entries[record.Key] = PaidRecordRetention{CurrentBlock: height}
+			continue
+		}
+		retention, err := verifier.PaidRecordRetention(record, parsed)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			entries[record.Key] = PaidRecordRetention{CurrentBlock: height}
+			continue
+		}
+		entries[record.Key] = retention
+	}
+	paidRetentionCacheFor(i).replace(entries)
+	// AUTOPAY records that stop paying become local cache entries. Rebuild free
+	// cache accounting lazily on the next FREE_LOCAL capacity check.
+	i.mutex.Lock()
+	i.resetFreeLocalUsageLocked()
+	i.mutex.Unlock()
+	return firstErr
+}
+
+func (i *Indexer) RefreshPaidRetention() error {
+	return i.RefreshPaidRetentionAt(i.currentHeight())
 }
 
 func (i *Indexer) PruneExpiredAutopay() (int, error) {
@@ -203,7 +324,9 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 		i.mutex.Unlock()
 		return 0, err
 	}
+	removedKeys := make([]string, 0, len(removed))
 	for _, record := range removed {
+		removedKeys = append(removedKeys, record.Key)
 		if i.feeUsageInitialized {
 			i.removeFeeUsageLocked(record.Key)
 		}
@@ -213,5 +336,6 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 	}
 	atomic.AddUint64(&i.generation, 1)
 	i.mutex.Unlock()
+	paidRetentionCacheFor(i).remove(removedKeys)
 	return len(removed), nil
 }
