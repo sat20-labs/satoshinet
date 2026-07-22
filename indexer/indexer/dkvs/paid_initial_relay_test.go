@@ -9,7 +9,8 @@ import (
 )
 
 // A write that just proved the current block payment must not wait for the next
-// maintenance refresh before it can enter P2P sync.
+// maintenance refresh before it can enter P2P sync. This is the propagation
+// counterpart of the restart fail-closed test.
 func TestVerifiedAutopayRecordRelaysImmediately(t *testing.T) {
 	database := dbpkg.NewKVDB(t.TempDir())
 	if database == nil {
