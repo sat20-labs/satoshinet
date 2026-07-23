@@ -11,7 +11,7 @@ const (
 
 	DefaultTestNetAutopayDeployNonce    uint64 = 8888
 	DefaultAutopayServiceName                  = "dkvs"
-	DefaultAutopayMinAmountPerBlock            = "100"
+	DefaultAutopayMinAmountPerBlock            = "1"
 	DefaultAutopayFullRecordFeePerBlock        = "1"
 )
 
@@ -41,7 +41,7 @@ func NetworkDefaultsForParams(params *chaincfg.Params) NetworkDefaults {
 	defaults := NetworkDefaults{
 		Enabled:                  true,
 		AutopayDeployer:          DefaultTestNetAutopayDeployer,
-		AutopayRecipient:         DefaultTestNetAutopayDeployer,
+		AutopayRecipient:         "",
 		AutopayFeeAssetName:      contractcommon.GasAssetNameForNet(params.Net),
 		AutopayServiceName:       DefaultAutopayServiceName,
 		AutopayMinAmountPerBlock: DefaultAutopayMinAmountPerBlock,

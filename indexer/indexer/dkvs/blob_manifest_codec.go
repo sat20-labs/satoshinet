@@ -93,3 +93,15 @@ func decodeBlobManifest(value []byte) (*BlobManifest, error) {
 	}
 	return manifest, nil
 }
+
+// RewriteBlobManifestRetention updates only the lifetime fields of a canonical
+// DKVS blob manifest while preserving its content and chunk commitments.
+func RewriteBlobManifestRetention(value []byte, ttl, expiryHeight uint64) ([]byte, error) {
+	manifest, err := decodeBlobManifest(value)
+	if err != nil {
+		return nil, err
+	}
+	manifest.TTL = ttl
+	manifest.ExpiryHeight = expiryHeight
+	return encodeBlobManifest(manifest)
+}

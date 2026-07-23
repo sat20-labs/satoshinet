@@ -16,7 +16,8 @@ func (i *Indexer) validateMailboxLocked(record *wire.DKVSRecord, parsed ParsedKe
 		if RecordSize(record) > i.mailbox.MaxMsgSize {
 			return ErrRecordTooLarge
 		}
-		if record.TTL == 0 || (i.mailbox.MaxMsgTTL > 0 && record.TTL > i.mailbox.MaxMsgTTL) {
+		if (record.TTL == 0 && !isAutopayRecord(record)) ||
+			(record.TTL != 0 && i.mailbox.MaxMsgTTL > 0 && record.TTL > i.mailbox.MaxMsgTTL) {
 			return ErrInvalidRecord
 		}
 		if len(parsed.Segments) != 4 {
@@ -58,7 +59,8 @@ func (i *Indexer) validateMailboxLocked(record *wire.DKVSRecord, parsed ParsedKe
 		if RecordSize(record) > i.mailbox.MaxShareSize {
 			return ErrRecordTooLarge
 		}
-		if record.TTL == 0 || (i.mailbox.MaxShareTTL > 0 && record.TTL > i.mailbox.MaxShareTTL) {
+		if (record.TTL == 0 && !isAutopayRecord(record)) ||
+			(record.TTL != 0 && i.mailbox.MaxShareTTL > 0 && record.TTL > i.mailbox.MaxShareTTL) {
 			return ErrInvalidRecord
 		}
 		if usedCount+1 > i.mailbox.MaxShares || usedBytes+uint64(RecordSize(record)) > i.mailbox.MaxShareBytes {

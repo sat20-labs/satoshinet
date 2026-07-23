@@ -1,6 +1,10 @@
 package dkvs
 
-import "sync"
+import (
+	"math/big"
+	"strings"
+	"sync"
+)
 
 // HeightCachedAutopayStateProvider reuses contract state within one indexed
 // block. Contract state only changes when a new block is applied.
@@ -22,7 +26,11 @@ func (p *HeightCachedAutopayStateProvider) GetAutopayState(contract string) (*Au
 		height = p.CurrentHeight()
 	}
 	if height == 0 {
-		return p.Provider.GetAutopayState(contract)
+		state, err := p.Provider.GetAutopayState(contract)
+		if err != nil {
+			return nil, err
+		}
+		return normalizeAutopayStateForPaidRetention(state), nil
 	}
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -37,8 +45,51 @@ func (p *HeightCachedAutopayStateProvider) GetAutopayState(contract string) (*Au
 	if err != nil {
 		return nil, err
 	}
+	state = normalizeAutopayStateForPaidRetention(state)
 	p.states[contract] = cloneAutopayState(state)
 	return cloneAutopayState(state), nil
+}
+
+// normalizeAutopayStateForPaidRetention converts the contract's per-block
+// payment history into the active/funding shape consumed by the existing DKVS
+// fee verifier. A delegate is active only after it has paid the current block.
+// The synthetic balance is verifier-local and never changes contract state.
+func normalizeAutopayStateForPaidRetention(state *AutopayContractState) *AutopayContractState {
+	state = cloneAutopayState(state)
+	if state == nil || state.CurrentBlock <= 0 || state.Closed || strings.EqualFold(state.Status, "closed") ||
+		strings.EqualFold(state.Status, "expired") {
+		return state
+	}
+	active := false
+	for payer, delegate := range state.Delegates {
+		paidCurrent := delegate.LastPayHeight >= state.CurrentBlock
+		if !paidCurrent {
+			delegate.Status = "funding"
+			delegate.Balance = "0"
+			state.Delegates[payer] = delegate
+			continue
+		}
+		amount, amountOK := new(big.Rat).SetString(strings.TrimSpace(delegate.AmountPerBlock))
+		if !amountOK || amount.Sign() <= 0 {
+			delegate.Status = "funding"
+			delegate.Balance = "0"
+			state.Delegates[payer] = delegate
+			continue
+		}
+		balance, balanceOK := new(big.Rat).SetString(strings.TrimSpace(delegate.Balance))
+		if !balanceOK || balance.Sign() < 0 || balance.Cmp(amount) < 0 {
+			delegate.Balance = delegate.AmountPerBlock
+		}
+		delegate.Status = "active"
+		state.Delegates[payer] = delegate
+		active = true
+	}
+	if active {
+		state.Status = "active"
+	} else {
+		state.Status = "funding"
+	}
+	return state
 }
 
 func cloneAutopayState(state *AutopayContractState) *AutopayContractState {

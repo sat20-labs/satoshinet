@@ -374,6 +374,10 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64,
 		(now != 0 && record.IssueTime > now+MaxFutureIssueTimeSkew) {
 		return parsed, ErrInvalidRecord
 	}
+	if verifyFee && !IsTombstone(record.Flags) && isAutopayRecord(record) &&
+		(record.TTL != 0 || record.ExpiryHeight != 0) {
+		return parsed, ErrInvalidFeeProof
+	}
 	if IsExpired(record, height, now) && !(allowExpiredTombstone && IsTombstone(record.Flags)) {
 		return parsed, ErrExpiredRecord
 	}
