@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -988,6 +989,145 @@ func TestBackendAutopayDelegateLimitRefundsInvoke(t *testing.T) {
 			require.NotContains(t, state.AutopayData().AutopayDelegates, "new-delegate")
 		})
 	}
+}
+
+func TestBackendAutopayConfigFundsDelegate(t *testing.T) {
+	gasConfig := testAutopayGasConfig()
+	runtime := testAutopayRuntime(t, "recipient-address", gasConfig.GasAssetName, "1")
+	store := runtimeStoreWith(runtime)
+	param, err := (&AutopayConfigInvokeParam{AmountPerBlock: "10"}).Encode()
+	require.NoError(t, err)
+	script, err := InvokeNullDataScript(InvokePayload{
+		GasLimit:  gasConfig.InvokeBaseGas,
+		CallNonce: 1,
+		Action:    InvokeAPIConfig,
+		Param:     param,
+	})
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, testAsset(gasConfig.GasAssetName, 100),
+		testTemplateContractScript(runtime.Address())))
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{tx},
+		Store:       store,
+		GasConfig:   gasConfig,
+		BlockHeight: 100,
+		ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) {
+			return "delegate-address", nil
+		},
+		AssetPrecision: func(name string) (int, bool) {
+			return 0, name == gasConfig.GasAssetName
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
+
+	triggerReserve, err := gasConfig.ContractFundingFee(
+		ExecutionKindTrigger, gasConfig.TriggerBaseGas, true, 100)
+	require.NoError(t, err)
+	expectedBalance := scommon.NewDefaultDecimal(100).
+		SubAlignPrecision(result.Records[0].GasFee).
+		SubAlignPrecision(triggerReserve)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	delegate, ok := state.AutopayData().AutopayDelegates["delegate-address"]
+	require.True(t, ok)
+	requireDecimalString(t, "10", delegate.AmountPerBlock)
+	requireDecimalString(t, expectedBalance.String(), delegate.Balance)
+	requireDecimalString(t, expectedBalance.String(), state.AutopayData().FeeBalance)
+	requireDecimalString(t, triggerReserve.String(), state.AutopayData().GasBalance)
+}
+
+func TestBackendAutopayConfigFundsDelegateAndGas(t *testing.T) {
+	gasConfig := testAutopayGasConfig()
+	const feeAsset = "ordx:f:fee"
+	runtime := testAutopayRuntime(t, "recipient-address", feeAsset, "1")
+	store := runtimeStoreWith(runtime)
+	param, err := (&AutopayConfigInvokeParam{AmountPerBlock: "10"}).Encode()
+	require.NoError(t, err)
+	script, err := InvokeNullDataScript(InvokePayload{
+		GasLimit:  gasConfig.InvokeBaseGas,
+		CallNonce: 1,
+		Action:    InvokeAPIConfig,
+		Param:     param,
+	})
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, testAssets(feeAsset, 100, gasConfig.GasAssetName, 100),
+		testTemplateContractScript(runtime.Address())))
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{tx},
+		Store:       store,
+		GasConfig:   gasConfig,
+		BlockHeight: 100,
+		ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) {
+			return "delegate-address", nil
+		},
+		AssetPrecision: func(name string) (int, bool) {
+			return 0, name == feeAsset
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	delegate, ok := state.AutopayData().AutopayDelegates["delegate-address"]
+	require.True(t, ok)
+	requireDecimalString(t, "10", delegate.AmountPerBlock)
+	requireDecimalString(t, "100", delegate.Balance)
+	requireDecimalString(t, "100", state.AutopayData().FeeBalance)
+	expectedGas := scommon.NewDefaultDecimal(100).SubAlignPrecision(result.Records[0].GasFee)
+	requireDecimalString(t, expectedGas.String(), state.AutopayData().GasBalance)
+}
+
+func TestBackendAutopayInvalidConfigDoesNotFundDelegate(t *testing.T) {
+	gasConfig := testAutopayGasConfig()
+	runtime := testAutopayRuntime(t, "recipient-address", gasConfig.GasAssetName, "10")
+	store := runtimeStoreWith(runtime)
+	param, err := (&AutopayConfigInvokeParam{AmountPerBlock: "1"}).Encode()
+	require.NoError(t, err)
+	script, err := InvokeNullDataScript(InvokePayload{
+		GasLimit:  gasConfig.InvokeBaseGas,
+		CallNonce: 1,
+		Action:    InvokeAPIConfig,
+		Param:     param,
+	})
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, testAsset(gasConfig.GasAssetName, 100),
+		testTemplateContractScript(runtime.Address())))
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{tx},
+		Store:       store,
+		GasConfig:   gasConfig,
+		BlockHeight: 100,
+		ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) {
+			return "delegate-address", nil
+		},
+		AssetPrecision: func(name string) (int, bool) {
+			return 0, name == gasConfig.GasAssetName
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, ResultStatusInvalid, result.Records[0].Status)
+
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.NotContains(t, state.AutopayData().AutopayDelegates, "delegate-address")
+	requireDecimalString(t, "0", state.AutopayData().FeeBalance)
 }
 
 func TestBackendRecordsInvalidInvokeParam(t *testing.T) {

@@ -200,6 +200,9 @@ func (c *AutopayContract) ApplyRunningData(state *TemplateRuntimeState, item *In
 		c.addDelegateBalance(autopay, item.Address, item.InAmt)
 	case OrderTypeValidate:
 		c.setDelegateAmount(autopay, item.Address, item.ExpectedAmt)
+		// A config invoke may also fund the delegate. The backend has already
+		// removed this invoke's Result fee from InAmt when it is the fee asset.
+		c.addDelegateBalance(autopay, item.Address, item.InAmt)
 	case OrderTypeCancel:
 	case OrderTypeClose:
 	default:
