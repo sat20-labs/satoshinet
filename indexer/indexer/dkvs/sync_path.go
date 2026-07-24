@@ -2,10 +2,13 @@ package dkvs
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -122,7 +125,8 @@ func compactSyncRanges(ranges []syncRange) []syncRange {
 	return out
 }
 
-func (i *Indexer) scanActiveSyncRangeLocked(r syncRange, seek []byte, limit int, height, now uint64) ([]*wire.DKVSRecord, []byte, bool, error) {
+func (i *Indexer) scanActiveSyncRangeLocked(r syncRange, seek []byte, limit int,
+	height, now uint64, relayOnly bool) ([]*wire.DKVSRecord, []byte, bool, error) {
 	if r.exact {
 		if len(seek) != 0 {
 			return nil, nil, true, nil
@@ -137,15 +141,16 @@ func (i *Indexer) scanActiveSyncRangeLocked(r syncRange, seek []byte, limit int,
 		if i.activeError(record, height, now) != nil {
 			return nil, nil, true, nil
 		}
-		if i.isLocalOnlyRecord(record) {
+		if relayOnly && i.isLocalOnlyRecord(record) {
 			return nil, nil, true, nil
 		}
 		return []*wire.DKVSRecord{record}, nil, true, nil
 	}
-	return i.scanRelaySyncRangeLocked(r.target, seek, limit, height, now)
+	return i.scanSyncRangeLocked(r.target, seek, limit, height, now, relayOnly)
 }
 
-func (i *Indexer) scanRelaySyncRangeLocked(prefix string, cursor []byte, limit int, height, now uint64) ([]*wire.DKVSRecord, []byte, bool, error) {
+func (i *Indexer) scanSyncRangeLocked(prefix string, cursor []byte, limit int,
+	height, now uint64, relayOnly bool) ([]*wire.DKVSRecord, []byte, bool, error) {
 	scanPrefix := recordKeyPrefix
 	normalizedPrefix := strings.TrimSuffix(prefix, "/")
 	if prefix != "" {
@@ -169,7 +174,8 @@ func (i *Indexer) scanRelaySyncRangeLocked(prefix string, cursor []byte, limit i
 		if normalizedPrefix != "" && record.Key != normalizedPrefix && !strings.HasPrefix(record.Key, normalizedPrefix+"/") {
 			return nil
 		}
-		if i.activeError(record, height, now) != nil || i.isLocalOnlyRecord(record) {
+		if i.activeError(record, height, now) != nil ||
+			(relayOnly && i.isLocalOnlyRecord(record)) {
 			return nil
 		}
 		records = append(records, record)
@@ -186,7 +192,8 @@ func (i *Indexer) scanRelaySyncRangeLocked(prefix string, cursor []byte, limit i
 	return records, next, done, err
 }
 
-func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int, now uint64) ([]*wire.DKVSRecord, []byte, bool, error) {
+func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
+	now uint64, relayOnly bool) ([]*wire.DKVSRecord, []byte, bool, error) {
 	if r.exact {
 		if len(seek) != 0 {
 			return nil, nil, true, nil
@@ -198,7 +205,7 @@ func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
 		if err != nil {
 			return nil, nil, false, err
 		}
-		if state.LocalOnly {
+		if relayOnly && state.LocalOnly {
 			return nil, nil, true, nil
 		}
 		return []*wire.DKVSRecord{state.Record}, nil, true, nil
@@ -233,7 +240,7 @@ func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
 			!bytesEqual(state.Record.PubKey, state.PubKey)) {
 			return ErrInvalidRecord
 		}
-		if state.LocalOnly || deleteRecordForRelay(state, now) == nil {
+		if (relayOnly && state.LocalOnly) || deleteRecordForRelay(state, now) == nil {
 			return nil
 		}
 		records = append(records, state.Record)
@@ -250,7 +257,8 @@ func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
 	return records, next, done, err
 }
 
-func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange,
+	relayOnly bool) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	if limit == 0 || limit > wire.MaxDKVSRecordsPerMsg {
 		limit = 100
 	}
@@ -269,9 +277,11 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange) ([
 		var next []byte
 		var phaseDone bool
 		if decoded.phase == syncPhaseRecords {
-			page, next, phaseDone, err = i.scanActiveSyncRangeLocked(currentRange, decoded.seek, remaining, height, now)
+			page, next, phaseDone, err = i.scanActiveSyncRangeLocked(
+				currentRange, decoded.seek, remaining, height, now, relayOnly)
 		} else {
-			page, next, phaseDone, err = i.scanDeleteSyncRangeLocked(currentRange, decoded.seek, remaining, now)
+			page, next, phaseDone, err = i.scanDeleteSyncRangeLocked(
+				currentRange, decoded.seek, remaining, now, relayOnly)
 		}
 		if err != nil {
 			i.mutex.RUnlock()
@@ -300,7 +310,7 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange) ([
 			return nil, nil, false, chainhash.Hash{}, ErrInvalidRecord
 		}
 	}
-	rootRecords, err := i.activeRecordsForRangesLocked(ranges, height, now)
+	rootRecords, err := i.activeRecordsForRangesLocked(ranges, height, now, relayOnly)
 	if err != nil {
 		i.mutex.RUnlock()
 		return nil, nil, false, chainhash.Hash{}, err
@@ -321,12 +331,69 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange) ([
 	return records, nextCursor, done, root, nil
 }
 
-func (i *Indexer) activeRecordsForRangesLocked(ranges []syncRange, height, now uint64) ([]*wire.DKVSRecord, error) {
+func (i *Indexer) filteredRoot(filters []Subscription, relayOnly bool) (chainhash.Hash, error) {
+	ranges, err := syncRangesForFilters(filters)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	height := i.currentHeight()
+	now := currentUnixMilli()
+	i.mutex.RLock()
+	defer i.mutex.RUnlock()
+	records, err := i.activeRecordsForRangesLocked(ranges, height, now, relayOnly)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	return recordsRoot(records, height)
+}
+
+// WaitFilteredForClient blocks until the client-visible active root covered by
+// filters changes or the context ends.
+func (i *Indexer) WaitFilteredForClient(ctx context.Context, filters []Subscription,
+	knownRoot chainhash.Hash) (chainhash.Hash, bool, error) {
+
+	if len(filters) == 0 {
+		return chainhash.Hash{}, false, ErrInvalidRecord
+	}
+	root, err := i.filteredRoot(filters, false)
+	if err != nil || root != knownRoot {
+		return root, root != knownRoot, err
+	}
+	generation := atomic.LoadUint64(&i.generation)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			nextGeneration := atomic.LoadUint64(&i.generation)
+			if nextGeneration == generation {
+				continue
+			}
+			generation = nextGeneration
+			root, err = i.filteredRoot(filters, false)
+			if err != nil || root != knownRoot {
+				return root, root != knownRoot, err
+			}
+		case <-ctx.Done():
+			root, err = i.filteredRoot(filters, false)
+			if err != nil || root != knownRoot {
+				return root, root != knownRoot, err
+			}
+			return root, false, ctx.Err()
+		}
+	}
+}
+
+func (i *Indexer) activeRecordsForRangesLocked(ranges []syncRange, height, now uint64,
+	relayOnly bool) ([]*wire.DKVSRecord, error) {
 	records, err := i.recordsForRangesLocked(ranges, true, height, now)
 	if err != nil {
 		return nil, err
 	}
-	return i.relayableRecords(records), nil
+	if relayOnly {
+		return i.relayableRecords(records), nil
+	}
+	return records, nil
 }
 
 func (i *Indexer) recordsForRangesLocked(ranges []syncRange, activeOnly bool, height, now uint64) ([]*wire.DKVSRecord, error) {

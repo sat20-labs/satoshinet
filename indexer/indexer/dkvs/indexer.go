@@ -297,7 +297,7 @@ func (i *Indexer) Sync(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte,
 	if err != nil {
 		return nil, nil, false, chainhash.Hash{}, err
 	}
-	return i.syncRanges(cursor, limit, ranges)
+	return i.syncRanges(cursor, limit, ranges, true)
 }
 
 func (i *Indexer) SyncFiltered(cursor []byte, limit uint32, filters []Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
@@ -308,7 +308,23 @@ func (i *Indexer) SyncFiltered(cursor []byte, limit uint32, filters []Subscripti
 	if err != nil {
 		return nil, nil, false, chainhash.Hash{}, err
 	}
-	return i.syncRanges(cursor, limit, ranges)
+	return i.syncRanges(cursor, limit, ranges, true)
+}
+
+// SyncFilteredForClient includes node-local temporary records. It is intended
+// for the wallet connected to this HTTP service and must never be used for P2P
+// relay or mirror synchronization.
+func (i *Indexer) SyncFilteredForClient(cursor []byte, limit uint32,
+	filters []Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+
+	if len(filters) == 0 {
+		return nil, nil, false, chainhash.Hash{}, ErrInvalidRecord
+	}
+	ranges, err := syncRangesForFilters(filters)
+	if err != nil {
+		return nil, nil, false, chainhash.Hash{}, err
+	}
+	return i.syncRanges(cursor, limit, ranges, false)
 }
 
 func (i *Indexer) Subscribe(sub Subscription) ([]*wire.DKVSRecord, int, error) {

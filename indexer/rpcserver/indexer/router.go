@@ -78,6 +78,8 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/dkvs/config", s.handle.getDKVSConfig)
 	r.GET(proxy+"/v3/dkvs/path-meta", s.handle.getDKVSPathMeta)
 	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
+	r.POST(proxy+"/v3/dkvs/sync", s.handle.syncDKVS)
+	r.POST(proxy+"/v3/dkvs/watch", s.handle.watchDKVS)
 	r.GET(proxy+"/v3/dkvs/checkpoint", s.handle.getDKVSCheckpoint)
 	r.GET(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.getDKVSSnapshot)
 	r.POST(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.applyDKVSSnapshot)

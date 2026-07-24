@@ -118,6 +118,13 @@ func TestFreeLocalRecordsStayOnAcceptingNode(t *testing.T) {
 	if err != nil || !done || len(records) != 0 {
 		t.Fatalf("free local sync records=%d done=%v err=%v", len(records), done, err)
 	}
+	clientRecords, _, clientDone, _, err := idx.SyncFilteredForClient(nil, 10,
+		[]Subscription{{Type: SubscriptionKey, Target: record.Key}})
+	if err != nil || !clientDone || len(clientRecords) != 1 ||
+		RecordHash(clientRecords[0]) != RecordHash(record) {
+		t.Fatalf("free local client sync records=%d done=%v err=%v",
+			len(clientRecords), clientDone, err)
+	}
 	checkpoint, err := idx.Checkpoint()
 	if err != nil || checkpoint.ActiveRecordCount != 0 {
 		t.Fatalf("free local checkpoint=%#v err=%v", checkpoint, err)

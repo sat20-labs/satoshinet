@@ -1,8 +1,10 @@
 package indexer
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -28,7 +30,9 @@ const (
 	dkvsRecordHTTPBodyLimit       = int64(32 * 1024)
 	dkvsSubscriptionHTTPBodyLimit = int64(4 * 1024)
 	dkvsSnapshotHTTPBodyLimit     = int64(64 * 1024 * 1024)
+	dkvsSyncHTTPBodyLimit         = int64(64 * 1024)
 	dkvsMaxListLimit              = 1000
+	dkvsMaxWatchSeconds           = 25
 )
 
 func bindDKVSJSON(c *gin.Context, target interface{}, limit int64) error {
@@ -315,6 +319,40 @@ type dkvsSubscriptionResp struct {
 	Data          []*swire.DKVSRecord        `json:"data,omitempty"`
 }
 
+type dkvsSyncReq struct {
+	Cursor  []byte                     `json:"cursor,omitempty"`
+	Limit   uint32                     `json:"limit,omitempty"`
+	Filters []dkvsindexer.Subscription `json:"filters"`
+}
+
+type dkvsSyncData struct {
+	Records    []*swire.DKVSRecord `json:"records,omitempty"`
+	NextCursor []byte              `json:"next_cursor,omitempty"`
+	Done       bool                `json:"done"`
+	Root       string              `json:"root"`
+}
+
+type dkvsSyncResp struct {
+	indexerwire.BaseResp
+	Data *dkvsSyncData `json:"data,omitempty"`
+}
+
+type dkvsWatchReq struct {
+	Filters        []dkvsindexer.Subscription `json:"filters"`
+	Root           string                     `json:"root"`
+	TimeoutSeconds int                        `json:"timeout_seconds,omitempty"`
+}
+
+type dkvsWatchData struct {
+	Changed bool   `json:"changed"`
+	Root    string `json:"root"`
+}
+
+type dkvsWatchResp struct {
+	indexerwire.BaseResp
+	Data *dkvsWatchData `json:"data,omitempty"`
+}
+
 type dkvsPruneResp struct {
 	indexerwire.BaseResp
 	Pruned int `json:"pruned"`
@@ -323,6 +361,79 @@ type dkvsPruneResp struct {
 type dkvsSnapshotImportResp struct {
 	indexerwire.BaseResp
 	Applied int `json:"applied"`
+}
+
+func validateDKVSSyncFilters(filters []dkvsindexer.Subscription) error {
+	if len(filters) == 0 {
+		return errors.New("at least one DKVS sync filter is required")
+	}
+	if len(filters) > swire.MaxDKVSSyncFilters {
+		return dkvsindexer.ErrTooManySubscriptions
+	}
+	return nil
+}
+
+func (s *Handle) syncDKVS(c *gin.Context) {
+	resp := &dkvsSyncResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	var req dkvsSyncReq
+	if err := bindDKVSJSON(c, &req, dkvsSyncHTTPBodyLimit); err != nil {
+		resp.Code, resp.Msg = -1, err.Error()
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	if err := validateDKVSSyncFilters(req.Filters); err != nil {
+		resp.Code, resp.Msg = -1, err.Error()
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	records, next, done, root, err := s.model.SyncFilteredDKVSRecords(req.Cursor, req.Limit, req.Filters)
+	if err != nil {
+		resp.Code, resp.Msg = -1, err.Error()
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	resp.Data = &dkvsSyncData{
+		Records: records, NextCursor: next, Done: done, Root: root.String(),
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (s *Handle) watchDKVS(c *gin.Context) {
+	resp := &dkvsWatchResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	var req dkvsWatchReq
+	if err := bindDKVSJSON(c, &req, dkvsSyncHTTPBodyLimit); err != nil {
+		resp.Code, resp.Msg = -1, err.Error()
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	if err := validateDKVSSyncFilters(req.Filters); err != nil {
+		resp.Code, resp.Msg = -1, err.Error()
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	knownRoot, err := chainhash.NewHashFromStr(strings.TrimSpace(req.Root))
+	if err != nil {
+		resp.Code, resp.Msg = -1, "invalid DKVS root"
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	timeout := req.TimeoutSeconds
+	if timeout <= 0 || timeout > dkvsMaxWatchSeconds {
+		timeout = dkvsMaxWatchSeconds
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(timeout)*time.Second)
+	defer cancel()
+	root, changed, err := s.model.WaitFilteredDKVSRecords(ctx, req.Filters, *knownRoot)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		resp.Code, resp.Msg = -1, err.Error()
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	resp.Data = &dkvsWatchData{Changed: changed, Root: root.String()}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (s *Handle) putDKVSRecord(c *gin.Context) {

@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -222,6 +223,18 @@ func (s *Model) GetDKVSUsage(prefix string) (*dkvsindexer.Usage, error) {
 
 func (s *Model) GetDKVSPathMeta(path string) (*dkvsindexer.PathMeta, error) {
 	return s.indexer.GetDKVSPathMeta(path)
+}
+
+func (s *Model) SyncFilteredDKVSRecords(cursor []byte, limit uint32,
+	filters []dkvsindexer.Subscription) ([]*swire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+
+	return s.indexer.SyncFilteredDKVSRecordsForClient(cursor, limit, filters)
+}
+
+func (s *Model) WaitFilteredDKVSRecords(ctx context.Context, filters []dkvsindexer.Subscription,
+	root chainhash.Hash) (chainhash.Hash, bool, error) {
+
+	return s.indexer.WaitFilteredDKVSRecordsForClient(ctx, filters, root)
 }
 
 func (s *Model) GetDKVSCheckpoint() (interface{}, error) {

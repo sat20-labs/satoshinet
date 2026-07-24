@@ -2,6 +2,7 @@ package dkvs
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -11,6 +12,37 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
+
+func TestWaitFilteredForClientObservesRootChange(t *testing.T) {
+	idx := testIndexer(t)
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := signedPersonalRecordWithKey(t, priv, 1, "one", 0)
+	if _, err := idx.PutLocal(first); err != nil {
+		t.Fatal(err)
+	}
+	filter := []Subscription{{Type: SubscriptionKey, Target: first.Key}}
+	_, _, _, root, err := idx.SyncFilteredForClient(nil, 10, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := signedPersonalRecordWithKey(t, priv, 2, "two", 0)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = idx.PutLocal(second)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	next, changed, err := idx.WaitFilteredForClient(ctx, filter, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || next == root {
+		t.Fatalf("changed=%v root=%s next=%s", changed, root, next)
+	}
+}
 
 func TestMissingDeleteCommandIsRetainedOnlyForRelay(t *testing.T) {
 	idx := testIndexer(t)

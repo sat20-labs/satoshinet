@@ -1,6 +1,8 @@
 package indexer
 
 import (
+	"context"
+
 	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -85,6 +87,8 @@ type Indexer interface {
 	ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error)
 	SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
 	SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
+	SyncFilteredDKVSRecordsForClient(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
+	WaitFilteredDKVSRecordsForClient(ctx context.Context, filters []dkvs_indexer.Subscription, root chainhash.Hash) (chainhash.Hash, bool, error)
 	GetDKVSCheckpoint() (*dkvs_indexer.Checkpoint, error)
 	GetDKVSSnapshot() (*dkvs_indexer.Snapshot, error)
 	ApplyDKVSSnapshot(snapshot *dkvs_indexer.Snapshot) (int, error)
