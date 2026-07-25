@@ -31,7 +31,11 @@ func (r *ContractRuntime) settleExchange(height int64, gasConfig GasConfig) (*Se
 		if item.Finished() || item.Height > height {
 			continue
 		}
-		switch item.OrderType {
+		orderType, err := invokeItemOrderType(item)
+		if err != nil {
+			return nil, err
+		}
+		switch orderType {
 		case OrderTypeFund:
 			if err := applyExchangeGasFee(&state, contract, item, gasAssetName); err != nil {
 				return nil, err
@@ -105,7 +109,10 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 		markExchangeRefunded(state, item, plan, contract, gasAssetName)
 		return nil
 	}
-	minOut := item.ExpectedAmt
+	minOut, err := invokeItemExpectedAmt(item)
+	if err != nil {
+		return err
+	}
 	if minOut == nil {
 		minOut = parseDecimalOrZero("0")
 	}
@@ -127,11 +134,11 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 	item.OutAmt = quote.OutA
 	item.RemainingAmt = nil
 	item.Done = ItemStatusDealt
-	item.UnitPrice = decimalString(quote.UnitPrice)
+	unitPrice := decimalString(quote.UnitPrice)
 	plan.Deals = append(plan.Deals, SettlementDeal{
 		BuyItemID: item.ID,
 		AssetAmt:  decimalString(item.OutAmt),
-		UnitPrice: item.UnitPrice,
+		UnitPrice: unitPrice,
 	})
 	if quote.OutA.Sign() > 0 {
 		plan.Transfers = append(plan.Transfers, SettlementTransfer{

@@ -956,11 +956,10 @@ func TestSettleAMMPartialRemoveLiquidityKeepsAssetPrecision(t *testing.T) {
 		Items: []InvokeItem{{
 			ID:           0,
 			Action:       InvokeAPIRemoveLiquidity,
-			OrderType:    OrderTypeRemoveLiquidity,
+			Param:        testRemoveLiquidityInvokeParamBytes(t, "ordx:f:test", "5"),
 			Reason:       InvokeReasonNormal,
 			Address:      "alice",
 			AssetName:    "ordx:f:test",
-			ExpectedAmt:  parseDecimalOrZero("5"),
 			RemainingAmt: parseDecimalOrZero("5"),
 		}},
 	}

@@ -199,12 +199,22 @@ func (c *AutopayContract) ApplyRunningData(state *TemplateRuntimeState, item *In
 	if item.Reason == InvokeReasonInvalid {
 		return true
 	}
+	orderType, err := invokeItemOrderType(item)
+	if err != nil {
+		item.Reason = InvokeReasonInvalid
+		return true
+	}
 	autopay := state.AutopayData()
-	switch item.OrderType {
+	switch orderType {
 	case OrderTypeFund:
 		c.addDelegateBalance(autopay, item.Address, item.InAmt)
 	case OrderTypeValidate:
-		c.setDelegateConfig(autopay, item.Address, item.ExpectedAmt, item.BlobKeyLimit)
+		amount, blobKeyLimit, err := invokeItemAutopayConfig(item)
+		if err != nil {
+			item.Reason = InvokeReasonInvalid
+			return true
+		}
+		c.setDelegateConfig(autopay, item.Address, amount, blobKeyLimit)
 		// A config invoke may also fund the delegate. The backend has already
 		// removed this invoke's Result fee from InAmt when it is the fee asset.
 		c.addDelegateBalance(autopay, item.Address, item.InAmt)
@@ -391,8 +401,14 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 	deployer := runtime.RuntimeBase().Deployer()
 	for i := range state.Items {
 		item := &state.Items[i]
-		if item.Finished() || item.Reason != InvokeReasonNormal ||
-			item.OrderType != OrderTypeClose || item.Height > height {
+		if item.Finished() || item.Reason != InvokeReasonNormal || item.Height > height {
+			continue
+		}
+		orderType, err := invokeItemOrderType(item)
+		if err != nil {
+			return false, err
+		}
+		if orderType != OrderTypeClose {
 			continue
 		}
 		if !state.AutopayData().AutopayCloseStarted {
@@ -456,8 +472,14 @@ func (c *AutopayContract) applyAutopayCancels(state *TemplateRuntimeState, plan 
 	changed := false
 	for i := range state.Items {
 		item := &state.Items[i]
-		if item.Finished() || item.Reason != InvokeReasonNormal ||
-			item.OrderType != OrderTypeCancel || item.Height > height {
+		if item.Finished() || item.Reason != InvokeReasonNormal || item.Height > height {
+			continue
+		}
+		orderType, err := invokeItemOrderType(item)
+		if err != nil {
+			return false, err
+		}
+		if orderType != OrderTypeCancel {
 			continue
 		}
 		addSettlementInputs(plan, item)
@@ -684,11 +706,15 @@ func NewAutopayDefaultInvokeItem(contract *AutopayContract, id int64, req ApplyI
 	if amount.Sign() <= 0 {
 		return nil, nil
 	}
+	param, err := encodeDefaultInvokeItemParam(OrderTypeFund, "")
+	if err != nil {
+		return nil, err
+	}
 	return &InvokeItem{
 		ID:             id,
 		CallID:         req.CallID,
 		Action:         contractcommon.ContractInvokeAPIDefault,
-		OrderType:      OrderTypeFund,
+		Param:          param,
 		Height:         req.Height,
 		OrderTime:      req.Timestamp,
 		AssetName:      contract.FeeAssetName,

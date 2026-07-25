@@ -1,6 +1,9 @@
 package template
 
-import scommon "github.com/sat20-labs/indexer/common"
+import (
+	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+)
 
 func (c *ExchangeContract) ApplyFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error) {
 	amt, err := output.AssetAmount(c.AssetAName)
@@ -48,7 +51,12 @@ func (c *ExchangeContract) ApplyRunningData(state *TemplateRuntimeState, item *I
 	if item.Reason == InvokeReasonInvalid {
 		return true
 	}
-	switch item.OrderType {
+	orderType, err := invokeItemOrderType(item)
+	if err != nil {
+		item.Reason = InvokeReasonInvalid
+		return true
+	}
+	switch orderType {
 	case OrderTypeFund:
 		if item.InAmt != nil {
 			if exchange.TotalInputAssetA == nil {
@@ -118,33 +126,29 @@ func exchangeFundingAmounts(contract *ExchangeContract, output ContractOutput) (
 	return inputA, inputB, output.OutPoint.String(), nil
 }
 
-func newExchangeItem(id int64, action string, req ApplyInvokeRequest, inUtxos, assetBName string,
-	inputB *scommon.Decimal, minOutA string) *InvokeItem {
+func newExchangeItem(id int64, action string, req ApplyInvokeRequest, inUtxos, assetName string,
+	inputAmt *scommon.Decimal, param []byte) *InvokeItem {
 
 	item := &InvokeItem{
 		ID:             id,
 		CallID:         req.CallID,
 		Action:         action,
-		OrderType:      OrderTypeExchange,
+		Param:          contractframework.CloneBytes(param),
 		Height:         req.Height,
 		OrderTime:      req.Timestamp,
-		AssetName:      assetBName,
+		AssetName:      assetName,
 		Address:        req.Invoker,
 		InUtxos:        inUtxos,
 		InAmt:          nil,
-		ExpectedAmt:    nil,
 		RemainingAmt:   nil,
 		GasFee:         req.ResultGasFee.Clone(),
 		Reason:         InvokeReasonNormal,
 		Done:           ItemStatusInit,
 		RemainingValue: 0,
 	}
-	if inputB != nil && inputB.Sign() > 0 {
-		item.InAmt = inputB
-		item.RemainingAmt = inputB
-	}
-	if minOutA != "" {
-		item.ExpectedAmt = parseDecimalOrZero(minOutA)
+	if inputAmt != nil && inputAmt.Sign() > 0 {
+		item.InAmt = inputAmt
+		item.RemainingAmt = inputAmt
 	}
 	return item
 }

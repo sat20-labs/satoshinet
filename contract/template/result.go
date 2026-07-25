@@ -618,7 +618,11 @@ func openOrderManagedAssets(contract Contract, state *TemplateRuntimeState) (int
 		if item.Finished() || item.Reason != InvokeReasonNormal {
 			continue
 		}
-		switch item.OrderType {
+		orderType, err := invokeItemOrderType(item)
+		if err != nil {
+			return 0, nil, err
+		}
+		switch orderType {
 		case OrderTypeBuy:
 			var overflow bool
 			value, overflow = contractframework.AddInt64(value, item.RemainingValue)

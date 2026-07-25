@@ -74,7 +74,7 @@ func TestAutopayDefaultFundingAndCloseReturnsBalances(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, item)
-	require.Equal(t, OrderTypeFund, item.OrderType)
+	requireInvokeItemOrderType(t, OrderTypeFund, item)
 
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:        InvokeAPIClose,
@@ -171,10 +171,10 @@ func TestAutopayCloseFitsResultOutputLimit(t *testing.T) {
 	state.AutopayData().GasBalance = parseDecimalOrZero("100")
 	state.AutopayData().AutopayStatus = AutopayStatusActive
 	state.Items = []InvokeItem{{
-		ID:        1,
-		OrderType: OrderTypeClose,
-		Address:   "deployer-address",
-		Height:    100,
+		ID:      1,
+		Action:  InvokeAPIClose,
+		Address: "deployer-address",
+		Height:  100,
 	}}
 	require.NoError(t, runtime.saveRuntimeState(state))
 

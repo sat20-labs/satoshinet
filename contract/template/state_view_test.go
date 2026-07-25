@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/stretchr/testify/require"
 )
@@ -14,41 +15,40 @@ func TestLimitOrderStateViewReturnsDepthWithoutItems(t *testing.T) {
 		InvokeCount: 3,
 		Items: []InvokeItem{
 			{
-				OrderType:      OrderTypeSell,
+				Action:         contractcommon.ContractInvokeAPIDefault,
+				Param:          testDefaultInvokeParam(t, OrderTypeSell, "2", ""),
 				Height:         10,
 				AssetName:      "ordx:f:test",
-				UnitPrice:      "2",
 				RemainingAmt:   parseDecimalOrZero("10"),
 				RemainingValue: 0,
 				Reason:         InvokeReasonNormal,
 				Done:           ItemStatusInit,
 			},
 			{
-				OrderType:      OrderTypeSell,
+				Action:         contractcommon.ContractInvokeAPIDefault,
+				Param:          testDefaultInvokeParam(t, OrderTypeSell, "2", ""),
 				Height:         11,
 				AssetName:      "ordx:f:test",
-				UnitPrice:      "2",
 				RemainingAmt:   parseDecimalOrZero("7"),
 				RemainingValue: 0,
 				Reason:         InvokeReasonNormal,
 				Done:           ItemStatusInit,
 			},
 			{
-				OrderType:      OrderTypeBuy,
+				Action:         contractcommon.ContractInvokeAPIDefault,
+				Param:          testDefaultInvokeParam(t, OrderTypeBuy, "3", "9"),
 				Height:         12,
 				AssetName:      "ordx:f:test",
-				UnitPrice:      "3",
-				ExpectedAmt:    parseDecimalOrZero("9"),
 				OutAmt:         parseDecimalOrZero("2"),
 				RemainingValue: 21,
 				Reason:         InvokeReasonNormal,
 				Done:           ItemStatusInit,
 			},
 			{
-				OrderType:      OrderTypeSell,
+				Action:         contractcommon.ContractInvokeAPIDefault,
+				Param:          testDefaultInvokeParam(t, OrderTypeSell, "1", ""),
 				Height:         13,
 				AssetName:      "ordx:f:test",
-				UnitPrice:      "1",
 				RemainingAmt:   parseDecimalOrZero("100"),
 				RemainingValue: 0,
 				Reason:         InvokeReasonInvalid,

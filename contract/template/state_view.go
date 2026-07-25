@@ -219,7 +219,10 @@ func limitOrderDepth(items []InvokeItem, ids []int, buy bool) ([]*DepthInfo, err
 			continue
 		}
 		item := items[id]
-		price := item.UnitPrice
+		price, err := invokeItemUnitPrice(&item)
+		if err != nil {
+			return nil, err
+		}
 		if price == "" {
 			price = "0"
 		}
@@ -234,9 +237,12 @@ func limitOrderDepth(items []InvokeItem, ids []int, buy bool) ([]*DepthInfo, err
 			if overflow {
 				return nil, fmt.Errorf("limit order buy depth value overflows int64")
 			}
-			amt := parseDecimalOrZero("0")
-			if item.ExpectedAmt != nil {
-				amt = item.ExpectedAmt
+			amt, err := invokeItemExpectedAmt(&item)
+			if err != nil {
+				return nil, err
+			}
+			if amt == nil {
+				amt = parseDecimalOrZero("0")
 			}
 			if item.OutAmt != nil {
 				amt = amt.Sub(item.OutAmt)
