@@ -124,35 +124,3 @@ func AttachSignedFeeProof(record *wire.DKVSRecord, proof *FeeProof, priv *btcec.
 	record.FeeProof = encoded
 	return nil
 }
-
-func BuildSignedBlobRecords(priv *btcec.PrivateKey, objectID string, chunks [][]byte, metadata []byte, opts RecordOptions) (*wire.DKVSRecord, []*wire.DKVSRecord, error) {
-	if opts.IssueTime == 0 {
-		opts.IssueTime = currentUnixMilli()
-	}
-	accountID := AccountID(priv.PubKey().SerializeCompressed())
-	manifest, manifestValue, err := BuildBlobManifest(chunks, metadata, opts.TTL, opts.ExpiryHeight)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifestKey, err := BlobManifestKey(accountID, objectID)
-	if err != nil {
-		return nil, nil, err
-	}
-	manifestRecord, err := NewSignedRecord(priv, manifestKey, manifestValue, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	chunkRecords := make([]*wire.DKVSRecord, 0, manifest.ChunkCount)
-	for n, chunk := range chunks {
-		chunkKey, err := BlobChunkKey(accountID, objectID, uint32(n))
-		if err != nil {
-			return nil, nil, err
-		}
-		chunkRecord, err := NewSignedRecord(priv, chunkKey, chunk, opts)
-		if err != nil {
-			return nil, nil, err
-		}
-		chunkRecords = append(chunkRecords, chunkRecord)
-	}
-	return manifestRecord, chunkRecords, nil
-}

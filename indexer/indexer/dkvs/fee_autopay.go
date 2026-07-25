@@ -52,6 +52,7 @@ type AutopayDelegateState struct {
 	PaidBlockCount int64  `json:"paidBlockCount,omitempty"`
 	LastPayHeight  int64  `json:"lastPayHeight,omitempty"`
 	Status         string `json:"status,omitempty"`
+	BlobKeyLimit   uint32 `json:"blobKeyLimit,omitempty"`
 }
 
 type AutopayFeeVerifier struct {
@@ -222,6 +223,10 @@ func (v AutopayFeeVerifier) VerifyFeeCapacity(record *wire.DKVSRecord, parsed Pa
 		if strings.TrimSpace(candidateProof.PoolContract) != capacity.Contract {
 			continue
 		}
+		candidateParsed, err := ParseKey(candidate.Key)
+		if err != nil || autopayCapacityClass(candidateParsed) != capacity.UsageClass {
+			continue
+		}
 		candidatePubKey, err := RecordSignerPubKey(candidate)
 		if err != nil {
 			continue
@@ -244,7 +249,7 @@ func (v AutopayFeeVerifier) FeeCapacity(record *wire.DKVSRecord, parsed ParsedKe
 		return FeeCapacityDescriptor{}, err
 	}
 	return FeeCapacityDescriptor{
-		UsageKey:   capacity.Contract + "\x00" + capacity.Payer,
+		UsageKey:   autopayUsageKey(capacity.Contract, capacity.Payer, capacity.UsageClass),
 		MaxRecords: capacity.MaxRecords,
 	}, nil
 }
@@ -260,6 +265,10 @@ func (v AutopayFeeVerifier) FeeUsageKey(record *wire.DKVSRecord) (string, error)
 	if proof.Mode != FeeModeAutopay {
 		return "", nil
 	}
+	parsed, err := ParseKey(record.Key)
+	if err != nil {
+		return "", err
+	}
 	pubKey, err := RecordSignerPubKey(record)
 	if err != nil {
 		return "", ErrInvalidFeeProof
@@ -268,18 +277,20 @@ func (v AutopayFeeVerifier) FeeUsageKey(record *wire.DKVSRecord) (string, error)
 	if err != nil {
 		return "", ErrInvalidFeeProof
 	}
-	return strings.TrimSpace(proof.PoolContract) + "\x00" + strings.TrimSpace(payer), nil
+	return autopayUsageKey(
+		strings.TrimSpace(proof.PoolContract), strings.TrimSpace(payer), autopayCapacityClass(parsed),
+	), nil
 }
 
 type autopayCapacity struct {
 	Contract   string
 	Payer      string
+	UsageClass string
 	MaxRecords uint64
 }
 
 func (v AutopayFeeVerifier) verifyProofForRecord(record *wire.DKVSRecord, parsed ParsedKey) (*FeeProof, autopayCapacity, error) {
 	var capacity autopayCapacity
-	_ = parsed
 	if record == nil {
 		return nil, capacity, ErrInvalidRecord
 	}
@@ -305,13 +316,14 @@ func (v AutopayFeeVerifier) verifyProofForRecord(record *wire.DKVSRecord, parsed
 	if err != nil {
 		return proof, capacity, err
 	}
-	maxRecords, err := v.maxRecordsForState(state, payer)
+	maxRecords, err := v.maxRecordsForState(state, payer, parsed)
 	if err != nil {
 		return proof, capacity, err
 	}
 	capacity = autopayCapacity{
 		Contract:   strings.TrimSpace(proof.PoolContract),
 		Payer:      strings.TrimSpace(payer),
+		UsageClass: autopayCapacityClass(parsed),
 		MaxRecords: maxRecords,
 	}
 	return proof, capacity, nil
@@ -366,13 +378,19 @@ func (v AutopayFeeVerifier) verifyState(proof *FeeProof, payer string, expiryHei
 	return state, nil
 }
 
-func (v AutopayFeeVerifier) maxRecordsForState(state *AutopayContractState, payer string) (uint64, error) {
+func (v AutopayFeeVerifier) maxRecordsForState(state *AutopayContractState, payer string, parsed ParsedKey) (uint64, error) {
 	if state == nil {
 		return 0, ErrInvalidFeeProof
 	}
 	delegate, ok := state.Delegates[strings.TrimSpace(payer)]
 	if !ok {
 		return 0, ErrInvalidFeeProof
+	}
+	if IsBlobKey(parsed) {
+		if delegate.BlobKeyLimit == 0 {
+			return 1, nil
+		}
+		return uint64(delegate.BlobKeyLimit), nil
 	}
 	amount, err := positiveRat(delegate.AmountPerBlock)
 	if err != nil {
@@ -388,6 +406,21 @@ func (v AutopayFeeVerifier) maxRecordsForState(state *AutopayContractState, paye
 		return ^uint64(0), nil
 	}
 	return maxRecords.Uint64(), nil
+}
+
+func autopayCapacityClass(parsed ParsedKey) string {
+	if IsBlobKey(parsed) {
+		return "blob"
+	}
+	return "record"
+}
+
+func autopayUsageKey(contract, payer, class string) string {
+	key := strings.TrimSpace(contract) + "\x00" + strings.TrimSpace(payer)
+	if class == "blob" {
+		key += "\x00blob"
+	}
+	return key
 }
 
 func positiveRat(value string) (*big.Rat, error) {

@@ -3,7 +3,6 @@ package dkvs
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strconv"
 	"strings"
 )
 
@@ -136,20 +135,9 @@ func validateNamespaceShape(parsed ParsedKey) error {
 		}
 		return ErrInvalidKey
 	case "blob":
-		if len(parsed.Segments) < 3 || !validAccountID(parsed.Segments[0]) {
+		if len(parsed.Segments) != 2 || !validAccountID(parsed.Segments[0]) {
 			return ErrInvalidKey
 		}
-		if len(parsed.Segments) == 3 && parsed.Segments[2] == "manifest" {
-			return nil
-		}
-		if len(parsed.Segments) == 4 && parsed.Segments[2] == "chunk" {
-			index, err := strconv.ParseUint(parsed.Segments[3], 10, 32)
-			if err != nil || strconv.FormatUint(index, 10) != parsed.Segments[3] {
-				return ErrInvalidKey
-			}
-			return nil
-		}
-		return ErrInvalidKey
 	case "tmp":
 		if len(parsed.Segments) != 1 {
 			return ErrInvalidKey

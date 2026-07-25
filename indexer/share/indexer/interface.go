@@ -73,6 +73,9 @@ type Indexer interface {
 	SetDKVSFeeVerifier(verifier dkvs_indexer.FeeVerifier)
 	SetDKVSSystemVerifier(verifier dkvs_indexer.SystemVerifier)
 	PutDKVSRecord(record *wire.DKVSRecord) (bool, error)
+	PutDKVSRecordWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error)
+	PutDKVSRecordCAS(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition) (bool, error)
+	PutDKVSRecordBatchCAS(mutations []dkvs_indexer.CASMutation) (int, error)
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	NotifyDKVSNameTransfers(names []string) error
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
@@ -82,12 +85,14 @@ type Indexer interface {
 	ListDKVSRecords(prefix string, start, limit int) ([]*wire.DKVSRecord, int, error)
 	GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error)
 	GetDKVSFreeLocalCachePolicy() dkvs_indexer.FreeLocalCachePolicy
+	GetDKVSClientConfig() dkvs_indexer.ClientConfig
 	GetDKVSPathMeta(path string) (*dkvs_indexer.PathMeta, error)
 	ApplyDKVSMirror(filters []dkvs_indexer.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error)
-	ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error)
 	SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
 	SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
 	SyncFilteredDKVSRecordsForClient(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
+	SyncDKVSDirectory(prefix string, cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
+	WaitDKVSDirectory(ctx context.Context, prefix string, root chainhash.Hash) (chainhash.Hash, bool, error)
 	WaitFilteredDKVSRecordsForClient(ctx context.Context, filters []dkvs_indexer.Subscription, root chainhash.Hash) (chainhash.Hash, bool, error)
 	GetDKVSCheckpoint() (*dkvs_indexer.Checkpoint, error)
 	GetDKVSSnapshot() (*dkvs_indexer.Snapshot, error)

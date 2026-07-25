@@ -46,7 +46,7 @@ jobs:
         working-directory: workspace/satoshinet
         shell: bash
         run: |
-          files=$(git diff --name-only origin/main...HEAD -- 'indexer/indexer/dkvs/*.go')
+          files=$(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- 'indexer/indexer/dkvs/*.go')
           if [ -n "$files" ]; then
             unformatted=$(gofmt -l $files)
             if [ -n "$unformatted" ]; then

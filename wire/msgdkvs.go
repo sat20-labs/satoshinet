@@ -4,23 +4,34 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 )
 
 const (
-	MaxDKVSKeySize        = 256
-	MaxDKVSValueSize      = 16 * 1024
-	MaxDKVSFeeProofSize   = 2 * 1024
-	MaxDKVSSignatureSize  = 256
-	MaxDKVSPubKeySize     = 128
+	MaxDKVSKeySize       = 256
+	MaxDKVSValueSize     = 16 * 1024
+	MaxDKVSBlobValueSize = 1024 * 1024
+	MaxDKVSFeeProofSize  = 2 * 1024
+	MaxDKVSSignatureSize = 256
+	MaxDKVSPubKeySize    = 128
+
+	// MaxDKVSRecordSize remains the ordinary-record wire bound. Blob records use
+	// MaxDKVSBlobRecordSize and are still bounded by MaxProtocolMessageLength.
 	MaxDKVSRecordSize     = 16 * 1024
+	MaxDKVSBlobRecordSize = MaxDKVSBlobValueSize + 4*1024
+
 	MaxDKVSRecordsPerMsg  = 200
 	MaxDKVSItemsPerMsg    = 1024
 	MaxDKVSCursorSize     = 512
 	MaxDKVSSyncFilters    = 256
 	MaxDKVSFilterTypeSize = 16
-	MaxDKVSNotifyDataSize = MaxDKVSRecordSize
+	MaxDKVSNotifyDataSize = MaxDKVSBlobRecordSize
+
+	// Leave room for message framing fields, cursors, signatures and not-found
+	// hashes. Record-bearing DKVS messages must fit below this aggregate budget.
+	MaxDKVSRecordsPayloadSize = MaxProtocolMessageLength - 64*1024
 )
 
 type DKVSRecord struct {
@@ -83,6 +94,23 @@ type DKVSSyncFilter struct {
 	Target string
 }
 
+// DKVSValueSizeLimit returns the wire-level value limit for a key. Namespace
+// shape and ownership are validated by the DKVS indexer after decoding.
+func DKVSValueSizeLimit(key string) uint32 {
+	if strings.HasPrefix(key, "/blob/") {
+		return MaxDKVSBlobValueSize
+	}
+	return MaxDKVSValueSize
+}
+
+// DKVSRecordSizeLimit returns the wire-level encoded record limit for a key.
+func DKVSRecordSizeLimit(key string) int {
+	if strings.HasPrefix(key, "/blob/") {
+		return MaxDKVSBlobRecordSize
+	}
+	return MaxDKVSRecordSize
+}
+
 func readDKVSRecord(r io.Reader, pver uint32, buf []byte) (*DKVSRecord, error) {
 	rec := &DKVSRecord{}
 	if err := readElements(r, &rec.Version); err != nil {
@@ -96,7 +124,7 @@ func readDKVSRecord(r io.Reader, pver uint32, buf []byte) (*DKVSRecord, error) {
 		return nil, messageError("readDKVSRecord", "dkvs key too large")
 	}
 	rec.Key = key
-	if rec.Value, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSValueSize, "dkvs value"); err != nil {
+	if rec.Value, err = ReadVarBytesBuf(r, pver, buf, DKVSValueSizeLimit(key), "dkvs value"); err != nil {
 		return nil, err
 	}
 	if rec.PubKey, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSPubKeySize, "dkvs pubkey"); err != nil {
@@ -114,7 +142,7 @@ func readDKVSRecord(r io.Reader, pver uint32, buf []byte) (*DKVSRecord, error) {
 	if err := readElements(r, &rec.Flags); err != nil {
 		return nil, err
 	}
-	if dkvsRecordSerializeSize(rec) > MaxDKVSRecordSize {
+	if dkvsRecordSerializeSize(rec) > DKVSRecordSizeLimit(key) {
 		return nil, messageError("readDKVSRecord", "dkvs record too large")
 	}
 	return rec, nil
@@ -127,12 +155,12 @@ func writeDKVSRecord(w io.Writer, pver uint32, rec *DKVSRecord, buf []byte) erro
 	if len(rec.Key) > MaxDKVSKeySize {
 		return messageError("writeDKVSRecord", "dkvs key too large")
 	}
-	if len(rec.Value) > MaxDKVSValueSize ||
+	if len(rec.Value) > int(DKVSValueSizeLimit(rec.Key)) ||
 		len(rec.PubKey) > MaxDKVSPubKeySize || len(rec.Signature) > MaxDKVSSignatureSize ||
 		len(rec.FeeProof) > MaxDKVSFeeProofSize {
 		return messageError("writeDKVSRecord", "dkvs record field too large")
 	}
-	if dkvsRecordSerializeSize(rec) > MaxDKVSRecordSize {
+	if dkvsRecordSerializeSize(rec) > DKVSRecordSizeLimit(rec.Key) {
 		return messageError("writeDKVSRecord", "dkvs record too large")
 	}
 	if err := writeElements(w, rec.Version); err != nil {
@@ -172,6 +200,20 @@ func dkvsRecordSerializeSize(rec *DKVSRecord) int {
 // DKVSRecordSerializeSize returns the exact encoded size of a DKVS record.
 func DKVSRecordSerializeSize(rec *DKVSRecord) int {
 	return dkvsRecordSerializeSize(rec)
+}
+
+func validateDKVSRecordsPayload(records []*DKVSRecord, fixedSize int) error {
+	total := fixedSize + VarIntSerializeSize(uint64(len(records)))
+	for _, record := range records {
+		if record == nil {
+			return messageError("validateDKVSRecordsPayload", "nil dkvs record")
+		}
+		total += dkvsRecordSerializeSize(record)
+		if total > MaxDKVSRecordsPayloadSize {
+			return messageError("validateDKVSRecordsPayload", "dkvs records payload too large")
+		}
+	}
+	return nil
 }
 
 // SerializeDKVSRecord encodes a standalone DKVS record using the wire codec.
@@ -265,9 +307,7 @@ func writeHashList(w io.Writer, pver uint32, hashes []chainhash.Hash, max uint32
 }
 
 func readerLen(r io.Reader) int {
-	type lenReader interface {
-		Len() int
-	}
+	type lenReader interface{ Len() int }
 	if lr, ok := r.(lenReader); ok {
 		return lr.Len()
 	}
@@ -313,7 +353,7 @@ func (msg *MsgDKVSNotify) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding)
 }
 
 func (msg *MsgDKVSNotify) Command() string { return CmdDKVSNotify }
-func (msg *MsgDKVSNotify) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgDKVSNotify) MaxPayloadLength(uint32) uint32 {
 	return 1 + MaxVarIntPayload + MaxDKVSNotifyDataSize
 }
 
@@ -356,7 +396,7 @@ func (msg *MsgDKVSInv) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) er
 }
 
 func (msg *MsgDKVSInv) Command() string { return CmdDKVSInv }
-func (msg *MsgDKVSInv) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgDKVSInv) MaxPayloadLength(uint32) uint32 {
 	return MaxVarIntPayload + MaxDKVSItemsPerMsg*(MaxVarIntPayload+MaxDKVSKeySize+chainhash.HashSize+8)
 }
 
@@ -406,7 +446,7 @@ func (msg *MsgDKVSGet) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) er
 }
 
 func (msg *MsgDKVSGet) Command() string { return CmdDKVSGet }
-func (msg *MsgDKVSGet) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgDKVSGet) MaxPayloadLength(uint32) uint32 {
 	return MaxVarIntPayload + MaxDKVSItemsPerMsg*(MaxVarIntPayload+MaxDKVSKeySize) +
 		MaxVarIntPayload + MaxDKVSItemsPerMsg*chainhash.HashSize
 }
@@ -422,10 +462,15 @@ func (msg *MsgDKVSData) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) e
 		return messageError("MsgDKVSData.BtcDecode", "too many dkvs records")
 	}
 	msg.Records = make([]*DKVSRecord, 0, count)
+	payloadSize := VarIntSerializeSize(count)
 	for i := uint64(0); i < count; i++ {
 		rec, err := readDKVSRecord(r, pver, buf)
 		if err != nil {
 			return err
+		}
+		payloadSize += dkvsRecordSerializeSize(rec)
+		if payloadSize > MaxDKVSRecordsPayloadSize {
+			return messageError("MsgDKVSData.BtcDecode", "dkvs records payload too large")
 		}
 		msg.Records = append(msg.Records, rec)
 	}
@@ -436,6 +481,9 @@ func (msg *MsgDKVSData) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) e
 func (msg *MsgDKVSData) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
 	if len(msg.Records) > MaxDKVSRecordsPerMsg {
 		return messageError("MsgDKVSData.BtcEncode", "too many dkvs records")
+	}
+	if err := validateDKVSRecordsPayload(msg.Records, 0); err != nil {
+		return err
 	}
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
@@ -450,10 +498,8 @@ func (msg *MsgDKVSData) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) e
 	return writeHashList(w, pver, msg.NotFound, MaxDKVSItemsPerMsg, "MsgDKVSData.BtcEncode", buf)
 }
 
-func (msg *MsgDKVSData) Command() string { return CmdDKVSData }
-func (msg *MsgDKVSData) MaxPayloadLength(pver uint32) uint32 {
-	return MaxProtocolMessageLength
-}
+func (msg *MsgDKVSData) Command() string                { return CmdDKVSData }
+func (msg *MsgDKVSData) MaxPayloadLength(uint32) uint32 { return MaxProtocolMessageLength }
 
 func (msg *MsgDKVSSyncRequest) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
 	buf := binarySerializer.Borrow()
@@ -495,10 +541,7 @@ func (msg *MsgDKVSSyncRequest) BtcDecode(r io.Reader, pver uint32, _ MessageEnco
 		if len(target) > MaxDKVSKeySize {
 			return messageError("MsgDKVSSyncRequest.BtcDecode", "dkvs sync filter target too large")
 		}
-		msg.Filters = append(msg.Filters, DKVSSyncFilter{
-			Type:   filterType,
-			Target: target,
-		})
+		msg.Filters = append(msg.Filters, DKVSSyncFilter{Type: filterType, Target: target})
 	}
 	return nil
 }
@@ -545,7 +588,7 @@ func (msg *MsgDKVSSyncRequest) BtcEncode(w io.Writer, pver uint32, _ MessageEnco
 }
 
 func (msg *MsgDKVSSyncRequest) Command() string { return CmdDKVSSyncRequest }
-func (msg *MsgDKVSSyncRequest) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgDKVSSyncRequest) MaxPayloadLength(uint32) uint32 {
 	return 8 + MaxVarIntPayload + MaxDKVSCursorSize + 4 + MaxVarIntPayload +
 		MaxDKVSSyncFilters*(MaxVarIntPayload+MaxDKVSFilterTypeSize+MaxVarIntPayload+MaxDKVSKeySize)
 }
@@ -564,10 +607,15 @@ func (msg *MsgDKVSSyncResponse) BtcDecode(r io.Reader, pver uint32, _ MessageEnc
 		return messageError("MsgDKVSSyncResponse.BtcDecode", "too many dkvs records")
 	}
 	msg.Records = make([]*DKVSRecord, 0, count)
+	payloadSize := 8 + VarIntSerializeSize(count)
 	for i := uint64(0); i < count; i++ {
 		rec, err := readDKVSRecord(r, pver, buf)
 		if err != nil {
 			return err
+		}
+		payloadSize += dkvsRecordSerializeSize(rec)
+		if payloadSize > MaxDKVSRecordsPayloadSize {
+			return messageError("MsgDKVSSyncResponse.BtcDecode", "dkvs records payload too large")
 		}
 		msg.Records = append(msg.Records, rec)
 	}
@@ -596,6 +644,9 @@ func (msg *MsgDKVSSyncResponse) BtcEncode(w io.Writer, pver uint32, _ MessageEnc
 	}
 	if len(msg.NextCursor) > MaxDKVSCursorSize {
 		return messageError("MsgDKVSSyncResponse.BtcEncode", "dkvs cursor too large")
+	}
+	if err := validateDKVSRecordsPayload(msg.Records, 8); err != nil {
+		return err
 	}
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
@@ -630,6 +681,6 @@ func (msg *MsgDKVSSyncResponse) BtcEncode(w io.Writer, pver uint32, _ MessageEnc
 }
 
 func (msg *MsgDKVSSyncResponse) Command() string { return CmdDKVSSyncResponse }
-func (msg *MsgDKVSSyncResponse) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgDKVSSyncResponse) MaxPayloadLength(uint32) uint32 {
 	return MaxProtocolMessageLength
 }

@@ -51,10 +51,6 @@ func (s *handlerTestStore) ApplyDKVSMirror([]dkvs.Subscription, []*wire.DKVSReco
 	return 0, nil
 }
 
-func (s *handlerTestStore) ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error) {
-	return len(records), nil
-}
-
 func (s *handlerTestStore) SyncFilteredDKVSRecords([]byte, uint32, []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	return s.syncRecords, nil, true, s.syncRoot, nil
 }

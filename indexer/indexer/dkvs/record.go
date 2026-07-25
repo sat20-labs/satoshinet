@@ -17,6 +17,18 @@ var signatureDomain = []byte("satoshinet-dkvs-record-v1")
 
 const notifyEventMagic = "DKNE"
 
+func cloneRecord(record *wire.DKVSRecord) *wire.DKVSRecord {
+	if record == nil {
+		return nil
+	}
+	cloned := *record
+	cloned.Value = append([]byte(nil), record.Value...)
+	cloned.PubKey = append([]byte(nil), record.PubKey...)
+	cloned.Signature = append([]byte(nil), record.Signature...)
+	cloned.FeeProof = append([]byte(nil), record.FeeProof...)
+	return &cloned
+}
+
 func RecordSize(record *wire.DKVSRecord) int {
 	return wire.DKVSRecordSerializeSize(record)
 }

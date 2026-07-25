@@ -1,6 +1,6 @@
 # DKVS Requirements Traceability
 
-更新时间：2026-07-04
+更新时间：2026-07-25
 
 本文按 `DKVS_Requirements_and_Design_v0.6.md` 逐项追踪当前实现证据。状态含义：
 
@@ -20,7 +20,7 @@
 | G6 | miner 全量同步 | Done | `MsgDKVSSyncRequest/Response`、serverPeer sync、包内三 miner startup sync 测试。 |
 | G7 | 普通节点按 key/prefix/mailbox/service 订阅 | Done | subscription set、filtered sync、notify filtering；key/prefix/mailbox/service 集成测试。 |
 | G8 | mailbox 与离线 IM | Done | `/mail/<mailbox_id>/msg/<sender_id>/<msg_id>` 发件人身份绑定、发件人 AUTOPAY、收件人免费删除、双层 quota/TTL/size；`/mail/share` owner 权限；SDK app helpers 和 examples。 |
-| G9 | 小型 blob / chunk | Done | owner-scoped named object key、manifest-first、same-generation chunk、chunk/content hash/size/count 校验；SDK blob helper。 |
+| G9 | 单记录 Blob | Done | `/blob/<account_id>/<blob_key>` owner-scoped 单 record；普通 value 16 KiB、Blob 1 MiB；AUTOPAY/FREE_LOCAL policy、SDK helper 和边界测试。 |
 | G10 | 预定义 namespace | Done | `/sys`、`/name`、`/svc`、`/personal`、`/mail`、`/blob`、`/tmp` parser/validator；`/sys` v1 子路径收紧到 params/checkpoint/snapshot/miner/pool。 |
 | G11 | Ordinals DID name/service 权限解析 | Partial | `DIDResolver` 契约、L1 `GET /ns/name/:name` owner-address resolver、p2tr pubkey->address 校验、static resolver tests；ascended-sat owner 和 service 生产规则仍待细化。 |
 | G12 | DKVS Pool 合约收费并向 miner 分配收益 | Partial | AUTOPAY verifier 已校验全局 template、service、recipient、fee asset，以及每个 p2tr delegate 的 active、余额和独立容量；主网合约参数和 miner 收益分配规则仍待定。 |
@@ -41,7 +41,7 @@
 | M7 | 普通节点订阅 | Done | key/prefix/mailbox/service subscription and filtered sync tests. |
 | M8 | `MsgDKVSNotify` | Done | Command、16 KiB payload boundary、direct validation/relay、duplicate suppression 和 subscription routing tests。 |
 | M9 | mailbox 容量控制 | Done | `MailboxPolicy`, full behavior, tombstone frees capacity. |
-| M10 | blob chunk | Done | Manifest/chunk validation and SDK assembly. |
+| M10 | 单记录 Blob | Done | 单 record codec、owner 校验、AUTOPAY/FREE_LOCAL quota、P2P 普通 record 复制和 RPC 目录同步。 |
 | M11 | checkpoint / snapshot | Done | Local non-consensus computed views implemented; signing, auto publish, external handoff and chain anchor are intentionally excluded. |
 
 ## 单元测试要求
@@ -62,7 +62,7 @@
 | U12 | fee proof | Done | JSON proof builders/verifier/signature/default missing proof tests. |
 | U13 | tombstone | Done | tombstone selection, API and mailbox tombstone tests. |
 | U14 | mailbox full | Done | `TestMailboxQuotaAndTombstone`. |
-| U15 | blob chunk hash | Done | manifest/chunk validation tests. |
+| U15 | Blob 大小与配额 | Done | 16 KiB/1 MiB 边界、owner、AUTOPAY/FREE_LOCAL、distinct key quota 和 tombstone 释放测试。 |
 | U16 | notify event 编码 | Done | `event_type + data` JSON/wire encode/decode、event/record consistency 和 compact payload tests。 |
 | U17 | personal key owner 校验 | Done | `/personal/<account_id>` owner tests. |
 
@@ -80,7 +80,7 @@
 | I8 | 临时数据过期清理 | Done | tmp policy and prune tests. |
 | I9 | 无 fee proof 写入失败 | Done | `TestDefaultFeeVerifierRejectsMissingProof`. |
 | I10 | checkpoint 生成和比较 | Done | checkpoint/snapshot tests and sync response root compare. |
-| I11 | blob 分片写入和读取 | Done | DKVS blob tests and SDK blob tests. |
+| I11 | 单记录 Blob 写入和读取 | Done | DKVS/SDK 单 record Blob、RPC directory sync、P2P 往返和 1 MiB 边界测试。 |
 | I12 | service namespace owner 权限校验 | Done | resolver/static service permission and service subscription tests. |
 | I13 | Ordinals DID owner 更新后新 owner 可写 `/name` 和 `/svc` | Done | Existing same-pubkey updates skip resolver unless local name-transfer notify marked the name dirty; pubkey changes resolve current owner and can replace lower seq. Covered by name/service owner replacement, L1 NS owner-address, and name-transfer notify tests. |
 | I14 | 普通节点先拉取再通过 notify 自动同步 | Done | key/prefix/mailbox/service sync-and-notify tests. |
@@ -93,7 +93,7 @@
 | 2 | Key、Name 与权限 | Partial | Namespace/personal/mail/name/service contract done; real Ordinals DID resolver blocked. |
 | 3 | 同步 | Done | Miner full sync, notify, ordinary subscriptions, checkpoint/snapshot implemented. |
 | 4 | 费用 | Partial | Proof format, verifier interface and AUTOPAY template contract verifier done; mainnet AUTOPAY parameters/revenue policy and ONESHOT/LEASE production rules remain. Expiry/renewal done. |
-| 5 | Mailbox / Blob | Done | Mailbox quota, blob chunk, SDK helpers implemented. |
+| 5 | Mailbox / Blob | Done | Mailbox quota、单记录 Blob、AUTOPAY/FREE_LOCAL policy、SDK helpers 和 batch-CAS 已实现。 |
 | 6 | 应用样本 | Partial | Go SDK helpers/examples, REST API examples, PWA DKVS developer tool and wallet AUTOPAY/name e2e done; production DID/mainnet fee UX samples remain. |
 
 ## Blocked Items

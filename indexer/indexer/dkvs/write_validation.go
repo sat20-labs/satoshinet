@@ -131,6 +131,10 @@ func (i *Indexer) writeStateStillCurrentLocked(key string, parsed ParsedKey, sna
 }
 
 func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed ParsedKey) error {
+	if record != nil && isAutopayRecord(record) &&
+		(record.TTL != 0 || record.ExpiryHeight != 0) {
+		return ErrInvalidFeeProof
+	}
 	if verifier == nil {
 		return ErrFeeProofRequired
 	}
@@ -185,7 +189,7 @@ func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolve
 			return ErrPermissionDenied
 		}
 	case "blob":
-		if len(parsed.Segments) < 3 || parsed.Segments[0] != AccountID(pubKey) {
+		if len(parsed.Segments) < 2 || parsed.Segments[0] != AccountID(pubKey) {
 			return ErrPermissionDenied
 		}
 	case "sys":
@@ -362,12 +366,12 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64,
 	if record == nil || record.Version != Version {
 		return parsed, ErrInvalidRecord
 	}
-	if len(record.Value) > MaxRecordValueSize || RecordSize(record) > wire.MaxDKVSRecordSize {
-		return parsed, ErrRecordTooLarge
-	}
 	var err error
 	parsed, err = ParseKey(record.Key)
 	if err != nil {
+		return parsed, err
+	}
+	if err := validateRecordSizeForParsed(record, parsed); err != nil {
 		return parsed, err
 	}
 	if record.Flags&^FlagTombstone != 0 || record.IssueTime == 0 ||

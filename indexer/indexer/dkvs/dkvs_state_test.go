@@ -119,7 +119,7 @@ func TestPhysicalDeleteFloorAndRecreate(t *testing.T) {
 	}
 }
 
-func TestDeleteCommandCompactionRemovesJournal(t *testing.T) {
+func TestDeleteCommandCompactionPreservesFloor(t *testing.T) {
 	idx := testIndexer(t)
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -160,11 +160,15 @@ func TestDeleteCommandCompactionRemovesJournal(t *testing.T) {
 	idx.mutex.RLock()
 	state, err = idx.getDeleteStateLocked(record.Key)
 	idx.mutex.RUnlock()
-	if !errors.Is(err, ErrRecordNotFound) {
+	if err != nil || state == nil || state.FloorSeq != tombstone.Seq || state.Record != nil || state.RelayUntil != 0 {
 		t.Fatalf("compacted journal state=%#v err=%v", state, err)
 	}
-	if updated, err := idx.PutRemote(record); err != nil || !updated {
-		t.Fatalf("expired journal left a permanent floor updated=%v err=%v", updated, err)
+	if updated, err := idx.PutRemote(record); err != nil || updated {
+		t.Fatalf("compacted delete floor allowed stale resurrection updated=%v err=%v", updated, err)
+	}
+	fresh := signedPersonalRecordWithKey(t, priv, 3, "fresh", 0)
+	if updated, err := idx.PutRemote(fresh); err != nil || !updated {
+		t.Fatalf("higher sequence did not clear compacted floor updated=%v err=%v", updated, err)
 	}
 }
 
@@ -648,157 +652,5 @@ func TestApplySnapshotDoesNotRollbackNewerRecord(t *testing.T) {
 	got, err := target.Get(newer.Key)
 	if err != nil || got.Seq != newer.Seq || string(got.Value) != "new" {
 		t.Fatalf("newer record rolled back: record=%#v err=%v", got, err)
-	}
-}
-
-func TestApplySnapshotOrdersBlobManifestBeforeChunks(t *testing.T) {
-	target := testIndexer(t)
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, chunks, err := BuildSignedBlobRecords(
-		priv,
-		"object",
-		[][]byte{[]byte("hello "), []byte("world")},
-		nil,
-		RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	records := append(append([]*wire.DKVSRecord{}, chunks...), manifest)
-	checkpoint, err := checkpointFromRecords(records, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot := &Snapshot{Checkpoint: checkpoint, Records: records, CreatedAt: currentUnixMilli()}
-	applied, err := target.ApplySnapshot(snapshot)
-	if err != nil || applied != len(records) {
-		t.Fatalf("apply blob snapshot applied=%d err=%v", applied, err)
-	}
-	manifestRecord, err := target.Get(manifest.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	chunkRecords := make([]*wire.DKVSRecord, 0, len(chunks))
-	for _, chunk := range chunks {
-		stored, err := target.Get(chunk.Key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		chunkRecords = append(chunkRecords, stored)
-	}
-	_, content, err := AssembleBlobFromRecords(manifestRecord, chunkRecords, BlobPolicy{})
-	if err != nil || string(content) != "hello world" {
-		t.Fatalf("assembled content=%q err=%v", content, err)
-	}
-}
-
-func TestApplyRecordSetRejectsIncompleteBlobWithoutMutation(t *testing.T) {
-	target := testIndexer(t)
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, chunks, err := BuildSignedBlobRecords(
-		priv, "object", [][]byte{[]byte("hello "), []byte("world")}, nil,
-		RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := target.ApplyRecordSet([]*wire.DKVSRecord{manifest, chunks[0]}); !errors.Is(err, ErrBlobChunkInvalid) {
-		t.Fatalf("incomplete blob err=%v", err)
-	}
-	if _, err := target.Get(manifest.Key); !errors.Is(err, ErrRecordNotFound) {
-		t.Fatalf("incomplete blob partially installed manifest: %v", err)
-	}
-}
-
-func TestApplyRecordSetDoesNotRollbackNewerBlobGeneration(t *testing.T) {
-	target := testIndexer(t)
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	newManifest, newChunks, err := BuildSignedBlobRecords(
-		priv, "object", [][]byte{[]byte("new "), []byte("data")}, nil,
-		RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := target.ApplyRecordSet(append([]*wire.DKVSRecord{newManifest}, newChunks...)); err != nil {
-		t.Fatal(err)
-	}
-	oldManifest, oldChunks, err := BuildSignedBlobRecords(
-		priv, "object", [][]byte{[]byte("old "), []byte("data")}, nil,
-		RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied, err := target.ApplyRecordSet(append([]*wire.DKVSRecord{oldManifest}, oldChunks...))
-	if err != nil || applied != 0 {
-		t.Fatalf("older blob generation applied=%d err=%v", applied, err)
-	}
-	manifestRecord, err := target.Get(newManifest.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	storedChunks := make([]*wire.DKVSRecord, 0, len(newChunks))
-	for _, chunk := range newChunks {
-		stored, err := target.Get(chunk.Key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		storedChunks = append(storedChunks, stored)
-	}
-	_, content, err := AssembleBlobFromRecords(manifestRecord, storedChunks, BlobPolicy{})
-	if err != nil || string(content) != "new data" {
-		t.Fatalf("newer blob rolled back content=%q err=%v", content, err)
-	}
-}
-
-func TestBlobManifestDeleteRemovesWholeObject(t *testing.T) {
-	idx := testIndexer(t)
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, chunks, err := BuildSignedBlobRecords(
-		priv, "object", [][]byte{[]byte("hello "), []byte("world")}, nil,
-		RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := idx.ApplyRecordSet(append([]*wire.DKVSRecord{manifest}, chunks...)); err != nil {
-		t.Fatal(err)
-	}
-	deleteManifest := signedRecordWithValue(t, priv, manifest.Key, 2, nil, FlagTombstone)
-	if updated, err := idx.PutLocal(deleteManifest); err != nil || !updated {
-		t.Fatalf("delete manifest updated=%v err=%v", updated, err)
-	}
-	for _, record := range append([]*wire.DKVSRecord{manifest}, chunks...) {
-		if _, err := idx.Get(record.Key); !errors.Is(err, ErrRecordNotFound) {
-			t.Fatalf("blob record %s remains after manifest delete: %v", record.Key, err)
-		}
-		if _, err := idx.GetByHash(RecordHash(record)); !errors.Is(err, ErrRecordNotFound) {
-			t.Fatalf("blob hash %s remains after manifest delete: %v", record.Key, err)
-		}
-	}
-}
-
-func TestBlobRejectsNonCanonicalChunkIndexAndUnevenChunks(t *testing.T) {
-	accountID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	if _, err := ParseKey("/blob/" + accountID + "/object/chunk/00"); !errors.Is(err, ErrInvalidKey) {
-		t.Fatalf("non-canonical chunk index err=%v", err)
-	}
-	if _, _, err := BuildBlobManifest(
-		[][]byte{[]byte("short"), []byte("longer")}, nil, 60_000, 100,
-	); !errors.Is(err, ErrBlobManifestInvalid) {
-		t.Fatalf("uneven chunks err=%v", err)
 	}
 }

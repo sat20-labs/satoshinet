@@ -2,6 +2,7 @@ package dkvs
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -137,17 +138,24 @@ func (i *Indexer) SetSystemVerifier(verifier SystemVerifier) {
 }
 
 func (i *Indexer) PutLocal(record *wire.DKVSRecord) (bool, error) {
-	updated, eventType, _, relay, err := i.put(record, false)
+	updated, _, err := i.PutLocalWithHash(record)
+	return updated, err
+}
+
+func (i *Indexer) PutLocalWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error) {
+	record = cloneRecord(record)
+	updated, eventType, hash, relay, err := i.put(record, false)
 	if err != nil {
-		return false, err
+		return false, chainhash.Hash{}, err
 	}
 	if updated {
 		i.emit(eventType, record, relay)
 	}
-	return updated, nil
+	return updated, hash, nil
 }
 
 func (i *Indexer) PutRemote(record *wire.DKVSRecord) (bool, error) {
+	record = cloneRecord(record)
 	updated, _, _, _, err := i.put(record, true)
 	return updated, err
 }
@@ -261,6 +269,17 @@ func (i *Indexer) ListPrefix(prefix string, start, limit int) ([]*wire.DKVSRecor
 	return i.listPrefixLocked(prefix, start, limit, totalHint, height, now)
 }
 
+func (i *Indexer) ClientConfig() ClientConfig {
+	i.mutex.RLock()
+	defer i.mutex.RUnlock()
+	return ClientConfig{
+		FreeLocal:         i.freeLocal,
+		Blob:              i.blob,
+		MaxBatchMutations: MaxBatchCASMutations,
+		MaxBatchBytes:     MaxBatchCASTotalSize,
+	}
+}
+
 func (i *Indexer) Usage(prefix string) (*Usage, error) {
 	if len(prefix) == 0 || prefix[0] != '/' {
 		return nil, ErrInvalidKey
@@ -297,7 +316,7 @@ func (i *Indexer) Sync(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte,
 	if err != nil {
 		return nil, nil, false, chainhash.Hash{}, err
 	}
-	return i.syncRanges(cursor, limit, ranges, true)
+	return i.syncRanges(cursor, limit, ranges, true, false)
 }
 
 func (i *Indexer) SyncFiltered(cursor []byte, limit uint32, filters []Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
@@ -308,7 +327,7 @@ func (i *Indexer) SyncFiltered(cursor []byte, limit uint32, filters []Subscripti
 	if err != nil {
 		return nil, nil, false, chainhash.Hash{}, err
 	}
-	return i.syncRanges(cursor, limit, ranges, true)
+	return i.syncRanges(cursor, limit, ranges, true, false)
 }
 
 // SyncFilteredForClient includes node-local temporary records. It is intended
@@ -324,7 +343,32 @@ func (i *Indexer) SyncFilteredForClient(cursor []byte, limit uint32,
 	if err != nil {
 		return nil, nil, false, chainhash.Hash{}, err
 	}
-	return i.syncRanges(cursor, limit, ranges, false)
+	return i.syncRanges(cursor, limit, ranges, false, true)
+}
+
+// SyncDirectory is the application-facing RPC view for one DKVS directory.
+// It includes node-local FREE_LOCAL records and retained signed tombstones.
+func (i *Indexer) SyncDirectory(prefix string, cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
+	if prefix == "" {
+		return nil, nil, false, chainhash.Hash{}, ErrInvalidKey
+	}
+	if _, err := ParsePrefix(prefix); err != nil {
+		return nil, nil, false, chainhash.Hash{}, err
+	}
+	ranges := []syncRange{{target: prefix}}
+	return i.syncRanges(cursor, limit, ranges, false, true)
+}
+
+func (i *Indexer) WaitDirectory(ctx context.Context, prefix string, knownRoot chainhash.Hash) (chainhash.Hash, bool, error) {
+	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
+	if prefix == "" {
+		return chainhash.Hash{}, false, ErrInvalidKey
+	}
+	if _, err := ParsePrefix(prefix); err != nil {
+		return chainhash.Hash{}, false, err
+	}
+	return i.WaitFilteredForClient(ctx, []Subscription{{Type: SubscriptionPrefix, Target: prefix}}, knownRoot)
 }
 
 func (i *Indexer) Subscribe(sub Subscription) ([]*wire.DKVSRecord, int, error) {
@@ -505,8 +549,10 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 			return 0, err
 		}
 	}
-	if pruned > 0 {
+	if pruned > 0 || compactedDeletes > 0 {
 		atomic.AddUint64(&i.generation, 1)
+	}
+	if pruned > 0 {
 		if i.freeLocalUsageInitialized {
 			for _, expired := range expiredRecords {
 				i.removeFreeLocalUsageLocked(expired.record.Key)
@@ -567,15 +613,19 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 
 		// Delete commands free capacity and are authorized by the current key
 		// owner, so they never require a storage fee proof.
+		var verifiedRetention *PaidRecordRetention
 		if !IsTombstone(record.Flags) {
 			if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
 				return false, 0, chainhash.Hash{}, false, err
 			}
-			if err := i.primePaidRetentionAfterFeeVerification(record, parsed, validators.feeVerifier); err != nil {
+			verifiedRetention, err = verifiedPaidRetentionAfterFeeVerification(
+				record, parsed, validators.feeVerifier, height,
+			)
+			if err != nil {
 				return false, 0, chainhash.Hash{}, false, err
 			}
 		}
-		if remote && i.isLocalOnlyRecord(record) {
+		if remote && isFreeLocalRecord(record) {
 			return false, 0, chainhash.Hash{}, false, ErrFreeLocalNotRelayable
 		}
 		forceReplace, err := validateWritePermissionWith(
@@ -614,7 +664,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		deleteState := snapshot.deleteState
 		clearNameTransfer := snapshot.requiresResolve && parsed.Namespace == "name"
 		if remote && IsTombstone(record.Flags) &&
-			((existing != nil && i.isLocalOnlyRecord(existing)) || (deleteState != nil && deleteState.LocalOnly)) {
+			((existing != nil && isFreeLocalRecord(existing)) || (deleteState != nil && deleteState.LocalOnly)) {
 			i.mutex.Unlock()
 			return false, 0, chainhash.Hash{}, false, ErrFreeLocalNotRelayable
 		}
@@ -657,7 +707,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 			if err != nil {
 				return false, 0, chainhash.Hash{}, false, err
 			}
-			return true, EventRecordTombstone, hash, !i.isLocalOnlyRecord(existing), nil
+			return true, EventRecordTombstone, hash, !isFreeLocalRecord(existing), nil
 		}
 
 		if deleteFloorBlocksRecord(parsed, deleteState, record) {
@@ -669,6 +719,9 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 			return false, 0, chainhash.Hash{}, false, err
 		}
 		if existing != nil && !forceReplace && i.activeError(existing, height, now) == nil && CompareRecords(existing, record) >= 0 {
+			if verifiedRetention != nil && RecordHash(existing) == RecordHash(record) {
+				paidRetentionCacheFor(i).set(record.Key, *verifiedRetention)
+			}
 			if clearNameTransfer {
 				if err := i.clearNameTransferDirty(parsed.Segments[0]); err != nil {
 					i.mutex.Unlock()
@@ -739,9 +792,13 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		if i.recordExpiryInitialized {
 			i.replaceRecordExpiryLocked(record)
 		}
+		if verifiedRetention != nil {
+			paidRetentionCacheFor(i).set(record.Key, *verifiedRetention)
+		}
 		eventType := notifyEventType(parsed, record, existing)
+		relay := verifiedRetention != nil || !i.isLocalOnlyRecord(record)
 		i.mutex.Unlock()
-		return true, eventType, hash, !i.isLocalOnlyRecord(record), nil
+		return true, eventType, hash, relay, nil
 	}
 	return false, 0, chainhash.Hash{}, false, ErrConcurrentUpdate
 }

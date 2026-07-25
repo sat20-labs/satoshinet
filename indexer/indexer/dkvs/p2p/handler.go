@@ -14,7 +14,6 @@ type Store interface {
 	GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordByHashForRelay(hash chainhash.Hash) (*wire.DKVSRecord, error)
 	ApplyDKVSMirror(filters []dkvs.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error)
-	ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error)
 	SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
 	GetDKVSCheckpoint() (*dkvs.Checkpoint, error)
 	ListDKVSSubscriptions() []dkvs.Subscription
@@ -292,11 +291,6 @@ func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
 		h.Node.MarkTrusted(time.Now())
 		h.Node.SetReady(true)
 		return
-	}
-	if len(action.BlobRecords) != 0 {
-		if _, err := h.Store.ApplyDKVSRecordSet(action.BlobRecords); err != nil {
-			h.warnf("apply atomic DKVS blob sync failed: %v", err)
-		}
 	}
 	if h.localMiner() && msg.CheckpointRoot != (chainhash.Hash{}) {
 		checkpoint, err := h.Store.GetDKVSCheckpoint()

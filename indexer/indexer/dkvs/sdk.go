@@ -1,10 +1,6 @@
 package dkvs
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"strconv"
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -30,7 +26,8 @@ type RecordVerificationOptions struct {
 }
 
 func NewRecord(key string, value []byte, pubKey []byte, opts RecordOptions) (*wire.DKVSRecord, error) {
-	if _, err := ParseKey(key); err != nil {
+	parsed, err := ParseKey(key)
+	if err != nil {
 		return nil, err
 	}
 	record := &wire.DKVSRecord{
@@ -48,9 +45,8 @@ func NewRecord(key string, value []byte, pubKey []byte, opts RecordOptions) (*wi
 	if record.IssueTime == 0 {
 		record.IssueTime = currentUnixMilli()
 	}
-	if RecordSize(record) > wire.MaxDKVSRecordSize ||
-		len(record.Value) > MaxRecordValueSize {
-		return nil, ErrRecordTooLarge
+	if err := validateRecordSizeForParsed(record, parsed); err != nil {
+		return nil, err
 	}
 	return record, nil
 }
@@ -62,37 +58,20 @@ func VerifyRecordForClient(record *wire.DKVSRecord, opts RecordVerificationOptio
 	if opts.ExpectedKey != "" && record.Key != opts.ExpectedKey {
 		return ErrInvalidKey
 	}
-	if len(record.Value) > MaxRecordValueSize || RecordSize(record) > wire.MaxDKVSRecordSize {
-		return ErrRecordTooLarge
-	}
-	parsed, err := ParseKey(record.Key)
+	parsed, err := validateParsedCoreWithVerifier(record, opts.Height, opts.Now, true, false, nil)
 	if err != nil {
 		return err
 	}
-	if IsExpired(record, opts.Height, opts.Now) {
-		return ErrExpiredRecord
+	if IsBlobKey(parsed) {
+		if err := validateBlobRecord(record, parsed, DefaultBlobPolicy()); err != nil {
+			return err
+		}
 	}
-	if err := VerifySignature(record); err != nil {
-		return err
-	}
-	if err := ValidateRecordIdentity(record, parsed); err != nil {
-		return err
-	}
-	if IsTombstone(record.Flags) && len(record.Value) != 0 {
+	if opts.CheckHash && RecordHash(record) != opts.ExpectedHash {
 		return ErrInvalidRecord
 	}
-	recordHash := RecordHash(record)
-	if opts.CheckHash && recordHash != opts.ExpectedHash {
-		return ErrInvalidRecord
-	}
-	if opts.FeeVerifier != nil {
-		feeAnchorHash := FeeAnchorHash(record)
-		var recordHash32 [32]byte
-		copy(recordHash32[:], feeAnchorHash[:])
-		keyHash := KeyHash(record.Key)
-		var keyHash32 [32]byte
-		copy(keyHash32[:], keyHash[:])
-		if err := opts.FeeVerifier.VerifyFeeProof(recordHash32, keyHash32, parsed.Namespace, RecordSize(record), record.ExpiryHeight, record.FeeProof); err != nil {
+	if opts.FeeVerifier != nil && !IsTombstone(record.Flags) {
+		if err := verifyFeeProofWith(opts.FeeVerifier, record, parsed); err != nil {
 			return err
 		}
 	}
@@ -185,94 +164,26 @@ func MailShareKey(mailboxID, packageID, shareID string) (string, error) {
 	return key, err
 }
 
-func BlobManifestKey(accountID, objectID string) (string, error) {
-	key := "/blob/" + accountID + "/" + objectID + "/manifest"
-	_, err := ParseKey(key)
-	return key, err
-}
-
-func BlobChunkKey(accountID, objectID string, index uint32) (string, error) {
-	key := "/blob/" + accountID + "/" + objectID + "/chunk/" + strconv.FormatUint(uint64(index), 10)
+// BlobKey builds the canonical single-record blob key.
+func BlobKey(accountID, blobName string) (string, error) {
+	accountID = strings.ToLower(strings.TrimSpace(accountID))
+	blobName = strings.TrimSpace(blobName)
+	key := "/blob/" + accountID + "/" + blobName
 	_, err := ParseKey(key)
 	return key, err
 }
 
 func TmpKey(randomID string) (string, error) {
-	key := "/tmp/" + randomID
+	key := "/tmp/" + strings.TrimSpace(randomID)
 	_, err := ParseKey(key)
 	return key, err
 }
 
-func BuildBlobManifest(chunks [][]byte, metadata []byte, ttl, expiryHeight uint64) (*BlobManifest, []byte, error) {
-	if len(chunks) == 0 {
-		return nil, nil, ErrBlobManifestInvalid
-	}
-	var content []byte
-	chunkHashes := make([]string, 0, len(chunks))
-	chunkSize := len(chunks[0])
-	for index, chunk := range chunks {
-		if len(chunk) == 0 || len(chunk) > MaxRecordValueSize {
-			return nil, nil, ErrBlobManifestInvalid
-		}
-		if index < len(chunks)-1 && len(chunk) != chunkSize {
-			return nil, nil, ErrBlobManifestInvalid
-		}
-		if index == len(chunks)-1 && len(chunk) > chunkSize {
-			return nil, nil, ErrBlobManifestInvalid
-		}
-		sum := sha256.Sum256(chunk)
-		chunkHashes = append(chunkHashes, hex.EncodeToString(sum[:]))
-		content = append(content, chunk...)
-	}
-	contentHash := sha256.Sum256(content)
-	manifest := &BlobManifest{
-		ContentHash:  hex.EncodeToString(contentHash[:]),
-		TotalSize:    uint64(len(content)),
-		ChunkSize:    uint32(chunkSize),
-		ChunkCount:   uint32(len(chunks)),
-		ChunkHashes:  chunkHashes,
-		TTL:          ttl,
-		ExpiryHeight: expiryHeight,
-		Metadata:     append([]byte(nil), metadata...),
-	}
-	encoded, err := encodeBlobManifest(manifest)
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := parseBlobManifest(encoded, normalizeBlobPolicy(BlobPolicy{})); err != nil {
-		return nil, nil, err
-	}
-	return manifest, encoded, nil
-}
-
-func ParseBlobManifestValue(value []byte, policy BlobPolicy) (*BlobManifest, error) {
-	return parseBlobManifest(value, normalizeBlobPolicy(policy))
-}
-
-func AssembleBlob(manifest *BlobManifest, chunks [][]byte) ([]byte, error) {
-	if manifest == nil || len(chunks) != int(manifest.ChunkCount) {
-		return nil, ErrBlobChunkInvalid
-	}
-	var content bytes.Buffer
-	for n, chunk := range chunks {
-		if err := validateBlobChunkHash(manifest, uint32(n), chunk); err != nil {
-			return nil, err
-		}
-		content.Write(chunk)
-	}
-	if uint64(content.Len()) != manifest.TotalSize {
-		return nil, ErrBlobChunkInvalid
-	}
-	sum := sha256.Sum256(content.Bytes())
-	want, err := decodeHashHex(manifest.ContentHash)
-	if err != nil || !bytes.Equal(sum[:], want) {
-		return nil, ErrBlobChunkInvalid
-	}
-	return content.Bytes(), nil
-}
-
-func AssembleBlobFromRecords(manifestRecord *wire.DKVSRecord, chunkRecords []*wire.DKVSRecord, policy BlobPolicy) (*BlobManifest, []byte, error) {
-	return AssembleAccountBlobFromRecords(manifestRecord, chunkRecords, policy, RecordVerificationOptions{})
+// DirectoryRootFromRecords computes the root used by the application directory
+// synchronization API. Callers must pass the complete active-record and
+// retained-tombstone view returned for the directory.
+func DirectoryRootFromRecords(records []*wire.DKVSRecord, height uint64) (chainhash.Hash, error) {
+	return recordsRoot(records, height)
 }
 
 func CheckpointFromRecords(records []*wire.DKVSRecord, height uint64) (*Checkpoint, error) {

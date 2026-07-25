@@ -82,21 +82,3 @@ func TestPaidMailboxShareUsesContinuousRetention(t *testing.T) {
 		t.Fatalf("paid mailbox share carried record lease: ttl=%d expiry=%d", stored.TTL, stored.ExpiryHeight)
 	}
 }
-
-func TestRewriteBlobManifestRetention(t *testing.T) {
-	_, value, err := BuildBlobManifest([][]byte{[]byte("chunk")}, []byte("meta"), 60_000, 12345)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rewritten, err := RewriteBlobManifestRetention(value, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := ParseBlobManifestValue(rewritten, BlobPolicy{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if manifest.TTL != 0 || manifest.ExpiryHeight != 0 {
-		t.Fatalf("manifest retention was not cleared: ttl=%d expiry=%d", manifest.TTL, manifest.ExpiryHeight)
-	}
-}

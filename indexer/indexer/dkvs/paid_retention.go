@@ -136,27 +136,35 @@ func (v AutopayFeeVerifier) PaidRecordRetention(record *wire.DKVSRecord, parsed 
 	return retention, nil
 }
 
-// primePaidRetentionAfterFeeVerification records the same current-block
-// payment that was just accepted by the fee verifier. It runs before the relay
-// decision, so a newly written or remotely received paid record can propagate
-// immediately. Records loaded after restart still fail closed until refreshed.
-func (i *Indexer) primePaidRetentionAfterFeeVerification(record *wire.DKVSRecord, parsed ParsedKey,
-	verifier FeeVerifier) error {
+func verifiedPaidRetentionAfterFeeVerification(record *wire.DKVSRecord, parsed ParsedKey,
+	verifier FeeVerifier, height uint64) (*PaidRecordRetention, error) {
 	if !isAutopayRecord(record) {
-		return nil
+		return nil, nil
 	}
 	retentionVerifier, ok := verifier.(PaidRecordRetentionVerifier)
 	if !ok {
-		return ErrInvalidFeeProof
+		return nil, ErrInvalidFeeProof
 	}
 	retention, err := retentionVerifier.PaidRecordRetention(record, parsed)
 	if err != nil {
+		return nil, err
+	}
+	if !paidRetentionCurrent(retention, height) {
+		return nil, ErrInvalidFeeProof
+	}
+	return &retention, nil
+}
+
+// primePaidRetentionAfterFeeVerification is retained for callers that commit
+// immediately. Transactional paths should verify first and update this cache
+// only after the database batch commits.
+func (i *Indexer) primePaidRetentionAfterFeeVerification(record *wire.DKVSRecord, parsed ParsedKey,
+	verifier FeeVerifier) error {
+	retention, err := verifiedPaidRetentionAfterFeeVerification(record, parsed, verifier, i.currentHeight())
+	if err != nil || retention == nil {
 		return err
 	}
-	if !paidRetentionCurrent(retention, i.currentHeight()) {
-		return ErrInvalidFeeProof
-	}
-	paidRetentionCacheFor(i).set(record.Key, retention)
+	paidRetentionCacheFor(i).set(record.Key, *retention)
 	return nil
 }
 

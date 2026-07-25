@@ -216,14 +216,6 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 		return chainhash.Hash{}, ErrRecordNotFound
 	}
 	recordsToDelete := []*wire.DKVSRecord{record}
-	if parsed.Namespace == "blob" && len(parsed.Segments) == 3 && parsed.Segments[2] == "manifest" {
-		objectPath := "/blob/" + parsed.Segments[0] + "/" + parsed.Segments[1]
-		objectRecords, _, _, err := i.scanLocked(objectPath, nil, 0, false, height, now)
-		if err != nil {
-			return chainhash.Hash{}, err
-		}
-		recordsToDelete = objectRecords
-	}
 	oldHash := RecordHash(record)
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
@@ -238,7 +230,7 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 	state := &deleteState{
 		FloorSeq:  floorSeq,
 		PubKey:    append([]byte{}, record.PubKey...),
-		LocalOnly: i.isLocalOnlyRecord(record) || i.isLocalOnlyRecord(deleteRecord),
+		LocalOnly: isFreeLocalRecord(record) || isFreeLocalRecord(deleteRecord),
 	}
 	if retainCommand {
 		state.PubKey = append(state.PubKey[:0], deleteRecord.PubKey...)
@@ -253,20 +245,17 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 			return chainhash.Hash{}, err
 		}
 	}
-	if len(recordsToDelete) == 1 {
-		meta, err := i.pathMetaForMutationLocked(parsed, record, nil, height, now)
-		if err != nil {
-			return chainhash.Hash{}, err
-		}
-		if err := putPathMetaBatch(batch, meta); err != nil {
-			return chainhash.Hash{}, err
-		}
-	} else if err := i.markPathMetaDirtyLocked(batch, recordsToDelete, height, now); err != nil {
+	meta, err := i.pathMetaForMutationLocked(parsed, record, nil, height, now)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	if err := putPathMetaBatch(batch, meta); err != nil {
 		return chainhash.Hash{}, err
 	}
 	if err := batch.Flush(); err != nil {
 		return chainhash.Hash{}, err
 	}
+	paidRetentionCacheFor(i).remove([]string{record.Key})
 	for _, candidate := range recordsToDelete {
 		if i.feeUsageInitialized {
 			i.removeFeeUsageLocked(candidate.Key)
@@ -294,8 +283,16 @@ func (i *Indexer) retainDeleteCommandLocked(record *wire.DKVSRecord, now uint64,
 	if err != nil && !errors.Is(err, ErrRecordNotFound) {
 		return chainhash.Hash{}, err
 	}
-	if err == nil && previous.Record != nil && CompareRecords(previous.Record, record) >= 0 {
-		return RecordHash(previous.Record), nil
+	if err == nil {
+		if previous.FloorSeq >= record.Seq {
+			if previous.Record != nil {
+				return RecordHash(previous.Record), nil
+			}
+			return RecordHash(record), nil
+		}
+		if previous.Record != nil && CompareRecords(previous.Record, record) >= 0 {
+			return RecordHash(previous.Record), nil
+		}
 	}
 	state := &deleteState{
 		FloorSeq:   record.Seq,
@@ -333,17 +330,12 @@ func (i *Indexer) compactExpiredDeleteCommandsLocked(batch indexercommon.WriteBa
 			!bytesEqual(state.Record.PubKey, state.PubKey)) {
 			return ErrInvalidRecord
 		}
-		if state.Record == nil || state.RelayUntil == 0 {
-			if err := batch.Delete(append([]byte{}, key...)); err != nil {
-				return err
-			}
-			compacted++
+		if state.Record == nil || state.RelayUntil == 0 || now < state.RelayUntil {
 			return nil
 		}
-		if now < state.RelayUntil {
-			return nil
-		}
-		if err := batch.Delete(append([]byte{}, key...)); err != nil {
+		state.Record = nil
+		state.RelayUntil = 0
+		if err := putDeleteStateBatch(batch, recordKey, state); err != nil {
 			return err
 		}
 		compacted++

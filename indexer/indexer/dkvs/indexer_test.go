@@ -260,8 +260,7 @@ func TestParseKey(t *testing.T) {
 	for _, key := range []string{
 		"/mail/" + account + "/msg/" + senderAccount + "/msg-1",
 		"/mail/" + account + "/share/pkg/share-1",
-		"/blob/" + account + "/object/manifest",
-		"/blob/" + account + "/object/chunk/0",
+		"/blob/" + account + "/object",
 		"/tmp/random",
 		"/svc/service/path",
 		"/name/alice",
@@ -287,9 +286,9 @@ func TestParseKey(t *testing.T) {
 		"/mail/" + account + "/msg/msg-1",
 		"/mail/" + account + "/msg/not-an-account/msg-1",
 		"/mail/" + account + "/share/pkg",
-		"/blob/" + account + "/object/chunk/0/extra",
-		"/blob/" + account + "/object",
-		"/blob/not-an-account/object/manifest",
+		"/blob/" + account + "/object/manifest",
+		"/blob/" + account + "/object/chunk/0",
+		"/blob/not-an-account/object",
 		"/tmp/random/extra",
 		"/svc/service",
 		"/name/alice/profile",
@@ -638,15 +637,16 @@ func signedRecordWithStructuredFee(t *testing.T, priv *btcec.PrivateKey, key str
 	return record
 }
 
-func signedRecordWithAutopayFee(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, contract string, expiry uint64) *wire.DKVSRecord {
+func signedRecordWithAutopayFee(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, contract string, _ uint64) *wire.DKVSRecord {
 	t.Helper()
 	record := signedRecordWithValue(t, priv, key, seq, []byte("value"), 0)
-	record.ExpiryHeight = expiry
+	record.TTL = 0
+	record.ExpiryHeight = 0
 	parsed, err := ParseKey(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof, err := NewAutopayFeeProof(key, parsed.Namespace, wire.MaxDKVSRecordSize, expiry, contract, "")
+	proof, err := NewAutopayFeeProof(key, parsed.Namespace, wire.MaxDKVSRecordSize, 0, contract, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1237,8 +1237,7 @@ func TestSDKKeyBuildersAndSignedRecord(t *testing.T) {
 		func() (string, error) { return ServiceKey("wallet", "config") },
 		func() (string, error) { return MailMsgKey(AccountID(pub), AccountID(pub), "msg-1") },
 		func() (string, error) { return MailShareKey(AccountID(pub), "pkg", "share-1") },
-		func() (string, error) { return BlobManifestKey(AccountID(pub), "object") },
-		func() (string, error) { return BlobChunkKey(AccountID(pub), "object", 0) },
+		func() (string, error) { return BlobKey(AccountID(pub), "object") },
 		func() (string, error) { return TmpKey("random") },
 		func() (string, error) { return SystemParamsKey(), nil },
 		func() (string, error) { return SystemMinerKey("miner-1") },
@@ -1447,52 +1446,6 @@ func TestVerifySubscriptionRecordsForClient(t *testing.T) {
 	}
 	if err := VerifySubscriptionRecordsForClient([]*wire.DKVSRecord{msg}, Subscription{Type: SubscriptionMailbox, Target: "bad/box"}, RecordVerificationOptions{}); err != ErrInvalidKey {
 		t.Fatalf("bad subscription err=%v", err)
-	}
-}
-
-func TestSDKBuildSignedBlobRecords(t *testing.T) {
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chunks := [][]byte{[]byte("hello "), []byte("world")}
-	manifestRecord, chunkRecords, err := BuildSignedBlobRecords(priv, "object", chunks, nil, RecordOptions{
-		Seq:          1,
-		TTL:          60_000,
-		ExpiryHeight: 100,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	accountID := AccountID(priv.PubKey().SerializeCompressed())
-	if manifestRecord.Key != "/blob/"+accountID+"/object/manifest" || len(chunkRecords) != 2 {
-		t.Fatalf("manifest=%s chunks=%d", manifestRecord.Key, len(chunkRecords))
-	}
-	idx := testIndexer(t)
-	if _, err := idx.PutLocal(manifestRecord); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := idx.PutLocal(chunkRecords[0]); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := idx.PutLocal(chunkRecords[1]); err != nil {
-		t.Fatal(err)
-	}
-	manifest, content, err := AssembleBlobFromRecords(manifestRecord, chunkRecords, BlobPolicy{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if manifest.ChunkCount != uint32(len(chunks)) || string(content) != "hello world" {
-		t.Fatalf("manifest=%#v content=%q", manifest, string(content))
-	}
-	badChunk := *chunkRecords[1]
-	badChunk.Value = []byte("bad")
-	if _, _, err := AssembleBlobFromRecords(manifestRecord, []*wire.DKVSRecord{chunkRecords[0], &badChunk}, BlobPolicy{}); err != ErrInvalidSignature {
-		t.Fatalf("bad chunk signature err=%v", err)
-	}
-	missing := []*wire.DKVSRecord{chunkRecords[0]}
-	if _, _, err := AssembleBlobFromRecords(manifestRecord, missing, BlobPolicy{}); err != ErrBlobChunkInvalid {
-		t.Fatalf("missing chunk err=%v", err)
 	}
 }
 
@@ -2570,85 +2523,6 @@ func TestRejectsUnknownFlagsAndFutureIssueTime(t *testing.T) {
 	}
 }
 
-func TestBlobManifestAndChunkValidation(t *testing.T) {
-	idx := testIndexer(t)
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chunk0 := []byte("hello ")
-	chunk1 := []byte("world")
-	manifest := testBlobManifest(t, chunk0, chunk1)
-	manifestBytes, err := encodeBlobManifest(&manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	accountID := AccountID(priv.PubKey().SerializeCompressed())
-	prefix := "/blob/" + accountID + "/object"
-	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/0", 1, chunk0, 0)); err != ErrBlobManifestInvalid {
-		t.Fatalf("chunk before manifest err=%v", err)
-	}
-	manifestRecord := signedRecordWithValue(t, priv, prefix+"/manifest", 1, manifestBytes, 0)
-	if updated, err := idx.PutLocal(manifestRecord); err != nil || !updated {
-		t.Fatalf("manifest put updated=%v err=%v", updated, err)
-	}
-	chunkRecord0 := signedRecordWithValue(t, priv, prefix+"/chunk/0", 1, chunk0, 0)
-	chunkRecord0.IssueTime = manifestRecord.IssueTime
-	signRecord(t, priv, chunkRecord0)
-	if updated, err := idx.PutLocal(chunkRecord0); err != nil || !updated {
-		t.Fatalf("chunk 0 after manifest updated=%v err=%v", updated, err)
-	}
-	chunkRecord1 := signedRecordWithValue(t, priv, prefix+"/chunk/1", 1, chunk1, 0)
-	chunkRecord1.IssueTime = manifestRecord.IssueTime
-	signRecord(t, priv, chunkRecord1)
-	if updated, err := idx.PutLocal(chunkRecord1); err != nil || !updated {
-		t.Fatalf("chunk after manifest updated=%v err=%v", updated, err)
-	}
-
-	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, prefix+"/chunk/1", 2, []byte("bad"), 0)); err != ErrBlobChunkInvalid {
-		t.Fatalf("bad chunk err=%v", err)
-	}
-}
-
-func TestBlobRejectsOtherAccountAndMixedGeneration(t *testing.T) {
-	idx := testIndexer(t)
-	owner, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chunk0 := []byte("hello")
-	manifest := testBlobManifest(t, chunk0)
-	manifestBytes, err := encodeBlobManifest(&manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	accountID := AccountID(owner.PubKey().SerializeCompressed())
-	prefix := "/blob/" + accountID + "/object"
-	if _, err := idx.PutLocal(signedRecordWithValue(t, other, prefix+"/manifest", 1, manifestBytes, 0)); err != ErrInvalidSignature {
-		t.Fatalf("other account manifest err=%v", err)
-	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, owner, prefix+"/manifest", 2, manifestBytes, 0)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, owner, prefix+"/chunk/0", 1, chunk0, 0)); err != ErrBlobChunkInvalid {
-		t.Fatalf("mixed generation chunk err=%v", err)
-	}
-}
-
-func TestBlobKeyRequiresNumericChunkIndex(t *testing.T) {
-	accountID := strings.Repeat("a", sha256.Size*2)
-	for _, key := range []string{"/blob/" + accountID + "/object/chunk/a", "/blob/" + accountID + "/object/chunk/-1"} {
-		if _, err := ParseKey(key); err != ErrInvalidKey {
-			t.Fatalf("blob key %s err=%v", key, err)
-		}
-	}
-}
-
 func TestPruneExpiredRecords(t *testing.T) {
 	height := uint64(1)
 	idx := testIndexerWithConfig(t, Config{
@@ -2833,9 +2707,9 @@ func TestSubscriptionValidationAndMatching(t *testing.T) {
 			misses:  []string{"/tmp/other"},
 		},
 		{
-			sub:     Subscription{Type: SubscriptionPrefix, Target: "/blob/account/object"},
-			matches: []string{"/blob/account/object/manifest", "/blob/account/object/chunk/0"},
-			misses:  []string{"/blob/account/other/manifest"},
+			sub:     Subscription{Type: SubscriptionPrefix, Target: "/blob/" + mailboxID},
+			matches: []string{"/blob/" + mailboxID + "/object"},
+			misses:  []string{"/blob/" + otherMailboxID + "/object"},
 		},
 		{
 			sub:     Subscription{Type: SubscriptionMailbox, Target: mailboxID},
@@ -2969,32 +2843,8 @@ func TestSubscriptionLimit(t *testing.T) {
 }
 
 func TestBlobAccountIDMustBeSHA256Hex(t *testing.T) {
-	if _, err := ParseKey("/blob/" + strings.Repeat("g", 64) + "/photo.jpg/manifest"); err != ErrInvalidKey {
+	if _, err := ParseKey("/blob/" + strings.Repeat("g", 64) + "/photo.jpg"); err != ErrInvalidKey {
 		t.Fatalf("non-hex blob account id err=%v", err)
-	}
-}
-
-func testBlobManifest(t *testing.T, chunks ...[]byte) BlobManifest {
-	t.Helper()
-	if len(chunks) == 0 {
-		t.Fatal("test blob manifest requires chunks")
-	}
-	var all []byte
-	hashes := make([]string, 0, len(chunks))
-	for _, chunk := range chunks {
-		sum := sha256.Sum256(chunk)
-		hashes = append(hashes, hex.EncodeToString(sum[:]))
-		all = append(all, chunk...)
-	}
-	contentHash := sha256.Sum256(all)
-	return BlobManifest{
-		ContentHash:  hex.EncodeToString(contentHash[:]),
-		TotalSize:    uint64(len(all)),
-		ChunkSize:    uint32(len(chunks[0])),
-		ChunkCount:   uint32(len(chunks)),
-		ChunkHashes:  hashes,
-		TTL:          60_000,
-		ExpiryHeight: 100,
 	}
 }
 
