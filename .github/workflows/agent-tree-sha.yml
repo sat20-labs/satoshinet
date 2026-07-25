@@ -1,0 +1,26 @@
+name: Resolve invoke item tree SHA
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/agent-tree-sha.yml
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Print tree object SHAs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          echo "MAIN_TREE=$(git rev-parse origin/main^{tree})"
+          echo "CLEAN_TREE=$(git rev-parse 7d0f60a029f43ccf66f4638e2b2c89ccb61f31b3^{tree})"
