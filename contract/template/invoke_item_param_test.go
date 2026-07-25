@@ -95,6 +95,7 @@ func TestInvokeItemSchemaKeepsInvokeParametersOpaque(t *testing.T) {
 	param, ok := typ.FieldByName("Param")
 	require.True(t, ok)
 	require.Equal(t, reflect.TypeOf([]byte(nil)), param.Type)
+	require.Equal(t, "param,omitempty", param.Tag.Get("json"))
 	for _, obsolete := range []string{
 		"OrderType", "UnitPrice", "ExpectedAmt", "BlobKeyLimit", "RefundItemIDs",
 	} {
