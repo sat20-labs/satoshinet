@@ -17,10 +17,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Print tree object SHAs
+      - name: Write tree object SHAs
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin main
-          echo "MAIN_TREE=$(git rev-parse origin/main^{tree})"
-          echo "CLEAN_TREE=$(git rev-parse 7d0f60a029f43ccf66f4638e2b2c89ccb61f31b3^{tree})"
+          {
+            echo "MAIN_TREE=$(git rev-parse origin/main^{tree})"
+            echo "CLEAN_TREE=$(git rev-parse 7d0f60a029f43ccf66f4638e2b2c89ccb61f31b3^{tree})"
+          } > tree-shas.txt
+          cat tree-shas.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: invoke-item-tree-shas
+          path: tree-shas.txt
+          retention-days: 1
