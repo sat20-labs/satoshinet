@@ -205,6 +205,18 @@ func (s *Model) PutDKVSRecord(record *swire.DKVSRecord) (bool, error) {
 	return s.indexer.PutDKVSRecord(record)
 }
 
+func (s *Model) PutDKVSRecordWithHash(record *swire.DKVSRecord) (bool, chainhash.Hash, error) {
+	return s.indexer.PutDKVSRecordWithHash(record)
+}
+
+func (s *Model) PutDKVSRecordCAS(record *swire.DKVSRecord, precondition dkvsindexer.WritePrecondition) (bool, error) {
+	return s.indexer.PutDKVSRecordCAS(record, precondition)
+}
+
+func (s *Model) PutDKVSRecordBatchCAS(mutations []dkvsindexer.CASMutation) (int, error) {
+	return s.indexer.PutDKVSRecordBatchCAS(mutations)
+}
+
 func (s *Model) GetDKVSRecord(key string) (*swire.DKVSRecord, error) {
 	return s.indexer.GetDKVSRecord(key)
 }
@@ -217,12 +229,24 @@ func (s *Model) ListDKVSRecords(prefix string, start, limit int) ([]*swire.DKVSR
 	return s.indexer.ListDKVSRecords(prefix, start, limit)
 }
 
+func (s *Model) GetDKVSClientConfig() dkvsindexer.ClientConfig {
+	return s.indexer.GetDKVSClientConfig()
+}
+
 func (s *Model) GetDKVSUsage(prefix string) (*dkvsindexer.Usage, error) {
 	return s.indexer.GetDKVSUsage(prefix)
 }
 
 func (s *Model) GetDKVSPathMeta(path string) (*dkvsindexer.PathMeta, error) {
 	return s.indexer.GetDKVSPathMeta(path)
+}
+
+func (s *Model) SyncDKVSDirectory(prefix string, cursor []byte, limit uint32) ([]*swire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+	return s.indexer.SyncDKVSDirectory(prefix, cursor, limit)
+}
+
+func (s *Model) WaitDKVSDirectory(ctx context.Context, prefix string, root chainhash.Hash) (chainhash.Hash, bool, error) {
+	return s.indexer.WaitDKVSDirectory(ctx, prefix, root)
 }
 
 func (s *Model) SyncFilteredDKVSRecords(cursor []byte, limit uint32,

@@ -1,5 +1,7 @@
 package dkvs
 
+import "github.com/sat20-labs/satoshinet/wire"
+
 const (
 	DefaultMailboxMaxMsgBytes          = uint64(1024 * 1024)
 	DefaultMailboxMaxMessages          = uint64(1024)
@@ -12,9 +14,8 @@ const (
 	DefaultMailboxMaxShareSize         = MaxRecordValueSize
 	DefaultMailboxMaxShareTTL          = uint64(365 * 24 * 60 * 60 * 1000)
 
-	DefaultBlobMaxTotalSize = uint64(1024 * 1024)
-	DefaultBlobMaxChunkSize = MaxRecordValueSize
-	DefaultBlobMaxChunks    = uint32(1024)
+	DefaultBlobMaxValueSize              = wire.MaxDKVSBlobValueSize
+	DefaultBlobMaxFreeLocalKeysPerSigner = uint64(1)
 
 	DefaultTmpMaxTTL  = uint64(24 * 60 * 60 * 1000)
 	DefaultTmpMaxSize = MaxRecordValueSize
@@ -55,14 +56,11 @@ func normalizeMailboxPolicy(policy MailboxPolicy) MailboxPolicy {
 }
 
 func normalizeBlobPolicy(policy BlobPolicy) BlobPolicy {
-	if policy.MaxTotalSize == 0 {
-		policy.MaxTotalSize = DefaultBlobMaxTotalSize
+	if policy.MaxValueSize == 0 || policy.MaxValueSize > wire.MaxDKVSBlobValueSize {
+		policy.MaxValueSize = DefaultBlobMaxValueSize
 	}
-	if policy.MaxChunkSize == 0 {
-		policy.MaxChunkSize = DefaultBlobMaxChunkSize
-	}
-	if policy.MaxChunks == 0 {
-		policy.MaxChunks = DefaultBlobMaxChunks
+	if policy.MaxFreeLocalKeysPerSigner == 0 {
+		policy.MaxFreeLocalKeysPerSigner = DefaultBlobMaxFreeLocalKeysPerSigner
 	}
 	return policy
 }

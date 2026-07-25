@@ -140,8 +140,12 @@ func NewAccountRecord(key string, value []byte, opts RecordOptions) (*wire.DKVSR
 	if record.IssueTime == 0 {
 		record.IssueTime = currentUnixMilli()
 	}
-	if RecordSize(record) > wire.MaxDKVSRecordSize || len(record.Value) > MaxRecordValueSize {
-		return nil, ErrRecordTooLarge
+	parsed, err := ParseKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRecordSizeForParsed(record, parsed); err != nil {
+		return nil, err
 	}
 	return record, nil
 }

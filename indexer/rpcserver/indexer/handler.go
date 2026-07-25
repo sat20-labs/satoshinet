@@ -27,10 +27,11 @@ import (
 const QueryParamDefaultLimit = "100"
 
 const (
-	dkvsRecordHTTPBodyLimit       = int64(32 * 1024)
+	dkvsRecordHTTPBodyLimit       = int64(2 * 1024 * 1024)
 	dkvsSubscriptionHTTPBodyLimit = int64(4 * 1024)
 	dkvsSnapshotHTTPBodyLimit     = int64(64 * 1024 * 1024)
 	dkvsSyncHTTPBodyLimit         = int64(64 * 1024)
+	dkvsBatchHTTPBodyLimit        = int64(16 * 1024 * 1024)
 	dkvsMaxListLimit              = 1000
 	dkvsMaxWatchSeconds           = 25
 )
@@ -279,6 +280,7 @@ func (s *Handle) getBestHeight(c *gin.Context) {
 type dkvsRecordResp struct {
 	indexerwire.BaseResp
 	Data *swire.DKVSRecord `json:"data,omitempty"`
+	Hash string            `json:"hash,omitempty"`
 }
 
 type dkvsRecordsResp struct {
@@ -299,7 +301,7 @@ type dkvsUsageResp struct {
 
 type dkvsConfigResp struct {
 	indexerwire.BaseResp
-	Data *dkvsindexer.FreeLocalCachePolicy `json:"data,omitempty"`
+	Data *dkvsindexer.ClientConfig `json:"data,omitempty"`
 }
 
 type dkvsPathMetaResp struct {
@@ -445,13 +447,15 @@ func (s *Handle) putDKVSRecord(c *gin.Context) {
 		c.JSON(http.StatusOK, resp)
 		return
 	}
-	if _, err := s.model.PutDKVSRecord(&record); err != nil {
+	_, hash, err := s.model.PutDKVSRecordWithHash(&record)
+	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
 	resp.Data = &record
+	resp.Hash = hash.String()
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -470,13 +474,15 @@ func (s *Handle) putDKVSTombstone(c *gin.Context) {
 		c.JSON(http.StatusOK, resp)
 		return
 	}
-	if _, err := s.model.PutDKVSRecord(&record); err != nil {
+	_, hash, err := s.model.PutDKVSRecordWithHash(&record)
+	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
 	resp.Data = &record
+	resp.Hash = hash.String()
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -548,8 +554,8 @@ func (s *Handle) getDKVSUsage(c *gin.Context) {
 
 func (s *Handle) getDKVSConfig(c *gin.Context) {
 	resp := &dkvsConfigResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
-	policy := s.model.GetDKVSFreeLocalCachePolicy()
-	resp.Data = &policy
+	config := s.model.GetDKVSClientConfig()
+	resp.Data = &config
 	c.JSON(http.StatusOK, resp)
 }
 

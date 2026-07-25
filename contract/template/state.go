@@ -46,6 +46,7 @@ type InvokeItem struct {
 	GasFee         *scommon.Decimal `json:"gasFee,omitempty"`
 	UnitPrice      string           `json:"unitPrice,omitempty"`
 	ExpectedAmt    *scommon.Decimal `json:"expectedAmt,omitempty"`
+	BlobKeyLimit   uint32           `json:"blobKeyLimit,omitempty"`
 	Address        string           `json:"address,omitempty"`
 	InUtxos        string           `json:"inUtxos,omitempty"`
 	InValue        int64            `json:"inValue"`
@@ -79,6 +80,7 @@ type invokeItemJSON struct {
 	GasFee         string  `json:"gasFee,omitempty"`
 	UnitPrice      string  `json:"unitPrice,omitempty"`
 	ExpectedAmt    string  `json:"expectedAmt,omitempty"`
+	BlobKeyLimit   uint32  `json:"blobKeyLimit,omitempty"`
 	Address        string  `json:"address,omitempty"`
 	InUtxos        string  `json:"inUtxos,omitempty"`
 	InValue        int64   `json:"inValue"`
@@ -109,6 +111,7 @@ func (i InvokeItem) MarshalJSON() ([]byte, error) {
 		GasFee:         decimalString(i.GasFee),
 		UnitPrice:      i.UnitPrice,
 		ExpectedAmt:    decimalString(i.ExpectedAmt),
+		BlobKeyLimit:   i.BlobKeyLimit,
 		Address:        i.Address,
 		InUtxos:        i.InUtxos,
 		InValue:        i.InValue,
@@ -157,6 +160,7 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 			return err
 		}
 	}
+	i.BlobKeyLimit = item.BlobKeyLimit
 	i.Address = item.Address
 	i.InUtxos = item.InUtxos
 	i.InValue = item.InValue
@@ -273,6 +277,7 @@ type AutopayRunningData struct {
 
 type AutopayDelegate struct {
 	AmountPerBlock *scommon.Decimal `json:"amountPerBlock,omitempty"`
+	BlobKeyLimit   uint32           `json:"blobKeyLimit,omitempty"`
 	Balance        *scommon.Decimal `json:"balance,omitempty"`
 	TotalPaid      *scommon.Decimal `json:"totalPaid,omitempty"`
 	PaidBlockCount int64            `json:"paidBlockCount,omitempty"`
@@ -282,6 +287,7 @@ type AutopayDelegate struct {
 
 type autopayDelegateJSON struct {
 	AmountPerBlock string `json:"amountPerBlock,omitempty"`
+	BlobKeyLimit   uint32 `json:"blobKeyLimit,omitempty"`
 	Balance        string `json:"balance,omitempty"`
 	TotalPaid      string `json:"totalPaid,omitempty"`
 	PaidBlockCount int64  `json:"paidBlockCount,omitempty"`
@@ -1225,6 +1231,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		}
 		item.OrderType = OrderTypeValidate
 		item.ExpectedAmt = amount
+		item.BlobKeyLimit = normalizeAutopayBlobKeyLimit(param.BlobKeyLimit)
 		item.Done = ItemStatusDealt
 		item.GasFee = nil
 		if req.ResultGasFee != nil {
@@ -1745,6 +1752,7 @@ func autopayDelegateJSONMap(in map[string]AutopayDelegate) map[string]autopayDel
 	for address, delegate := range in {
 		out[address] = autopayDelegateJSON{
 			AmountPerBlock: decimalString(delegate.AmountPerBlock),
+			BlobKeyLimit:   delegate.BlobKeyLimit,
 			Balance:        decimalString(delegate.Balance),
 			TotalPaid:      decimalString(delegate.TotalPaid),
 			PaidBlockCount: delegate.PaidBlockCount,
@@ -1775,6 +1783,7 @@ func parseAutopayDelegateJSONMap(in map[string]autopayDelegateJSON) (map[string]
 		}
 		out[address] = AutopayDelegate{
 			AmountPerBlock: amount,
+			BlobKeyLimit:   normalizeAutopayBlobKeyLimit(item.BlobKeyLimit),
 			Balance:        balance,
 			TotalPaid:      totalPaid,
 			PaidBlockCount: item.PaidBlockCount,

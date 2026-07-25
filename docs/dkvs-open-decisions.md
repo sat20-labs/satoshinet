@@ -55,7 +55,7 @@
 4. 如果需要 ONESHOT：payment proof 格式、确认数、可覆盖 namespace/size/expiry 和防重放规则。
 5. 如果需要 LEASE：plan_id、payer、scope、namespace、prefix、quota、expiry、daily mailbox quota。
 6. `record_size` 计费口径：当前实现使用 `RecordSize(record)`，AUTOPAY 容量按 `wire.MaxDKVSRecordSize` 满负荷 record 计算。
-7. tombstone、renewal、mailbox msg/share、blob manifest/chunk 是否不同费率。
+7. tombstone、renewal、mailbox msg/share、普通 record 与单记录 Blob 是否采用不同费率；Blob key 数当前由 AUTOPAY `blob_key_limit` 独立限制。
 
 推荐的最小生产接入：
 

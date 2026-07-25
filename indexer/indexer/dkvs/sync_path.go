@@ -7,7 +7,6 @@ import (
 	"errors"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -125,32 +124,36 @@ func compactSyncRanges(ranges []syncRange) []syncRange {
 	return out
 }
 
-func (i *Indexer) scanActiveSyncRangeLocked(r syncRange, seek []byte, limit int,
-	height, now uint64, relayOnly bool) ([]*wire.DKVSRecord, []byte, bool, error) {
+func (i *Indexer) scanActiveSyncRangeLocked(r syncRange, seek []byte, limit, byteLimit int,
+	height, now uint64, relayOnly, allowFirst bool) ([]*wire.DKVSRecord, []byte, bool, int, error) {
 	if r.exact {
 		if len(seek) != 0 {
-			return nil, nil, true, nil
+			return nil, nil, true, 0, nil
 		}
 		record, err := i.getRaw(r.target)
 		if errors.Is(err, ErrRecordNotFound) {
-			return nil, nil, true, nil
+			return nil, nil, true, 0, nil
 		}
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, false, 0, err
 		}
 		if i.activeError(record, height, now) != nil {
-			return nil, nil, true, nil
+			return nil, nil, true, 0, nil
 		}
 		if relayOnly && i.isLocalOnlyRecord(record) {
-			return nil, nil, true, nil
+			return nil, nil, true, 0, nil
 		}
-		return []*wire.DKVSRecord{record}, nil, true, nil
+		size := wire.DKVSRecordSerializeSize(record)
+		if byteLimit > 0 && size > byteLimit && !allowFirst {
+			return nil, nil, false, 0, nil
+		}
+		return []*wire.DKVSRecord{record}, nil, true, size, nil
 	}
-	return i.scanSyncRangeLocked(r.target, seek, limit, height, now, relayOnly)
+	return i.scanSyncRangeLocked(r.target, seek, limit, byteLimit, height, now, relayOnly, allowFirst)
 }
 
-func (i *Indexer) scanSyncRangeLocked(prefix string, cursor []byte, limit int,
-	height, now uint64, relayOnly bool) ([]*wire.DKVSRecord, []byte, bool, error) {
+func (i *Indexer) scanSyncRangeLocked(prefix string, cursor []byte, limit, byteLimit int,
+	height, now uint64, relayOnly, allowFirst bool) ([]*wire.DKVSRecord, []byte, bool, int, error) {
 	scanPrefix := recordKeyPrefix
 	normalizedPrefix := strings.TrimSuffix(prefix, "/")
 	if prefix != "" {
@@ -161,7 +164,8 @@ func (i *Indexer) scanSyncRangeLocked(prefix string, cursor []byte, limit int,
 		seek = scanPrefix
 	}
 	records := make([]*wire.DKVSRecord, 0)
-	var next []byte
+	var next, lastIncluded []byte
+	used := 0
 	done := true
 	err := i.db.BatchReadV2(scanPrefix, seek, false, func(key, value []byte) error {
 		if len(cursor) != 0 && bytes.Equal(key, cursor) {
@@ -178,7 +182,15 @@ func (i *Indexer) scanSyncRangeLocked(prefix string, cursor []byte, limit int,
 			(relayOnly && i.isLocalOnlyRecord(record)) {
 			return nil
 		}
+		size := wire.DKVSRecordSerializeSize(record)
+		if byteLimit > 0 && used+size > byteLimit && !(allowFirst && len(records) == 0) {
+			done = false
+			next = append([]byte{}, lastIncluded...)
+			return errStopScan
+		}
 		records = append(records, record)
+		used += size
+		lastIncluded = append(lastIncluded[:0], key...)
 		if limit > 0 && len(records) >= limit {
 			done = false
 			next = append([]byte{}, key...)
@@ -189,26 +201,30 @@ func (i *Indexer) scanSyncRangeLocked(prefix string, cursor []byte, limit int,
 	if errors.Is(err, errStopScan) {
 		err = nil
 	}
-	return records, next, done, err
+	return records, next, done, used, err
 }
 
-func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
-	now uint64, relayOnly bool) ([]*wire.DKVSRecord, []byte, bool, error) {
+func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit, byteLimit int,
+	now uint64, relayOnly, allowFirst bool) ([]*wire.DKVSRecord, []byte, bool, int, error) {
 	if r.exact {
 		if len(seek) != 0 {
-			return nil, nil, true, nil
+			return nil, nil, true, 0, nil
 		}
 		state, err := i.getDeleteStateLocked(r.target)
 		if errors.Is(err, ErrRecordNotFound) || (err == nil && deleteRecordForRelay(state, now) == nil) {
-			return nil, nil, true, nil
+			return nil, nil, true, 0, nil
 		}
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, false, 0, err
 		}
 		if relayOnly && state.LocalOnly {
-			return nil, nil, true, nil
+			return nil, nil, true, 0, nil
 		}
-		return []*wire.DKVSRecord{state.Record}, nil, true, nil
+		size := wire.DKVSRecordSerializeSize(state.Record)
+		if byteLimit > 0 && size > byteLimit && !allowFirst {
+			return nil, nil, false, 0, nil
+		}
+		return []*wire.DKVSRecord{state.Record}, nil, true, size, nil
 	}
 	scanPrefix := deleteKeyPrefix
 	normalized := strings.TrimSuffix(r.target, "/")
@@ -219,7 +235,8 @@ func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
 		seek = scanPrefix
 	}
 	records := make([]*wire.DKVSRecord, 0)
-	var next []byte
+	var next, lastIncluded []byte
+	used := 0
 	done := true
 	err := i.db.BatchReadV2(scanPrefix, seek, false, func(key, value []byte) error {
 		if len(seek) != 0 && bytes.Equal(key, seek) && !bytes.Equal(seek, scanPrefix) {
@@ -243,7 +260,15 @@ func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
 		if (relayOnly && state.LocalOnly) || deleteRecordForRelay(state, now) == nil {
 			return nil
 		}
+		size := wire.DKVSRecordSerializeSize(state.Record)
+		if byteLimit > 0 && used+size > byteLimit && !(allowFirst && len(records) == 0) {
+			done = false
+			next = append([]byte{}, lastIncluded...)
+			return errStopScan
+		}
 		records = append(records, state.Record)
+		used += size
+		lastIncluded = append(lastIncluded[:0], key...)
 		if limit > 0 && len(records) >= limit {
 			done = false
 			next = append([]byte{}, key...)
@@ -254,11 +279,11 @@ func (i *Indexer) scanDeleteSyncRangeLocked(r syncRange, seek []byte, limit int,
 	if errors.Is(err, errStopScan) {
 		err = nil
 	}
-	return records, next, done, err
+	return records, next, done, used, err
 }
 
 func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange,
-	relayOnly bool) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+	relayOnly, includeDeletesInRoot bool) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	if limit == 0 || limit > wire.MaxDKVSRecordsPerMsg {
 		limit = 100
 	}
@@ -269,19 +294,24 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange,
 	height := i.currentHeight()
 	now := currentUnixMilli()
 	remaining := int(limit)
+	// Reserve the sync response session ID and maximum varint overhead. The wire
+	// encoder independently validates the same upper bound.
+	remainingBytes := wire.MaxDKVSRecordsPayloadSize - 8 - wire.MaxVarIntPayload
 	records := make([]*wire.DKVSRecord, 0, remaining)
 	i.mutex.RLock()
-	for decoded.rangeIndex < len(ranges) && remaining > 0 {
+	for decoded.rangeIndex < len(ranges) && remaining > 0 && remainingBytes > 0 {
 		currentRange := ranges[decoded.rangeIndex]
 		var page []*wire.DKVSRecord
 		var next []byte
 		var phaseDone bool
+		var used int
+		allowFirst := len(records) == 0
 		if decoded.phase == syncPhaseRecords {
-			page, next, phaseDone, err = i.scanActiveSyncRangeLocked(
-				currentRange, decoded.seek, remaining, height, now, relayOnly)
+			page, next, phaseDone, used, err = i.scanActiveSyncRangeLocked(
+				currentRange, decoded.seek, remaining, remainingBytes, height, now, relayOnly, allowFirst)
 		} else {
-			page, next, phaseDone, err = i.scanDeleteSyncRangeLocked(
-				currentRange, decoded.seek, remaining, now, relayOnly)
+			page, next, phaseDone, used, err = i.scanDeleteSyncRangeLocked(
+				currentRange, decoded.seek, remaining, remainingBytes, now, relayOnly, allowFirst)
 		}
 		if err != nil {
 			i.mutex.RUnlock()
@@ -289,8 +319,11 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange,
 		}
 		records = append(records, page...)
 		remaining -= len(page)
+		remainingBytes -= used
 		if !phaseDone {
-			decoded.seek = next
+			if len(next) != 0 {
+				decoded.seek = next
+			}
 			break
 		}
 		decoded.seek = nil
@@ -305,12 +338,12 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange,
 	var nextCursor []byte
 	if !done {
 		nextCursor = encodeSyncCursor(decoded)
-		if len(nextCursor) == 0 || len(nextCursor) > wire.MaxDKVSCursorSize {
+		if len(nextCursor) == 0 || len(nextCursor) > wire.MaxDKVSCursorSize || bytes.Equal(nextCursor, cursor) {
 			i.mutex.RUnlock()
 			return nil, nil, false, chainhash.Hash{}, ErrInvalidRecord
 		}
 	}
-	rootRecords, err := i.activeRecordsForRangesLocked(ranges, height, now, relayOnly)
+	rootRecords, err := i.syncViewRecordsForRangesLocked(ranges, height, now, relayOnly, includeDeletesInRoot)
 	if err != nil {
 		i.mutex.RUnlock()
 		return nil, nil, false, chainhash.Hash{}, err
@@ -331,7 +364,7 @@ func (i *Indexer) syncRanges(cursor []byte, limit uint32, ranges []syncRange,
 	return records, nextCursor, done, root, nil
 }
 
-func (i *Indexer) filteredRoot(filters []Subscription, relayOnly bool) (chainhash.Hash, error) {
+func (i *Indexer) filteredRoot(filters []Subscription, relayOnly, includeDeletes bool) (chainhash.Hash, error) {
 	ranges, err := syncRangesForFilters(filters)
 	if err != nil {
 		return chainhash.Hash{}, err
@@ -340,7 +373,7 @@ func (i *Indexer) filteredRoot(filters []Subscription, relayOnly bool) (chainhas
 	now := currentUnixMilli()
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	records, err := i.activeRecordsForRangesLocked(ranges, height, now, relayOnly)
+	records, err := i.syncViewRecordsForRangesLocked(ranges, height, now, relayOnly, includeDeletes)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -355,33 +388,65 @@ func (i *Indexer) WaitFilteredForClient(ctx context.Context, filters []Subscript
 	if len(filters) == 0 {
 		return chainhash.Hash{}, false, ErrInvalidRecord
 	}
-	root, err := i.filteredRoot(filters, false)
+	root, err := i.filteredRoot(filters, false, true)
 	if err != nil || root != knownRoot {
 		return root, root != knownRoot, err
 	}
-	generation := atomic.LoadUint64(&i.generation)
+	// Recompute the root on every tick rather than only when the mutation
+	// generation changes. TTL expiry changes the active directory view without
+	// writing to the database, and application watches must observe it.
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			nextGeneration := atomic.LoadUint64(&i.generation)
-			if nextGeneration == generation {
-				continue
-			}
-			generation = nextGeneration
-			root, err = i.filteredRoot(filters, false)
+			root, err = i.filteredRoot(filters, false, true)
 			if err != nil || root != knownRoot {
 				return root, root != knownRoot, err
 			}
 		case <-ctx.Done():
-			root, err = i.filteredRoot(filters, false)
+			root, err = i.filteredRoot(filters, false, true)
 			if err != nil || root != knownRoot {
 				return root, root != knownRoot, err
 			}
 			return root, false, ctx.Err()
 		}
 	}
+}
+
+func (i *Indexer) syncViewRecordsForRangesLocked(ranges []syncRange, height, now uint64,
+	relayOnly, includeDeletes bool) ([]*wire.DKVSRecord, error) {
+	records, err := i.activeRecordsForRangesLocked(ranges, height, now, relayOnly)
+	if err != nil || !includeDeletes {
+		return records, err
+	}
+	byKey := make(map[string]*wire.DKVSRecord, len(records))
+	for _, record := range records {
+		if record != nil {
+			byKey[record.Key] = record
+		}
+	}
+	for _, currentRange := range ranges {
+		deletes, _, _, _, err := i.scanDeleteSyncRangeLocked(currentRange, nil, 0, 0, now, relayOnly, true)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range deletes {
+			if record != nil {
+				byKey[record.Key] = record
+			}
+		}
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]*wire.DKVSRecord, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, byKey[key])
+	}
+	return out, nil
 }
 
 func (i *Indexer) activeRecordsForRangesLocked(ranges []syncRange, height, now uint64,

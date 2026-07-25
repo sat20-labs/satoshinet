@@ -42,6 +42,18 @@ func (b *IndexerMgr) PutDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return b.dkvsIndexer.PutLocal(record)
 }
 
+func (b *IndexerMgr) PutDKVSRecordWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error) {
+	return b.dkvsIndexer.PutLocalWithHash(record)
+}
+
+func (b *IndexerMgr) PutDKVSRecordCAS(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition) (bool, error) {
+	return b.dkvsIndexer.PutLocalCAS(record, precondition)
+}
+
+func (b *IndexerMgr) PutDKVSRecordBatchCAS(mutations []dkvs_indexer.CASMutation) (int, error) {
+	return b.dkvsIndexer.PutLocalBatchCAS(mutations)
+}
+
 func (b *IndexerMgr) PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return b.dkvsIndexer.PutRemote(record)
 }
@@ -78,6 +90,10 @@ func (b *IndexerMgr) GetDKVSFreeLocalCachePolicy() dkvs_indexer.FreeLocalCachePo
 	return b.dkvsIndexer.FreeLocalCachePolicy()
 }
 
+func (b *IndexerMgr) GetDKVSClientConfig() dkvs_indexer.ClientConfig {
+	return b.dkvsIndexer.ClientConfig()
+}
+
 func (b *IndexerMgr) GetDKVSPathMeta(path string) (*dkvs_indexer.PathMeta, error) {
 	return b.dkvsIndexer.GetPathMeta(path)
 }
@@ -86,16 +102,20 @@ func (b *IndexerMgr) ApplyDKVSMirror(filters []dkvs_indexer.Subscription, record
 	return b.dkvsIndexer.ApplyMirror(filters, records, root)
 }
 
-func (b *IndexerMgr) ApplyDKVSRecordSet(records []*wire.DKVSRecord) (int, error) {
-	return b.dkvsIndexer.ApplyRecordSet(records)
-}
-
 func (b *IndexerMgr) SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	return b.dkvsIndexer.Sync(cursor, limit)
 }
 
 func (b *IndexerMgr) SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	return b.dkvsIndexer.SyncFiltered(cursor, limit, filters)
+}
+
+func (b *IndexerMgr) SyncDKVSDirectory(prefix string, cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+	return b.dkvsIndexer.SyncDirectory(prefix, cursor, limit)
+}
+
+func (b *IndexerMgr) WaitDKVSDirectory(ctx context.Context, prefix string, root chainhash.Hash) (chainhash.Hash, bool, error) {
+	return b.dkvsIndexer.WaitDirectory(ctx, prefix, root)
 }
 
 func (b *IndexerMgr) SyncFilteredDKVSRecordsForClient(cursor []byte, limit uint32,

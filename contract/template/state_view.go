@@ -71,6 +71,7 @@ type AutopayStateView struct {
 
 type AutopayDelegateView struct {
 	AmountPerBlock string `json:"amountPerBlock,omitempty"`
+	BlobKeyLimit   uint32 `json:"blobKeyLimit,omitempty"`
 	Balance        string `json:"balance,omitempty"`
 	TotalPaid      string `json:"totalPaid,omitempty"`
 	PaidBlockCount int64  `json:"paidBlockCount,omitempty"`
@@ -169,6 +170,7 @@ func autopayDelegateViewMap(in map[string]AutopayDelegate) map[string]AutopayDel
 	for address, delegate := range in {
 		out[address] = AutopayDelegateView{
 			AmountPerBlock: decimalString(delegate.AmountPerBlock),
+			BlobKeyLimit:   delegate.BlobKeyLimit,
 			Balance:        decimalString(delegate.Balance),
 			TotalPaid:      decimalString(delegate.TotalPaid),
 			PaidBlockCount: delegate.PaidBlockCount,

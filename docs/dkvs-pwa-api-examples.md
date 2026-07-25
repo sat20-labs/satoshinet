@@ -164,23 +164,49 @@ async function deleteMailboxMessage(signedTombstoneRecord) {
 }
 ```
 
-## Blob / Chunk
+## Single-record Blob
 
-Blob data is represented by:
+Blob uses one signed record:
 
-- `/blob/<account_id>/<object_id>/manifest`
-- `/blob/<account_id>/<object_id>/chunk/<index>`
+- `/blob/<account_id>/<blob_key>`
 
-`object_id` is an owner-selected name, not a content hash. Only the wallet whose pubkey hashes to `account_id` may write. Upload the manifest first; all chunks must use the same signer, seq and expiry as the manifest. The manifest contains content hash, total size, chunk size, chunk count and chunk hashes. PWA clients should verify the manifest, each chunk hash and final content hash before using the content.
+The value is opaque bytes. Normal DKVS values remain limited to 16 KiB; Blob values may be up to 1 MiB. The key owner is the account encoded by `account_id`. Blob supports both `AUTOPAY` and node-local `FREE_LOCAL`; the connected node's `/v3/dkvs/config` response defines the applicable FREE_LOCAL TTL, byte, record and distinct-Blob-key limits.
 
 ```js
-async function getChunkedBlob(accountId, objectId) {
-  const manifestRecord = await getDKVSRecord(`/blob/${accountId}/${objectId}/manifest`);
-  const manifest = JSON.parse(atob(manifestRecord.Value));
-  const { records } = await listDKVSRecords(`/blob/${accountId}/${objectId}/chunk`, 0, manifest.chunk_count);
-  return { manifest, manifestRecord, chunkRecords: records };
+async function getBlob(accountId, blobKey) {
+  return getDKVSRecord(`/blob/${accountId}/${blobKey}`);
+}
+
+async function putSignedBlob(signedBlobRecord) {
+  return putDKVSRecord(signedBlobRecord);
 }
 ```
+
+For application synchronization, use the directory RPC rather than the node-to-node P2P protocol:
+
+```js
+async function syncDKVSDirectory(prefix, cursor = null, limit = 100) {
+  const body = await dkvsFetch("/v3/dkvs/sync/directory", {
+    method: "POST",
+    body: JSON.stringify({ prefix, cursor, limit }),
+  });
+  return body.data;
+}
+
+async function watchDKVSDirectory(prefix, root, timeoutSeconds = 20) {
+  const body = await dkvsFetch("/v3/dkvs/watch/directory", {
+    method: "POST",
+    body: JSON.stringify({
+      prefix,
+      root,
+      timeout_seconds: timeoutSeconds,
+    }),
+  });
+  return body.data;
+}
+```
+
+Applications that must update multiple keys together should submit a signed atomic batch-CAS request to `/v3/dkvs/records/batch-cas`; any failed precondition or validation rejects the entire batch.
 
 ## Checkpoint And Snapshot
 

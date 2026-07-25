@@ -9,39 +9,18 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const dataPayloadBudget = 3500 * 1000
-
-func ReceivePriority(record *wire.DKVSRecord) int {
-	if record == nil {
-		return 1
-	}
-	parsed, err := dkvs.ParseKey(record.Key)
-	if err != nil || parsed.Namespace != "blob" || len(parsed.Segments) < 3 {
-		return 1
-	}
-	if parsed.Segments[2] == "manifest" {
-		return 0
-	}
-	if parsed.Segments[2] == "chunk" {
-		return 2
-	}
-	return 1
-}
-
 func OrderRecords(records []*wire.DKVSRecord) []*wire.DKVSRecord {
-	ordered := append([]*wire.DKVSRecord{}, records...)
+	ordered := append([]*wire.DKVSRecord(nil), records...)
 	sort.SliceStable(ordered, func(a, b int) bool {
-		return ReceivePriority(ordered[a]) < ReceivePriority(ordered[b])
+		if ordered[a] == nil {
+			return ordered[b] != nil
+		}
+		if ordered[b] == nil {
+			return false
+		}
+		return ordered[a].Key < ordered[b].Key
 	})
 	return ordered
-}
-
-func RecordIsBlob(record *wire.DKVSRecord) bool {
-	if record == nil || dkvs.IsTombstone(record.Flags) {
-		return false
-	}
-	parsed, err := dkvs.ParseKey(record.Key)
-	return err == nil && parsed.Namespace == "blob"
 }
 
 func DataMessages(records []*wire.DKVSRecord, notFound []chainhash.Hash) []*wire.MsgDKVSData {
@@ -54,11 +33,14 @@ func DataMessages(records []*wire.DKVSRecord, notFound []chainhash.Hash) []*wire
 		size := 16
 		for count < len(records) && count < wire.MaxDKVSRecordsPerMsg {
 			recordSize := wire.DKVSRecordSerializeSize(records[count])
-			if count > 0 && size+recordSize > dataPayloadBudget {
+			if count > 0 && size+recordSize > wire.MaxDKVSRecordsPayloadSize {
 				break
 			}
 			size += recordSize
 			count++
+		}
+		if count == 0 {
+			return nil
 		}
 		msg := &wire.MsgDKVSData{Records: records[:count]}
 		records = records[count:]

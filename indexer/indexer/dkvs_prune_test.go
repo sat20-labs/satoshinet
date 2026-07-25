@@ -96,7 +96,7 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 				FeeVerifier:    dkvs.JSONFeeVerifier{AllowFreeLocal: true},
 				SystemVerifier: dkvs.StaticSystemVerifier{},
 				MailboxPolicy:  dkvs.MailboxPolicy{MaxMessages: 7},
-				BlobPolicy:     dkvs.BlobPolicy{MaxChunks: 9},
+				BlobPolicy:     dkvs.BlobPolicy{MaxValueSize: 999, MaxFreeLocalKeysPerSigner: 9},
 				TmpPolicy:      dkvs.TmpPolicy{MaxTTL: 11},
 				AllowFreeLocal: &allowFreeLocal,
 			},
@@ -116,7 +116,7 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 	if _, ok := cfg.SystemVerifier.(dkvs.StaticSystemVerifier); !ok {
 		t.Fatalf("system verifier not merged: %T", cfg.SystemVerifier)
 	}
-	if cfg.MailboxPolicy.MaxMessages != 7 || cfg.BlobPolicy.MaxChunks != 9 || cfg.TmpPolicy.MaxTTL != 11 {
+	if cfg.MailboxPolicy.MaxMessages != 7 || cfg.BlobPolicy.MaxValueSize != 999 || cfg.BlobPolicy.MaxFreeLocalKeysPerSigner != 9 || cfg.TmpPolicy.MaxTTL != 11 {
 		t.Fatalf("policies not merged: mailbox=%+v blob=%+v tmp=%+v", cfg.MailboxPolicy, cfg.BlobPolicy, cfg.TmpPolicy)
 	}
 

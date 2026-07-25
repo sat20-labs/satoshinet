@@ -72,6 +72,8 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/miner/info/:pubkey", s.handle.getMinerInfo)
 
 	r.POST(proxy+"/v3/dkvs/records", s.handle.putDKVSRecord)
+	r.POST(proxy+"/v3/dkvs/records/cas", s.handle.putDKVSRecordCAS)
+	r.POST(proxy+"/v3/dkvs/records/batch-cas", s.handle.putDKVSRecordBatchCAS)
 	r.GET(proxy+"/v3/dkvs/records", s.handle.getDKVSRecord)
 	r.GET(proxy+"/v3/dkvs/records/prefix", s.handle.listDKVSRecords)
 	r.GET(proxy+"/v3/dkvs/usage", s.handle.getDKVSUsage)
@@ -80,6 +82,8 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
 	r.POST(proxy+"/v3/dkvs/sync", s.handle.syncDKVS)
 	r.POST(proxy+"/v3/dkvs/watch", s.handle.watchDKVS)
+	r.POST(proxy+"/v3/dkvs/sync/directory", s.handle.syncDKVSDirectory)
+	r.POST(proxy+"/v3/dkvs/watch/directory", s.handle.watchDKVSDirectory)
 	r.GET(proxy+"/v3/dkvs/checkpoint", s.handle.getDKVSCheckpoint)
 	r.GET(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.getDKVSSnapshot)
 	r.POST(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.applyDKVSSnapshot)

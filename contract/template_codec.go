@@ -138,6 +138,7 @@ type TemplateExchangeInvokeParam struct {
 
 type TemplateAutopayConfigInvokeParam struct {
 	AmountPerBlock string `json:"amountPerBlock"`
+	BlobKeyLimit   uint32 `json:"blobKeyLimit"`
 }
 
 type TemplateCloseInvokeParam struct{}
@@ -259,6 +260,7 @@ func EncodeTemplateAutopayContent(contract TemplateAutopayContract) ([]byte, err
 func (p *TemplateAutopayConfigInvokeParam) Encode() ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddData([]byte(p.AmountPerBlock)).
+		AddInt64(int64(p.BlobKeyLimit)).
 		Script()
 }
 
@@ -268,6 +270,17 @@ func (p *TemplateAutopayConfigInvokeParam) Decode(data []byte) error {
 		return fmt.Errorf("missing amount per block")
 	}
 	p.AmountPerBlock = string(tokenizer.Data())
+	if !tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("missing blob key limit")
+	}
+	limit := tokenizer.ExtractInt64()
+	if limit < 0 || limit > 1024 {
+		return fmt.Errorf("invalid blob key limit")
+	}
+	p.BlobKeyLimit = uint32(limit)
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected autopay config fields")
+	}
 	return tokenizer.Err()
 }
 

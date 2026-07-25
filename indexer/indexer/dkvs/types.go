@@ -28,7 +28,7 @@ const (
 	MaxKeySize             = 256
 	MaxKeySegmentSize      = 64
 	MaxNamespaceSize       = 16
-	MaxRecordValueSize     = wire.MaxDKVSRecordSize
+	MaxRecordValueSize     = wire.MaxDKVSValueSize
 	MaxFutureIssueTimeSkew = uint64(10 * 60 * 1000)
 )
 
@@ -48,10 +48,10 @@ var (
 	ErrInvalidCheckpoint      = errors.New("invalid dkvs checkpoint")
 	ErrInvalidSnapshot        = errors.New("invalid dkvs snapshot")
 	ErrMailboxFull            = errors.New("dkvs mailbox full")
-	ErrBlobManifestInvalid    = errors.New("dkvs blob manifest invalid")
-	ErrBlobChunkInvalid       = errors.New("dkvs blob chunk invalid")
 	ErrTooManySubscriptions   = errors.New("too many dkvs subscriptions")
 	ErrConcurrentUpdate       = errors.New("concurrent dkvs update")
+	ErrWriteConflict          = errors.New("dkvs write conflict")
+	ErrBatchTooLarge          = errors.New("dkvs batch too large")
 	ErrFreeLocalDisabled      = errors.New("dkvs free local cache is disabled")
 	ErrFreeLocalQuotaExceeded = errors.New("dkvs free local cache quota exceeded")
 	ErrFreeLocalNotRelayable  = errors.New("dkvs free local record is not relayable")
@@ -182,6 +182,25 @@ type Config struct {
 	TmpPolicy      TmpPolicy
 }
 
+const (
+	MaxBatchCASMutations = 64
+	MaxBatchCASTotalSize = 8 * 1024 * 1024
+)
+
+type WritePrecondition struct {
+	ExpectedHash *chainhash.Hash `json:"expected_hash,omitempty"`
+	ExpectAbsent bool            `json:"expect_absent,omitempty"`
+}
+
+func (p WritePrecondition) Valid() bool {
+	return p.ExpectAbsent != (p.ExpectedHash != nil)
+}
+
+type CASMutation struct {
+	Record       *wire.DKVSRecord  `json:"record"`
+	Precondition WritePrecondition `json:"precondition"`
+}
+
 type SubscriptionType string
 
 const (
@@ -246,25 +265,21 @@ type MailboxPolicy struct {
 }
 
 type BlobPolicy struct {
-	MaxTotalSize uint64
-	MaxChunkSize int
-	MaxChunks    uint32
+	MaxValueSize              int    `json:"max_value_size"`
+	MaxFreeLocalKeysPerSigner uint64 `json:"max_free_local_keys_per_signer"`
+}
+
+// ClientConfig is the node policy exposed to wallet SDKs and applications.
+type ClientConfig struct {
+	FreeLocal         FreeLocalCachePolicy `json:"free_local"`
+	Blob              BlobPolicy           `json:"blob"`
+	MaxBatchMutations int                  `json:"max_batch_mutations"`
+	MaxBatchBytes     int                  `json:"max_batch_record_bytes"`
 }
 
 type TmpPolicy struct {
 	MaxTTL  uint64
 	MaxSize int
-}
-
-type BlobManifest struct {
-	ContentHash  string   `json:"content_hash"`
-	TotalSize    uint64   `json:"total_size"`
-	ChunkSize    uint32   `json:"chunk_size"`
-	ChunkCount   uint32   `json:"chunk_count"`
-	ChunkHashes  []string `json:"chunk_hashes"`
-	TTL          uint64   `json:"ttl,omitempty"`
-	ExpiryHeight uint64   `json:"expiry_height,omitempty"`
-	Metadata     []byte   `json:"metadata,omitempty"`
 }
 
 type defaultResolver struct{}

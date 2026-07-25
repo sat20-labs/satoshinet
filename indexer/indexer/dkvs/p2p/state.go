@@ -106,7 +106,6 @@ type PeerState struct {
 	syncMirror  bool
 	syncRecords map[string]*wire.DKVSRecord
 	syncDeletes map[string]*wire.DKVSRecord
-	syncBlobs   map[string]*wire.DKVSRecord
 	syncBytes   uint64
 }
 
@@ -322,7 +321,6 @@ func (s *PeerState) StartSync(cursor []byte, mirror, localMiner bool, filters []
 			s.syncRecords = nil
 			s.syncDeletes = nil
 		}
-		s.syncBlobs = make(map[string]*wire.DKVSRecord)
 		s.syncBytes = 0
 		s.syncRoot = chainhash.Hash{}
 		s.syncRootSet = false
@@ -353,7 +351,6 @@ type SyncAction struct {
 	MergeRecords  []*wire.DKVSRecord
 	MirrorRecords []*wire.DKVSRecord
 	MirrorDeletes []*wire.DKVSRecord
-	BlobRecords   []*wire.DKVSRecord
 }
 
 type MirrorVerifier func(requestCursor []byte, filters []wire.DKVSSyncFilter, msg *wire.MsgDKVSSyncResponse) bool
@@ -363,7 +360,6 @@ func (s *PeerState) resetSyncLocked() {
 	s.syncActive = false
 	s.syncRecords = nil
 	s.syncDeletes = nil
-	s.syncBlobs = nil
 	s.syncBytes = 0
 }
 
@@ -432,26 +428,7 @@ func (s *PeerState) AcceptSyncResponse(msg *wire.MsgDKVSSyncResponse, verify Mir
 		}
 	} else {
 		for _, record := range msg.Records {
-			if !RecordIsBlob(record) || !shouldStore(record.Key) {
-				continue
-			}
-			recordSize := uint64(wire.DKVSRecordSerializeSize(record))
-			if len(s.syncBlobs) >= MaxMirrorRecords || s.syncBytes+recordSize > MaxMirrorBytes {
-				s.resetSyncLocked()
-				return action, ErrSyncStagingLimit
-			}
-			if previous := s.syncBlobs[record.Key]; previous != nil {
-				if dkvs.RecordHash(previous) != dkvs.RecordHash(record) {
-					s.resetSyncLocked()
-					return action, ErrSyncConflict
-				}
-				continue
-			}
-			s.syncBlobs[record.Key] = record
-			s.syncBytes += recordSize
-		}
-		for _, record := range msg.Records {
-			if !RecordIsBlob(record) {
+			if record != nil && shouldStore(record.Key) {
 				action.MergeRecords = append(action.MergeRecords, record)
 			}
 		}
@@ -468,8 +445,6 @@ func (s *PeerState) AcceptSyncResponse(msg *wire.MsgDKVSSyncResponse, verify Mir
 	if s.syncMirror {
 		action.MirrorRecords = sortedRecordMap(s.syncRecords)
 		action.MirrorDeletes = sortedRecordMap(s.syncDeletes)
-	} else {
-		action.BlobRecords = sortedRecordMap(s.syncBlobs)
 	}
 	s.resetSyncLocked()
 	return action, nil

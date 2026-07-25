@@ -3,13 +3,15 @@ package dkvs
 import "github.com/sat20-labs/satoshinet/wire"
 
 type freeLocalUsage struct {
-	records uint64
-	bytes   uint64
+	records  uint64
+	bytes    uint64
+	blobKeys uint64
 }
 
 type freeLocalUsageEntry struct {
 	signer string
 	bytes  uint64
+	blob   bool
 }
 
 func normalizeFreeLocalCachePolicy(policy FreeLocalCachePolicy, allow bool) FreeLocalCachePolicy {
@@ -72,7 +74,7 @@ func (i *Indexer) ensureFreeLocalUsageLocked(height, now uint64) error {
 		return err
 	}
 	for _, record := range records {
-		if record == nil || IsExpired(record, height, now) || !i.isLocalOnlyRecord(record) {
+		if record == nil || IsExpired(record, height, now) || !isFreeLocalRecord(record) {
 			continue
 		}
 		parsed, err := ParseKey(record.Key)
@@ -97,8 +99,13 @@ func (i *Indexer) addFreeLocalUsageLocked(record *wire.DKVSRecord, signer string
 	usage := i.freeLocalUsageBySigner[signer]
 	usage.records++
 	usage.bytes += size
+	parsed, _ := ParseKey(record.Key)
+	blob := IsBlobKey(parsed)
+	if blob {
+		usage.blobKeys++
+	}
 	i.freeLocalUsageBySigner[signer] = usage
-	i.freeLocalUsageEntries[record.Key] = freeLocalUsageEntry{signer: signer, bytes: size}
+	i.freeLocalUsageEntries[record.Key] = freeLocalUsageEntry{signer: signer, bytes: size, blob: blob}
 	i.freeLocalTotal.records++
 	i.freeLocalTotal.bytes += size
 }
@@ -119,6 +126,9 @@ func (i *Indexer) removeFreeLocalUsageLocked(key string) {
 		usage.bytes = 0
 	} else {
 		usage.bytes -= entry.bytes
+	}
+	if entry.blob && usage.blobKeys > 0 {
+		usage.blobKeys--
 	}
 	if usage.records == 0 {
 		delete(i.freeLocalUsageBySigner, entry.signer)
@@ -175,7 +185,14 @@ func (i *Indexer) validateFreeLocalCapacityLocked(record *wire.DKVSRecord, parse
 	projectedTotal := i.freeLocalTotal
 	if replacing {
 		if entry.signer == signer {
-			projectedSigner.bytes -= entry.bytes
+			if projectedSigner.bytes <= entry.bytes {
+				projectedSigner.bytes = 0
+			} else {
+				projectedSigner.bytes -= entry.bytes
+			}
+			if entry.blob && projectedSigner.blobKeys > 0 {
+				projectedSigner.blobKeys--
+			}
 		} else {
 			projectedSigner.records++
 		}
@@ -190,11 +207,16 @@ func (i *Indexer) validateFreeLocalCapacityLocked(record *wire.DKVSRecord, parse
 	}
 	size := uint64(RecordSize(record))
 	projectedSigner.bytes += size
+	if IsBlobKey(parsed) {
+		projectedSigner.blobKeys++
+	}
 	projectedTotal.bytes += size
 	if policy.MaxRecordsPerSigner == 0 || projectedSigner.records > policy.MaxRecordsPerSigner ||
 		policy.MaxBytesPerSigner == 0 || projectedSigner.bytes > policy.MaxBytesPerSigner ||
 		policy.MaxTotalRecords == 0 || projectedTotal.records > policy.MaxTotalRecords ||
-		policy.MaxTotalBytes == 0 || projectedTotal.bytes > policy.MaxTotalBytes {
+		policy.MaxTotalBytes == 0 || projectedTotal.bytes > policy.MaxTotalBytes ||
+		(IsBlobKey(parsed) && (i.blob.MaxFreeLocalKeysPerSigner == 0 ||
+			projectedSigner.blobKeys > i.blob.MaxFreeLocalKeysPerSigner)) {
 		return ErrFreeLocalQuotaExceeded
 	}
 	return nil

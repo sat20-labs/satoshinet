@@ -24,6 +24,8 @@ const (
 	AutopayCloseReservedOutputs    = 2
 	AutopayMaxCloseDelegateOutputs = AutopayMaxCloseOutputs - AutopayCloseReservedOutputs
 	AutopayMaxDelegates            = 10000
+	AutopayDefaultBlobKeyLimit     = uint32(1)
+	AutopayMaxBlobKeyLimit         = uint32(1024)
 )
 
 type AutopayContract struct {
@@ -114,6 +116,9 @@ func (c *AutopayContract) CheckInvoke(action string, param []byte) error {
 		if amount.Cmp(c.minAmountPerBlock()) < 0 {
 			return fmt.Errorf("autopay amount below minimum")
 		}
+		if config.BlobKeyLimit > AutopayMaxBlobKeyLimit {
+			return fmt.Errorf("invalid autopay blob key limit")
+		}
 		if c.FeeAssetName == SatoshiAssetName {
 			if _, err := contractframework.DecimalToInt64(*amount); err != nil {
 				return fmt.Errorf("autopay sats amount must be an integer: %w", err)
@@ -199,7 +204,7 @@ func (c *AutopayContract) ApplyRunningData(state *TemplateRuntimeState, item *In
 	case OrderTypeFund:
 		c.addDelegateBalance(autopay, item.Address, item.InAmt)
 	case OrderTypeValidate:
-		c.setDelegateAmount(autopay, item.Address, item.ExpectedAmt)
+		c.setDelegateConfig(autopay, item.Address, item.ExpectedAmt, item.BlobKeyLimit)
 		// A config invoke may also fund the delegate. The backend has already
 		// removed this invoke's Result fee from InAmt when it is the fee asset.
 		c.addDelegateBalance(autopay, item.Address, item.InAmt)
@@ -239,18 +244,32 @@ func (c *AutopayContract) ensureDelegate(running *AutopayRunningData, address st
 	if delegate.AmountPerBlock == nil {
 		delegate.AmountPerBlock = c.minAmountPerBlock()
 	}
+	if delegate.BlobKeyLimit == 0 {
+		delegate.BlobKeyLimit = AutopayDefaultBlobKeyLimit
+	}
 	if delegate.Status == "" {
 		delegate.Status = AutopayStatusFunding
 	}
 	return delegate
 }
 
-func (c *AutopayContract) setDelegateAmount(running *AutopayRunningData, address string, amount *scommon.Decimal) {
+func normalizeAutopayBlobKeyLimit(limit uint32) uint32 {
+	if limit == 0 {
+		return AutopayDefaultBlobKeyLimit
+	}
+	if limit > AutopayMaxBlobKeyLimit {
+		return AutopayMaxBlobKeyLimit
+	}
+	return limit
+}
+
+func (c *AutopayContract) setDelegateConfig(running *AutopayRunningData, address string, amount *scommon.Decimal, blobKeyLimit uint32) {
 	if running == nil || address == "" || amount == nil || amount.Sign() <= 0 {
 		return
 	}
 	delegate := c.ensureDelegate(running, address)
 	delegate.AmountPerBlock = amount.Clone()
+	delegate.BlobKeyLimit = normalizeAutopayBlobKeyLimit(blobKeyLimit)
 	delegate.Status = c.delegateStatus(delegate)
 	running.AutopayDelegates[address] = delegate
 }
