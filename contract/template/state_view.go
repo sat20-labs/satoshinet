@@ -108,8 +108,12 @@ func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (int
 	case *LimitOrderContract:
 		running := state.LimitOrderData()
 		buyIDs, sellIDs := activeLimitOrderIDs(state.Items, ctx.Height)
-		sortLimitOrders(state.Items, buyIDs, true)
-		sortLimitOrders(state.Items, sellIDs, false)
+		if err := sortLimitOrders(state.Items, buyIDs, true); err != nil {
+			return nil, err
+		}
+		if err := sortLimitOrders(state.Items, sellIDs, false); err != nil {
+			return nil, err
+		}
 		buyDepth, err := limitOrderDepth(state.Items, buyIDs, true)
 		if err != nil {
 			return nil, err
@@ -219,7 +223,11 @@ func limitOrderDepth(items []InvokeItem, ids []int, buy bool) ([]*DepthInfo, err
 			continue
 		}
 		item := items[id]
-		price := item.UnitPrice
+		param, err := decodeLimitOrderItemParam(&item)
+		if err != nil {
+			return nil, err
+		}
+		price := param.UnitPrice
 		if price == "" {
 			price = "0"
 		}
@@ -234,10 +242,7 @@ func limitOrderDepth(items []InvokeItem, ids []int, buy bool) ([]*DepthInfo, err
 			if overflow {
 				return nil, fmt.Errorf("limit order buy depth value overflows int64")
 			}
-			amt := parseDecimalOrZero("0")
-			if item.ExpectedAmt != nil {
-				amt = item.ExpectedAmt
-			}
+			amt := parseDecimalOrZero(param.Amt)
 			if item.OutAmt != nil {
 				amt = amt.Sub(item.OutAmt)
 			}

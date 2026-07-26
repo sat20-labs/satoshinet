@@ -960,7 +960,7 @@ func TestSettleAMMPartialRemoveLiquidityKeepsAssetPrecision(t *testing.T) {
 			Reason:       InvokeReasonNormal,
 			Address:      "alice",
 			AssetName:    "ordx:f:test",
-			ExpectedAmt:  parseDecimalOrZero("5"),
+			Param:        mustRemoveLiquidityItemParam(t, "ordx:f:test", "5"),
 			RemainingAmt: parseDecimalOrZero("5"),
 		}},
 	}

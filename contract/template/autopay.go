@@ -204,7 +204,12 @@ func (c *AutopayContract) ApplyRunningData(state *TemplateRuntimeState, item *In
 	case OrderTypeFund:
 		c.addDelegateBalance(autopay, item.Address, item.InAmt)
 	case OrderTypeValidate:
-		c.setDelegateConfig(autopay, item.Address, item.ExpectedAmt, item.BlobKeyLimit)
+		param, err := decodeAutopayConfigItemParam(item)
+		if err != nil {
+			item.Reason = InvokeReasonInvalid
+			return true
+		}
+		c.setDelegateConfig(autopay, item.Address, parseDecimalOrZero(param.AmountPerBlock), param.BlobKeyLimit)
 		// A config invoke may also fund the delegate. The backend has already
 		// removed this invoke's Result fee from InAmt when it is the fee asset.
 		c.addDelegateBalance(autopay, item.Address, item.InAmt)
@@ -696,6 +701,7 @@ func NewAutopayDefaultInvokeItem(contract *AutopayContract, id int64, req ApplyI
 		InUtxos:        req.FundingOutput.OutPoint.String(),
 		InValue:        req.FundingOutput.PlainValue(),
 		InAmt:          amount,
+		Param:          contractframework.CloneBytes(req.Param),
 		RemainingAmt:   amount.Clone(),
 		Reason:         InvokeReasonNormal,
 		Done:           ItemStatusDealt,

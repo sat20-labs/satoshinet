@@ -38,7 +38,9 @@ func (r *ContractRuntime) settleLimitOrders(height int64,
 	if err != nil {
 		return nil, err
 	}
-	applyRefunds(&state, plan, height)
+	if err := applyRefunds(&state, plan, height); err != nil {
+		return nil, err
+	}
 	closed, err := applyCloseItems(r.contract, &state, plan, height, r.base.Deployer())
 	if err != nil {
 		return nil, err
@@ -50,15 +52,27 @@ func (r *ContractRuntime) settleLimitOrders(height int64,
 		return plan, nil
 	}
 	buyIDs, sellIDs := activeLimitOrderIDs(state.Items, height)
-	sortLimitOrders(state.Items, buyIDs, true)
-	sortLimitOrders(state.Items, sellIDs, false)
+	if err := sortLimitOrders(state.Items, buyIDs, true); err != nil {
+		return nil, err
+	}
+	if err := sortLimitOrders(state.Items, sellIDs, false); err != nil {
+		return nil, err
+	}
 
 	i, j := 0, 0
 	for i < len(buyIDs) && j < len(sellIDs) {
 		buy := &state.Items[buyIDs[i]]
 		sell := &state.Items[sellIDs[j]]
-		buyPrice := parseDecimalOrZero(buy.UnitPrice)
-		sellPrice := parseDecimalOrZero(sell.UnitPrice)
+		buyPriceString, err := limitOrderItemPrice(buy)
+		if err != nil {
+			return nil, err
+		}
+		sellPriceString, err := limitOrderItemPrice(sell)
+		if err != nil {
+			return nil, err
+		}
+		buyPrice := parseDecimalOrZero(buyPriceString)
+		sellPrice := parseDecimalOrZero(sellPriceString)
 		if buyPrice.Cmp(sellPrice) < 0 {
 			break
 		}
@@ -82,7 +96,7 @@ func (r *ContractRuntime) settleLimitOrders(height int64,
 			continue
 		}
 
-		if err := applyLimitOrderDeal(buy, sell, matchAmt, matchValue); err != nil {
+		if err := applyLimitOrderDeal(buy, sell, matchAmt, matchValue, sellPriceString); err != nil {
 			return nil, err
 		}
 		plan.Deals = append(plan.Deals, SettlementDeal{
@@ -90,7 +104,7 @@ func (r *ContractRuntime) settleLimitOrders(height int64,
 			SellItemID: sell.ID,
 			AssetAmt:   matchAmt.String(),
 			SatValue:   matchValue,
-			UnitPrice:  sell.UnitPrice,
+			UnitPrice:  sellPriceString,
 		})
 		addSettlementInputs(plan, buy)
 		addSettlementInputs(plan, sell)
@@ -142,7 +156,9 @@ func (r *ContractRuntime) settleAMM(height int64,
 	if err != nil {
 		return nil, err
 	}
-	applyRefunds(&state, plan, height)
+	if err := applyRefunds(&state, plan, height); err != nil {
+		return nil, err
+	}
 	changed = changed || settlementPlanHasChanges(plan)
 	closed, err := applyCloseItems(r.contract, &state, plan, height, r.base.Deployer())
 	if err != nil {
@@ -369,9 +385,9 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 			if owned == nil {
 				owned = parseDecimalOrZero("0")
 			}
-			remove := item.ExpectedAmt
-			if remove == nil {
-				remove = parseDecimalOrZero("0")
+			remove, err := removeLiquidityItemAmount(item)
+			if err != nil {
+				return false, err
 			}
 			remove = minDecimal(remove, owned)
 			remove = minDecimal(remove, totalLPT)
@@ -474,11 +490,22 @@ func activeLimitOrderIDs(items []InvokeItem, height int64) ([]int, []int) {
 	return buyIDs, sellIDs
 }
 
-func sortLimitOrders(items []InvokeItem, ids []int, buy bool) {
+func sortLimitOrders(items []InvokeItem, ids []int, buy bool) error {
+	prices := make(map[int]*scommon.Decimal, len(ids))
+	for _, id := range ids {
+		if id < 0 || id >= len(items) {
+			return fmt.Errorf("limit order index %d out of range", id)
+		}
+		price, err := limitOrderItemPrice(&items[id])
+		if err != nil {
+			return err
+		}
+		prices[id] = parseDecimalOrZero(price)
+	}
 	sort.SliceStable(ids, func(i, j int) bool {
 		a := items[ids[i]]
 		b := items[ids[j]]
-		priceCmp := parseDecimalOrZero(a.UnitPrice).Cmp(parseDecimalOrZero(b.UnitPrice))
+		priceCmp := prices[ids[i]].Cmp(prices[ids[j]])
 		if priceCmp != 0 {
 			if buy {
 				return priceCmp > 0
@@ -493,6 +520,7 @@ func sortLimitOrders(items []InvokeItem, ids []int, buy bool) {
 		}
 		return a.ID < b.ID
 	})
+	return nil
 }
 
 func matchLimitOrderAmount(buy, sell *InvokeItem, price *scommon.Decimal) (*scommon.Decimal, int64, error) {
@@ -518,9 +546,9 @@ func matchLimitOrderAmount(buy, sell *InvokeItem, price *scommon.Decimal) (*scom
 			return nil, 0, fmt.Errorf("failed to calculate match amount")
 		}
 	}
-	expected := buy.ExpectedAmt
-	if expected == nil {
-		expected = parseDecimalOrZero("0")
+	expected, err := limitOrderItemExpectedAmount(buy)
+	if err != nil {
+		return nil, 0, err
 	}
 	bought := buy.OutAmt
 	if bought == nil {
@@ -548,7 +576,7 @@ func matchLimitOrderAmount(buy, sell *InvokeItem, price *scommon.Decimal) (*scom
 	return matchAmt, matchValue, nil
 }
 
-func applyLimitOrderDeal(buy, sell *InvokeItem, matchAmt *scommon.Decimal, matchValue int64) error {
+func applyLimitOrderDeal(buy, sell *InvokeItem, matchAmt *scommon.Decimal, matchValue int64, sellPrice string) error {
 	buy.RemainingValue -= matchValue
 	if buy.RemainingValue < 0 {
 		buy.RemainingValue = 0
@@ -568,7 +596,11 @@ func applyLimitOrderDeal(buy, sell *InvokeItem, matchAmt *scommon.Decimal, match
 		return fmt.Errorf("limit order seller output overflows int64")
 	}
 
-	if limitOrderBuyFinished(buy, sell.UnitPrice) {
+	buyFinished, err := limitOrderBuyFinished(buy, sellPrice)
+	if err != nil {
+		return err
+	}
+	if buyFinished {
 		buy.OutValue, overflow = contractframework.AddInt64(buy.OutValue, buy.RemainingValue)
 		if overflow {
 			return fmt.Errorf("limit order buyer refund overflows int64")
@@ -588,28 +620,28 @@ func applyLimitOrderDeal(buy, sell *InvokeItem, matchAmt *scommon.Decimal, match
 	return nil
 }
 
-func limitOrderBuyFinished(buy *InvokeItem, price string) bool {
+func limitOrderBuyFinished(buy *InvokeItem, price string) (bool, error) {
 	if buy.RemainingValue == 0 {
-		return true
+		return true, nil
 	}
-	expected := buy.ExpectedAmt
-	if expected == nil {
-		expected = parseDecimalOrZero("0")
+	expected, err := limitOrderItemExpectedAmount(buy)
+	if err != nil {
+		return false, err
 	}
 	bought := buy.OutAmt
 	if bought == nil {
 		bought = parseDecimalOrZero("0")
 	}
 	if expected.Sign() > 0 && bought.Cmp(expected) >= 0 {
-		return true
+		return true, nil
 	}
 	unitPrice := parseDecimalOrZero(price)
 	if unitPrice.Sign() <= 0 {
-		return true
+		return true, nil
 	}
 	toBuy := scommon.NewDecimal(buy.RemainingValue, MaxPriceDivisibility)
 	nextAmt := scommon.DecimalDiv(toBuy, unitPrice)
-	return nextAmt == nil || nextAmt.Sign() == 0
+	return nextAmt == nil || nextAmt.Sign() == 0, nil
 }
 
 func limitOrderSellFinished(sell *InvokeItem) (bool, error) {
@@ -620,7 +652,11 @@ func limitOrderSellFinished(sell *InvokeItem) (bool, error) {
 	if remaining.Sign() == 0 {
 		return true, nil
 	}
-	unitPrice := parseDecimalOrZero(sell.UnitPrice)
+	price, err := limitOrderItemPrice(sell)
+	if err != nil {
+		return false, err
+	}
+	unitPrice := parseDecimalOrZero(price)
 	if unitPrice.Sign() <= 0 {
 		return true, nil
 	}
@@ -720,7 +756,7 @@ func addSettlementInputs(plan *SettlementPlan, item *InvokeItem) {
 	plan.Inputs = contractframework.UniqueOutPoints(plan.Inputs)
 }
 
-func applyRefunds(state *TemplateRuntimeState, plan *SettlementPlan, height int64) {
+func applyRefunds(state *TemplateRuntimeState, plan *SettlementPlan, height int64) error {
 	for i := range state.Items {
 		refund := &state.Items[i]
 		if refund.Finished() || refund.Reason != InvokeReasonNormal || refund.OrderType != OrderTypeRefund || refund.Height > height {
@@ -731,7 +767,11 @@ func applyRefunds(state *TemplateRuntimeState, plan *SettlementPlan, height int6
 			if item.ID == refund.ID || item.Finished() || item.Reason != InvokeReasonNormal || item.Address != refund.Address {
 				continue
 			}
-			if !refundMatchesItem(refund, item.ID) {
+			matches, err := refundMatchesItem(refund, item.ID)
+			if err != nil {
+				return err
+			}
+			if !matches {
 				continue
 			}
 			transfer := refundTransfer(item)
@@ -755,6 +795,7 @@ func applyRefunds(state *TemplateRuntimeState, plan *SettlementPlan, height int6
 		refund.Reason = InvokeReasonRefund
 		plan.ItemIDs = appendPlanItemID(plan.ItemIDs, refund.ID)
 	}
+	return nil
 }
 
 func applyInvalidItems(contract Contract, state *TemplateRuntimeState, plan *SettlementPlan, height int64) (bool, error) {
@@ -959,16 +1000,23 @@ func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan
 	return nil
 }
 
-func refundMatchesItem(refund *InvokeItem, itemID int64) bool {
-	if refund == nil || len(refund.RefundItemIDs) == 0 {
-		return true
+func refundMatchesItem(refund *InvokeItem, itemID int64) (bool, error) {
+	if refund == nil {
+		return true, nil
 	}
-	for _, targetID := range refund.RefundItemIDs {
+	param, err := decodeRefundItemParam(refund)
+	if err != nil {
+		return false, err
+	}
+	if len(param.ItemIDs) == 0 {
+		return true, nil
+	}
+	for _, targetID := range param.ItemIDs {
 		if targetID == itemID {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func refundTransfer(item *InvokeItem) SettlementTransfer {
@@ -1089,9 +1137,9 @@ func settleAMMBuy(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64, a
 		return SettlementDeal{}, nil, false, nil
 	}
 	maxInputValue := item.RemainingValue
-	minAsset := item.ExpectedAmt
-	if minAsset == nil {
-		minAsset = parseDecimalOrZero("0")
+	minAsset, err := limitOrderItemExpectedAmount(item)
+	if err != nil {
+		return SettlementDeal{}, nil, false, err
 	}
 	inputValue := maxInputValue
 	calculatedOut, err := calculateAMMBuyOutput(inputValue, poolAsset, poolGas, k)
@@ -1186,9 +1234,9 @@ func settleAMMSell(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64, 
 		transfer := markItemRefunded(item)
 		return SettlementDeal{}, transfer, false, nil
 	}
-	minGas := item.ExpectedAmt
-	if minGas == nil {
-		minGas = parseDecimalOrZero("0")
+	minGas, err := limitOrderItemExpectedAmount(item)
+	if err != nil {
+		return SettlementDeal{}, SettlementTransfer{}, false, err
 	}
 	if minGas.Sign() > 0 && scommon.NewDefaultDecimal(outGas).Cmp(minGas) < 0 {
 		item.Reason = InvokeReasonSlippageProtect

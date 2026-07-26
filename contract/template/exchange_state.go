@@ -1,6 +1,9 @@
 package template
 
-import scommon "github.com/sat20-labs/indexer/common"
+import (
+	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+)
 
 func (c *ExchangeContract) ApplyFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error) {
 	amt, err := output.AssetAmount(c.AssetAName)
@@ -119,7 +122,7 @@ func exchangeFundingAmounts(contract *ExchangeContract, output ContractOutput) (
 }
 
 func newExchangeItem(id int64, action string, req ApplyInvokeRequest, inUtxos, assetBName string,
-	inputB *scommon.Decimal, minOutA string) *InvokeItem {
+	inputB *scommon.Decimal) *InvokeItem {
 
 	item := &InvokeItem{
 		ID:             id,
@@ -132,9 +135,9 @@ func newExchangeItem(id int64, action string, req ApplyInvokeRequest, inUtxos, a
 		Address:        req.Invoker,
 		InUtxos:        inUtxos,
 		InAmt:          nil,
-		ExpectedAmt:    nil,
 		RemainingAmt:   nil,
 		GasFee:         req.ResultGasFee.Clone(),
+		Param:          contractframework.CloneBytes(req.Param),
 		Reason:         InvokeReasonNormal,
 		Done:           ItemStatusInit,
 		RemainingValue: 0,
@@ -142,9 +145,6 @@ func newExchangeItem(id int64, action string, req ApplyInvokeRequest, inUtxos, a
 	if inputB != nil && inputB.Sign() > 0 {
 		item.InAmt = inputB
 		item.RemainingAmt = inputB
-	}
-	if minOutA != "" {
-		item.ExpectedAmt = parseDecimalOrZero(minOutA)
 	}
 	return item
 }

@@ -66,7 +66,12 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), item.ID)
 	require.Equal(t, OrderTypeBuy, item.OrderType)
-	requireDecimalString(t, "10", item.ExpectedAmt)
+	require.Equal(t, param, item.Param)
+	param[0] ^= 0xff
+	require.NotEqual(t, param, item.Param)
+	expected, err := limitOrderItemExpectedAmount(item)
+	require.NoError(t, err)
+	requireDecimalString(t, "10", expected)
 	require.Equal(t, int64(20), item.RemainingValue)
 	require.Equal(t, int64(10), item.OutValue)
 
@@ -234,7 +239,9 @@ func TestApplyInvokeRecordsAMMBuyWithExactFunding(t *testing.T) {
 	require.Equal(t, OrderTypeBuy, item.OrderType)
 	require.Equal(t, int64(SwapInvokeFee), item.ServiceFee)
 	require.Equal(t, int64(10), item.RemainingValue)
-	require.Empty(t, item.ExpectedAmt)
+	expected, err := limitOrderItemExpectedAmount(item)
+	require.NoError(t, err)
+	require.Zero(t, expected.Sign())
 }
 
 func TestApplyFundingTracksTemplateGasSeparately(t *testing.T) {
