@@ -126,6 +126,9 @@ func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, erro
 	if err != nil {
 		return nil, err
 	}
+	if err := normalizeInvokeItemParam(r.contract, item); err != nil {
+		return nil, err
+	}
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
