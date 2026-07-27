@@ -83,3 +83,37 @@ func TestInvokeItemRejectsLegacyExpandedInvokeParameters(t *testing.T) {
 		})
 	}
 }
+
+func TestInvokeItemRejectsOrderTypeParamMismatch(t *testing.T) {
+	param := mustLimitOrderItemParam(t, OrderTypeBuy, "ordx:f:test", "10", "2")
+	item := InvokeItem{
+		ID:        7,
+		Action:    InvokeAPISwap,
+		OrderType: OrderTypeSell,
+		AssetName: "ordx:f:test",
+		Param:     param,
+		Reason:    InvokeReasonNormal,
+	}
+	encoded, err := json.Marshal(item)
+	require.NoError(t, err)
+
+	var decoded InvokeItem
+	err = json.Unmarshal(encoded, &decoded)
+	require.ErrorContains(t, err, "does not match parameter order type")
+}
+
+func TestNewInvokeItemRejectsParameterAssetMismatch(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	contract := runtime.Address()
+	param := mustLimitOrderItemParam(t, OrderTypeBuy, "ordx:f:other", "10", "2")
+
+	_, err := NewInvokeItemFromRequest(runtime.contract, 1, ApplyInvokeRequest{
+		Action:        InvokeAPISwap,
+		Param:         param,
+		CallID:        "call",
+		FundingOutput: testContractOutput("tx", 1, contract, 30, nil),
+		Height:        10,
+		Timestamp:     20,
+	})
+	require.ErrorContains(t, err, "does not match contract asset")
+}
