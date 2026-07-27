@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	scommon "github.com/sat20-labs/indexer/common"
@@ -9,8 +11,12 @@ import (
 )
 
 func TestParseAgentDeployTxCombinesMultipleOPReturns(t *testing.T) {
-	content := []byte(`{"subtype":"prediction"}`)
-	content = append(content, make([]byte, contractcommon.MaxNullDataPayloadLen+11)...)
+	contractContent := validPredictionContract()
+	contractContent.Description = strings.Repeat("d", 500)
+	content, err := contractContent.Encode()
+	if err != nil {
+		t.Fatalf("PredictionContract.Encode failed: %v", err)
+	}
 
 	scripts, err := DeployNullDataScripts(DeployPayload{
 		GasLimit:        5000,
@@ -51,7 +57,11 @@ func TestParseAgentInvokeTxFindsAgentContractOutputs(t *testing.T) {
 	contract := testAgentContract(t)
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
-	invokeScript, err := InvokeNullDataScript(InvokePayload{GasLimit: 1000, CallNonce: 9, Action: InvokeAPIBet, Param: []byte{1, 2, 3}})
+	param, err := (PredictionBetParam{OutcomeID: "a"}).Encode()
+	if err != nil {
+		t.Fatalf("PredictionBetParam.Encode failed: %v", err)
+	}
+	invokeScript, err := InvokeNullDataScript(InvokePayload{GasLimit: 1000, CallNonce: 9, Action: InvokeAPIBet, Param: param})
 	if err != nil {
 		t.Fatalf("InvokeNullDataScript failed: %v", err)
 	}
@@ -70,6 +80,9 @@ func TestParseAgentInvokeTxFindsAgentContractOutputs(t *testing.T) {
 	}
 	if parsed.Invoke.Action != InvokeAPIBet {
 		t.Fatalf("action mismatch: %s", parsed.Invoke.Action)
+	}
+	if !bytes.Equal(parsed.Invoke.Param, param) {
+		t.Fatalf("invoke param changed during OP_RETURN parsing: got %x want %x", parsed.Invoke.Param, param)
 	}
 	if len(parsed.ContractOutputs) != 1 {
 		t.Fatalf("contract output count mismatch: %d", len(parsed.ContractOutputs))

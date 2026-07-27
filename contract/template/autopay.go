@@ -90,6 +90,9 @@ func (c *AutopayContract) Decode(data []byte) error {
 		return fmt.Errorf("missing minimum amount per block")
 	}
 	c.MinAmountPerBlock = string(tokenizer.Data())
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected autopay contract content")
+	}
 	return tokenizer.Err()
 }
 

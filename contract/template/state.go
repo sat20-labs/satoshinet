@@ -732,6 +732,9 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 	}
 	item.RetainedAssetA = retention.AssetA
 	item.RetainedAssetB = retention.AssetB
+	if err := normalizeInvokeItemParam(r.contract, item); err != nil {
+		return nil, err
+	}
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)

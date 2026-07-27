@@ -56,6 +56,7 @@ func TestParseTemplateInvokeTxFindsTemplateContractOutputs(t *testing.T) {
 	require.Equal(t, TxTypeInvoke, parsed.Type)
 	require.NotNil(t, parsed.Invoke)
 	require.Equal(t, InvokeAPISwap, parsed.Invoke.Action)
+	require.Equal(t, []byte{1, 2, 3}, parsed.Invoke.Param)
 	require.Len(t, parsed.ContractOutputs, 1)
 	require.True(t, contract.Equal(parsed.ContractOutputs[0].Contract))
 	amount, err := parsed.ContractOutputs[0].AssetAmount("ordx:f:gas")

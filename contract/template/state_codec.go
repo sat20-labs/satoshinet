@@ -101,5 +101,8 @@ func restoreRuntime(snapshot runtimeSnapshot, registry *Registry) (*ContractRunt
 	for key, value := range snapshot.State {
 		runtime.base.state[key] = append([]byte(nil), value...)
 	}
+	if _, err := runtime.loadRuntimeState(); err != nil {
+		return nil, fmt.Errorf("validate restored template runtime state: %w", err)
+	}
 	return runtime, nil
 }

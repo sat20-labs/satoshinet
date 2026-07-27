@@ -109,3 +109,64 @@ func TestInvokeItemParameterDecoderRejectsAssetMismatch(t *testing.T) {
 	_, err := limitOrderItemPrice(&item)
 	require.ErrorContains(t, err, "does not match contract asset")
 }
+
+func TestInvokeItemConsistencyChecksActionsWithEmptyParam(t *testing.T) {
+	tests := []struct {
+		name      string
+		action    string
+		orderType int
+	}{
+		{name: "refund", action: InvokeAPIRefund, orderType: OrderTypeRefund},
+		{name: "exchange", action: InvokeAPIExchange, orderType: OrderTypeExchange},
+		{name: "cancel", action: InvokeAPICancel, orderType: OrderTypeCancel},
+		{name: "close", action: InvokeAPIClose, orderType: OrderTypeClose},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			item := InvokeItem{
+				ID:        1,
+				Action:    test.action,
+				OrderType: test.orderType,
+				Reason:    InvokeReasonNormal,
+			}
+			require.NoError(t, validateInvokeItemParamConsistency(&item))
+			item.OrderType = OrderTypeBuy
+			require.ErrorContains(t, validateInvokeItemParamConsistency(&item), "order type")
+		})
+	}
+}
+
+func TestDefaultInvokeItemConsistency(t *testing.T) {
+	item := InvokeItem{
+		ID:        1,
+		Action:    "default",
+		OrderType: OrderTypeBuy,
+		Reason:    InvokeReasonNormal,
+	}
+	require.NoError(t, validateInvokeItemParamConsistency(&item))
+
+	item.OrderType = OrderTypeClose
+	require.ErrorContains(t, validateInvokeItemParamConsistency(&item), "default order type")
+}
+
+func TestDecodeRuntimeStoreValidatesInnerTemplateState(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	runtime.SetState(runtimeStateKey, []byte(`{
+		"nextItemId": 2,
+		"invokeCount": 1,
+		"items": [{
+			"id": 1,
+			"action": "close",
+			"orderType": 2,
+			"reason": "normal",
+			"done": 0
+		}]
+	}`))
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	encoded, err := store.MarshalBinary()
+	require.NoError(t, err)
+
+	_, err = DecodeRuntimeStore(encoded, nil)
+	require.ErrorContains(t, err, "order type")
+}
