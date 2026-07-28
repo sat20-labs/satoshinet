@@ -5,26 +5,22 @@ rpctest
 [![ISC License](http://img.shields.io/badge/license-ISC-blue.svg)](http://copyfree.org)
 [![GoDoc](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/github.com/sat20-labs/satoshinet/integration/rpctest)
 
-Package rpctest provides a btcd-specific RPC testing harness crafting and
-executing integration tests by driving a `btcd` instance via the `RPC`
-interface. Each instance of an active harness comes equipped with a simple
-in-memory HD wallet capable of properly syncing to the generated chain,
-creating new addresses, and crafting fully signed transactions paying to an
-arbitrary set of outputs.
+Package rpctest provides the low-level process and RPC harness used by
+SatoshiNet integration tests. Callers must explicitly provide the runtime
+required by their scenario, including indexer configuration and, when blocks
+need signing, a wallet-enabled executable.
 
-This package was designed specifically to act as an RPC testing harness for
-`btcd`. However, the constructs presented are general enough to be adapted to
-any project wishing to programmatically drive a `btcd` instance of its
-systems/integration tests.
+The harness retains some btcd-derived helpers for compatibility, but its old
+standalone self-test suite is not a valid SatoshiNet consensus test. In
+particular, SatoshiNet does not support bootstrapping tests by mining empty
+blocks into a fixed 50 BTC in-memory wallet.
 
 ## Installation and Updating
 
-```bash
-$ go get -u github.com/sat20-labs/satoshinet/integration/rpctest
-```
+The maintained end-to-end use of this package is in
+`integration/contract_e2e`.
 
 ## License
 
 Package rpctest is licensed under the [copyfree](http://copyfree.org) ISC
 License.
-
