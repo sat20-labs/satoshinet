@@ -1217,7 +1217,7 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 	nodes := []*rpctest.Harness{bootstrapNode, coreNode}
 
 	gasAnchor := buildNetworkAnchorTx(t, gasLockedUtxo, lockedValue,
-		testWireAsset(gasAsset, 100000000), gasAsset+"-100000000-0-1",
+		testWireAsset(gasAsset, 100000000), gasAsset+"-100000000-0-0",
 		witnessScript, bootstrapKey, traderAActor.pkScript)
 	sendTx(t, bootstrapNode, gasAnchor)
 
@@ -1226,7 +1226,7 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 		lockedUtxo := templateLockedOutPoint(asset, i+1)
 		amount := assets[asset]
 		anchor := buildNetworkAnchorTx(t, lockedUtxo, lockedValue,
-			testWireAsset(asset, amount), fmt.Sprintf("%s-%d-0-1", asset, amount),
+			testWireAsset(asset, amount), fmt.Sprintf("%s-%d-0-0", asset, amount),
 			witnessScript, bootstrapKey, traderAActor.pkScript)
 		sendTx(t, bootstrapNode, anchor)
 		assetAnchors[asset] = anchor

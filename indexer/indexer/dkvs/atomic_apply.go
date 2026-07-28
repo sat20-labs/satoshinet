@@ -12,6 +12,7 @@ import (
 type preparedRecordSet struct {
 	ordered          []*wire.DKVSRecord
 	capacities       map[string]preparedFeeCapacity
+	retentions       map[string]*PaidRecordRetention
 	forceReplace     map[string]bool
 	generation       uint64
 	policyGeneration uint64
@@ -44,6 +45,7 @@ func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord, rejectFreeLoc
 	now := currentUnixMilli()
 	generation := atomic.LoadUint64(&i.generation)
 	capacities := make(map[string]preparedFeeCapacity, len(ordered))
+	retentions := make(map[string]*PaidRecordRetention, len(ordered))
 	forceReplace := make(map[string]bool, len(ordered))
 	for _, record := range ordered {
 		parsed, err := validateParsedCoreWithVerifier(record, height, now, false, false, nil)
@@ -53,9 +55,16 @@ func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord, rejectFreeLoc
 		if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
 			return preparedRecordSet{}, err
 		}
-		if rejectFreeLocal && i.isLocalOnlyRecord(record) {
+		if rejectFreeLocal && isFreeLocalRecord(record) {
 			return preparedRecordSet{}, ErrFreeLocalNotRelayable
 		}
+		retention, err := verifiedPaidRetentionAfterFeeVerification(
+			record, parsed, validators.feeVerifier, height,
+		)
+		if err != nil {
+			return preparedRecordSet{}, err
+		}
+		retentions[record.Key] = retention
 		state, err := i.readWriteStateSnapshot(record.Key, parsed, validators)
 		if err != nil {
 			return preparedRecordSet{}, err
@@ -74,6 +83,7 @@ func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord, rejectFreeLoc
 	return preparedRecordSet{
 		ordered:          ordered,
 		capacities:       capacities,
+		retentions:       retentions,
 		forceReplace:     forceReplace,
 		generation:       generation,
 		policyGeneration: validators.policyGeneration,
@@ -187,6 +197,12 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 		}
 		batch := i.db.NewWriteBatch()
 		touched := make([]*wire.DKVSRecord, 0, len(current)+len(ordered))
+		retentionRemovals := make([]string, 0, len(current)+len(ordered))
+		for _, record := range ordered {
+			if prepared.retentions[record.Key] == nil {
+				retentionRemovals = append(retentionRemovals, record.Key)
+			}
+		}
 		for _, record := range currentByKey {
 			if _, keep := incoming[record.Key]; keep {
 				continue
@@ -201,6 +217,7 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 				break
 			}
 			touched = append(touched, record)
+			retentionRemovals = append(retentionRemovals, record.Key)
 		}
 		applied := 0
 		for _, record := range ordered {
@@ -256,6 +273,13 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 			i.resetFreeLocalUsageLocked()
 			i.resetRecordExpiryLocked()
 			atomic.AddUint64(&i.generation, 1)
+		}
+		retentionCache := paidRetentionCacheFor(i)
+		retentionCache.remove(retentionRemovals)
+		for _, record := range ordered {
+			if retention := prepared.retentions[record.Key]; retention != nil {
+				retentionCache.set(record.Key, *retention)
+			}
 		}
 		i.mutex.Unlock()
 		return applied, nil

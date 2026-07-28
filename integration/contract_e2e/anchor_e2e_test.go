@@ -93,7 +93,7 @@ func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
 	anchorTx.AddTxOut(wire.NewTxOut(lockedValue, testWireAsset(gasAsset, 1000000), spendScript))
 	ascendingScript, err := sindexercommon.NullDataScript(
 		sindexercommon.CONTENT_TYPE_ASCENDING,
-		[]byte(gasAsset+"-1000000-0-1"),
+		[]byte(gasAsset+"-1000000-0-0"),
 	)
 	require.NoError(t, err)
 	anchorTx.AddTxOut(wire.NewTxOut(0, nil, ascendingScript))
@@ -282,7 +282,9 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 			env = append(env, name+"="+value)
 		}
 	}
-	r, err := rpctest.NewWithEnv(&chaincfg.TestNetParams, nil, btcdCfg, "", env)
+	r, err := rpctest.NewWithEnv(
+		&chaincfg.TestNetParams, nil, btcdCfg, contractE2EExecutablePath(t), env,
+	)
 	require.NoError(t, err)
 	r.MaxConnRetries = 200
 	r.ConnectionRetryTimeout = 100 * time.Millisecond
