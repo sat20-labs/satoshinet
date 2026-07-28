@@ -3,10 +3,14 @@ package agent
 import "testing"
 
 func TestDeriveContractAddressUsesAgentType(t *testing.T) {
+	content, err := validPredictionContract().Encode()
+	if err != nil {
+		t.Fatalf("PredictionContract.Encode failed: %v", err)
+	}
 	addr, hash, err := DeriveContractAddress(
 		TestnetContractPrefix,
 		SubtypePrediction,
-		[]byte(`{"subtype":"prediction"}`),
+		content,
 		"deployer",
 		3,
 	)

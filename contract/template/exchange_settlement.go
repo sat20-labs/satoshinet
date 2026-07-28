@@ -105,9 +105,9 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 		markExchangeRefunded(state, item, plan, contract, gasAssetName)
 		return nil
 	}
-	minOut := item.ExpectedAmt
-	if minOut == nil {
-		minOut = parseDecimalOrZero("0")
+	minOut, err := exchangeItemMinimumOutput(item)
+	if err != nil {
+		return err
 	}
 	if minOut.Sign() > 0 && quote.OutA.Cmp(minOut) < 0 {
 		markExchangeRefunded(state, item, plan, contract, gasAssetName)
@@ -127,11 +127,10 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 	item.OutAmt = quote.OutA
 	item.RemainingAmt = nil
 	item.Done = ItemStatusDealt
-	item.UnitPrice = decimalString(quote.UnitPrice)
 	plan.Deals = append(plan.Deals, SettlementDeal{
 		BuyItemID: item.ID,
 		AssetAmt:  decimalString(item.OutAmt),
-		UnitPrice: item.UnitPrice,
+		UnitPrice: decimalString(quote.UnitPrice),
 	})
 	if quote.OutA.Sign() > 0 {
 		plan.Transfers = append(plan.Transfers, SettlementTransfer{

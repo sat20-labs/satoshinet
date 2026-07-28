@@ -93,10 +93,10 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 	recipient := p2trAddressFromKey(t, callerKeys[2])
 
 	gasAnchor := buildNetworkAnchorTx(t, gasLockedUtxo, lockedValue,
-		testWireAsset(gasAsset, 100000000), gasAsset+"-100000000-0-1",
+		testWireAsset(gasAsset, 100000000), gasAsset+"-100000000-0-0",
 		witnessScript, bootstrapKey, caller0Script)
 	assetAnchor := buildNetworkAnchorTx(t, assetLockedUtxo, lockedValue,
-		testWireDecimalAsset(t, vaultAsset, "10.00", 2), vaultAsset+"-10.00-2-1",
+		testWireDecimalAsset(t, vaultAsset, "10.00", 2), vaultAsset+"-10.00-2-0",
 		witnessScript, bootstrapKey, caller0Script)
 	sendTx(t, bootstrapNode, gasAnchor)
 	sendTx(t, bootstrapNode, assetAnchor)

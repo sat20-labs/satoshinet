@@ -6,7 +6,6 @@ package rpctest
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -49,11 +48,8 @@ func btcdExecutablePath() (string, error) {
 	if runtime.GOOS == "windows" {
 		outputPath += ".exe"
 	}
-	if err := writeRPCTestWalletConfig(testDir); err != nil {
-		return "", err
-	}
 	cmd := exec.Command(
-		"go", "build", "-tags=rpctest,wallet_source", "-o", outputPath, "github.com/sat20-labs/satoshinet",
+		"go", "build", "-tags=rpctest", "-o", outputPath, "github.com/sat20-labs/satoshinet",
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("Failed to build btcd: %v: %s", err, string(output))
@@ -62,42 +58,4 @@ func btcdExecutablePath() (string, error) {
 	// Save executable path so future calls do not recompile.
 	executablePath = outputPath
 	return executablePath, nil
-}
-
-func writeRPCTestWalletConfig(dir string) error {
-	cfgPath := filepath.Join(dir, "conf.yaml")
-	data := []byte(`env: rpctest
-chain: testnet
-mode: local
-log: info
-db: ""
-indexer_layer1:
-  scheme: http
-  host: 127.0.0.1:1
-  proxy: testnet
-indexer_layer2:
-  scheme: http
-  host: 127.0.0.1:1
-  proxy: testnet
-rpc:
-  scheme: http
-  host: 127.0.0.1:1
-  proxy: testnet
-wallet:
-  mode: local
-  password: rpctest
-`)
-	return os.WriteFile(cfgPath, data, 0o600)
-}
-
-func walletPluginSourceDir() (string, error) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("unable to locate rpctest source directory")
-	}
-	dir := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", "sat20wallet", "sdk", "plugin"))
-	if _, err := os.Stat(filepath.Join(dir, "main.go")); err != nil {
-		return "", err
-	}
-	return dir, nil
 }

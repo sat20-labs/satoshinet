@@ -252,7 +252,9 @@ func TestSettleLimitOrdersBuyTakesLowerSellPricesAndLeavesRemainder(t *testing.T
 	require.Equal(t, ItemStatusInit, buy.Done)
 	requireDecimalString(t, "30", buy.OutAmt)
 	require.Equal(t, int64(130), buy.RemainingValue)
-	require.Equal(t, "10", buy.UnitPrice)
+	price, err := limitOrderItemPrice(&buy)
+	require.NoError(t, err)
+	require.Equal(t, "10", price)
 }
 
 func TestSettleLimitOrdersRefundsPartiallyDealtOrder(t *testing.T) {

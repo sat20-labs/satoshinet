@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"net/url"
@@ -9,6 +8,7 @@ import (
 	"strings"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -56,7 +56,7 @@ type PredictionRejectParam struct {
 }
 
 func (c PredictionContract) Encode() ([]byte, error) {
-	return json.Marshal(c)
+	return c.commonContract().Encode()
 }
 
 func (c PredictionContract) NetworkExclusive() bool {
@@ -64,11 +64,11 @@ func (c PredictionContract) NetworkExclusive() bool {
 }
 
 func DecodePredictionContract(data []byte) (PredictionContract, error) {
-	var c PredictionContract
-	if err := json.Unmarshal(data, &c); err != nil {
+	c, err := contractcommon.DecodeAgentPredictionContract(data)
+	if err != nil {
 		return PredictionContract{}, err
 	}
-	return c, nil
+	return predictionContractFromCommon(c), nil
 }
 
 func (c PredictionContract) Check() error {
@@ -134,15 +134,15 @@ func (c PredictionContract) HasOutcome(id string) bool {
 }
 
 func (p PredictionBetParam) Encode() ([]byte, error) {
-	return json.Marshal(p)
+	return contractcommon.AgentPredictionBetParam(p).Encode()
 }
 
 func DecodePredictionBetParam(data []byte) (PredictionBetParam, error) {
-	var p PredictionBetParam
-	if err := json.Unmarshal(data, &p); err != nil {
+	p, err := contractcommon.DecodeAgentPredictionBetParam(data)
+	if err != nil {
 		return PredictionBetParam{}, err
 	}
-	return p, nil
+	return PredictionBetParam(p), nil
 }
 
 func (p PredictionBetParam) Check(contract PredictionContract) error {
@@ -153,15 +153,15 @@ func (p PredictionBetParam) Check(contract PredictionContract) error {
 }
 
 func (p PredictionConfirmParam) Encode() ([]byte, error) {
-	return json.Marshal(p)
+	return contractcommon.AgentPredictionConfirmParam(p).Encode()
 }
 
 func DecodePredictionConfirmParam(data []byte) (PredictionConfirmParam, error) {
-	var p PredictionConfirmParam
-	if err := json.Unmarshal(data, &p); err != nil {
+	p, err := contractcommon.DecodeAgentPredictionConfirmParam(data)
+	if err != nil {
 		return PredictionConfirmParam{}, err
 	}
-	return p, nil
+	return PredictionConfirmParam(p), nil
 }
 
 func (p PredictionConfirmParam) Check(contract PredictionContract) error {
@@ -194,15 +194,15 @@ func (p PredictionConfirmParam) Check(contract PredictionContract) error {
 }
 
 func (p PredictionRejectParam) Encode() ([]byte, error) {
-	return json.Marshal(p)
+	return contractcommon.AgentPredictionRejectParam(p).Encode()
 }
 
 func DecodePredictionRejectParam(data []byte) (PredictionRejectParam, error) {
-	var p PredictionRejectParam
-	if err := json.Unmarshal(data, &p); err != nil {
+	p, err := contractcommon.DecodeAgentPredictionRejectParam(data)
+	if err != nil {
 		return PredictionRejectParam{}, err
 	}
-	return p, nil
+	return PredictionRejectParam(p), nil
 }
 
 func (p PredictionRejectParam) Check() error {
@@ -280,6 +280,46 @@ func checkOutcome(outcome PredictionOutcome) error {
 		return fmt.Errorf("prediction outcome %s text is empty", outcome.ID)
 	}
 	return nil
+}
+
+func (c PredictionContract) commonContract() contractcommon.AgentPredictionContract {
+	outcomes := make([]contractcommon.AgentPredictionOutcome, len(c.Outcomes))
+	for i, outcome := range c.Outcomes {
+		outcomes[i] = contractcommon.AgentPredictionOutcome(outcome)
+	}
+	return contractcommon.AgentPredictionContract{
+		Subtype:      c.Subtype,
+		Title:        c.Title,
+		Description:  c.Description,
+		TimeBase:     c.TimeBase,
+		EventTime:    c.EventTime,
+		BetDeadline:  c.BetDeadline,
+		ConfirmAfter: c.ConfirmAfter,
+		SourceURL:    c.SourceURL,
+		BetAsset:     c.BetAsset,
+		MinBetUnit:   c.MinBetUnit,
+		Outcomes:     outcomes,
+	}
+}
+
+func predictionContractFromCommon(c contractcommon.AgentPredictionContract) PredictionContract {
+	outcomes := make([]PredictionOutcome, len(c.Outcomes))
+	for i, outcome := range c.Outcomes {
+		outcomes[i] = PredictionOutcome(outcome)
+	}
+	return PredictionContract{
+		Subtype:      c.Subtype,
+		Title:        c.Title,
+		Description:  c.Description,
+		TimeBase:     c.TimeBase,
+		EventTime:    c.EventTime,
+		BetDeadline:  c.BetDeadline,
+		ConfirmAfter: c.ConfirmAfter,
+		SourceURL:    c.SourceURL,
+		BetAsset:     c.BetAsset,
+		MinBetUnit:   c.MinBetUnit,
+		Outcomes:     outcomes,
+	}
 }
 
 func checkAssetName(assetName string) error {

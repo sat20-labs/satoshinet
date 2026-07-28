@@ -46,7 +46,10 @@ func (c *LimitOrderContract) Decode(data []byte) error {
 		return fmt.Errorf("missing asset name")
 	}
 	c.AssetName = string(tokenizer.Data())
-	return nil
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected limit order contract content")
+	}
+	return tokenizer.Err()
 }
 
 func (c *LimitOrderContract) CheckContent() error {
@@ -113,7 +116,10 @@ func (p *LimitOrderInvokeParam) Decode(data []byte) error {
 		return fmt.Errorf("missing unit price")
 	}
 	p.UnitPrice = string(tokenizer.Data())
-	return nil
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected limit order invoke fields")
+	}
+	return tokenizer.Err()
 }
 
 func (p *LimitOrderInvokeParam) Check(action string) error {

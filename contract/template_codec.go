@@ -311,7 +311,10 @@ func (p *TemplateLimitOrderInvokeParam) Decode(data []byte) error {
 		return fmt.Errorf("missing unit price")
 	}
 	p.UnitPrice = string(tokenizer.Data())
-	return nil
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected limit order invoke fields")
+	}
+	return tokenizer.Err()
 }
 
 func (p *TemplateRefundInvokeParam) Encode() ([]byte, error) {
@@ -371,7 +374,10 @@ func (p *TemplateAddLiquidityInvokeParam) Decode(data []byte) error {
 		return fmt.Errorf("missing sat value")
 	}
 	p.Value = tokenizer.ExtractInt64()
-	return nil
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected add liquidity invoke fields")
+	}
+	return tokenizer.Err()
 }
 
 func (p *TemplateRemoveLiquidityInvokeParam) Encode() ([]byte, error) {
@@ -396,7 +402,10 @@ func (p *TemplateRemoveLiquidityInvokeParam) Decode(data []byte) error {
 		return fmt.Errorf("missing lpt amt")
 	}
 	p.LptAmt = string(tokenizer.Data())
-	return nil
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected remove liquidity invoke fields")
+	}
+	return tokenizer.Err()
 }
 
 func (p *TemplateExchangeInvokeParam) Encode() ([]byte, error) {

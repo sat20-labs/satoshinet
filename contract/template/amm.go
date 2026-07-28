@@ -84,7 +84,10 @@ func (c *AMMContract) Decode(data []byte) error {
 		return fmt.Errorf("missing K parameter")
 	}
 	c.K = string(tokenizer.Data())
-	return nil
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected AMM contract content")
+	}
+	return tokenizer.Err()
 }
 
 func (c *AMMContract) CheckContent() error {
@@ -203,7 +206,10 @@ func (p *AddLiquidityInvokeParam) Decode(data []byte) error {
 		return fmt.Errorf("missing sat value")
 	}
 	p.Value = tokenizer.ExtractInt64()
-	return nil
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected add liquidity invoke fields")
+	}
+	return tokenizer.Err()
 }
 
 func (p *AddLiquidityInvokeParam) Check() error {
@@ -255,7 +261,10 @@ func (p *RemoveLiquidityInvokeParam) Decode(data []byte) error {
 		return fmt.Errorf("missing lpt amt")
 	}
 	p.LptAmt = string(tokenizer.Data())
-	return nil
+	if tokenizer.Next() {
+		return fmt.Errorf("unexpected remove liquidity invoke fields")
+	}
+	return tokenizer.Err()
 }
 
 func (p *RemoveLiquidityInvokeParam) Check() error {

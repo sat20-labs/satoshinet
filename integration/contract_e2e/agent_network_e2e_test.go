@@ -164,7 +164,7 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	nodes := []*rpctest.Harness{bootstrapNode, coreNode}
 
 	anchorTx := buildNetworkAnchorTx(t, lockedUtxo, lockedValue,
-		testWireAsset(gasAsset, 320000), gasAsset+"-320000-0-1",
+		testWireAsset(gasAsset, 320000), gasAsset+"-320000-0-0",
 		witnessScript, bootstrapKey, spendScript)
 	sendTx(t, bootstrapNode, anchorTx)
 	waitForPOSTx(t, bootstrapNode, nodes, anchorTx)
@@ -309,7 +309,9 @@ func startAgentSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemo
 			env = append(env, name+"="+value)
 		}
 	}
-	r, err := rpctest.NewWithEnv(&chaincfg.TestNetParams, nil, btcdCfg, "", env)
+	r, err := rpctest.NewWithEnv(
+		&chaincfg.TestNetParams, nil, btcdCfg, contractE2EExecutablePath(t), env,
+	)
 	require.NoError(t, err)
 	r.MaxConnRetries = 200
 	r.ConnectionRetryTimeout = 100 * time.Millisecond

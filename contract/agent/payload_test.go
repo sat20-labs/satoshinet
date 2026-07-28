@@ -6,12 +6,16 @@ import (
 )
 
 func TestDeployPayloadRoundTrip(t *testing.T) {
+	content, err := validPredictionContract().Encode()
+	if err != nil {
+		t.Fatalf("PredictionContract.Encode failed: %v", err)
+	}
 	payload := DeployPayload{
 		GasLimit:        1000,
 		SubType:         SubtypePrediction,
 		Version:         CurrentAgentVersion,
 		DeployNonce:     3,
-		ContractContent: []byte(`{"subtype":"prediction"}`),
+		ContractContent: content,
 	}
 	encoded, err := EncodeDeployPayload(payload)
 	if err != nil {
@@ -31,11 +35,15 @@ func TestDeployPayloadRoundTrip(t *testing.T) {
 }
 
 func TestInvokePayloadRoundTrip(t *testing.T) {
+	param, err := validPredictionConfirmParam().Encode()
+	if err != nil {
+		t.Fatalf("PredictionConfirmParam.Encode failed: %v", err)
+	}
 	payload := InvokePayload{
 		GasLimit:  1000,
 		CallNonce: 7,
 		Action:    InvokeAPIConfirm,
-		Param:     []byte(`{"result_type":"outcome"}`),
+		Param:     param,
 	}
 	encoded, err := EncodeInvokePayload(payload)
 	if err != nil {

@@ -35,18 +35,19 @@ type TemplateRuntimeState struct {
 }
 
 type InvokeItem struct {
-	ID             int64            `json:"id"`
-	CallID         string           `json:"callId"`
-	Action         string           `json:"action"`
-	OrderType      int              `json:"orderType"`
-	Height         int64            `json:"height"`
-	OrderTime      int64            `json:"orderTime"`
-	AssetName      string           `json:"assetName"`
-	ServiceFee     int64            `json:"serviceFee"`
-	GasFee         *scommon.Decimal `json:"gasFee,omitempty"`
-	UnitPrice      string           `json:"unitPrice,omitempty"`
-	ExpectedAmt    *scommon.Decimal `json:"expectedAmt,omitempty"`
-	BlobKeyLimit   uint32           `json:"blobKeyLimit,omitempty"`
+	ID         int64            `json:"id"`
+	CallID     string           `json:"callId"`
+	Action     string           `json:"action"`
+	OrderType  int              `json:"orderType"`
+	Height     int64            `json:"height"`
+	OrderTime  int64            `json:"orderTime"`
+	AssetName  string           `json:"assetName"`
+	ServiceFee int64            `json:"serviceFee"`
+	GasFee     *scommon.Decimal `json:"gasFee,omitempty"`
+	// Param is the exact compact invoke parameter payload carried by the
+	// invoke OP_RETURN. Internal/default invokes store an equivalent compact
+	// contract parameter when execution needs a durable derived constraint.
+	Param          []byte           `json:"param,omitempty"`
 	Address        string           `json:"address,omitempty"`
 	InUtxos        string           `json:"inUtxos,omitempty"`
 	InValue        int64            `json:"inValue"`
@@ -58,7 +59,6 @@ type InvokeItem struct {
 	OutTxID        string           `json:"outTxId,omitempty"`
 	OutAmt         *scommon.Decimal `json:"outAmt,omitempty"`
 	OutValue       int64            `json:"outValue"`
-	RefundItemIDs  []int64          `json:"refundItemIds,omitempty"`
 	Reason         string           `json:"reason"`
 	Done           int              `json:"done"`
 	StatsApplied   bool             `json:"statsApplied,omitempty"`
@@ -69,33 +69,30 @@ func (i InvokeItem) Finished() bool {
 }
 
 type invokeItemJSON struct {
-	ID             int64   `json:"id"`
-	CallID         string  `json:"callId"`
-	Action         string  `json:"action"`
-	OrderType      int     `json:"orderType"`
-	Height         int64   `json:"height"`
-	OrderTime      int64   `json:"orderTime"`
-	AssetName      string  `json:"assetName"`
-	ServiceFee     int64   `json:"serviceFee"`
-	GasFee         string  `json:"gasFee,omitempty"`
-	UnitPrice      string  `json:"unitPrice,omitempty"`
-	ExpectedAmt    string  `json:"expectedAmt,omitempty"`
-	BlobKeyLimit   uint32  `json:"blobKeyLimit,omitempty"`
-	Address        string  `json:"address,omitempty"`
-	InUtxos        string  `json:"inUtxos,omitempty"`
-	InValue        int64   `json:"inValue"`
-	InAmt          string  `json:"inAmt,omitempty"`
-	RetainedAssetA string  `json:"retainedAssetA,omitempty"`
-	RetainedAssetB string  `json:"retainedAssetB,omitempty"`
-	RemainingAmt   string  `json:"remainingAmt,omitempty"`
-	RemainingValue int64   `json:"remainingValue"`
-	OutTxID        string  `json:"outTxId,omitempty"`
-	OutAmt         string  `json:"outAmt,omitempty"`
-	OutValue       int64   `json:"outValue"`
-	RefundItemIDs  []int64 `json:"refundItemIds,omitempty"`
-	Reason         string  `json:"reason"`
-	Done           int     `json:"done"`
-	StatsApplied   bool    `json:"statsApplied,omitempty"`
+	ID             int64  `json:"id"`
+	CallID         string `json:"callId"`
+	Action         string `json:"action"`
+	OrderType      int    `json:"orderType"`
+	Height         int64  `json:"height"`
+	OrderTime      int64  `json:"orderTime"`
+	AssetName      string `json:"assetName"`
+	ServiceFee     int64  `json:"serviceFee"`
+	GasFee         string `json:"gasFee,omitempty"`
+	Param          []byte `json:"param,omitempty"`
+	Address        string `json:"address,omitempty"`
+	InUtxos        string `json:"inUtxos,omitempty"`
+	InValue        int64  `json:"inValue"`
+	InAmt          string `json:"inAmt,omitempty"`
+	RetainedAssetA string `json:"retainedAssetA,omitempty"`
+	RetainedAssetB string `json:"retainedAssetB,omitempty"`
+	RemainingAmt   string `json:"remainingAmt,omitempty"`
+	RemainingValue int64  `json:"remainingValue"`
+	OutTxID        string `json:"outTxId,omitempty"`
+	OutAmt         string `json:"outAmt,omitempty"`
+	OutValue       int64  `json:"outValue"`
+	Reason         string `json:"reason"`
+	Done           int    `json:"done"`
+	StatsApplied   bool   `json:"statsApplied,omitempty"`
 }
 
 func (i InvokeItem) MarshalJSON() ([]byte, error) {
@@ -109,9 +106,7 @@ func (i InvokeItem) MarshalJSON() ([]byte, error) {
 		AssetName:      i.AssetName,
 		ServiceFee:     i.ServiceFee,
 		GasFee:         decimalString(i.GasFee),
-		UnitPrice:      i.UnitPrice,
-		ExpectedAmt:    decimalString(i.ExpectedAmt),
-		BlobKeyLimit:   i.BlobKeyLimit,
+		Param:          contractframework.CloneBytes(i.Param),
 		Address:        i.Address,
 		InUtxos:        i.InUtxos,
 		InValue:        i.InValue,
@@ -123,7 +118,6 @@ func (i InvokeItem) MarshalJSON() ([]byte, error) {
 		OutTxID:        i.OutTxID,
 		OutAmt:         decimalString(i.OutAmt),
 		OutValue:       i.OutValue,
-		RefundItemIDs:  i.RefundItemIDs,
 		Reason:         i.Reason,
 		Done:           i.Done,
 		StatsApplied:   i.StatsApplied,
@@ -131,6 +125,16 @@ func (i InvokeItem) MarshalJSON() ([]byte, error) {
 }
 
 func (i *InvokeItem) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, name := range []string{"unitPrice", "expectedAmt", "blobKeyLimit", "refundItemIds"} {
+		if _, ok := fields[name]; ok {
+			return fmt.Errorf("legacy invoke parameter field %q is not supported", name)
+		}
+	}
+
 	var item invokeItemJSON
 	if err := json.Unmarshal(data, &item); err != nil {
 		return err
@@ -151,16 +155,7 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 			return err
 		}
 	}
-	i.UnitPrice = item.UnitPrice
-	i.ExpectedAmt = nil
-	if item.ExpectedAmt != "" {
-		var err error
-		i.ExpectedAmt, err = parseStateDecimal("expectedAmt", item.ExpectedAmt)
-		if err != nil {
-			return err
-		}
-	}
-	i.BlobKeyLimit = item.BlobKeyLimit
+	i.Param = contractframework.CloneBytes(item.Param)
 	i.Address = item.Address
 	i.InUtxos = item.InUtxos
 	i.InValue = item.InValue
@@ -207,7 +202,6 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 		}
 	}
 	i.OutValue = item.OutValue
-	i.RefundItemIDs = item.RefundItemIDs
 	i.Reason = item.Reason
 	i.Done = item.Done
 	i.StatsApplied = item.StatsApplied
@@ -738,6 +732,9 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 	}
 	item.RetainedAssetA = retention.AssetA
 	item.RetainedAssetB = retention.AssetB
+	if err := normalizeInvokeItemParam(r.contract, item); err != nil {
+		return nil, err
+	}
 	state.NextItemID++
 	state.InvokeCount++
 	state.Items = append(state.Items, *item)
@@ -770,6 +767,7 @@ func (r *ContractRuntime) ApplyInvalidInvoke(req ApplyInvokeRequest, gasAssetNam
 		InUtxos:        inUtxos,
 		InValue:        inValue,
 		InAmt:          inAmt,
+		Param:          contractframework.CloneBytes(req.Param),
 		RetainedAssetA: retention.AssetA,
 		RetainedAssetB: retention.AssetB,
 		Reason:         InvokeReasonInvalid,
@@ -962,7 +960,7 @@ func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state Template
 		if inputA.Sign() == 0 && inputB.Sign() == 0 {
 			return nil, nil
 		}
-		item := newExchangeItem(id, contractcommon.ContractInvokeAPIDefault, req, inUtxos, c.AssetBName, inputB, "")
+		item := newExchangeItem(id, contractcommon.ContractInvokeAPIDefault, req, inUtxos, c.AssetBName, inputB)
 		if inputB.Sign() == 0 {
 			item.OrderType = OrderTypeFund
 			item.AssetName = c.AssetAName
@@ -978,9 +976,23 @@ func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state Template
 	if err != nil {
 		return nil, err
 	}
-	orderType, unitPrice := defaultInvokeOrder(contract, state, inValue, inAmt)
+	orderType, unitPrice, err := defaultInvokeOrder(contract, state, inValue, inAmt)
+	if err != nil {
+		return nil, err
+	}
 	if orderType == OrderTypeNoSpec {
 		return nil, nil
+	}
+	param := contractframework.CloneBytes(req.Param)
+	if _, ok := contract.(*LimitOrderContract); ok {
+		param, err = (&LimitOrderInvokeParam{
+			OrderType: orderType,
+			AssetName: assetName,
+			UnitPrice: unitPrice,
+		}).Encode()
+		if err != nil {
+			return nil, err
+		}
 	}
 	item := &InvokeItem{
 		ID:             id,
@@ -995,7 +1007,7 @@ func NewDefaultInvokeItemFromRequest(contract Contract, id int64, state Template
 		InValue:        inValue,
 		InAmt:          inAmt,
 		ServiceFee:     0,
-		UnitPrice:      unitPrice,
+		Param:          param,
 		Reason:         InvokeReasonNormal,
 		Done:           ItemStatusInit,
 		RemainingValue: inValue,
@@ -1025,33 +1037,39 @@ func defaultInvokeFunding(assetName string, output ContractOutput) (int64, *scom
 	return inValue, inAmt, inUtxos, nil
 }
 
-func defaultInvokeOrder(contract Contract, state TemplateRuntimeState, inValue int64, inAmt *scommon.Decimal) (int, string) {
+func defaultInvokeOrder(contract Contract, state TemplateRuntimeState, inValue int64, inAmt *scommon.Decimal) (int, string, error) {
 	hasValue := inValue > 0
 	hasAsset := inAmt != nil && inAmt.Sign() > 0
 	if hasValue == hasAsset {
-		return OrderTypeNoSpec, ""
+		return OrderTypeNoSpec, "", nil
 	}
 	if _, ok := contract.(*AMMContract); ok {
 		if hasValue {
-			return OrderTypeBuy, ""
+			return OrderTypeBuy, "", nil
 		}
-		return OrderTypeSell, ""
+		return OrderTypeSell, "", nil
 	}
 	if hasValue {
-		price := lowestActiveSellPrice(state)
-		if price == "" {
-			return OrderTypeNoSpec, ""
+		price, err := lowestActiveSellPrice(state)
+		if err != nil {
+			return OrderTypeNoSpec, "", err
 		}
-		return OrderTypeBuy, price
+		if price == "" {
+			return OrderTypeNoSpec, "", nil
+		}
+		return OrderTypeBuy, price, nil
 	}
-	price := highestActiveBuyPrice(state)
+	price, err := highestActiveBuyPrice(state)
+	if err != nil {
+		return OrderTypeNoSpec, "", err
+	}
 	if price == "" {
-		return OrderTypeNoSpec, ""
+		return OrderTypeNoSpec, "", nil
 	}
-	return OrderTypeSell, price
+	return OrderTypeSell, price, nil
 }
 
-func lowestActiveSellPrice(state TemplateRuntimeState) string {
+func lowestActiveSellPrice(state TemplateRuntimeState) (string, error) {
 	var best *scommon.Decimal
 	bestString := ""
 	for i := range state.Items {
@@ -1062,19 +1080,23 @@ func lowestActiveSellPrice(state TemplateRuntimeState) string {
 		if item.RemainingAmt == nil || item.RemainingAmt.Sign() <= 0 {
 			continue
 		}
-		price := parseDecimalOrZero(item.UnitPrice)
+		priceString, err := limitOrderItemPrice(item)
+		if err != nil {
+			return "", err
+		}
+		price := parseDecimalOrZero(priceString)
 		if price.Sign() <= 0 {
 			continue
 		}
 		if best == nil || price.Cmp(best) < 0 {
 			best = price
-			bestString = item.UnitPrice
+			bestString = priceString
 		}
 	}
-	return bestString
+	return bestString, nil
 }
 
-func highestActiveBuyPrice(state TemplateRuntimeState) string {
+func highestActiveBuyPrice(state TemplateRuntimeState) (string, error) {
 	var best *scommon.Decimal
 	bestString := ""
 	for i := range state.Items {
@@ -1082,16 +1104,20 @@ func highestActiveBuyPrice(state TemplateRuntimeState) string {
 		if item.Finished() || item.Reason != InvokeReasonNormal || item.OrderType != OrderTypeBuy || item.RemainingValue <= 0 {
 			continue
 		}
-		price := parseDecimalOrZero(item.UnitPrice)
+		priceString, err := limitOrderItemPrice(item)
+		if err != nil {
+			return "", err
+		}
+		price := parseDecimalOrZero(priceString)
 		if price.Sign() <= 0 {
 			continue
 		}
 		if best == nil || price.Cmp(best) > 0 {
 			best = price
-			bestString = item.UnitPrice
+			bestString = priceString
 		}
 	}
-	return bestString
+	return bestString, nil
 }
 
 func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeRequest) (*InvokeItem, error) {
@@ -1123,6 +1149,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		InUtxos:   inUtxos,
 		InValue:   inValue,
 		InAmt:     inAmt,
+		Param:     contractframework.CloneBytes(req.Param),
 		Reason:    InvokeReasonNormal,
 		Done:      ItemStatusInit,
 	}
@@ -1139,10 +1166,6 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		}
 		item.OrderType = param.OrderType
 		item.AssetName = firstNonEmpty(param.AssetName, assetName)
-		item.UnitPrice = param.UnitPrice
-		if param.Amt != "" {
-			item.ExpectedAmt = parseDecimalOrZero(param.Amt)
-		}
 		item.RemainingValue = inValue
 		if item.OrderType == OrderTypeSell {
 			item.RemainingAmt = item.InAmt
@@ -1174,7 +1197,6 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		item.AssetName = ""
 		item.InAmt = nil
 		item.RemainingValue = inValue
-		item.RefundItemIDs = append([]int64(nil), param.ItemIDs...)
 	case InvokeAPIAddLiquidity:
 		var param AddLiquidityInvokeParam
 		if err := param.Decode(req.Param); err != nil {
@@ -1183,7 +1205,6 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		item.OrderType = param.OrderType
 		item.AssetName = firstNonEmpty(param.AssetName, assetName)
 		if param.Amt != "" {
-			item.ExpectedAmt = parseDecimalOrZero(param.Amt)
 			item.RemainingAmt = parseDecimalOrZero(param.Amt)
 		}
 		item.RemainingValue = param.Value
@@ -1196,7 +1217,6 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		item.OrderType = param.OrderType
 		item.AssetName = firstNonEmpty(param.AssetName, assetName)
 		if param.LptAmt != "" {
-			item.ExpectedAmt = parseDecimalOrZero(param.LptAmt)
 			item.RemainingAmt = parseDecimalOrZero(param.LptAmt)
 		}
 	case InvokeAPIExchange:
@@ -1212,7 +1232,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		if err != nil {
 			return nil, err
 		}
-		item = newExchangeItem(id, req.Action, req, inUtxos, contract.AssetBName, inputB, param.MinOutA)
+		item = newExchangeItem(id, req.Action, req, inUtxos, contract.AssetBName, inputB)
 		if inputA.Sign() > 0 {
 			item.OutAmt = inputA
 		}
@@ -1230,8 +1250,6 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 			item.Reason = InvokeReasonInvalid
 		}
 		item.OrderType = OrderTypeValidate
-		item.ExpectedAmt = amount
-		item.BlobKeyLimit = normalizeAutopayBlobKeyLimit(param.BlobKeyLimit)
 		item.Done = ItemStatusDealt
 		item.GasFee = nil
 		if req.ResultGasFee != nil {
@@ -1269,6 +1287,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 				InAmt:          inputA,
 				RemainingAmt:   inputB,
 				GasFee:         req.ResultGasFee.Clone(),
+				Param:          contractframework.CloneBytes(req.Param),
 				Reason:         InvokeReasonNormal,
 				Done:           ItemStatusInit,
 				RemainingValue: fundingValue(req.FundingOutput),
@@ -1287,6 +1306,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 			InUtxos:        inUtxos,
 			InAmt:          inAmt,
 			GasFee:         req.ResultGasFee.Clone(),
+			Param:          contractframework.CloneBytes(req.Param),
 			Reason:         InvokeReasonNormal,
 			Done:           ItemStatusInit,
 			RemainingValue: fundingValue(req.FundingOutput),

@@ -64,9 +64,15 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 		Timestamp:     200,
 	})
 	require.NoError(t, err)
+	rawParam := append([]byte(nil), param...)
 	require.Equal(t, int64(0), item.ID)
 	require.Equal(t, OrderTypeBuy, item.OrderType)
-	requireDecimalString(t, "10", item.ExpectedAmt)
+	require.Equal(t, rawParam, item.Param)
+	param[0] ^= 0xff
+	require.NotEqual(t, param, item.Param)
+	expected, err := limitOrderItemExpectedAmount(item)
+	require.NoError(t, err)
+	requireDecimalString(t, "10", expected)
 	require.Equal(t, int64(20), item.RemainingValue)
 	require.Equal(t, int64(10), item.OutValue)
 
@@ -75,8 +81,38 @@ func TestApplyInvokeRecordsLimitOrderItem(t *testing.T) {
 	require.Equal(t, int64(1), state.NextItemID)
 	require.Equal(t, uint64(1), state.InvokeCount)
 	require.Len(t, state.Items, 1)
+	require.Equal(t, rawParam, state.Items[0].Param)
 	requireDecimalString(t, "30", state.LimitOrderData().TotalInputAssetB)
 	requireDecimalString(t, "20", state.LimitOrderData().AssetBInPool)
+}
+
+func TestApplyInvokePreservesRawParamWhileResolvingGenericAssetName(t *testing.T) {
+	runtime := testLimitOrderRuntime(t)
+	contract := runtime.Address()
+	param, err := (&LimitOrderInvokeParam{
+		OrderType: OrderTypeBuy,
+		AssetName: "",
+		Amt:       "10",
+		UnitPrice: "2",
+	}).Encode()
+	require.NoError(t, err)
+	rawParam := append([]byte(nil), param...)
+
+	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action:        InvokeAPISwap,
+		Param:         param,
+		CallID:        DeriveInvokeCallID("raw-param", 1, contract),
+		FundingOutput: testContractOutput("raw-param", 1, contract, 30, nil),
+		Height:        100,
+		Timestamp:     200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "ordx:f:test", item.AssetName)
+	require.Equal(t, rawParam, item.Param)
+
+	var decoded LimitOrderInvokeParam
+	require.NoError(t, decoded.Decode(item.Param))
+	require.Empty(t, decoded.AssetName)
 }
 
 func TestApplyInvokeRecordsLimitOrderBuyExcessForRefund(t *testing.T) {
@@ -234,7 +270,9 @@ func TestApplyInvokeRecordsAMMBuyWithExactFunding(t *testing.T) {
 	require.Equal(t, OrderTypeBuy, item.OrderType)
 	require.Equal(t, int64(SwapInvokeFee), item.ServiceFee)
 	require.Equal(t, int64(10), item.RemainingValue)
-	require.Empty(t, item.ExpectedAmt)
+	expected, err := limitOrderItemExpectedAmount(item)
+	require.NoError(t, err)
+	require.Zero(t, expected.Sign())
 }
 
 func TestApplyFundingTracksTemplateGasSeparately(t *testing.T) {

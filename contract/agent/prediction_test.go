@@ -1,6 +1,12 @@
 package agent
 
-import "testing"
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
+)
 
 func validPredictionContract() PredictionContract {
 	return PredictionContract{
@@ -30,6 +36,62 @@ func TestPredictionContractCheck(t *testing.T) {
 	contract.Outcomes = append(contract.Outcomes, PredictionOutcome{ID: "a", Text: "duplicate"})
 	if err := contract.Check(); err == nil {
 		t.Fatalf("expected duplicate outcome error")
+	}
+}
+
+func TestPredictionCodecUsesSharedCompactScriptFormat(t *testing.T) {
+	contract := validPredictionContract()
+	content, err := contract.Encode()
+	if err != nil {
+		t.Fatalf("Encode failed: %v", err)
+	}
+	if json.Valid(content) {
+		t.Fatalf("prediction contract content must not use JSON")
+	}
+	commonContent, err := contract.commonContract().Encode()
+	if err != nil {
+		t.Fatalf("common Encode failed: %v", err)
+	}
+	if !reflect.DeepEqual(content, commonContent) {
+		t.Fatalf("agent runtime codec differs from shared contract codec")
+	}
+	decoded, err := DecodePredictionContract(content)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if !reflect.DeepEqual(contract, decoded) {
+		t.Fatalf("decoded contract mismatch: %#v", decoded)
+	}
+
+	confirm := validPredictionConfirmParam()
+	confirm.AgentVersion = CurrentAgentVersion
+	confirm.ModelVersion = "model-v1"
+	param, err := confirm.Encode()
+	if err != nil {
+		t.Fatalf("confirm Encode failed: %v", err)
+	}
+	commonParam, err := (contractcommon.AgentPredictionConfirmParam(confirm)).Encode()
+	if err != nil {
+		t.Fatalf("common confirm Encode failed: %v", err)
+	}
+	if !reflect.DeepEqual(param, commonParam) {
+		t.Fatalf("agent runtime param codec differs from shared contract codec")
+	}
+	decodedConfirm, err := DecodePredictionConfirmParam(param)
+	if err != nil {
+		t.Fatalf("confirm Decode failed: %v", err)
+	}
+	if !reflect.DeepEqual(confirm, decodedConfirm) {
+		t.Fatalf("decoded confirm mismatch: %#v", decodedConfirm)
+	}
+}
+
+func TestPredictionCodecRejectsLegacyJSON(t *testing.T) {
+	if _, err := DecodePredictionContract([]byte(`{"subtype":"prediction"}`)); err == nil {
+		t.Fatalf("expected legacy JSON contract content to be rejected")
+	}
+	if _, err := DecodePredictionBetParam([]byte(`{"outcome_id":"a"}`)); err == nil {
+		t.Fatalf("expected legacy JSON param to be rejected")
 	}
 }
 
