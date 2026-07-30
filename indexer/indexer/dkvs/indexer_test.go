@@ -234,6 +234,41 @@ func TestLocalCacheAutopayVerifierAcceptsOnlyExplicitFreeLocal(t *testing.T) {
 	}
 }
 
+func TestLocalCacheAutopayVerifierAcceptsFreeLocalCAS(t *testing.T) {
+	idx := testIndexerWithConfig(t, Config{
+		AllowFreeLocal: true,
+		FreeLocalCache: FreeLocalCachePolicy{
+			Enabled:             true,
+			MaxTTL:              120_000,
+			MaxRecordsPerSigner: 4,
+			MaxBytesPerSigner:   1 << 20,
+			MaxTotalRecords:     10,
+			MaxTotalBytes:       1 << 20,
+		},
+		FeeVerifier: LocalCacheAutopayFeeVerifier{
+			AutopayFeeVerifier: AutopayFeeVerifier{FullRecordFeePerBlock: "1"},
+			AllowFreeLocal:     true,
+		},
+	})
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	single := signedFreePersonalRecord(t, priv, "cas/single", 1, "single", 0)
+	if updated, err := idx.PutLocalCAS(single, WritePrecondition{ExpectAbsent: true}); err != nil || !updated {
+		t.Fatalf("free local single CAS updated=%v err=%v", updated, err)
+	}
+	first := signedFreePersonalRecord(t, priv, "cas/batch-a", 1, "first", 0)
+	second := signedFreePersonalRecord(t, priv, "cas/batch-b", 1, "second", 0)
+	applied, err := idx.PutLocalBatchCAS([]CASMutation{
+		{Record: first, Precondition: WritePrecondition{ExpectAbsent: true}},
+		{Record: second, Precondition: WritePrecondition{ExpectAbsent: true}},
+	})
+	if err != nil || applied != 2 {
+		t.Fatalf("free local batch CAS applied=%d err=%v", applied, err)
+	}
+}
+
 func testMailMsgKey(t *testing.T, mailboxPubKey, senderPubKey []byte, msgID string) string {
 	t.Helper()
 	key, err := MailMsgKey(AccountID(mailboxPubKey), AccountID(senderPubKey), msgID)

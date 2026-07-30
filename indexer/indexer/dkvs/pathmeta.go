@@ -64,6 +64,20 @@ func collectionPathForPrefix(prefix string) string {
 	return ""
 }
 
+// CollectionPathForKey returns the logical collection whose root and
+// generation cover key.
+func CollectionPathForKey(key string) (string, error) {
+	parsed, err := ParseKey(key)
+	if err != nil {
+		return "", err
+	}
+	path := collectionPath(parsed)
+	if path == "" {
+		return "", ErrInvalidKey
+	}
+	return path, nil
+}
+
 func pathMetaDBKey(path string) []byte {
 	out := make([]byte, 0, len(pathMetaKeyPrefix)+len(path))
 	out = append(out, pathMetaKeyPrefix...)
@@ -345,11 +359,11 @@ func (i *Indexer) markPathMetaDirtyLocked(batch indexercommon.WriteBatch, record
 			metas[path] = meta
 		}
 		meta.Dirty = true
+	}
+	for _, meta := range metas {
 		meta.Generation++
 		meta.UpdatedHeight = height
 		meta.UpdatedAt = now
-	}
-	for _, meta := range metas {
 		if err := putPathMetaBatch(batch, meta); err != nil {
 			return err
 		}

@@ -21,7 +21,14 @@ type dkvsCASMutationReq struct {
 }
 
 type dkvsBatchCASReq struct {
-	Mutations []dkvsCASMutationReq `json:"mutations"`
+	Mutations         []dkvsCASMutationReq      `json:"mutations"`
+	PathPreconditions []dkvsPathPreconditionReq `json:"path_preconditions,omitempty"`
+}
+
+type dkvsPathPreconditionReq struct {
+	Path               string `json:"path"`
+	ExpectedRoot       string `json:"expected_root"`
+	ExpectedGeneration uint64 `json:"expected_generation"`
 }
 
 type dkvsBatchCASData struct {
@@ -61,6 +68,20 @@ func parseDKVSPrecondition(expected string, absent bool) (dkvsindexer.WritePreco
 		condition.ExpectedHash = hash
 	}
 	return condition, nil
+}
+
+func parseDKVSPathPreconditions(requests []dkvsPathPreconditionReq) ([]dkvsindexer.PathWritePrecondition, error) {
+	conditions := make([]dkvsindexer.PathWritePrecondition, 0, len(requests))
+	for _, request := range requests {
+		root, err := chainhash.NewHashFromStr(strings.TrimSpace(request.ExpectedRoot))
+		if err != nil {
+			return nil, dkvsindexer.ErrInvalidRecord
+		}
+		conditions = append(conditions, dkvsindexer.PathWritePrecondition{
+			Path: request.Path, ExpectedRoot: *root, ExpectedGeneration: request.ExpectedGeneration,
+		})
+	}
+	return conditions, nil
 }
 
 func (s *Handle) putDKVSRecordCAS(c *gin.Context) {
@@ -110,7 +131,22 @@ func (s *Handle) putDKVSRecordBatchCAS(c *gin.Context) {
 		}
 		mutations = append(mutations, dkvsindexer.CASMutation{Record: mutation.Record, Precondition: condition})
 	}
-	applied, err := s.model.PutDKVSRecordBatchCAS(mutations)
+	pathConditions, err := parseDKVSPathPreconditions(req.PathPreconditions)
+	if err == nil {
+		applied, applyErr := s.model.PutDKVSRecordBatchCASWithOptions(mutations,
+			dkvsindexer.BatchCASOptions{PathPreconditions: pathConditions})
+		err = applyErr
+		if err == nil {
+			data := &dkvsBatchCASData{Applied: applied, Records: make([]*swire.DKVSRecord, 0, len(mutations)), Hashes: make([]string, 0, len(mutations))}
+			for _, mutation := range mutations {
+				data.Records = append(data.Records, mutation.Record)
+				data.Hashes = append(data.Hashes, dkvsindexer.RecordHash(mutation.Record).String())
+			}
+			resp.Data = data
+			c.JSON(http.StatusOK, resp)
+			return
+		}
+	}
 	if err != nil {
 		resp.Code, resp.Msg = -1, err.Error()
 		status := http.StatusBadRequest
@@ -120,13 +156,6 @@ func (s *Handle) putDKVSRecordBatchCAS(c *gin.Context) {
 		c.JSON(status, resp)
 		return
 	}
-	data := &dkvsBatchCASData{Applied: applied, Records: make([]*swire.DKVSRecord, 0, len(mutations)), Hashes: make([]string, 0, len(mutations))}
-	for _, mutation := range mutations {
-		data.Records = append(data.Records, mutation.Record)
-		data.Hashes = append(data.Hashes, dkvsindexer.RecordHash(mutation.Record).String())
-	}
-	resp.Data = data
-	c.JSON(http.StatusOK, resp)
 }
 
 func (s *Handle) syncDKVSDirectory(c *gin.Context) {

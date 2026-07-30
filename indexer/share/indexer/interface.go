@@ -76,6 +76,7 @@ type Indexer interface {
 	PutDKVSRecordWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error)
 	PutDKVSRecordCAS(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition) (bool, error)
 	PutDKVSRecordBatchCAS(mutations []dkvs_indexer.CASMutation) (int, error)
+	PutDKVSRecordBatchCASWithOptions(mutations []dkvs_indexer.CASMutation, options dkvs_indexer.BatchCASOptions) (int, error)
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	NotifyDKVSNameTransfers(names []string) error
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)

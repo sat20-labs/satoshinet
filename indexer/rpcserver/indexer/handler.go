@@ -447,13 +447,14 @@ func (s *Handle) putDKVSRecord(c *gin.Context) {
 		c.JSON(http.StatusOK, resp)
 		return
 	}
-	_, hash, err := s.model.PutDKVSRecordWithHash(&record)
+	_, err := s.model.PutDKVSRecordCAS(&record, dkvsindexer.WritePrecondition{ExpectAbsent: true})
 	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
+	hash := dkvsindexer.RecordHash(&record)
 	resp.Data = &record
 	resp.Hash = hash.String()
 	c.JSON(http.StatusOK, resp)
@@ -474,13 +475,14 @@ func (s *Handle) putDKVSTombstone(c *gin.Context) {
 		c.JSON(http.StatusOK, resp)
 		return
 	}
-	_, hash, err := s.model.PutDKVSRecordWithHash(&record)
+	_, err := s.model.PutDKVSRecordCAS(&record, dkvsindexer.WritePrecondition{ExpectAbsent: true})
 	if err != nil {
 		resp.Code = -1
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
+	hash := dkvsindexer.RecordHash(&record)
 	resp.Data = &record
 	resp.Hash = hash.String()
 	c.JSON(http.StatusOK, resp)

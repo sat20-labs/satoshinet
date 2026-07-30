@@ -54,6 +54,12 @@ func (b *IndexerMgr) PutDKVSRecordBatchCAS(mutations []dkvs_indexer.CASMutation)
 	return b.dkvsIndexer.PutLocalBatchCAS(mutations)
 }
 
+func (b *IndexerMgr) PutDKVSRecordBatchCASWithOptions(mutations []dkvs_indexer.CASMutation,
+	options dkvs_indexer.BatchCASOptions) (int, error) {
+
+	return b.dkvsIndexer.PutLocalBatchCASWithOptions(mutations, options)
+}
+
 func (b *IndexerMgr) PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return b.dkvsIndexer.PutRemote(record)
 }

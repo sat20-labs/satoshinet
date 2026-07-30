@@ -19,6 +19,7 @@ type preparedCASMutation struct {
 
 type batchCASPreparation struct {
 	mutations        []preparedCASMutation
+	pathConditions   []PathWritePrecondition
 	height           uint64
 	now              uint64
 	policyGeneration uint64
@@ -80,14 +81,52 @@ func mutationAlreadyApplied(record *wire.DKVSRecord, snapshot writeStateSnapshot
 		RecordHash(snapshot.deleteState.Record) == want
 }
 
-func (i *Indexer) prepareBatchCAS(mutations []CASMutation) (batchCASPreparation, error) {
+func clonePathWritePreconditions(conditions []PathWritePrecondition) []PathWritePrecondition {
+	cloned := make([]PathWritePrecondition, len(conditions))
+	copy(cloned, conditions)
+	return cloned
+}
+
+func validatePathWritePreconditions(mutations []CASMutation, conditions []PathWritePrecondition) error {
+	if len(conditions) == 0 {
+		return nil
+	}
+	touched := make(map[string]struct{})
+	for _, mutation := range mutations {
+		path, err := CollectionPathForKey(mutation.Record.Key)
+		if err == nil {
+			touched[path] = struct{}{}
+		}
+	}
+	seen := make(map[string]struct{}, len(conditions))
+	for _, condition := range conditions {
+		path := collectionPathForPrefix(condition.Path)
+		if path == "" || path != condition.Path {
+			return ErrInvalidKey
+		}
+		if _, ok := touched[path]; !ok {
+			return ErrInvalidRecord
+		}
+		if _, ok := seen[path]; ok {
+			return ErrInvalidRecord
+		}
+		seen[path] = struct{}{}
+	}
+	return nil
+}
+
+func (i *Indexer) prepareBatchCAS(mutations []CASMutation, options BatchCASOptions) (batchCASPreparation, error) {
 	mutations = cloneCASMutations(mutations)
 	if err := validateCASMutations(mutations); err != nil {
+		return batchCASPreparation{}, err
+	}
+	if err := validatePathWritePreconditions(mutations, options.PathPreconditions); err != nil {
 		return batchCASPreparation{}, err
 	}
 	validators := i.snapshotValidators()
 	prep := batchCASPreparation{
 		mutations:        make([]preparedCASMutation, 0, len(mutations)),
+		pathConditions:   clonePathWritePreconditions(options.PathPreconditions),
 		height:           i.currentHeight(),
 		now:              currentUnixMilli(),
 		policyGeneration: validators.policyGeneration,
@@ -149,6 +188,35 @@ func writePreconditionMatches(i *Indexer, existing *wire.DKVSRecord, condition W
 	return *condition.ExpectedHash == hash
 }
 
+func nextCASSequence(snapshot writeStateSnapshot) (uint64, error) {
+	var current uint64
+	if snapshot.existing != nil {
+		current = snapshot.existing.Seq
+	}
+	if snapshot.deleteState != nil && snapshot.deleteState.FloorSeq > current {
+		current = snapshot.deleteState.FloorSeq
+	}
+	if current == ^uint64(0) {
+		return 0, ErrWriteConflict
+	}
+	return current + 1, nil
+}
+
+func (i *Indexer) validatePathWritePreconditionsLocked(conditions []PathWritePrecondition,
+	height, now uint64) error {
+
+	for _, condition := range conditions {
+		meta, err := i.ensurePathMetaLocked(condition.Path, height, now)
+		if err != nil {
+			return err
+		}
+		if meta.Generation != condition.ExpectedGeneration || meta.ActiveRoot != condition.ExpectedRoot {
+			return ErrWriteConflict
+		}
+	}
+	return nil
+}
+
 func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint64) ([]preparedCASMutation, error) {
 	if atomic.LoadUint64(&i.policyGeneration) != prep.policyGeneration {
 		return nil, ErrConcurrentUpdate
@@ -172,6 +240,9 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 		}
 		return nil, ErrWriteConflict
 	}
+	if err := i.validatePathWritePreconditionsLocked(prep.pathConditions, height, now); err != nil {
+		return nil, err
+	}
 	ready := make([]preparedCASMutation, 0, len(prep.mutations))
 	for _, prepared := range prep.mutations {
 		record := prepared.mutation.Record
@@ -180,6 +251,10 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 			return nil, ErrExpiredRecord
 		}
 		if !writePreconditionMatches(i, existing, prepared.mutation.Precondition, height, now) {
+			return nil, ErrWriteConflict
+		}
+		nextSeq, err := nextCASSequence(prepared.snapshot)
+		if err != nil || record.Seq != nextSeq {
 			return nil, ErrWriteConflict
 		}
 		if IsTombstone(record.Flags) {
@@ -333,6 +408,9 @@ func (i *Indexer) validateProjectedFeeLocked(ready []preparedCASMutation,
 			continue
 		}
 		key := prepared.capacity.descriptor.UsageKey
+		if key == "" {
+			continue
+		}
 		limits[key] = prepared.capacity.descriptor.MaxRecords
 		verifiers[key] = prepared.capacity.indexed
 	}
@@ -507,9 +585,9 @@ func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now 
 	return events, nil
 }
 
-func (i *Indexer) PutLocalBatchCAS(mutations []CASMutation) (int, error) {
+func (i *Indexer) PutLocalBatchCASWithOptions(mutations []CASMutation, options BatchCASOptions) (int, error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		prep, err := i.prepareBatchCAS(mutations)
+		prep, err := i.prepareBatchCAS(mutations, options)
 		if err != nil {
 			if errors.Is(err, ErrConcurrentUpdate) {
 				continue
@@ -540,6 +618,10 @@ func (i *Indexer) PutLocalBatchCAS(mutations []CASMutation) (int, error) {
 		return len(ready), nil
 	}
 	return 0, ErrConcurrentUpdate
+}
+
+func (i *Indexer) PutLocalBatchCAS(mutations []CASMutation) (int, error) {
+	return i.PutLocalBatchCASWithOptions(mutations, BatchCASOptions{})
 }
 
 func (i *Indexer) PutLocalCAS(record *wire.DKVSRecord, precondition WritePrecondition) (bool, error) {

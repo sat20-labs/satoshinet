@@ -12,7 +12,7 @@ const (
 	DefaultTestNetAutopayDeployNonce    uint64 = 8888
 	DefaultAutopayServiceName                  = "dkvs"
 	DefaultAutopayMinAmountPerBlock            = "1"
-	DefaultAutopayFullRecordFeePerBlock        = "1"
+	DefaultAutopayFullRecordFeePerBlock        = "0.1"
 )
 
 // NetworkDefaults contains DKVS policy defaults that are safe to publish in

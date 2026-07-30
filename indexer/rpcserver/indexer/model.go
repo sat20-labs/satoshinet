@@ -217,6 +217,12 @@ func (s *Model) PutDKVSRecordBatchCAS(mutations []dkvsindexer.CASMutation) (int,
 	return s.indexer.PutDKVSRecordBatchCAS(mutations)
 }
 
+func (s *Model) PutDKVSRecordBatchCASWithOptions(mutations []dkvsindexer.CASMutation,
+	options dkvsindexer.BatchCASOptions) (int, error) {
+
+	return s.indexer.PutDKVSRecordBatchCASWithOptions(mutations, options)
+}
+
 func (s *Model) GetDKVSRecord(key string) (*swire.DKVSRecord, error) {
 	return s.indexer.GetDKVSRecord(key)
 }

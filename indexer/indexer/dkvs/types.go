@@ -201,6 +201,18 @@ type CASMutation struct {
 	Precondition WritePrecondition `json:"precondition"`
 }
 
+// PathWritePrecondition proves that the caller built a mutation from a
+// complete, current view of a logical DKVS collection.
+type PathWritePrecondition struct {
+	Path               string         `json:"path"`
+	ExpectedRoot       chainhash.Hash `json:"expected_root"`
+	ExpectedGeneration uint64         `json:"expected_generation"`
+}
+
+type BatchCASOptions struct {
+	PathPreconditions []PathWritePrecondition `json:"path_preconditions,omitempty"`
+}
+
 type SubscriptionType string
 
 const (
