@@ -6,6 +6,8 @@ import (
 	"sync"
 )
 
+const subscriptionPath = SubscriptionType("path")
+
 type subscriptionSet struct {
 	mutex sync.RWMutex
 	items map[Subscription]struct{}
@@ -89,6 +91,11 @@ func validateSubscription(sub Subscription) (Subscription, error) {
 			return sub, ErrInvalidKey
 		}
 		sub.Target = "/svc/" + serviceName
+	case subscriptionPath:
+		sub.Target = strings.TrimSuffix(sub.Target, "/")
+		if collectionPathForPrefix(sub.Target) != sub.Target || !isCanonicalCollectionPath(sub.Target) {
+			return sub, ErrInvalidKey
+		}
 	default:
 		return sub, ErrInvalidRecord
 	}
@@ -101,13 +108,17 @@ func subscriptionMatchesKey(sub Subscription, key string) bool {
 		return key == sub.Target
 	case SubscriptionPrefix, SubscriptionMailbox, SubscriptionService:
 		return key == sub.Target || strings.HasPrefix(key, sub.Target+"/")
+	case subscriptionPath:
+		parsed, err := ParseKey(key)
+		return err == nil && collectionPath(parsed) == sub.Target
 	default:
 		return false
 	}
 }
 
 // SubscriptionMatchesKey validates a subscription and reports whether it
-// covers key. It is exported for the P2P sync coordinator.
+// covers key. The internal "path" type is accepted for authenticated full-path
+// synchronization but is never persisted as a user subscription.
 func SubscriptionMatchesKey(sub Subscription, key string) bool {
 	normalized, err := validateSubscription(sub)
 	if err != nil {

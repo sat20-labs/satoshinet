@@ -1,8 +1,11 @@
 package dkvs
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
@@ -10,136 +13,95 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const pathMetaVersion = uint32(2)
+const pathMetaVersion = uint32(3)
 
-var pathMetaKeyPrefix = []byte("dkvs:pathmeta:")
-
-func collectionPath(parsed ParsedKey) string {
-	if len(parsed.Segments) == 0 {
-		return ""
-	}
-	switch parsed.Namespace {
-	case "personal":
-		return "/personal/" + parsed.Segments[0]
-	case "svc":
-		return "/svc/" + parsed.Segments[0]
-	case "mail":
-		if len(parsed.Segments) >= 3 && parsed.Segments[1] == "msg" {
-			return "/mail/" + parsed.Segments[0] + "/msg/" + parsed.Segments[2]
-		}
-		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" {
-			return "/mail/" + parsed.Segments[0] + "/share"
-		}
-	case "blob":
-		if len(parsed.Segments) >= 2 {
-			return "/blob/" + parsed.Segments[0] + "/" + parsed.Segments[1]
-		}
-	}
-	return ""
-}
-
-func collectionPathForPrefix(prefix string) string {
-	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
-	parsed, err := ParsePrefix(prefix)
-	if err != nil {
-		return ""
-	}
-	switch parsed.Namespace {
-	case "personal", "svc":
-		if len(parsed.Segments) == 1 {
-			return prefix
-		}
-	case "mail":
-		if len(parsed.Segments) == 3 && parsed.Segments[1] == "msg" && validAccountID(parsed.Segments[2]) {
-			return prefix
-		}
-		if len(parsed.Segments) == 2 && parsed.Segments[1] == "share" {
-			return prefix
-		}
-	case "blob":
-		if len(parsed.Segments) == 2 {
-			return prefix
-		}
-	}
-	return ""
-}
-
-// CollectionPathForKey returns the logical collection whose root and
-// generation cover key.
-func CollectionPathForKey(key string) (string, error) {
-	parsed, err := ParseKey(key)
-	if err != nil {
-		return "", err
-	}
-	path := collectionPath(parsed)
-	if path == "" {
-		return "", ErrInvalidKey
-	}
-	return path, nil
-}
+var (
+	pathMetaKeyPrefix   = []byte("dkvs:pathmeta:")
+	pathStatusKeyPrefix = []byte("dkvs:pathstatus:")
+	pathLeafDomain      = []byte("dkvs-path-leaf-v1")
+	deleteFloorDomain   = []byte("dkvs-delete-floor-v1")
+)
 
 func pathMetaDBKey(path string) []byte {
 	out := make([]byte, 0, len(pathMetaKeyPrefix)+len(path))
 	out = append(out, pathMetaKeyPrefix...)
-	out = append(out, path...)
-	return out
+	return append(out, path...)
+}
+
+func pathStatusDBKey(path string) []byte {
+	out := make([]byte, 0, len(pathStatusKeyPrefix)+len(path))
+	out = append(out, pathStatusKeyPrefix...)
+	return append(out, path...)
+}
+
+func normalizePathMetaAliases(meta *PathMeta) {
+	if meta == nil {
+		return
+	}
+	// ActiveRoot is a deprecated in-memory compatibility view containing only
+	// active records. StateRoot is the canonical network root and additionally
+	// commits delete floors. ActiveRoot is therefore populated only when a
+	// caller explicitly asks for path metadata and must never alias StateRoot.
+	meta.UpdatedHeight = meta.ViewHeight
 }
 
 func marshalPathMeta(meta *PathMeta) ([]byte, error) {
 	if meta == nil || meta.Version != pathMetaVersion || meta.Path == "" {
 		return nil, ErrInvalidRecord
 	}
-	encoded := make([]byte, 4+7*8+chainhash.HashSize+1)
+	encoded := make([]byte, 4+5*8+chainhash.HashSize)
 	binary.LittleEndian.PutUint32(encoded[0:4], meta.Version)
-	values := []uint64{
-		meta.Generation,
-		meta.ActiveRecords,
-		meta.ActiveTotalSize,
-		meta.MinExpiryHeight,
-		meta.MinExpiryTime,
-		meta.UpdatedHeight,
-		meta.UpdatedAt,
-	}
+	values := []uint64{meta.Generation, meta.ActiveRecords, meta.ActiveTotalSize, meta.MinExpiryHeight, meta.ViewHeight}
 	offset := 4
 	for _, value := range values {
 		binary.LittleEndian.PutUint64(encoded[offset:offset+8], value)
 		offset += 8
 	}
-	copy(encoded[offset:offset+chainhash.HashSize], meta.ActiveRoot[:])
-	offset += chainhash.HashSize
-	if meta.Dirty {
-		encoded[offset] = 1
-	}
+	copy(encoded[offset:], meta.StateRoot[:])
 	return encoded, nil
 }
 
 func unmarshalPathMeta(path string, encoded []byte) (*PathMeta, error) {
-	if path == "" || len(encoded) != 4+7*8+chainhash.HashSize+1 {
+	if path == "" || len(encoded) != 4+5*8+chainhash.HashSize {
 		return nil, ErrInvalidRecord
 	}
-	meta := &PathMeta{Path: path}
-	meta.Version = binary.LittleEndian.Uint32(encoded[0:4])
+	meta := &PathMeta{Path: path, Version: binary.LittleEndian.Uint32(encoded[0:4])}
 	if meta.Version != pathMetaVersion {
 		return nil, ErrInvalidRecord
 	}
-	fields := []*uint64{
-		&meta.Generation,
-		&meta.ActiveRecords,
-		&meta.ActiveTotalSize,
-		&meta.MinExpiryHeight,
-		&meta.MinExpiryTime,
-		&meta.UpdatedHeight,
-		&meta.UpdatedAt,
-	}
+	fields := []*uint64{&meta.Generation, &meta.ActiveRecords, &meta.ActiveTotalSize, &meta.MinExpiryHeight, &meta.ViewHeight}
 	offset := 4
 	for _, field := range fields {
 		*field = binary.LittleEndian.Uint64(encoded[offset : offset+8])
 		offset += 8
 	}
-	copy(meta.ActiveRoot[:], encoded[offset:offset+chainhash.HashSize])
-	offset += chainhash.HashSize
-	meta.Dirty = encoded[offset] != 0
+	copy(meta.StateRoot[:], encoded[offset:])
+	normalizePathMetaAliases(meta)
 	return meta, nil
+}
+
+func marshalPathStatus(status *PathLocalStatus) ([]byte, error) {
+	if status == nil || status.Path == "" {
+		return nil, ErrInvalidRecord
+	}
+	return json.Marshal(status)
+}
+
+func unmarshalPathStatus(path string, encoded []byte) (*PathLocalStatus, error) {
+	if path == "" || len(encoded) == 0 {
+		return nil, ErrInvalidRecord
+	}
+	var status PathLocalStatus
+	if err := json.Unmarshal(encoded, &status); err != nil {
+		return nil, ErrInvalidRecord
+	}
+	if status.Path == "" {
+		status.Path = path
+	}
+	if status.Path != path {
+		return nil, ErrInvalidRecord
+	}
+	return &status, nil
 }
 
 func (i *Indexer) readPathMetaLocked(path string) (*PathMeta, error) {
@@ -153,14 +115,22 @@ func (i *Indexer) readPathMetaLocked(path string) (*PathMeta, error) {
 	return unmarshalPathMeta(path, encoded)
 }
 
-func pathMetaNeedsRebuild(meta *PathMeta, height, now uint64) bool {
-	if meta == nil || meta.Dirty {
+func (i *Indexer) readPathStatusLocked(path string) (*PathLocalStatus, error) {
+	encoded, err := i.db.Read(pathStatusDBKey(path))
+	if err != nil {
+		if errors.Is(err, indexercommon.ErrKeyNotFound) {
+			return &PathLocalStatus{Path: path}, nil
+		}
+		return nil, err
+	}
+	return unmarshalPathStatus(path, encoded)
+}
+
+func pathMetaNeedsRebuild(meta *PathMeta, status *PathLocalStatus, height uint64) bool {
+	if meta == nil || (status != nil && status.Dirty) || meta.ViewHeight != height {
 		return true
 	}
-	if height != 0 && meta.MinExpiryHeight != 0 && meta.MinExpiryHeight <= height {
-		return true
-	}
-	return now != 0 && meta.MinExpiryTime != 0 && meta.MinExpiryTime <= now
+	return height != 0 && meta.MinExpiryHeight != 0 && meta.MinExpiryHeight <= height
 }
 
 func recordExpiryTime(record *wire.DKVSRecord) uint64 {
@@ -171,36 +141,102 @@ func recordExpiryTime(record *wire.DKVSRecord) uint64 {
 }
 
 func updateMinExpiry(meta *PathMeta, record *wire.DKVSRecord) {
-	if meta == nil || record == nil || IsTombstone(record.Flags) {
+	if meta == nil || record == nil || IsTombstone(record.Flags) || isFreeLocalRecord(record) {
 		return
 	}
 	if record.ExpiryHeight != 0 && (meta.MinExpiryHeight == 0 || record.ExpiryHeight < meta.MinExpiryHeight) {
 		meta.MinExpiryHeight = record.ExpiryHeight
 	}
-	if expiryTime := recordExpiryTime(record); expiryTime != 0 && (meta.MinExpiryTime == 0 || expiryTime < meta.MinExpiryTime) {
-		meta.MinExpiryTime = expiryTime
-	}
+}
+
+func pathStateLeaf(key string, effectiveHash chainhash.Hash) chainhash.Hash {
+	h := sha256.New()
+	_, _ = h.Write(pathLeafDomain)
+	var scratch [8]byte
+	binary.BigEndian.PutUint64(scratch[:], uint64(len(key)))
+	_, _ = h.Write(scratch[:])
+	_, _ = h.Write([]byte(key))
+	_, _ = h.Write(effectiveHash[:])
+	var out chainhash.Hash
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func deleteFloorEffectiveHash(key string, floorSeq, pathGeneration uint64, pubKey []byte) chainhash.Hash {
+	h := sha256.New()
+	_, _ = h.Write(deleteFloorDomain)
+	var scratch [8]byte
+	binary.BigEndian.PutUint64(scratch[:], uint64(len(key)))
+	_, _ = h.Write(scratch[:])
+	_, _ = h.Write([]byte(key))
+	binary.BigEndian.PutUint64(scratch[:], floorSeq)
+	_, _ = h.Write(scratch[:])
+	binary.BigEndian.PutUint64(scratch[:], pathGeneration)
+	_, _ = h.Write(scratch[:])
+	binary.BigEndian.PutUint64(scratch[:], uint64(len(pubKey)))
+	_, _ = h.Write(scratch[:])
+	_, _ = h.Write(pubKey)
+	var out chainhash.Hash
+	copy(out[:], h.Sum(nil))
+	return out
 }
 
 func pathMetaRecordLeaf(record *wire.DKVSRecord) chainhash.Hash {
 	if record == nil {
 		return chainhash.Hash{}
 	}
-	recordHash := RecordHash(record)
-	payload := make([]byte, 0, len(record.Key)+chainhash.HashSize)
-	payload = append(payload, record.Key...)
-	payload = append(payload, recordHash[:]...)
-	return chainhash.DoubleHashH(payload)
+	return pathStateLeaf(record.Key, RecordHash(record))
 }
 
-func xorPathMetaRoot(root *chainhash.Hash, record *wire.DKVSRecord) {
-	if root == nil || record == nil {
+func xorHash(root *chainhash.Hash, leaf chainhash.Hash) {
+	if root == nil {
 		return
 	}
-	leaf := pathMetaRecordLeaf(record)
 	for n := range root {
 		root[n] ^= leaf[n]
 	}
+}
+
+func xorPathMetaRoot(root *chainhash.Hash, record *wire.DKVSRecord) {
+	if root != nil && record != nil {
+		xorHash(root, pathMetaRecordLeaf(record))
+	}
+}
+
+func xorDeleteFloorRoot(root *chainhash.Hash, key string, state *deleteState) {
+	if root != nil && state != nil {
+		xorHash(root, pathStateLeaf(key, state.effectiveHash(key)))
+	}
+}
+
+func pathIncludesCollection(path, candidate string) bool {
+	return candidate == path || (!isCanonicalCollectionPath(path) && strings.HasPrefix(candidate, path+"/"))
+}
+
+func (i *Indexer) scanPathDeleteStatesLocked(path string) (map[string]*deleteState, error) {
+	states := make(map[string]*deleteState)
+	err := i.db.BatchReadV2(deleteKeyPrefix, deleteKeyPrefix, false, func(key, value []byte) error {
+		if len(key) < len(deleteKeyPrefix) {
+			return ErrInvalidRecord
+		}
+		recordKey := string(key[len(deleteKeyPrefix):])
+		parsed, err := ParseKey(recordKey)
+		if err != nil {
+			return err
+		}
+		if !pathIncludesCollection(path, collectionPath(parsed)) {
+			return nil
+		}
+		state, err := unmarshalDeleteState(value)
+		if err != nil {
+			return err
+		}
+		if !state.LocalOnly {
+			states[recordKey] = state
+		}
+		return nil
+	})
+	return states, err
 }
 
 func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathMeta, error) {
@@ -208,23 +244,42 @@ func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathM
 	if err != nil {
 		return nil, err
 	}
-	meta := &PathMeta{
-		Version:       pathMetaVersion,
-		Path:          path,
-		UpdatedHeight: height,
-		UpdatedAt:     now,
-	}
-	if previous, err := i.readPathMetaLocked(path); err == nil {
+	meta := &PathMeta{Version: pathMetaVersion, Path: path, ViewHeight: height}
+	if previous, readErr := i.readPathMetaLocked(path); readErr == nil {
 		meta.Generation = previous.Generation
-	} else if !errors.Is(err, ErrRecordNotFound) {
-		return nil, err
+	} else if !errors.Is(readErr, ErrRecordNotFound) {
+		return nil, readErr
 	}
 	for _, record := range records {
+		if record == nil || isFreeLocalRecord(record) {
+			continue
+		}
 		meta.ActiveRecords++
 		meta.ActiveTotalSize += uint64(RecordSize(record))
+		xorPathMetaRoot(&meta.StateRoot, record)
 		xorPathMetaRoot(&meta.ActiveRoot, record)
 		updateMinExpiry(meta, record)
+		if record.PathGeneration > meta.Generation {
+			meta.Generation = record.PathGeneration
+		}
 	}
+	deleteStates, err := i.scanPathDeleteStatesLocked(path)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(deleteStates))
+	for key := range deleteStates {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		state := deleteStates[key]
+		xorDeleteFloorRoot(&meta.StateRoot, key, state)
+		if state.PathGeneration > meta.Generation {
+			meta.Generation = state.PathGeneration
+		}
+	}
+	normalizePathMetaAliases(meta)
 	encoded, err := marshalPathMeta(meta)
 	if err != nil {
 		return nil, err
@@ -232,11 +287,18 @@ func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathM
 	if err := i.db.Write(pathMetaDBKey(path), encoded); err != nil {
 		return nil, err
 	}
+	statusBytes, err := marshalPathStatus(&PathLocalStatus{Path: path, UpdatedAt: now})
+	if err != nil {
+		return nil, err
+	}
+	if err := i.db.Write(pathStatusDBKey(path), statusBytes); err != nil {
+		return nil, err
+	}
 	return meta, nil
 }
 
 func (i *Indexer) ensurePathMetaLocked(path string, height, now uint64) (*PathMeta, error) {
-	if path == "" {
+	if path == "" || !isCanonicalCollectionPath(path) {
 		return nil, ErrInvalidKey
 	}
 	meta, err := i.readPathMetaLocked(path)
@@ -246,7 +308,11 @@ func (i *Indexer) ensurePathMetaLocked(path string, height, now uint64) (*PathMe
 	if err != nil {
 		return nil, err
 	}
-	if pathMetaNeedsRebuild(meta, height, now) {
+	status, err := i.readPathStatusLocked(path)
+	if err != nil {
+		return nil, err
+	}
+	if pathMetaNeedsRebuild(meta, status, height) {
 		return i.rebuildPathMetaLocked(path, height, now)
 	}
 	return meta, nil
@@ -257,33 +323,90 @@ func clonePathMeta(meta *PathMeta) *PathMeta {
 		return nil
 	}
 	copyMeta := *meta
+	normalizePathMetaAliases(&copyMeta)
 	return &copyMeta
 }
 
-// GetPathMeta returns the aggregate for a supported logical collection path.
+func (i *Indexer) activePathRootLocked(path string, height, now uint64) (chainhash.Hash, error) {
+	records, _, _, err := i.scanLocked(path, nil, 0, true, height, now)
+	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	var root chainhash.Hash
+	for _, record := range records {
+		if record == nil || isFreeLocalRecord(record) {
+			continue
+		}
+		xorPathMetaRoot(&root, record)
+	}
+	return root, nil
+}
+
 func (i *Indexer) GetPathMeta(path string) (*PathMeta, error) {
 	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
 	if collectionPathForPrefix(path) == "" {
 		return nil, ErrInvalidKey
 	}
+	parsed, err := ParsePrefix(path)
+	if err != nil {
+		return nil, err
+	}
+	if pathMode(parsed) == PathLocalOnly {
+		return nil, ErrFreeLocalNotRelayable
+	}
 	height := i.currentHeight()
 	now := currentUnixMilli()
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	meta, err := i.ensurePathMetaLocked(path, height, now)
+	var meta *PathMeta
+	if isCanonicalCollectionPath(path) {
+		meta, err = i.ensurePathMetaLocked(path, height, now)
+	} else {
+		meta, err = i.rebuildPathMetaLocked(path, height, now)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return clonePathMeta(meta), nil
+	result := clonePathMeta(meta)
+	result.ActiveRoot, err = i.activePathRootLocked(path, height, now)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (i *Indexer) GetPathLocalStatus(path string) (*PathLocalStatus, error) {
+	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
+	if collectionPathForPrefix(path) == "" {
+		return nil, ErrInvalidKey
+	}
+	i.mutex.RLock()
+	defer i.mutex.RUnlock()
+	status, err := i.readPathStatusLocked(path)
+	if err != nil {
+		return nil, err
+	}
+	copyStatus := *status
+	return &copyStatus, nil
 }
 
 func existingRecordActive(i *Indexer, record *wire.DKVSRecord, height, now uint64) bool {
 	return record != nil && !IsTombstone(record.Flags) && i.activeError(record, height, now) == nil
 }
 
+func mutationPathGeneration(meta *PathMeta, record *wire.DKVSRecord) uint64 {
+	if record != nil && record.PathGeneration != 0 {
+		return record.PathGeneration
+	}
+	if meta == nil || meta.Generation == ^uint64(0) {
+		return 0
+	}
+	return meta.Generation + 1
+}
+
 func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wire.DKVSRecord, height, now uint64) (*PathMeta, error) {
 	path := collectionPath(parsed)
-	if path == "" {
+	if path == "" || (next != nil && isFreeLocalRecord(next)) || (next == nil && existing != nil && isFreeLocalRecord(existing)) {
 		return nil, nil
 	}
 	meta, err := i.ensurePathMetaLocked(path, height, now)
@@ -291,10 +414,8 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 		return nil, err
 	}
 	meta = clonePathMeta(meta)
-	oldActive := existingRecordActive(i, existing, height, now)
-	newActive := next != nil && !IsTombstone(next.Flags) && !IsExpired(next, height, now)
-	if oldActive {
-		xorPathMetaRoot(&meta.ActiveRoot, existing)
+	if existingRecordActive(i, existing, height, now) && !isFreeLocalRecord(existing) {
+		xorPathMetaRoot(&meta.StateRoot, existing)
 		oldSize := uint64(RecordSize(existing))
 		if meta.ActiveRecords > 0 {
 			meta.ActiveRecords--
@@ -303,31 +424,49 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 			meta.ActiveTotalSize -= oldSize
 		} else {
 			meta.ActiveTotalSize = 0
-			meta.Dirty = true
 		}
 		if existing.ExpiryHeight != 0 && existing.ExpiryHeight == meta.MinExpiryHeight {
-			meta.Dirty = true
-		}
-		if expiryTime := recordExpiryTime(existing); expiryTime != 0 && expiryTime == meta.MinExpiryTime {
-			meta.Dirty = true
+			meta.MinExpiryHeight = 0
 		}
 	}
-	if newActive {
-		meta.ActiveRecords++
-		meta.ActiveTotalSize += uint64(RecordSize(next))
-		xorPathMetaRoot(&meta.ActiveRoot, next)
-		updateMinExpiry(meta, next)
+	key := parsedKeyString(parsed)
+	if state, stateErr := i.getDeleteStateLocked(key); stateErr == nil && !state.LocalOnly {
+		xorDeleteFloorRoot(&meta.StateRoot, key, state)
 	}
-	meta.Generation++
-	meta.UpdatedHeight = height
-	meta.UpdatedAt = now
+	if next != nil && !isFreeLocalRecord(next) {
+		if IsTombstone(next.Flags) {
+			state := &deleteState{
+				FloorSeq: next.Seq, PathGeneration: mutationPathGeneration(meta, next),
+				PubKey: append([]byte{}, next.PubKey...), Record: next, EffectiveHash: RecordHash(next),
+			}
+			xorDeleteFloorRoot(&meta.StateRoot, next.Key, state)
+		} else if !IsExpired(next, height, now) {
+			meta.ActiveRecords++
+			meta.ActiveTotalSize += uint64(RecordSize(next))
+			xorPathMetaRoot(&meta.StateRoot, next)
+			updateMinExpiry(meta, next)
+		}
+		if generation := mutationPathGeneration(meta, next); generation > meta.Generation {
+			meta.Generation = generation
+		}
+	}
+	meta.ViewHeight = height
+	normalizePathMetaAliases(meta)
 	return meta, nil
+}
+
+func parsedKeyString(parsed ParsedKey) string {
+	if parsed.Namespace == "" {
+		return ""
+	}
+	return "/" + parsed.Namespace + "/" + strings.Join(parsed.Segments, "/")
 }
 
 func putPathMetaBatch(batch indexercommon.WriteBatch, meta *PathMeta) error {
 	if meta == nil {
 		return nil
 	}
+	normalizePathMetaAliases(meta)
 	encoded, err := marshalPathMeta(meta)
 	if err != nil {
 		return err
@@ -335,36 +474,39 @@ func putPathMetaBatch(batch indexercommon.WriteBatch, meta *PathMeta) error {
 	return batch.Put(pathMetaDBKey(meta.Path), encoded)
 }
 
-func (i *Indexer) markPathMetaDirtyLocked(batch indexercommon.WriteBatch, records []*wire.DKVSRecord, height, now uint64) error {
-	metas := make(map[string]*PathMeta)
+func putPathStatusBatch(batch indexercommon.WriteBatch, status *PathLocalStatus) error {
+	if status == nil {
+		return nil
+	}
+	encoded, err := marshalPathStatus(status)
+	if err != nil {
+		return err
+	}
+	return batch.Put(pathStatusDBKey(status.Path), encoded)
+}
+
+func (i *Indexer) markPathMetaDirtyLocked(batch indexercommon.WriteBatch, records []*wire.DKVSRecord, _ uint64, now uint64) error {
+	paths := make(map[string]struct{})
 	for _, record := range records {
-		if record == nil {
+		if record == nil || isFreeLocalRecord(record) {
 			continue
 		}
 		parsed, err := ParseKey(record.Key)
 		if err != nil {
 			continue
 		}
-		path := collectionPath(parsed)
-		if path == "" {
-			continue
+		if path := collectionPath(parsed); path != "" && pathMode(parsed) != PathLocalOnly {
+			paths[path] = struct{}{}
 		}
-		meta := metas[path]
-		if meta == nil {
-			meta, err = i.ensurePathMetaLocked(path, height, now)
-			if err != nil {
-				return err
-			}
-			meta = clonePathMeta(meta)
-			metas[path] = meta
-		}
-		meta.Dirty = true
 	}
-	for _, meta := range metas {
-		meta.Generation++
-		meta.UpdatedHeight = height
-		meta.UpdatedAt = now
-		if err := putPathMetaBatch(batch, meta); err != nil {
+	for path := range paths {
+		status, err := i.readPathStatusLocked(path)
+		if err != nil {
+			return err
+		}
+		status.Dirty = true
+		status.UpdatedAt = now
+		if err := putPathStatusBatch(batch, status); err != nil {
 			return err
 		}
 	}

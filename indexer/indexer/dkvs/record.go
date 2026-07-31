@@ -72,6 +72,10 @@ func VerifySignature(record *wire.DKVSRecord) error {
 	return nil
 }
 
+// CompareRecords selects the deterministic winner for two records of the same
+// key. Sequence is the primary order. At the same sequence, retention may only
+// choose a winner when the signed business state is identical; otherwise
+// IssueTime and finally RecordHash decide the winner.
 func CompareRecords(a, b *wire.DKVSRecord) int {
 	if a == nil && b == nil {
 		return 0
@@ -88,15 +92,62 @@ func CompareRecords(a, b *wire.DKVSRecord) int {
 	if a.Seq < b.Seq {
 		return -1
 	}
-	if a.ExpiryHeight > b.ExpiryHeight {
+	if sameBusinessContent(a, b) {
+		if retention := compareRetention(a, b); retention != 0 {
+			return retention
+		}
+	}
+	if a.IssueTime > b.IssueTime {
 		return 1
 	}
-	if a.ExpiryHeight < b.ExpiryHeight {
+	if a.IssueTime < b.IssueTime {
 		return -1
 	}
 	ah := RecordHash(a)
 	bh := RecordHash(b)
 	return bytes.Compare(ah[:], bh[:])
+}
+
+func sameBusinessContent(a, b *wire.DKVSRecord) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Version == b.Version &&
+		a.Key == b.Key &&
+		a.Seq == b.Seq &&
+		a.Flags == b.Flags &&
+		bytes.Equal(a.Value, b.Value) &&
+		bytes.Equal(a.PubKey, b.PubKey)
+}
+
+// compareRetention compares only retention fields. Zero means no protocol
+// expiry and is therefore longer than any finite retention.
+func compareRetention(a, b *wire.DKVSRecord) int {
+	if a == nil || b == nil {
+		return 0
+	}
+	if result := compareOptionalUpperBound(a.ExpiryHeight, b.ExpiryHeight); result != 0 {
+		return result
+	}
+	aExpiry := recordExpiryTime(a)
+	bExpiry := recordExpiryTime(b)
+	return compareOptionalUpperBound(aExpiry, bExpiry)
+}
+
+func compareOptionalUpperBound(a, b uint64) int {
+	if a == b {
+		return 0
+	}
+	if a == 0 {
+		return 1
+	}
+	if b == 0 {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return -1
 }
 
 func IsExpired(record *wire.DKVSRecord, height uint64, now uint64) bool {
@@ -237,6 +288,7 @@ func canonicalRecordBytes(record *wire.DKVSRecord, includeSignature bool) []byte
 	writeHash(&buf, sha256.Sum256(record.Value))
 	writeBytes(&buf, record.PubKey)
 	writeUint64(&buf, record.Seq)
+	writeUint64(&buf, record.PathGeneration)
 	writeUint64(&buf, record.IssueTime)
 	writeUint64(&buf, record.TTL)
 	writeUint64(&buf, record.ExpiryHeight)

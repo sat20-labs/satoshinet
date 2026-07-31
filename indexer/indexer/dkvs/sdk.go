@@ -8,12 +8,13 @@ import (
 )
 
 type RecordOptions struct {
-	Seq          uint64
-	IssueTime    uint64
-	TTL          uint64
-	ExpiryHeight uint64
-	FeeProof     []byte
-	Flags        uint32
+	Seq            uint64
+	PathGeneration uint64
+	IssueTime      uint64
+	TTL            uint64
+	ExpiryHeight   uint64
+	FeeProof       []byte
+	Flags          uint32
 }
 
 type RecordVerificationOptions struct {
@@ -31,16 +32,17 @@ func NewRecord(key string, value []byte, pubKey []byte, opts RecordOptions) (*wi
 		return nil, err
 	}
 	record := &wire.DKVSRecord{
-		Version:      Version,
-		Key:          key,
-		Value:        append([]byte{}, value...),
-		PubKey:       append([]byte{}, pubKey...),
-		Seq:          opts.Seq,
-		IssueTime:    opts.IssueTime,
-		TTL:          opts.TTL,
-		ExpiryHeight: opts.ExpiryHeight,
-		FeeProof:     append([]byte{}, opts.FeeProof...),
-		Flags:        opts.Flags,
+		Version:        Version,
+		Key:            key,
+		Value:          append([]byte{}, value...),
+		PubKey:         append([]byte{}, pubKey...),
+		Seq:            opts.Seq,
+		PathGeneration: opts.PathGeneration,
+		IssueTime:      opts.IssueTime,
+		TTL:            opts.TTL,
+		ExpiryHeight:   opts.ExpiryHeight,
+		FeeProof:       append([]byte{}, opts.FeeProof...),
+		Flags:          opts.Flags,
 	}
 	if record.IssueTime == 0 {
 		record.IssueTime = currentUnixMilli()
@@ -164,7 +166,6 @@ func MailShareKey(mailboxID, packageID, shareID string) (string, error) {
 	return key, err
 }
 
-// BlobKey builds the canonical single-record blob key.
 func BlobKey(accountID, blobName string) (string, error) {
 	accountID = strings.ToLower(strings.TrimSpace(accountID))
 	blobName = strings.TrimSpace(blobName)
@@ -179,9 +180,6 @@ func TmpKey(randomID string) (string, error) {
 	return key, err
 }
 
-// DirectoryRootFromRecords computes the root used by the application directory
-// synchronization API. Callers must pass the complete active-record and
-// retained-tombstone view returned for the directory.
 func DirectoryRootFromRecords(records []*wire.DKVSRecord, height uint64) (chainhash.Hash, error) {
 	return recordsRoot(records, height)
 }

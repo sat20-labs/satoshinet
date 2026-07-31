@@ -75,8 +75,12 @@ type Indexer interface {
 	PutDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	PutDKVSRecordWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error)
 	PutDKVSRecordCAS(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition) (bool, error)
+	PutDKVSRecordCASResult(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition,
+		options dkvs_indexer.BatchCASOptions) (*dkvs_indexer.WriteResult, error)
 	PutDKVSRecordBatchCAS(mutations []dkvs_indexer.CASMutation) (int, error)
 	PutDKVSRecordBatchCASWithOptions(mutations []dkvs_indexer.CASMutation, options dkvs_indexer.BatchCASOptions) (int, error)
+	PutDKVSRecordBatchCASResultWithOptions(mutations []dkvs_indexer.CASMutation,
+		options dkvs_indexer.BatchCASOptions) (*dkvs_indexer.WriteResult, error)
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	NotifyDKVSNameTransfers(names []string) error
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
@@ -88,6 +92,8 @@ type Indexer interface {
 	GetDKVSFreeLocalCachePolicy() dkvs_indexer.FreeLocalCachePolicy
 	GetDKVSClientConfig() dkvs_indexer.ClientConfig
 	GetDKVSPathMeta(path string) (*dkvs_indexer.PathMeta, error)
+	GetDKVSPathSnapshot(path string) (*dkvs_indexer.PathSnapshot, error)
+	ApplyDKVSPathSnapshot(snapshot *dkvs_indexer.PathSnapshot) (int, error)
 	ApplyDKVSMirror(filters []dkvs_indexer.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error)
 	SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
 	SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs_indexer.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)

@@ -32,30 +32,105 @@ const (
 	MaxFutureIssueTimeSkew = uint64(10 * 60 * 1000)
 )
 
-var (
-	ErrInvalidRecord          = errors.New("invalid dkvs record")
-	ErrInvalidKey             = errors.New("invalid dkvs key")
-	ErrInvalidNamespace       = errors.New("invalid dkvs namespace")
-	ErrInvalidSignature       = errors.New("invalid dkvs signature")
-	ErrExpiredRecord          = errors.New("expired dkvs record")
-	ErrRecordTooLarge         = errors.New("dkvs record too large")
-	ErrPermissionDenied       = errors.New("dkvs permission denied")
-	ErrDIDResolverUnavailable = errors.New("dkvs did resolver unavailable")
-	ErrFeeProofRequired       = errors.New("dkvs fee proof required")
-	ErrInvalidFeeProof        = errors.New("invalid dkvs fee proof")
-	ErrFeeCapacityExceeded    = errors.New("dkvs fee capacity exceeded")
-	ErrRecordNotFound         = errors.New("dkvs record not found")
-	ErrInvalidCheckpoint      = errors.New("invalid dkvs checkpoint")
-	ErrInvalidSnapshot        = errors.New("invalid dkvs snapshot")
-	ErrMailboxFull            = errors.New("dkvs mailbox full")
-	ErrTooManySubscriptions   = errors.New("too many dkvs subscriptions")
-	ErrConcurrentUpdate       = errors.New("concurrent dkvs update")
-	ErrWriteConflict          = errors.New("dkvs write conflict")
-	ErrBatchTooLarge          = errors.New("dkvs batch too large")
-	ErrFreeLocalDisabled      = errors.New("dkvs free local cache is disabled")
-	ErrFreeLocalQuotaExceeded = errors.New("dkvs free local cache quota exceeded")
-	ErrFreeLocalNotRelayable  = errors.New("dkvs free local record is not relayable")
+type ErrorCode string
+
+const (
+	ErrorCodeWriteConflict             ErrorCode = "DKVS_WRITE_CONFLICT"
+	ErrorCodeStaleGeneration           ErrorCode = "DKVS_STALE_GENERATION"
+	ErrorCodeStaleEndpoint             ErrorCode = "DKVS_STALE_ENDPOINT"
+	ErrorCodePermissionDenied          ErrorCode = "DKVS_PERMISSION_DENIED"
+	ErrorCodeInvalidSequence           ErrorCode = "DKVS_INVALID_SEQUENCE"
+	ErrorCodePathDiverged              ErrorCode = "DKVS_PATH_DIVERGED"
+	ErrorCodeLocalOnlyEndpointMismatch ErrorCode = "DKVS_LOCAL_ONLY_ENDPOINT_MISMATCH"
+	ErrorCodeQuotaExceeded             ErrorCode = "DKVS_QUOTA_EXCEEDED"
+	ErrorCodeInvalidRecord             ErrorCode = "DKVS_INVALID_RECORD"
+	ErrorCodeRecordNotFound            ErrorCode = "DKVS_RECORD_NOT_FOUND"
 )
+
+var (
+	ErrInvalidRecord             = errors.New("invalid dkvs record")
+	ErrInvalidKey                = errors.New("invalid dkvs key")
+	ErrInvalidNamespace          = errors.New("invalid dkvs namespace")
+	ErrInvalidSignature          = errors.New("invalid dkvs signature")
+	ErrExpiredRecord             = errors.New("expired dkvs record")
+	ErrRecordTooLarge            = errors.New("dkvs record too large")
+	ErrPermissionDenied          = errors.New("dkvs permission denied")
+	ErrDIDResolverUnavailable    = errors.New("dkvs did resolver unavailable")
+	ErrFeeProofRequired          = errors.New("dkvs fee proof required")
+	ErrInvalidFeeProof           = errors.New("invalid dkvs fee proof")
+	ErrFeeCapacityExceeded       = errors.New("dkvs fee capacity exceeded")
+	ErrRecordNotFound            = errors.New("dkvs record not found")
+	ErrInvalidCheckpoint         = errors.New("invalid dkvs checkpoint")
+	ErrInvalidSnapshot           = errors.New("invalid dkvs snapshot")
+	ErrMailboxFull               = errors.New("dkvs mailbox full")
+	ErrTooManySubscriptions      = errors.New("too many dkvs subscriptions")
+	ErrConcurrentUpdate          = errors.New("concurrent dkvs update")
+	ErrWriteConflict             = errors.New("dkvs write conflict")
+	ErrStaleGeneration           = errors.New("dkvs stale generation")
+	ErrStaleEndpoint             = errors.New("dkvs stale endpoint")
+	ErrInvalidSequence           = errors.New("dkvs invalid sequence")
+	ErrPathDiverged              = errors.New("dkvs path diverged")
+	ErrPathGenerationGap         = errors.New("dkvs path generation gap")
+	ErrLocalOnlyEndpointMismatch = errors.New("dkvs local-only endpoint mismatch")
+	ErrBatchTooLarge             = errors.New("dkvs batch too large")
+	ErrFreeLocalDisabled         = errors.New("dkvs free local cache is disabled")
+	ErrFreeLocalQuotaExceeded    = errors.New("dkvs free local cache quota exceeded")
+	ErrFreeLocalNotRelayable     = errors.New("dkvs free local record is not relayable")
+)
+
+// ErrorCodeOf maps implementation errors to the stable API contract. Callers
+// must branch on this code or errors.Is/As, never on the human-readable text.
+func ErrorCodeOf(err error) ErrorCode {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrStaleEndpoint):
+		return ErrorCodeStaleEndpoint
+	case errors.Is(err, ErrStaleGeneration), errors.Is(err, ErrPathGenerationGap):
+		return ErrorCodeStaleGeneration
+	case errors.Is(err, ErrInvalidSequence):
+		return ErrorCodeInvalidSequence
+	case errors.Is(err, ErrPathDiverged):
+		return ErrorCodePathDiverged
+	case errors.Is(err, ErrLocalOnlyEndpointMismatch):
+		return ErrorCodeLocalOnlyEndpointMismatch
+	case errors.Is(err, ErrPermissionDenied), errors.Is(err, ErrDIDResolverUnavailable):
+		return ErrorCodePermissionDenied
+	case errors.Is(err, ErrFeeCapacityExceeded), errors.Is(err, ErrMailboxFull),
+		errors.Is(err, ErrFreeLocalQuotaExceeded):
+		return ErrorCodeQuotaExceeded
+	case errors.Is(err, ErrWriteConflict), errors.Is(err, ErrConcurrentUpdate):
+		return ErrorCodeWriteConflict
+	case errors.Is(err, ErrRecordNotFound):
+		return ErrorCodeRecordNotFound
+	default:
+		return ErrorCodeInvalidRecord
+	}
+}
+
+type PathMode uint8
+
+const (
+	PathOwnerExclusive PathMode = iota
+	PathAuthorityExclusive
+	PathSharedAppend
+	PathLocalOnly
+)
+
+func (mode PathMode) String() string {
+	switch mode {
+	case PathOwnerExclusive:
+		return "owner_exclusive"
+	case PathAuthorityExclusive:
+		return "authority_exclusive"
+	case PathSharedAppend:
+		return "shared_append"
+	case PathLocalOnly:
+		return "local_only"
+	default:
+		return "unknown"
+	}
+}
 
 type DIDIdentity struct {
 	CanonicalName  string
@@ -155,8 +230,6 @@ type FreeLocalCachePolicy struct {
 	MaxTotalBytes       uint64 `json:"max_total_bytes"`
 }
 
-// DefaultFreeLocalCachePolicy is intentionally centralized so operators can
-// tune one default before it is exposed to connected wallets.
 func DefaultFreeLocalCachePolicy() FreeLocalCachePolicy {
 	return FreeLocalCachePolicy{
 		Enabled:             true,
@@ -180,6 +253,7 @@ type Config struct {
 	MailboxPolicy  MailboxPolicy
 	BlobPolicy     BlobPolicy
 	TmpPolicy      TmpPolicy
+	EndpointID     string
 }
 
 const (
@@ -201,8 +275,6 @@ type CASMutation struct {
 	Precondition WritePrecondition `json:"precondition"`
 }
 
-// PathWritePrecondition proves that the caller built a mutation from a
-// complete, current view of a logical DKVS collection.
 type PathWritePrecondition struct {
 	Path               string         `json:"path"`
 	ExpectedRoot       chainhash.Hash `json:"expected_root"`
@@ -211,6 +283,19 @@ type PathWritePrecondition struct {
 
 type BatchCASOptions struct {
 	PathPreconditions []PathWritePrecondition `json:"path_preconditions,omitempty"`
+	// EndpointID pins a FREE_LOCAL batch to the node that owns its local-only
+	// cache. It is ignored when the batch contains no local-only mutations.
+	EndpointID string `json:"endpoint_id,omitempty"`
+}
+
+type WriteResult struct {
+	Applied      int                    `json:"applied"`
+	Records      []*wire.DKVSRecord     `json:"records,omitempty"`
+	Hashes       []string               `json:"hashes,omitempty"`
+	PathMeta     map[string]*PathMeta   `json:"pathmeta,omitempty"`
+	ServerTimeMS uint64                 `json:"server_time_ms"`
+	LocalOnly    bool                   `json:"local_only,omitempty"`
+	EndpointID   string                 `json:"endpoint_id,omitempty"`
 }
 
 type SubscriptionType string
@@ -241,20 +326,51 @@ type Usage struct {
 	ActiveTotalSize uint64 `json:"active_total_size"`
 }
 
-// PathMeta is the compact aggregate maintained for a logical DKVS collection.
-// It is stored once per collection path rather than once per record.
+// PathMeta contains only network-comparable state. Local timestamps, retry
+// flags and peer information are stored separately in PathLocalStatus.
 type PathMeta struct {
 	Version         uint32         `json:"version"`
 	Path            string         `json:"path"`
 	Generation      uint64         `json:"generation"`
+	StateRoot       chainhash.Hash `json:"state_root"`
 	ActiveRecords   uint64         `json:"active_records"`
 	ActiveTotalSize uint64         `json:"active_total_size"`
-	ActiveRoot      chainhash.Hash `json:"active_root"`
 	MinExpiryHeight uint64         `json:"min_expiry_height,omitempty"`
-	MinExpiryTime   uint64         `json:"min_expiry_time,omitempty"`
-	UpdatedHeight   uint64         `json:"updated_height"`
-	UpdatedAt       uint64         `json:"updated_at"`
-	Dirty           bool           `json:"dirty,omitempty"`
+	ViewHeight      uint64         `json:"view_height"`
+
+	// Deprecated in-memory aliases retained while internal callers migrate.
+	// They are neither serialized to the public API nor used for equality.
+	ActiveRoot    chainhash.Hash `json:"-"`
+	MinExpiryTime uint64         `json:"-"`
+	UpdatedHeight uint64         `json:"-"`
+	UpdatedAt     uint64         `json:"-"`
+	Dirty         bool           `json:"-"`
+}
+
+type PathLocalStatus struct {
+	Path            string `json:"path"`
+	UpdatedAt       uint64 `json:"updated_at,omitempty"`
+	LastSyncAt      uint64 `json:"last_sync_at,omitempty"`
+	LastSyncPeer    string `json:"last_sync_peer,omitempty"`
+	Dirty           bool   `json:"dirty,omitempty"`
+	Stale           bool   `json:"stale,omitempty"`
+	LocalRetryState string `json:"local_retry_state,omitempty"`
+}
+
+type PathSnapshot struct {
+	Path         string             `json:"path"`
+	PathMeta     *PathMeta          `json:"pathmeta"`
+	Records      []*wire.DKVSRecord `json:"records"`
+	DeleteFloors []DeleteFloor      `json:"delete_floors,omitempty"`
+	ServerTimeMS uint64             `json:"server_time_ms"`
+}
+
+type DeleteFloor struct {
+	Key            string         `json:"key"`
+	FloorSeq       uint64         `json:"floor_seq"`
+	PathGeneration uint64         `json:"path_generation"`
+	PubKey         []byte         `json:"pub_key,omitempty"`
+	EffectiveHash  chainhash.Hash `json:"effective_hash"`
 }
 
 type Snapshot struct {
@@ -281,12 +397,12 @@ type BlobPolicy struct {
 	MaxFreeLocalKeysPerSigner uint64 `json:"max_free_local_keys_per_signer"`
 }
 
-// ClientConfig is the node policy exposed to wallet SDKs and applications.
 type ClientConfig struct {
 	FreeLocal         FreeLocalCachePolicy `json:"free_local"`
 	Blob              BlobPolicy           `json:"blob"`
 	MaxBatchMutations int                  `json:"max_batch_mutations"`
 	MaxBatchBytes     int                  `json:"max_batch_record_bytes"`
+	EndpointID        string               `json:"endpoint_id,omitempty"`
 }
 
 type TmpPolicy struct {

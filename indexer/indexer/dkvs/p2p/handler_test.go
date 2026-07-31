@@ -55,10 +55,6 @@ func (s *handlerTestStore) SyncFilteredDKVSRecords([]byte, uint32, []dkvs.Subscr
 	return s.syncRecords, nil, true, s.syncRoot, nil
 }
 
-func (s *handlerTestStore) GetDKVSCheckpoint() (*dkvs.Checkpoint, error) {
-	return &dkvs.Checkpoint{}, nil
-}
-
 func (s *handlerTestStore) ListDKVSSubscriptions() []dkvs.Subscription {
 	return append([]dkvs.Subscription{}, s.subscriptions...)
 }
@@ -175,7 +171,8 @@ func TestHandlerServesSignedSyncResponse(t *testing.T) {
 	handler := Handler{
 		Store: store, Peer: &peer, Node: &node,
 		Net: chaincfg.TestNetParams.Net, ValidatorID: "remote",
-		RemoteServices: wire.SFNodeMiner, MirrorAuthority: true,
+		LocalServices: wire.SFNodeMiner, RemoteServices: wire.SFNodeMiner,
+		MirrorAuthority: true,
 		Sign: func([]byte) ([]byte, error) { return []byte{1, 2, 3}, nil },
 		Send: func(msg wire.Message) { sent = msg },
 	}

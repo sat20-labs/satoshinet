@@ -32,22 +32,13 @@ type Service struct {
 }
 
 func NewService(indexer shareIndexer.Indexer) *Service {
-	return &Service{
-		handle: NewHandle(indexer),
-	}
+	return &Service{handle: NewHandle(indexer)}
 }
 
 func (s *Service) InitRouter(r *gin.Engine, proxy string) {
-
 	r.GET(proxy+"/health", s.handle.getHealth)
-
-	//获取地址上大于指定value的utxo;如果value=0,获得所有可用的utxo
 	r.GET(proxy+"/utxo/address/:address/:value", s.handle.getPlainUtxos)
-	//获取地址上获得所有utxo
 	r.GET(proxy+"/allutxos/address/:address", s.handle.getAllUtxos)
-
-	// root group
-	// 当前网络高度
 	r.GET(proxy+"/bestheight", s.handle.getBestHeight)
 	r.GET(proxy+"/height/:height", s.handle.getBlockInfo)
 
@@ -55,8 +46,6 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/tick/info/:ticker", s.handle.getTickerInfo)
 	r.GET(proxy+"/v3/tick/holders/:ticker", s.handle.getHolderListV3)
 
-	// address
-	// 获取某个地址上所有资产和数量的列表
 	r.POST(proxy+"/v3/utxos/existing", s.handle.getExistingUtxos)
 	r.GET(proxy+"/v3/ascend/:utxo", s.handle.getAscendData)
 	r.GET(proxy+"/v3/descend/:utxo", s.handle.getDescendData)
@@ -71,19 +60,18 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/miner/check/:pubkey", s.handle.checkMiner)
 	r.GET(proxy+"/v3/miner/info/:pubkey", s.handle.getMinerInfo)
 
-	r.POST(proxy+"/v3/dkvs/records", s.handle.putDKVSRecord)
+	// DKVS v1 normative path-oriented API.
+	r.GET(proxy+"/v3/dkvs/pathmeta", s.handle.getDKVSPathMetaV1)
+	r.POST(proxy+"/v3/dkvs/sync/path", s.handle.syncDKVSPath)
+	r.POST(proxy+"/v3/dkvs/watch/path", s.handle.watchDKVSPath)
 	r.POST(proxy+"/v3/dkvs/records/cas", s.handle.putDKVSRecordCAS)
 	r.POST(proxy+"/v3/dkvs/records/batch-cas", s.handle.putDKVSRecordBatchCAS)
+
+	// Read/config and administrative endpoints.
 	r.GET(proxy+"/v3/dkvs/records", s.handle.getDKVSRecord)
 	r.GET(proxy+"/v3/dkvs/records/prefix", s.handle.listDKVSRecords)
 	r.GET(proxy+"/v3/dkvs/usage", s.handle.getDKVSUsage)
 	r.GET(proxy+"/v3/dkvs/config", s.handle.getDKVSConfig)
-	r.GET(proxy+"/v3/dkvs/path-meta", s.handle.getDKVSPathMeta)
-	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
-	r.POST(proxy+"/v3/dkvs/sync", s.handle.syncDKVS)
-	r.POST(proxy+"/v3/dkvs/watch", s.handle.watchDKVS)
-	r.POST(proxy+"/v3/dkvs/sync/directory", s.handle.syncDKVSDirectory)
-	r.POST(proxy+"/v3/dkvs/watch/directory", s.handle.watchDKVSDirectory)
 	r.GET(proxy+"/v3/dkvs/checkpoint", s.handle.getDKVSCheckpoint)
 	r.GET(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.getDKVSSnapshot)
 	r.POST(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.applyDKVSSnapshot)
@@ -92,12 +80,18 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.DELETE(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.unsubscribeDKVS)
 	r.GET(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.listDKVSSubscriptions)
 
+	// Development-stage compatibility routes. New SDK code does not use these.
+	r.POST(proxy+"/v3/dkvs/records", s.handle.putDKVSRecord)
+	r.GET(proxy+"/v3/dkvs/path-meta", s.handle.getDKVSPathMeta)
+	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
+	r.POST(proxy+"/v3/dkvs/sync", s.handle.syncDKVS)
+	r.POST(proxy+"/v3/dkvs/watch", s.handle.watchDKVS)
+	r.POST(proxy+"/v3/dkvs/sync/directory", s.handle.syncDKVSDirectory)
+	r.POST(proxy+"/v3/dkvs/watch/directory", s.handle.watchDKVSDirectory)
+
 	r.GET(proxy+"/v3/address/summary/:address", s.handle.getAssetSummaryV3)
-	// 获取某个地址上所有utxo数据列表
 	r.GET(proxy+"/v3/address/utxos/:address", s.handle.getAddressUtxosV3)
-	// 获取某个地址上某个资产的utxo数据列表(utxo包含其他资产), ticker格式：wire.AssetName.String()
 	r.GET(proxy+"/v3/address/asset/:address/:ticker", s.handle.getUtxosWithTickerV3)
-	// 获取utxo的资产信息
 	r.GET(proxy+"/v3/utxo/info/:utxo", s.handle.getUtxoInfoV3)
 	r.POST(proxy+"/v3/utxos/info", s.handle.getUtxoInfoListV3)
 
@@ -116,5 +110,4 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/contracts/:contract/users", s.handle.getContractUsers)
 	r.GET(proxy+"/v3/contracts/:contract/users/:address", s.handle.getContractUser)
 	r.GET(proxy+"/v3/contracts/:contract/users/:address/history", s.handle.getContractUserHistory)
-
 }

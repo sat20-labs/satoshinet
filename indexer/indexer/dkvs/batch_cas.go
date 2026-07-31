@@ -1,9 +1,13 @@
 package dkvs
 
 import (
+	"bytes"
+	"encoding/hex"
 	"errors"
+	"sort"
 	"sync/atomic"
 
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -44,6 +48,37 @@ func cloneCASMutations(mutations []CASMutation) []CASMutation {
 	return cloned
 }
 
+func batchMutationOwner(record *wire.DKVSRecord, parsed ParsedKey) string {
+	if record == nil {
+		return ""
+	}
+	switch parsed.Namespace {
+	case "personal", "blob":
+		if len(parsed.Segments) > 0 {
+			return "account:" + parsed.Segments[0]
+		}
+	case "mail":
+		if len(parsed.Segments) >= 3 && parsed.Segments[1] == "msg" {
+			if IsTombstone(record.Flags) {
+				return "account:" + parsed.Segments[0]
+			}
+			return "account:" + parsed.Segments[2]
+		}
+		if len(parsed.Segments) > 0 {
+			return "account:" + parsed.Segments[0]
+		}
+	case "account":
+		if len(parsed.Segments) == 2 {
+			return "account-record:" + parsed.Segments[0] + ":" + parsed.Segments[1]
+		}
+	case "name", "svc", "sys":
+		return "authority:" + hex.EncodeToString(record.PubKey)
+	case "tmp":
+		return "local:" + hex.EncodeToString(record.PubKey)
+	}
+	return ""
+}
+
 func validateCASMutations(mutations []CASMutation) error {
 	if len(mutations) == 0 {
 		return ErrInvalidRecord
@@ -53,6 +88,7 @@ func validateCASMutations(mutations []CASMutation) error {
 	}
 	seen := make(map[string]struct{}, len(mutations))
 	total := 0
+	owner := ""
 	for _, mutation := range mutations {
 		if mutation.Record == nil || !mutation.Precondition.Valid() {
 			return ErrInvalidRecord
@@ -61,6 +97,19 @@ func validateCASMutations(mutations []CASMutation) error {
 			return ErrInvalidRecord
 		}
 		seen[mutation.Record.Key] = struct{}{}
+		parsed, err := ParseKey(mutation.Record.Key)
+		if err != nil {
+			return err
+		}
+		candidateOwner := batchMutationOwner(mutation.Record, parsed)
+		if candidateOwner == "" {
+			return ErrPermissionDenied
+		}
+		if owner == "" {
+			owner = candidateOwner
+		} else if owner != candidateOwner {
+			return ErrPermissionDenied
+		}
 		total += RecordSize(mutation.Record)
 		if total > MaxBatchCASTotalSize {
 			return ErrBatchTooLarge
@@ -77,8 +126,7 @@ func mutationAlreadyApplied(record *wire.DKVSRecord, snapshot writeStateSnapshot
 	if !IsTombstone(record.Flags) {
 		return snapshot.existing != nil && RecordHash(snapshot.existing) == want
 	}
-	return snapshot.deleteState != nil && snapshot.deleteState.Record != nil &&
-		RecordHash(snapshot.deleteState.Record) == want
+	return snapshot.deleteState != nil && snapshot.deleteState.effectiveHash(record.Key) == want
 }
 
 func clonePathWritePreconditions(conditions []PathWritePrecondition) []PathWritePrecondition {
@@ -87,21 +135,33 @@ func clonePathWritePreconditions(conditions []PathWritePrecondition) []PathWrite
 	return cloned
 }
 
-func validatePathWritePreconditions(mutations []CASMutation, conditions []PathWritePrecondition) error {
-	if len(conditions) == 0 {
-		return nil
-	}
+func relayableTouchedPaths(mutations []CASMutation) (map[string]struct{}, error) {
 	touched := make(map[string]struct{})
 	for _, mutation := range mutations {
-		path, err := CollectionPathForKey(mutation.Record.Key)
-		if err == nil {
-			touched[path] = struct{}{}
+		if mutation.Record == nil || isFreeLocalRecord(mutation.Record) {
+			continue
 		}
+		path, err := CollectionPathForKey(mutation.Record.Key)
+		if err != nil {
+			return nil, err
+		}
+		touched[path] = struct{}{}
+	}
+	return touched, nil
+}
+
+func validatePathWritePreconditions(mutations []CASMutation, conditions []PathWritePrecondition) error {
+	touched, err := relayableTouchedPaths(mutations)
+	if err != nil {
+		return err
+	}
+	if len(conditions) != len(touched) {
+		return ErrStaleGeneration
 	}
 	seen := make(map[string]struct{}, len(conditions))
 	for _, condition := range conditions {
-		path := collectionPathForPrefix(condition.Path)
-		if path == "" || path != condition.Path {
+		path := stringsTrimPath(condition.Path)
+		if !isCanonicalCollectionPath(path) {
 			return ErrInvalidKey
 		}
 		if _, ok := touched[path]; !ok {
@@ -113,6 +173,13 @@ func validatePathWritePreconditions(mutations []CASMutation, conditions []PathWr
 		seen[path] = struct{}{}
 	}
 	return nil
+}
+
+func stringsTrimPath(path string) string {
+	for len(path) > 1 && path[len(path)-1] == '/' {
+		path = path[:len(path)-1]
+	}
+	return path
 }
 
 func (i *Indexer) prepareBatchCAS(mutations []CASMutation, options BatchCASOptions) (batchCASPreparation, error) {
@@ -137,6 +204,12 @@ func (i *Indexer) prepareBatchCAS(mutations []CASMutation, options BatchCASOptio
 		if err != nil {
 			return batchCASPreparation{}, err
 		}
+		if !isFreeLocalRecord(record) && record.PathGeneration == 0 {
+			return batchCASPreparation{}, ErrStaleGeneration
+		}
+		if isFreeLocalRecord(record) && record.PathGeneration != 0 {
+			return batchCASPreparation{}, ErrInvalidRecord
+		}
 		snapshot, err := i.readWriteStateSnapshot(record.Key, parsed, validators)
 		if err != nil {
 			return batchCASPreparation{}, err
@@ -151,23 +224,17 @@ func (i *Indexer) prepareBatchCAS(mutations []CASMutation, options BatchCASOptio
 			if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
 				return batchCASPreparation{}, err
 			}
-			prepared.retention, err = verifiedPaidRetentionAfterFeeVerification(
-				record, parsed, validators.feeVerifier, prep.height,
-			)
+			prepared.retention, err = verifiedPaidRetentionAfterFeeVerification(record, parsed, validators.feeVerifier, prep.height)
 			if err != nil {
 				return batchCASPreparation{}, err
 			}
 		}
-		prepared.forceReplace, err = validateWritePermissionWith(
-			parsed, record, snapshot.existing, snapshot.requiresResolve, validators,
-		)
+		prepared.forceReplace, err = validateWritePermissionWith(parsed, record, snapshot.existing, snapshot.requiresResolve, validators)
 		if err != nil {
 			return batchCASPreparation{}, err
 		}
 		if !IsTombstone(record.Flags) {
-			prepared.capacity, err = i.prepareFeeCapacity(
-				record, parsed, snapshot.existing, validators.feeVerifier, prep.height, prep.now,
-			)
+			prepared.capacity, err = i.prepareFeeCapacity(record, parsed, snapshot.existing, validators.feeVerifier, prep.height, prep.now)
 			if err != nil {
 				return batchCASPreparation{}, err
 			}
@@ -197,21 +264,55 @@ func nextCASSequence(snapshot writeStateSnapshot) (uint64, error) {
 		current = snapshot.deleteState.FloorSeq
 	}
 	if current == ^uint64(0) {
-		return 0, ErrWriteConflict
+		return 0, ErrInvalidSequence
 	}
 	return current + 1, nil
 }
 
-func (i *Indexer) validatePathWritePreconditionsLocked(conditions []PathWritePrecondition,
-	height, now uint64) error {
-
+func (i *Indexer) validatePathWritePreconditionsLocked(conditions []PathWritePrecondition, height, now uint64) error {
 	for _, condition := range conditions {
-		meta, err := i.ensurePathMetaLocked(condition.Path, height, now)
+		meta, err := i.ensurePathMetaLocked(stringsTrimPath(condition.Path), height, now)
 		if err != nil {
 			return err
 		}
-		if meta.Generation != condition.ExpectedGeneration || meta.ActiveRoot != condition.ExpectedRoot {
-			return ErrWriteConflict
+		if meta.Generation != condition.ExpectedGeneration {
+			return ErrStaleGeneration
+		}
+		if meta.StateRoot != condition.ExpectedRoot {
+			return ErrPathDiverged
+		}
+	}
+	return nil
+}
+
+func groupedReadyByPath(ready []preparedCASMutation) map[string][]preparedCASMutation {
+	groups := make(map[string][]preparedCASMutation)
+	for _, prepared := range ready {
+		if isFreeLocalRecord(prepared.mutation.Record) {
+			continue
+		}
+		path := collectionPath(prepared.parsed)
+		groups[path] = append(groups[path], prepared)
+	}
+	for path := range groups {
+		sort.Slice(groups[path], func(a, b int) bool {
+			return groups[path][a].mutation.Record.Key < groups[path][b].mutation.Record.Key
+		})
+	}
+	return groups
+}
+
+func (i *Indexer) validatePathGenerationsLocked(ready []preparedCASMutation, height, now uint64) error {
+	for path, group := range groupedReadyByPath(ready) {
+		meta, err := i.ensurePathMetaLocked(path, height, now)
+		if err != nil {
+			return err
+		}
+		for offset, prepared := range group {
+			expected := meta.Generation + uint64(offset) + 1
+			if expected <= meta.Generation || prepared.mutation.Record.PathGeneration != expected {
+				return ErrStaleGeneration
+			}
 		}
 	}
 	return nil
@@ -255,23 +356,30 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 		}
 		nextSeq, err := nextCASSequence(prepared.snapshot)
 		if err != nil || record.Seq != nextSeq {
-			return nil, ErrWriteConflict
+			return nil, ErrInvalidSequence
+		}
+		if prepared.parsed.Namespace == "mail" && len(prepared.parsed.Segments) == 4 &&
+			prepared.parsed.Segments[1] == "msg" && !IsTombstone(record.Flags) {
+			if !prepared.mutation.Precondition.ExpectAbsent || prepared.snapshot.deleteState != nil {
+				return nil, ErrWriteConflict
+			}
 		}
 		if IsTombstone(record.Flags) {
-			if !existingRecordActive(i, existing, height, now) ||
-				(!prepared.forceReplace && record.Seq <= existing.Seq) {
+			if !existingRecordActive(i, existing, height, now) || (!prepared.forceReplace && record.Seq <= existing.Seq) {
 				return nil, ErrWriteConflict
 			}
 		} else {
 			if deleteFloorBlocksRecord(prepared.parsed, prepared.snapshot.deleteState, record) {
 				return nil, ErrWriteConflict
 			}
-			if existingRecordActive(i, existing, height, now) && !prepared.forceReplace &&
-				CompareRecords(existing, record) >= 0 {
+			if existingRecordActive(i, existing, height, now) && !prepared.forceReplace && CompareRecords(existing, record) >= 0 {
 				return nil, ErrWriteConflict
 			}
 		}
 		ready = append(ready, prepared)
+	}
+	if err := i.validatePathGenerationsLocked(ready, height, now); err != nil {
+		return nil, err
 	}
 	return ready, nil
 }
@@ -385,8 +493,7 @@ func (i *Indexer) validateProjectedFreeLocalLocked(records map[string]*wire.DKVS
 	if total.records == 0 {
 		return nil
 	}
-	if policy.MaxTotalRecords == 0 || total.records > policy.MaxTotalRecords ||
-		policy.MaxTotalBytes == 0 || total.bytes > policy.MaxTotalBytes {
+	if policy.MaxTotalRecords == 0 || total.records > policy.MaxTotalRecords || policy.MaxTotalBytes == 0 || total.bytes > policy.MaxTotalBytes {
 		return ErrFreeLocalQuotaExceeded
 	}
 	for signer, u := range bySigner {
@@ -399,8 +506,7 @@ func (i *Indexer) validateProjectedFreeLocalLocked(records map[string]*wire.DKVS
 	return nil
 }
 
-func (i *Indexer) validateProjectedFeeLocked(ready []preparedCASMutation,
-	records map[string]*wire.DKVSRecord, height, now uint64) error {
+func (i *Indexer) validateProjectedFeeLocked(ready []preparedCASMutation, records map[string]*wire.DKVSRecord, height, now uint64) error {
 	limits := make(map[string]uint64)
 	verifiers := make(map[string]IndexedFeeCapacityVerifier)
 	for _, prepared := range ready {
@@ -418,10 +524,7 @@ func (i *Indexer) validateProjectedFeeLocked(ready []preparedCASMutation,
 	for _, record := range records {
 		for usageKey, verifier := range verifiers {
 			candidateKey, err := verifier.FeeUsageKey(record)
-			if err != nil {
-				continue
-			}
-			if candidateKey == usageKey {
+			if err == nil && candidateKey == usageKey {
 				counts[usageKey]++
 			}
 		}
@@ -439,10 +542,7 @@ func (i *Indexer) validateProjectedFeeLocked(ready []preparedCASMutation,
 		if prepared.capacity.fallback == nil || IsTombstone(prepared.mutation.Record.Flags) {
 			continue
 		}
-		if err := prepared.capacity.fallback.VerifyFeeCapacity(
-			prepared.mutation.Record, prepared.parsed, prepared.snapshot.existing,
-			projected, height, now,
-		); err != nil {
+		if err := prepared.capacity.fallback.VerifyFeeCapacity(prepared.mutation.Record, prepared.parsed, prepared.snapshot.existing, projected, height, now); err != nil {
 			return err
 		}
 	}
@@ -492,16 +592,14 @@ func (i *Indexer) validateMailboxRecordStatic(record *wire.DKVSRecord, parsed Pa
 		if RecordSize(record) > i.mailbox.MaxMsgSize {
 			return ErrRecordTooLarge
 		}
-		if (record.TTL == 0 && !isAutopayRecord(record)) ||
-			(record.TTL != 0 && i.mailbox.MaxMsgTTL > 0 && record.TTL > i.mailbox.MaxMsgTTL) {
+		if (record.TTL == 0 && !isAutopayRecord(record)) || (record.TTL != 0 && i.mailbox.MaxMsgTTL > 0 && record.TTL > i.mailbox.MaxMsgTTL) {
 			return ErrInvalidRecord
 		}
 	case "share":
 		if RecordSize(record) > i.mailbox.MaxShareSize {
 			return ErrRecordTooLarge
 		}
-		if (record.TTL == 0 && !isAutopayRecord(record)) ||
-			(record.TTL != 0 && i.mailbox.MaxShareTTL > 0 && record.TTL > i.mailbox.MaxShareTTL) {
+		if (record.TTL == 0 && !isAutopayRecord(record)) || (record.TTL != 0 && i.mailbox.MaxShareTTL > 0 && record.TTL > i.mailbox.MaxShareTTL) {
 			return ErrInvalidRecord
 		}
 	default:
@@ -510,65 +608,140 @@ func (i *Indexer) validateMailboxRecordStatic(record *wire.DKVSRecord, parsed Pa
 	return nil
 }
 
-func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now uint64) ([]batchCASEvent, error) {
+func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, now uint64) (map[string]*PathMeta, error) {
+	groups := groupedReadyByPath(ready)
+	metas := make(map[string]*PathMeta, len(groups))
+	for path, group := range groups {
+		current, err := i.ensurePathMetaLocked(path, height, now)
+		if err != nil {
+			return nil, err
+		}
+		active, _, _, err := i.scanLocked(path, nil, 0, true, height, now)
+		if err != nil {
+			return nil, err
+		}
+		activeByKey := make(map[string]*wire.DKVSRecord, len(active))
+		for _, record := range active {
+			if record != nil && !isFreeLocalRecord(record) {
+				activeByKey[record.Key] = record
+			}
+		}
+		deletes, err := i.scanPathDeleteStatesLocked(path)
+		if err != nil {
+			return nil, err
+		}
+		for _, prepared := range group {
+			record := prepared.mutation.Record
+			delete(activeByKey, record.Key)
+			delete(deletes, record.Key)
+			if IsTombstone(record.Flags) {
+				deletes[record.Key] = &deleteState{
+					FloorSeq: record.Seq, PathGeneration: record.PathGeneration,
+					PubKey: append([]byte{}, record.PubKey...), Record: record,
+					EffectiveHash: RecordHash(record),
+				}
+			} else {
+				activeByKey[record.Key] = record
+			}
+		}
+		meta := &PathMeta{Version: pathMetaVersion, Path: path, ViewHeight: height, Generation: current.Generation}
+		activeKeys := make([]string, 0, len(activeByKey))
+		for key := range activeByKey {
+			activeKeys = append(activeKeys, key)
+		}
+		sort.Strings(activeKeys)
+		for _, key := range activeKeys {
+			record := activeByKey[key]
+			meta.ActiveRecords++
+			meta.ActiveTotalSize += uint64(RecordSize(record))
+			xorPathMetaRoot(&meta.StateRoot, record)
+			updateMinExpiry(meta, record)
+			if record.PathGeneration > meta.Generation {
+				meta.Generation = record.PathGeneration
+			}
+		}
+		deleteKeys := make([]string, 0, len(deletes))
+		for key := range deletes {
+			deleteKeys = append(deleteKeys, key)
+		}
+		sort.Strings(deleteKeys)
+		for _, key := range deleteKeys {
+			state := deletes[key]
+			xorDeleteFloorRoot(&meta.StateRoot, key, state)
+			if state.PathGeneration > meta.Generation {
+				meta.Generation = state.PathGeneration
+			}
+		}
+		normalizePathMetaAliases(meta)
+		metas[path] = meta
+	}
+	return metas, nil
+}
+
+func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now uint64) ([]batchCASEvent, map[string]*PathMeta, error) {
+	metas, err := i.projectPathMetasLocked(ready, height, now)
+	if err != nil {
+		return nil, nil, err
+	}
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
-	touched := make([]*wire.DKVSRecord, 0, len(ready)*2)
 	events := make([]batchCASEvent, 0, len(ready))
 	for _, prepared := range ready {
 		record := prepared.mutation.Record
 		existing := prepared.snapshot.existing
 		if existing != nil {
 			if err := batch.Delete(hashDBKey(RecordHash(existing))); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			touched = append(touched, existing)
 		}
 		if IsTombstone(record.Flags) {
 			if err := batch.Delete(recordDBKey(record.Key)); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			state := &deleteState{
-				FloorSeq:   record.Seq,
-				RelayUntil: deleteRelayUntil(now),
-				PubKey:     append([]byte(nil), record.PubKey...),
-				Record:     record,
-				LocalOnly:  isFreeLocalRecord(existing) || isFreeLocalRecord(record),
+				FloorSeq: record.Seq, PathGeneration: record.PathGeneration,
+				RelayUntil: deleteRelayUntil(now), PubKey: append([]byte(nil), record.PubKey...),
+				Record: record, EffectiveHash: RecordHash(record),
+				LocalOnly: isFreeLocalRecord(existing) || isFreeLocalRecord(record),
 			}
 			if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			events = append(events, batchCASEvent{EventRecordTombstone, record, !state.LocalOnly})
 		} else {
 			encoded, err := MarshalRecord(record)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			hash := RecordHash(record)
 			if err := batch.Put(recordDBKey(record.Key), encoded); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if err := batch.Put(hashDBKey(hash), []byte(record.Key)); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if err := deleteDeleteStateBatch(batch, record.Key); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			relay := prepared.retention != nil || !i.isLocalOnlyRecord(record)
 			events = append(events, batchCASEvent{notifyEventType(prepared.parsed, record, existing), record, relay})
 		}
 		if prepared.snapshot.requiresResolve && prepared.parsed.Namespace == "name" {
 			if err := batch.Delete(nameTransferDBKey(prepared.parsed.Segments[0])); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
-		touched = append(touched, record)
 	}
-	if err := i.markPathMetaDirtyLocked(batch, touched, height, now); err != nil {
-		return nil, err
+	for path, meta := range metas {
+		if err := putPathMetaBatch(batch, meta); err != nil {
+			return nil, nil, err
+		}
+		if err := putPathStatusBatch(batch, &PathLocalStatus{Path: path, UpdatedAt: now}); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err := batch.Flush(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	atomic.AddUint64(&i.generation, 1)
 	i.resetFeeUsageLocked()
@@ -582,17 +755,17 @@ func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now 
 			paidRetentionCacheFor(i).set(record.Key, *prepared.retention)
 		}
 	}
-	return events, nil
+	return events, metas, nil
 }
 
-func (i *Indexer) PutLocalBatchCASWithOptions(mutations []CASMutation, options BatchCASOptions) (int, error) {
+func (i *Indexer) PutLocalBatchCASResultWithOptions(mutations []CASMutation, options BatchCASOptions) (*WriteResult, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		prep, err := i.prepareBatchCAS(mutations, options)
 		if err != nil {
 			if errors.Is(err, ErrConcurrentUpdate) {
 				continue
 			}
-			return 0, err
+			return nil, err
 		}
 		i.mutex.Lock()
 		height := i.currentHeight()
@@ -602,22 +775,45 @@ func (i *Indexer) PutLocalBatchCASWithOptions(mutations []CASMutation, options B
 			err = i.validateBatchStateLocked(ready, height, now)
 		}
 		var events []batchCASEvent
+		metas := make(map[string]*PathMeta)
 		if err == nil && len(ready) != 0 {
-			events, err = i.commitBatchCASLocked(ready, height, now)
+			events, metas, err = i.commitBatchCASLocked(ready, height, now)
 		}
 		i.mutex.Unlock()
 		if errors.Is(err, ErrConcurrentUpdate) {
 			continue
 		}
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for _, event := range events {
 			i.emit(event.eventType, event.record, event.relay)
 		}
-		return len(ready), nil
+		result := &WriteResult{Applied: len(ready), PathMeta: metas, ServerTimeMS: now}
+		result.Records = make([]*wire.DKVSRecord, 0, len(prep.mutations))
+		result.Hashes = make([]string, 0, len(prep.mutations))
+		for _, prepared := range prep.mutations {
+			record := cloneRecord(prepared.mutation.Record)
+			result.Records = append(result.Records, record)
+			result.Hashes = append(result.Hashes, RecordHash(record).String())
+			if isFreeLocalRecord(record) {
+				result.LocalOnly = true
+			}
+		}
+		if result.LocalOnly {
+			result.EndpointID = i.endpointID()
+		}
+		return result, nil
 	}
-	return 0, ErrConcurrentUpdate
+	return nil, ErrConcurrentUpdate
+}
+
+func (i *Indexer) PutLocalBatchCASWithOptions(mutations []CASMutation, options BatchCASOptions) (int, error) {
+	result, err := i.PutLocalBatchCASResultWithOptions(mutations, options)
+	if err != nil {
+		return 0, err
+	}
+	return result.Applied, nil
 }
 
 func (i *Indexer) PutLocalBatchCAS(mutations []CASMutation) (int, error) {
@@ -625,6 +821,8 @@ func (i *Indexer) PutLocalBatchCAS(mutations []CASMutation) (int, error) {
 }
 
 func (i *Indexer) PutLocalCAS(record *wire.DKVSRecord, precondition WritePrecondition) (bool, error) {
-	applied, err := i.PutLocalBatchCAS([]CASMutation{{Record: record, Precondition: precondition}})
-	return applied != 0, err
+	result, err := i.PutLocalBatchCASResultWithOptions([]CASMutation{{Record: record, Precondition: precondition}}, BatchCASOptions{})
+	return err == nil && result.Applied != 0, err
 }
+
+func hashBytesEqual(a, b chainhash.Hash) bool { return bytes.Equal(a[:], b[:]) }

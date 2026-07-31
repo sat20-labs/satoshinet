@@ -195,8 +195,8 @@ func TestPathMetaTracksPutUpdateDelete(t *testing.T) {
 	wantRoot := chainhash.Hash{}
 	xorPathMetaRoot(&wantRoot, first)
 	xorPathMetaRoot(&wantRoot, second)
-	if meta.ActiveRoot != wantRoot {
-		t.Fatalf("after puts root=%s want=%s", meta.ActiveRoot, wantRoot)
+	if meta.StateRoot != wantRoot {
+		t.Fatalf("after puts root=%s want=%s", meta.StateRoot, wantRoot)
 	}
 
 	updatedFirst := signedRecordWithValue(t, priv, first.Key, 2, []byte("updated-value"), 0)
@@ -211,8 +211,8 @@ func TestPathMetaTracksPutUpdateDelete(t *testing.T) {
 	wantRoot = chainhash.Hash{}
 	xorPathMetaRoot(&wantRoot, updatedFirst)
 	xorPathMetaRoot(&wantRoot, second)
-	if meta.ActiveRoot != wantRoot {
-		t.Fatalf("after update root=%s want=%s", meta.ActiveRoot, wantRoot)
+	if meta.StateRoot != wantRoot {
+		t.Fatalf("after update root=%s want=%s", meta.StateRoot, wantRoot)
 	}
 
 	deleteSecond := signedRecordWithValue(t, priv, second.Key, 2, nil, FlagTombstone)
@@ -223,10 +223,17 @@ func TestPathMetaTracksPutUpdateDelete(t *testing.T) {
 	if err != nil || meta.ActiveRecords != 1 || meta.ActiveTotalSize != uint64(RecordSize(updatedFirst)) {
 		t.Fatalf("after delete meta=%#v err=%v", meta, err)
 	}
+	idx.mutex.RLock()
+	floor, floorErr := idx.getDeleteStateLocked(second.Key)
+	idx.mutex.RUnlock()
+	if floorErr != nil {
+		t.Fatal(floorErr)
+	}
 	wantRoot = chainhash.Hash{}
 	xorPathMetaRoot(&wantRoot, updatedFirst)
-	if meta.ActiveRoot != wantRoot {
-		t.Fatalf("after delete root=%s want=%s", meta.ActiveRoot, wantRoot)
+	xorDeleteFloorRoot(&wantRoot, second.Key, floor)
+	if meta.StateRoot != wantRoot {
+		t.Fatalf("after delete root=%s want=%s", meta.StateRoot, wantRoot)
 	}
 	usage, err := idx.Usage(base)
 	if err != nil || usage.ActiveRecords != meta.ActiveRecords || usage.ActiveTotalSize != meta.ActiveTotalSize {

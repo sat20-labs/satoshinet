@@ -35,6 +35,52 @@ func signedFreeBlobRecord(t *testing.T, priv *btcec.PrivateKey, name string, seq
 	return record
 }
 
+func signedPersonalRecordV1(t *testing.T, priv *btcec.PrivateKey, path string, seq, pathGeneration uint64, value string) *wire.DKVSRecord {
+	t.Helper()
+	record := signedPersonalRecordWithPath(t, priv, path, seq, value, 0)
+	record.PathGeneration = pathGeneration
+	signRecord(t, priv, record)
+	return record
+}
+
+func signedRelayablePersonalRecordV1(t *testing.T, priv *btcec.PrivateKey, path string, seq, pathGeneration uint64, value string) *wire.DKVSRecord {
+	t.Helper()
+	record := signedPersonalRecordV1(t, priv, path, seq, pathGeneration, value)
+	record.TTL = 0
+	record.ExpiryHeight = 100
+	record.FeeProof = nil
+	signRecord(t, priv, record)
+	return record
+}
+
+func currentPathCondition(t *testing.T, idx *Indexer, key string) PathWritePrecondition {
+	t.Helper()
+	path, err := CollectionPathForKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := idx.GetPathMeta(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return PathWritePrecondition{
+		Path:               path,
+		ExpectedRoot:       meta.StateRoot,
+		ExpectedGeneration: meta.Generation,
+	}
+}
+
+func putSingleCASV1(idx *Indexer, record *wire.DKVSRecord, precondition WritePrecondition,
+	pathPrecondition PathWritePrecondition) (bool, error) {
+	result, err := idx.PutLocalBatchCASResultWithOptions([]CASMutation{{
+		Record: record, Precondition: precondition,
+	}}, BatchCASOptions{PathPreconditions: []PathWritePrecondition{pathPrecondition}})
+	if err != nil {
+		return false, err
+	}
+	return result != nil && result.Applied == 1, nil
+}
+
 func blobTestIndexer(t *testing.T, maxKeys uint64) *Indexer {
 	t.Helper()
 	return testIndexerWithConfig(t, Config{
@@ -90,29 +136,33 @@ func TestBatchCASIsAtomicAndIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := signedPersonalRecordWithPath(t, priv, "batch/a", 1, "one", 0)
-	second := signedPersonalRecordWithPath(t, priv, "batch/b", 1, "two", 0)
+	first := signedPersonalRecordV1(t, priv, "batch/a", 1, 1, "one")
+	second := signedPersonalRecordV1(t, priv, "batch/b", 1, 2, "two")
 	create := []CASMutation{
 		{Record: first, Precondition: WritePrecondition{ExpectAbsent: true}},
 		{Record: second, Precondition: WritePrecondition{ExpectAbsent: true}},
 	}
-	if applied, err := idx.PutLocalBatchCAS(create); err != nil || applied != 2 {
-		t.Fatalf("create batch applied=%d err=%v", applied, err)
+	initialCondition := currentPathCondition(t, idx, first.Key)
+	createOptions := BatchCASOptions{PathPreconditions: []PathWritePrecondition{initialCondition}}
+	if result, err := idx.PutLocalBatchCASResultWithOptions(create, createOptions); err != nil || result.Applied != 2 {
+		t.Fatalf("create batch result=%#v err=%v", result, err)
 	}
-	if applied, err := idx.PutLocalBatchCAS(create); err != nil || applied != 0 {
-		t.Fatalf("idempotent retry applied=%d err=%v", applied, err)
+	if result, err := idx.PutLocalBatchCASResultWithOptions(create, createOptions); err != nil || result.Applied != 0 {
+		t.Fatalf("idempotent retry result=%#v err=%v", result, err)
 	}
 	firstHash := RecordHash(first)
 	secondHash := RecordHash(second)
-	firstUpdate := signedPersonalRecordWithPath(t, priv, "batch/a", 2, "one-v2", 0)
-	secondUpdate := signedPersonalRecordWithPath(t, priv, "batch/b", 2, "two-v2", 0)
+	firstUpdate := signedPersonalRecordV1(t, priv, "batch/a", 2, 3, "one-v2")
+	secondUpdate := signedPersonalRecordV1(t, priv, "batch/b", 2, 4, "two-v2")
 	wrong := chainhash.DoubleHashH([]byte("wrong"))
 	conflict := []CASMutation{
 		{Record: firstUpdate, Precondition: WritePrecondition{ExpectedHash: &firstHash}},
 		{Record: secondUpdate, Precondition: WritePrecondition{ExpectedHash: &wrong}},
 	}
-	if applied, err := idx.PutLocalBatchCAS(conflict); !errors.Is(err, ErrWriteConflict) || applied != 0 {
-		t.Fatalf("conflicting batch applied=%d err=%v", applied, err)
+	updateCondition := currentPathCondition(t, idx, first.Key)
+	updateOptions := BatchCASOptions{PathPreconditions: []PathWritePrecondition{updateCondition}}
+	if result, err := idx.PutLocalBatchCASResultWithOptions(conflict, updateOptions); !errors.Is(err, ErrWriteConflict) || result != nil {
+		t.Fatalf("conflicting batch result=%#v err=%v", result, err)
 	}
 	gotFirst, err := idx.Get(first.Key)
 	if err != nil || RecordHash(gotFirst) != firstHash {
@@ -126,8 +176,8 @@ func TestBatchCASIsAtomicAndIdempotent(t *testing.T) {
 		{Record: firstUpdate, Precondition: WritePrecondition{ExpectedHash: &firstHash}},
 		{Record: secondUpdate, Precondition: WritePrecondition{ExpectedHash: &secondHash}},
 	}
-	if applied, err := idx.PutLocalBatchCAS(valid); err != nil || applied != 2 {
-		t.Fatalf("valid update batch applied=%d err=%v", applied, err)
+	if result, err := idx.PutLocalBatchCASResultWithOptions(valid, updateOptions); err != nil || result.Applied != 2 {
+		t.Fatalf("valid update batch result=%#v err=%v", result, err)
 	}
 }
 
@@ -137,34 +187,44 @@ func TestBatchCASRequiresExactNextSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := signedPersonalRecordWithPath(t, priv, "strict-seq", 1, "one", 0)
-	if applied, err := idx.PutLocalCAS(initial, WritePrecondition{ExpectAbsent: true}); err != nil || !applied {
+	initial := signedPersonalRecordV1(t, priv, "strict-seq", 1, 1, "one")
+	initialCondition := currentPathCondition(t, idx, initial.Key)
+	if applied, err := putSingleCASV1(idx, initial, WritePrecondition{ExpectAbsent: true}, initialCondition); err != nil || !applied {
 		t.Fatalf("initial applied=%v err=%v", applied, err)
 	}
 	hash := RecordHash(initial)
-	skipped := signedPersonalRecordWithPath(t, priv, "strict-seq", 3, "three", 0)
-	if applied, err := idx.PutLocalCAS(skipped, WritePrecondition{ExpectedHash: &hash}); !errors.Is(err, ErrWriteConflict) || applied {
+	pathCondition := currentPathCondition(t, idx, initial.Key)
+	skipped := signedPersonalRecordV1(t, priv, "strict-seq", 3, 2, "three")
+	if applied, err := putSingleCASV1(idx, skipped, WritePrecondition{ExpectedHash: &hash}, pathCondition); !errors.Is(err, ErrInvalidSequence) || applied {
 		t.Fatalf("skipped sequence applied=%v err=%v", applied, err)
 	}
-	next := signedPersonalRecordWithPath(t, priv, "strict-seq", 2, "two", 0)
-	if applied, err := idx.PutLocalCAS(next, WritePrecondition{ExpectedHash: &hash}); err != nil || !applied {
+	next := signedPersonalRecordV1(t, priv, "strict-seq", 2, 2, "two")
+	if applied, err := putSingleCASV1(idx, next, WritePrecondition{ExpectedHash: &hash}, pathCondition); err != nil || !applied {
 		t.Fatalf("next sequence applied=%v err=%v", applied, err)
 	}
 }
 
-func TestRemoteReplicationAllowsSequenceGap(t *testing.T) {
-	idx := testIndexer(t)
+func TestRemoteReplicationRejectsPathGenerationGap(t *testing.T) {
+	idx := testIndexerWithConfig(t, Config{FeeVerifier: testFeeVerifier{}})
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := signedPersonalRecordWithPath(t, priv, "remote-gap", 1, "one", 0)
-	if updated, err := idx.PutRemote(initial); err != nil || !updated {
+	initial := signedRelayablePersonalRecordV1(t, priv, "remote-gap", 1, 1, "one")
+	if updated, err := idx.PutRemoteV1(initial, "peer-a"); err != nil || !updated {
 		t.Fatalf("initial remote updated=%v err=%v", updated, err)
 	}
-	later := signedPersonalRecordWithPath(t, priv, "remote-gap", 5, "five", 0)
-	if updated, err := idx.PutRemote(later); err != nil || !updated {
+	later := signedRelayablePersonalRecordV1(t, priv, "remote-gap", 5, 3, "five")
+	if updated, err := idx.PutRemoteV1(later, "peer-a"); !errors.Is(err, ErrPathGenerationGap) || updated {
 		t.Fatalf("gapped remote updated=%v err=%v", updated, err)
+	}
+	path, err := CollectionPathForKey(initial.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := idx.GetPathLocalStatus(path)
+	if err != nil || !status.Stale || status.LastSyncPeer != "peer-a" {
+		t.Fatalf("path status=%#v err=%v", status, err)
 	}
 }
 
@@ -174,36 +234,28 @@ func TestBatchCASPathPreconditionRejectsStaleDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := signedPersonalRecordWithPath(t, priv, "path/a", 1, "a1", 0)
-	second := signedPersonalRecordWithPath(t, priv, "path/b", 1, "b1", 0)
-	if applied, err := idx.PutLocalBatchCAS([]CASMutation{
+	first := signedPersonalRecordV1(t, priv, "path/a", 1, 1, "a1")
+	second := signedPersonalRecordV1(t, priv, "path/b", 1, 2, "b1")
+	createOptions := BatchCASOptions{PathPreconditions: []PathWritePrecondition{currentPathCondition(t, idx, first.Key)}}
+	if result, err := idx.PutLocalBatchCASResultWithOptions([]CASMutation{
 		{Record: first, Precondition: WritePrecondition{ExpectAbsent: true}},
 		{Record: second, Precondition: WritePrecondition{ExpectAbsent: true}},
-	}); err != nil || applied != 2 {
-		t.Fatalf("create applied=%d err=%v", applied, err)
+	}, createOptions); err != nil || result.Applied != 2 {
+		t.Fatalf("create result=%#v err=%v", result, err)
 	}
-	path, err := CollectionPathForKey(first.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stale, err := idx.GetPathMeta(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	stale := currentPathCondition(t, idx, first.Key)
 	secondHash := RecordHash(second)
-	secondUpdate := signedPersonalRecordWithPath(t, priv, "path/b", 2, "b2", 0)
-	if applied, err := idx.PutLocalCAS(secondUpdate, WritePrecondition{ExpectedHash: &secondHash}); err != nil || !applied {
+	secondUpdate := signedPersonalRecordV1(t, priv, "path/b", 2, 3, "b2")
+	if applied, err := putSingleCASV1(idx, secondUpdate, WritePrecondition{ExpectedHash: &secondHash}, stale); err != nil || !applied {
 		t.Fatalf("concurrent update applied=%v err=%v", applied, err)
 	}
 	firstHash := RecordHash(first)
-	firstUpdate := signedPersonalRecordWithPath(t, priv, "path/a", 2, "a2", 0)
-	applied, err := idx.PutLocalBatchCASWithOptions([]CASMutation{{
+	firstUpdate := signedPersonalRecordV1(t, priv, "path/a", 2, 3, "a2")
+	result, err := idx.PutLocalBatchCASResultWithOptions([]CASMutation{{
 		Record: firstUpdate, Precondition: WritePrecondition{ExpectedHash: &firstHash},
-	}}, BatchCASOptions{PathPreconditions: []PathWritePrecondition{{
-		Path: path, ExpectedRoot: stale.ActiveRoot, ExpectedGeneration: stale.Generation,
-	}}})
-	if !errors.Is(err, ErrWriteConflict) || applied != 0 {
-		t.Fatalf("stale path applied=%d err=%v", applied, err)
+	}}, BatchCASOptions{PathPreconditions: []PathWritePrecondition{stale}})
+	if !errors.Is(err, ErrStaleGeneration) || result != nil {
+		t.Fatalf("stale path result=%#v err=%v", result, err)
 	}
 	got, err := idx.Get(first.Key)
 	if err != nil || RecordHash(got) != firstHash {
@@ -211,47 +263,38 @@ func TestBatchCASPathPreconditionRejectsStaleDirectory(t *testing.T) {
 	}
 }
 
-func TestBatchCASPathGenerationAdvancesOnce(t *testing.T) {
+func TestBatchCASPathGenerationAdvancesPerMutation(t *testing.T) {
 	idx := testIndexer(t)
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := signedPersonalRecordWithPath(t, priv, "generation/a", 1, "a1", 0)
-	second := signedPersonalRecordWithPath(t, priv, "generation/b", 1, "b1", 0)
-	if applied, err := idx.PutLocalBatchCAS([]CASMutation{
+	first := signedPersonalRecordV1(t, priv, "generation/a", 1, 1, "a1")
+	second := signedPersonalRecordV1(t, priv, "generation/b", 1, 2, "b1")
+	if result, err := idx.PutLocalBatchCASResultWithOptions([]CASMutation{
 		{Record: first, Precondition: WritePrecondition{ExpectAbsent: true}},
 		{Record: second, Precondition: WritePrecondition{ExpectAbsent: true}},
-	}); err != nil || applied != 2 {
-		t.Fatalf("create applied=%d err=%v", applied, err)
+	}, BatchCASOptions{PathPreconditions: []PathWritePrecondition{currentPathCondition(t, idx, first.Key)}}); err != nil || result.Applied != 2 {
+		t.Fatalf("create result=%#v err=%v", result, err)
 	}
-	path, err := CollectionPathForKey(first.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before, err := idx.GetPathMeta(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	beforeCondition := currentPathCondition(t, idx, first.Key)
 	firstHash := RecordHash(first)
 	secondHash := RecordHash(second)
-	firstUpdate := signedPersonalRecordWithPath(t, priv, "generation/a", 2, "a2", 0)
-	secondUpdate := signedPersonalRecordWithPath(t, priv, "generation/b", 2, "b2", 0)
-	applied, err := idx.PutLocalBatchCASWithOptions([]CASMutation{
+	firstUpdate := signedPersonalRecordV1(t, priv, "generation/a", 2, beforeCondition.ExpectedGeneration+1, "a2")
+	secondUpdate := signedPersonalRecordV1(t, priv, "generation/b", 2, beforeCondition.ExpectedGeneration+2, "b2")
+	result, err := idx.PutLocalBatchCASResultWithOptions([]CASMutation{
 		{Record: firstUpdate, Precondition: WritePrecondition{ExpectedHash: &firstHash}},
 		{Record: secondUpdate, Precondition: WritePrecondition{ExpectedHash: &secondHash}},
-	}, BatchCASOptions{PathPreconditions: []PathWritePrecondition{{
-		Path: path, ExpectedRoot: before.ActiveRoot, ExpectedGeneration: before.Generation,
-	}}})
-	if err != nil || applied != 2 {
-		t.Fatalf("path update applied=%d err=%v", applied, err)
+	}, BatchCASOptions{PathPreconditions: []PathWritePrecondition{beforeCondition}})
+	if err != nil || result.Applied != 2 {
+		t.Fatalf("path update result=%#v err=%v", result, err)
 	}
-	after, err := idx.GetPathMeta(path)
+	after, err := idx.GetPathMeta(beforeCondition.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Generation != before.Generation+1 {
-		t.Fatalf("path generation=%d want=%d", after.Generation, before.Generation+1)
+	if after.Generation != beforeCondition.ExpectedGeneration+2 {
+		t.Fatalf("path generation=%d want=%d", after.Generation, beforeCondition.ExpectedGeneration+2)
 	}
 }
 
