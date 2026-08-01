@@ -29,6 +29,30 @@ func signedAccountRecord(t *testing.T, priv *btcec.PrivateKey, key string, value
 	return record
 }
 
+func TestNewAccountRecordPreservesPathGeneration(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountID, err := CanonicalAccountID(priv.PubKey().SerializeCompressed())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := AccountPersonalKey(accountID, "account/recovery/item")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := NewAccountRecord(key, []byte("value"), RecordOptions{
+		Seq: 1, PathGeneration: 7, IssueTime: 1234,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.PathGeneration != 7 {
+		t.Fatalf("path generation=%d want=7", record.PathGeneration)
+	}
+}
+
 func TestAccountIDAndAddressMapping(t *testing.T) {
 	idx := testIndexer(t)
 	priv, err := btcec.NewPrivateKey()

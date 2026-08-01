@@ -127,15 +127,16 @@ func NewAccountRecord(key string, value []byte, opts RecordOptions) (*wire.DKVSR
 		return nil, err
 	}
 	record := &wire.DKVSRecord{
-		Version:      Version,
-		Key:          key,
-		Value:        append([]byte(nil), value...),
-		Seq:          opts.Seq,
-		IssueTime:    opts.IssueTime,
-		TTL:          opts.TTL,
-		ExpiryHeight: opts.ExpiryHeight,
-		FeeProof:     append([]byte(nil), opts.FeeProof...),
-		Flags:        opts.Flags,
+		Version:        Version,
+		Key:            key,
+		Value:          append([]byte(nil), value...),
+		Seq:            opts.Seq,
+		PathGeneration: opts.PathGeneration,
+		IssueTime:      opts.IssueTime,
+		TTL:            opts.TTL,
+		ExpiryHeight:   opts.ExpiryHeight,
+		FeeProof:       append([]byte(nil), opts.FeeProof...),
+		Flags:          opts.Flags,
 	}
 	if record.IssueTime == 0 {
 		record.IssueTime = currentUnixMilli()
