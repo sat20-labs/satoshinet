@@ -254,19 +254,12 @@ func (i *Indexer) ListPrefix(prefix string, start, limit int) ([]*wire.DKVSRecor
 	prefix = strings.TrimSuffix(prefix, "/")
 	height := i.currentHeight()
 	now := currentUnixMilli()
-	totalHint := -1
-	if path := collectionPathForPrefix(prefix); path != "" {
-		meta, err := i.GetPathMeta(path)
-		if err != nil {
-			return nil, 0, err
-		}
-		if meta.ActiveRecords <= uint64(^uint(0)>>1) {
-			totalHint = int(meta.ActiveRecords)
-		}
-	}
+	// PathMeta is the network-relayable view and deliberately excludes
+	// endpoint-local FREE_LOCAL records. Application listing includes those
+	// records, so a PathMeta count must never be used as an early-return hint.
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	return i.listPrefixLocked(prefix, start, limit, totalHint, height, now)
+	return i.listPrefixLocked(prefix, start, limit, -1, height, now)
 }
 
 func (i *Indexer) ClientConfig() ClientConfig {
