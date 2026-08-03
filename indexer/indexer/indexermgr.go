@@ -175,7 +175,7 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 			if b.compiling == nil {
 				return 0
 			}
-			height := b.compiling.GetSyncHeight()
+			height := b.compiling.GetHeight()
 			if height < 0 {
 				return 0
 			}

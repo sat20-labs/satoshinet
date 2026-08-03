@@ -8,6 +8,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	baseindexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
 	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -56,6 +57,34 @@ func TestPruneExpiredDKVSOnBlock(t *testing.T) {
 	mgr.pruneExpiredDKVSOnBlock(&common.Block{Height: dkvsPruneIntervalBlocks})
 	if mgr.lastDKVSPruneHeight != dkvsPruneIntervalBlocks {
 		t.Fatalf("repeat prune changed height=%d", mgr.lastDKVSPruneHeight)
+	}
+}
+
+func TestDKVSConfigUsesLatestIndexedHeight(t *testing.T) {
+	database := dbpkg.NewKVDB(t.TempDir())
+	if database == nil {
+		t.Fatal("NewKVDB failed")
+	}
+	t.Cleanup(func() { _ = database.Close() })
+
+	compiling := baseindexer.NewBaseIndexer(database, &chaincfg.TestNetParams, -1, 100)
+	compiling.SetBlockCallback(func(*common.Block) {})
+	compiling.SetUpdateDBCallback(func() {})
+	compiling.Init()
+	if err := compiling.SyncBlock(chaincfg.TestNetParams.GenesisBlock, 0, 10, false); err != nil {
+		t.Fatal(err)
+	}
+	block := &wire.MsgBlock{Header: wire.BlockHeader{PrevBlock: *chaincfg.TestNetParams.GenesisHash}}
+	if err := compiling.SyncBlock(block, 1, 10, false); err != nil {
+		t.Fatal(err)
+	}
+	if compiling.GetSyncHeight() >= compiling.GetHeight() {
+		t.Fatalf("test requires delayed sync height: sync=%d latest=%d", compiling.GetSyncHeight(), compiling.GetHeight())
+	}
+
+	mgr := &IndexerMgr{cfg: &Config{}, chaincfgParam: &chaincfg.TestNetParams, compiling: compiling}
+	if got := mgr.dkvsConfig().CurrentHeight(); got != uint64(compiling.GetHeight()) {
+		t.Fatalf("DKVS current height=%d, latest indexed height=%d", got, compiling.GetHeight())
 	}
 }
 
