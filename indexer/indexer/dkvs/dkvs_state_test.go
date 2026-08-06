@@ -607,7 +607,8 @@ func TestApplyMirrorPreservesExpiredPaidRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := signedPersonalRecordWithPath(t, priv, "paid", 1, "value", 0)
-	record.ExpiryHeight = 2
+	record.IssueHeight = 1
+	record.TTL = 1
 	record.FeeProof = []byte{1}
 	signRecord(t, priv, record)
 	if _, err := target.PutLocal(record); err != nil {

@@ -1,6 +1,6 @@
 # DKVS PWA / dApp API Examples
 
-更新时间：2026-07-03
+更新时间：2026-08-06
 
 本文给 PWA、dApp 和本地 Agent 提供当前 SatoshiNet indexer DKVS REST API 的最小调用样本。它只描述现有 HTTP/API 行为，不替代钱包签名 SDK，也不引入新的 wire command。
 
@@ -22,17 +22,20 @@
   "Key": "/personal/<account_id>/profile",
   "Value": "base64-encoded-value",
   "PubKey": "base64-encoded-compressed-pubkey",
-  "Signature": "base64-encoded-ecdsa-signature",
+  "Signature": "base64-encoded-wallet-signature",
   "Seq": 1,
-  "IssueTime": 1783094400000,
-  "TTL": 60000,
-  "ExpiryHeight": 100,
+  "IssueHeight": 123456,
+  "TTL": 144,
   "FeeProof": "base64-encoded-compact-fee-proof",
   "Flags": 0
 }
 ```
 
 Tombstone record 使用同一结构，`Value` 为空，`Flags` 包含 `1`。
+
+`IssueHeight` 是聪网可信区块高度，`TTL` 单位为聪网区块。有限记录在
+`IssueHeight + TTL` 高度到期；`TTL=0` 表示没有固定 record 租期，通常由 AUTOPAY
+控制。`ExpiryHeight` 不存入 record。
 
 ## Minimal Fetch Wrapper
 

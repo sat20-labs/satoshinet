@@ -39,17 +39,14 @@ func NewSignedRenewalRecord(priv *btcec.PrivateKey, existing *wire.DKVSRecord, o
 	if priv == nil || existing == nil {
 		return nil, ErrInvalidSignature
 	}
-	if IsTombstone(existing.Flags) {
+	if IsTombstone(existing.Flags) || existing.TTL == 0 || opts.TTL == 0 {
 		return nil, ErrInvalidRecord
 	}
-	if _, err := ParseKey(existing.Key); err != nil {
-		return nil, err
-	}
-	pubKey := priv.PubKey().SerializeCompressed()
 	parsed, err := ParseKey(existing.Key)
 	if err != nil {
 		return nil, err
 	}
+	pubKey := priv.PubKey().SerializeCompressed()
 	if isAccountScopedNamespace(parsed.Namespace) {
 		want, err := RecordSignerAccountID(existing, parsed)
 		if err != nil {
@@ -62,28 +59,21 @@ func NewSignedRenewalRecord(priv *btcec.PrivateKey, existing *wire.DKVSRecord, o
 	} else if !bytes.Equal(existing.PubKey, pubKey) {
 		return nil, ErrPermissionDenied
 	}
-	if opts.ExpiryHeight <= existing.ExpiryHeight {
-		return nil, ErrInvalidRecord
-	}
 	record := *existing
 	record.PubKey = append([]byte{}, existing.PubKey...)
 	record.Value = append([]byte{}, existing.Value...)
 	record.Signature = nil
-	record.IssueTime = opts.IssueTime
-	if record.IssueTime == 0 {
-		record.IssueTime = currentUnixMilli()
+	record.IssueHeight = opts.IssueHeight
+	record.TTL = opts.TTL
+	if RecordExpiryHeight(&record) == 0 || RecordExpiryHeight(&record) <= RecordExpiryHeight(existing) {
+		return nil, ErrInvalidRecord
 	}
-	if opts.TTL != 0 {
-		record.TTL = opts.TTL
-	}
-	record.ExpiryHeight = opts.ExpiryHeight
 	if opts.FeeProof != nil {
 		record.FeeProof = append([]byte{}, opts.FeeProof...)
 	} else {
 		record.FeeProof = append([]byte{}, existing.FeeProof...)
 	}
-	if RecordSize(&record) > wire.MaxDKVSRecordSize ||
-		len(record.Value) > MaxRecordValueSize {
+	if RecordSize(&record) > wire.MaxDKVSRecordSize || len(record.Value) > MaxRecordValueSize {
 		return nil, ErrRecordTooLarge
 	}
 	SignRecord(priv, &record)

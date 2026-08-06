@@ -11,8 +11,6 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const satsNetTargetBlockMillis = uint64(12_000)
-
 type PaidRecordRetention struct {
 	CurrentBlock  uint64
 	LastPayHeight uint64
@@ -177,10 +175,7 @@ func isAutopayRecord(record *wire.DKVSRecord) bool {
 }
 
 func paidRetentionGraceBlocks(policy FreeLocalCachePolicy) uint64 {
-	if policy.MaxTTL == 0 {
-		return 0
-	}
-	return (policy.MaxTTL + satsNetTargetBlockMillis - 1) / satsNetTargetBlockMillis
+	return policy.MaxTTL
 }
 
 func paidRetentionExpired(retention PaidRecordRetention, height, graceBlocks uint64) bool {

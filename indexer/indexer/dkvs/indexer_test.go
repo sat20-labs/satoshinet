@@ -53,7 +53,7 @@ func signedPersonalRecordWithPath(t *testing.T, priv *btcec.PrivateKey, path str
 	t.Helper()
 	key := "/personal/" + AccountID(priv.PubKey().SerializeCompressed()) + "/" + path
 	record, err := NewSignedRecord(priv, key, []byte(value), RecordOptions{
-		Seq: seq, TTL: 60_000, ExpiryHeight: 100, Flags: flags,
+		Seq: seq, TTL: 100, Flags: flags,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func signedFreePersonalRecord(t *testing.T, priv *btcec.PrivateKey, path string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof, err := NewFreeLocalFeeProof(record.Key, parsed.Namespace, wire.MaxDKVSRecordSize, record.ExpiryHeight)
+	proof, err := NewFreeLocalFeeProof(record.Key, parsed.Namespace, wire.MaxDKVSRecordSize, RecordExpiryHeight(record))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,8 @@ func TestSnapshotMatchesCheckpointAndFiltersInactive(t *testing.T) {
 	}
 	active := signedPersonalRecordWithPath(t, priv, "active", 1, "active", 0)
 	expired := signedPersonalRecordWithPath(t, priv, "expired", 1, "expired", 0)
-	expired.ExpiryHeight = 2
+	expired.IssueHeight = 1
+	expired.TTL = 1
 	signRecord(t, priv, expired)
 	if _, err := idx.PutLocal(active); err != nil {
 		t.Fatal(err)
@@ -644,7 +645,7 @@ func signedRecordForKey(t *testing.T, priv *btcec.PrivateKey, key string, seq ui
 func signedRecordWithValue(t *testing.T, priv *btcec.PrivateKey, key string, seq uint64, value []byte, flags uint32) *wire.DKVSRecord {
 	t.Helper()
 	record, err := NewSignedRecord(priv, key, value, RecordOptions{
-		Seq: seq, TTL: 60_000, ExpiryHeight: 100, Flags: flags,
+		Seq: seq, TTL: 100, Flags: flags,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -676,7 +677,6 @@ func signedRecordWithAutopayFee(t *testing.T, priv *btcec.PrivateKey, key string
 	t.Helper()
 	record := signedRecordWithValue(t, priv, key, seq, []byte("value"), 0)
 	record.TTL = 0
-	record.ExpiryHeight = 0
 	parsed, err := ParseKey(key)
 	if err != nil {
 		t.Fatal(err)
@@ -1287,9 +1287,8 @@ func TestSDKKeyBuildersAndSignedRecord(t *testing.T) {
 		}
 	}
 	record, err := NewSignedRecord(priv, personalKey, []byte("value"), RecordOptions{
-		Seq:          1,
-		TTL:          60_000,
-		ExpiryHeight: 100,
+		Seq: 1,
+		TTL: 100,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1317,20 +1316,19 @@ func TestSDKRenewalRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := NewSignedRecord(priv, key, []byte("backup"), RecordOptions{Seq: 7, TTL: 60_000, ExpiryHeight: 100})
+	record, err := NewSignedRecord(priv, key, []byte("backup"), RecordOptions{Seq: 7, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := idx.PutLocal(record); err != nil {
 		t.Fatal(err)
 	}
-	renewal, err := NewSignedRenewalRecord(priv, record, RecordOptions{TTL: 120_000, ExpiryHeight: 200})
+	renewal, err := NewSignedRenewalRecord(priv, record, RecordOptions{IssueHeight: 1, TTL: 199})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if renewal.Key != record.Key || renewal.Seq != record.Seq ||
-		string(renewal.Value) != string(record.Value) ||
-		renewal.ExpiryHeight != 200 || renewal.TTL != 120_000 {
+		string(renewal.Value) != string(record.Value) || RecordExpiryHeight(renewal) != 200 {
 		t.Fatalf("renewal=%#v record=%#v", renewal, record)
 	}
 	if err := VerifySignature(renewal); err != nil {
@@ -1343,20 +1341,20 @@ func TestSDKRenewalRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ExpiryHeight != 200 || got.Seq != 7 || string(got.Value) != "backup" {
+	if RecordExpiryHeight(got) != 200 || got.Seq != 7 || string(got.Value) != "backup" {
 		t.Fatalf("got renewal=%#v", got)
 	}
-	if _, err := NewSignedRenewalRecord(priv, record, RecordOptions{ExpiryHeight: 100}); err != ErrInvalidRecord {
+	if _, err := NewSignedRenewalRecord(priv, record, RecordOptions{IssueHeight: 1, TTL: 99}); err != ErrInvalidRecord {
 		t.Fatalf("non-extension renewal err=%v", err)
 	}
-	if _, err := NewSignedRenewalRecord(otherPriv, record, RecordOptions{ExpiryHeight: 200}); err != ErrPermissionDenied {
+	if _, err := NewSignedRenewalRecord(otherPriv, record, RecordOptions{IssueHeight: 1, TTL: 199}); err != ErrPermissionDenied {
 		t.Fatalf("other signer renewal err=%v", err)
 	}
-	tombstone, err := NewSignedTombstone(priv, key, RecordOptions{Seq: 8, TTL: 60_000, ExpiryHeight: 300})
+	tombstone, err := NewSignedTombstone(priv, key, RecordOptions{Seq: 8, IssueHeight: 1, TTL: 299})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewSignedRenewalRecord(priv, tombstone, RecordOptions{ExpiryHeight: 400}); err != ErrInvalidRecord {
+	if _, err := NewSignedRenewalRecord(priv, tombstone, RecordOptions{IssueHeight: 1, TTL: 399}); err != ErrInvalidRecord {
 		t.Fatalf("tombstone renewal err=%v", err)
 	}
 }
@@ -1370,7 +1368,7 @@ func TestSDKTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := NewSignedTombstone(priv, key, RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, err := NewSignedTombstone(priv, key, RecordOptions{Seq: 1, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1391,12 +1389,12 @@ func TestVerifyRecordForClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := NewSignedRecord(priv, key, []byte("value"), RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	record, err := NewSignedRecord(priv, key, []byte("value"), RecordOptions{Seq: 1, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	hash := RecordHash(record)
-	if err := VerifyRecordForClient(record, RecordVerificationOptions{ExpectedKey: key, ExpectedHash: hash, CheckHash: true, Height: 1, Now: record.IssueTime}); err != nil {
+	if err := VerifyRecordForClient(record, RecordVerificationOptions{ExpectedKey: key, ExpectedHash: hash, CheckHash: true, Height: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifyRecordForClient(record, RecordVerificationOptions{ExpectedKey: "/tmp/other"}); err != ErrInvalidKey {
@@ -1405,14 +1403,14 @@ func TestVerifyRecordForClient(t *testing.T) {
 	if err := VerifyRecordForClient(record, RecordVerificationOptions{ExpectedKey: key, ExpectedHash: chainhash.Hash{}, CheckHash: true}); err != ErrInvalidRecord {
 		t.Fatalf("wrong hash err=%v", err)
 	}
-	if err := VerifyRecordForClient(record, RecordVerificationOptions{ExpectedKey: key, Height: record.ExpiryHeight}); err != ErrExpiredRecord {
+	if err := VerifyRecordForClient(record, RecordVerificationOptions{ExpectedKey: key, Height: RecordExpiryHeight(record)}); err != ErrExpiredRecord {
 		t.Fatalf("expired err=%v", err)
 	}
 	feeErr := errors.New("fee")
 	if err := VerifyRecordForClient(record, RecordVerificationOptions{ExpectedKey: key, FeeVerifier: testFeeVerifier{err: feeErr}}); err != feeErr {
 		t.Fatalf("fee err=%v", err)
 	}
-	badTombstone, err := NewSignedRecord(priv, key, []byte("bad"), RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100, Flags: FlagTombstone})
+	badTombstone, err := NewSignedRecord(priv, key, []byte("bad"), RecordOptions{Seq: 2, TTL: 100, Flags: FlagTombstone})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1427,15 +1425,15 @@ func TestVerifyRecordsForClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	prefix := "/personal/" + AccountID(priv.PubKey().SerializeCompressed())
-	recordA, err := NewSignedRecord(priv, prefix+"/profile", []byte("profile"), RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	recordA, err := NewSignedRecord(priv, prefix+"/profile", []byte("profile"), RecordOptions{Seq: 1, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	recordB, err := NewSignedRecord(priv, prefix+"/settings", []byte("settings"), RecordOptions{Seq: 2, TTL: 60_000, ExpiryHeight: 100})
+	recordB, err := NewSignedRecord(priv, prefix+"/settings", []byte("settings"), RecordOptions{Seq: 2, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyRecordsForClient([]*wire.DKVSRecord{recordA, recordB}, prefix+"/", RecordVerificationOptions{Height: 1, Now: recordA.IssueTime}); err != nil {
+	if err := VerifyRecordsForClient([]*wire.DKVSRecord{recordA, recordB}, prefix+"/", RecordVerificationOptions{Height: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifyRecordsForClient([]*wire.DKVSRecord{recordA, recordB}, prefix, RecordVerificationOptions{CheckHash: true}); err != ErrInvalidRecord {
@@ -1445,7 +1443,7 @@ func TestVerifyRecordsForClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := NewSignedRecord(otherPriv, "/tmp/random", []byte("tmp"), RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	other, err := NewSignedRecord(otherPriv, "/tmp/random", []byte("tmp"), RecordOptions{Seq: 1, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1460,19 +1458,19 @@ func TestVerifySubscriptionRecordsForClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	mailboxID := AccountID(priv.PubKey().SerializeCompressed())
-	msg, err := NewSignedRecord(priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1"), []byte("message"), RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	msg, err := NewSignedRecord(priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1"), []byte("message"), RecordOptions{Seq: 1, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
-	share, err := NewSignedRecord(priv, "/mail/"+mailboxID+"/share/pkg/share-1", []byte("share"), RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	share, err := NewSignedRecord(priv, "/mail/"+mailboxID+"/share/pkg/share-1", []byte("share"), RecordOptions{Seq: 1, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
 	sub := Subscription{Type: SubscriptionMailbox, Target: mailboxID}
-	if err := VerifySubscriptionRecordsForClient([]*wire.DKVSRecord{msg, share}, sub, RecordVerificationOptions{Height: 1, Now: msg.IssueTime}); err != nil {
+	if err := VerifySubscriptionRecordsForClient([]*wire.DKVSRecord{msg, share}, sub, RecordVerificationOptions{Height: 1}); err != nil {
 		t.Fatal(err)
 	}
-	other, err := NewSignedRecord(priv, "/tmp/random", []byte("tmp"), RecordOptions{Seq: 1, TTL: 60_000, ExpiryHeight: 100})
+	other, err := NewSignedRecord(priv, "/tmp/random", []byte("tmp"), RecordOptions{Seq: 1, TTL: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1851,9 +1849,8 @@ func TestHTTPSystemVerifier(t *testing.T) {
 	})
 	valid = true
 	record, err := NewSignedRecord(systemPriv, SystemParamsKey(), []byte(`{"epoch":"1"}`), RecordOptions{
-		Seq:          1,
-		TTL:          60_000,
-		ExpiryHeight: 100,
+		Seq: 1,
+		TTL: 100,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2265,7 +2262,8 @@ func TestNotifyEventTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	renewal := signedPersonalRecordWithKey(t, priv, 2, "value2", 0)
-	renewal.ExpiryHeight = 200
+	renewal.IssueHeight = 1
+	renewal.TTL = 199
 	signRecord(t, priv, renewal)
 	if updated, err := idx.PutLocal(renewal); err != nil || !updated {
 		t.Fatalf("renewal updated=%v err=%v", updated, err)
@@ -2274,8 +2272,8 @@ func TestNotifyEventTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ExpiryHeight != 200 {
-		t.Fatalf("renewal expiry=%d", got.ExpiryHeight)
+	if RecordExpiryHeight(got) != 200 {
+		t.Fatalf("renewal expiry=%d", RecordExpiryHeight(got))
 	}
 	mailMsg := testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1")
 	if _, err := idx.PutLocal(signedRecordForKey(t, priv, mailMsg, 1)); err != nil {
@@ -2538,7 +2536,7 @@ func TestNameMultipleCurrentKeysUseNormalSelector(t *testing.T) {
 	}
 }
 
-func TestRejectsUnknownFlagsAndFutureIssueTime(t *testing.T) {
+func TestRejectsUnknownFlagsAndFutureIssueHeight(t *testing.T) {
 	idx := testIndexer(t)
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -2551,10 +2549,10 @@ func TestRejectsUnknownFlagsAndFutureIssueTime(t *testing.T) {
 		t.Fatalf("unknown flag err=%v", err)
 	}
 	future := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
-	future.IssueTime = currentUnixMilli() + MaxFutureIssueTimeSkew + 60_000
+	future.IssueHeight = 2
 	signRecord(t, priv, future)
 	if _, err := idx.PutLocal(future); err != ErrInvalidRecord {
-		t.Fatalf("future issue time err=%v", err)
+		t.Fatalf("future issue height err=%v", err)
 	}
 }
 
@@ -2569,7 +2567,8 @@ func TestPruneExpiredRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
-	record.ExpiryHeight = 2
+	record.IssueHeight = 1
+	record.TTL = 1
 	signRecord(t, priv, record)
 	if _, err := idx.PutLocal(record); err != nil {
 		t.Fatal(err)
@@ -2608,15 +2607,17 @@ func TestPruneExpiredKeepsPaidRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	freeRecord := signedPersonalRecordWithKey(t, freePriv, 1, "free", 0)
-	freeRecord.ExpiryHeight = 2
+	freeRecord.IssueHeight = 1
+	freeRecord.TTL = 1
 	signRecord(t, freePriv, freeRecord)
 	paidRecord := signedPersonalRecordWithKey(t, paidPriv, 1, "paid", 0)
-	paidRecord.ExpiryHeight = 2
+	paidRecord.IssueHeight = 1
+	paidRecord.TTL = 1
 	parsed, err := ParseKey(paidRecord.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof, err := NewOneshotFeeProof(paidRecord.Key, parsed.Namespace, wire.MaxDKVSRecordSize, paidRecord.ExpiryHeight, "pool", "payer", "txid", "100")
+	proof, err := NewOneshotFeeProof(paidRecord.Key, parsed.Namespace, wire.MaxDKVSRecordSize, RecordExpiryHeight(paidRecord), "pool", "payer", "txid", "100")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2672,7 +2673,8 @@ func TestPruneExpiredDoesNotBroadcastExpiredRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
-	record.ExpiryHeight = 2
+	record.IssueHeight = 1
+	record.TTL = 1
 	signRecord(t, priv, record)
 	if _, err := idx.PutLocal(record); err != nil {
 		t.Fatal(err)
@@ -2971,7 +2973,8 @@ func TestUsageFiltersActiveRecordsByPrefix(t *testing.T) {
 	activeA := signedPersonalRecordWithPath(t, priv, "a", 1, "a", 0)
 	activeB := signedPersonalRecordWithPath(t, priv, "b", 2, "bb", 0)
 	expired := signedPersonalRecordWithPath(t, priv, "expired", 3, "expired", 0)
-	expired.ExpiryHeight = 2
+	expired.IssueHeight = 1
+	expired.TTL = 1
 	signRecord(t, priv, expired)
 	for _, record := range []*wire.DKVSRecord{activeA, activeB, expired} {
 		if _, err := idx.PutLocal(record); err != nil {
@@ -3041,7 +3044,6 @@ func TestExpiredTombstoneFloorPreventsOfflineRecordResurrection(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := signedPersonalRecordWithKey(t, priv, 1, "old", 0)
-	old.ExpiryHeight = 100
 	signRecord(t, priv, old)
 	if _, err := source.PutLocal(old); err != nil {
 		t.Fatal(err)
@@ -3050,7 +3052,8 @@ func TestExpiredTombstoneFloorPreventsOfflineRecordResurrection(t *testing.T) {
 		t.Fatal(err)
 	}
 	tombstone := signedPersonalRecordWithKey(t, priv, 2, "", FlagTombstone)
-	tombstone.ExpiryHeight = 2
+	tombstone.IssueHeight = 1
+	tombstone.TTL = 1
 	signRecord(t, priv, tombstone)
 	if _, err := source.PutLocal(tombstone); err != nil {
 		t.Fatal(err)

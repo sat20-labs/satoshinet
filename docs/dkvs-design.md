@@ -1,85 +1,42 @@
-# DKVS v1 整体设计
+# DKVS 整体设计
 
-更新时间：2026-07-31  
+更新时间：2026-08-06  
 适用仓库：`sat20-labs/satoshinet`、`sat20-labs/sat20wallet`  
 文档性质：**DKVS 唯一规范性设计文档**
 
-> 本文同时约束 SatoshiNet 节点中的 DKVS 存储与传播实现，以及
-> `sat20wallet/sdk` 中的 `dkvsManager` 和领域模块接入方式。
->
-> 其他 DKVS 文档只能记录实现状态、开放问题、外部接口或测试结果，不能定义与本文
-> 冲突的协议和行为。发生冲突时以本文为准。
+> 本文直接描述当前开发协议。不使用版本分叉、旧格式 fallback、双写或迁移兼容。
+> 其他文档只能记录实现状态、接口样例和未决产品问题；与本文冲突时，以本文为准。
 
 ---
 
-## 1. 定位与目标
+## 1. 定位
 
-DKVS 是面向 Bitcoin/SatoshiNet 应用的 **owner-controlled distributed KV**。
-它不是通用分布式数据库，不解决任意多主并发写、跨账户事务或通用业务合并。
+DKVS 是面向 SatoshiNet 应用的小数据 owner-controlled distributed KV。它负责：
 
-设计目标按优先级为：
+- key/path 权限；
+- record 签名和完整性；
+- 单 key revision；
+- path 级 CAS、batch-CAS 和状态摘要；
+- FREE_LOCAL 或 AUTOPAY 存储策略；
+- 节点间传播、完整 path 修复和普通节点按需订阅；
+- Wallet SDK 本地 confirmed replica 的持续同步。
 
-1. **简单**：协议、状态和错误语义容易理解；
-2. **可靠**：权限、签名、顺序和最终收敛规则明确；
-3. **高性能**：不同 owner path 可并行处理，正常写入只访问一个目标节点；
-4. **最终一致**：网络传播完成后，各节点对同一 path 得到相同有效状态。
+DKVS 不负责：
 
-核心前提：
-
-- 普通 path 有唯一控制者；
-- 正常情况下，同一个 owner path 同一时间只有一个 active writer；
-- DKVS 支持不同账户通过不同节点并发写入；
-- 同一账户在多个设备、多个进程或多个节点同时修改同一个 path，不属于 DKVS
-  的正确性保证；
-- 特殊共享 path 必须使用明确的 append/create-only 模型，不能退化为多人覆盖同一个
-  mutable key。
-
-当前仍处于开发测试阶段。本文直接定义最终 DKVS v1，不新增 v2，也不保留未发布旧
-行为的兼容层、双写路径或旧协议分支。
-
----
-
-## 2. 保证与非目标
-
-### 2.1 DKVS 保证
-
-DKVS v1 保证：
-
-- namespace 和 path 权限正确；
-- record 签名、身份、value 完整性和费用证明得到验证；
-- owner key 正常更新满足连续 sequence；
-- 同代异常冲突按确定性规则收敛；
-- owner path 的 PathMeta generation 和 state root 可跨节点比较；
-- 接收写入节点上的 CAS 和 batch-CAS 原子执行；
-- relayable record 通过 P2P 最终传播；
-- 删除状态不会因为旧 record 重放而复活；
-- exact-record 重试具备幂等语义；
-- 不同 owner path 的写入可以并行。
-
-### 2.2 DKVS 不保证
-
-DKVS v1 不保证：
-
-- 同一账户多设备并发修改时，两个业务修改都被保留；
-- 自动理解或合并钱包、RGB11、账户管理等领域状态；
+- 理解账户、RGB 或其他业务 value；
+- 合并同一账户多设备对同一 key 的并发业务修改；
 - 跨账户事务；
-- 跨节点线性一致事务；
-- quorum、leader、BFT 或链上 commit certificate；
-- CRDT 或任意多主数据库语义；
-- 使用 `FREE_LOCAL` 数据完成跨节点、跨设备恢复。
+- 分布式线性一致事务、quorum、BFT、CRDT 或 leader election。
 
-违反单 active writer 约束造成的覆盖、分支或业务错误由应用层负责。
+同一账户在多个设备同时修改同一个 key 时，应用必须先同步最新 value，再基于最新 value 重算完整 mutation。CAS 冲突后重新同步和重试。DKVS 只保证协议状态确定性，不保证两个业务意图都被保留。
 
 ---
 
-## 3. Path 与权限模型
+## 2. Key、Path 与权限
 
-### 3.1 Path 是一致性和并发控制单位
+### 2.1 Logical path
 
-DKVS key 属于一个逻辑 path。PathMeta、写入串行化、generation 和同步比较都以 path
-为单位，而不是以整个 DKVS 数据库为单位。
-
-推荐的 v1 path 划分：
+PathMeta、写入串行化、CAS 和同步比较以 logical path 为单位。
 
 | Key | Logical path | 模式 |
 | --- | --- | --- |
@@ -89,750 +46,549 @@ DKVS key 属于一个逻辑 path。PathMeta、写入串行化、generation 和�
 | `/mail/<receiver>/share/...` | `/mail/<receiver>/share` | OwnerExclusive |
 | `/name/<name>` | 完整 name key | AuthorityExclusive |
 | `/svc/<service_name>/...` | `/svc/<service_name>` | AuthorityExclusive |
-| `/sys/...` | 由 system policy 定义 | AuthorityExclusive |
-| `/tmp/...`、`FREE_LOCAL` | 节点本地 scope | LocalOnly |
+| `/sys/...` | system policy 决定 | AuthorityExclusive |
+| `/tmp/...`、FREE_LOCAL | endpoint-local scope | LocalOnly |
 
-`/personal/<account_id>` 下按 module 划分 path，避免账户管理、RGB11 和其他业务因为
-无关 key 更新而共享同一个 generation 和写锁。
+### 2.2 Path 模式
 
-### 3.2 PathMode
+**OwnerExclusive**
+
+- owner 由 account ID 等确定性字段推导；
+- 只有 owner 可以创建、更新和删除；
+- 应用避免同一时刻多个 active writer。
+
+**AuthorityExclusive**
+
+- 当前写入者由外部 resolver/verifier 决定；
+- owner 变化不重置 PathMeta generation。
+
+**SharedAppend**
+
+- 多个主体只能创建不同的唯一 key；
+- 不允许多人覆盖同一个 mutable value；
+- mailbox message 按 sender 子 path 隔离。
+
+**LocalOnly**
+
+- 记录只存在于写入 endpoint；
+- 不进入 P2P、network PathMeta、checkpoint 或跨节点 snapshot；
+- 只能作为有限期缓存，不得宣称为网络备份。
+
+---
+
+## 3. DKVSRecord
+
+### 3.1 字段
 
 ```go
-type PathMode uint8
-
-const (
-    PathOwnerExclusive PathMode = iota
-    PathAuthorityExclusive
-    PathSharedAppend
-    PathLocalOnly
-)
-```
-
-#### OwnerExclusive
-
-- path owner 由 `account_id` 等确定性字段决定；
-- 只有 owner 可以创建、更新和删除；
-- 正常情况下只有一个 active writer；
-- 使用完整 PathMeta generation/root 同步规则。
-
-#### AuthorityExclusive
-
-- 当前写入者由 DID resolver、service resolver 或 system verifier 决定；
-- 同一时刻仍只有一个有效控制者；
-- owner 变更以外部权威状态为准，旧 owner record 不再具有写权限；
-- PathMeta generation 不因 owner 变更重置。
-
-#### SharedAppend
-
-- 多个主体可以在同一业务 namespace 下创建不同的唯一 key；
-- 不允许多个主体修改同一个普通 value；
-- 每个并发写入者必须落在独立子 path，或使用 create-only key；
-- mailbox message 是该模式的标准实现。
-
-#### LocalOnly
-
-- 数据仅存在于接收节点；
-- 不进入 P2P、checkpoint、snapshot 或跨节点 PathMeta 比较；
-- endpoint 必须固定；
-- UI 不得显示为“已同步到网络”。
-
-### 3.3 Mailbox 规则
-
-标准 message key：
-
-```text
-/mail/<receiver_id>/msg/<sender_id>/<msg_id>
-```
-
-规则：
-
-- `sender_id` 必须与创建 record 的 signer 匹配；
-- message key 只能 create，sender 不能覆盖已有 message；
-- `msg_id` 必须在 sender 子 path 内唯一；
-- receiver 可以提交 tombstone 删除 message；
-- 不同 sender 使用不同 logical path，可并行 append；
-- 不存在允许多人更新的 `/mail/<receiver>/inbox` 聚合 mutable key。
-
----
-
-## 4. Record 模型
-
-### 4.1 基本字段
-
-DKVSRecord v1 保留以下核心含义，并在最终 v1 格式中加入 `PathGeneration`：
-
-```text
-Version
-Key
-Value
-PubKey / account identity
-Seq
-PathGeneration
-IssueTime
-TTL
-ExpiryHeight
-FeeProof
-Flags
-Signature
-```
-
-`PathGeneration` 是该 record 对所属 logical path 的 owner mutation revision。它由
-`dkvsManager` 基于已确认 PathMeta 分配，并由 owner 签名覆盖。节点和 P2P 转发者不得
-修改它。
-
-record 签名必须覆盖所有影响 record 语义的字段。P2P 转发节点不得修改已签名字段。
-
-### 4.2 Sequence
-
-普通 owner key 的正常更新：
-
-```text
-new.Seq = current.Seq + 1
-```
-
-新建 key 使用协议规定的初始 sequence。节点在接收本地 RPC 写入时必须验证：
-
-- key owner/authority；
-- record 签名；
-- `Seq` 连续；
-- CAS/path generation 前置条件；
-- tombstone/delete floor；
-- fee、TTL、size 和 quota。
-
-sequence 是单 key 的顺序，不是整个 path 的 generation。
-
-### 4.3 IssueTime
-
-`IssueTime` 用于相同 sequence 的异常冲突裁决。它不是全网可信时钟，也不用于代替
-sequence。
-
-为避免客户端本机时钟偏差，节点的 pathmeta/sync/write 响应必须返回：
-
-```text
-server_time_ms
-```
-
-`dkvsManager` 构造 record 时使用：
-
-```text
-IssueTime = max(server_time_ms, previous_issue_time + 1)
-```
-
-接收节点按自身时间检查未来偏差。record 一旦签名，IssueTime 在后续传播中保持不变。
-
-同一账户违反单写者约束、分别使用不同节点时间写入时，节点时钟误差可能影响最终
-winner；这是明确接受的应用层风险。
-
-### 4.4 Deterministic record selection
-
-同 key 多个候选 record 的最终比较顺序：
-
-1. `Seq` 较大者优先，防止正常版本回退；
-2. `Seq` 相同时：
-   - 若 owner、value、flags 等业务内容相同，仅 retention 不同，则按更长有效期选择
-     renewal；
-   - 否则 `IssueTime` 较新者优先；
-3. 仍相同时，以 `RecordHash` 的字节序确定 winner。
-
-禁止使用 `ExpiryHeight`、付费额度或保存期限决定两个不同业务 value 的胜负。
-
-该规则只保证最终确定性，不保证异常并发下的业务语义正确。
-
-### 4.5 Delete state
-
-删除使用签名 tombstone，并保留足以阻止旧 value 复活的 delete floor。
-
-Path state root 必须覆盖：
-
-- 当前 active records；
-- 保留期内 tombstones；
-- tombstone 压缩后的 delete floors。
-
-完整 tombstone 被压缩为 delete floor 时，不应改变该 path 的有效状态语义。
-
----
-
-## 5. 确定性 PathMeta
-
-### 5.1 网络可比较字段
-
-```text
-PathMeta {
-    Version
-    Path
-    Generation
-    StateRoot
-    ActiveRecords
-    ActiveTotalSize
-    MinExpiryHeight
-    ViewHeight
+type DKVSRecord struct {
+    Version     uint32
+    Key         string
+    Value       []byte
+    PubKey      []byte
+    Signature   []byte
+    Seq         uint64
+    IssueHeight uint64
+    TTL         uint64
+    FeeProof    []byte
+    Flags       uint32
 }
 ```
 
-以下内容属于节点本地运行状态，必须与网络 PathMeta 分离：
+record 中不存在：
 
 ```text
-UpdatedAt
-LastSyncAt
-LastSyncPeer
-Dirty
-LocalRetryState
+PathGeneration
+ExpiryHeight
+IssueTime / Unix time
 ```
 
-本地时间、接收时间和节点自己的数据库维护状态不能参与跨节点 PathMeta 相等判断。
+record 签名覆盖全部协议字段。节点和转发者不得修改已签名内容。
 
-### 5.2 Generation 定义
+### 3.2 Seq
 
-`Generation` 是 path 已接受的最大 owner mutation revision：
+`Seq` 只表示当前 key 的 value revision：
 
 ```text
-PathMeta.Generation = max(confirmed PathGeneration watermark)
+新建 key：Seq = 1
+更新 key：Seq = current.Seq + 1
+删除 key：Seq = current.Seq + 1
+```
+
+同一路径中不同 key 的 `Seq` 互不相关。`Seq` 不承担 path revision 的职责。
+
+相同 `Seq` 的完全相同 record 是幂等重试。异常同 `Seq` 候选按确定性 selector 收敛；应用不得把这种收敛理解成并发业务合并。
+
+### 3.3 IssueHeight 与 TTL
+
+协议时间统一使用 SatoshiNet 可信区块高度：
+
+```text
+expiry_height = IssueHeight + TTL
+```
+
+有效区间：
+
+```text
+[IssueHeight, IssueHeight + TTL)
 ```
 
 规则：
 
-- 每个真正改变 path 有效状态的 put、update、delete、renewal 使用
-  `PathGeneration = current_generation + 1`；
-- exact retry、重复 notify 和 selector no-op 不增加 generation；
-- 一个 batch 内的 mutation 按 canonical key order 分配连续 PathGeneration；
-- batch 返回最后一个 generation；
-- 远端节点从 record 中读取已签名的 PathGeneration，不能按“自己收到了多少条 record”
-  重新计数；
-- full path sync 同时传输 generation watermark，避免最新 mutation 已过期或压缩后新节点
-  丢失路径高水位。
+- `TTL > 0`：有限区块租期；
+- `TTL = 0`：record 没有固定租期，生命周期由 AUTOPAY 等外部策略决定；
+- `IssueHeight + TTL` 溢出时 record 无效；
+- Unix 时间只用于日志、请求超时和本地维护，不参与 record 有效性、StateRoot 或费用状态。
 
-generation 的目标是快速判断 path 是否有新的 owner mutation，不是数据库本地写次数。
+`ExpiryHeight` 只是在运行时由 `IssueHeight + TTL` 派生，不存入 record。
 
-### 5.3 StateRoot
+### 3.4 Selector
 
-`StateRoot` 是 path 当前有效状态的确定性摘要。v1 可继续使用高性能、可增量更新的
-XOR accumulator：
+同 key 候选的确定性比较：
 
-```text
-leaf = H("dkvs-path-leaf-v1" || key || effective_state_hash)
-state_root = XOR(all leaves)
-```
+1. `Seq` 较大者优先；
+2. 相同 `Seq` 且业务内容相同的续期，派生到期高度更晚者优先；
+3. 其他相同 `Seq` 异常冲突按 `IssueHeight`；
+4. 仍相同时按 `RecordHash` 字节序。
 
-`effective_state_hash` 对 active record 使用 `RecordHash`，对 delete floor 使用其 canonical
-hash。
+费用额度不能让不同业务 value 获胜。
 
-该 root 用于同步检测和完整状态复算，不是 Merkle membership proof，也不是共识承诺。
+### 3.5 Tombstone 与 DeleteFloor
 
-### 5.4 Expiry 的确定性边界
+删除使用 owner/receiver 签名的 tombstone。完整 tombstone 在保留期后可压缩为 DeleteFloor，防止旧 record 重放复活。
 
-为了使 relayable path 在相同链高度下得到相同状态：
-
-- 网络传播和长期保存的数据使用 `ExpiryHeight` 或不设置过期；
-- wall-clock `TTL` 只用于 `LocalOnly/FREE_LOCAL` 数据；
-- relayable record 不依赖各节点本地 wall-clock 决定有效性；
-- PathMeta 的 root 以 `ViewHeight` 为参照计算；只有处于同一链视图高度时才直接比较
-  root。
-
-record 因达到 `ExpiryHeight` 失效不增加 owner generation，但会改变相应高度下的
-StateRoot。同步判断因此始终使用 `(Generation, StateRoot, ViewHeight)`，不能只比较
-Generation。
-
-### 5.5 比较规则
-
-manager 或节点比较两个 PathMeta：
-
-1. 先确认 path 和链视图兼容；
-2. generation 较小的一方需要同步；
-3. generation 相同且 root 相同，视为已同步；
-4. generation 相同但 root 不同，执行完整 path reconciliation；
-5. endpoint generation 小于客户端已经确认的 generation 时，该 endpoint 对此 path
-   是 stale，不能接受新写入。
+DeleteFloor 可保存 path 内部 generation watermark；这是节点 path 状态，不是 DKVSRecord 字段。
 
 ---
 
-## 6. 节点写入协议
+## 4. PathMeta
 
-### 6.1 单 key 写入
+### 4.1 网络可比较状态
 
-请求至少包含：
-
-```text
-signed_record
-expected_path_generation
-expected_record_hash 或 expect_absent
+```go
+type PathMeta struct {
+    Version         uint32
+    Path            string
+    Generation      uint64
+    StateRoot       Hash
+    ActiveRecords   uint64
+    ActiveTotalSize uint64
+    MinExpiryHeight uint64
+    ViewHeight      uint64
+}
 ```
 
-处理顺序：
+本地时间、最后同步 peer、重试次数、dirty/stale 等运行状态不得进入网络 PathMeta。
 
-1. 在锁外解析 key、验证 record 结构、签名、owner、fee、size；
-2. 获取 logical path 的写锁；
-3. 读取当前 PathMeta、record 和 delete floor；
-4. 校验 expected generation 和 record CAS；
-5. 校验 sequence、quota、expiry 和 namespace policy；
-6. 验证 record.PathGeneration 等于当前 generation + 1，并计算新 winner 和 state root；
-7. 在一个本地 KVDB write batch 中提交 record、hash index、delete state 和 PathMeta；
-8. 释放锁；
-9. 返回 accepted record、最新 PathMeta 和 `server_time_ms`；
-10. 在锁外异步发送 P2P notify。
+### 4.2 Generation
 
-写响应已经包含新的 record 和 PathMeta，wallet SDK 成功后不需要再执行一次完整目录刷新。
+`Generation` 是 path 的节点维护 mutation revision：
 
-### 6.2 Batch-CAS
+- 单个有效 mutation 成功提交后递增；
+- batch 内同 path 的 mutation 按 canonical key order 计数；
+- exact retry/no-op 不递增；
+- record 不携带 generation；
+- full path snapshot 携带最终 PathMeta generation；
+- standalone notify 只能提示 path 发生变化，接收节点不能根据到达顺序推测 generation。
 
-Batch-CAS 用于同一 owner 下多个 key 的本地原子提交，例如 RGB11 snapshot 与 head。
+收到非幂等远端 record 时，节点把目标 path 标记 stale，并通过认证的完整 path snapshot 修复。
 
-约束：
+### 4.3 StateRoot
 
-- mutation 必须属于同一个 owner/authority；
-- 涉及多个 path 时，按 path 字符串排序获取锁，避免死锁；
-- 每个 path 都带 expected generation；
-- batch 内 key 按 canonical order 分配连续 generation；
-- 全部校验成功后在一个本地 DB batch 中提交；
-- 任一校验失败时 `applied=0`；
-- 不支持 Alice 与 Bob 的跨账户事务；
-- 只保证接收 RPC 节点的本地原子性，不宣称其他节点瞬时原子可见。
+StateRoot 覆盖当前网络可见状态：
 
-### 6.3 Idempotency
+- active relayable records；
+- delete floors；
+- 不包含 FREE_LOCAL；
+- AUTOPAY 停止当前区块支付后，即使记录仍处于节点本地 grace，也必须退出 network PathMeta 和 snapshot。
 
-客户端必须重试完全相同的签名 record/batch bytes。
+PathMeta rebuild、PathSnapshot 和 P2P relay 必须使用完全相同的记录可见性规则。
 
-如果当前 active record hash 与请求完全相同，返回幂等成功：
+### 4.4 到期与 root
+
+`MinExpiryHeight` 从所有有限租期 record 的 `IssueHeight + TTL` 派生。
+
+record 到期不代表 owner mutation，因此不增加 generation；但会在相应 `ViewHeight` 改变 StateRoot。同步必须比较：
 
 ```text
-applied = 0
+Generation + StateRoot + ViewHeight
 ```
 
-不得重复：
-
-- 增加 generation；
-- 更新 sequence；
-- 消耗额外 quota；
-- 发送重复业务通知。
-
-如果只有 batch 的一部分已经存在，整批返回 conflict，不补写剩余 mutation。
+不能只比较 generation。
 
 ---
 
-## 7. P2P 传播与节点同步
+## 5. 写入协议
 
-### 7.1 增量 record 传播
+### 5.1 单 key CAS
 
-P2P 继续传播完整签名 record，不需要引入 quorum、transaction certificate 或第二套
-DKVS 协议。增量顺序由 record 中签名覆盖的 `PathGeneration` 表达。
+请求包含：
 
-远端节点收到 record 后：
+```text
+signed record
+expected path generation
+expected current record hash 或 expect_absent
+```
 
-- 完整验证 record、权限、fee、namespace 和 PathGeneration；
-- `PathGeneration == local_generation + 1`：应用 record，更新 generation 并重算增量
-  StateRoot；
-- `PathGeneration <= local_generation`：按 exact hash/record selector 处理重复或异常同代
-  冲突，不按接收次数增加 generation；
-- `PathGeneration > local_generation + 1`：说明存在 gap，不直接应用并猜测中间 generation，
-  标记 path stale 并发起 full path sync；
-- 同 generation 最终状态 root 不一致：执行完整 reconciliation；
-- `FREE_LOCAL` record 一律不进入该流程。
+节点：
 
-现有 `dkvsnotify/dkvsdata/dkvssyncres` 只需携带最终 v1 `DKVSRecord`；不新增 PathUpdate
-事务消息。开发阶段直接更新 v1 record codec 和签名域，不保留旧 record 格式兼容分支。
+1. 锁外解析、验证签名、owner、fee、size；
+2. 获取 path 锁；
+3. 读取 PathMeta、record、delete floor；
+4. 校验 path/record CAS 和 key-local Seq；
+5. 校验 TTL、quota、namespace；
+6. 计算 winner、PathMeta generation 和 StateRoot；
+7. 一个本地 DB batch 原子提交；
+8. 返回 accepted record 和最新 PathMeta；
+9. 锁外发送 notify。
 
-### 7.2 完整 path sync
+### 5.2 Batch-CAS
 
-完整同步返回：
+用于同一 owner 下多 key 的目标节点原子提交。
+
+- mutation 可跨多个 path；
+- path 按 canonical order 加锁；
+- 每个 path 都有 expected generation/root；
+- 任一前置条件失败则 `applied=0`；
+- 不提供跨账户分布式事务；
+- 写响应是目标节点的提交凭证，其他节点通过 path sync 最终收敛。
+
+### 5.3 幂等
+
+重试必须复用完全相同的签名 bytes。完全相同 active hash 返回幂等成功，不重复消耗 sequence、generation、quota 或业务通知。
+
+---
+
+## 6. 存储策略
+
+### 6.1 FREE_LOCAL
+
+- 必须 `TTL > 0`；
+- 只保存在写入 endpoint；
+- 不进入 P2P 和 network PathMeta；
+- 受 endpoint 的 record/bytes/blob-key quota；
+- 到期后本地清理。
+
+### 6.2 AUTOPAY
+
+- record 使用 `TTL = 0`；
+- fee proof 指向配置的 AUTOPAY 合约；
+- signer 派生 payer/delegate；
+- 节点按当前区块支付状态、余额和容量验证；
+- 停止支付后记录可在 endpoint 本地 grace 期间可读，但不再进入网络 path view；
+- 恢复支付后可重新进入网络 path view。
+
+### 6.3 Blob
+
+- `/blob/<account_id>/<blob_key>`；
+- 单 record opaque value；
+- 最大 value 由节点 policy 限制，当前硬上限 1 MiB；
+- owner-exclusive；
+- 支持 FREE_LOCAL 或 AUTOPAY。
+
+---
+
+## 7. P2P 与完整 path 修复
+
+### 7.1 Notify
+
+P2P notify 携带签名 record，但 record 不携带 PathMeta generation。接收节点：
+
+- exact 已存在 record：幂等忽略；
+- 非幂等变化：标记 path stale，向可信 source 请求完整 path snapshot；
+- FREE_LOCAL：拒绝传播。
+
+### 7.2 Path snapshot
+
+snapshot 包含：
 
 ```text
 PathMeta
 active records
-retained tombstones / delete floors
-server_time_ms
+delete floors
+server_time_ms（诊断字段）
 ```
 
-接收方必须：
+接收节点：
 
-1. 校验所有 key 都属于目标 path；
-2. 验证所有 record；
-3. 对同 key 候选执行确定性 selector；
-4. 重算 StateRoot、count 和 size；
-5. 与远端 PathMeta 比较；
-6. 在一个本地 DB batch 中替换该 path 的 confirmed state；
-7. 仅在原子替换成功后解除 stale 状态。
+1. 验证 source 和 session；
+2. 验证所有 record、fee、namespace 和 path；
+3. 重算 network-visible record set、StateRoot、count、size、MinExpiryHeight；
+4. 与 PathMeta 比较；
+5. 一个本地 batch 原子替换 path；
+6. 恢复 AUTOPAY retention cache；
+7. 解除 stale；
+8. 可重新广播已认证 active records，帮助下游节点修复。
 
-P2P 和 RPC 可以共用相同的 path snapshot 验证逻辑。
+### 7.3 Path repair 队列
+
+同一 peer 的多个 stale path：
+
+- FIFO 排队；
+- 相同 path 去重；
+- 请求以 `sessionID + cursor` 绑定；
+- 单页超时后当前 path 回队尾，先推进其他 path；
+- 终态错误释放 session；
+- 临时失败延迟重试，避免重试风暴。
 
 ---
 
-## 8. RPC 接口契约
+## 8. Wallet SDK 本地副本
 
-建议统一为 path-oriented API：
+`dkvsManager` 是 SDK 内唯一 DKVS transport、replica、path state 和同步协调层。领域模块不能直接管理 record、Seq、PathMeta、outbox 或 endpoint。
+
+### 8.1 启动同步
+
+Wallet 启动后：
+
+1. 注册当前账户体系所需 path；
+2. 启动同步 worker；
+3. 主动执行首轮同步；
+4. 当前 session 尚未同步成功的 scope 保持 not-ready。
+
+持久化旧缓存可以展示为 cached，但不能宣称为最新状态，也不能用于生成写入 CAS。
+
+### 8.2 持续同步
+
+watch 发现 generation/root 变化，或 watch 请求异常时：
+
+- 立即撤销对应 scope ready；
+- 完整同步并原子替换本地 confirmed replica；
+- 成功后恢复 ready。
+
+### 8.3 读写 fail-closed
+
+写入前必须满足：
+
+- 当前 SDK session scope ready；
+- PathMeta 存在；
+- session state 为 idle/confirmed；
+- LastErrorCode 为空；
+- endpoint affinity 未失效。
+
+prepared、inflight、conflict、error、stale 或首轮同步未完成时拒绝使用旧缓存写入。
+
+### 8.4 并发边界
+
+Wallet SDK 能做的最大努力是：
 
 ```text
-GET  /v3/dkvs/pathmeta?path=...
-POST /v3/dkvs/sync/path
-POST /v3/dkvs/watch/path
-POST /v3/dkvs/records/cas
-POST /v3/dkvs/records/batch-cas
+写入前同步最新远端 value
+→ 应用本地领域 mutation
+→ 构造完整下一 value
+→ CAS/batch-CAS
+→ 冲突后重新同步并重算
 ```
 
-所有 pathmeta、sync 和 write 响应返回：
-
-```text
-server_time_ms
-pathmeta
-```
-
-业务错误必须有稳定 machine-readable code，例如：
-
-```text
-DKVS_WRITE_CONFLICT
-DKVS_STALE_GENERATION
-DKVS_STALE_ENDPOINT
-DKVS_PERMISSION_DENIED
-DKVS_INVALID_SEQUENCE
-DKVS_PATH_DIVERGED
-DKVS_LOCAL_ONLY_ENDPOINT_MISMATCH
-DKVS_QUOTA_EXCEEDED
-```
-
-Go SDK 将其映射为可通过 `errors.Is/As` 判断的 typed error。不得解析英文 `msg` 决定
-业务分支。
+同一账户两个设备同时修改同一字段时，应用决定 merge/覆盖语义，DKVS 不自动合并。
 
 ---
 
-## 9. SatoshiNet 节点实现要求
+## 9. 账户管理统一托管数据
 
-### 9.1 并发模型
+### 9.1 始终启用
 
-为满足不同账户高并发：
+PWA/Wallet 创建或导入第一个 mnemonic wallet 时，账户管理立即存在：
 
-- 解析、签名、fee 等不依赖可变状态的检查在锁外完成；
-- 使用 per-path lock 或固定数量的 striped path locks；
-- 不使用一个全局 DKVS 写锁串行所有账户；
-- batch 多 path 加锁按 canonical path order；
-- DB commit 临界区保持最小；
-- notify、watch 和日志在提交后异步执行。
+- 建立 root account identity；
+- 建立完整 wallet/subaccount catalog；
+- 生成本地 account secret；
+- 默认使用 FREE_LOCAL 服务节点缓存；
+- `RecoveryConfigured=false` 表示尚未配置恢复材料，不表示账户管理未启用。
 
-### 9.2 Selector
+### 9.2 统一 provider 接口
 
-节点 selector 必须调整为本文规定的：
+其他模块通过通用接口交给账户管理保存必要数据：
 
-```text
-Seq -> renewal special case / IssueTime -> RecordHash
-```
-
-现有“同 Seq 先比较 ExpiryHeight”的规则只能用于相同业务内容的 renewal，不能用于
-不同 value。
-
-### 9.3 PathMeta
-
-节点必须：
-
-- 把 network-comparable PathMeta 与 local status 分开存储；
-- 最终 v1 record 携带签名覆盖的 PathGeneration；
-- gap 时同步，不按本地接收次数自增；
-- full sync 后以经过验证的远端 generation/root 建立本地状态；
-- exact retry/no-op 不增加 generation；
-- 将 delete floor 纳入 StateRoot；
-- 将 relayable TTL 收敛到 height-based expiry。
-
-### 9.4 FREE_LOCAL
-
-- 不 relay；
-- 不进入 miner/普通节点 mirror；
-- 不进入 network PathMeta、checkpoint 或 snapshot；
-- 只受接收节点 policy 和本地清理器管理；
-- API 明确返回 `local_only=true` 和 endpoint identity。
-
----
-
-## 10. Wallet SDK `dkvsManager`
-
-### 10.1 唯一入口
-
-`dkvsManager` 是 SDK 内唯一 DKVS 协调层。RGB11、账户管理和其他领域模块不能持有
-transport client，也不能自行管理 sequence、generation、root、outbox 或 sync worker。
-
-PWA JavaScript 层不感知 DKVS：只调用领域级 WASM/API，不直接调用 `/v3/dkvs`，不
-处理 record 或冲突。
-
-### 10.2 内部结构
-
-```text
-dkvsManager
-├── PathPolicyRegistry
-├── EndpointRouter
-├── PerPathActor / PerPathLock
-├── ConfirmedReplica
-├── PathStateStore
-├── SimpleOutbox
-├── SyncWorker
-└── ChangeNotifier
-```
-
-### 10.3 PathPolicyRegistry
-
-每个领域模块注册：
-
-```text
-logical path
-owner id
-path mode
-key/value codec
-fee mode
-size limit
-local-only policy
-```
-
-manager 只执行通用 DKVS 规则，不调用 RGB11 或账户管理专用恢复逻辑。
-
-### 10.4 Endpoint affinity
-
-一个 account 的 active write session 固定到一个 endpoint。
-
-允许切换 endpoint，但必须满足：
-
-1. 当前没有未确认 outbox 写入；
-2. 新 endpoint 对所有受管 owner path 的 generation/root 不低于本地 confirmed state；
-3. 完成 path sync 后才恢复写入。
-
-这不是分布式 lease，只是应用层避免同账户跨节点分叉的简单约束。
-
-### 10.5 读路径
-
-区分：
-
-- **Local read**：正常钱包 UI 和本地业务立即读取本地领域数据库；
-- **Synced read**：恢复、备份校验或明确要求网络最新状态时，等待对应 path 完成
-  generation/root 对账。
-
-持久化 replica 可在启动时立即加载，但在完成当前 endpoint 对账前只能标记为 cached，
-不能宣称 network-synced。
-
-### 10.6 写路径
-
-```text
-1. 进入 per-path actor；
-2. 确认 endpoint affinity；
-3. 获取/校验 PathMeta；
-4. 基于 confirmed record 分配 seq + 1；
-5. 分配 `PathGeneration = confirmed_generation + 1`；
-6. 使用响应中的 server_time_ms 生成单调 IssueTime；
-7. 构造并签名 record；
-8. 持久化 exact bytes 到 outbox；
-9. 提交 CAS/batch-CAS；
-10. 使用写响应原子更新 confirmed replica、PathMeta 和 outbox；
-11. 在锁外通知领域模块。
-```
-
-领域 mutation builder 必须是纯函数。在远端提交确认前，不得修改不可回滚的钱包业务
-状态或清除 pending mutation。
-
-### 10.7 Outbox
-
-Outbox 只解决网络中断和响应丢失，不承担分布式事务。
-
-每项至少保存：
-
-```text
-path
-exact signed record/batch bytes
-record hash/batch hash
-expected generation
-created_at
-retry_count
-last_error
+```go
+type AccountManagedDataProvider interface {
+    ID() string
+    Export(AccountManagedDataCatalog) ([]AccountManagedDataPayload, error)
+    Validate(AccountManagedDataCatalog, []AccountManagedDataPayload) error
+    Import(AccountManagedDataCatalog, []AccountManagedDataPayload) error
+}
 ```
 
 规则：
 
-- 重试不重新生成 sequence、PathGeneration、IssueTime 或签名；
-- active hash 完全相同才能判定已提交；
-- 远端 generation 更高或出现不同 winner 时返回 stale/conflict；
-- 不得因为“远端 record 排序更大”而静默删除本地 intent并冒充成功。
+- provider ID 全局唯一且稳定；
+- catalog 枚举全部 mnemonic wallets 和全部启用 subaccounts；
+- payload 按 `provider + network + wallet fingerprint + account index` 隔离；
+- 空 scope 不创建 payload；
+- 未知 provider 在任何 import 前拒绝；
+- 全部 provider 先 Validate，全部通过后才 Import；
+- provider Import 必须幂等，可在同步失败后重试；
+- 添加未来模块不需要修改账户同步核心。
 
-### 10.8 Session 状态
+### 9.3 统一状态与 blob
 
-建议状态：
+账户管理使用 root account 签名和支付：
 
 ```text
-CACHED
-SYNCING
-READY
-WRITING
-STALE_ENDPOINT
-DIVERGED
-LOCAL_ONLY
-FAILED
+/personal/<root_account_id>/account/state
+/blob/<root_account_id>/account-managed-data
 ```
 
-领域层只看到业务化状态，例如“可写”“正在同步”“此设备只读”“备份仅保存在当前
-节点”，不暴露 root、generation 和 transport 细节。
+state 保存：
+
+- wallet/subaccount catalog；
+- state revision；
+- managed-data revision/hash；
+- recovery configuration。
+
+managed-data blob 保存加密的 provider items。state 与 blob 通过 batch-CAS 一起更新并回读验证。
+
+### 9.4 存储策略切换
+
+无有效 delegate：
+
+```text
+state + managed-data blob = FREE_LOCAL，有限 TTL
+```
+
+激活 AUTOPAY：
+
+```text
+账户管理刷新 catalog 和全部 provider
+→ 用 root account 将 state + managed-data blob 改写为 TTL=0 AUTOPAY
+→ 回读验证
+→ 全部成功后显示 AUTOPAY 已配置
+```
+
+领域 provider 不感知 AUTOPAY、fee proof、DKVS key 或 endpoint。
+
+### 9.5 钱包和子账户生命周期
+
+新增/删除 wallet 或 subaccount 由账户管理负责：
+
+- 更新 catalog；
+- 标记 managed data dirty；
+- 下一次同步重新枚举 scope；
+- 新空 scope 不生成 provider payload；
+- 移除 scope 时统一删除 bundle 中该 scope 的所有 provider items；
+- provider 不直接处理账户目录或远端 DKVS 生命周期。
+
+当前派生账户索引采用 append-only 语义；未来如果提供逻辑删除，仍由账户 catalog 表达 active/deleted scope，provider 只接收最终 catalog。
 
 ---
 
-## 11. 领域接入规则
+## 10. RGB11 接入
 
-### 11.1 账户管理
+### 10.1 永久恢复数据
 
-- 使用 `/personal/<account_id>/account/...` owner path；
-- 当前整体 state/snapshot 模型可以继续使用；
-- 应用保证一个账户只有一个 active writer；
-- 其他设备默认只读，或在完成显式 takeover 和同步后成为 writer；
-- DKVS 不做多设备 operation merge；
-- 如未来业务确实需要 merge，应在账户管理领域增加 operation log，而不是扩展 DKVS
-  通用语义。
+RGB11 注册为账户管理 provider：`rgb11`。
 
-### 11.2 RGB11
+只导出丢失后可能影响资产控制或未完成操作安全的数据：
 
-- 使用独立 `/personal/<account_id>/rgb11/...` path；
-- snapshot/blob 与 head 可使用同 owner batch-CAS；
-- 应用保证同一 RGB11 wallet 只有一个 active writer；
-- 其他设备在完成同步和显式切换前只读；
-- DKVS 不判断两个 RGB11 wallet state 如何合并；
-- 底层 UTXO/RGB 客户端验证仍是资产有效性的最终依据。
+- 当前 allocation proof；
+- 对应最小 carrier output 信息；
+- 必要 consignment object/validation receipt；
+- 未终结发送 operation、reservation 和签名交易；
+- 未终结接收 transfer、consignment object；
+- active receive request、seal/blinding/reservation metadata。
 
-### 11.3 Blob
+不保存：
 
-- 一个 blob key 对应一条完整 record；
-- owner-exclusive；
-- AUTOPAY blob 可以 relay；
-- FREE_LOCAL blob 只能固定 endpoint 使用；
-- blob 与 head 的 batch 只保证目标节点本地原子提交，远端节点通过 path sync 最终一致。
+- 余额和 asset list 投影；
+- 完成历史；
+- ticker/icon/描述缓存；
+- confirmation、scan height、raw tx cache；
+- unrelated BTC/ORDX assets；
+- 可从 canonical object 重建的索引。
 
-### 11.4 Mailbox
+恢复时：
 
-- message create-only；
-- sender 子 path 并行；
-- receiver tombstone 删除；
-- 不构造需要所有 sender 共同覆盖的 inbox state；
-- mailbox quota、TTL/expiry 和费用仍由 namespace policy 执行。
+```text
+导入最小 recovery package
+→ 重建 projection/cache
+→ 重建 UTXO reservation
+→ 链上 reconciliation
+```
 
----
+缺失 payload 表示该 scope 没有不可重建 RGB 状态，导入时权威清理旧本地 RGB 状态。
 
-## 12. 性能原则
+### 10.2 瞬态 RGB DKVS
 
-正常写入的目标成本：
+以下仍可由 RGB 模块使用 DKVS：
 
-- 一个 active endpoint；
-- 一次 pathmeta/CAS 视图；
-- 一次本地 DB batch；
-- 一次写响应；
-- 异步 P2P notify。
+- receive capability；
+- address delivery；
+- ACK/NACK；
+- mailbox relay。
 
-优化原则：
+这些全部是有限 TTL FREE_LOCAL 传输记录：
 
-- per-path/striped lock，而非全局锁；
-- 不同 account/module path 并行；
-- 写响应直接携带新 PathMeta，避免写后全量 refresh；
-- generation 相同且 root 相同则不下载目录；
-- gap/divergence 才执行完整 path sync；
-- batch 设置 mutation 数量和总 bytes 上限；
-- P2P 按 payload bytes 分页；
-- expensive signature/fee validation 尽量在锁外完成；
-- root 使用可增量 accumulator。
-
-不为了极少数不受支持的同账户多设备并发场景引入 quorum、leader、CRDT 或全局事务。
+- 不使用 AUTOPAY；
+- 不代表永久备份；
+- 到期后可清理；
+- 永久恢复状态由账户管理 provider 负责。
 
 ---
 
-## 13. 测试与验收
+## 11. 数据格式与开发阶段约束
 
-### 13.1 SatoshiNet
+当前协议直接替换旧开发格式：
 
-必须覆盖：
+- DKVSRecord wire layout、签名 hash 和 StateRoot 已变化；
+- TTL 单位统一为 SatoshiNet blocks；
+- RGB 独立 head/snapshot 永久备份已删除；
+- 账户托管数据使用严格编码和加密 bundle；
+- 不保留旧格式读取、迁移命令、fallback 或双写。
 
-- 不同 owner 通过不同节点并发写入并最终收敛；
-- 同 owner 同 path 在单节点内 sequence 连续；
-- same-seq 不同 value 按 IssueTime、RecordHash 收敛；
-- renewal 不会因为 expiry 更长而覆盖不同 value；
-- P2P notify 重复、乱序和 gap；
-- gap 不会导致节点按本地接收次数错误增加 generation；
-- generation 相同/root 不同触发 full reconciliation；
-- full path sync 后 generation/root/records/delete floors 一致；
+部署测试环境必须：
+
+```text
+所有 SatoshiNet 节点、Wallet SDK、WASM、PWA 同时升级
+清理旧 DKVS/Wallet/PWA 开发数据
+禁止新旧节点混跑
+```
+
+---
+
+## 12. 验收要求
+
+### SatoshiNet
+
+- DKVSRecord 不含 PathGeneration/ExpiryHeight/Unix IssueTime；
+- Seq 为 key-local revision；
+- IssueHeight+TTL 在相同链高度确定性过期；
+- PathMeta generation/root 在节点间收敛；
+- FREE_LOCAL 不进入 network view；
+- AUTOPAY grace 不泄漏到 PathMeta/snapshot；
+- path snapshot 修复支持队列、超时和失败推进；
 - batch-CAS 全成功或全失败；
-- exact retry 不增加 generation；
-- expiry height 下各节点 state root 一致；
-- FREE_LOCAL 不 relay、不进入 network PathMeta；
-- mailbox 不同 sender 并发 append；
-- per-path 并发测试证明不同账户不会被全局写锁串行。
+- delete floor 阻止旧状态复活。
 
-### 13.2 Sat20wallet SDK
+### Wallet SDK
 
-必须覆盖：
+- 启动同步与 watch 持续更新本地 replica；
+- stale/conflict/error scope fail-closed；
+- 多设备写前同步、CAS 冲突后重算；
+- 首个钱包自动启用账户管理；
+- catalog 覆盖所有 wallets/subaccounts；
+- provider 未知/验证失败时没有部分 import；
+- 独立 provider/scope 可三方合并；
+- 移除 scope 会删除相应 provider item。
 
-- 领域模块无法获取 transport client；
-- per-path 本地并发写严格串行；
-- 不同 path 可并行；
-- endpoint affinity；
-- failover 前强制 PathMeta 对账；
-- stale endpoint 拒绝写入；
-- write response 直接更新 confirmed replica；
-- exact outbox retry；
-- 响应丢失后通过 active hash 确认结果；
-- 远端不同 winner 不会被误判为 outbox success；
-- local read 与 synced read 的状态边界；
-- account/RGB11 的第二设备默认只读；
-- FREE_LOCAL UI 不显示为网络备份成功；
-- PWA 中不存在直接 DKVS REST、record、sequence、generation 管理逻辑。
+### 账户管理与 RGB
 
-### 13.3 明确不测试为 DKVS 保证
-
-不把以下结果作为 DKVS 验收目标：
-
-```text
-同一账户两个设备同时写同一个 key，两个业务修改自动合并且均不丢失
-```
-
-相关测试只需证明节点最终按 selector 收敛，并明确记录其中一个业务 value 可能被覆盖。
+- FREE_LOCAL 与 AUTOPAY 都由账户管理统一写 state/blob；
+- managed-data blob 可同时包含 RGB 和其他 provider；
+- RGB 空 scope 不占 blob；
+- RGB 最小恢复包不包含完成历史和派生缓存；
+- 发送方、接收方在未完成流程中换机后可继续；
+- 确认后恢复当前 allocation 并重建锁；
+- PWA 不展示 RGB 独立备份状态，也不直接操作 DKVS record。
 
 ---
 
-## 14. 文档与代码收敛
+## 13. 最终原则
 
-### 14.1 唯一规范文档
-
-唯一权威文件：
-
-```text
-satoshinet/docs/dkvs-design.md
-```
-
-以下旧的设计/优化文档应删除，或只保留不超过数行的迁移提示后删除：
-
-```text
-sat20wallet/docs/dkvs-manager-design.md
-sat20wallet/docs/dkvs-review-optimization-plan.md
-satoshinet/docs/dkvs-review-optimization-plan.md
-```
-
-`sat20wallet` 只在 README、package doc 或实现说明中链接到权威文件，不复制设计正文。
-
-### 14.2 非规范性文档
-
-以下文档可保留，但文件开头必须注明“非规范性，以 `dkvs-design.md` 为准”：
-
-```text
-dkvs-implementation-status.md
-dkvs-open-decisions.md
-dkvs-external-integration-contracts.md
-dkvs-requirements-traceability.md
-dkvs-pwa-api-examples.md
-```
-
-它们分别只记录：
-
-- 当前实现状态；
-- 未决产品问题；
-- 外部接口契约；
-- 需求追踪；
-- API 使用样例。
-
-不得在这些文件中重新定义 record selector、PathMeta、并发模型或 SDK 边界。
-
----
-
-## 15. 最终原则
-
-1. **普通 path 只有一个控制者。**
-2. **不同账户可以高并发写，同一账户并发写由应用避免。**
-3. **共享场景使用 append/create-only key，不共享 mutable key。**
-4. **sequence 管单 key，generation 管 path。**
-5. **PathGeneration 由 owner 签名，PathMeta 是确定性的网络状态；节点本地字段必须分离。**
-6. **异常同代冲突按 IssueTime 和 RecordHash 收敛，但 DKVS 不保证业务正确。**
-7. **CAS/batch-CAS 保证目标节点本地原子性，不包装成分布式事务。**
-8. **wallet SDK 通过唯一 `dkvsManager` 管理 transport、replica、generation、outbox 和同步。**
-9. **FREE_LOCAL 永远是节点本地语义。**
-10. **不为不受支持的多设备多主场景牺牲系统的简单性、可靠性和性能。**
+1. `Seq` 只管理单 key；`PathMeta.Generation` 管理 path。
+2. record 生命周期只由 `IssueHeight + TTL` 表达。
+3. DKVS 解决协议一致性，不解决领域并发合并。
+4. Wallet SDK 本地副本必须持续同步；无法证明最新时 fail-closed。
+5. 账户管理从第一个钱包起存在，并统一管理所有 wallet/subaccount scope。
+6. 模块只通过 provider 接口交付必要恢复数据，不感知 DKVS/AUTOPAY。
+7. RGB 永久状态归账户管理；RGB 自己只使用有限 TTL 的瞬态传输记录。
+8. 开发阶段直接采用当前格式，不保留旧协议兼容路径。

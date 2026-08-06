@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -15,14 +16,19 @@ import (
 )
 
 const (
-	pathSyncFilterType = "path"
-	pathSyncMetaFlag   = uint32(1 << 31)
-	pathSyncFloorFlag  = uint32(1 << 30)
-	pathSyncMetaV1     = uint32(1)
-	pathSyncCursorV1   = byte(1)
+	pathSyncFilterType    = "path"
+	pathSyncMetaFlag      = uint32(1 << 31)
+	pathSyncFloorFlag     = uint32(1 << 30)
+	pathSyncMetaVersion   = uint32(1)
+	pathSyncCursorVersion = byte(1)
 )
 
 const pathSyncCursorSize = 1 + 8 + chainhash.HashSize + 8
+
+const (
+	PathSyncRequestTimeout = 10 * time.Second
+	PathSyncRetryDelay     = time.Second
+)
 
 func pathSyncFilter(filters []wire.DKVSSyncFilter) (string, bool) {
 	if len(filters) != 1 || filters[0].Type != pathSyncFilterType {
@@ -72,17 +78,16 @@ func encodePathSyncMeta(snapshot *dkvs.PathSnapshot) (*wire.DKVSRecord, error) {
 	}
 	copy(value[offset:], snapshot.PathMeta.StateRoot[:])
 	return &wire.DKVSRecord{
-		Version:        pathSyncMetaV1,
-		Key:            pathSyncMetaKey(snapshot.Path),
-		Value:          value,
-		Seq:            snapshot.PathMeta.Generation,
-		PathGeneration: snapshot.PathMeta.Generation,
-		Flags:          pathSyncMetaFlag,
+		Version: pathSyncMetaVersion,
+		Key:     pathSyncMetaKey(snapshot.Path),
+		Value:   value,
+		Seq:     snapshot.PathMeta.Generation,
+		Flags:   pathSyncMetaFlag,
 	}, nil
 }
 
 func decodePathSyncMeta(record *wire.DKVSRecord) (string, *dkvs.PathMeta, uint64, error) {
-	if record == nil || record.Flags != pathSyncMetaFlag || record.Version != pathSyncMetaV1 ||
+	if record == nil || record.Flags != pathSyncMetaFlag || record.Version != pathSyncMetaVersion ||
 		len(record.Value) < 2+4+6*8+chainhash.HashSize {
 		return "", nil, 0, dkvs.ErrInvalidSnapshot
 	}
@@ -112,8 +117,7 @@ func decodePathSyncMeta(record *wire.DKVSRecord) (string, *dkvs.PathMeta, uint64
 	serverTimeMS := binary.BigEndian.Uint64(record.Value[offset : offset+8])
 	offset += 8
 	copy(meta.StateRoot[:], record.Value[offset:])
-	if meta.Version == 0 || serverTimeMS == 0 || record.Seq != meta.Generation ||
-		record.PathGeneration != meta.Generation {
+	if meta.Version == 0 || serverTimeMS == 0 || record.Seq != meta.Generation {
 		return "", nil, 0, dkvs.ErrInvalidSnapshot
 	}
 	return path, meta, serverTimeMS, nil
@@ -124,29 +128,32 @@ func encodePathSyncFloor(floor dkvs.DeleteFloor) (*wire.DKVSRecord, error) {
 		floor.EffectiveHash == (chainhash.Hash{}) {
 		return nil, dkvs.ErrInvalidSnapshot
 	}
+	value := make([]byte, 8+chainhash.HashSize)
+	binary.BigEndian.PutUint64(value[0:8], floor.PathGeneration)
+	copy(value[8:], floor.EffectiveHash[:])
 	return &wire.DKVSRecord{
-		Version:        pathSyncMetaV1,
-		Key:            floor.Key,
-		Value:          append([]byte(nil), floor.EffectiveHash[:]...),
-		PubKey:         append([]byte(nil), floor.PubKey...),
-		Seq:            floor.FloorSeq,
-		PathGeneration: floor.PathGeneration,
-		Flags:          pathSyncFloorFlag,
+		Version: pathSyncMetaVersion,
+		Key:     floor.Key,
+		Value:   value,
+		PubKey:  append([]byte(nil), floor.PubKey...),
+		Seq:     floor.FloorSeq,
+		Flags:   pathSyncFloorFlag,
 	}, nil
 }
 
 func decodePathSyncFloor(path string, record *wire.DKVSRecord) (dkvs.DeleteFloor, error) {
-	if record == nil || record.Flags != pathSyncFloorFlag || record.Version != pathSyncMetaV1 ||
-		record.Seq == 0 || record.PathGeneration == 0 || len(record.Value) != chainhash.HashSize ||
+	if record == nil || record.Flags != pathSyncFloorFlag || record.Version != pathSyncMetaVersion ||
+		record.Seq == 0 || len(record.Value) != 8+chainhash.HashSize ||
 		!pathSyncMatchesKey(path, record.Key) {
 		return dkvs.DeleteFloor{}, dkvs.ErrInvalidSnapshot
 	}
 	floor := dkvs.DeleteFloor{
-		Key: record.Key, FloorSeq: record.Seq, PathGeneration: record.PathGeneration,
-		PubKey: append([]byte(nil), record.PubKey...),
+		Key: record.Key, FloorSeq: record.Seq,
+		PathGeneration: binary.BigEndian.Uint64(record.Value[0:8]),
+		PubKey:         append([]byte(nil), record.PubKey...),
 	}
-	copy(floor.EffectiveHash[:], record.Value)
-	if floor.EffectiveHash == (chainhash.Hash{}) {
+	copy(floor.EffectiveHash[:], record.Value[8:])
+	if floor.PathGeneration == 0 || floor.EffectiveHash == (chainhash.Hash{}) {
 		return dkvs.DeleteFloor{}, dkvs.ErrInvalidSnapshot
 	}
 	return floor, nil
@@ -154,7 +161,7 @@ func decodePathSyncFloor(path string, record *wire.DKVSRecord) (dkvs.DeleteFloor
 
 func encodePathSyncCursor(offset uint64, root chainhash.Hash, generation uint64) []byte {
 	cursor := make([]byte, pathSyncCursorSize)
-	cursor[0] = pathSyncCursorV1
+	cursor[0] = pathSyncCursorVersion
 	binary.BigEndian.PutUint64(cursor[1:9], offset)
 	copy(cursor[9:9+chainhash.HashSize], root[:])
 	binary.BigEndian.PutUint64(cursor[9+chainhash.HashSize:], generation)
@@ -162,7 +169,7 @@ func encodePathSyncCursor(offset uint64, root chainhash.Hash, generation uint64)
 }
 
 func decodePathSyncCursor(cursor []byte) (uint64, chainhash.Hash, uint64, error) {
-	if len(cursor) != pathSyncCursorSize || cursor[0] != pathSyncCursorV1 {
+	if len(cursor) != pathSyncCursorSize || cursor[0] != pathSyncCursorVersion {
 		return 0, chainhash.Hash{}, 0, dkvs.ErrInvalidSnapshot
 	}
 	offset := binary.BigEndian.Uint64(cursor[1:9])
@@ -290,26 +297,36 @@ func decodePathSnapshot(path string, root chainhash.Hash, records, deletes []*wi
 	return snapshot, nil
 }
 
-func (s *PeerState) StartPathSync(path string, now time.Time) (SyncStart, error) {
-	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
+func (s *PeerState) enqueuePathSyncLocked(path string) {
 	if path == "" {
-		return SyncStart{}, dkvs.ErrInvalidKey
+		return
 	}
-	filters := []wire.DKVSSyncFilter{{Type: pathSyncFilterType, Target: path}}
-	s.syncMtx.Lock()
-	defer s.syncMtx.Unlock()
-	if s.syncActive && !syncSessionExpired(s.syncUpdated, now) {
-		if activePath, ok := pathSyncFilter(s.syncFilters); ok && activePath == path {
-			return SyncStart{}, nil
-		}
-		// A generation gap makes the local path unusable. Prioritize its
-		// atomic repair over a lower-priority anti-entropy session.
-		s.resetSyncLocked()
+	if s.pendingPathSyncSet == nil {
+		s.pendingPathSyncSet = make(map[string]struct{})
 	}
+	if _, exists := s.pendingPathSyncSet[path]; exists {
+		return
+	}
+	s.pendingPathSync = append(s.pendingPathSync, path)
+	s.pendingPathSyncSet[path] = struct{}{}
+}
+
+func (s *PeerState) dequeuePathSyncLocked() string {
+	if len(s.pendingPathSync) == 0 {
+		return ""
+	}
+	path := s.pendingPathSync[0]
+	s.pendingPathSync = s.pendingPathSync[1:]
+	delete(s.pendingPathSyncSet, path)
+	return path
+}
+
+func (s *PeerState) startPathSyncLocked(path string, now time.Time) (SyncStart, error) {
 	session, err := wire.RandomUint64()
 	if err != nil || session == 0 {
 		return SyncStart{}, err
 	}
+	filters := []wire.DKVSSyncFilter{{Type: pathSyncFilterType, Target: path}}
 	s.syncSession = session
 	s.syncCursor = nil
 	s.syncFilters = filters
@@ -330,6 +347,76 @@ func (s *PeerState) StartPathSync(path string, now time.Time) (SyncStart, error)
 	}, nil
 }
 
+func (s *PeerState) StartPathSync(path string, now time.Time) (SyncStart, error) {
+	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
+	if path == "" {
+		return SyncStart{}, dkvs.ErrInvalidKey
+	}
+	s.syncMtx.Lock()
+	defer s.syncMtx.Unlock()
+	if s.syncActive && !syncSessionExpired(s.syncUpdated, now) {
+		if activePath, ok := pathSyncFilter(s.syncFilters); ok {
+			if activePath != path {
+				s.enqueuePathSyncLocked(path)
+			}
+			return SyncStart{}, nil
+		}
+		// A path generation gap is higher priority than generic anti-entropy.
+		s.resetSyncLocked()
+	}
+	return s.startPathSyncLocked(path, now)
+}
+
+func (s *PeerState) StartNextPathSync(now time.Time) (SyncStart, error) {
+	if s == nil {
+		return SyncStart{}, nil
+	}
+	s.syncMtx.Lock()
+	defer s.syncMtx.Unlock()
+	if s.syncActive && !syncSessionExpired(s.syncUpdated, now) {
+		return SyncStart{}, nil
+	}
+	if s.syncActive {
+		s.resetSyncLocked()
+	}
+	path := s.dequeuePathSyncLocked()
+	if path == "" {
+		return SyncStart{}, nil
+	}
+	return s.startPathSyncLocked(path, now)
+}
+
+func (s *PeerState) RequeuePathSync(path string) {
+	if s == nil {
+		return
+	}
+	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
+	if path == "" {
+		return
+	}
+	s.syncMtx.Lock()
+	s.enqueuePathSyncLocked(path)
+	s.syncMtx.Unlock()
+}
+
+// TimeoutPathSyncRequest expires only the exact outstanding page. An older
+// timer cannot cancel a newer page because the cursor must still match.
+func (s *PeerState) TimeoutPathSyncRequest(session uint64, cursor []byte) bool {
+	if s == nil || session == 0 {
+		return false
+	}
+	s.syncMtx.Lock()
+	defer s.syncMtx.Unlock()
+	path, ok := pathSyncFilter(s.syncFilters)
+	if !s.syncActive || !ok || s.syncSession != session ||
+		!bytes.Equal(s.syncCursor, cursor) {
+		return false
+	}
+	s.resetSyncLocked()
+	s.enqueuePathSyncLocked(path)
+	return true
+}
+
 func (s *PeerState) ActivePathSync() (string, bool) {
 	if s == nil {
 		return "", false
@@ -342,8 +429,49 @@ func (s *PeerState) ActivePathSync() (string, bool) {
 	return pathSyncFilter(s.syncFilters)
 }
 
+func (h Handler) sendPathSyncRequest(request *wire.MsgDKVSSyncRequest) {
+	if !h.valid() || request == nil {
+		return
+	}
+	h.send(request)
+	session := request.SessionID
+	cursor := append([]byte(nil), request.Cursor...)
+	time.AfterFunc(PathSyncRequestTimeout, func() {
+		if h.Peer.TimeoutPathSyncRequest(session, cursor) {
+			h.warnf("DKVS path snapshot request timed out")
+			h.queueNextPathSync()
+		}
+	})
+}
+
+func (h Handler) finishFailedPathSync(path string, retry bool) {
+	// The response state machine has already released the active session for
+	// terminal errors. Always allow the next queued path to proceed first.
+	h.queueNextPathSync()
+	if !retry || path == "" {
+		return
+	}
+	time.AfterFunc(PathSyncRetryDelay, func() {
+		h.QueuePathSync(path)
+	})
+}
+
+func (h Handler) queueNextPathSync() {
+	if !h.valid() || !h.allowedPathSnapshotSource() {
+		return
+	}
+	start, err := h.Peer.StartNextPathSync(time.Now())
+	if err != nil || start.Request == nil {
+		return
+	}
+	if start.Started {
+		h.Node.SetReady(false)
+	}
+	h.sendPathSyncRequest(start.Request)
+}
+
 func (h Handler) QueuePathSync(path string) {
-	if !h.valid() || !h.TrustedSource {
+	if !h.valid() || !h.allowedPathSnapshotSource() {
 		return
 	}
 	start, err := h.Peer.StartPathSync(path, time.Now())
@@ -353,7 +481,7 @@ func (h Handler) QueuePathSync(path string) {
 	if start.Started {
 		h.Node.SetReady(false)
 	}
-	h.send(start.Request)
+	h.sendPathSyncRequest(start.Request)
 }
 
 func (h Handler) queuePathRepair(record *wire.DKVSRecord, err error) bool {

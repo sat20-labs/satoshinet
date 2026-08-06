@@ -213,7 +213,7 @@ func (v AutopayFeeVerifier) VerifyFeeCapacity(record *wire.DKVSRecord, parsed Pa
 	}
 	count := uint64(1)
 	for _, candidate := range records {
-		if candidate == nil || candidate.Key == record.Key || IsExpired(candidate, height, now) {
+		if candidate == nil || candidate.Key == record.Key || IsExpired(candidate, height) {
 			continue
 		}
 		candidateProof, err := ParseFeeProof(candidate.FeeProof)
@@ -312,7 +312,7 @@ func (v AutopayFeeVerifier) verifyProofForRecord(record *wire.DKVSRecord, parsed
 	if err != nil {
 		return proof, capacity, ErrInvalidFeeProof
 	}
-	state, err := v.verifyState(proof, payer, record.ExpiryHeight)
+	state, err := v.verifyState(proof, payer, RecordExpiryHeight(record))
 	if err != nil {
 		return proof, capacity, err
 	}

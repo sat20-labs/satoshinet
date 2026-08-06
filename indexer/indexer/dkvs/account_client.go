@@ -15,7 +15,7 @@ func VerifyAccountRecordForClient(record *wire.DKVSRecord, opts RecordVerificati
 	if opts.ExpectedKey != "" && record.Key != opts.ExpectedKey {
 		return ErrInvalidKey
 	}
-	parsed, err := validateParsedCoreWithVerifier(record, opts.Height, opts.Now, true, false, nil)
+	parsed, err := validateParsedCoreWithVerifier(record, opts.Height, true, false, nil)
 	if err != nil {
 		return err
 	}

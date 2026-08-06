@@ -47,11 +47,11 @@ func validateBlobRecord(record *wire.DKVSRecord, parsed ParsedKey, policy BlobPo
 	}
 	switch proof.Mode {
 	case FeeModeAutopay:
-		if record.TTL != 0 || record.ExpiryHeight != 0 {
+		if record.TTL != 0 {
 			return ErrInvalidFeeProof
 		}
 	case FeeModeFreeLocal:
-		if record.TTL == 0 || record.ExpiryHeight != 0 {
+		if record.TTL == 0 {
 			return ErrInvalidFeeProof
 		}
 	default:
@@ -72,7 +72,7 @@ func VerifyBlobRecordForClient(record *wire.DKVSRecord, opts RecordVerificationO
 	if opts.ExpectedKey != "" && record.Key != opts.ExpectedKey {
 		return ErrInvalidKey
 	}
-	parsed, err := validateParsedCoreWithVerifier(record, opts.Height, opts.Now, true, false, nil)
+	parsed, err := validateParsedCoreWithVerifier(record, opts.Height, true, false, nil)
 	if err != nil {
 		return err
 	}

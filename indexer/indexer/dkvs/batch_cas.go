@@ -12,13 +12,14 @@ import (
 )
 
 type preparedCASMutation struct {
-	mutation     CASMutation
-	parsed       ParsedKey
-	snapshot     writeStateSnapshot
-	forceReplace bool
-	capacity     preparedFeeCapacity
-	retention    *PaidRecordRetention
-	applied      bool
+	mutation       CASMutation
+	parsed         ParsedKey
+	snapshot       writeStateSnapshot
+	forceReplace   bool
+	capacity       preparedFeeCapacity
+	retention      *PaidRecordRetention
+	applied        bool
+	pathGeneration uint64
 }
 
 type batchCASPreparation struct {
@@ -200,15 +201,9 @@ func (i *Indexer) prepareBatchCAS(mutations []CASMutation, options BatchCASOptio
 	}
 	for _, mutation := range mutations {
 		record := mutation.Record
-		parsed, err := validateParsedCoreWithVerifier(record, prep.height, prep.now, false, false, nil)
+		parsed, err := validateParsedCoreWithVerifier(record, prep.height, false, false, nil)
 		if err != nil {
 			return batchCASPreparation{}, err
-		}
-		if !isFreeLocalRecord(record) && record.PathGeneration == 0 {
-			return batchCASPreparation{}, ErrStaleGeneration
-		}
-		if isFreeLocalRecord(record) && record.PathGeneration != 0 {
-			return batchCASPreparation{}, ErrInvalidRecord
 		}
 		snapshot, err := i.readWriteStateSnapshot(record.Key, parsed, validators)
 		if err != nil {
@@ -302,20 +297,32 @@ func groupedReadyByPath(ready []preparedCASMutation) map[string][]preparedCASMut
 	return groups
 }
 
-func (i *Indexer) validatePathGenerationsLocked(ready []preparedCASMutation, height, now uint64) error {
-	for path, group := range groupedReadyByPath(ready) {
+func (i *Indexer) assignPathGenerationsLocked(ready []preparedCASMutation, height, now uint64) ([]preparedCASMutation, error) {
+	indicesByPath := make(map[string][]int)
+	for index, prepared := range ready {
+		if isFreeLocalRecord(prepared.mutation.Record) {
+			continue
+		}
+		path := collectionPath(prepared.parsed)
+		indicesByPath[path] = append(indicesByPath[path], index)
+	}
+	for path, indices := range indicesByPath {
 		meta, err := i.ensurePathMetaLocked(path, height, now)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		for offset, prepared := range group {
-			expected := meta.Generation + uint64(offset) + 1
-			if expected <= meta.Generation || prepared.mutation.Record.PathGeneration != expected {
-				return ErrStaleGeneration
+		sort.Slice(indices, func(a, b int) bool {
+			return ready[indices[a]].mutation.Record.Key < ready[indices[b]].mutation.Record.Key
+		})
+		for offset, index := range indices {
+			generation := meta.Generation + uint64(offset) + 1
+			if generation <= meta.Generation {
+				return nil, ErrStaleGeneration
 			}
+			ready[index].pathGeneration = generation
 		}
 	}
-	return nil
+	return ready, nil
 }
 
 func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint64) ([]preparedCASMutation, error) {
@@ -348,7 +355,7 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 	for _, prepared := range prep.mutations {
 		record := prepared.mutation.Record
 		existing := prepared.snapshot.existing
-		if IsExpired(record, height, now) {
+		if IsExpired(record, height) {
 			return nil, ErrExpiredRecord
 		}
 		if !writePreconditionMatches(i, existing, prepared.mutation.Precondition, height, now) {
@@ -378,10 +385,7 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 		}
 		ready = append(ready, prepared)
 	}
-	if err := i.validatePathGenerationsLocked(ready, height, now); err != nil {
-		return nil, err
-	}
-	return ready, nil
+	return i.assignPathGenerationsLocked(ready, height, now)
 }
 
 func (i *Indexer) projectedActiveRecordsLocked(ready []preparedCASMutation, height, now uint64) (map[string]*wire.DKVSRecord, error) {
@@ -622,7 +626,7 @@ func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, no
 		}
 		activeByKey := make(map[string]*wire.DKVSRecord, len(active))
 		for _, record := range active {
-			if record != nil && !isFreeLocalRecord(record) {
+			if i.networkPathRecordVisible(record) {
 				activeByKey[record.Key] = record
 			}
 		}
@@ -636,15 +640,19 @@ func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, no
 			delete(deletes, record.Key)
 			if IsTombstone(record.Flags) {
 				deletes[record.Key] = &deleteState{
-					FloorSeq: record.Seq, PathGeneration: record.PathGeneration,
+					FloorSeq: record.Seq, PathGeneration: prepared.pathGeneration,
 					PubKey: append([]byte{}, record.PubKey...), Record: record,
 					EffectiveHash: RecordHash(record),
 				}
-			} else {
+			} else if prepared.retention != nil || i.networkPathRecordVisible(record) {
 				activeByKey[record.Key] = record
 			}
 		}
-		meta := &PathMeta{Version: pathMetaVersion, Path: path, ViewHeight: height, Generation: current.Generation}
+		generation := current.Generation + uint64(len(group))
+		if generation < current.Generation {
+			return nil, ErrStaleGeneration
+		}
+		meta := &PathMeta{Version: pathMetaVersion, Path: path, ViewHeight: height, Generation: generation}
 		activeKeys := make([]string, 0, len(activeByKey))
 		for key := range activeByKey {
 			activeKeys = append(activeKeys, key)
@@ -656,9 +664,6 @@ func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, no
 			meta.ActiveTotalSize += uint64(RecordSize(record))
 			xorPathMetaRoot(&meta.StateRoot, record)
 			updateMinExpiry(meta, record)
-			if record.PathGeneration > meta.Generation {
-				meta.Generation = record.PathGeneration
-			}
 		}
 		deleteKeys := make([]string, 0, len(deletes))
 		for key := range deletes {
@@ -699,7 +704,7 @@ func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now 
 				return nil, nil, err
 			}
 			state := &deleteState{
-				FloorSeq: record.Seq, PathGeneration: record.PathGeneration,
+				FloorSeq: record.Seq, PathGeneration: prepared.pathGeneration,
 				RelayUntil: deleteRelayUntil(now), PubKey: append([]byte(nil), record.PubKey...),
 				Record: record, EffectiveHash: RecordHash(record),
 				LocalOnly: isFreeLocalRecord(existing) || isFreeLocalRecord(record),

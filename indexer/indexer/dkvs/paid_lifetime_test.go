@@ -46,14 +46,13 @@ func TestAutopayRecordRejectsRecordLevelLifetime(t *testing.T) {
 	}, AllowFreeLocal: true}
 
 	for name, mutate := range map[string]func(*Record){
-		"ttl":           func(record *Record) { record.TTL = 60_000 },
-		"expiry_height": func(record *Record) { record.ExpiryHeight = height + 100 },
+		"ttl": func(record *Record) { record.TTL = 100 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
 			mutate(record)
 			resignPaidLifetimeRecord(t, record, priv)
-			_, err := validateParsedCoreWithVerifier(record, height, record.IssueTime, false, true, verifier)
+			_, err := validateParsedCoreWithVerifier(record, height, false, true, verifier)
 			if !errors.Is(err, ErrInvalidFeeProof) {
 				t.Fatalf("expected invalid fee proof, got %v", err)
 			}

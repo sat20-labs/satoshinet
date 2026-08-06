@@ -29,9 +29,6 @@ func ValidatePathSnapshotForClient(snapshot *PathSnapshot, opts RecordVerificati
 	if opts.Height == 0 {
 		opts.Height = meta.ViewHeight
 	}
-	if opts.Now == 0 {
-		opts.Now = snapshot.ServerTimeMS
-	}
 
 	selected := make(map[string]*wire.DKVSRecord, len(snapshot.Records))
 	for _, record := range snapshot.Records {
@@ -76,23 +73,18 @@ func ValidatePathSnapshotForClient(snapshot *PathSnapshot, opts RecordVerificati
 	}
 
 	active := make([]*wire.DKVSRecord, 0, len(selected))
-	tombstones := make([]*wire.DKVSRecord, 0, len(selected))
 	for key, record := range selected {
-		if floor, ok := floors[key]; ok {
-			if floor.FloorSeq > record.Seq ||
-				(floor.FloorSeq == record.Seq && floor.EffectiveHash != RecordHash(record)) {
-				return ErrInvalidSnapshot
-			}
-			delete(floors, key)
-		}
 		if IsTombstone(record.Flags) {
-			tombstones = append(tombstones, record)
-		} else if !IsExpired(record, meta.ViewHeight, opts.Now) {
+			return ErrInvalidSnapshot
+		}
+		if _, deleted := floors[key]; deleted {
+			return ErrInvalidSnapshot
+		}
+		if !IsExpired(record, meta.ViewHeight) {
 			active = append(active, record)
 		}
 	}
 	sort.Slice(active, func(a, b int) bool { return active[a].Key < active[b].Key })
-	sort.Slice(tombstones, func(a, b int) bool { return tombstones[a].Key < tombstones[b].Key })
 	orderedFloors := make([]DeleteFloor, 0, len(floors))
 	for _, floor := range floors {
 		orderedFloors = append(orderedFloors, floor)
@@ -111,22 +103,6 @@ func ValidatePathSnapshotForClient(snapshot *PathSnapshot, opts RecordVerificati
 		computed.ActiveTotalSize += uint64(RecordSize(record))
 		xorPathMetaRoot(&computed.StateRoot, record)
 		updateMinExpiry(computed, record)
-		if record.PathGeneration > visibleGeneration {
-			visibleGeneration = record.PathGeneration
-		}
-	}
-	for _, record := range tombstones {
-		state := &deleteState{
-			FloorSeq:       record.Seq,
-			PathGeneration: record.PathGeneration,
-			PubKey:         append([]byte(nil), record.PubKey...),
-			Record:         record,
-			EffectiveHash:  RecordHash(record),
-		}
-		xorDeleteFloorRoot(&computed.StateRoot, record.Key, state)
-		if record.PathGeneration > visibleGeneration {
-			visibleGeneration = record.PathGeneration
-		}
 	}
 	for _, floor := range orderedFloors {
 		state := &deleteState{

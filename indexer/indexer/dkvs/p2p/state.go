@@ -107,6 +107,9 @@ type PeerState struct {
 	syncRecords map[string]*wire.DKVSRecord
 	syncDeletes map[string]*wire.DKVSRecord
 	syncBytes   uint64
+
+	pendingPathSync    []string
+	pendingPathSyncSet map[string]struct{}
 }
 
 func (s *PeerState) TrackRequest(msg *wire.MsgDKVSGet, now time.Time) {

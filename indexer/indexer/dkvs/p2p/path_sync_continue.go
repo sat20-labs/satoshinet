@@ -37,6 +37,6 @@ func (h Handler) queuePathSyncContinuation(cursor []byte) {
 	}
 	request, err := h.Peer.ContinuePathSync(cursor, time.Now())
 	if err == nil && request != nil {
-		h.send(request)
+		h.sendPathSyncRequest(request)
 	}
 }

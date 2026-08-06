@@ -129,7 +129,7 @@ func TestPruneExpiredAutopayAfterNodeCacheGrace(t *testing.T) {
 	}, AllowFreeLocal: true}
 	idx := New(database, Config{
 		AllowFreeLocal: true,
-		FreeLocalCache: FreeLocalCachePolicy{Enabled: true, MaxTTL: 24_000, MaxRecordsPerSigner: 10,
+		FreeLocalCache: FreeLocalCachePolicy{Enabled: true, MaxTTL: 2, MaxRecordsPerSigner: 10,
 			MaxBytesPerSigner: 1 << 20, MaxTotalRecords: 100, MaxTotalBytes: 1 << 20},
 		FeeVerifier:   verifier,
 		CurrentHeight: func() uint64 { return height },

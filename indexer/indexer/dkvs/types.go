@@ -29,7 +29,6 @@ const (
 	MaxKeySegmentSize      = 64
 	MaxNamespaceSize       = 16
 	MaxRecordValueSize     = wire.MaxDKVSValueSize
-	MaxFutureIssueTimeSkew = uint64(10 * 60 * 1000)
 )
 
 type ErrorCode string
@@ -223,7 +222,7 @@ type NotifyEvent struct {
 // records are admitted by one node only and are never relayed through DKVS P2P.
 type FreeLocalCachePolicy struct {
 	Enabled             bool   `json:"enabled"`
-	MaxTTL              uint64 `json:"max_ttl_ms"`
+	MaxTTL              uint64 `json:"max_ttl_blocks"`
 	MaxRecordsPerSigner uint64 `json:"max_records_per_signer"`
 	MaxBytesPerSigner   uint64 `json:"max_bytes_per_signer"`
 	MaxTotalRecords     uint64 `json:"max_total_records"`
@@ -233,7 +232,7 @@ type FreeLocalCachePolicy struct {
 func DefaultFreeLocalCachePolicy() FreeLocalCachePolicy {
 	return FreeLocalCachePolicy{
 		Enabled:             true,
-		MaxTTL:              24 * 60 * 60 * 1000,
+		MaxTTL:              144,
 		MaxRecordsPerSigner: 100,
 		MaxBytesPerSigner:   1 << 20,
 		MaxTotalRecords:     100000,

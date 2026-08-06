@@ -13,9 +13,7 @@ import (
 func signedAccountRecord(t *testing.T, priv *btcec.PrivateKey, key string, value []byte, seq uint64) *wire.DKVSRecord {
 	t.Helper()
 	record, err := NewAccountRecord(key, value, RecordOptions{
-		Seq:          seq,
-		TTL:          60_000,
-		ExpiryHeight: 100,
+		Seq: seq, TTL: 100,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +27,7 @@ func signedAccountRecord(t *testing.T, priv *btcec.PrivateKey, key string, value
 	return record
 }
 
-func TestNewAccountRecordPreservesPathGeneration(t *testing.T) {
+func TestNewAccountRecordPreservesIssueHeight(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -43,13 +41,13 @@ func TestNewAccountRecordPreservesPathGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	record, err := NewAccountRecord(key, []byte("value"), RecordOptions{
-		Seq: 1, PathGeneration: 7, IssueTime: 1234,
+		Seq: 1, IssueHeight: 1234, TTL: 100,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.PathGeneration != 7 {
-		t.Fatalf("path generation=%d want=7", record.PathGeneration)
+	if record.IssueHeight != 1234 || RecordExpiryHeight(record) != 1334 {
+		t.Fatalf("issue=%d expiry=%d", record.IssueHeight, RecordExpiryHeight(record))
 	}
 }
 

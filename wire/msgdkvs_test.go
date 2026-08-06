@@ -11,17 +11,16 @@ import (
 func TestDKVSMessagesWire(t *testing.T) {
 	hash := chainhash.DoubleHashH([]byte("record"))
 	record := &DKVSRecord{
-		Version:      1,
-		Key:          "/personal/a/b",
-		Value:        []byte("value"),
-		PubKey:       []byte{2, 1, 2, 3},
-		Signature:    []byte{48, 1, 1},
-		Seq:          10,
-		IssueTime:    20,
-		TTL:          30,
-		ExpiryHeight: 40,
-		FeeProof:     []byte("fee"),
-		Flags:        1,
+		Version:     1,
+		Key:         "/personal/a/b",
+		Value:       []byte("value"),
+		PubKey:      []byte{2, 1, 2, 3},
+		Signature:   []byte{48, 1, 1},
+		Seq:         10,
+		IssueHeight: 20,
+		TTL:         30,
+		FeeProof:    []byte("fee"),
+		Flags:       1,
 	}
 	recordData, err := SerializeDKVSRecord(record)
 	if err != nil {
@@ -189,17 +188,16 @@ func TestDKVSCommandLength(t *testing.T) {
 func sampleDKVSMessages() []Message {
 	hash := chainhash.DoubleHashH([]byte("record"))
 	record := &DKVSRecord{
-		Version:      1,
-		Key:          "/personal/a/b",
-		Value:        []byte("value"),
-		PubKey:       []byte{2, 1, 2, 3},
-		Signature:    []byte{48, 1, 1},
-		Seq:          10,
-		IssueTime:    20,
-		TTL:          30,
-		ExpiryHeight: 40,
-		FeeProof:     []byte("fee"),
-		Flags:        1,
+		Version:     1,
+		Key:         "/personal/a/b",
+		Value:       []byte("value"),
+		PubKey:      []byte{2, 1, 2, 3},
+		Signature:   []byte{48, 1, 1},
+		Seq:         10,
+		IssueHeight: 20,
+		TTL:         30,
+		FeeProof:    []byte("fee"),
+		Flags:       1,
 	}
 	recordData, err := SerializeDKVSRecord(record)
 	if err != nil {

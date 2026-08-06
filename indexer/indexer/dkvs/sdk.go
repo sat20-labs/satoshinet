@@ -8,13 +8,11 @@ import (
 )
 
 type RecordOptions struct {
-	Seq            uint64
-	PathGeneration uint64
-	IssueTime      uint64
-	TTL            uint64
-	ExpiryHeight   uint64
-	FeeProof       []byte
-	Flags          uint32
+	Seq         uint64
+	IssueHeight uint64
+	TTL         uint64
+	FeeProof    []byte
+	Flags       uint32
 }
 
 type RecordVerificationOptions struct {
@@ -22,7 +20,6 @@ type RecordVerificationOptions struct {
 	ExpectedHash chainhash.Hash
 	CheckHash    bool
 	Height       uint64
-	Now          uint64
 	FeeVerifier  FeeVerifier
 }
 
@@ -36,16 +33,11 @@ func NewRecord(key string, value []byte, pubKey []byte, opts RecordOptions) (*wi
 		Key:            key,
 		Value:          append([]byte{}, value...),
 		PubKey:         append([]byte{}, pubKey...),
-		Seq:            opts.Seq,
-		PathGeneration: opts.PathGeneration,
-		IssueTime:      opts.IssueTime,
-		TTL:            opts.TTL,
-		ExpiryHeight:   opts.ExpiryHeight,
+		Seq:         opts.Seq,
+		IssueHeight: opts.IssueHeight,
+		TTL:         opts.TTL,
 		FeeProof:       append([]byte{}, opts.FeeProof...),
 		Flags:          opts.Flags,
-	}
-	if record.IssueTime == 0 {
-		record.IssueTime = currentUnixMilli()
 	}
 	if err := validateRecordSizeForParsed(record, parsed); err != nil {
 		return nil, err
@@ -60,7 +52,7 @@ func VerifyRecordForClient(record *wire.DKVSRecord, opts RecordVerificationOptio
 	if opts.ExpectedKey != "" && record.Key != opts.ExpectedKey {
 		return ErrInvalidKey
 	}
-	parsed, err := validateParsedCoreWithVerifier(record, opts.Height, opts.Now, true, false, nil)
+	parsed, err := validateParsedCoreWithVerifier(record, opts.Height, true, false, nil)
 	if err != nil {
 		return err
 	}

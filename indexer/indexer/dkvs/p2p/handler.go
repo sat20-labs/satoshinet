@@ -76,6 +76,14 @@ func (h Handler) remoteMiner() bool {
 	return h.RemoteServices&wire.SFNodeMiner != 0
 }
 
+func (h Handler) allowedPathSnapshotSource() bool {
+	// A path repair is requested from the exact peer that announced the
+	// divergence. Its response is bound to the negotiated validator identity
+	// and still passes full record, permission, fee-proof and StateRoot checks.
+	// Generic mirror synchronization remains restricted to TrustedSource.
+	return h.validatorID() != ""
+}
+
 func (h Handler) allowedIncrementalSource() bool {
 	return h.localMiner() || h.TrustedSource
 }
@@ -325,6 +333,10 @@ func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
 	}
 	activePath, pathSync := h.Peer.ActivePathSync()
 	verify := func(cursor []byte, filters []wire.DKVSSyncFilter, response *wire.MsgDKVSSyncResponse) bool {
+		if pathSync {
+			return h.allowedPathSnapshotSource() &&
+				VerifySyncSignature(h.Net, h.validatorID(), cursor, filters, response)
+		}
 		return h.TrustedSource && VerifySyncSignature(h.Net, h.validatorID(), cursor, filters, response)
 	}
 	shouldStore := h.shouldStoreKey
@@ -337,12 +349,13 @@ func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
 		if errors.Is(err, ErrUnauthenticatedSync) {
 			h.penalize(0, 20, "unauthenticated DKVS sync response")
 		}
+		if pathSync && !errors.Is(err, ErrUnsolicitedSync) {
+			retry := !errors.Is(err, ErrUnauthenticatedSync)
+			h.finishFailedPathSync(activePath, retry)
+			return
+		}
 		if errors.Is(err, ErrSyncRootChanged) {
-			if pathSync {
-				h.QueuePathSync(activePath)
-			} else {
-				h.QueueSync(nil)
-			}
+			h.QueueSync(nil)
 		}
 		return
 	}
@@ -373,16 +386,25 @@ func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
 	if snapshot, isPath, snapshotErr := pathActionSnapshot(action); isPath {
 		if snapshotErr != nil {
 			h.warnf("decode DKVS path snapshot failed: %v", snapshotErr)
-			h.QueuePathSync(activePath)
+			h.finishFailedPathSync(activePath, true)
 			return
 		}
 		if _, applyErr := h.Store.ApplyDKVSPathSnapshot(snapshot); applyErr != nil {
 			h.warnf("apply DKVS path snapshot failed: %v", applyErr)
-			h.QueuePathSync(snapshot.Path)
+			h.finishFailedPathSync(snapshot.Path, true)
 			return
+		}
+		// The incremental notify that triggered this repair was not committed.
+		// Re-announce the authenticated active records after the atomic snapshot
+		// commit so downstream subscribed peers can repair the same path.
+		for _, record := range snapshot.Records {
+			if record != nil && !dkvs.IsTombstone(record.Flags) {
+				h.broadcast(record)
+			}
 		}
 		h.Node.MarkTrusted(time.Now())
 		h.Node.SetReady(true)
+		h.queueNextPathSync()
 		return
 	}
 	filters := SubscriptionsFromFilters(action.Filters)

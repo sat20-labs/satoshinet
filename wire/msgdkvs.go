@@ -35,18 +35,16 @@ const (
 )
 
 type DKVSRecord struct {
-	Version        uint32
-	Key            string
-	Value          []byte
-	PubKey         []byte
-	Signature      []byte
-	Seq            uint64
-	PathGeneration uint64
-	IssueTime      uint64
-	TTL            uint64
-	ExpiryHeight   uint64
-	FeeProof       []byte
-	Flags          uint32
+	Version     uint32
+	Key         string
+	Value       []byte
+	PubKey      []byte
+	Signature   []byte
+	Seq         uint64
+	IssueHeight uint64
+	TTL         uint64
+	FeeProof    []byte
+	Flags       uint32
 }
 
 type DKVSInvItem struct {
@@ -134,7 +132,7 @@ func readDKVSRecord(r io.Reader, pver uint32, buf []byte) (*DKVSRecord, error) {
 	if rec.Signature, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSSignatureSize, "dkvs signature"); err != nil {
 		return nil, err
 	}
-	if err := readElements(r, &rec.Seq, &rec.PathGeneration, &rec.IssueTime, &rec.TTL, &rec.ExpiryHeight); err != nil {
+	if err := readElements(r, &rec.Seq, &rec.IssueHeight, &rec.TTL); err != nil {
 		return nil, err
 	}
 	if rec.FeeProof, err = ReadVarBytesBuf(r, pver, buf, MaxDKVSFeeProofSize, "dkvs fee proof"); err != nil {
@@ -175,7 +173,7 @@ func writeDKVSRecord(w io.Writer, pver uint32, rec *DKVSRecord, buf []byte) erro
 			return err
 		}
 	}
-	if err := writeElements(w, rec.Seq, rec.PathGeneration, rec.IssueTime, rec.TTL, rec.ExpiryHeight); err != nil {
+	if err := writeElements(w, rec.Seq, rec.IssueHeight, rec.TTL); err != nil {
 		return err
 	}
 	if err := WriteVarBytesBuf(w, pver, rec.FeeProof, buf); err != nil {
@@ -193,7 +191,7 @@ func dkvsRecordSerializeSize(rec *DKVSRecord) int {
 		VarIntSerializeSize(uint64(len(rec.Value))) + len(rec.Value) +
 		VarIntSerializeSize(uint64(len(rec.PubKey))) + len(rec.PubKey) +
 		VarIntSerializeSize(uint64(len(rec.Signature))) + len(rec.Signature) +
-		40 +
+		24 +
 		VarIntSerializeSize(uint64(len(rec.FeeProof))) + len(rec.FeeProof) +
 		4
 }

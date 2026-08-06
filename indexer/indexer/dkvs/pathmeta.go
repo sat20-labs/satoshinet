@@ -133,19 +133,13 @@ func pathMetaNeedsRebuild(meta *PathMeta, status *PathLocalStatus, height uint64
 	return height != 0 && meta.MinExpiryHeight != 0 && meta.MinExpiryHeight <= height
 }
 
-func recordExpiryTime(record *wire.DKVSRecord) uint64 {
-	if record == nil || record.TTL == 0 || record.IssueTime == 0 || record.IssueTime > ^uint64(0)-record.TTL {
-		return 0
-	}
-	return record.IssueTime + record.TTL
-}
-
 func updateMinExpiry(meta *PathMeta, record *wire.DKVSRecord) {
 	if meta == nil || record == nil || IsTombstone(record.Flags) || isFreeLocalRecord(record) {
 		return
 	}
-	if record.ExpiryHeight != 0 && (meta.MinExpiryHeight == 0 || record.ExpiryHeight < meta.MinExpiryHeight) {
-		meta.MinExpiryHeight = record.ExpiryHeight
+	expiry := RecordExpiryHeight(record)
+	if expiry != 0 && (meta.MinExpiryHeight == 0 || expiry < meta.MinExpiryHeight) {
+		meta.MinExpiryHeight = expiry
 	}
 }
 
@@ -251,7 +245,7 @@ func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathM
 		return nil, readErr
 	}
 	for _, record := range records {
-		if record == nil || isFreeLocalRecord(record) {
+		if !i.networkPathRecordVisible(record) {
 			continue
 		}
 		meta.ActiveRecords++
@@ -259,9 +253,6 @@ func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathM
 		xorPathMetaRoot(&meta.StateRoot, record)
 		xorPathMetaRoot(&meta.ActiveRoot, record)
 		updateMinExpiry(meta, record)
-		if record.PathGeneration > meta.Generation {
-			meta.Generation = record.PathGeneration
-		}
 	}
 	deleteStates, err := i.scanPathDeleteStatesLocked(path)
 	if err != nil {
@@ -334,7 +325,7 @@ func (i *Indexer) activePathRootLocked(path string, height, now uint64) (chainha
 	}
 	var root chainhash.Hash
 	for _, record := range records {
-		if record == nil || isFreeLocalRecord(record) {
+		if !i.networkPathRecordVisible(record) {
 			continue
 		}
 		xorPathMetaRoot(&root, record)
@@ -394,17 +385,14 @@ func existingRecordActive(i *Indexer, record *wire.DKVSRecord, height, now uint6
 	return record != nil && !IsTombstone(record.Flags) && i.activeError(record, height, now) == nil
 }
 
-func mutationPathGeneration(meta *PathMeta, record *wire.DKVSRecord) uint64 {
-	if record != nil && record.PathGeneration != 0 {
-		return record.PathGeneration
-	}
+func mutationPathGeneration(meta *PathMeta) uint64 {
 	if meta == nil || meta.Generation == ^uint64(0) {
 		return 0
 	}
 	return meta.Generation + 1
 }
 
-func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wire.DKVSRecord, height, now uint64) (*PathMeta, error) {
+func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wire.DKVSRecord, nextVisible bool, height, now uint64) (*PathMeta, error) {
 	path := collectionPath(parsed)
 	if path == "" || (next != nil && isFreeLocalRecord(next)) || (next == nil && existing != nil && isFreeLocalRecord(existing)) {
 		return nil, nil
@@ -414,7 +402,7 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 		return nil, err
 	}
 	meta = clonePathMeta(meta)
-	if existingRecordActive(i, existing, height, now) && !isFreeLocalRecord(existing) {
+	if existingRecordActive(i, existing, height, now) && i.networkPathRecordVisible(existing) {
 		xorPathMetaRoot(&meta.StateRoot, existing)
 		oldSize := uint64(RecordSize(existing))
 		if meta.ActiveRecords > 0 {
@@ -425,7 +413,7 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 		} else {
 			meta.ActiveTotalSize = 0
 		}
-		if existing.ExpiryHeight != 0 && existing.ExpiryHeight == meta.MinExpiryHeight {
+		if expiry := RecordExpiryHeight(existing); expiry != 0 && expiry == meta.MinExpiryHeight {
 			meta.MinExpiryHeight = 0
 		}
 	}
@@ -433,20 +421,20 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 	if state, stateErr := i.getDeleteStateLocked(key); stateErr == nil && !state.LocalOnly {
 		xorDeleteFloorRoot(&meta.StateRoot, key, state)
 	}
-	if next != nil && !isFreeLocalRecord(next) {
+	if next != nil && !isFreeLocalRecord(next) && nextVisible {
 		if IsTombstone(next.Flags) {
 			state := &deleteState{
-				FloorSeq: next.Seq, PathGeneration: mutationPathGeneration(meta, next),
+				FloorSeq: next.Seq, PathGeneration: mutationPathGeneration(meta),
 				PubKey: append([]byte{}, next.PubKey...), Record: next, EffectiveHash: RecordHash(next),
 			}
 			xorDeleteFloorRoot(&meta.StateRoot, next.Key, state)
-		} else if !IsExpired(next, height, now) {
+		} else if !IsExpired(next, height) {
 			meta.ActiveRecords++
 			meta.ActiveTotalSize += uint64(RecordSize(next))
 			xorPathMetaRoot(&meta.StateRoot, next)
 			updateMinExpiry(meta, next)
 		}
-		if generation := mutationPathGeneration(meta, next); generation > meta.Generation {
+		if generation := mutationPathGeneration(meta); generation > meta.Generation {
 			meta.Generation = generation
 		}
 	}

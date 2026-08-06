@@ -10,7 +10,7 @@ func TestDKVSSingleRecordBlobWireLimits(t *testing.T) {
 		Version:   1,
 		Key:       "/blob/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/state",
 		Value:     bytes.Repeat([]byte{0x5a}, MaxDKVSBlobValueSize),
-		IssueTime: 1,
+		IssueHeight: 1,
 	}
 	encoded, err := SerializeDKVSRecord(blob)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestDKVSRecordMessagesEnforceAggregatePayloadBudget(t *testing.T) {
 			Version:   1,
 			Key:       "/blob/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/blob" + string(rune('a'+index)),
 			Value:     bytes.Repeat([]byte{byte(index)}, MaxDKVSBlobValueSize),
-			IssueTime: 1,
+			IssueHeight: 1,
 		})
 	}
 	var encoded bytes.Buffer

@@ -58,9 +58,6 @@ func marshalDeleteState(state *deleteState) ([]byte, error) {
 			state.Record.Seq > state.FloorSeq {
 			return nil, ErrInvalidRecord
 		}
-		if state.PathGeneration == 0 {
-			state.PathGeneration = state.Record.PathGeneration
-		}
 		recordBytes, err = MarshalRecord(state.Record)
 		if err != nil {
 			return nil, err
@@ -122,9 +119,6 @@ func unmarshalDeleteState(encoded []byte) (*deleteState, error) {
 	state.Record = record
 	if len(state.PubKey) == 0 {
 		state.PubKey = append([]byte{}, record.PubKey...)
-	}
-	if state.PathGeneration == 0 {
-		state.PathGeneration = record.PathGeneration
 	}
 	if state.EffectiveHash == (chainhash.Hash{}) {
 		state.EffectiveHash = RecordHash(record)
@@ -240,7 +234,7 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 		return chainhash.Hash{}, ErrRecordNotFound
 	}
 	oldHash := RecordHash(record)
-	meta, err := i.pathMetaForMutationLocked(parsed, record, deleteRecord, height, now)
+	meta, err := i.pathMetaForMutationLocked(parsed, record, deleteRecord, !i.isLocalOnlyRecord(record), height, now)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
@@ -250,8 +244,7 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 		LocalOnly: isFreeLocalRecord(record) || isFreeLocalRecord(deleteRecord),
 	}
 	if deleteRecord != nil {
-		state.PathGeneration = deleteRecord.PathGeneration
-		if state.PathGeneration == 0 && meta != nil {
+		if meta != nil {
 			state.PathGeneration = meta.Generation
 		}
 		state.EffectiveHash = RecordHash(deleteRecord)
@@ -318,26 +311,28 @@ func (i *Indexer) retainDeleteCommandLocked(record *wire.DKVSRecord, now uint64,
 			return previous.effectiveHash(record.Key), nil
 		}
 	}
-	state := &deleteState{
-		FloorSeq:       record.Seq,
-		PathGeneration: record.PathGeneration,
-		RelayUntil:     deleteRelayUntil(now),
-		PubKey:         append([]byte{}, record.PubKey...),
-		Record:         record,
-		EffectiveHash:  RecordHash(record),
-		LocalOnly:      localOnly,
-	}
-	batch := i.db.NewWriteBatch()
-	defer batch.Close()
-	if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
-		return chainhash.Hash{}, err
-	}
 	parsed, err := ParseKey(record.Key)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
-	meta, err := i.pathMetaForMutationLocked(parsed, nil, record, i.currentHeight(), now)
+	meta, err := i.pathMetaForMutationLocked(parsed, nil, record, true, i.currentHeight(), now)
 	if err != nil {
+		return chainhash.Hash{}, err
+	}
+	state := &deleteState{
+		FloorSeq:      record.Seq,
+		RelayUntil:    deleteRelayUntil(now),
+		PubKey:        append([]byte{}, record.PubKey...),
+		Record:        record,
+		EffectiveHash: RecordHash(record),
+		LocalOnly:     localOnly,
+	}
+	if meta != nil {
+		state.PathGeneration = meta.Generation
+	}
+	batch := i.db.NewWriteBatch()
+	defer batch.Close()
+	if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
 		return chainhash.Hash{}, err
 	}
 	if err := putPathMetaBatch(batch, meta); err != nil {

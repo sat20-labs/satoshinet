@@ -27,7 +27,6 @@ func TestPruneExpiredDKVSOnBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := signedDKVSTestPersonalRecord(t, priv, 1)
-	record.ExpiryHeight = 2
 	signDKVSTestRecord(t, priv, record)
 	if _, err := idx.PutLocal(record); err != nil {
 		t.Fatal(err)
@@ -39,7 +38,6 @@ func TestPruneExpiredDKVSOnBlock(t *testing.T) {
 	}
 
 	record = signedDKVSTestPersonalRecord(t, priv, 2)
-	record.ExpiryHeight = 2
 	signDKVSTestRecord(t, priv, record)
 	if _, err := idx.PutLocal(record); err != nil {
 		t.Fatal(err)
@@ -262,9 +260,7 @@ func signedDKVSTestPersonalRecord(t *testing.T, priv *btcec.PrivateKey, seq uint
 		t.Fatal(err)
 	}
 	record, err := dkvs.NewAccountRecord(key, []byte("value"), dkvs.RecordOptions{
-		Seq:          seq,
-		TTL:          60_000,
-		ExpiryHeight: 100,
+		Seq: seq, IssueHeight: 1, TTL: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

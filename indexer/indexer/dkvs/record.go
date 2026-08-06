@@ -13,7 +13,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-var signatureDomain = []byte("satoshinet-dkvs-record-v1")
+var signatureDomain = []byte("satoshinet-dkvs-record")
 
 const notifyEventMagic = "DKNE"
 
@@ -75,7 +75,7 @@ func VerifySignature(record *wire.DKVSRecord) error {
 // CompareRecords selects the deterministic winner for two records of the same
 // key. Sequence is the primary order. At the same sequence, retention may only
 // choose a winner when the signed business state is identical; otherwise
-// IssueTime and finally RecordHash decide the winner.
+// IssueHeight and finally RecordHash decide the winner.
 func CompareRecords(a, b *wire.DKVSRecord) int {
 	if a == nil && b == nil {
 		return 0
@@ -97,10 +97,10 @@ func CompareRecords(a, b *wire.DKVSRecord) int {
 			return retention
 		}
 	}
-	if a.IssueTime > b.IssueTime {
+	if a.IssueHeight > b.IssueHeight {
 		return 1
 	}
-	if a.IssueTime < b.IssueTime {
+	if a.IssueHeight < b.IssueHeight {
 		return -1
 	}
 	ah := RecordHash(a)
@@ -120,18 +120,13 @@ func sameBusinessContent(a, b *wire.DKVSRecord) bool {
 		bytes.Equal(a.PubKey, b.PubKey)
 }
 
-// compareRetention compares only retention fields. Zero means no protocol
-// expiry and is therefore longer than any finite retention.
+// compareRetention compares the derived expiry height. TTL=0 means no fixed
+// record-level expiry and is therefore longer than any finite retention.
 func compareRetention(a, b *wire.DKVSRecord) int {
 	if a == nil || b == nil {
 		return 0
 	}
-	if result := compareOptionalUpperBound(a.ExpiryHeight, b.ExpiryHeight); result != 0 {
-		return result
-	}
-	aExpiry := recordExpiryTime(a)
-	bExpiry := recordExpiryTime(b)
-	return compareOptionalUpperBound(aExpiry, bExpiry)
+	return compareOptionalUpperBound(RecordExpiryHeight(a), RecordExpiryHeight(b))
 }
 
 func compareOptionalUpperBound(a, b uint64) int {
@@ -150,17 +145,21 @@ func compareOptionalUpperBound(a, b uint64) int {
 	return -1
 }
 
-func IsExpired(record *wire.DKVSRecord, height uint64, now uint64) bool {
+// RecordExpiryHeight returns the exclusive upper bound of a finite record
+// lease. Zero denotes no fixed record-level expiry or an invalid overflow.
+func RecordExpiryHeight(record *wire.DKVSRecord) uint64 {
+	if record == nil || record.TTL == 0 || record.IssueHeight > ^uint64(0)-record.TTL {
+		return 0
+	}
+	return record.IssueHeight + record.TTL
+}
+
+func IsExpired(record *wire.DKVSRecord, height uint64) bool {
 	if record == nil {
 		return true
 	}
-	if record.ExpiryHeight != 0 && height != 0 && record.ExpiryHeight <= height {
-		return true
-	}
-	if record.TTL != 0 && record.IssueTime != 0 && now > record.IssueTime+record.TTL {
-		return true
-	}
-	return false
+	expiry := RecordExpiryHeight(record)
+	return expiry != 0 && height >= expiry
 }
 
 func MarshalRecord(record *wire.DKVSRecord) ([]byte, error) {
@@ -288,10 +287,8 @@ func canonicalRecordBytes(record *wire.DKVSRecord, includeSignature bool) []byte
 	writeHash(&buf, sha256.Sum256(record.Value))
 	writeBytes(&buf, record.PubKey)
 	writeUint64(&buf, record.Seq)
-	writeUint64(&buf, record.PathGeneration)
-	writeUint64(&buf, record.IssueTime)
+	writeUint64(&buf, record.IssueHeight)
 	writeUint64(&buf, record.TTL)
-	writeUint64(&buf, record.ExpiryHeight)
 	writeHash(&buf, sha256.Sum256(record.FeeProof))
 	writeUint32(&buf, record.Flags)
 	if includeSignature {

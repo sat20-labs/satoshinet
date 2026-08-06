@@ -7,19 +7,28 @@ import (
 	dbpkg "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 func newAutopayMirrorIndexer(t *testing.T, lastPayHeight int64) (*Indexer, *btcec.PrivateKey, uint64) {
+	return newAutopayMirrorIndexerForPrivateKey(t, nil, lastPayHeight)
+}
+
+func newAutopayMirrorIndexerForPrivateKey(t *testing.T, priv *btcec.PrivateKey,
+	lastPayHeight int64) (*Indexer, *btcec.PrivateKey, uint64) {
 	t.Helper()
 	database := dbpkg.NewKVDB(t.TempDir())
 	if database == nil {
 		t.Fatal("NewKVDB failed")
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
+	var err error
+	if priv == nil {
+		priv, err = btcec.NewPrivateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	payer, err := P2TRAddressFromPubKeyBytes(priv.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
 	if err != nil {
@@ -49,7 +58,7 @@ func newAutopayMirrorIndexer(t *testing.T, lastPayHeight int64) (*Indexer, *btce
 	idx := New(database, Config{
 		AllowFreeLocal: true,
 		FreeLocalCache: FreeLocalCachePolicy{
-			Enabled: true, MaxTTL: 60_000, MaxRecordsPerSigner: 10,
+			Enabled: true, MaxTTL: 144, MaxRecordsPerSigner: 10,
 			MaxBytesPerSigner: 1 << 20, MaxTotalRecords: 100, MaxTotalBytes: 1 << 20,
 		},
 		FeeVerifier: verifier, CurrentHeight: func() uint64 { return height },
@@ -94,7 +103,7 @@ func TestVerifiedAutopayRecordRelaysImmediately(t *testing.T) {
 	}, AllowFreeLocal: true}
 	idx := New(database, Config{
 		AllowFreeLocal: true,
-		FreeLocalCache: FreeLocalCachePolicy{Enabled: true, MaxTTL: 60_000, MaxRecordsPerSigner: 10,
+		FreeLocalCache: FreeLocalCachePolicy{Enabled: true, MaxTTL: 144, MaxRecordsPerSigner: 10,
 			MaxBytesPerSigner: 1 << 20, MaxTotalRecords: 100, MaxTotalBytes: 1 << 20},
 		FeeVerifier: verifier, CurrentHeight: func() uint64 { return height },
 	})
@@ -171,5 +180,71 @@ func TestApplyMirrorStillRejectsFreeLocalRecord(t *testing.T) {
 	}
 	if _, err := idx.Get(record.Key); !errors.Is(err, ErrRecordNotFound) {
 		t.Fatalf("FREE_LOCAL mirror mutated store: %v", err)
+	}
+}
+
+func TestAutopayGraceRecordIsExcludedConsistentlyFromPathSnapshot(t *testing.T) {
+	idx, priv, _ := newAutopayMirrorIndexer(t, 10)
+	record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
+	if updated, err := idx.PutLocal(record); err != nil || !updated {
+		t.Fatalf("put paid AUTOPAY record updated=%v err=%v", updated, err)
+	}
+	path, err := CollectionPathForKey(record.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Payment covered height 10. At height 11 the record remains locally
+	// readable during grace, but must leave the network-comparable path view.
+	idx.height = func() uint64 { return 11 }
+	if got, err := idx.Get(record.Key); err != nil || RecordHash(got) != RecordHash(record) {
+		t.Fatalf("grace record not locally readable: record=%#v err=%v", got, err)
+	}
+	meta, err := idx.GetPathMeta(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.ActiveRecords != 0 || meta.ActiveTotalSize != 0 || meta.StateRoot != (chainhash.Hash{}) {
+		t.Fatalf("unpaid grace record leaked into PathMeta: %#v", meta)
+	}
+	snapshot, err := idx.GetPathSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Records) != 0 || snapshot.PathMeta.StateRoot != meta.StateRoot ||
+		snapshot.PathMeta.ActiveRecords != meta.ActiveRecords {
+		t.Fatalf("snapshot/meta mismatch: snapshot=%#v meta=%#v", snapshot, meta)
+	}
+	if err := ValidatePathSnapshotForClient(snapshot, RecordVerificationOptions{}); err != nil {
+		t.Fatalf("validate empty network path snapshot: %v", err)
+	}
+}
+
+func TestApplyPathSnapshotPrimesAutopayRetentionForDownstreamRelay(t *testing.T) {
+	source, priv, _ := newAutopayMirrorIndexer(t, 10)
+	record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
+	if updated, err := source.PutLocal(record); err != nil || !updated {
+		t.Fatalf("source put updated=%v err=%v", updated, err)
+	}
+	path, err := CollectionPathForKey(record.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.GetPathSnapshot(path)
+	if err != nil || len(snapshot.Records) != 1 {
+		t.Fatalf("source snapshot=%#v err=%v", snapshot, err)
+	}
+
+	target, _, _ := newAutopayMirrorIndexerForPrivateKey(t, priv, 10)
+	if applied, err := target.ApplyPathSnapshot(snapshot); err != nil || applied != 1 {
+		t.Fatalf("target apply=%d err=%v", applied, err)
+	}
+	if !target.paidRecordRelayable(record) {
+		t.Fatal("snapshot-applied AUTOPAY record is not relayable")
+	}
+	downstream, err := target.GetPathSnapshot(path)
+	if err != nil || len(downstream.Records) != 1 ||
+		RecordHash(downstream.Records[0]) != RecordHash(record) ||
+		downstream.PathMeta.StateRoot != snapshot.PathMeta.StateRoot {
+		t.Fatalf("downstream snapshot=%#v err=%v", downstream, err)
 	}
 }

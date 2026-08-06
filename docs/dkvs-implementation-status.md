@@ -1,150 +1,122 @@
 # DKVS Implementation Status
 
-更新时间：2026-07-25
+更新时间：2026-08-06  
+性质：非规范性实现状态；协议与行为以 [`dkvs-design.md`](./dkvs-design.md) 为准。
 
-本文记录当前 SatoshiNet 内置 indexer DKVS 对 `DKVS_Requirements_and_Design_v0.6.md` 的实现状态。它是项目级实现说明，不替代对外协议文档。
+## 当前已实现
 
-## 已实现
+### DKVSRecord 与生命周期
 
-- DKVS core record / key / validator / selector / store，使用 SatoshiNet indexer KVDB，数据目录为 indexer DB 下的 `dkvs` 子库。
-- key namespace 校验：`/sys`、`/name`、`/svc`、`/personal`、`/mail`、`/blob`、`/tmp`，包含长度、segment 字符集、namespace shape 和 tombstone 基础规则；`/name` 按文档限定为 `/name/<name>` 单段；`/sys` 按 v1 文档限定为 `/sys/params`、`/sys/checkpoint/<epoch>`、`/sys/snapshot/<epoch>`、`/sys/miner/<miner_id>`、`/sys/pool/<pool_id>`。
-- record 签名、TTL / expiry、record size、seq / expiry / hash 选择规则。
-- record hash 反查索引随 active record 替换同步更新，避免同 key 旧 record hash 索引长期残留。
-- `/personal/<account_id>/...` 使用 `sha256(pubkey)` owner 校验。
-- `/name/<name>`、`/svc/<service_name>/...` 通过 `DIDResolver` 接口校验当前 signing key 或 owner p2tr address；默认 resolver 不可用，因此主网未配置 resolver 时默认不可写。已存在同 key record 后，后续同 pubkey 写入不再重复调用 resolver；pubkey 变更时才调用 resolver，并允许当前 owner 低 seq 覆盖旧 pubkey record。
-- DKVS 提供本地 `NotifyNameTransfers` / `NotifyDKVSNameTransfers` 接口，供 indexer 在观察到一个区块内的 name 转移后通知 DKVS。通知会持久化 dirty 标记，使对应 `/name/<name>` 下次写入即使 pubkey 未变化也必须重新 resolver；resolver 校验通过后清除标记，即使 selector 最终判定为 no-op，resolver 失败则保留。
-- DKVS 提供可选 `HTTPDIDResolver` 适配器，支持按 `GET /name/<name>`、`GET /service/<service>` 读取 direct 或 `{code,msg,data}` 包装的 DID identity JSON；identity 可返回 `signing_keys`，也可返回 `owner_addresses` / `address`。
-- DKVS 提供 `L1NSResolver` 适配器，支持接入 L1 indexer `GET /ns/name/:name`，使用 `data.address` 作为 owner，按 record pubkey 派生 p2tr 地址并与 owner address 对比；SatoshiNet 节点启动时若配置了 L1 indexer host/proxy，会把该 endpoint 注入为 DKVS L1 NS resolver base URL。
-- DKVS resolver / fee verifier / system verifier 支持初始化配置和运行期注入：`indexer.Config.DKVS`、`SetDKVSResolver`、`SetDKVSFeeVerifier`、`SetDKVSSystemVerifier`；运行期传入 nil 会恢复保守默认。嵌入式 indexer 配置层还支持 `ResolverL1NSBaseURL` / `ResolverHTTPBaseURL` / `FeeVerifierHTTPEndpoint` / `SystemVerifierHTTPEndpoint`，在未显式注入接口时自动构造 `L1NSResolver` / `HTTPDIDResolver` / `HTTPFeeVerifier` / `HTTPSystemVerifier`。
-- `/mail/<mailbox_id>/msg/<sender_id>/<msg_id>` 允许发件人投递；`mailbox_id` 和 `sender_id` 都是 `hex(sha256(pubkey))`，路径中的 `sender_id` 必须匹配 record signer。AUTOPAY 容量按 signer 派生的 p2tr delegate 扣减，收件人不承担消息保存费用；收件人可签名免费删除消息并释放发件人容量。消息同时受收件箱总 quota 和每 sender quota / TTL / size 限制。
-- `/mail/<mailbox_id>/share/<package_id>/<share_id>` 要求 mailbox owner 写入，受 share quota / TTL / size 限制。
-- `/sys/*` 通过 `SystemVerifier` 授权；默认拒绝普通写入。
-- `/tmp/<random_id>` 作为短期临时数据，要求非零 TTL，默认 TTL 上限 24 小时，受可配置单条 size 限制。
-- `/blob/<account_id>/<blob_key>` 是 owner-scoped 单记录大 value；仅 account owner 可写，普通 value 上限 16 KiB，Blob value 硬上限 1 MiB。Blob 同时支持 AUTOPAY 和受节点 policy 限制的 FREE_LOCAL，不存在 manifest/chunk 子结构。
-- DKVS fee proof 接口和 ONESHOT / LEASE / FREE_LOCAL / AUTOPAY 紧凑二进制 proof helper；record 签名直接覆盖 proof，proof 不重复携带 record hash、key hash、size、expiry、namespace 或独立签名。AUTOPAY verifier 读取全局 `autopay.tc` 合约 state，并按 signer 的 p2tr delegate 独立校验 active、余额和 full-size record 容量。
-- `FREE_LOCAL` 是显式签名 fee proof：节点通过 `FreeLocalCachePolicy` 限制最大 TTL、每 signer record/bytes 和全节点 record/bytes。免费 record 只在接受写入的钱包连接节点保存，超过配额拒绝而不静默淘汰；过期后由既有清理器删除。
-- DKVS 提供可选 `HTTPFeeVerifier` 适配器，可把 `record_hash`、`key_hash`、namespace、record size、expiry height 和 raw fee proof 转发给外部 DKVS Pool verifier service；不默认启用，不定义合约语义。
-- DKVS 提供可选 `HTTPSystemVerifier` 适配器，可把 `/sys/*` key 和 record signer pubkey 转发给外部 system authority service；不默认启用，不定义 system signer 治理语义。
-- Checkpoint / snapshot 是未签名的本地计算结果，用于节点视图对账、调试和 snapshot 校验；embedded indexer 不持有 checkpoint/snapshot system signer 私钥，也不自动发布 signed `/sys/*` checkpoint record。
-- DKVS 单测显式覆盖默认非免费策略下无 fee proof 写入失败，避免主网节点误开放免费写入；测试网默认策略使用 AUTOPAY verifier，主网不凭默认值放行，测试环境或本地策略仍可通过 `AllowFreeLocal` 或自定义 `FeeVerifier` 开启。
-- 6 个原生 wire 消息：`dkvsnotify`、`dkvsinv`、`dkvsget`、`dkvsdata`、`dkvssyncreq`、`dkvssyncres`。`dkvsnotify` 使用 1 字节 event type 并直接内联完整 DKVSRecord；普通 record 维持 16 KiB 边界，单记录 Blob 允许 1 MiB value，所有 data/sync 消息同时受总 payload bytes 限制。
-- peer listener 和 serverPeer DKVS 消息分发；miner 新连接后通过带 session id 的 sync request / response 分页同步 active records，分页受 record 数量和 payload bytes 双重限制；`FREE_LOCAL` record 与其显式 delete command 不会进入 notify/get/data、miner merge sync、普通节点 mirror sync、checkpoint 或 snapshot，远端收到该类型一律拒绝。
-- REST API：
-  - `POST /v3/dkvs/records`
-  - `POST /v3/dkvs/records/cas`
-  - `POST /v3/dkvs/records/batch-cas`
-  - `GET /v3/dkvs/records?key=...`
-  - `GET /v3/dkvs/records?hash=...`
-  - `GET /v3/dkvs/records/prefix?prefix=...&start=...&limit=...`
-  - `GET /v3/dkvs/usage?prefix=...`
-  - `GET /v3/dkvs/config`
-  - `POST /v3/dkvs/tombstone`
-  - `GET /v3/dkvs/checkpoint`
-  - `GET /v3/dkvs/snapshot`
-  - `POST /v3/dkvs/snapshot`
-  - `POST /v3/dkvs/prune`
-  - `POST /v3/dkvs/subscriptions`
-  - `DELETE /v3/dkvs/subscriptions`
-  - `GET /v3/dkvs/subscriptions`
-- Checkpoint / snapshot 生成，snapshot import 会先校验 root / count / size / namespace roots，再逐条走 remote record 校验落库；SDK 提供 snapshot root 本地验证 helper。
-- DKVS prefix usage 统计，返回指定 prefix 下当前 active record 数量和总 record size，可用于 `/personal`、`/svc`、mailbox、blob 等命名空间的本地用量展示和 quota 辅助判断。
-- 非共识 checkpoint / snapshot 通过现有 API 导出/导入，不塞入单条 signed DKVS record，也不自动对接 anchor 服务。
-- 普通节点本地 subscription 状态和 notify 过滤；非 miner 只保存订阅范围内的 record。
-- 普通节点如果本地已有 DKVS subscription，连接 miner peer 时会用现有 `MsgDKVSSyncRequest/Response` 拉取当前 active records，并在本地按 subscription 过滤落库；不扩展 wire 协议。
-- 普通节点运行中新增 DKVS subscription 后，会通过 server callback 对已连接 miner peers 发送现有 `MsgDKVSSyncRequest`，收到 response 后仍按本地 subscription 过滤落库；重复订阅不会重复触发远端 sync；不扩展 wire 协议。
-- `MsgDKVSSyncRequest/Response` 使用 session id 约束分页会话，并支持 subscription filters；miner 只接受其他已识别 miner 的无过滤全量同步，普通节点必须携带 key / prefix / mailbox / service filters，最多 256 个订阅。
-- DKVS 包内集成测试覆盖普通节点按 exact key 和 prefix 订阅后先用 filtered sync 拉取当前数据、过滤掉未订阅 key/prefix，再接收 prefix 下新增 record。
-- DKVS 包内集成测试覆盖普通节点订阅 `/mail/<mailbox_id>` 后先用 filtered sync 拉取 mailbox 当前数据、过滤掉其他 mailbox，再接收新增 mailbox message。
-- DKVS 包内集成测试覆盖普通节点订阅 `/svc/<service_name>` 后先用 filtered sync 拉取 service 当前数据、过滤掉其他 service，再接收新增 service record；权限仍走 `DIDResolver`，默认未配置 resolver 时 `/svc` 不开放。
-- 过期 record 手动 prune 和 indexer 低频自动 prune。
-- DKVS Go helper / SDK-style builder：record signing、tombstone、renewal record、fee proof 构造、personal/name/service/mail/blob/tmp key builder、单条 record 本地验证、prefix/subscription/directory record set 本地验证、单记录 Blob builder，以及单 key CAS / 原子 batch-CAS 类型。
-- `sat20wallet/sdk` 的 SatoshiNet DKVS REST client 覆盖 records、record hash 精确读取、verified get/list、signed put/tombstone/renewal、personal/name/service/mail helpers、AUTOPAY/FREE_LOCAL 单记录 Blob、单 key CAS、原子 batch-CAS，以及标准 RPC directory sync/watch；RGB11 snapshot+head 和大 payload+mailbox locator 使用同一 batch-CAS 原子提交。
-- `sat20wallet/sdk` 新增 DKVS 应用级 Go helper，覆盖 wallet recovery encrypted backup、wallet recovery renewal、guardian mailbox share、offline IM message、service authenticity record 的 record 构造、写入、读取和基础 value 校验；这些 helper 只组合现有 DKVS REST client，不新增 wire command 或链语义。
-- `sat20wallet/sdk` 新增可执行 Go examples，覆盖钱包恢复、Guardian mailbox、离线 IM、服务正版检测和 record 级 name 解析样本；示例使用 fake HTTP，不访问外网，不依赖真实 DID resolver。
-- `docs/dkvs-pwa-api-examples.md` 新增 PWA / dApp REST API 调用样本，覆盖 put/get/tombstone、prefix list、usage、subscription、mailbox、blob、checkpoint/snapshot、name/service record 读取；样本明确 record 签名和 fee proof 应由钱包/SDK 完成，不把 REST 样本等同于前端 UI。
-- `sat20wallet/pwa` 新增 DKVS 开发者工具页 `/wallet/dkvs`，并在 Tools 页面提供入口；UI 支持按 key/hash 查询、prefix 列表、提交已签名 record、提交 tombstone、读取 checkpoint。页面只调用现有 REST API，不在前端臆造 DID、fee proof 或 record 签名逻辑。
-- `docs/dkvs-external-integration-contracts.md` 新增外部集成契约，明确真实 Ordinals DID resolver、DKVS Pool fee verifier 和 `/sys` system verifier 的接口、输入输出、失败模式和主网默认关闭边界。
-- `docs/dkvs-open-decisions.md` 新增剩余开放决策清单，列出 DID resolver、DKVS Pool、checkpoint anchor、PWA UI 的待确认问题、推荐最小接入和代码接入点。
-- `docs/dkvs-requirements-traceability.md` 新增需求追踪矩阵，按总体目标、迁移实现、单元测试、集成测试和开发阶段逐项标注 Done / Partial / Blocked，并列出证据和外部输入需求。
-- Notify event 常量覆盖文档中的 record 事件类型；mailbox message 写入使用 `MAILBOX_MESSAGE`，tombstone 使用 `RECORD_TOMBSTONE`，同 key / 同 seq / 同 owner / 同 value 的 expiry 延长写入使用 `RENEWAL`。过期 prune 不产生可授权远端删除的消息，因此不传播 `EXPIRED`。
-- DKVS core 提供 `NotifyEvent` 构造、JSON encode/decode helper；事件只包含 `event_type` 和紧凑 `data`，record 类 data 是完整 DKVSRecord 编码。key、record hash、seq、expiry、size、flags 都从 record 推导，wire 不再携带冗余 key hash 或 source node。接收端直接完整验证并落库，不再为常规 notify 发起 get/data 往返。
+- `Seq` 是单 key revision。
+- record 已删除 `PathGeneration` 和独立 `ExpiryHeight`。
+- `IssueHeight` 使用 SatoshiNet 可信区块高度。
+- `TTL` 单位为区块；派生到期高度为 `IssueHeight + TTL`。
+- `TTL=0` 表示没有固定 record 租期，用于 AUTOPAY。
+- Unix 时间不参与 record 有效性、PathMeta 或 StateRoot。
+- wire codec、签名 hash、record hash、renewal、expiry heap、fee usage 和客户端验证均已切换到当前格式。
 
-## 保持主网兼容的边界
+### PathMeta、CAS 与同步
 
-- 未引入 `github.com/libp2p/*`。
-- 未修改交易、区块、签名、共识、mempool、mining 或 txscript 语义。
-- 未修改 `go.mod` / `go.sum`。
-- `/name`、`/svc`、`/sys` 在未注入真实 resolver / verifier 前仍默认关闭。
-- DKVS wire command 保持当前 6 个原生命令；P2P 仅用于节点复制。应用通过 RPC directory sync/watch 同步指定目录，不复用 P2P 会话语义。
-- 未发布的 manifest/chunk Blob 方案已删除，不保留读取、迁移或 wire 兼容分支。
+- PathMeta generation 由节点在提交 mutation/batch 时维护，不存入 record。
+- StateRoot 覆盖网络可见 active records 和 delete floors。
+- FREE_LOCAL 不进入 network PathMeta、snapshot 或 P2P。
+- AUTOPAY 停止当前区块支付后，记录可保留本地 grace，但退出 network path view。
+- 单 key CAS 和 batch-CAS 使用 expected PathMeta/record 条件。
+- standalone notify 只触发 stale/path repair，不根据到达顺序推测 generation。
+- 完整 path snapshot 会验证 record、fee、root、count、size、MinExpiryHeight 和 delete floors，并原子替换本地 path。
+- snapshot 应用后恢复 AUTOPAY retention cache，并可向下游重新广播 active records。
+- 同 peer 多 stale path FIFO 排队；支持去重、分页 cursor/session、请求超时、终态失败释放和延迟重试。
 
-## 已验证
+### Namespace 与存储策略
 
-- `go test ./wire ./peer ./indexer/indexer ./indexer/indexer/dkvs ./indexer/rpcserver/indexer ./indexer/share/indexer`
-- `go test ./...`
-- `go test ./indexer/indexer/dkvs -run '^TestNotifyEventEncoding$' -count=1`
-- `go test ./indexer/indexer/dkvs -run '^TestDefaultFeeVerifierRejectsMissingProof$' -count=1`
-- `go test ./indexer/indexer/dkvs -run '^TestOrdinaryNodeKeyAndPrefixSubscriptionSyncAndNotify$' -count=1`
-- `go test ./indexer/indexer/dkvs -run '^TestOrdinaryNodeMailboxSubscriptionSyncAndNotify$' -count=1`
-- `go test ./indexer/indexer/dkvs -run '^TestOrdinaryNodeServiceSubscriptionSyncAndNotify$' -count=1`
-- `go test ./indexer/indexer/dkvs -run '^(TestL1NSResolverUsesOwnerAddress|TestExistingNameRecordSkipsResolverForSamePubKey|TestNameOwnerRotationAllowsLowerSeqReplacement|TestServiceOwnerRotationAllowsLowerSeqReplacement|TestNameTombstonePermissionAllowsExistingOwnerAndNewOwnerReplace)$' -count=1`
-- `go test ./indexer/indexer/dkvs -run '^(TestNameTransferNotifyForcesNextNameResolve|TestNameTransferNotifyPersistsDirtyMarker|TestExistingNameRecordSkipsResolverForSamePubKey)$' -count=1`
-- `go test ./indexer/indexer/dkvs -run '^TestHTTPSystemVerifier$' -count=1`
-- `go test ./indexer/indexer -run '^(TestPublishDKVSSystemRecordsOnBlock|TestDKVSConfigMergesExternalIntegrations|TestPruneExpiredDKVSOnBlock)$' -count=1`
-- `go test ./indexer/indexer -run '^TestDKVSConfigMergesExternalIntegrations$' -count=1`
-- `sat20wallet/sdk`: `go test ./wallet -run '^TestSatsNetDKVSClient' -count=1`
-- `sat20wallet/sdk`: `go test ./... -run '^$'`
-- `sat20wallet/pwa`: `npm run compile`
-- `sat20wallet/pwa`: `npm run build:skip-check`
-- `rg "github.com/libp2p" go.mod go.sum indexer wire peer server.go` 无命中。
-- `git diff -- go.mod go.sum blockchain mempool mining txscript chaincfg` 无输出。
+- 支持 `/sys`、`/name`、`/svc`、`/personal`、`/mail`、`/blob`、`/tmp`。
+- `/personal`、`/blob` 使用 account owner 校验。
+- `/name`、`/svc` 使用可注入 resolver。
+- `/sys` 使用可注入 system verifier。
+- mailbox message 按 sender 子 path append，receiver 可 tombstone。
+- Blob 是单 record opaque value，当前硬上限 1 MiB。
+- FREE_LOCAL 有有限 TTL、endpoint affinity 和本地 quota。
+- AUTOPAY 按 signer/payer delegate、当前区块支付、余额和容量验证。
 
-说明：`sat20wallet/sdk` 的完整 `go test ./wallet` 当前会运行既有网络型测试并访问 `apiprd.sat20.org`，本轮在多次 EOF / TLS handshake timeout 后手动中断；新增 DKVS client 测试已用精确 `-run` 验证，全包用 `-run '^$'` 做编译检查。
+### P2P 与 RPC
 
-## 未闭环，需要规格或跨模块设计
+- 原生 DKVS P2P notify/inventory/get/data/sync 消息已接入 peer/server。
+- miner 可全量同步；普通节点按 key/prefix/mailbox/service subscription 同步。
+- directory/path sync、watch、CAS、batch-CAS、record、prefix、usage、blob、subscription、checkpoint/snapshot REST API 已实现。
+- P2P path repair 和 RPC path snapshot 共用确定性验证逻辑。
 
-开放决策清单见 `docs/dkvs-open-decisions.md`。
+### Wallet SDK 本地副本
 
-### Ordinals DID resolver
+- `dkvsManager` 是 SDK 唯一 DKVS 协调层。
+- Wallet 启动时注册 path、启动 worker，并主动执行首轮同步。
+- watch 变化或异常立即撤销对应 scope ready。
+- 完整同步成功后原子替换 confirmed replica 并恢复 ready。
+- read/write 同时检查当前 session ready 和持久化 path session 状态。
+- prepared/inflight/conflict/error/stale 或首轮同步未完成时 fail-closed。
+- 写入前使用最新本地 confirmed value；CAS 冲突后重新同步并由应用重算 mutation。
+- 旧单-record outbox 已删除；managed path 使用完整 batch outbox 和 path preconditions。
 
-当前已实现 resolver 接口、L1 `/ns/name/:name` owner-address resolver、record pubkey p2tr address 校验，以及本地 name transfer notify dirty 标记。仍需继续明确的规则：
+### 账户管理统一托管数据
 
-- canonical name / name_id 的来源；
-- DID active 状态判断；
-- DKVS signing key 声明和轮换方式；
-- service name 与系统预置 service key 的来源；
-- owner 变化与历史 record 失效的最终协议确认。
+- 创建或导入第一个 mnemonic wallet 时，账户管理自动启用。
+- `RecoveryConfigured` 与 `Active` 分离；未配置恢复材料时仍进行临时账户数据管理。
+- 账户 catalog 枚举所有 mnemonic wallets 和全部启用 subaccounts。
+- 通用 `AccountManagedDataProvider` 接口已实现，未来模块无需修改账户同步核心。
+- provider payload 按 provider/scope 隔离并统一加密。
+- account state 与 `account-managed-data` blob 通过 root account batch-CAS 写入。
+- 无 delegate 时使用 FREE_LOCAL；激活 AUTOPAY 后统一改写为 TTL=0 并回读验证。
+- provider import 先拒绝未知 provider，再全量 Validate，最后统一 Import。
+- 多设备对不同 provider/scope 的修改支持三方合并；同 provider/scope 冲突 fail-closed。
+- wallet/subaccount catalog 变化会标记 managed data dirty；移除 scope 会删除对应 provider items。
 
-这些信息应来自 L1 Ordinals DID / SNS / referrer 等索引状态或新的 DID 协议字段，不能在 SatoshiNet DKVS 内部臆造。
+### RGB11 接入
 
-当前已在 `docs/dkvs-external-integration-contracts.md` 固化 resolver 接口契约：`ResolveName` / `ResolveService` 必须返回 canonical name、name_id、当前 signing keys 或 owner addresses 和 active 状态；resolver 不可用或 DID 缺失必须保持拒绝写入。
+- RGB11 已注册为内置 account-managed provider：`rgb11`。
+- 独立 RGB permanent head/snapshot、auto-backup policy、activation API 和迁移命令已删除。
+- RGB 状态变更只通知账户管理 provider dirty，不直接写永久 DKVS。
+- 最小恢复包仅包含：当前 allocation proof、最小 carrier、必要对象/receipt、未终结发送/接收、active receive request 和 reservation。
+- 余额、完成历史、ticker 展示、scan/confirmation/raw tx 等派生缓存不进入账户托管数据。
+- 空 RGB scope 不产生 payload；缺失 payload 在导入时权威清理旧本地 RGB 状态。
+- RGB capability、delivery、ACK/NACK、mailbox relay 仍使用 DKVS，但全部为有限 TTL FREE_LOCAL 瞬态记录，不使用 AUTOPAY。
 
-本轮核查过当前 SatoshiNet referrer / referree 数据：`ReferrerInfo` 只有 `Name` 和 `BindBlock`，绑定逻辑是“地址绑定推荐人名字”，没有 DID owner、active 状态、DKVS signing key 或 key rotation 语义，因此不能安全接成 `/name` / `/svc` 的默认 resolver。
+### PWA/WASM
 
-### DKVS Pool 合约与真实 fee proof
+- PWA 不直接管理 DKVS record、Seq、PathMeta 或 fee proof。
+- 账户设置页显示账户管理始终启用，并单独显示恢复/AUTOPAY 配置状态。
+- RGB 页面已移除独立备份状态、模式和 retention 展示。
+- WASM 已移除 RGB 独立 activation 返回字段和瞬态 AUTOPAY 选项。
+- transient RGB TTL 使用区块数。
 
-当前已接入 delegate 模式 AUTOPAY template contract verifier：全网使用配置的同一个 `autopay.tc` 合约；record 提交 AUTOPAY proof 后，节点通过 `getcontractstate` 检查合约、service、recipient 和 fee asset，并按 record signer 派生的 p2tr delegate 独立检查 active、余额和每区块 payment。容量以 `(contract, delegate)` 隔离并换算为可持有的 full-size active record 数量，不同委托人不能互相占用。仍缺：
+## 当前验证
 
-- 主网 DKVS AUTOPAY 全局合约地址、service、recipient、fee asset 与 full record fee 参数；
-- 普通用户 delegate funding / 续费的产品流程和钱包 UX；
-- miner 收益分配规则。
+已执行并通过：
 
-在这些规格明确前，不能把测试网默认参数宣称为主网费用策略。
+- SatoshiNet DKVS 全量测试；
+- DKVS P2P path repair、timeout、queue、AUTOPAY retention 定向测试；
+- Wallet `go test ./wallet/...`；
+- Wallet SDK `go build ./...`；
+- WASM `make all`；
+- PWA `npm run compile`；
+- PWA production bundle；
+- Account Management AUTOPAY 本地三节点 E2E；
+- Account Management 生命周期与多设备并发 E2E；
+- RGB sender/receiver 最小恢复包跨设备恢复测试；
+- 通用 provider 注册、两阶段 import、多 scope merge、removed scope 测试；
+- 两钱包、五子账户 RGB provider catalog/export/authoritative clear 测试。
 
-当前已在 `docs/dkvs-external-integration-contracts.md` 固化 fee verifier 接口契约：AUTOPAY verifier 校验 template contract state 和容量；ONESHOT / LEASE 仍作为后续 Pool proof 语义保留；`JSONFeeVerifier` 仍只作为结构化本地 verifier。
+## 部署边界
 
-### 普通节点远端订阅同步边界
+当前开发格式不兼容旧数据库和旧节点：
 
-当前用 `MsgDKVSSyncRequest` filters 支持远端 key / prefix / mailbox / service 过滤同步，并用 session id 阻止 unsolicited response、跨会话 cursor 和不前进分页。无过滤全量同步只允许已识别 miner；普通节点最多配置 256 个订阅。节点每分钟执行一次反熵同步，弥补 notify 丢失、短暂断线和分页并发更新。
+- 必须同时升级 SatoshiNet 节点、Wallet SDK、WASM 和 PWA；
+- 测试环境需清理旧 DKVS/Wallet/PWA 数据；
+- 禁止新旧 record codec 或旧 RGB snapshot 机制混跑；
+- 不提供迁移、fallback 或双写。
 
-### SDK 和应用样本
+## 尚未闭环
 
-当前已有 SatoshiNet DKVS 包内 Go helper，`sat20wallet/sdk` 里的 REST client、signed put/tombstone、personal、key/prefix 订阅、mailbox/blob/name/service record 级便捷封装，以及 Go SDK 应用级 helper：wallet recovery encrypted backup、guardian mailbox share、offline IM message、service authenticity record。PWA 侧已有 DKVS 开发者工具页，覆盖 key/hash 查询、prefix 列表、signed record/tombstone 提交和 checkpoint 读取。
-
-真实三节点 e2e 已使用 mnemonic 派生的 key-path p2tr actor 部署 AUTOPAY 合约，写入 `/name/8888.btc`，再模拟 L1 name 转移并由新 owner 低 seq 覆盖旧 owner record，验证 core/miner/bootstrap 收敛。
-
-仍未闭环的是真实 Ordinals DID name 主网解析样本和主网 AUTOPAY fee proof 写入样本。SDK 已提供 record 级 `ResolveNameRecord(name)` 和可执行 Go example，会返回 canonical input、`NormalizeNameID(name)` 和 `/name/<name_id>` DKVS record；真实 DID owner / signing key / active 状态解析仍依赖 Ordinals DID resolver 规格，不在 SDK/PWA 内臆造。
-
-### Checkpoint 链上锚定
-
-当前已实现非共识 checkpoint / snapshot API，用于节点视图对账、调试和 snapshot 校验。checkpoint / snapshot 是未签名的本地计算结果，不作为 `/sys/*` signed DKVS record 发布，embedded indexer 也不持有 checkpoint 签名私钥。仍未实现真实链上 anchor；anchor 交易或系统合约格式、epoch 规则、发布者权限和失败处理规格仍需单独设计。
+- 主网 `/name`、`/svc` resolver 和 system verifier 治理参数；
+- 主网 AUTOPAY 合约地址、fee asset、recipient 和 miner 收益规则；
+- account-managed blob 的未来分片/扩容策略；当前使用一个 root-owned blob，硬上限受 Blob policy 约束；
+- 逻辑删除中间 subaccount 的产品语义；当前派生 index 为 append-only，未来由账户 catalog 表达 deleted scope；
+- RGB 跨多个本地 store 的通用 operation journal；现有 minimum recovery、reservation owner 和 reconciliation 已覆盖主要崩溃恢复，但生产前仍应做更多 failpoint 测试。

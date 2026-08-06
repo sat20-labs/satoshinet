@@ -37,6 +37,14 @@ func (i *Indexer) isLocalOnlyRecord(record *wire.DKVSRecord) bool {
 	return isAutopayRecord(record) && !i.paidRecordRelayable(record)
 }
 
+// networkPathRecordVisible is the single inclusion rule for PathMeta,
+// PathSnapshot and P2P relay. AUTOPAY records remain locally readable during
+// grace, but enter the network-comparable path view only while the current
+// block payment is verified.
+func (i *Indexer) networkPathRecordVisible(record *wire.DKVSRecord) bool {
+	return record != nil && !IsTombstone(record.Flags) && !i.isLocalOnlyRecord(record)
+}
+
 func (i *Indexer) relayableRecords(records []*wire.DKVSRecord) []*wire.DKVSRecord {
 	filtered := make([]*wire.DKVSRecord, 0, len(records))
 	for _, record := range records {
@@ -74,7 +82,7 @@ func (i *Indexer) ensureFreeLocalUsageLocked(height, now uint64) error {
 		return err
 	}
 	for _, record := range records {
-		if record == nil || IsExpired(record, height, now) || !isFreeLocalRecord(record) {
+		if record == nil || IsExpired(record, height) || !isFreeLocalRecord(record) {
 			continue
 		}
 		parsed, err := ParseKey(record.Key)

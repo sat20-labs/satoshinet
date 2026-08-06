@@ -131,8 +131,7 @@ func (i *Indexer) writeStateStillCurrentLocked(key string, parsed ParsedKey, sna
 }
 
 func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed ParsedKey) error {
-	if record != nil && isAutopayRecord(record) &&
-		(record.TTL != 0 || record.ExpiryHeight != 0) {
+	if record != nil && isAutopayRecord(record) && record.TTL != 0 {
 		return ErrInvalidFeeProof
 	}
 	if verifier == nil {
@@ -147,7 +146,7 @@ func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed Pa
 	keyHash := KeyHash(record.Key)
 	var keyHash32 [32]byte
 	copy(keyHash32[:], keyHash[:])
-	return verifier.VerifyFeeProof(hash32, keyHash32, parsed.Namespace, RecordSize(record), record.ExpiryHeight, record.FeeProof)
+	return verifier.VerifyFeeProof(hash32, keyHash32, parsed.Namespace, RecordSize(record), RecordExpiryHeight(record), record.FeeProof)
 }
 
 func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolver, system SystemVerifier) error {
@@ -361,7 +360,7 @@ func (i *Indexer) validatePreparedFeeCapacityLocked(record *wire.DKVSRecord, pre
 	return nil
 }
 
-func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64, allowExpiredTombstone, verifyFee bool, feeVerifier FeeVerifier) (ParsedKey, error) {
+func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height uint64, allowExpiredTombstone, verifyFee bool, feeVerifier FeeVerifier) (ParsedKey, error) {
 	var parsed ParsedKey
 	if record == nil || record.Version != Version {
 		return parsed, ErrInvalidRecord
@@ -374,15 +373,15 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height, now uint64,
 	if err := validateRecordSizeForParsed(record, parsed); err != nil {
 		return parsed, err
 	}
-	if record.Flags&^FlagTombstone != 0 || record.IssueTime == 0 ||
-		(now != 0 && record.IssueTime > now+MaxFutureIssueTimeSkew) {
+	if record.Flags&^FlagTombstone != 0 ||
+		(height != 0 && record.IssueHeight > height) ||
+		(record.TTL != 0 && RecordExpiryHeight(record) == 0) {
 		return parsed, ErrInvalidRecord
 	}
-	if verifyFee && !IsTombstone(record.Flags) && isAutopayRecord(record) &&
-		(record.TTL != 0 || record.ExpiryHeight != 0) {
+	if verifyFee && !IsTombstone(record.Flags) && isAutopayRecord(record) && record.TTL != 0 {
 		return parsed, ErrInvalidFeeProof
 	}
-	if IsExpired(record, height, now) && !(allowExpiredTombstone && IsTombstone(record.Flags)) {
+	if IsExpired(record, height) && !(allowExpiredTombstone && IsTombstone(record.Flags)) {
 		return parsed, ErrExpiredRecord
 	}
 	if err := VerifySignature(record); err != nil {

@@ -2,6 +2,7 @@ package dkvs
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"sync/atomic"
 
@@ -14,8 +15,8 @@ type validatedPathSnapshot struct {
 	path          string
 	meta          *PathMeta
 	active        []*wire.DKVSRecord
-	tombstones    []*wire.DKVSRecord
 	floors        []DeleteFloor
+	retentions    map[string]*PaidRecordRetention
 	serverTimeMS  uint64
 	policyVersion uint64
 }
@@ -78,7 +79,7 @@ func (i *Indexer) GetPathSnapshot(path string) (*PathSnapshot, error) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	records := make([]*wire.DKVSRecord, 0, len(active)+len(states))
+	records := make([]*wire.DKVSRecord, 0, len(active))
 	for _, record := range active {
 		if record != nil && !i.isLocalOnlyRecord(record) {
 			records = append(records, cloneRecord(record))
@@ -86,12 +87,7 @@ func (i *Indexer) GetPathSnapshot(path string) (*PathSnapshot, error) {
 	}
 	floors := make([]DeleteFloor, 0, len(states))
 	for _, key := range keys {
-		state := states[key]
-		if state.Record != nil && deleteRecordForRelay(state, now) != nil {
-			records = append(records, cloneRecord(state.Record))
-			continue
-		}
-		floors = append(floors, state.publicFloor(key))
+		floors = append(floors, states[key].publicFloor(key))
 	}
 	sort.Slice(records, func(a, b int) bool {
 		if records[a].Key == records[b].Key {
@@ -129,9 +125,6 @@ func validateRelayableExpiry(record *wire.DKVSRecord) error {
 	if isFreeLocalRecord(record) {
 		return ErrFreeLocalNotRelayable
 	}
-	if record.PathGeneration == 0 || record.TTL != 0 {
-		return ErrInvalidRecord
-	}
 	return nil
 }
 
@@ -139,11 +132,14 @@ func validateSnapshotPermission(record *wire.DKVSRecord, parsed ParsedKey, valid
 	if record == nil {
 		return ErrInvalidRecord
 	}
-	if parsed.Namespace == "mail" {
-		return validateMailWritePermissionWith(parsed, record, nil, validators.resolver, validators.system)
-	}
+	// Account-scoped records are signed by the x-only account identity and
+	// intentionally carry no PubKey. Validate that identity before applying
+	// namespace-specific rules written for traditional pubkey records.
 	if len(record.PubKey) == 0 {
 		return ValidateRecordIdentity(record, parsed)
+	}
+	if parsed.Namespace == "mail" {
+		return validateMailWritePermissionWith(parsed, record, nil, validators.resolver, validators.system)
 	}
 	return validatePermissionWith(parsed, record.PubKey, validators.resolver, validators.system)
 }
@@ -174,9 +170,9 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		return validatedPathSnapshot{}, ErrInvalidSnapshot
 	}
 	validators := i.snapshotValidators()
-	now := currentUnixMilli()
 	viewHeight := snapshot.PathMeta.ViewHeight
 	selected := make(map[string]*wire.DKVSRecord, len(snapshot.Records))
+	retentions := make(map[string]*PaidRecordRetention, len(snapshot.Records))
 	for _, raw := range snapshot.Records {
 		record := cloneRecord(raw)
 		parsed, err := recordBelongsToPath(record, path)
@@ -186,19 +182,27 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		if err := validateRelayableExpiry(record); err != nil {
 			return validatedPathSnapshot{}, err
 		}
-		if _, err := validateParsedCoreWithVerifier(record, viewHeight, now, true, false, nil); err != nil {
+		if _, err := validateParsedCoreWithVerifier(record, viewHeight, true, false, nil); err != nil {
 			return validatedPathSnapshot{}, err
 		}
 		if err := validateSnapshotPermission(record, parsed, validators); err != nil {
 			return validatedPathSnapshot{}, err
 		}
-		if !IsTombstone(record.Flags) {
-			if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
-				return validatedPathSnapshot{}, err
-			}
+		if IsTombstone(record.Flags) {
+			return validatedPathSnapshot{}, ErrInvalidSnapshot
+		}
+		if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
+			return validatedPathSnapshot{}, err
+		}
+		retention, err := verifiedPaidRetentionAfterFeeVerification(
+			record, parsed, validators.feeVerifier, viewHeight,
+		)
+		if err != nil {
+			return validatedPathSnapshot{}, err
 		}
 		if previous := selected[record.Key]; previous == nil || CompareRecords(previous, record) < 0 {
 			selected[record.Key] = record
+			retentions[record.Key] = retention
 		}
 	}
 	floors := make(map[string]DeleteFloor, len(snapshot.DeleteFloors))
@@ -213,23 +217,15 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		floors[floor.Key] = floor
 	}
 	active := make([]*wire.DKVSRecord, 0, len(selected))
-	tombstones := make([]*wire.DKVSRecord, 0, len(selected))
 	for key, record := range selected {
-		if floor, ok := floors[key]; ok {
-			if floor.FloorSeq > record.Seq ||
-				(floor.FloorSeq == record.Seq && floor.EffectiveHash != RecordHash(record)) {
-				return validatedPathSnapshot{}, ErrInvalidSnapshot
-			}
-			delete(floors, key)
+		if _, deleted := floors[key]; deleted {
+			return validatedPathSnapshot{}, ErrInvalidSnapshot
 		}
-		if IsTombstone(record.Flags) {
-			tombstones = append(tombstones, record)
-		} else if !IsExpired(record, viewHeight, now) {
+		if !IsExpired(record, viewHeight) {
 			active = append(active, record)
 		}
 	}
 	sort.Slice(active, func(a, b int) bool { return active[a].Key < active[b].Key })
-	sort.Slice(tombstones, func(a, b int) bool { return tombstones[a].Key < tombstones[b].Key })
 	orderedFloors := make([]DeleteFloor, 0, len(floors))
 	for _, floor := range floors {
 		orderedFloors = append(orderedFloors, floor)
@@ -247,20 +243,6 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		computed.ActiveTotalSize += uint64(RecordSize(record))
 		xorPathMetaRoot(&computed.StateRoot, record)
 		updateMinExpiry(computed, record)
-		if record.PathGeneration > visibleGeneration {
-			visibleGeneration = record.PathGeneration
-		}
-	}
-	for _, record := range tombstones {
-		state := &deleteState{
-			FloorSeq: record.Seq, PathGeneration: record.PathGeneration,
-			PubKey: append([]byte(nil), record.PubKey...), Record: record,
-			EffectiveHash: RecordHash(record),
-		}
-		xorDeleteFloorRoot(&computed.StateRoot, record.Key, state)
-		if record.PathGeneration > visibleGeneration {
-			visibleGeneration = record.PathGeneration
-		}
 	}
 	for _, floor := range orderedFloors {
 		state := &deleteState{
@@ -277,15 +259,23 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		computed.ActiveRecords != snapshot.PathMeta.ActiveRecords ||
 		computed.ActiveTotalSize != snapshot.PathMeta.ActiveTotalSize ||
 		computed.MinExpiryHeight != snapshot.PathMeta.MinExpiryHeight {
-		return validatedPathSnapshot{}, ErrPathDiverged
+		return validatedPathSnapshot{}, fmt.Errorf(
+			"%w: path=%s generation=%d visible_generation=%d root=%s want_root=%s records=%d want_records=%d bytes=%d want_bytes=%d min_expiry=%d want_min_expiry=%d snapshot_records=%d floors=%d view_height=%d",
+			ErrPathDiverged, path, computed.Generation, visibleGeneration,
+			computed.StateRoot, snapshot.PathMeta.StateRoot,
+			computed.ActiveRecords, snapshot.PathMeta.ActiveRecords,
+			computed.ActiveTotalSize, snapshot.PathMeta.ActiveTotalSize,
+			computed.MinExpiryHeight, snapshot.PathMeta.MinExpiryHeight,
+			len(snapshot.Records), len(snapshot.DeleteFloors), viewHeight,
+		)
 	}
 	normalizePathMetaAliases(computed)
 	return validatedPathSnapshot{
 		path:          path,
 		meta:          computed,
 		active:        active,
-		tombstones:    tombstones,
 		floors:        orderedFloors,
+		retentions:    retentions,
 		serverTimeMS:  snapshot.ServerTimeMS,
 		policyVersion: validators.policyGeneration,
 	}, nil
@@ -313,6 +303,7 @@ func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
 	}
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
+	retentionRemovals := make([]string, 0, len(current))
 	for _, record := range current {
 		if record == nil || isFreeLocalRecord(record) {
 			continue
@@ -323,6 +314,7 @@ func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
 		if err := batch.Delete(hashDBKey(RecordHash(record))); err != nil {
 			return 0, err
 		}
+		retentionRemovals = append(retentionRemovals, record.Key)
 	}
 	for key, state := range currentFloors {
 		if state != nil && state.LocalOnly {
@@ -343,17 +335,6 @@ func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
 			return 0, err
 		}
 		if err := batch.Put(hashDBKey(hash), []byte(record.Key)); err != nil {
-			return 0, err
-		}
-		applied++
-	}
-	for _, record := range validated.tombstones {
-		state := &deleteState{
-			FloorSeq: record.Seq, PathGeneration: record.PathGeneration,
-			RelayUntil: deleteRelayUntil(now), PubKey: append([]byte(nil), record.PubKey...),
-			Record: record, EffectiveHash: RecordHash(record),
-		}
-		if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
 			return 0, err
 		}
 		applied++
@@ -382,6 +363,13 @@ func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
 	i.resetFreeLocalUsageLocked()
 	i.resetRecordExpiryLocked()
 	atomic.AddUint64(&i.generation, 1)
+	retentionCache := paidRetentionCacheFor(i)
+	retentionCache.remove(retentionRemovals)
+	for _, record := range validated.active {
+		if retention := validated.retentions[record.Key]; retention != nil {
+			retentionCache.set(record.Key, *retention)
+		}
+	}
 	return applied, nil
 }
 

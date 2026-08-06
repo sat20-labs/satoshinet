@@ -70,8 +70,9 @@ func (i *Indexer) setPathStaleLocked(path, peer, retryState string) error {
 	return i.db.Write(pathStatusDBKey(path), encoded)
 }
 
-// PutRemoteV1 applies a relayable record according to its signed path
-// generation. It never derives a generation from arrival order.
+// PutRemoteV1 treats a relayable record as a path-change notification.
+// PathMeta.Generation is not carried by the record, so any non-idempotent
+// update must be resolved by the authenticated full path snapshot flow.
 func (i *Indexer) PutRemoteV1(record *wire.DKVSRecord, peer string) (bool, error) {
 	record = cloneRecord(record)
 	if record == nil {
@@ -81,7 +82,7 @@ func (i *Indexer) PutRemoteV1(record *wire.DKVSRecord, peer string) (bool, error
 		return false, err
 	}
 	if _, err := validateParsedCoreWithVerifier(
-		record, i.currentHeight(), currentUnixMilli(), true, false, nil,
+		record, i.currentHeight(), true, false, nil,
 	); err != nil {
 		return false, err
 	}
@@ -95,7 +96,7 @@ func (i *Indexer) PutRemoteV1(record *wire.DKVSRecord, peer string) (bool, error
 	}
 
 	i.mutex.Lock()
-	meta, status, existing, floor, err := i.pathStateForRecordLocked(record)
+	_, _, existing, floor, err := i.pathStateForRecordLocked(record)
 	if err != nil {
 		i.mutex.Unlock()
 		return false, err
@@ -104,44 +105,7 @@ func (i *Indexer) PutRemoteV1(record *wire.DKVSRecord, peer string) (bool, error
 		i.mutex.Unlock()
 		return false, nil
 	}
-	if record.PathGeneration > meta.Generation+1 || meta.Generation == ^uint64(0) {
-		_ = i.setPathStaleLocked(path, peer, "generation_gap")
-		i.mutex.Unlock()
-		return false, ErrPathGenerationGap
-	}
-	if status.Stale && record.PathGeneration == meta.Generation+1 {
-		i.mutex.Unlock()
-		return false, ErrStaleEndpoint
-	}
-	if record.PathGeneration <= meta.Generation {
-		var current *wire.DKVSRecord
-		if existing != nil {
-			current = existing
-		} else if floor != nil {
-			current = floor.Record
-		}
-		if current == nil {
-			// The visible state for this generation was compacted, expired or is
-			// otherwise incomplete. A single record cannot safely repair it.
-			_ = i.setPathStaleLocked(path, peer, "same_generation_missing_state")
-			i.mutex.Unlock()
-			return false, ErrPathDiverged
-		}
-		if CompareRecords(current, record) >= 0 {
-			i.mutex.Unlock()
-			return false, nil
-		}
-		if record.PathGeneration != current.PathGeneration {
-			_ = i.setPathStaleLocked(path, peer, "historical_generation_conflict")
-			i.mutex.Unlock()
-			return false, ErrPathDiverged
-		}
-	}
+	_ = i.setPathStaleLocked(path, peer, "path_snapshot_required")
 	i.mutex.Unlock()
-
-	updated, _, _, _, err := i.put(record, true)
-	if err != nil {
-		return false, err
-	}
-	return updated, nil
+	return false, ErrPathDiverged
 }

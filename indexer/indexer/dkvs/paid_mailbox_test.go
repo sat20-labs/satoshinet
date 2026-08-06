@@ -78,7 +78,7 @@ func TestPaidMailboxShareUsesContinuousRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.TTL != 0 || stored.ExpiryHeight != 0 {
-		t.Fatalf("paid mailbox share carried record lease: ttl=%d expiry=%d", stored.TTL, stored.ExpiryHeight)
+	if stored.TTL != 0 {
+		t.Fatalf("paid mailbox share carried record lease: ttl=%d", stored.TTL)
 	}
 }

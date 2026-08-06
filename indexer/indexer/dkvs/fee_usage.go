@@ -11,7 +11,6 @@ type feeUsageEntry struct {
 	usageKey     string
 	recordHash   chainhash.Hash
 	expiryHeight uint64
-	expiryTime   uint64
 	tombstone    bool
 }
 
@@ -41,12 +40,11 @@ func (i *Indexer) resetFeeUsageLocked() {
 	i.feeUsageCounts = make(map[string]uint64)
 	i.feeUsageEntries = make(map[string]feeUsageEntry)
 	i.feeExpiryHeights = nil
-	i.feeExpiryTimes = nil
 }
 
 func (i *Indexer) ensureFeeUsageLocked(verifier IndexedFeeCapacityVerifier, height, now uint64) error {
 	if i.feeUsageInitialized {
-		i.expireFeeUsageLocked(height, now)
+		i.expireFeeUsageLocked(height)
 		return nil
 	}
 	i.resetFeeUsageLocked()
@@ -55,7 +53,7 @@ func (i *Indexer) ensureFeeUsageLocked(verifier IndexedFeeCapacityVerifier, heig
 		return err
 	}
 	for _, record := range records {
-		if record == nil || IsTombstone(record.Flags) || IsExpired(record, height, now) {
+		if record == nil || IsTombstone(record.Flags) || IsExpired(record, height) {
 			continue
 		}
 		usageKey, err := verifier.FeeUsageKey(record)
@@ -76,19 +74,13 @@ func (i *Indexer) addFeeUsageLocked(record *wire.DKVSRecord, usageKey string) {
 	entry := feeUsageEntry{
 		usageKey:     usageKey,
 		recordHash:   hash,
-		expiryHeight: record.ExpiryHeight,
+		expiryHeight: RecordExpiryHeight(record),
 		tombstone:    IsTombstone(record.Flags),
-	}
-	if record.TTL != 0 && record.IssueTime != 0 && record.IssueTime <= ^uint64(0)-record.TTL {
-		entry.expiryTime = record.IssueTime + record.TTL
 	}
 	i.feeUsageEntries[record.Key] = entry
 	i.feeUsageCounts[usageKey]++
 	if !entry.tombstone && entry.expiryHeight != 0 {
 		heap.Push(&i.feeExpiryHeights, feeExpiryItem{recordKey: record.Key, recordHash: hash, expires: entry.expiryHeight})
-	}
-	if !entry.tombstone && entry.expiryTime != 0 {
-		heap.Push(&i.feeExpiryTimes, feeExpiryItem{recordKey: record.Key, recordHash: hash, expires: entry.expiryTime})
 	}
 }
 
@@ -105,9 +97,8 @@ func (i *Indexer) removeFeeUsageLocked(recordKey string) {
 	}
 }
 
-func (i *Indexer) expireFeeUsageLocked(height, now uint64) {
+func (i *Indexer) expireFeeUsageLocked(height uint64) {
 	i.expireFeeHeapLocked(&i.feeExpiryHeights, height)
-	i.expireFeeHeapLocked(&i.feeExpiryTimes, now)
 }
 
 func (i *Indexer) expireFeeHeapLocked(items *feeExpiryHeap, current uint64) {

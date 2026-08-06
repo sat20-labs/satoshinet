@@ -30,7 +30,6 @@ type Indexer struct {
 	feeUsageCounts            map[string]uint64
 	feeUsageEntries           map[string]feeUsageEntry
 	feeExpiryHeights          feeExpiryHeap
-	feeExpiryTimes            feeExpiryHeap
 	freeLocal                 FreeLocalCachePolicy
 	freeLocalUsageInitialized bool
 	freeLocalUsageBySigner    map[string]freeLocalUsage
@@ -39,7 +38,6 @@ type Indexer struct {
 	recordExpiryInitialized   bool
 	recordExpiryEntries       map[string]recordExpiryEntry
 	recordExpiryHeights       feeExpiryHeap
-	recordExpiryTimes         feeExpiryHeap
 	system                    SystemVerifier
 	mailbox                   MailboxPolicy
 	blob                      BlobPolicy
@@ -493,7 +491,7 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 	pruned := 0
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
-	for _, key := range i.expiredRecordKeysLocked(height, now) {
+	for _, key := range i.expiredRecordKeysLocked(height) {
 		record, err := i.getRaw(key)
 		if errors.Is(err, ErrRecordNotFound) {
 			continue
@@ -502,7 +500,7 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 			i.mutex.Unlock()
 			return pruned, err
 		}
-		if !IsExpired(record, height, now) {
+		if !IsExpired(record, height) {
 			i.addRecordExpiryLocked(record)
 			continue
 		}
@@ -595,7 +593,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 	now := currentUnixMilli()
 	for attempt := 0; attempt < 3; attempt++ {
 		validators := i.snapshotValidators()
-		parsed, err := validateParsedCoreWithVerifier(record, height, now, remote, false, nil)
+		parsed, err := validateParsedCoreWithVerifier(record, height, remote, false, nil)
 		if err != nil {
 			return false, 0, chainhash.Hash{}, false, err
 		}
@@ -735,7 +733,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 			i.mutex.Unlock()
 			return false, 0, chainhash.Hash{}, false, err
 		}
-		meta, err := i.pathMetaForMutationLocked(parsed, existing, record, height, now)
+		meta, err := i.pathMetaForMutationLocked(parsed, existing, record, verifiedRetention != nil || i.networkPathRecordVisible(record), height, now)
 		if err != nil {
 			i.mutex.Unlock()
 			return false, 0, chainhash.Hash{}, false, err
@@ -801,8 +799,8 @@ func (i *Indexer) validate(record *wire.DKVSRecord) error {
 	return err
 }
 
-func (i *Indexer) validateAt(record *wire.DKVSRecord, height, now uint64) error {
-	parsed, err := i.validateParsedCore(record, height, now, true, false)
+func (i *Indexer) validateAt(record *wire.DKVSRecord, height uint64) error {
+	parsed, err := i.validateParsedCore(record, height, true, false)
 	if err != nil {
 		return err
 	}
@@ -820,27 +818,27 @@ func (i *Indexer) validateParsed(record *wire.DKVSRecord, height, now uint64) (P
 	return parsed, nil
 }
 
-func (i *Indexer) validateParsedBasic(record *wire.DKVSRecord, height, now uint64) (ParsedKey, error) {
-	return i.validateParsedCore(record, height, now, false, true)
+func (i *Indexer) validateParsedBasic(record *wire.DKVSRecord, height, _ uint64) (ParsedKey, error) {
+	return i.validateParsedCore(record, height, false, true)
 }
 
-func (i *Indexer) validateParsedCore(record *wire.DKVSRecord, height, now uint64, allowExpiredTombstone, verifyFee bool) (ParsedKey, error) {
+func (i *Indexer) validateParsedCore(record *wire.DKVSRecord, height uint64, allowExpiredTombstone, verifyFee bool) (ParsedKey, error) {
 	var verifier FeeVerifier
 	if verifyFee {
 		verifier = i.snapshotValidators().feeVerifier
 	}
-	return validateParsedCoreWithVerifier(record, height, now, allowExpiredTombstone, verifyFee, verifier)
+	return validateParsedCoreWithVerifier(record, height, allowExpiredTombstone, verifyFee, verifier)
 }
 
 func (i *Indexer) verifyFeeProof(record *wire.DKVSRecord, parsed ParsedKey) error {
 	return verifyFeeProofWith(i.snapshotValidators().feeVerifier, record, parsed)
 }
 
-func (i *Indexer) activeError(record *wire.DKVSRecord, height, now uint64) error {
+func (i *Indexer) activeError(record *wire.DKVSRecord, height, _ uint64) error {
 	if record == nil || IsTombstone(record.Flags) {
 		return ErrRecordNotFound
 	}
-	return i.validateAt(record, height, now)
+	return i.validateAt(record, height)
 }
 
 func (i *Indexer) validatePermission(parsed ParsedKey, pubKey []byte) error {
@@ -1175,8 +1173,7 @@ func isRenewal(record, existing *wire.DKVSRecord) bool {
 	return record.Key == existing.Key &&
 		record.Seq == existing.Seq &&
 		record.Flags == existing.Flags &&
-		record.ExpiryHeight > existing.ExpiryHeight &&
-		record.TTL >= existing.TTL &&
+		RecordExpiryHeight(record) > RecordExpiryHeight(existing) &&
 		bytes.Equal(record.Value, existing.Value) &&
 		bytes.Equal(record.PubKey, existing.PubKey)
 }
