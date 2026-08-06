@@ -120,3 +120,18 @@
 - account-managed blob 的未来分片/扩容策略；当前使用一个 root-owned blob，硬上限受 Blob policy 约束；
 - 逻辑删除中间 subaccount 的产品语义；当前派生 index 为 append-only，未来由账户 catalog 表达 deleted scope；
 - RGB 跨多个本地 store 的通用 operation journal；现有 minimum recovery、reservation owner 和 reconciliation 已覆盖主要崩溃恢复，但生产前仍应做更多 failpoint 测试。
+
+## 2026-08-06 FREE_LOCAL、Blob 与 Wallet SDK 收敛
+
+- `GET /v3/dkvs/config` 已成为 wallet SDK 在线 FREE_LOCAL 保存期的唯一来源。账户管理、
+  RGB capability/delivery/ACK、普通 record、account record 和 Blob 在线写入均采用服务节点
+  返回的 `max_ttl_blocks`；配置缺失、禁用或为零时拒绝写入。
+- 账户首次自动激活不再写入 SDK 内置 TTL。同步前读取当前服务节点策略，并把变化后的
+  TTL 提交到本地 profile；后续同步可按节点新策略续写。
+- 通用 Blob codec 保持 opaque，不自动压缩任意 value。
+- `account-managed-data` 在 AES-GCM 加密前自动尝试 zlib 压缩；仅在明文不小于 1 KiB 且
+  至少节省 64 bytes 时采用，解压上限为 1 MiB，并兼容既有未压缩 envelope。
+- 既有未压缩 envelope 在后续账户同步时只在压缩确有收益的情况下透明迁移一次；
+  无收益的旧 envelope 和内容未变化的已压缩 envelope 均直接复用，避免无意义续写。
+- 新增 `sdk/wallet/dkvs` 低层包。record、Blob、FREE_LOCAL policy、typed errors、应用 payload
+  codec 和 confirmed replica persistence 已迁入；父级 wallet 保留 manager 协调和兼容 facade。

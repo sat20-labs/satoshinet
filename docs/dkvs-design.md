@@ -263,6 +263,21 @@ expected current record hash 或 expect_absent
 
 ### 6.1 FREE_LOCAL
 
+### 服务节点策略是 FREE_LOCAL 保存期的唯一来源 {#free-local-node-policy}
+
+- FREE_LOCAL 是否启用、最大保存区块数和容量限制由当前连接的服务节点配置；客户端通过
+  `GET /v3/dkvs/config` 读取 `free_local` 策略。
+- 在线写入不得使用 SDK 默认值、编译期常量或业务模块兜底值。客户端提交 FREE_LOCAL
+  record 时统一采用当前节点返回的 `max_ttl_blocks`。
+- 调用方传入的 TTL 不是保存期授权；在线 SDK 会以节点策略覆盖它。离线 record builder
+  可以显式接收 TTL，但提交前仍必须按目标节点策略重新构造或拒绝。
+- 配置不可读取、FREE_LOCAL 被禁用或 `max_ttl_blocks == 0` 时，写入必须失败关闭，不能
+  猜测一个保存时长。
+- 节点可以调整策略。账户管理的后续同步以及 RGB 临时消息的后续写入必须重新读取当前
+  配置；发现已保存 record 的策略与节点当前配置不一致时，应按新策略续写。
+- `max_ttl_blocks` 表示节点承诺接受的保存窗口，不是跨节点、跨设备或永久恢复保证。
+
+
 - 必须 `TTL > 0`；
 - 只保存在写入 endpoint；
 - 不进入 P2P 和 network PathMeta；
@@ -279,6 +294,22 @@ expected current record hash 或 expect_absent
 - 恢复支付后可重新进入网络 path view。
 
 ### 6.3 Blob
+
+### Blob 压缩边界 {#blob-compression-policy}
+
+- 通用 Blob value 是 opaque bytes。DKVS/Blob 底层不得无条件自动压缩，因为调用方数据
+  可能已经压缩或已经加密；再次压缩通常无收益，并会破坏“写入什么、读取什么”的透明性。
+- 需要压缩的领域必须在加密前使用自描述、版本化 envelope，并在解码时设置严格的展开
+  大小上限。压缩算法和阈值属于领域 codec，不属于 DKVS record 共识语义。
+- 账户管理的 `account-managed-data` 是已知 codec，允许自动尝试压缩：规范化明文 bundle
+  不小于 1 KiB 时使用 zlib 尝试压缩，只有至少节省 64 bytes 才采用；随后再执行 AES-GCM
+  加密。压缩标记位于认证密文内部，旧的未压缩 envelope 继续可读。
+- 解压必须限制为账户托管数据的逻辑上限 1 MiB。压缩不会扩大允许保存的逻辑数据量，
+  只减少实际 Blob bytes、传输量和可能的付费容量占用。
+- 对既有未压缩 `account-managed-data` envelope，下一次账户同步会先判断当前明文是否
+  达到压缩收益条件：有收益时只迁移一次并重新加密；无收益时继续复用原 envelope。
+  已压缩且逻辑内容未变化的 envelope 也会直接复用，不因同步而反复重写。
+
 
 - `/blob/<account_id>/<blob_key>`；
 - 单 record opaque value；
@@ -592,3 +623,14 @@ RGB11 注册为账户管理 provider：`rgb11`。
 6. 模块只通过 provider 接口交付必要恢复数据，不感知 DKVS/AUTOPAY。
 7. RGB 永久状态归账户管理；RGB 自己只使用有限 TTL 的瞬态传输记录。
 8. 开发阶段直接采用当前格式，不保留旧协议兼容路径。
+
+### Wallet SDK 包边界 {#wallet-dkvs-package-boundary}
+
+`sdk/wallet/dkvs` 保存不依赖钱包业务状态的底层实现，包括 record 签名、Blob/payload codec、
+FREE_LOCAL policy、typed error、confirmed replica codec 与持久化。该子包不得反向依赖父级
+`wallet` 包。
+
+父级 `sdk/wallet` 只负责 `dkvsManager` 协调和领域适配：endpoint、同步 worker、outbox、
+路径 readiness、账户管理/RGB 调用以及为现有调用方保留的窄兼容 facade。新增底层协议、
+codec 或持久化实现不得继续堆放在父目录；兼容 facade 不得重新实现一份底层逻辑。
+

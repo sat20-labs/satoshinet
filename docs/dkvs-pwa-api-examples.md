@@ -14,6 +14,37 @@
 - 默认主网兼容策略下，未配置免费策略或真实 `FeeVerifier` 时，缺少 `FeeProof` 的写入会被拒绝。
 - `/name`、`/svc` 和 `/sys` 默认未开放普通写入，除非节点注入真实 DID resolver 或 system verifier。
 
+
+
+## Read Node Policy Before FREE_LOCAL Writes
+
+FREE_LOCAL retention is node-local policy. Do not hardcode a duration in a PWA or dApp. Read the
+connected service node before each new FREE_LOCAL write, or use the wallet SDK API that performs
+this step:
+
+```js
+async function getDKVSClientConfig() {
+  const body = await dkvsFetch("/v3/dkvs/config");
+  return body.data;
+}
+
+const config = await getDKVSClientConfig();
+if (!config?.free_local?.enabled || !config.free_local.max_ttl_blocks) {
+  throw new Error("The connected node does not provide FREE_LOCAL storage");
+}
+
+// A connected wallet SDK overwrites caller TTL with this node policy before
+// signing. Raw/offline builders must be rebuilt for the selected endpoint.
+const ttlBlocks = config.free_local.max_ttl_blocks;
+```
+
+A different endpoint may expose a different policy and cannot be assumed to contain the record.
+
+Generic Blob values are opaque and are not automatically compressed by DKVS. A producer that owns
+an application codec may use a versioned envelope and compress **before encryption**. In particular,
+account-managed data performs bounded, opportunistic pre-encryption compression internally; PWA
+callers do not compress or decompress that payload themselves.
+
 ## Record JSON Shape
 
 ```json
