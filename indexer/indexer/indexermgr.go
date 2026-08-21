@@ -138,6 +138,15 @@ func NewIndexerMgr(
 }
 
 func (b *IndexerMgr) Init() {
+	b.connectMutex.Lock()
+	defer b.connectMutex.Unlock()
+	b.initLocked()
+}
+
+// initLocked initializes the indexer while connectMutex is already held.
+// Reorg recovery calls this from DisconnectBlock, so it must not re-enter the
+// public ConnectBlock method when seeding an empty database.
+func (b *IndexerMgr) initLocked() {
 	err := b.initDB()
 	if err != nil {
 		common.Log.Panicf("initDB failed. %v", err)
@@ -162,7 +171,9 @@ func (b *IndexerMgr) Init() {
 	b.contractBackupDB = nil
 
 	if b.lastCheckHeight == -1 {
-		b.ConnectBlock(b.chaincfgParam.GenesisBlock, 0, 0)
+		if err := b.connectBlockLocked(b.chaincfgParam.GenesisBlock, 0, 0); err != nil {
+			common.Log.Panicf("connect genesis block failed. %v", err)
+		}
 	}
 
 	b.startDKVSPruneTimer()
@@ -380,7 +391,7 @@ func (b *IndexerMgr) forceUpdateDB() {
 
 func (b *IndexerMgr) handleReorg(height int) {
 	b.closeDB()
-	b.Init()
+	b.initLocked()
 	b.compiling.SetReorgHeight(height)
 	common.Log.Infof("IndexerMgr handleReorg completed.")
 }

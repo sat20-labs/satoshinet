@@ -1132,7 +1132,7 @@ func TestNetworkTemplateContractStateRollbackOnInvalidate(t *testing.T) {
 	buyBlockHash, err := chainhash.NewHashFromStr(buyVerbose.BlockHash)
 	require.NoError(t, err)
 
-	require.NoError(t, fixture.bootstrapNode.Client.InvalidateBlock(buyBlockHash))
+	require.NoError(t, invalidateBlockWithTimeout(t, fixture.bootstrapNode, buyBlockHash, 15*time.Second))
 	buyVerboseAfterInvalidate, err := fixture.bootstrapNode.Client.GetRawTransactionVerbose(&buyHash)
 	if err != nil {
 		require.ErrorContains(t, err, "No information available about transaction")
@@ -1585,6 +1585,23 @@ func templateUtxoHasAsset(utxo *indexercommon.AssetsInUtxo, want wire.AssetInfo)
 		return amount.Cmp(&want.Amount) >= 0
 	}
 	return false
+}
+
+func invalidateBlockWithTimeout(t *testing.T, node *rpctest.Harness, hash *chainhash.Hash, timeout time.Duration) error {
+	t.Helper()
+	result := make(chan error, 1)
+	go func() {
+		result <- node.Client.InvalidateBlock(hash)
+	}()
+
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(timeout):
+		t.Fatalf("InvalidateBlock(%s) did not return within %s (node_pid=%d rpc=%s log=%s)",
+			hash, timeout, node.NodePID(), node.RPCAddress(), node.LogFile())
+		return nil
+	}
 }
 
 func waitForPOSTx(t *testing.T, node *rpctest.Harness, nodes []*rpctest.Harness, tx *wire.MsgTx) {

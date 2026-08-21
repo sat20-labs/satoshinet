@@ -292,7 +292,13 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 	t.Logf("started %s node: pid=%d rpc=%s p2p=%s log=%s",
 		role, r.NodePID(), r.RPCAddress(), r.P2PAddress(), r.LogFile())
 	t.Cleanup(func() {
-		require.NoError(t, r.TearDown())
+		if err := r.TearDown(); err != nil {
+			if t.Failed() {
+				t.Logf("node teardown after test failure: %v", err)
+				return
+			}
+			require.NoError(t, err)
+		}
 	})
 	return r
 }
