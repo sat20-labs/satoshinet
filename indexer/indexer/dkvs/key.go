@@ -80,17 +80,28 @@ func validSegment(segment string) bool {
 	return true
 }
 
+// NormalizeNameID provides a reversible presentation normalization for DKVS
+// identifiers: trim leading/trailing whitespace and convert ASCII whitespace
+// runs to a single underscore. It never hashes or otherwise invents an ID.
+// Any remaining character invalid for a DKVS segment is rejected later by
+// ParseKey.
 func NormalizeNameID(canonicalName string) string {
-	if len(canonicalName) > 0 && len(canonicalName) <= MaxKeySegmentSize && validSegment(canonicalName) {
-		return canonicalName
+	canonicalName = strings.ToLower(strings.TrimSpace(canonicalName))
+	var out strings.Builder
+	underscore := false
+	for i := 0; i < len(canonicalName); i++ {
+		c := canonicalName[i]
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			if out.Len() != 0 && !underscore {
+				out.WriteByte('_')
+				underscore = true
+			}
+			continue
+		}
+		out.WriteByte(c)
+		underscore = c == '_'
 	}
-	sum := sha256.Sum256([]byte(canonicalName))
-	return hex.EncodeToString(sum[:])
-}
-
-func personalAccountID(pubKey []byte) string {
-	sum := sha256.Sum256(pubKey)
-	return hex.EncodeToString(sum[:])
+	return strings.Trim(out.String(), "_")
 }
 
 func validAccountID(accountID string) bool {

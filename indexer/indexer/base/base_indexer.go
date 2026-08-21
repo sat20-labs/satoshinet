@@ -1720,6 +1720,14 @@ func (b *BaseIndexer) GetHeight() int {
 	return b.lastHeight
 }
 
+// GetInternalTip returns the height and hash from the same in-memory snapshot.
+// Node consensus code must compare both fields before consulting index state.
+func (b *BaseIndexer) GetInternalTip() (int, string) {
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	return b.lastHeight, b.lastHash
+}
+
 func (b *BaseIndexer) GetChainTip() int {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()

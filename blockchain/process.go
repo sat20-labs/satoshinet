@@ -156,7 +156,6 @@ func (b *BlockChain) showCurrentOrphans() {
 	log.Debugf("---------------------------------------------------------------------------------------")
 }
 
-
 func (b *BlockChain) SetTipHeight(tip int) {
 	if tip == 0 {
 		tip = int(b.bestChain.Height())
@@ -183,10 +182,28 @@ func (b *BlockChain) GetTipHeight() int {
 //
 // This function is safe for concurrent access.
 func (b *BlockChain) ProcessBlock(block *btcutil.Block, flags BehaviorFlags) (bool, bool, error) {
-	b.chainLock.Lock()
-	defer b.chainLock.Unlock()
+	blockHash := block.Hash()
+	if err, ok := b.rejectedBlockError(*blockHash); ok {
+		return false, false, err
+	}
+	for {
+		if err := b.waitForDirectTipReadiness(block); err != nil {
+			return false, false, err
+		}
+		b.chainLock.Lock()
+		if !b.directTipReadinessLocked(block) {
+			b.chainLock.Unlock()
+			continue
+		}
+		isMainChain, isOrphan, err := b.processBlockLocked(block, flags)
+		b.chainLock.Unlock()
+		return isMainChain, isOrphan, err
+	}
+}
 
-
+// processBlockLocked contains ProcessBlock's state transition after readiness
+// has been checked. It MUST be called with chainLock held for writes.
+func (b *BlockChain) processBlockLocked(block *btcutil.Block, flags BehaviorFlags) (bool, bool, error) {
 	fastAdd := flags&BFFastAdd == BFFastAdd
 
 	blockHash := block.Hash()

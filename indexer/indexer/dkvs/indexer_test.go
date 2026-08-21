@@ -1247,10 +1247,17 @@ func TestNormalizeNameID(t *testing.T) {
 	if got := NormalizeNameID("alice.name"); got != "alice.name" {
 		t.Fatalf("safe name id=%s", got)
 	}
-	sum := sha256.Sum256([]byte("Alice Name"))
-	want := hex.EncodeToString(sum[:])
-	if got := NormalizeNameID("Alice Name"); got != want {
-		t.Fatalf("unsafe name id=%s want=%s", got, want)
+	if got := NormalizeNameID(" Alice Name "); got != "alice_name" {
+		t.Fatalf("name id normalization got=%q", got)
+	}
+	if got := NormalizeNameID("alice   name"); got != "alice_name" {
+		t.Fatalf("repeated whitespace normalization got=%q", got)
+	}
+	if key, err := NameKey("Alice Name"); err != nil || key != "/name/alice_name" {
+		t.Fatalf("normalized explicit name key=%q err=%v", key, err)
+	}
+	if _, err := NameKey("alice/name"); err != ErrInvalidKey {
+		t.Fatalf("illegal name id was not rejected: %v", err)
 	}
 }
 
@@ -1268,7 +1275,7 @@ func TestSDKKeyBuildersAndSignedRecord(t *testing.T) {
 		t.Fatalf("personal key=%s", personalKey)
 	}
 	for _, build := range []func() (string, error){
-		func() (string, error) { return NameKey("Alice Name") },
+		func() (string, error) { return NameKey("alice-name") },
 		func() (string, error) { return ServiceKey("wallet", "config") },
 		func() (string, error) { return MailMsgKey(AccountID(pub), AccountID(pub), "msg-1") },
 		func() (string, error) { return MailShareKey(AccountID(pub), "pkg", "share-1") },

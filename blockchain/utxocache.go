@@ -348,7 +348,7 @@ func (s *utxoCache) addTxOut(outpoint wire.OutPoint, txOut *wire.TxOut, isCoinBa
 
 	entry := new(UtxoEntry)
 	entry.amount = txOut.Value
-	entry.txAssets =txOut.Assets.Clone()
+	entry.txAssets = txOut.Assets.Clone()
 
 	// Deep copy the script when the script in the entry differs from the one in
 	// the txout.  This is required since the txout script is a subslice of the
@@ -418,6 +418,7 @@ func (s *utxoCache) addTxIn(txIn *wire.TxIn, stxos *[]SpentTxOut) error {
 		// Populate the stxo details using the utxo entry.
 		stxo := SpentTxOut{
 			Amount:     entry.Amount(),
+			Assets:     entry.txAssets.Clone(),
 			PkScript:   entry.PkScript(),
 			Height:     entry.BlockHeight(),
 			IsCoinBase: entry.IsCoinBase(),
@@ -425,6 +426,8 @@ func (s *utxoCache) addTxIn(txIn *wire.TxIn, stxos *[]SpentTxOut) error {
 
 		*stxos = append(*stxos, stxo)
 	}
+
+	entryMemory := entry.memoryUsage()
 
 	// Mark the entry as spent.
 	entry.Spend()
@@ -435,13 +438,12 @@ func (s *utxoCache) addTxIn(txIn *wire.TxIn, stxos *[]SpentTxOut) error {
 	if entry.isFresh() {
 		// If the entry is fresh, we will always have it in the cache.
 		s.cachedEntries.delete(txIn.PreviousOutPoint)
-		s.totalEntryMemory -= entry.memoryUsage()
-	} else {
-		// Can leave the entry to be garbage collected as the only purpose
-		// of this entry now is so that the entry on disk can be deleted.
-		entry = nil
-		s.totalEntryMemory -= entry.memoryUsage()
 	}
+	// Spent entries no longer count toward the live UTXO memory budget. Keep
+	// the non-fresh tombstone in the map until the next flush deletes its DB
+	// entry, but subtract the original entry size before dropping the local
+	// reference.
+	s.totalEntryMemory -= entryMemory
 
 	return nil
 }
@@ -452,13 +454,14 @@ func (s *utxoCache) addTxIn(txIn *wire.TxIn, stxos *[]SpentTxOut) error {
 // is fresh (meaning that the database on disk never saw it), it will be removed
 // from the cache.
 func (s *utxoCache) addTxIns(tx *btcutil.Tx, stxos *[]SpentTxOut, anchorTxInfos *[]AnchorTxInfo) error {
-	// Coinbase transactions don't have any inputs to spend.
-	if IsCoinBase(tx) {
-		return nil
-	}
+	// Coinbase transactions don't spend inputs, and SatoshiNet anchor
+	// inputs represent external L1 locks rather than entries in this UTXO set.
+	if !transactionConsumesSpendJournal(tx.MsgTx(), IsCoinBase(tx)) {
+		if !IsAnchorTx(tx.MsgTx()) {
+			return nil
+		}
 
-	// Anchor transactions don't have any inputs to spend.
-	if IsAnchorTx(tx.MsgTx()) {
+		// Anchor transactions don't have any local inputs to spend.
 		if anchorTxInfos != nil {
 			// Add the anchor tx info to anchor tx cache
 			lockedTxInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)

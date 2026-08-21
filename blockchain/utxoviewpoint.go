@@ -282,15 +282,9 @@ func (view *UtxoViewpoint) AddTxOuts(tx *btcutil.Tx, blockHeight int32) {
 // to append an entry for each spent txout.  An error will be returned if the
 // view does not contain the required utxos.
 func (view *UtxoViewpoint) connectTransaction(tx *btcutil.Tx, blockHeight int32, stxos *[]SpentTxOut) error {
-	// Coinbase transactions don't have any inputs to spend.
-	if IsCoinBase(tx) {
-		// Add the transaction's outputs as available utxos.
-		view.AddTxOuts(tx, blockHeight)
-		return nil
-	}
-
-	if IsAnchorTx(tx.MsgTx()) {
-		// Add the transaction's outputs as available utxos.
+	// Coinbase and SatoshiNet anchor transactions create outputs without
+	// consuming entries from the local UTXO set.
+	if !transactionConsumesSpendJournal(tx.MsgTx(), IsCoinBase(tx)) {
 		view.AddTxOuts(tx, blockHeight)
 		return nil
 	}
@@ -312,6 +306,7 @@ func (view *UtxoViewpoint) connectTransaction(tx *btcutil.Tx, blockHeight int32,
 			// Populate the stxo details using the utxo entry.
 			var stxo = SpentTxOut{
 				Amount:     entry.Amount(),
+				Assets:     entry.txAssets.Clone(),
 				PkScript:   entry.PkScript(),
 				Height:     entry.BlockHeight(),
 				IsCoinBase: entry.IsCoinBase(),
@@ -440,7 +435,7 @@ func (view *UtxoViewpoint) disconnectTransactions(db database.DB, block *btcutil
 		// for the coinbase which has no inputs) and unspend the
 		// referenced txos.  This is necessary to match the order of the
 		// spent txout entries.
-		if isCoinBase {
+		if !transactionConsumesSpendJournal(tx.MsgTx(), isCoinBase) {
 			continue
 		}
 		for txInIdx := len(tx.MsgTx().TxIn) - 1; txInIdx > -1; txInIdx-- {
@@ -612,6 +607,9 @@ func (view *UtxoViewpoint) findInputsToFetch(block *btcutil.Block) []wire.OutPoi
 	// what is already known (in-flight).
 	needed := make([]wire.OutPoint, 0, len(transactions))
 	for i, tx := range transactions[1:] {
+		if !transactionConsumesSpendJournal(tx.MsgTx(), false) {
+			continue
+		}
 		for _, txIn := range tx.MsgTx().TxIn {
 			// It is acceptable for a transaction input to reference
 			// the output of another transaction in this block only
@@ -718,4 +716,3 @@ func (b *BlockChain) FetchUtxoEntry(outpoint wire.OutPoint) (*UtxoEntry, error) 
 
 	return entries[0], nil
 }
-

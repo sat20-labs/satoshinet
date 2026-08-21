@@ -2,6 +2,7 @@ package node
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcutil"
@@ -40,6 +41,9 @@ type ParentStateProvider interface {
 
 type CompositeContractBlockValidator struct {
 	cfg CompositeContractBlockValidatorConfig
+
+	assetViewMu        sync.Mutex
+	preparedAssetViews map[chainhash.Hash]blockchain.ContractAssetIndexView
 }
 
 type contractBlockActivity struct {
@@ -53,10 +57,48 @@ type ContractBlockActivityProvider interface {
 }
 
 func NewCompositeContractBlockValidator(cfg CompositeContractBlockValidatorConfig) *CompositeContractBlockValidator {
-	return &CompositeContractBlockValidator{cfg: cfg}
+	return &CompositeContractBlockValidator{
+		cfg:                cfg,
+		preparedAssetViews: make(map[chainhash.Hash]blockchain.ContractAssetIndexView),
+	}
+}
+
+// PrepareContractAssetIndexView binds an isolated AIDX view to one block. The
+// following ValidateContractBlock consumes it atomically; normal direct-tip
+// validation continues to use the production providers configured at startup.
+func (v *CompositeContractBlockValidator) PrepareContractAssetIndexView(
+	blockHash *chainhash.Hash, view blockchain.ContractAssetIndexView) error {
+
+	if v == nil || blockHash == nil || view == nil {
+		return fmt.Errorf("invalid prepared contract asset view")
+	}
+	v.assetViewMu.Lock()
+	defer v.assetViewMu.Unlock()
+	if _, exists := v.preparedAssetViews[*blockHash]; exists {
+		return fmt.Errorf("contract asset view already prepared for block %s", blockHash)
+	}
+	v.preparedAssetViews[*blockHash] = view
+	return nil
 }
 
 func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
+	v.assetViewMu.Lock()
+	defer v.assetViewMu.Unlock()
+
+	var assetView blockchain.ContractAssetIndexView
+	if block != nil {
+		assetView = v.preparedAssetViews[*block.Hash()]
+		delete(v.preparedAssetViews, *block.Hash())
+	}
+	restore, err := v.applyContractAssetIndexView(assetView)
+	if err != nil {
+		return err
+	}
+	defer restore()
+	return v.validateContractBlock(block, view)
+}
+
+func (v *CompositeContractBlockValidator) validateContractBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
 	activity, err := v.blockActivity(block, view)
 	if err != nil {
 		return err

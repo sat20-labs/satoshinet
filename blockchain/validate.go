@@ -1642,8 +1642,29 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 //
 // This function is safe for concurrent access.
 func (b *BlockChain) CheckConnectBlockTemplate(block *btcutil.Block) error {
-	b.chainLock.Lock()
-	defer b.chainLock.Unlock()
+	for {
+		if err := b.waitForDirectTipReadiness(block); err != nil {
+			return err
+		}
+		b.chainLock.Lock()
+		if !b.directTipReadinessLocked(block) {
+			b.chainLock.Unlock()
+			continue
+		}
+		err := b.checkConnectBlockTemplateLocked(block)
+		if err == nil {
+			b.rememberPreparedBlock(*block.Hash(), block.MsgBlock().Header.PrevBlock)
+		} else {
+			b.releaseContractPostState(block.Hash())
+		}
+		b.chainLock.Unlock()
+		return err
+	}
+}
+
+// checkConnectBlockTemplateLocked performs template validation after the
+// external readiness wait and locked final check.
+func (b *BlockChain) checkConnectBlockTemplateLocked(block *btcutil.Block) error {
 
 	// Skip the proof of work check as this is just a block template.
 	flags := BFNoPoWCheck
@@ -1679,6 +1700,9 @@ func (b *BlockChain) CheckConnectBlockTemplate(block *btcutil.Block) error {
 
 func (b *BlockChain) validateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error {
 	if b.contractBlockValidator != nil {
+		if err := b.requireContractParentReadyLocked(block); err != nil {
+			return err
+		}
 		return b.contractBlockValidator.ValidateContractBlock(block, view)
 	}
 	return nil

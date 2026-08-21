@@ -213,6 +213,12 @@ func (v *TemplateBlockExecutionValidator) ReleaseBlockPostState(hash *chainhash.
 }
 
 func (v *TemplateBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*template.RuntimeStore, error) {
+	if block != nil {
+		prevHash := block.MsgBlock().Header.PrevBlock
+		if state, ok := v.TemplateBlockPostState(&prevHash); ok {
+			return state, nil
+		}
+	}
 	if v.cfg.NewRuntime != nil {
 		return v.cfg.NewRuntime(block, view)
 	}

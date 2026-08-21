@@ -107,9 +107,12 @@ type BlockChain struct {
 	sigCache               *txscript.SigCache
 	indexManager           IndexManager
 	assetIndexerMgr        *indexer.IndexerMgr
+	assetIndexReadiness    AssetIndexReadiness
 	contractBlockValidator ContractBlockValidator
 	contractStateManager   ContractStateManager
 	hashCache              *txscript.HashCache
+	interrupt              <-chan struct{}
+	validationCache        *blockValidationCache
 
 	// The following fields are calculated based upon the provided chain
 	// parameters.  They are also set when the instance is created and
@@ -208,6 +211,11 @@ type BlockChain struct {
 //
 // This function is safe for concurrent access.
 func (b *BlockChain) HaveBlock(hash *chainhash.Hash) (bool, error) {
+	if hash != nil {
+		if _, rejected := b.rejectedBlockError(*hash); rejected {
+			return true, nil
+		}
+	}
 	exists, err := b.blockExists(hash)
 	if err != nil {
 		return false, err
@@ -812,7 +820,7 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 
 	err = b.db.Update(func(dbTx database.Tx) error {
 		// Update best block state.
-		err := dbPutBestState(dbTx, state, node.workSum)
+		err := dbPutBestState(dbTx, state, prevNode.workSum)
 		if err != nil {
 			return err
 		}
@@ -921,11 +929,9 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 
 // countSpentOutputs returns the number of utxos the passed block spends.
 func countSpentOutputs(block *btcutil.Block) int {
-	// Exclude the coinbase transaction since it can't spend anything.
 	var numSpent int
-	for _, tx := range block.Transactions()[1:] {
-		if IsAnchorTx(tx.MsgTx()) {
-			// No Spent Inputs for Anchor Tx
+	for txIndex, tx := range block.Transactions() {
+		if !transactionConsumesSpendJournal(tx.MsgTx(), txIndex == 0) {
 			continue
 		}
 		numSpent += len(tx.MsgTx().TxIn)
@@ -2186,6 +2192,15 @@ type ContractBlockValidator interface {
 	ValidateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error
 }
 
+// AssetIndexReadiness exposes the canonical in-memory asset-index tip used by
+// contract consensus validation.
+type AssetIndexReadiness interface {
+	GetInternalTip() (int, chainhash.Hash, bool)
+	InternalTipReady(height int, hash *chainhash.Hash) bool
+	EnsureInternalTip(height int, hash *chainhash.Hash, tip int) error
+	WaitForInternalTip(height int, hash *chainhash.Hash, interrupt <-chan struct{}) error
+}
+
 // ContractBlockStateProvider is optionally implemented by a
 // ContractBlockValidator that can expose post-state generated during block
 // validation without requiring blockchain to know any concrete contract engine
@@ -2268,6 +2283,10 @@ type Config struct {
 
 	AssetIndexManager *indexer.IndexerMgr
 
+	// AssetIndexReadiness may be supplied independently in tests. Production
+	// defaults it to AssetIndexManager.
+	AssetIndexReadiness AssetIndexReadiness
+
 	// ContractBlockValidator optionally validates all contract execution
 	// engines through a single external interface.
 	ContractBlockValidator ContractBlockValidator
@@ -2341,8 +2360,11 @@ func New(config *Config) (*BlockChain, error) {
 		sigCache:               config.SigCache,
 		indexManager:           config.IndexManager,
 		assetIndexerMgr:        config.AssetIndexManager,
+		assetIndexReadiness:    config.AssetIndexReadiness,
 		contractBlockValidator: config.ContractBlockValidator,
 		contractStateManager:   config.ContractStateManager,
+		interrupt:              config.Interrupt,
+		validationCache:        newBlockValidationCache(),
 		minRetargetTimespan:    targetTimespan / adjustmentFactor,
 		maxRetargetTimespan:    targetTimespan * adjustmentFactor,
 		blocksPerRetarget:      int32(targetTimespan / targetTimePerBlock),
@@ -2356,6 +2378,9 @@ func New(config *Config) (*BlockChain, error) {
 		warningCaches:          newThresholdCaches(vbNumBits),
 		deploymentCaches:       newThresholdCaches(chaincfg.DefinedDeployments),
 		pruneTarget:            config.Prune,
+	}
+	if b.assetIndexReadiness == nil && b.assetIndexerMgr != nil {
+		b.assetIndexReadiness = b.assetIndexerMgr
 	}
 
 	// Ensure all the deployments are synchronized with our clock if

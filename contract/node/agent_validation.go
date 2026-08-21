@@ -191,6 +191,12 @@ func (v *AgentBlockExecutionValidator) ReleaseBlockPostState(hash *chainhash.Has
 }
 
 func (v *AgentBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*agent.RuntimeStore, error) {
+	if block != nil {
+		prevHash := block.MsgBlock().Header.PrevBlock
+		if state, ok := v.AgentBlockPostState(&prevHash); ok {
+			return state, nil
+		}
+	}
 	if v.cfg.NewRuntime != nil {
 		return v.cfg.NewRuntime(block, view)
 	}

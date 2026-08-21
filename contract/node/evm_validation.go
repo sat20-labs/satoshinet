@@ -264,6 +264,26 @@ func (v *EVMBlockExecutionValidator) ReleaseBlockPostState(hash *chainhash.Hash)
 }
 
 func (v *EVMBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*evm.Runtime, error) {
+	if block != nil {
+		prevHash := block.MsgBlock().Header.PrevBlock
+		if state, ok := v.EVMBlockPostState(&prevHash); ok {
+			var runtime *evm.Runtime
+			var err error
+			if v.cfg.NewRuntime != nil {
+				runtime, err = v.cfg.NewRuntime(block, view)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				runtime = evm.NewRuntime(nil)
+			}
+			if runtime == nil {
+				runtime = evm.NewRuntime(nil)
+			}
+			runtime.State = state
+			return runtime, nil
+		}
+	}
 	if v.cfg.NewRuntime != nil {
 		return v.cfg.NewRuntime(block, view)
 	}

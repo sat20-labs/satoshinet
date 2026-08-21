@@ -70,7 +70,11 @@ func batchMutationOwner(record *wire.DKVSRecord, parsed ParsedKey) string {
 		}
 	case "account":
 		if len(parsed.Segments) == 2 {
-			return "account-record:" + parsed.Segments[0] + ":" + parsed.Segments[1]
+			accountID, err := RecordSignerAccountID(record, parsed)
+			if err != nil {
+				return ""
+			}
+			return "account:" + accountID
 		}
 	case "name", "svc", "sys":
 		return "authority:" + hex.EncodeToString(record.PubKey)

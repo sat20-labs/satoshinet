@@ -29,15 +29,15 @@ func NewRecord(key string, value []byte, pubKey []byte, opts RecordOptions) (*wi
 		return nil, err
 	}
 	record := &wire.DKVSRecord{
-		Version:        Version,
-		Key:            key,
-		Value:          append([]byte{}, value...),
-		PubKey:         append([]byte{}, pubKey...),
+		Version:     Version,
+		Key:         key,
+		Value:       append([]byte{}, value...),
+		PubKey:      append([]byte{}, pubKey...),
 		Seq:         opts.Seq,
 		IssueHeight: opts.IssueHeight,
 		TTL:         opts.TTL,
-		FeeProof:       append([]byte{}, opts.FeeProof...),
-		Flags:          opts.Flags,
+		FeeProof:    append([]byte{}, opts.FeeProof...),
+		Flags:       opts.Flags,
 	}
 	if err := validateRecordSizeForParsed(record, parsed); err != nil {
 		return nil, err
@@ -134,14 +134,19 @@ func PersonalKey(pubKey []byte, path string) (string, error) {
 	return AccountPersonalKey(accountID, path)
 }
 
-func NameKey(name string) (string, error) {
-	key := "/name/" + NormalizeNameID(name)
+// NameKey applies only reversible canonicalization (lowercase and whitespace
+// to underscore). Invalid remaining characters are rejected; no hash fallback
+// or hidden surrogate identity is ever created.
+func NameKey(nameID string) (string, error) {
+	key := "/name/" + NormalizeNameID(nameID)
 	_, err := ParseKey(key)
 	return key, err
 }
 
-func ServiceKey(serviceName, path string) (string, error) {
-	key := "/svc/" + NormalizeNameID(serviceName) + "/" + normalizePath(path)
+// ServiceKey applies the same reversible canonicalization as NameKey. It
+// never invents a service identity from content.
+func ServiceKey(serviceID, path string) (string, error) {
+	key := "/svc/" + NormalizeNameID(serviceID) + "/" + normalizePath(path)
 	_, err := ParseKey(key)
 	return key, err
 }

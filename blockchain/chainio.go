@@ -264,6 +264,14 @@ type SpentTxOut struct {
 	IsCoinBase bool
 }
 
+// transactionConsumesSpendJournal reports whether a transaction consumes
+// ordinary UTXOs whose complete state must be recorded for disconnect/reorg.
+// Coinbase and SatoshiNet anchor transactions create outputs without spending
+// entries from the local UTXO set, so every journal path must exclude them.
+func transactionConsumesSpendJournal(tx *wire.MsgTx, isCoinbase bool) bool {
+	return tx != nil && !isCoinbase && !IsAnchorTx(tx)
+}
+
 // FetchSpendJournal attempts to retrieve the spend journal, or the set of
 // outputs spent for the target block. This provides a view of all the outputs
 // that will be consumed once the target block is connected to the end of the
@@ -387,9 +395,13 @@ func decodeSpentTxOut(serialized []byte, stxo *SpentTxOut) (int, error) {
 // format comments, this function also requires the transactions that spend the
 // txouts.
 func deserializeSpendJournalEntry(serialized []byte, txns []*wire.MsgTx) ([]SpentTxOut, error) {
-	// Calculate the total number of stxos.
+	// Calculate the total number of stxos using the same transaction
+	// classification as connect and disconnect.
 	var numStxos int
 	for _, tx := range txns {
+		if !transactionConsumesSpendJournal(tx, false) {
+			continue
+		}
 		numStxos += len(tx.TxIn)
 	}
 
@@ -414,6 +426,9 @@ func deserializeSpendJournalEntry(serialized []byte, txns []*wire.MsgTx) ([]Spen
 	stxos := make([]SpentTxOut, numStxos)
 	for txIdx := len(txns) - 1; txIdx > -1; txIdx-- {
 		tx := txns[txIdx]
+		if !transactionConsumesSpendJournal(tx, false) {
+			continue
+		}
 
 		// Loop backwards through all of the transaction inputs and read
 		// the associated stxo.

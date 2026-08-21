@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
@@ -476,63 +478,139 @@ func (p *IndexerMgr) dbStatistic() bool {
 	return false
 }
 
+type connectBlockOps struct {
+	internalTip       func() (int, string)
+	syncBlockAtHeight func(height, tip int) error
+	syncBlock         func(block *wire.MsgBlock, height, tip int) error
+	prepareDBBuffer   func()
+	publish           func(height, tip int)
+}
+
+func connectBlock(ops connectBlockOps, block *wire.MsgBlock, height, tip int) error {
+	lastHeight, _ := ops.internalTip()
+	targetHeight := height
+	if block != nil {
+		targetHeight--
+	}
+	if lastHeight > targetHeight {
+		if block == nil || lastHeight > height {
+			return fmt.Errorf("indexer tip height %d is ahead of target %d", lastHeight, targetHeight)
+		}
+
+		// A repeated notification for the block already compiled is idempotent,
+		// but still publishes the compiling snapshot to the RPC service.
+		_, lastHash := ops.internalTip()
+		blockHash := block.BlockHash().String()
+		if lastHash != blockHash {
+			return fmt.Errorf("indexer block hash mismatch at height %d: got %s, want %s", height, lastHash, blockHash)
+		}
+		ops.publish(height, tip)
+		return nil
+	}
+
+	backfilled := false
+	for i := lastHeight + 1; i <= targetHeight; i++ {
+		if err := ops.syncBlockAtHeight(i, tip); err != nil {
+			return fmt.Errorf("sync block at height %d: %w", i, err)
+		}
+		backfilled = true
+	}
+	if backfilled {
+		ops.prepareDBBuffer()
+	}
+
+	if block != nil {
+		parentHeight, parentHash := ops.internalTip()
+		if height == 0 {
+			if parentHeight != -1 {
+				return fmt.Errorf("indexer tip height %d is not before genesis", parentHeight)
+			}
+		} else {
+			if parentHeight != height-1 {
+				return fmt.Errorf("indexer parent height mismatch for block %d: got %d, want %d", height, parentHeight, height-1)
+			}
+			wantParentHash := block.Header.PrevBlock.String()
+			if parentHash != wantParentHash {
+				return fmt.Errorf("indexer parent hash mismatch for block %d: got %s, want %s", height, parentHash, wantParentHash)
+			}
+		}
+		if err := ops.syncBlock(block, height, tip); err != nil {
+			return fmt.Errorf("sync provided block at height %d: %w", height, err)
+		}
+	}
+
+	ops.publish(height, tip)
+	return nil
+}
+
+func (p *IndexerMgr) connectBlockOps() connectBlockOps {
+	return connectBlockOps{
+		internalTip: p.compiling.GetInternalTip,
+		syncBlockAtHeight: func(height, tip int) error {
+			return p.compiling.SyncBlockWithHeight(height, tip, true)
+		},
+		syncBlock: func(block *wire.MsgBlock, height, tip int) error {
+			return p.compiling.SyncBlock(block, height, tip, false)
+		},
+		prepareDBBuffer: p.prepareDBBuffer,
+		publish:         p.updateDB,
+	}
+}
+
+func (p *IndexerMgr) connectBlockLocked(block *wire.MsgBlock, height, tip int) error {
+	return connectBlock(p.connectBlockOps(), block, height, tip)
+}
+
+func ensureInternalTip(ops connectBlockOps, height int, hash *chainhash.Hash, tip int) error {
+	if hash == nil {
+		return fmt.Errorf("nil internal tip target")
+	}
+	currentHeight, currentHashText := ops.internalTip()
+	currentHash, err := chainhash.NewHashFromStr(currentHashText)
+	if err != nil {
+		return fmt.Errorf("decode current internal tip hash at height %d: %w", currentHeight, err)
+	}
+	if currentHeight == height && *currentHash == *hash {
+		return nil
+	}
+	if currentHeight > height {
+		return fmt.Errorf("indexer tip %d is ahead of readiness target %d", currentHeight, height)
+	}
+	if err := connectBlock(ops, nil, height, tip); err != nil {
+		return fmt.Errorf("repair internal tip to %d/%s: %w", height, hash, err)
+	}
+	currentHeight, currentHashText = ops.internalTip()
+	currentHash, err = chainhash.NewHashFromStr(currentHashText)
+	if err != nil {
+		return fmt.Errorf("decode repaired internal tip hash at height %d: %w", currentHeight, err)
+	}
+	if currentHeight != height || *currentHash != *hash {
+		return fmt.Errorf("repaired internal tip mismatch: got %d/%s want %d/%s",
+			currentHeight, currentHash, height, hash)
+	}
+	return nil
+}
+
 // tip: 本地最长链； block，新接收到的区块，一般会比tip高1
 func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	p.connectMutex.Lock()
 	defer p.connectMutex.Unlock()
 
-	stepRun := false
-	if stepRun {
-		lastHeight := p.compiling.GetHeight()
-		if lastHeight+1 < height && height > 1 {
-			for i := lastHeight + 1; i <= height; i++ {
-				tip2 := p.compiling.GetHeight() + 1
-				err := p.compiling.SyncBlockWithHeight(i, tip2, false)
-				if err != nil {
-					common.Log.Errorf("SyncBlockWithHeight %d failed, %v", i, err)
-					return
-				}
-				p.updateDB(height, tip2)
-
-			}
-			// 重新设置buffer
-			p.prepareDBBuffer()
-		}
-	} else {
-		lastHeight := p.compiling.GetHeight()
-		common.Log.Infof("compiling height %d, block %d, tip %d", lastHeight, height, tip)
-		if lastHeight+1 < height && height > 1 {
-			// 节点区块数据已经同步，但是索引器重建，走这个流程
-			for i := lastHeight + 1; i <= height; i++ {
-				err := p.compiling.SyncBlockWithHeight(i, tip, true)
-				if err != nil {
-					common.Log.Errorf("SyncBlockWithHeight %d failed, %v", i, err)
-					return
-				}
-				// 只更新
-				// p.updateServiceInstance()
-			}
-			// 重新设置buffer
-			p.prepareDBBuffer()
-		}
+	lastHeight := p.compiling.GetHeight()
+	common.Log.Infof("compiling height %d, block %d, tip %d", lastHeight, height, tip)
+	err := p.connectBlockLocked(block, height, tip)
+	if err != nil {
+		common.Log.Errorf("ConnectBlock failed, %v", err)
+		return
 	}
 
-	if block != nil {
-		err := p.compiling.SyncBlock(block, height, tip, false)
-		if err != nil {
-			common.Log.Errorf("ConnectBlock failed, %v", err)
-			return
-		}
-	}
-
-	// 聪网节点processBlock过程中，需要同步读取索引器数据，所以这里需要同步更新 rpcService
-	// TODO 优化indexer的设计
-	p.updateDB(height, tip)
 	if (height+1)%200 == 0 { // TODO 先多检查，以后稳定了再降低检查频率
 		p.checkSelf()
 	}
 }
 
 func (p *IndexerMgr) DisconnectBlock(height int) {
+	p.connectMutex.Lock()
+	defer p.connectMutex.Unlock()
 	p.handleReorg(height)
 }

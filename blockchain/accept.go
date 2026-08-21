@@ -44,6 +44,38 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 		return false, err
 	}
 
+	// Direct best-tip blocks on contract-enabled nodes are fully prevalidated
+	// before any raw bytes or block-index status are persisted. This makes local
+	// readiness failures retryable and keeps permanently invalid blocks out of
+	// ffldb. The resulting status and contract post-state are reused below.
+	blockHeader := &block.MsgBlock().Header
+	newNode := newBlockNode(blockHeader, prevNode)
+	prevalidated := false
+	if b.contractBlockValidator != nil && prevNode == b.bestChain.Tip() {
+		if err := b.requireContractParentReadyLocked(block); err != nil {
+			return false, err
+		}
+		if b.takePreparedBlock(*block.Hash(), *prevHash) {
+			prevalidated = true
+		} else {
+			view := NewUtxoViewpoint()
+			view.SetBestHash(prevHash)
+			if err := b.checkConnectBlock(newNode, block, view, nil); err != nil {
+				b.releaseContractPostState(block.Hash())
+				b.cacheRejectedBlock(*block.Hash(), err)
+				return false, err
+			}
+			prevalidated = true
+		}
+		newNode.status |= statusValid
+	}
+	releasePrepared := prevalidated
+	defer func() {
+		if releasePrepared {
+			b.releaseContractPostState(block.Hash())
+		}
+	}()
+
 	// Insert the block into the database if it's not already there.  Even
 	// though it is possible the block will ultimately fail to connect, it
 	// has already passed all proof-of-work and validity tests which means
@@ -63,9 +95,7 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 	// Create a new block node for the block and add it to the node index. Even
 	// if the block ultimately gets connected to the main chain, it starts out
 	// on a side chain.
-	blockHeader := &block.MsgBlock().Header
-	newNode := newBlockNode(blockHeader, prevNode)
-	newNode.status = statusDataStored
+	newNode.status |= statusDataStored
 
 	b.index.AddNode(newNode)
 	err = b.index.flushToDB()
@@ -80,6 +110,7 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 	if err != nil {
 		return false, err
 	}
+	releasePrepared = false
 
 	// Notify the caller that the new block was accepted into the block
 	// chain.  The caller would typically want to react by relaying the
