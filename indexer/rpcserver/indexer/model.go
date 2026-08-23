@@ -300,7 +300,10 @@ func (s *Model) GetBlockInfo(height int) (*common.BlockInfo, error) {
 }
 
 func (s *Model) GetAssetSummary(address string, start int, limit int) (*indexerwire.AssetSummary, error) {
-	tickerMap := s.indexer.GetAssetSummaryInAddressV3(address)
+	tickerMap, err := s.indexer.GetAssetSummaryInAddressV3(address)
+	if err != nil {
+		return nil, err
+	}
 
 	result := indexerwire.AssetSummary{}
 	for tickName, amount := range tickerMap {
@@ -437,7 +440,10 @@ func (s *Model) GetMinerInfo(pubkey string) *common.MinerInfo {
 }
 
 func (s *Model) GetAssetSummaryV3(address string, start int, limit int) ([]*indexer.DisplayAsset, error) {
-	tickerMap := s.indexer.GetAssetSummaryInAddressV3(address)
+	tickerMap, err := s.indexer.GetAssetSummaryInAddressV3(address)
+	if err != nil {
+		return nil, err
+	}
 
 	result := make([]*indexer.DisplayAsset, 0)
 	for tickName, balance := range tickerMap {

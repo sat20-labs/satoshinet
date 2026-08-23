@@ -1,11 +1,13 @@
 package indexer
 
 import (
+	"fmt"
+
 	"github.com/sat20-labs/indexer/common"
 
+	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 	swire "github.com/sat20-labs/satoshinet/wire"
-	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
 )
 
 // return: utxoId->asset
@@ -32,7 +34,7 @@ func (b *IndexerMgr) GetAssetUTXOsInAddressWithTickV3(address string, ticker *sw
 		assetsInUtxo.OutPoint = utxo
 		assetsInUtxo.Value = output.OutValue.Value
 		assetsInUtxo.PkScript = output.OutValue.PkScript
-		
+
 		for _, v := range output.OutValue.Assets {
 			asset := common.DisplayAsset{
 				AssetName:  v.Name,
@@ -42,7 +44,7 @@ func (b *IndexerMgr) GetAssetUTXOsInAddressWithTickV3(address string, ticker *sw
 			}
 			assetsInUtxo.Assets = append(assetsInUtxo.Assets, &asset)
 		}
-		
+
 		if ticker == nil {
 			result[utxoId] = &assetsInUtxo
 		} else if common.IsPlainAsset(ticker) {
@@ -62,7 +64,6 @@ func (b *IndexerMgr) GetAssetUTXOsInAddressWithTickV3(address string, ticker *sw
 	return result, nil
 }
 
-
 func (b *IndexerMgr) GetTxOutputWithUtxoV3(utxo string) *common.AssetsInUtxo {
 	output := b.GetTxOutputWithUtxo(utxo)
 	if output == nil {
@@ -74,7 +75,7 @@ func (b *IndexerMgr) GetTxOutputWithUtxoV3(utxo string) *common.AssetsInUtxo {
 	assetsInUtxo.OutPoint = utxo
 	assetsInUtxo.Value = output.OutValue.Value
 	assetsInUtxo.PkScript = output.OutValue.PkScript
-	
+
 	for _, v := range output.OutValue.Assets {
 		asset := common.DisplayAsset{
 			AssetName:  v.Name,
@@ -89,11 +90,10 @@ func (b *IndexerMgr) GetTxOutputWithUtxoV3(utxo string) *common.AssetsInUtxo {
 	return &assetsInUtxo
 }
 
-
-func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.TickerName]*common.Decimal {
+func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) (map[common.TickerName]*common.Decimal, error) {
 	utxos, err := b.rpcService.GetUTXOs(address)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("get UTXOs for %s: %w", address, err)
 	}
 
 	totalSats := int64(0)
@@ -101,22 +101,22 @@ func (b *IndexerMgr) GetAssetSummaryInAddressV3(address string) map[common.Ticke
 	for utxoId := range utxos {
 		utxo, err := b.rpcService.GetUtxoByID(utxoId)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("get UTXO %d for %s: %w", utxoId, address, err)
 		}
 		info, err := b.rpcService.GetUtxoInfo(utxo)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("get UTXO info %s for %s: %w", utxo, address, err)
 		}
 		totalSats += info.Value
 
 		convertAssets(info, result)
 	}
 	result[common.ASSET_ALL_SAT] = common.NewDefaultDecimal(totalSats)
-	
-	return result
+
+	return result, nil
 }
 
-func convertAssets(info *sindexer.UtxoInfo, assetMap map[common.TickerName]*common.Decimal)  {
+func convertAssets(info *sindexer.UtxoInfo, assetMap map[common.TickerName]*common.Decimal) {
 
 	// 白聪资产去除绑定资产的聪
 	bindingSats := int64(0)
@@ -139,7 +139,6 @@ func convertAssets(info *sindexer.UtxoInfo, assetMap map[common.TickerName]*comm
 		assetMap[common.ASSET_PLAIN_SAT] = common.DecimalAdd(plainSats, common.NewDefaultDecimal(value))
 	}
 }
-
 
 // return: ticker -> asset info (inscriptinId -> asset ranges)
 func (b *IndexerMgr) GetAssetsWithUtxoV3(utxo string) map[common.TickerName]*common.Decimal {

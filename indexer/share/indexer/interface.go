@@ -39,7 +39,7 @@ type Indexer interface {
 	GetBindingSat(ticker *common.TickerName) int
 	// Asset
 	// return: tick->amount
-	GetAssetSummaryInAddressV3(address string) map[common.TickerName]*indexer.Decimal
+	GetAssetSummaryInAddressV3(address string) (map[common.TickerName]*indexer.Decimal, error)
 	// return: tick->UTXOs
 	GetAssetUTXOsInAddress(address string) map[common.TickerName][]*common.TxOutput
 	// return: utxo->asset amount

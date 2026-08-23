@@ -6,6 +6,13 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 )
 
+func TestDefaultFreeLocalCacheTTLIsOneSatoshiNetDay(t *testing.T) {
+	policy := DefaultFreeLocalCachePolicy()
+	if policy.MaxTTL != 7200 {
+		t.Fatalf("FREE_LOCAL max TTL=%d, want 7200 blocks", policy.MaxTTL)
+	}
+}
+
 func TestDefaultDKVSAutopayPaysCurrentMiner(t *testing.T) {
 	defaults := NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	if defaults.AutopayRecipient != "" {

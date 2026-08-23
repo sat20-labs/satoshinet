@@ -29,6 +29,8 @@ const (
 	MaxKeySegmentSize      = 64
 	MaxNamespaceSize       = 16
 	MaxRecordValueSize     = wire.MaxDKVSValueSize
+	// DefaultFreeLocalMaxTTLBlocks is one day at the 12-second target block interval.
+	DefaultFreeLocalMaxTTLBlocks = uint64(24 * 60 * 60 / 12)
 )
 
 type ErrorCode string
@@ -232,7 +234,7 @@ type FreeLocalCachePolicy struct {
 func DefaultFreeLocalCachePolicy() FreeLocalCachePolicy {
 	return FreeLocalCachePolicy{
 		Enabled:             true,
-		MaxTTL:              144,
+		MaxTTL:              DefaultFreeLocalMaxTTLBlocks,
 		MaxRecordsPerSigner: 100,
 		MaxBytesPerSigner:   1 << 20,
 		MaxTotalRecords:     100000,
