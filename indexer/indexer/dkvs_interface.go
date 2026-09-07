@@ -41,11 +41,28 @@ func (p *IndexerMgr) SetDKVSSystemVerifier(verifier dkvs.SystemVerifier) {
 	}
 }
 
+func (p *IndexerMgr) SetDKVSEndpointID(endpointID string) error {
+	if p.dkvsIndexer == nil {
+		return errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.SetEndpointID(endpointID)
+}
+
 func (p *IndexerMgr) PutDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	if p.dkvsIndexer == nil {
 		return false, errDKVSNotInitialized
 	}
 	return p.dkvsIndexer.PutLocal(record)
+}
+
+// PutDKVSInternalMailbox is reserved for MessageManager after it has completed
+// binding, signature, sequence and billing admission. Generic DKVS RPCs must
+// never expose this method directly.
+func (p *IndexerMgr) PutDKVSInternalMailbox(record *wire.DKVSRecord) (bool, error) {
+	if p.dkvsIndexer == nil {
+		return false, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.PutInternalMailbox(record)
 }
 
 func (p *IndexerMgr) PutDKVSRecordWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error) {
@@ -62,8 +79,7 @@ func (p *IndexerMgr) PutDKVSRecordCAS(record *wire.DKVSRecord, precondition dkvs
 	return p.dkvsIndexer.PutLocalCAS(record, precondition)
 }
 
-func (p *IndexerMgr) PutDKVSRecordCASResult(record *wire.DKVSRecord, precondition dkvs.WritePrecondition,
-	options dkvs.BatchCASOptions) (*dkvs.WriteResult, error) {
+func (p *IndexerMgr) PutDKVSRecordCASResult(record *wire.DKVSRecord, precondition dkvs.WritePrecondition, options dkvs.BatchCASOptions) (*dkvs.WriteResult, error) {
 	if p.dkvsIndexer == nil {
 		return nil, errDKVSNotInitialized
 	}
@@ -81,8 +97,7 @@ func (p *IndexerMgr) PutDKVSRecordBatchCAS(mutations []dkvs.CASMutation) (int, e
 	return p.dkvsIndexer.PutLocalBatchCAS(mutations)
 }
 
-func (p *IndexerMgr) PutDKVSRecordBatchCASWithOptions(mutations []dkvs.CASMutation,
-	options dkvs.BatchCASOptions) (int, error) {
+func (p *IndexerMgr) PutDKVSRecordBatchCASWithOptions(mutations []dkvs.CASMutation, options dkvs.BatchCASOptions) (int, error) {
 	if p.dkvsIndexer == nil {
 		return 0, errDKVSNotInitialized
 	}
@@ -92,8 +107,7 @@ func (p *IndexerMgr) PutDKVSRecordBatchCASWithOptions(mutations []dkvs.CASMutati
 	return p.dkvsIndexer.PutLocalBatchCASWithOptions(mutations, options)
 }
 
-func (p *IndexerMgr) PutDKVSRecordBatchCASResultWithOptions(mutations []dkvs.CASMutation,
-	options dkvs.BatchCASOptions) (*dkvs.WriteResult, error) {
+func (p *IndexerMgr) PutDKVSRecordBatchCASResultWithOptions(mutations []dkvs.CASMutation, options dkvs.BatchCASOptions) (*dkvs.WriteResult, error) {
 	if p.dkvsIndexer == nil {
 		return nil, errDKVSNotInitialized
 	}
@@ -107,7 +121,7 @@ func (p *IndexerMgr) PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error) 
 	if p.dkvsIndexer == nil {
 		return false, errDKVSNotInitialized
 	}
-	return p.dkvsIndexer.PutRemoteV1(record, "")
+	return p.dkvsIndexer.AcceptRemoteRecord(record, "")
 }
 
 func (p *IndexerMgr) NotifyDKVSNameTransfers(names []string) error {
@@ -128,6 +142,10 @@ func (p *IndexerMgr) GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error)
 	if p.dkvsIndexer == nil {
 		return nil, errDKVSNotInitialized
 	}
+	mode, err := dkvs.ReplicationModeForKey(key)
+	if err != nil || mode == dkvs.ReplicationAccountBound {
+		return nil, dkvs.ErrRecordNotFound
+	}
 	return p.dkvsIndexer.GetForRelay(key)
 }
 
@@ -142,7 +160,15 @@ func (p *IndexerMgr) GetDKVSRecordByHashForRelay(hash chainhash.Hash) (*wire.DKV
 	if p.dkvsIndexer == nil {
 		return nil, errDKVSNotInitialized
 	}
-	return p.dkvsIndexer.GetByHashForRelay(hash)
+	record, err := p.dkvsIndexer.GetByHashForRelay(hash)
+	if err != nil || record == nil {
+		return record, err
+	}
+	mode, modeErr := dkvs.ReplicationModeForKey(record.Key)
+	if modeErr != nil || mode == dkvs.ReplicationAccountBound {
+		return nil, dkvs.ErrRecordNotFound
+	}
+	return record, nil
 }
 
 func (p *IndexerMgr) ListDKVSRecords(prefix string, start, limit int) ([]*wire.DKVSRecord, int, error) {
@@ -159,16 +185,14 @@ func (p *IndexerMgr) SyncDKVSRecords(cursor []byte, limit uint32) ([]*wire.DKVSR
 	return p.dkvsIndexer.Sync(cursor, limit)
 }
 
-func (p *IndexerMgr) SyncFilteredDKVSRecords(cursor []byte, limit uint32,
-	filters []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+func (p *IndexerMgr) SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	if p.dkvsIndexer == nil {
 		return nil, nil, false, chainhash.Hash{}, errDKVSNotInitialized
 	}
 	return p.dkvsIndexer.SyncFiltered(cursor, limit, filters)
 }
 
-func (p *IndexerMgr) SyncFilteredDKVSRecordsForClient(cursor []byte, limit uint32,
-	filters []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
+func (p *IndexerMgr) SyncFilteredDKVSRecordsForClient(cursor []byte, limit uint32, filters []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	if p.dkvsIndexer == nil {
 		return nil, nil, false, chainhash.Hash{}, errDKVSNotInitialized
 	}
@@ -196,21 +220,47 @@ func (p *IndexerMgr) ApplyDKVSPathSnapshot(snapshot *dkvs.PathSnapshot) (int, er
 	return p.dkvsIndexer.ApplyPathSnapshot(snapshot)
 }
 
-func (p *IndexerMgr) WaitFilteredDKVSRecords(ctx context.Context, filters []dkvs.Subscription,
-	knownRoot chainhash.Hash) (chainhash.Hash, bool, error) {
+func (p *IndexerMgr) GetDKVSKeyState(key string) (dkvs.DKVSKeyState, error) {
+	if p.dkvsIndexer == nil {
+		return dkvs.DKVSKeyState{}, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.GetKeyState(key)
+}
+
+func (p *IndexerMgr) GetDKVSPrefixStatus(endpointID string,
+	known []dkvs.PrefixGeneration) (*dkvs.PrefixStatusResult, error) {
+	if p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.PrefixStatus(endpointID, known)
+}
+
+func (p *IndexerMgr) GetDKVSPrefixSnapshot(prefix string) (*dkvs.PrefixSnapshot, error) {
+	if p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.PrefixSnapshot(prefix)
+}
+
+func (p *IndexerMgr) ReadDKVSPrefix(prefix string) (*dkvs.PrefixReadResult, error) {
+	if p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.ReadPrefix(prefix)
+}
+
+func (p *IndexerMgr) WaitFilteredDKVSRecords(ctx context.Context, filters []dkvs.Subscription, knownRoot chainhash.Hash) (chainhash.Hash, bool, error) {
 	if p.dkvsIndexer == nil {
 		return chainhash.Hash{}, false, errDKVSNotInitialized
 	}
 	return p.dkvsIndexer.WaitFilteredForClient(ctx, filters, knownRoot)
 }
 
-func (p *IndexerMgr) WaitFilteredDKVSRecordsForClient(ctx context.Context, filters []dkvs.Subscription,
-	knownRoot chainhash.Hash) (chainhash.Hash, bool, error) {
+func (p *IndexerMgr) WaitFilteredDKVSRecordsForClient(ctx context.Context, filters []dkvs.Subscription, knownRoot chainhash.Hash) (chainhash.Hash, bool, error) {
 	return p.WaitFilteredDKVSRecords(ctx, filters, knownRoot)
 }
 
-func (p *IndexerMgr) WaitDKVSDirectory(ctx context.Context, prefix string,
-	knownRoot chainhash.Hash) (chainhash.Hash, bool, error) {
+func (p *IndexerMgr) WaitDKVSDirectory(ctx context.Context, prefix string, knownRoot chainhash.Hash) (chainhash.Hash, bool, error) {
 	if p.dkvsIndexer == nil {
 		return chainhash.Hash{}, false, errDKVSNotInitialized
 	}
@@ -235,9 +285,7 @@ func (p *IndexerMgr) GetDKVSClientConfig() dkvs.ClientConfig {
 	if p.dkvsIndexer == nil {
 		return dkvs.ClientConfig{}
 	}
-	config := p.dkvsIndexer.ClientConfig()
-	config.EndpointID = p.dkvsIndexer.EndpointID()
-	return config
+	return p.dkvsIndexer.ClientConfig()
 }
 
 func (p *IndexerMgr) GetDKVSPathMeta(path string) (*dkvs.PathMeta, error) {
@@ -245,6 +293,13 @@ func (p *IndexerMgr) GetDKVSPathMeta(path string) (*dkvs.PathMeta, error) {
 		return nil, errDKVSNotInitialized
 	}
 	return p.dkvsIndexer.GetPathMeta(path)
+}
+
+func (p *IndexerMgr) WaitDKVSPath(ctx context.Context, path string, generation uint64, root chainhash.Hash, viewHeight uint64) (*dkvs.PathMeta, bool, error) {
+	if p.dkvsIndexer == nil {
+		return nil, false, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.WaitPath(ctx, path, generation, root, viewHeight)
 }
 
 func (p *IndexerMgr) GetDKVSCheckpoint() (*dkvs.Checkpoint, error) {
@@ -300,8 +355,7 @@ func (p *IndexerMgr) IsDKVSSubscribed(key string) bool {
 	return p.dkvsIndexer != nil && p.dkvsIndexer.IsSubscribed(key)
 }
 
-func (p *IndexerMgr) ApplyDKVSMirror(filters []dkvs.Subscription, records []*wire.DKVSRecord,
-	root chainhash.Hash) (int, error) {
+func (p *IndexerMgr) ApplyDKVSMirror(filters []dkvs.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error) {
 	if p.dkvsIndexer == nil {
 		return 0, errDKVSNotInitialized
 	}

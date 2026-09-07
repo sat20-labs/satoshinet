@@ -131,6 +131,9 @@ func (i *Indexer) writeStateStillCurrentLocked(key string, parsed ParsedKey, sna
 }
 
 func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed ParsedKey) error {
+	if isAccountMappingBindingControlRecord(record, parsed) {
+		return nil
+	}
 	if record != nil && isAutopayRecord(record) && record.TTL != 0 {
 		return ErrInvalidFeeProof
 	}
@@ -152,7 +155,6 @@ func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed Pa
 func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolver, system SystemVerifier) error {
 	switch parsed.Namespace {
 	case "account":
-		// Public address mappings are pubkey-free account records.
 		return ErrPermissionDenied
 	case "personal":
 		if len(parsed.Segments) < 2 || parsed.Segments[0] != AccountID(pubKey) {
@@ -182,11 +184,8 @@ func validatePermissionWith(parsed ParsedKey, pubKey []byte, resolver DIDResolve
 			return err
 		}
 		return identity.CanSign(pubKey)
-	case "mail":
-		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" &&
-			parsed.Segments[0] != AccountID(pubKey) {
-			return ErrPermissionDenied
-		}
+	case "mail", "topic":
+		return ErrPermissionDenied
 	case "blob":
 		if len(parsed.Segments) < 2 || parsed.Segments[0] != AccountID(pubKey) {
 			return ErrPermissionDenied
@@ -237,36 +236,37 @@ func resolveIdentityWith(parsed ParsedKey, resolver DIDResolver) (DIDIdentity, e
 }
 
 func validateMailWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRecord, resolver DIDResolver, system SystemVerifier) error {
+	_ = resolver
+	_ = system
 	if len(parsed.Segments) < 2 || record == nil {
 		return ErrInvalidKey
 	}
 	if parsed.Segments[1] == "share" {
-		return validatePermissionWith(parsed, record.PubKey, resolver, system)
+		return ValidateRecordIdentity(record, parsed)
 	}
-	if parsed.Segments[1] != "msg" {
+	if parsed.Segments[1] != "msg" && parsed.Segments[1] != "topic" {
 		return ErrInvalidKey
 	}
 	if IsTombstone(record.Flags) {
-		if parsed.Segments[0] != AccountID(record.PubKey) {
+		signer, err := RecordSignerAccountID(record, parsed)
+		if err != nil || signer != parsed.Segments[0] {
 			return ErrPermissionDenied
 		}
 		return nil
 	}
-	if len(parsed.Segments) != 4 || parsed.Segments[2] != AccountID(record.PubKey) {
-		return ErrPermissionDenied
-	}
-	if existing == nil || IsTombstone(existing.Flags) {
-		return nil
-	}
-	if !bytes.Equal(existing.PubKey, record.PubKey) {
-		return ErrPermissionDenied
-	}
-	return nil
+	_ = existing
+	return ErrPermissionDenied
 }
 
 func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRecord, requiresResolve bool, validators runtimeValidators) (bool, error) {
 	if record == nil {
 		return false, ErrInvalidRecord
+	}
+	if parsed.Namespace == "mail" {
+		return false, validateMailWritePermissionWith(parsed, record, existing, validators.resolver, validators.system)
+	}
+	if isInternalMailboxRecord(record) || isInternalTopicRecord(record) {
+		return false, ErrPermissionDenied
 	}
 	if len(record.PubKey) == 0 {
 		return false, ValidateRecordIdentity(record, parsed)
@@ -290,8 +290,6 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 			return false, nil
 		}
 		return true, nil
-	case "mail":
-		return false, validateMailWritePermissionWith(parsed, record, existing, validators.resolver, validators.system)
 	default:
 		return false, validatePermissionWith(parsed, record.PubKey, validators.resolver, validators.system)
 	}
@@ -299,6 +297,9 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 
 func (i *Indexer) prepareFeeCapacity(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, verifier FeeVerifier, height, now uint64) (preparedFeeCapacity, error) {
 	prepared := preparedFeeCapacity{}
+	if isAccountMappingBindingControlRecord(record, parsed) {
+		return prepared, nil
+	}
 	if indexed, ok := verifier.(IndexedFeeCapacityVerifier); ok {
 		descriptor, err := indexed.FeeCapacity(record, parsed)
 		if err != nil {
@@ -373,9 +374,7 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height uint64, allo
 	if err := validateRecordSizeForParsed(record, parsed); err != nil {
 		return parsed, err
 	}
-	if record.Flags&^FlagTombstone != 0 ||
-		(height != 0 && record.IssueHeight > height) ||
-		(record.TTL != 0 && RecordExpiryHeight(record) == 0) {
+	if record.Flags&^FlagTombstone != 0 || (height != 0 && record.IssueHeight > height) || (record.TTL != 0 && RecordExpiryHeight(record) == 0) {
 		return parsed, ErrInvalidRecord
 	}
 	if verifyFee && !IsTombstone(record.Flags) && isAutopayRecord(record) && record.TTL != 0 {
@@ -383,6 +382,12 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height uint64, allo
 	}
 	if IsExpired(record, height) && !(allowExpiredTombstone && IsTombstone(record.Flags)) {
 		return parsed, ErrExpiredRecord
+	}
+	if isInternalMailboxRecord(record) || isInternalTopicRecord(record) {
+		if verifyFee {
+			return parsed, ErrPermissionDenied
+		}
+		return parsed, nil
 	}
 	if err := VerifySignature(record); err != nil {
 		return parsed, err

@@ -13,7 +13,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const pathMetaVersion = uint32(3)
+const pathMetaVersion = uint32(4)
 
 var (
 	pathMetaKeyPrefix   = []byte("dkvs:pathmeta:")
@@ -49,9 +49,9 @@ func marshalPathMeta(meta *PathMeta) ([]byte, error) {
 	if meta == nil || meta.Version != pathMetaVersion || meta.Path == "" {
 		return nil, ErrInvalidRecord
 	}
-	encoded := make([]byte, 4+5*8+chainhash.HashSize)
+	encoded := make([]byte, 4+6*8+chainhash.HashSize)
 	binary.LittleEndian.PutUint32(encoded[0:4], meta.Version)
-	values := []uint64{meta.Generation, meta.ActiveRecords, meta.ActiveTotalSize, meta.MinExpiryHeight, meta.ViewHeight}
+	values := []uint64{meta.Generation, meta.EndpointGeneration, meta.ActiveRecords, meta.ActiveTotalSize, meta.MinExpiryHeight, meta.ViewHeight}
 	offset := 4
 	for _, value := range values {
 		binary.LittleEndian.PutUint64(encoded[offset:offset+8], value)
@@ -62,14 +62,14 @@ func marshalPathMeta(meta *PathMeta) ([]byte, error) {
 }
 
 func unmarshalPathMeta(path string, encoded []byte) (*PathMeta, error) {
-	if path == "" || len(encoded) != 4+5*8+chainhash.HashSize {
+	if path == "" || len(encoded) != 4+6*8+chainhash.HashSize {
 		return nil, ErrInvalidRecord
 	}
 	meta := &PathMeta{Path: path, Version: binary.LittleEndian.Uint32(encoded[0:4])}
 	if meta.Version != pathMetaVersion {
 		return nil, ErrInvalidRecord
 	}
-	fields := []*uint64{&meta.Generation, &meta.ActiveRecords, &meta.ActiveTotalSize, &meta.MinExpiryHeight, &meta.ViewHeight}
+	fields := []*uint64{&meta.Generation, &meta.EndpointGeneration, &meta.ActiveRecords, &meta.ActiveTotalSize, &meta.MinExpiryHeight, &meta.ViewHeight}
 	offset := 4
 	for _, field := range fields {
 		*field = binary.LittleEndian.Uint64(encoded[offset : offset+8])
@@ -209,7 +209,8 @@ func pathIncludesCollection(path, candidate string) bool {
 
 func (i *Indexer) scanPathDeleteStatesLocked(path string) (map[string]*deleteState, error) {
 	states := make(map[string]*deleteState)
-	err := i.db.BatchReadV2(deleteKeyPrefix, deleteKeyPrefix, false, func(key, value []byte) error {
+	prefix := deleteDBKey(path)
+	err := i.db.BatchReadV2(prefix, prefix, false, func(key, value []byte) error {
 		if len(key) < len(deleteKeyPrefix) {
 			return ErrInvalidRecord
 		}
@@ -233,6 +234,33 @@ func (i *Indexer) scanPathDeleteStatesLocked(path string) (map[string]*deleteSta
 	return states, err
 }
 
+func (i *Indexer) scanEndpointDeleteStatesLocked(path string) (map[string]*deleteState, error) {
+	states := make(map[string]*deleteState)
+	prefix := deleteDBKey(path)
+	err := i.db.BatchReadV2(prefix, prefix, false, func(key, value []byte) error {
+		if len(key) < len(deleteKeyPrefix) {
+			return ErrInvalidRecord
+		}
+		recordKey := string(key[len(deleteKeyPrefix):])
+		parsed, err := ParseKey(recordKey)
+		if err != nil {
+			return err
+		}
+		if !pathIncludesCollection(path, collectionPath(parsed)) {
+			return nil
+		}
+		state, err := unmarshalDeleteState(value)
+		if err != nil {
+			return err
+		}
+		if state.LocalOnly {
+			states[recordKey] = state
+		}
+		return nil
+	})
+	return states, err
+}
+
 func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathMeta, error) {
 	records, _, _, err := i.scanLocked(path, nil, 0, true, height, now)
 	if err != nil {
@@ -241,6 +269,7 @@ func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathM
 	meta := &PathMeta{Version: pathMetaVersion, Path: path, ViewHeight: height}
 	if previous, readErr := i.readPathMetaLocked(path); readErr == nil {
 		meta.Generation = previous.Generation
+		meta.EndpointGeneration = previous.EndpointGeneration
 	} else if !errors.Is(readErr, ErrRecordNotFound) {
 		return nil, readErr
 	}
@@ -394,7 +423,7 @@ func mutationPathGeneration(meta *PathMeta) uint64 {
 
 func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wire.DKVSRecord, nextVisible bool, height, now uint64) (*PathMeta, error) {
 	path := collectionPath(parsed)
-	if path == "" || (next != nil && isFreeLocalRecord(next)) || (next == nil && existing != nil && isFreeLocalRecord(existing)) {
+	if path == "" || pathMode(parsed) == PathLocalOnly {
 		return nil, nil
 	}
 	meta, err := i.ensurePathMetaLocked(path, height, now)
@@ -402,6 +431,10 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 		return nil, err
 	}
 	meta = clonePathMeta(meta)
+	if meta.EndpointGeneration == ^uint64(0) {
+		return nil, ErrStaleGeneration
+	}
+	meta.EndpointGeneration++
 	if existingRecordActive(i, existing, height, now) && i.networkPathRecordVisible(existing) {
 		xorPathMetaRoot(&meta.StateRoot, existing)
 		oldSize := uint64(RecordSize(existing))
@@ -438,7 +471,9 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 			meta.Generation = generation
 		}
 	}
-	meta.ViewHeight = height
+	if next != nil && !isFreeLocalRecord(next) && nextVisible {
+		meta.ViewHeight = height
+	}
 	normalizePathMetaAliases(meta)
 	return meta, nil
 }
@@ -473,10 +508,10 @@ func putPathStatusBatch(batch indexercommon.WriteBatch, status *PathLocalStatus)
 	return batch.Put(pathStatusDBKey(status.Path), encoded)
 }
 
-func (i *Indexer) markPathMetaDirtyLocked(batch indexercommon.WriteBatch, records []*wire.DKVSRecord, _ uint64, now uint64) error {
+func (i *Indexer) markPathMetaDirtyLocked(batch indexercommon.WriteBatch, records []*wire.DKVSRecord, height uint64, now uint64) error {
 	paths := make(map[string]struct{})
 	for _, record := range records {
-		if record == nil || isFreeLocalRecord(record) {
+		if record == nil {
 			continue
 		}
 		parsed, err := ParseKey(record.Key)
@@ -488,6 +523,19 @@ func (i *Indexer) markPathMetaDirtyLocked(batch indexercommon.WriteBatch, record
 		}
 	}
 	for path := range paths {
+		meta, err := i.readPathMetaLocked(path)
+		if errors.Is(err, ErrRecordNotFound) {
+			meta = &PathMeta{Version: pathMetaVersion, Path: path, ViewHeight: height}
+		} else if err != nil {
+			return err
+		}
+		if meta.EndpointGeneration == ^uint64(0) {
+			return ErrStaleGeneration
+		}
+		meta.EndpointGeneration++
+		if err := putPathMetaBatch(batch, meta); err != nil {
+			return err
+		}
 		status, err := i.readPathStatusLocked(path)
 		if err != nil {
 			return err

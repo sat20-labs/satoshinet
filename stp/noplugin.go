@@ -50,3 +50,5 @@ func ImportWallet(mn, pw string) error {
 func GetPubKey() ([]byte, error) {
 	return nil, fmt.Errorf("not implemented")
 }
+
+func RegisterMessageServiceHandler(handler func([]byte) ([]byte, error)) {}

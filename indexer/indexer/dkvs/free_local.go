@@ -27,20 +27,29 @@ func isFreeLocalRecord(record *wire.DKVSRecord) bool {
 	return err == nil && proof.Mode == FeeModeFreeLocal
 }
 
-// isLocalOnlyRecord accepts explicit FREE_LOCAL records and paid records whose
-// payer did not pay the current block. Unpaid AUTOPAY records remain readable
-// from this node during the configured cache grace but are not relayed.
+// isLocalOnlyRecord is the common P2P-relay exclusion rule. Besides explicit
+// FREE_LOCAL/unpaid AUTOPAY data, AccountBound mailbox records and Topic Host
+// service-state records are node-local from ordinary DKVS replication's point
+// of view. They use MessageManager/TopicManager placement instead of broadcast.
 func (i *Indexer) isLocalOnlyRecord(record *wire.DKVSRecord) bool {
-	if isFreeLocalRecord(record) {
+	if isEndpointCacheRecord(record) {
 		return true
 	}
 	return isAutopayRecord(record) && !i.paidRecordRelayable(record)
 }
 
+// isEndpointCacheRecord is a stable storage-placement property. Unlike
+// isLocalOnlyRecord it must not depend on the transient AUTOPAY relay cache:
+// a canonical AUTOPAY record remains canonical while payment state is being
+// refreshed and therefore still needs a durable, relayable delete floor.
+func isEndpointCacheRecord(record *wire.DKVSRecord) bool {
+	return isAccountBoundRecord(record) || isHostLocalTopicRecord(record) || isFreeLocalRecord(record)
+}
+
 // networkPathRecordVisible is the single inclusion rule for PathMeta,
-// PathSnapshot and P2P relay. AUTOPAY records remain locally readable during
-// grace, but enter the network-comparable path view only while the current
-// block payment is verified.
+// PathSnapshot and P2P relay. Placement-bound application records remain
+// readable/subscribable at their authoritative endpoint without joining the
+// network-comparable path view.
 func (i *Indexer) networkPathRecordVisible(record *wire.DKVSRecord) bool {
 	return record != nil && !IsTombstone(record.Flags) && !i.isLocalOnlyRecord(record)
 }
@@ -170,12 +179,39 @@ func (i *Indexer) replaceFreeLocalUsageLocked(record *wire.DKVSRecord, parsed Pa
 }
 
 func (i *Indexer) validateFreeLocalCapacityLocked(record *wire.DKVSRecord, parsed ParsedKey, height, now uint64) error {
+	return i.validateFreeLocalCapacityModeLocked(record, parsed, height, now, false)
+}
+
+func (i *Indexer) validateInternalFreeLocalCapacityLocked(record *wire.DKVSRecord, parsed ParsedKey, height, now uint64) error {
+	return i.validateFreeLocalCapacityModeLocked(record, parsed, height, now, true)
+}
+
+func (i *Indexer) validateFreeLocalCapacityModeLocked(record *wire.DKVSRecord, parsed ParsedKey, height, now uint64, trustedInternal bool) error {
 	if !isFreeLocalRecord(record) {
 		return nil
 	}
 	policy := i.freeLocal
-	if !policy.Enabled {
+	if !policy.Enabled && !trustedInternal {
 		return ErrFreeLocalDisabled
+	}
+	if trustedInternal && (policy.MaxTTL == 0 || policy.MaxRecordsPerSigner == 0 || policy.MaxBytesPerSigner == 0 ||
+		policy.MaxTotalRecords == 0 || policy.MaxTotalBytes == 0) {
+		defaults := DefaultFreeLocalCachePolicy()
+		if policy.MaxTTL == 0 {
+			policy.MaxTTL = defaults.MaxTTL
+		}
+		if policy.MaxRecordsPerSigner == 0 {
+			policy.MaxRecordsPerSigner = defaults.MaxRecordsPerSigner
+		}
+		if policy.MaxBytesPerSigner == 0 {
+			policy.MaxBytesPerSigner = defaults.MaxBytesPerSigner
+		}
+		if policy.MaxTotalRecords == 0 {
+			policy.MaxTotalRecords = defaults.MaxTotalRecords
+		}
+		if policy.MaxTotalBytes == 0 {
+			policy.MaxTotalBytes = defaults.MaxTotalBytes
+		}
 	}
 	if record.TTL == 0 || record.TTL > policy.MaxTTL {
 		return ErrInvalidRecord

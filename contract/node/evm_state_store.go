@@ -131,9 +131,6 @@ func dbStoreEVMBlockState(dbTx database.Tx, hash *chainhash.Hash, state *evm.Mem
 	if err != nil {
 		return err
 	}
-	if err := validatePersistedContractStateSize("EVM", encoded); err != nil {
-		return err
-	}
 	parent, err := dbTx.Metadata().CreateBucketIfNotExists(evmStateBucketName)
 	if err != nil {
 		return err
@@ -142,7 +139,7 @@ func dbStoreEVMBlockState(dbTx database.Tx, hash *chainhash.Hash, state *evm.Mem
 	if err != nil {
 		return err
 	}
-	if err := byBlock.Put(hash[:], encoded); err != nil {
+	if err := putStateBlob(byBlock, hash[:], encoded); err != nil {
 		return err
 	}
 	return parent.Put(evmStateTipKeyName, hash[:])
@@ -158,7 +155,7 @@ func dbDeleteEVMBlockState(dbTx database.Tx, hash, newTip *chainhash.Hash) error
 	}
 	byBlock := parent.Bucket(evmStateByBlockBucketName)
 	if byBlock != nil {
-		if err := byBlock.Delete(hash[:]); err != nil {
+		if err := deleteStateBlob(byBlock, hash[:]); err != nil {
 			return err
 		}
 	}
@@ -176,23 +173,41 @@ func dbDeleteEVMBlockState(dbTx database.Tx, hash, newTip *chainhash.Hash) error
 }
 
 func (s *EVMStateStore) RuntimeFactory() EVMRuntimeFactory {
+	return s.runtimeFactory(nil)
+}
+
+func (s *EVMStateStore) runtimeFactory(transient func(*chainhash.Hash) (*evm.MemoryStateDB, bool)) EVMRuntimeFactory {
 	return func(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*evm.Runtime, error) {
+		if s == nil || s.db == nil {
+			return nil, errors.New("missing EVM state database")
+		}
 		if block == nil {
 			return nil, errors.New("missing block")
 		}
 		prevHash := block.MsgBlock().Header.PrevBlock
-		state, err := s.LoadBlockState(&prevHash)
-		if errors.Is(err, ErrEVMStateNotFound) {
-			_, tipState, tipErr := s.LoadTip()
-			if tipErr != nil {
-				return nil, tipErr
+		var state *evm.MemoryStateDB
+		err := s.db.View(func(tx database.Tx) error {
+			parent := tx.Metadata().Bucket(evmStateBucketName)
+			var lookup func(*chainhash.Hash) bool
+			var foundTransient bool
+			if transient != nil {
+				lookup = func(hash *chainhash.Hash) bool { state, foundTransient = transient(hash); return foundTransient }
 			}
-			if tipState != nil {
-				state = tipState
-			} else {
+			hash, err := ancestorStateHash(tx, parent, evmStateByBlockBucketName, prevHash, lookup)
+			if err != nil {
+				return err
+			}
+			if hash == nil {
 				state = evm.NewMemoryStateDB()
+				return nil
 			}
-		} else if err != nil {
+			if foundTransient {
+				return nil
+			}
+			state, err = loadEVMStateFromBucket(parent, hash)
+			return err
+		})
+		if err != nil {
 			return nil, err
 		}
 		return evm.NewRuntime(state), nil
@@ -204,7 +219,10 @@ func loadEVMStateFromBucket(parent database.Bucket, hash *chainhash.Hash) (*evm.
 	if byBlock == nil {
 		return nil, ErrEVMStateNotFound
 	}
-	encoded := byBlock.Get(hash[:])
+	encoded, err := getStateBlob(byBlock, hash[:])
+	if err != nil {
+		return nil, err
+	}
 	if encoded == nil {
 		return nil, ErrEVMStateNotFound
 	}

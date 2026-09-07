@@ -89,15 +89,18 @@ type TxSource interface {
 // transaction to be prioritized and track dependencies on other transactions
 // which have not been mined into a block yet.
 type txPrioItem struct {
-	tx               *btcutil.Tx
-	fee              int64
-	priority         float64
-	feePerKB         int64
-	feeAssets        wire.TxAssets
-	contractTx       bool
-	contractPriority int
-	contractTxType   contractcommon.TxType
-	contractGasLimit int64
+	tx                   *btcutil.Tx
+	anchorFundingUtxo    string
+	fee                  int64
+	priority             float64
+	feePerKB             int64
+	feeAssets            wire.TxAssets
+	contractTx           bool
+	protocolFeeCandidate bool
+	protocolFeeExempt    bool
+	contractPriority     int
+	contractTxType       contractcommon.TxType
+	contractGasLimit     int64
 
 	// dependsOn holds a map of transaction hashes which this one depends
 	// on.  It will only be set when the transaction references other
@@ -263,7 +266,7 @@ func shouldSkipLowFeeTx(prioItem *txPrioItem, sortedByFee bool, blockPlusTxWeigh
 	if !sortedByFee {
 		return false
 	}
-	if prioItem.contractTx {
+	if prioItem.contractTx || prioItem.protocolFeeExempt {
 		return false
 	}
 	return prioItem.fee < int64(policy.TxMinFreeFee) &&
@@ -325,10 +328,10 @@ func mergeUtxoView(viewA *blockchain.UtxoViewpoint, viewB *blockchain.UtxoViewpo
 // signature script of the coinbase transaction of a new block.  In particular,
 // it starts with the block height that is required by version 2 blocks and adds
 // the extra nonce as well as additional coinbase flags.
-func standardCoinbaseScript(nextBlockHeight int32, extraNonce uint64) ([]byte, error) {
+func (g *BlkTmplGenerator) standardCoinbaseScript(nextBlockHeight int32, extraNonce uint64) ([]byte, error) {
 
 	data := common.GetScriptSignData(int(nextBlockHeight), extraNonce)
-	sig, err := stp.SignMsg([]byte(data))
+	sig, err := g.coinbaseSigner([]byte(data))
 	if err != nil {
 		return nil, err
 	}
@@ -450,6 +453,9 @@ type BlkTmplGenerator struct {
 	timeSource  blockchain.MedianTimeSource
 	sigCache    *txscript.SigCache
 	hashCache   *txscript.HashCache
+
+	// Configured before first use; must not change while the generator is in use.
+	coinbaseSigner func([]byte) ([]byte, error)
 }
 
 // NewBlkTmplGenerator returns a new block template generator for the given
@@ -465,13 +471,14 @@ func NewBlkTmplGenerator(policy *Policy, params *chaincfg.Params,
 	hashCache *txscript.HashCache) *BlkTmplGenerator {
 
 	return &BlkTmplGenerator{
-		policy:      policy,
-		chainParams: params,
-		txSource:    txSource,
-		chain:       chain,
-		timeSource:  timeSource,
-		sigCache:    sigCache,
-		hashCache:   hashCache,
+		policy:         policy,
+		chainParams:    params,
+		txSource:       txSource,
+		chain:          chain,
+		timeSource:     timeSource,
+		sigCache:       sigCache,
+		hashCache:      hashCache,
+		coinbaseSigner: stp.SignMsg,
 	}
 }
 
@@ -551,7 +558,7 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 	// same value to the same public key address would otherwise be an
 	// identical transaction for block version 1).
 	extraNonce := uint64(0)
-	coinbaseScript, err := standardCoinbaseScript(nextBlockHeight, extraNonce)
+	coinbaseScript, err := g.standardCoinbaseScript(nextBlockHeight, extraNonce)
 	if err != nil {
 		return nil, err
 	}
@@ -618,26 +625,14 @@ mempoolLoop:
 			log.Debugf("Skipping coinbase tx %s", tx.Hash())
 			continue
 		}
+		anchorFundingUtxo := ""
 		if blockchain.IsAnchorTx(tx.MsgTx()) {
 			lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
 			if err != nil {
 				log.Warnf("Skipping invalid anchor tx %s: %v", tx.Hash(), err)
 				continue
 			}
-			if prevHash, ok := anchorFundingUtxos[lockedInfo.Utxo]; ok {
-				log.Warnf("Skipping duplicate anchor tx %s for funding utxo %s, already selected %s",
-					tx.Hash(), lockedInfo.Utxo, prevHash)
-				continue
-			}
-			anchorFundingUtxos[lockedInfo.Utxo] = tx.Hash()
-			log.Debugf("Add anchor tx %s directly", tx.Hash())
-			blockTxns = append(blockTxns, tx)
-			continue
-		}
-		if blockchain.IsDeAnchorTx(tx.MsgTx()) {
-			log.Debugf("Add deAnchor tx %s directly", tx.Hash())
-			blockTxns = append(blockTxns, tx)
-			continue
+			anchorFundingUtxo = lockedInfo.Utxo
 		}
 		if !blockchain.IsFinalizedTransaction(tx, nextBlockHeight,
 			g.timeSource.AdjustedTime()) {
@@ -661,10 +656,14 @@ mempoolLoop:
 		// Setup dependencies for any transactions which reference
 		// other transactions in the mempool so they can be properly
 		// ordered below.
-		prioItem := &txPrioItem{tx: tx}
+		prioItem := &txPrioItem{tx: tx, anchorFundingUtxo: anchorFundingUtxo}
+		prioItem.protocolFeeCandidate = blockchain.IsAnchorTx(tx.MsgTx()) || blockchain.IsDeAnchorTx(tx.MsgTx())
 		prioItem.contractTx, prioItem.contractPriority, prioItem.contractTxType, prioItem.contractGasLimit = contractMiningInfo(
 			tx.MsgTx(), contractPrefix)
 		for _, txIn := range tx.MsgTx().TxIn {
+			if anchorFundingUtxo != "" {
+				break
+			}
 			originHash := &txIn.PreviousOutPoint.Hash
 			entry := utxos.LookupEntry(txIn.PreviousOutPoint)
 			if entry == nil || entry.IsSpent() {
@@ -831,7 +830,8 @@ mempoolLoop:
 
 		// Skip free transactions once the block is larger than the
 		// minimum block size.
-		if shouldSkipLowFeeTx(prioItem, sortedByFee, blockPlusTxWeight, g.policy) {
+		// Protocol candidates defer the fee decision until validation succeeds.
+		if !prioItem.protocolFeeCandidate && shouldSkipLowFeeTx(prioItem, sortedByFee, blockPlusTxWeight, g.policy) {
 
 			log.Debugf("Skipping tx %s with fee %d "+
 				"< TxMinFreeFee %d and block weight %d >= "+
@@ -874,6 +874,13 @@ mempoolLoop:
 
 		// Ensure the transaction inputs pass all of the necessary
 		// preconditions before allowing it to be added to the block.
+		if prioItem.protocolFeeCandidate {
+			if err := blockchain.CheckTransactionSanity(tx); err != nil {
+				log.Debugf("Skipping invalid protocol candidate %s: %v", tx.Hash(), err)
+				logSkippedDeps(tx, deps)
+				continue
+			}
+		}
 		_, _, err = blockchain.CheckTransactionInputs(tx, true, nextBlockHeight,
 			blockUtxos, g.chainParams)
 		if err != nil {
@@ -882,14 +889,38 @@ mempoolLoop:
 			logSkippedDeps(tx, deps)
 			continue
 		}
-		err = blockchain.ValidateTransactionScripts(tx, blockUtxos,
-			txscript.StandardVerifyFlags, g.sigCache,
-			g.hashCache)
-		if err != nil {
-			log.Debugf("Skipping tx %s due to error in "+
-				"ValidateTransactionScripts: %v", tx.Hash(), err)
-			logSkippedDeps(tx, deps)
-			continue
+		if !blockchain.IsAnchorTx(tx.MsgTx()) {
+			err = blockchain.ValidateTransactionScripts(tx, blockUtxos,
+				txscript.StandardVerifyFlags, g.sigCache,
+				g.hashCache)
+			if err != nil {
+				log.Debugf("Skipping tx %s due to error in "+
+					"ValidateTransactionScripts: %v", tx.Hash(), err)
+				logSkippedDeps(tx, deps)
+				continue
+			}
+		}
+		if prioItem.anchorFundingUtxo != "" {
+			if info, _ := g.chain.FetchAnchorTx(prioItem.anchorFundingUtxo); info != nil {
+				log.Debugf("Skipping already anchored funding utxo %s", prioItem.anchorFundingUtxo)
+				logSkippedDeps(tx, deps)
+				continue
+			}
+			if prevHash, ok := anchorFundingUtxos[prioItem.anchorFundingUtxo]; ok {
+				log.Warnf("Skipping duplicate anchor tx %s for funding utxo %s, already selected %s",
+					tx.Hash(), prioItem.anchorFundingUtxo, prevHash)
+				logSkippedDeps(tx, deps)
+				continue
+			}
+		}
+		if prioItem.protocolFeeCandidate {
+			prioItem.protocolFeeExempt = prioItem.anchorFundingUtxo != "" ||
+				blockchain.CheckDeAnchorFeeExemption(tx.MsgTx(), blockUtxos, g.chainParams) == nil
+			if shouldSkipLowFeeTx(prioItem, sortedByFee, blockPlusTxWeight, g.policy) {
+				log.Debugf("Skipping low-fee tx %s without validated protocol exemption", tx.Hash())
+				logSkippedDeps(tx, deps)
+				continue
+			}
 		}
 
 		// Spend the transaction inputs in the block utxo view and add
@@ -902,6 +933,9 @@ mempoolLoop:
 		// save the fees and signature operation counts to the block
 		// template.
 		blockTxns = append(blockTxns, tx)
+		if prioItem.anchorFundingUtxo != "" {
+			anchorFundingUtxos[prioItem.anchorFundingUtxo] = tx.Hash()
+		}
 		blockWeight += txWeight
 		blockSigOpCost += int64(sigOpCost)
 		totalFees += prioItem.fee
@@ -1204,7 +1238,7 @@ func (g *BlkTmplGenerator) UpdateBlockTime(msgBlock *wire.MsgBlock) error {
 // height.  It also recalculates and updates the new merkle root that results
 // from changing the coinbase script.
 func (g *BlkTmplGenerator) UpdateExtraNonce(msgBlock *wire.MsgBlock, blockHeight int32, extraNonce uint64) error {
-	coinbaseScript, err := standardCoinbaseScript(blockHeight, extraNonce)
+	coinbaseScript, err := g.standardCoinbaseScript(blockHeight, extraNonce)
 	if err != nil {
 		return err
 	}

@@ -23,7 +23,7 @@ func ValidatePathSnapshotForClient(snapshot *PathSnapshot, opts RecordVerificati
 		return ErrInvalidSnapshot
 	}
 	prefix, err := ParsePrefix(path)
-	if err != nil || pathMode(prefix) == PathLocalOnly {
+	if err != nil || replicationMode(prefix, nil) != ReplicationNetwork {
 		return ErrInvalidSnapshot
 	}
 	if opts.Height == 0 {

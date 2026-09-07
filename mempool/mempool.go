@@ -1596,7 +1596,8 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 	// Don't allow transactions with fees too low to get into a mined
 	// block.
 	// In satsnet, the min relay fee is 0, not to validate relay Fee Met
-	if !blockchain.IsDeAnchorTx(tx.MsgTx()) {
+	deanchorCandidate := blockchain.IsDeAnchorTx(tx.MsgTx())
+	if !deanchorCandidate {
 		err = mp.validateRelayFeeMet(
 			tx, txFee, feeAssets, txSize, utxoView, nextBlockHeight,
 			isNew, rateLimit)
@@ -1625,6 +1626,15 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 			return nil, chainRuleError(cerr)
 		}
 		return nil, err
+	}
+
+	// Classification only defers fee policy. Grant the de-anchor exemption
+	// after signatures and the shared local protocol checks have passed.
+	if deanchorCandidate && blockchain.CheckDeAnchorFeeExemption(tx.MsgTx(), utxoView, mp.cfg.ChainParams) != nil {
+		if err := mp.validateRelayFeeMet(tx, txFee, feeAssets, txSize, utxoView,
+			nextBlockHeight, isNew, rateLimit); err != nil {
+			return nil, err
+		}
 	}
 
 	result := &MempoolAcceptResult{

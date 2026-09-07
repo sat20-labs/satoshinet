@@ -182,7 +182,7 @@ func (b *IndexerMgr) initLocked() {
 func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 	defaults := dkvs_indexer.NetworkDefaultsForParams(b.chaincfgParam)
 	cfg := dkvs_indexer.Config{
-		AllowFreeLocal: b.chaincfgParam.Name != chaincfg.MainNetParams.Name,
+		AllowFreeLocal: b.chaincfgParam != nil && !b.IsMainnet(),
 		FreeLocalCache: dkvs_indexer.DefaultFreeLocalCachePolicy(),
 		CurrentHeight: func() uint64 {
 			if b.compiling == nil {

@@ -871,7 +871,7 @@ func TestRuntimeNestedStaticCallCannotCreateEffects(t *testing.T) {
 			Gas:           200000,
 			Block:         BlockContext{GasLimit: 1000000},
 		})
-		require.NoError(t, result.Err, opcode.String())
+		require.ErrorIs(t, result.Err, ErrCrossContractCallUnsupported, opcode.String())
 		require.Empty(t, runtime.AssetIntents, opcode.String())
 	}
 }
@@ -1055,7 +1055,7 @@ func callPrecompileWithOpcodeCode(addr gethcommon.Address, opcode vm.OpCode) []b
 		0x36,       // CALLDATASIZE, input size
 		0x60, 0x00, // PUSH1 0, input offset
 	}
-	if opcode == vm.CALL {
+	if opcode == vm.CALL || opcode == vm.CALLCODE {
 		code = append(code, 0x60, 0x00) // PUSH1 0, value
 	}
 	code = append(code, 0x73) // PUSH20 target address

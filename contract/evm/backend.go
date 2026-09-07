@@ -205,9 +205,10 @@ type Backend struct {
 	ContractUTXOs             ContractUTXOProvider
 	Triggers                  []TriggerCall
 
-	records []ExecutionRecord
-	pending []ExecutionRecord
-	gasUsed int64
+	records             []ExecutionRecord
+	pending             []ExecutionRecord
+	gasUsed             int64
+	settlementPrecision contractframework.AssetPrecisionPolicy
 }
 
 func SettlementPrecision(assetPrecision contractframework.AssetPrecisionResolver) contractframework.AssetPrecisionPolicy {
@@ -429,6 +430,7 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 		runtime.AssetBalances = NewContractUTXOAssetView(prefix, req.ContractUTXOs)
 	}
 	return &Backend{
+		settlementPrecision:       SettlementPrecision(req.AssetPrecision),
 		Runtime:                   runtime,
 		ContractPrefix:            prefix,
 		GasConfig:                 req.GasConfig,
@@ -589,7 +591,6 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx, contractTx contra
 		CallID:        callID,
 		Input:         nil,
 		Gas:           contractTx.GasLimit,
-		Value:         0,
 		FundingOutput: &output,
 		Block:         e.Block,
 	})
@@ -732,10 +733,13 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		FundingOutput:    &fundingOutput,
 		Block:            e.Block,
 	})
-	if !result.Contract.Equal(expectedContract) {
+	if result.Status == ResultStatusSuccess && !result.Contract.Equal(expectedContract) {
 		return fmt.Errorf("deploy contract mismatch: got %s want %s",
 			result.Contract.MustEncode(), expectedContract.MustEncode())
 	}
+	// Failed CREATE may return the zero address (for example, a nonce collision).
+	// Funding still belongs to the deterministically derived deploy address.
+	result.Contract = expectedContract
 	if result.Status == ResultStatusSuccess {
 		e.Runtime.State.SetContractDeployer(ContractGethAddress(result.Contract), gasRefundRecipient)
 	}
@@ -756,6 +760,14 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		GasRefundRecipient: gasRefundRecipient,
 		AssetIntents:       contractframework.CloneAssetIntents(e.Runtime.AssetIntents[intentStart:]),
 		RequiresResult:     true,
+	}
+	if result.Status != ResultStatusSuccess {
+		refunds, err := contractframework.NonGasFundingRefundIntents(expectedContract,
+			fundingOutputs, e.GasConfig.Normalize().GasAssetName, gasRefundRecipient)
+		if err != nil {
+			return err
+		}
+		outcome.AssetIntents = append(outcome.AssetIntents, refunds...)
 	}
 	return e.appendOutcome(outcome)
 }
@@ -795,7 +807,6 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		CallID:        callID,
 		Input:         contractframework.CloneBytes(validated.Payload.Param),
 		Gas:           validated.Payload.GasLimit,
-		Value:         0,
 		FundingOutput: &validated.FundingOutput,
 		GasAssetName:  gasConfig.GasAssetName,
 		GasFeeReserve: gasFeeReserve,
@@ -983,7 +994,11 @@ func (e *Backend) ExecuteTrigger(call TriggerCall) error {
 	if !e.contractExists(call.Trigger.Contract) {
 		return errors.New("trigger contract does not exist")
 	}
-	ready, err := e.triggerHasGasBudget(call.Trigger.Contract, callGasLimit)
+	maxBlockGas := e.GasConfig.Normalize().MaxGasPerBlock
+	if maxBlockGas > 0 && (e.gasUsed > maxBlockGas || callGasLimit > maxBlockGas-e.gasUsed) {
+		return nil
+	}
+	reserve, ready, err := e.triggerGasBudget(call.Trigger.Contract, callGasLimit)
 	if err != nil {
 		return err
 	}
@@ -994,6 +1009,13 @@ func (e *Backend) ExecuteTrigger(call TriggerCall) error {
 
 	callID := DeriveTriggerCallID(call.Trigger.Contract, call.Trigger.ID, int64(e.Block.Number))
 	intentStart := len(e.Runtime.AssetIntents)
+	baseBalances := e.Runtime.AssetBalances
+	if reserve != nil && baseBalances != nil {
+		e.Runtime.AssetBalances = triggerReservedAssetView{
+			base: baseBalances, owner: ContractAddressHash(call.Trigger.Contract),
+			assetName: e.GasConfig.Normalize().GasAssetName, reserve: reserve,
+		}
+	}
 	result := e.Runtime.Call(CallRequest{
 		CallerAddress: call.Trigger.Contract.MustEncode(),
 		TargetAddress: call.Trigger.Contract.MustEncode(),
@@ -1002,6 +1024,7 @@ func (e *Backend) ExecuteTrigger(call TriggerCall) error {
 		Gas:           call.GasLimit,
 		Block:         e.Block,
 	})
+	e.Runtime.AssetBalances = baseBalances
 	intents := contractframework.CloneAssetIntents(e.Runtime.AssetIntents[intentStart:])
 	outcome := contractframework.ExecutionOutcome{
 		Height:         int64(e.Block.Number),
@@ -1018,35 +1041,8 @@ func (e *Backend) ExecuteTrigger(call TriggerCall) error {
 }
 
 func (e *Backend) triggerHasGasBudget(contract ContractAddress, gasLimit int64) (bool, error) {
-	if e.ContractUTXOs == nil {
-		return true, nil
-	}
-	required, err := e.GasConfig.ContractFundingFee(ExecutionKindTrigger, gasLimit, true, e.Block.Number)
-	if err != nil {
-		return false, err
-	}
-	if required == nil || required.Sign() <= 0 {
-		return true, nil
-	}
-	utxos, err := e.ContractUTXOs(contract)
-	if err != nil {
-		return false, err
-	}
-	total := zeroDecimal()
-	for _, utxo := range utxos {
-		if !utxo.Contract.Equal(contract) {
-			continue
-		}
-		amount, err := utxo.AssetAmount(e.GasConfig.Normalize().GasAssetName)
-		if err != nil {
-			return false, err
-		}
-		total = total.AddAlignPrecision(amount)
-		if total.Cmp(required) >= 0 {
-			return true, nil
-		}
-	}
-	return false, nil
+	_, ready, err := e.triggerGasBudget(contract, gasLimit)
+	return ready, err
 }
 
 func (e *Backend) VerifyAndSettleResultTx(tx *wire.MsgTx, verify ResultVerifier) error {

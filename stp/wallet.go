@@ -262,3 +262,5 @@ func GetPubKey() ([]byte, error) {
 
 	return getPubKey()
 }
+
+func RegisterMessageServiceHandler(handler func([]byte) ([]byte, error)) {}

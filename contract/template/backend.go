@@ -425,19 +425,20 @@ func (e *Backend) Records() []ExecutionRecord {
 
 func (e *Backend) recordsWithSettlementAssetIntents(plans []*SettlementPlan) ([]ExecutionRecord, error) {
 	records := contractframework.CloneExecutionRecords(e.records)
-	intentsByItem := make(map[int64][]AssetIntent)
+	intentsByItem := make(map[settlementItemKey][]AssetIntent)
 	for _, plan := range plans {
 		planIntents, err := BuildSettlementAssetIntentsByItem(plan, e.AssetPrecision)
 		if err != nil {
 			return nil, err
 		}
 		for itemID, intents := range planIntents {
-			intentsByItem[itemID] = append(intentsByItem[itemID], intents...)
+			key := settlementItemKey{plan.Contract, itemID}
+			intentsByItem[key] = append(intentsByItem[key], intents...)
 		}
 	}
 	for i := range records {
 		for _, itemID := range records[i].ItemIDs {
-			if intents := intentsByItem[itemID]; len(intents) != 0 {
+			if intents := intentsByItem[settlementItemKey{records[i].Contract.MustEncode(), itemID}]; len(intents) != 0 {
 				records[i].AssetIntents = append(records[i].AssetIntents,
 					contractframework.CloneAssetIntents(intents)...)
 			}

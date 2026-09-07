@@ -35,7 +35,7 @@ func (i *Indexer) ensureRecordExpiryLocked(height, now uint64) error {
 }
 
 func (i *Indexer) addRecordExpiryLocked(record *wire.DKVSRecord) {
-	if record == nil || IsTombstone(record.Flags) {
+	if record == nil || IsTombstone(record.Flags) || recordHasPaidFeeProof(record) {
 		return
 	}
 	entry := recordExpiryEntry{recordHash: RecordHash(record), expiryHeight: RecordExpiryHeight(record)}

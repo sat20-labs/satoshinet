@@ -5,14 +5,28 @@
 package mining
 
 import (
+	"bytes"
 	"container/heap"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/btcutil/hdkeychain"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractapi "github.com/sat20-labs/satoshinet/contract"
@@ -20,9 +34,40 @@ import (
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
+	"github.com/sat20-labs/satoshinet/database"
+	_ "github.com/sat20-labs/satoshinet/database/ffldb"
+	satsindexer "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
+	"github.com/tyler-smith/go-bip39"
 )
+
+const miningTestBootstrapMnemonic = "acquire pet news congress unveil erode paddle crumble blue fish match eye"
+
+type anchorTemplateTxSource struct {
+	descs  []*TxDesc
+	hashes map[chainhash.Hash]struct{}
+}
+
+func newAnchorTemplateTxSource(txs ...*btcutil.Tx) *anchorTemplateTxSource {
+	source := &anchorTemplateTxSource{
+		descs:  make([]*TxDesc, 0, len(txs)),
+		hashes: make(map[chainhash.Hash]struct{}, len(txs)),
+	}
+	for _, tx := range txs {
+		source.descs = append(source.descs, &TxDesc{Tx: tx, Added: time.Now()})
+		source.hashes[*tx.Hash()] = struct{}{}
+	}
+	return source
+}
+
+func (s *anchorTemplateTxSource) LastUpdated() time.Time { return time.Now() }
+func (s *anchorTemplateTxSource) MiningDescs() []*TxDesc { return s.descs }
+func (s *anchorTemplateTxSource) HaveTransaction(hash *chainhash.Hash) bool {
+	_, ok := s.hashes[*hash]
+	return ok
+}
+func (s *anchorTemplateTxSource) Count() int { return len(s.descs) }
 
 func TestBlockHasEVMWorkIgnoresTemplateTransactions(t *testing.T) {
 	tx, _, err := tmplcontract.BuildDeployTx(tmplcontract.DeployTxBuildRequest{
@@ -45,6 +90,17 @@ func TestBlockHasEVMWorkIgnoresTemplateTransactions(t *testing.T) {
 	}
 	if contractengine.BlockHasContractTypeWork(txs, &chaincfg.TestNetParams, evmcommon.ContractTypeEVM) {
 		t.Fatal("template deploy must not be classified as EVM work")
+	}
+}
+
+func TestContractPrefixUsesNetworkIdentity(t *testing.T) {
+	params := chaincfg.MainNetParams
+	params.Name = "renamed-mainnet"
+	if got := contractPrefix(&params); got != contractapi.MainnetContractPrefix {
+		t.Fatalf("renamed mainnet contract prefix=%q, want %q", got, contractapi.MainnetContractPrefix)
+	}
+	if got := contractPrefix(&chaincfg.TestNetParams); got != contractapi.TestnetContractPrefix {
+		t.Fatalf("testnet contract prefix=%q, want %q", got, contractapi.TestnetContractPrefix)
 	}
 }
 
@@ -244,6 +300,22 @@ func TestEVMAssetFeeBypassesSatoshiMinFreeFee(t *testing.T) {
 	}
 }
 
+func TestProtocolZeroFeeTransactionsBypassTemplateFloor(t *testing.T) {
+	policy := &Policy{
+		BlockMinWeight: 0,
+		TxMinFreeFee:   btcutil.Amount(10),
+	}
+	if !shouldSkipLowFeeTx(&txPrioItem{}, true, 1, policy) {
+		t.Fatal("ordinary zero-fee transaction must remain subject to the template fee floor")
+	}
+	if shouldSkipLowFeeTx(&txPrioItem{protocolFeeExempt: true}, true, 1, policy) {
+		t.Fatal("anchor/deanchor transaction must bypass the satoshi fee floor")
+	}
+	if !shouldSkipLowFeeTx(&txPrioItem{protocolFeeCandidate: true}, true, 1, policy) {
+		t.Fatal("classification alone must not grant a protocol fee exemption")
+	}
+}
+
 func TestAddEVMResultsToTemplateCommitsRootAndFees(t *testing.T) {
 	contract, err := evm.NewContractAddress(evm.TestnetContractPrefix,
 		evm.AddressVersionV1, evm.ContractTypeEVM, evm.EVMAddress{1, 2, 3})
@@ -402,4 +474,370 @@ func TestMergeMissingEVMResultUtxosFetchesContractAssetInput(t *testing.T) {
 	if fetches != 1 {
 		t.Fatalf("expected no extra fetch when input already exists, got %d", fetches)
 	}
+}
+
+func TestCoinbaseSignerIsolatedAcrossGenerators(t *testing.T) {
+	for _, name := range []string{"first", "second"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			generator := NewBlkTmplGenerator(nil, &chaincfg.TestNetParams, nil, nil, nil, nil, nil)
+			if generator.coinbaseSigner == nil {
+				t.Fatal("constructor did not initialize the signer")
+			}
+			signature := []byte("signature-" + t.Name())
+			generator.coinbaseSigner = func([]byte) ([]byte, error) { return signature, nil }
+			const height = int32(100)
+			coinbase, err := createCoinbaseTx(&chaincfg.TestNetParams, nil, height, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			block := &wire.MsgBlock{Transactions: []*wire.MsgTx{coinbase.MsgTx()}}
+			checkScript := func(script []byte, nonce uint64) {
+				t.Helper()
+				want, err := txscript.NewScriptBuilder().AddInt64(int64(height)).
+					AddInt64(int64(nonce)).AddData(signature).Script()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(script, want) {
+					t.Fatalf("coinbase script=%x, want %x", script, want)
+				}
+			}
+			for nonce := uint64(0); nonce < 100; nonce++ {
+				script, err := generator.standardCoinbaseScript(height, nonce)
+				if err != nil {
+					t.Fatal(err)
+				}
+				checkScript(script, nonce)
+				if err := generator.UpdateExtraNonce(block, height, nonce+1); err != nil {
+					t.Fatal(err)
+				}
+				checkScript(block.Transactions[0].TxIn[0].SignatureScript, nonce+1)
+			}
+		})
+	}
+}
+
+func TestCoinbaseSignerErrorPropagates(t *testing.T) {
+	generator := NewBlkTmplGenerator(nil, nil, nil, nil, nil, nil, nil)
+	signErr := errors.New("test signer failure")
+	generator.coinbaseSigner = func([]byte) ([]byte, error) { return nil, signErr }
+	if script, err := generator.standardCoinbaseScript(100, 0); !errors.Is(err, signErr) || script != nil {
+		t.Fatalf("script=%x err=%v, want signer failure", script, err)
+	}
+	if err := generator.UpdateExtraNonce(nil, 100, 1); !errors.Is(err, signErr) {
+		t.Fatalf("UpdateExtraNonce error=%v, want signer failure", err)
+	}
+}
+
+func TestAnchorTemplateSelectionAcceptsValidAndRejectsInvalidOrDuplicate(t *testing.T) {
+	params := chaincfg.TestNetParams
+	db, err := database.Create("ffldb", filepath.Join(t.TempDir(), "blocks"), params.Net)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	timeSource := blockchain.NewMedianTime()
+	chain, err := blockchain.New(&blockchain.Config{
+		DB: db, ChainParams: &params, TimeSource: timeSource,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	coreKey, peerKey := miningTestAnchorKeys(t)
+	witnessScript, lockedPkScript, err := anchortx.GetP2WSHscript(
+		coreKey.PubKey().SerializeCompressed(), peerKey.PubKey().SerializeCompressed())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		validFunding   = "111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000:1"
+		invalidFunding = "22223333444455556666777788889999aaaabbbbccccddddeeeeffff00001111:0"
+		value          = int64(21000)
+	)
+	server := miningTestL1Indexer(t, map[string]*scommon.AssetsInUtxo{
+		validFunding: {
+			OutPoint: validFunding, Value: value, PkScript: lockedPkScript,
+		},
+		invalidFunding: {
+			OutPoint: invalidFunding, Value: value - 1, PkScript: lockedPkScript,
+		},
+	})
+	t.Cleanup(server.Close)
+	host := strings.TrimPrefix(server.URL, "http://")
+	if !anchortx.StartAnchorManager(&anchortx.AnchorConfig{
+		IndexerScheme: "http", IndexerHost: host, IndexerProxy: "testnet", ChainParams: &params,
+	}) {
+		t.Fatal("failed to start anchor manager")
+	}
+	t.Cleanup(anchortx.Stop)
+
+	valid := miningTestAnchorTx(t, validFunding, witnessScript, value, coreKey, txscript.OP_TRUE)
+	duplicate := miningTestAnchorTx(t, validFunding, witnessScript, value, coreKey, txscript.OP_2)
+	invalid := miningTestAnchorTx(t, invalidFunding, witnessScript, value, coreKey, txscript.OP_3)
+	invalidAmount := valid.MsgTx().Copy()
+	invalidAmount.TxOut[0].Value--
+	invalidSignature := valid.MsgTx().Copy()
+	invalidSignature.TxIn[0].SignatureScript = []byte{txscript.OP_TRUE}
+	deanchorMarker, err := satsindexer.NullDataScript(satsindexer.CONTENT_TYPE_DESCENDING, []byte("missing-input"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidDeanchor := wire.NewMsgTx(2)
+	invalidDeanchor.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: chainhash.Hash{9}, Index: 0}, nil, nil))
+	invalidDeanchor.AddTxOut(wire.NewTxOut(330, nil, deanchorMarker))
+	if !blockchain.IsDeAnchorTx(invalidDeanchor) {
+		t.Fatal("test transaction was not classified as deanchor")
+	}
+	source := newAnchorTemplateTxSource(valid, duplicate, invalid, btcutil.NewTx(invalidAmount),
+		btcutil.NewTx(invalidSignature), btcutil.NewTx(invalidDeanchor))
+	generator := NewBlkTmplGenerator(&Policy{
+		BlockMaxWeight: blockchain.MaxBlockWeight,
+		BlockMinWeight: 0,
+		TxMinFreeFee:   btcutil.Amount(10),
+	}, &params, source, chain, timeSource, txscript.NewSigCache(10), txscript.NewHashCache(10))
+	generator.coinbaseSigner = func([]byte) ([]byte, error) { return []byte("test-signature"), nil }
+
+	template, err := generator.NewBlockTemplate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(template.Block.Transactions) != 2 {
+		t.Fatalf("template transaction count=%d, want coinbase plus one anchor", len(template.Block.Transactions))
+	}
+	includedHash := template.Block.Transactions[1].TxHash()
+	if includedHash != *valid.Hash() && includedHash != *duplicate.Hash() {
+		t.Fatalf("template included unexpected transaction %s", includedHash)
+	}
+	if includedHash == *invalid.Hash() {
+		t.Fatalf("template included invalid anchor %s", includedHash)
+	}
+	lockedInfo, err := anchortx.GetLockedTxInfo(template.Block.Transactions[1], false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lockedInfo.Utxo != validFunding {
+		t.Fatalf("included funding utxo=%s, want %s", lockedInfo.Utxo, validFunding)
+	}
+	if len(template.Fees) != 2 || len(template.SigOpCosts) != 2 {
+		t.Fatalf("template accounting missing anchor: fees=%v sigops=%v", template.Fees, template.SigOpCosts)
+	}
+
+	// Use a real signed P2WSH spend of an in-template anchor. Supply the
+	// transactions in reverse dependency order to exercise deferred validation.
+	channel, err := btcutil.NewAddressWitnessScriptHash(chainhash.HashB(witnessScript), &params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := miningTestAnchorTx(t, validFunding, witnessScript, value, coreKey, txscript.OP_TRUE)
+	parent.MsgTx().TxOut[0].PkScript = lockedPkScript
+	keys := []*btcec.PrivateKey{coreKey, peerKey}
+	if bytes.Compare(coreKey.PubKey().SerializeCompressed(), peerKey.PubKey().SerializeCompressed()) > 0 {
+		keys[0], keys[1] = keys[1], keys[0]
+	}
+	signSpend := func(tx *wire.MsgTx, amount int64) {
+		t.Helper()
+		fetcher := txscript.NewCannedPrevOutputFetcher(lockedPkScript, amount, nil)
+		hashes := txscript.NewTxSigHashes(tx, fetcher)
+		witness := wire.TxWitness{nil}
+		for _, key := range keys {
+			sig, err := txscript.RawTxInWitnessSignature(tx, hashes, 0, amount, nil, witnessScript, txscript.SigHashAll, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			witness = append(witness, sig)
+		}
+		tx.TxIn[0].Witness = append(witness, witnessScript)
+	}
+	for _, test := range []struct {
+		name                                   string
+		legacy, badPayload, badChannel, badSig bool
+		op                                     uint8
+		fee                                    int64
+		wantIncluded                           bool
+	}{
+		{name: "legacy deanchor", legacy: true, wantIncluded: true},
+		{name: "close deanchor", op: satsindexer.DESCEND_OP_CLOSE, wantIncluded: true},
+		{name: "splicing deanchor", op: satsindexer.DESCEND_OP_SPLICING_OUT, wantIncluded: true},
+		{name: "force close zero txid", op: satsindexer.DESCEND_OP_FORCE_CLOSE, wantIncluded: true},
+		{name: "malformed deanchor", op: satsindexer.DESCEND_OP_CLOSE, badPayload: true},
+		{name: "wrong channel", op: satsindexer.DESCEND_OP_CLOSE, badChannel: true},
+		{name: "bad deanchor signature", op: satsindexer.DESCEND_OP_CLOSE, badSig: true},
+		{name: "malformed pays ordinary fee", op: satsindexer.DESCEND_OP_CLOSE, badPayload: true, fee: 1000, wantIncluded: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			l1TxID := strings.Repeat("1", 64)
+			if test.op == satsindexer.DESCEND_OP_FORCE_CLOSE {
+				l1TxID = strings.Repeat("0", 64)
+			}
+			payload := []byte(l1TxID)
+			if !test.legacy {
+				payload, err = satsindexer.EncodeDescendPayloadV2(l1TxID, test.op, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.badPayload {
+				payload = append(payload, 0)
+			}
+			marker, err := satsindexer.NullDataScript(satsindexer.CONTENT_TYPE_DESCENDING, payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			channelID := channel.EncodeAddress()
+			if test.badChannel {
+				channelID = "not-a-channel"
+			}
+			channelMarker, err := satsindexer.NullDataScript(satsindexer.CONTENT_TYPE_CHANNELID, []byte(channelID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			deanchor := wire.NewMsgTx(2)
+			deanchor.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: *parent.Hash()}, nil, nil))
+			deanchor.AddTxOut(wire.NewTxOut(1000, nil, marker))
+			change := value - 1000 - test.fee
+			deanchor.AddTxOut(wire.NewTxOut(change, nil, lockedPkScript))
+			deanchor.AddTxOut(wire.NewTxOut(0, nil, channelMarker))
+			signSpend(deanchor, value)
+			if test.badSig {
+				deanchor.TxIn[0].Witness[1] = []byte{1}
+			}
+			deanchorTx := btcutil.NewTx(deanchor)
+			view := blockchain.NewUtxoViewpoint()
+			view.AddTxOuts(parent, 1)
+			if err := blockchain.ValidateTransactionScripts(deanchorTx, view, txscript.StandardVerifyFlags, nil, txscript.NewHashCache(10)); (err != nil) != test.badSig {
+				t.Fatalf("fixture signature validation error=%v, badSig=%v", err, test.badSig)
+			}
+			descendant := wire.NewMsgTx(2)
+			descendant.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: *deanchorTx.Hash(), Index: 1}, nil, nil))
+			descendant.AddTxOut(wire.NewTxOut(change-10, nil, lockedPkScript))
+			signSpend(descendant, change)
+			txs := newAnchorTemplateTxSource(btcutil.NewTx(descendant), deanchorTx, parent)
+			txs.descs[0].Fee = 10
+			txs.descs[1].Fee = test.fee
+			generator := NewBlkTmplGenerator(&Policy{
+				BlockMaxWeight: blockchain.MaxBlockWeight, TxMinFreeFee: 10,
+			}, &params, txs, chain, timeSource, txscript.NewSigCache(10), txscript.NewHashCache(10))
+			generator.coinbaseSigner = func([]byte) ([]byte, error) { return []byte("test-signature"), nil }
+			got, err := generator.NewBlockTemplate(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCount := 2
+			if test.wantIncluded {
+				wantCount = 4
+			}
+			if len(got.Block.Transactions) != wantCount || len(got.Fees) != wantCount || len(got.SigOpCosts) != wantCount {
+				t.Fatalf("template counts: txs=%d fees=%d sigops=%d, want %d", len(got.Block.Transactions), len(got.Fees), len(got.SigOpCosts), wantCount)
+			}
+			if test.wantIncluded && (got.Block.Transactions[2].TxHash() != deanchor.TxHash() || got.Block.Transactions[3].TxHash() != descendant.TxHash()) {
+				t.Fatal("deanchor or descendant missing or out of dependency order")
+			}
+		})
+	}
+}
+
+func miningTestAnchorTx(t *testing.T, funding string, witnessScript []byte, value int64,
+	key *btcec.PrivateKey, outputOpcode byte) *btcutil.Tx {
+
+	t.Helper()
+	invoice, err := anchortx.StandardAnchorScript(funding, witnessScript, value, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := ecdsa.Sign(key, chainhash.HashB(invoice))
+	assets := wire.TxAssets{}
+	assetsBuf, err := wire.SerializeTxAssets(&assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchorScript, err := txscript.NewScriptBuilder().
+		AddData([]byte(funding)).
+		AddData(witnessScript).
+		AddInt64(value).
+		AddData(assetsBuf).
+		AddData(sig.Serialize()).
+		Script()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: wire.AnchorTxOutIndex},
+		SignatureScript:  anchorScript,
+	})
+	tx.AddTxOut(wire.NewTxOut(value, nil, []byte{outputOpcode}))
+	payload := scommon.ASSET_PLAIN_SAT.String() + "-21000000000000000-" +
+		strconv.Itoa(0) + "-" + strconv.Itoa(1)
+	marker, err := satsindexer.NullDataScript(satsindexer.CONTENT_TYPE_ASCENDING, []byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.AddTxOut(wire.NewTxOut(0, nil, marker))
+	return btcutil.NewTx(tx)
+}
+
+func miningTestL1Indexer(t *testing.T, utxos map[string]*scommon.AssetsInUtxo) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/testnet/v3/utxo/info/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			t.Errorf("unexpected L1 indexer path %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		utxo := strings.TrimPrefix(r.URL.Path, prefix)
+		data, ok := utxos[utxo]
+		response := indexerwire.TxOutputRespV3{Data: data}
+		if ok {
+			response.BaseResp = indexerwire.BaseResp{Code: 0, Msg: "ok"}
+		} else {
+			response.BaseResp = indexerwire.BaseResp{Code: 404, Msg: "missing utxo"}
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("encode L1 response: %v", err)
+		}
+	}))
+}
+
+func miningTestAnchorKeys(t *testing.T) (*btcec.PrivateKey, *btcec.PrivateKey) {
+	t.Helper()
+	oldEnableTesting := scommon.ENABLE_TESTING
+	scommon.ENABLE_TESTING = true
+	t.Cleanup(func() { scommon.ENABLE_TESTING = oldEnableTesting })
+	coreKey := miningTestAnchorKey(t, 0)
+	if got := hex.EncodeToString(coreKey.PubKey().SerializeCompressed()); got != scommon.GetBootstrapPubKey() {
+		t.Fatalf("bootstrap key=%s, want %s", got, scommon.GetBootstrapPubKey())
+	}
+	return coreKey, miningTestAnchorKey(t, 1)
+}
+
+func miningTestAnchorKey(t *testing.T, index uint32) *btcec.PrivateKey {
+	t.Helper()
+	if !bip39.IsMnemonicValid(miningTestBootstrapMnemonic) {
+		t.Fatal("invalid test bootstrap mnemonic")
+	}
+	master, err := hdkeychain.NewMaster(bip39.NewSeed(miningTestBootstrapMnemonic, ""), &chaincfg.TestNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, child := range []uint32{
+		hdkeychain.HardenedKeyStart + 86,
+		hdkeychain.HardenedKeyStart,
+		hdkeychain.HardenedKeyStart,
+		0,
+		index,
+	} {
+		master, err = master.Derive(child)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	key, err := master.ECPrivKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
 }

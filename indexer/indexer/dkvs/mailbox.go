@@ -51,11 +51,18 @@ func (i *Indexer) validateMailboxLocked(record *wire.DKVSRecord, parsed ParsedKe
 		}
 	case "share":
 		path := "/mail/" + parsed.Segments[0] + "/share"
-		meta, err := i.ensurePathMetaLocked(path, height, now)
+		records, _, _, err := i.scanLocked(path, nil, 0, true, height, now)
 		if err != nil {
 			return err
 		}
-		usedCount, usedBytes := mailboxUsageWithoutExisting(i, meta.ActiveRecords, meta.ActiveTotalSize, existing, height, now)
+		var usedCount, usedBytes uint64
+		for _, candidate := range records {
+			if existing != nil && candidate.Key == existing.Key {
+				continue
+			}
+			usedCount++
+			usedBytes += uint64(RecordSize(candidate))
+		}
 		if RecordSize(record) > i.mailbox.MaxShareSize {
 			return ErrRecordTooLarge
 		}

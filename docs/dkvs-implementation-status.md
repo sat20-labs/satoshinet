@@ -42,19 +42,23 @@
 
 - 原生 DKVS P2P notify/inventory/get/data/sync 消息已接入 peer/server。
 - miner 可全量同步；普通节点按 key/prefix/mailbox/service subscription 同步。
-- directory/path sync、watch、CAS、batch-CAS、record、prefix、usage、blob、subscription、checkpoint/snapshot REST API 已实现。
+- Wallet REST API 只暴露 config、record、key-state、batch-CAS、prefix status/snapshot/read；
+  canonical path sync、checkpoint/snapshot 和节点 subscription 保持节点内部或 node-local 管理接口。
 - P2P path repair 和 RPC path snapshot 共用确定性验证逻辑。
 
 ### Wallet SDK 本地副本
 
 - `dkvsManager` 是 SDK 唯一 DKVS 协调层。
 - Wallet 启动时注册 path、启动 worker，并主动执行首轮同步。
-- watch 变化或异常立即撤销对应 scope ready。
-- 完整同步成功后原子替换 confirmed replica 并恢复 ready。
-- read/write 同时检查当前 session ready 和持久化 path session 状态。
+- managed prefix 启动时完整 snapshot，之后默认每分钟比较 endpoint-local generation；只重拉变化 prefix。
+- FREE_LOCAL 参与同一套本端 generation/status/snapshot，唯一差异是不进入 P2P relay。
+- unmanaged key/prefix 按需直读，使用 5 秒超时和 1 分钟 endpoint-scoped 内存缓存。
+- 服务端无 Wallet session、cursor、change log 或 watcher。
+- 完整同步成功后按 prefix 原子替换 confirmed replica；全部目标 prefix 完成后恢复 ready。
+- read/write 同时检查当前 session ready 和持久化 prefix generation 状态。
 - prepared/inflight/conflict/error/stale 或首轮同步未完成时 fail-closed。
-- 写入前使用最新本地 confirmed value；CAS 冲突后重新同步并由应用重算 mutation。
-- 旧单-record outbox 已删除；managed path 使用完整 batch outbox 和 path preconditions。
+- 写入前使用最新本地 confirmed value；CAS 冲突后直读相关 key、重新执行业务 builder、重签并最多重试 3 次。
+- 旧单-record outbox 已删除；写入只使用 per-key CAS/batch-CAS，不使用 path write precondition。
 
 ### 账户管理统一托管数据
 
@@ -77,7 +81,9 @@
 - 最小恢复包仅包含：当前 allocation proof、最小 carrier、必要对象/receipt、未终结发送/接收、active receive request 和 reservation。
 - 余额、完成历史、ticker 展示、scan/confirmation/raw tx 等派生缓存不进入账户托管数据。
 - 空 RGB scope 不产生 payload；缺失 payload 在导入时权威清理旧本地 RGB 状态。
-- RGB capability、delivery、ACK/NACK、mailbox relay 仍使用 DKVS，但全部为有限 TTL FREE_LOCAL 瞬态记录，不使用 AUTOPAY。
+- RGB delivery、ACK/NACK、mailbox relay 仍使用有限 TTL FREE_LOCAL DKVS 瞬态记录，不使用 AUTOPAY。
+- RGB Direct capability 合并进主账户唯一免费的 `/account/<network>/<root-address>` 服务描述符；该全网复制记录同时承载 AccountID、CoreNode binding、capability bits 和有界协议 TLV。
+- 子账户不创建 DKVS mapping/binding/capability/mailbox identity；所有子账户 RGB 恢复数据由主账户 provider 统一管理，L1 监控仍覆盖每个 RGB scope。
 
 ### PWA/WASM
 
@@ -124,7 +130,7 @@
 ## 2026-08-06 FREE_LOCAL、Blob 与 Wallet SDK 收敛
 
 - `GET /v3/dkvs/config` 已成为 wallet SDK 在线 FREE_LOCAL 保存期的唯一来源。账户管理、
-  RGB capability/delivery/ACK、普通 record、account record 和 Blob 在线写入均采用服务节点
+  RGB delivery/ACK、普通 record、account record 和 Blob 在线写入均采用服务节点
   返回的 `max_ttl_blocks`；配置缺失、禁用或为零时拒绝写入。
 - 账户首次自动激活不再写入 SDK 内置 TTL。同步前读取当前服务节点策略，并把变化后的
   TTL 提交到本地 profile；后续同步可按节点新策略续写。

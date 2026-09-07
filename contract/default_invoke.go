@@ -38,6 +38,8 @@ func FindDefaultInvokeOutputs(tx *wire.MsgTx, prefix string, contractType byte) 
 	if tx == nil {
 		return nil, fmt.Errorf("missing transaction")
 	}
+	// Contract payloads, including Result settlements, are not default calls.
+	// Paying a contract from a Result must not start an automatic invocation chain.
 	hasPayload, err := HasContractPayload(tx)
 	if err != nil || hasPayload {
 		return nil, err

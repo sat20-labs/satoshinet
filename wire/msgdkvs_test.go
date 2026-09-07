@@ -27,7 +27,7 @@ func TestDKVSMessagesWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []Message{
-		&MsgDKVSNotify{EventType: 1, Data: recordData},
+		&MsgDKVSNotify{Target: "core-b", EventType: 1, Data: recordData},
 		&MsgDKVSInv{Items: []DKVSInvItem{{Key: record.Key, RecordHash: hash, Seq: 10}}},
 		&MsgDKVSGet{Keys: []string{record.Key}, RecordHashes: []chainhash.Hash{hash}},
 		&MsgDKVSData{Records: []*DKVSRecord{record}, NotFound: []chainhash.Hash{hash}},
@@ -81,7 +81,8 @@ func TestDKVSMessagesOversize(t *testing.T) {
 	largeRecordValue := bytes.Repeat([]byte("v"), MaxDKVSRecordSize)
 	longCursor := bytes.Repeat([]byte("c"), MaxDKVSCursorSize+1)
 	tests := []Message{
-		&MsgDKVSNotify{Data: bytes.Repeat([]byte{1}, MaxDKVSNotifyDataSize+1)},
+		&MsgDKVSNotify{Target: string(bytes.Repeat([]byte("t"), MaxDKVSNotifyTargetSize+1)), EventType: 1, Data: []byte{1}},
+		&MsgDKVSNotify{EventType: 1, Data: bytes.Repeat([]byte{1}, MaxDKVSNotifyDataSize+1)},
 		&MsgDKVSNotify{EventType: 1},
 		&MsgDKVSInv{Items: []DKVSInvItem{{Key: longKey}}},
 		&MsgDKVSGet{Keys: []string{longKey}},
@@ -204,7 +205,7 @@ func sampleDKVSMessages() []Message {
 		panic(err)
 	}
 	return []Message{
-		&MsgDKVSNotify{EventType: 1, Data: recordData},
+		&MsgDKVSNotify{Target: "core-b", EventType: 1, Data: recordData},
 		&MsgDKVSInv{Items: []DKVSInvItem{{Key: record.Key, RecordHash: hash, Seq: 10}}},
 		&MsgDKVSGet{Keys: []string{record.Key}, RecordHashes: []chainhash.Hash{hash}},
 		&MsgDKVSData{Records: []*DKVSRecord{record}, NotFound: []chainhash.Hash{hash}},
@@ -240,12 +241,12 @@ func TestDKVSNotifyCompactPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msg := &MsgDKVSNotify{EventType: 1, Data: data}
+	msg := &MsgDKVSNotify{Target: "core-b", EventType: 1, Data: data}
 	var encoded bytes.Buffer
 	if err := msg.BtcEncode(&encoded, ProtocolVersion, BaseEncoding); err != nil {
 		t.Fatal(err)
 	}
-	want := 1 + VarIntSerializeSize(uint64(len(data))) + len(data)
+	want := VarIntSerializeSize(uint64(len(msg.Target))) + len(msg.Target) + 1 + VarIntSerializeSize(uint64(len(data))) + len(data)
 	if encoded.Len() != want {
 		t.Fatalf("notify size=%d want=%d", encoded.Len(), want)
 	}

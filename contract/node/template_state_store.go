@@ -115,23 +115,41 @@ func (s *TemplateStateStore) DeleteBlockState(hash *chainhash.Hash) error {
 }
 
 func (s *TemplateStateStore) RuntimeFactory() TemplateRuntimeFactory {
+	return s.runtimeFactory(nil)
+}
+
+func (s *TemplateStateStore) runtimeFactory(transient func(*chainhash.Hash) (*template.RuntimeStore, bool)) TemplateRuntimeFactory {
 	return func(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*template.RuntimeStore, error) {
+		if s == nil || s.db == nil {
+			return nil, errors.New("missing template state database")
+		}
 		if block == nil {
 			return nil, errors.New("missing block")
 		}
 		prevHash := block.MsgBlock().Header.PrevBlock
-		store, err := s.LoadBlockState(&prevHash)
-		if errors.Is(err, ErrTemplateStateNotFound) {
-			_, tipStore, tipErr := s.LoadTip()
-			if tipErr != nil {
-				return nil, tipErr
+		var store *template.RuntimeStore
+		err := s.db.View(func(tx database.Tx) error {
+			parent := tx.Metadata().Bucket(templateStateBucketName)
+			var lookup func(*chainhash.Hash) bool
+			var foundTransient bool
+			if transient != nil {
+				lookup = func(hash *chainhash.Hash) bool { store, foundTransient = transient(hash); return foundTransient }
 			}
-			if tipStore != nil {
-				store = tipStore
-			} else {
+			hash, err := ancestorStateHash(tx, parent, templateStateByBlockBucketName, prevHash, lookup)
+			if err != nil {
+				return err
+			}
+			if hash == nil {
 				store = template.NewRuntimeStore()
+				return nil
 			}
-		} else if err != nil {
+			if foundTransient {
+				return nil
+			}
+			store, err = loadTemplateStateFromBucket(parent, hash)
+			return err
+		})
+		if err != nil {
 			return nil, err
 		}
 		return store, nil
@@ -149,9 +167,6 @@ func dbStoreTemplateBlockState(dbTx database.Tx, hash *chainhash.Hash, store *te
 	if err != nil {
 		return err
 	}
-	if err := validatePersistedContractStateSize("template", encoded); err != nil {
-		return err
-	}
 	parent, err := dbTx.Metadata().CreateBucketIfNotExists(templateStateBucketName)
 	if err != nil {
 		return err
@@ -160,7 +175,7 @@ func dbStoreTemplateBlockState(dbTx database.Tx, hash *chainhash.Hash, store *te
 	if err != nil {
 		return err
 	}
-	if err := byBlock.Put(hash[:], encoded); err != nil {
+	if err := putStateBlob(byBlock, hash[:], encoded); err != nil {
 		return err
 	}
 	return parent.Put(templateStateTipKeyName, hash[:])
@@ -176,7 +191,7 @@ func dbDeleteTemplateBlockState(dbTx database.Tx, hash, newTip *chainhash.Hash) 
 	}
 	byBlock := parent.Bucket(templateStateByBlockBucketName)
 	if byBlock != nil {
-		if err := byBlock.Delete(hash[:]); err != nil {
+		if err := deleteStateBlob(byBlock, hash[:]); err != nil {
 			return err
 		}
 	}
@@ -198,7 +213,10 @@ func loadTemplateStateFromBucket(parent database.Bucket, hash *chainhash.Hash) (
 	if byBlock == nil {
 		return nil, ErrTemplateStateNotFound
 	}
-	encoded := byBlock.Get(hash[:])
+	encoded, err := getStateBlob(byBlock, hash[:])
+	if err != nil {
+		return nil, err
+	}
 	if encoded == nil {
 		return nil, ErrTemplateStateNotFound
 	}

@@ -15,7 +15,7 @@ import (
 // interface for RPC
 
 func (b *IndexerMgr) IsMainnet() bool {
-	return b.chaincfgParam.Name == "mainnet"
+	return b != nil && b.chaincfgParam != nil && b.chaincfgParam.Net == wire.MainNet
 }
 
 func (b *IndexerMgr) GetBaseDBVer() string {

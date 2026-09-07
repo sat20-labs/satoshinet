@@ -245,7 +245,7 @@ func TestPathMetaTracksPutUpdateDelete(t *testing.T) {
 	}
 }
 
-func TestMailboxRejectsZeroTTL(t *testing.T) {
+func TestMailboxZeroTTLReservedForPaidInternalRetention(t *testing.T) {
 	idx := testIndexer(t)
 	owner, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -255,11 +255,23 @@ func TestMailboxRejectsZeroTTL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := signedRecordWithValue(t, sender, testMailMsgKey(t, owner.PubKey().SerializeCompressed(), sender.PubKey().SerializeCompressed(), "m1"), 1, []byte("message"), 0)
-	record.TTL = 0
-	signRecord(t, sender, record)
-	if _, err := idx.PutLocal(record); !errors.Is(err, ErrInvalidRecord) {
-		t.Fatalf("zero TTL mailbox record err=%v", err)
+	record := &wire.DKVSRecord{
+		Version: Version,
+		Key:     testMailMsgKey(t, owner.PubKey().SerializeCompressed(), sender.PubKey().SerializeCompressed(), "m1"),
+		Value:   []byte("message"),
+		Seq:     1, IssueHeight: 1, TTL: 0,
+	}
+	if updated, err := idx.PutInternalMailbox(record); err != nil || !updated {
+		t.Fatalf("paid zero TTL mailbox record updated=%v err=%v", updated, err)
+	}
+	freeZero := cloneRecord(record)
+	freeZero.Key = testMailMsgKey(t, owner.PubKey().SerializeCompressed(), sender.PubKey().SerializeCompressed(), "m2")
+	freeZero.FeeProof, err = EncodeFeeProof(&FeeProof{Mode: FeeModeFreeLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.PutInternalMailbox(freeZero); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("FREE_LOCAL zero TTL mailbox record err=%v", err)
 	}
 }
 

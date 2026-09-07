@@ -234,18 +234,22 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 		return chainhash.Hash{}, ErrRecordNotFound
 	}
 	oldHash := RecordHash(record)
-	meta, err := i.pathMetaForMutationLocked(parsed, record, deleteRecord, !i.isLocalOnlyRecord(record), height, now)
+	localOnly := isEndpointCacheRecord(record) || pathMode(parsed) == PathLocalOnly
+	meta, err := i.pathMetaForMutationLocked(parsed, record, deleteRecord, !localOnly, height, now)
 	if err != nil {
 		return chainhash.Hash{}, err
 	}
 	state := &deleteState{
 		FloorSeq:  floorSeq,
 		PubKey:    append([]byte{}, record.PubKey...),
-		LocalOnly: isFreeLocalRecord(record) || isFreeLocalRecord(deleteRecord),
+		LocalOnly: localOnly,
 	}
 	if deleteRecord != nil {
 		if meta != nil {
 			state.PathGeneration = meta.Generation
+			if state.LocalOnly {
+				state.PathGeneration = meta.EndpointGeneration
+			}
 		}
 		state.EffectiveHash = RecordHash(deleteRecord)
 	}
@@ -265,7 +269,15 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 	if err := batch.Delete(hashDBKey(oldHash)); err != nil {
 		return chainhash.Hash{}, err
 	}
-	if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
+	if localOnly {
+		// Endpoint-local cache data has no durable delete history. The endpoint
+		// generation above is sufficient to invalidate client snapshots, while
+		// physically removing the delete state prevents mailbox/FREE_LOCAL churn
+		// from accumulating forever.
+		if err := deleteDeleteStateBatch(batch, record.Key); err != nil {
+			return chainhash.Hash{}, err
+		}
+	} else if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
 		return chainhash.Hash{}, err
 	}
 	if clearNameTransfer && parsed.Namespace == "name" && len(parsed.Segments) == 1 {
@@ -329,6 +341,9 @@ func (i *Indexer) retainDeleteCommandLocked(record *wire.DKVSRecord, now uint64,
 	}
 	if meta != nil {
 		state.PathGeneration = meta.Generation
+		if localOnly {
+			state.PathGeneration = meta.EndpointGeneration
+		}
 	}
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
@@ -407,6 +422,7 @@ func (i *Indexer) deleteMirrorRecordLocked(record *wire.DKVSRecord, height, now 
 	if i.recordExpiryInitialized {
 		delete(i.recordExpiryEntries, record.Key)
 	}
+	i.notifyPathMutation(record)
 	return nil
 }
 

@@ -132,29 +132,36 @@ func (b *BaseIndexer) reset() {
 // 只保存UpdateDB需要用的数据
 func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 	startTime := time.Now()
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
+	if setStoredFlag {
+		b.mutex.Lock()
+		defer b.mutex.Unlock()
+	} else {
+		b.mutex.RLock()
+		defer b.mutex.RUnlock()
+	}
 
 	newInst := NewBaseIndexer(b.db, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 
 	newInst.utxoIndex = common.NewUTXOIndex()
 	for key, value := range b.utxoIndex.Index {
-		newInst.utxoIndex.Index[key] = value
+		newInst.utxoIndex.Index[key] = cloneOutput(value)
 	}
 	newInst.delUTXOs = make([]*UtxoValue, len(b.delUTXOs))
-	copy(newInst.delUTXOs, b.delUTXOs)
+	for i, value := range b.delUTXOs {
+		newInst.delUTXOs[i] = cloneUtxoValue(value)
+	}
 
 	for key, value := range b.utxoIndex.AscendMap {
-		newInst.utxoIndex.AscendMap[key] = value
+		newInst.utxoIndex.AscendMap[key] = cloneAscendData(value)
 	}
 	for key, value := range b.utxoIndex.DescendMap {
-		newInst.utxoIndex.DescendMap[key] = value
+		newInst.utxoIndex.DescendMap[key] = cloneDescendData(value)
 	}
 	for key, value := range b.utxoIndex.ChannelLedgerMap {
-		newInst.utxoIndex.ChannelLedgerMap[key] = value
+		newInst.utxoIndex.ChannelLedgerMap[key] = cloneChannelLedgerEntry(value)
 	}
 	for key, value := range b.utxoIndex.ChannelStateEventMap {
-		newInst.utxoIndex.ChannelStateEventMap[key] = value
+		newInst.utxoIndex.ChannelStateEventMap[key] = cloneChannelStateEvent(value)
 	}
 	for key, value := range b.utxoIndex.ReferrerMap {
 		newInst.utxoIndex.ReferrerMap[key] = &common.ReferrerInfo{
@@ -174,7 +181,7 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 
 	newInst.tickInfoMap = make(map[string]*common.TickerInfo)
 	for k, v := range b.tickInfoMap {
-		newInst.tickInfoMap[k] = v
+		newInst.tickInfoMap[k] = cloneTickerInfo(v)
 	}
 
 	newInst.coreNodeMap = make(map[string]*common.CoreNodeInfo)
@@ -185,7 +192,7 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 
 	newInst.channelMap = make(map[string]*common.ChannelInfo)
 	for k, v := range b.channelMap {
-		newInst.channelMap[k] = v
+		newInst.channelMap[k] = cloneChannelInfo(v)
 	}
 
 	newInst.addressValueMap = make(map[string]*indexer.AddressValueV2)
@@ -197,7 +204,8 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 			Utxos:       make(map[uint64]int64),
 		}
 		if setStoredFlag {
-			value.Op = 0 // 当作已经写入数据库
+			// 本次变化由快照接管；后续 live 变化会重新置脏，供 Subtract 区分。
+			value.Op = 0
 		}
 		for id, v := range value.Utxos {
 			n.Utxos[id] = v
@@ -205,7 +213,12 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 		newInst.addressValueMap[key] = &n
 	}
 	newInst.blockVector = make([]*common.BlockValueInDB, len(b.blockVector))
-	copy(newInst.blockVector, b.blockVector)
+	for i, value := range b.blockVector {
+		if value != nil {
+			cloned := *value
+			newInst.blockVector[i] = &cloned
+		}
+	}
 
 	newInst.lastHash = b.lastHash
 	newInst.lastHeight = b.lastHeight
@@ -218,6 +231,104 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 	common.Log.Infof("BaseIndexer->clone takes %v", time.Since(startTime))
 
 	return newInst
+}
+
+func cloneScriptPubKey(value *common.ScriptPubKey) *common.ScriptPubKey {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Addresses = append([]string(nil), value.Addresses...)
+	cloned.PkScript = append([]byte(nil), value.PkScript...)
+	return &cloned
+}
+
+func cloneOutput(value *common.Output) *common.Output {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Address = cloneScriptPubKey(value.Address)
+	cloned.Assets = value.Assets.Clone()
+	return &cloned
+}
+
+func cloneUtxoValue(value *UtxoValue) *UtxoValue {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Address = cloneScriptPubKey(value.Address)
+	return &cloned
+}
+
+func cloneAscendData(value *common.AscendData) *common.AscendData {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Assets = value.Assets.Clone()
+	cloned.Sig = append([]byte(nil), value.Sig...)
+	cloned.PubA = append([]byte(nil), value.PubA...)
+	cloned.PubB = append([]byte(nil), value.PubB...)
+	return &cloned
+}
+
+func cloneDescendData(value *common.DescendData) *common.DescendData {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Assets = value.Assets.Clone()
+	cloned.ReturnedChannelOutputs = append([]string(nil), value.ReturnedChannelOutputs...)
+	return &cloned
+}
+
+func cloneChannelLedgerEntry(value *common.ChannelLedgerEntry) *common.ChannelLedgerEntry {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Assets = value.Assets.Clone()
+	cloned.L1Outpoints = append([]string(nil), value.L1Outpoints...)
+	cloned.ReturnedChannelOutputs = append([]string(nil), value.ReturnedChannelOutputs...)
+	return &cloned
+}
+
+func cloneChannelStateEvent(value *common.ChannelStateEvent) *common.ChannelStateEvent {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.PunishTxIds = append([]string(nil), value.PunishTxIds...)
+	return &cloned
+}
+
+func cloneTickerInfo(value *common.TickerInfo) *common.TickerInfo {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	if value.MaxSupply != nil {
+		cloned.MaxSupply = value.MaxSupply.Clone()
+	}
+	if value.TotalAscendAmt != nil {
+		cloned.TotalAscendAmt = value.TotalAscendAmt.Clone()
+	}
+	if value.TotalDescendAmt != nil {
+		cloned.TotalDescendAmt = value.TotalDescendAmt.Clone()
+	}
+	return &cloned
+}
+
+func cloneChannelInfo(value *common.ChannelInfo) *common.ChannelInfo {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.PubA = append([]byte(nil), value.PubA...)
+	cloned.PubB = append([]byte(nil), value.PubB...)
+	return &cloned
 }
 
 // 在 UpdateDB 用到的数据，这里需要先剪去，这些剪去的数据，当作已经备份到数据库
@@ -791,7 +902,11 @@ func (b *BaseIndexer) handleStakeAssetV2(height int, tx *common.Transaction, dat
 			}
 		} else {
 			info, err := txOut.Assets.Find(assetName)
-			if err != nil || info.Amount.Cmp(amt) != 0 {
+			if err != nil || info == nil {
+				common.Log.Errorf("handleStakeAssetV2 %s missing staking asset %s", tx.Txid, assetName.String())
+				continue
+			}
+			if info.Amount.Cmp(amt) != 0 {
 				common.Log.Errorf("handleStakeAssetV2 %s invalid asset amt, %s -> %s", tx.Txid, info.Amount.String(), amt.String())
 				continue
 			}
@@ -805,9 +920,14 @@ func (b *BaseIndexer) handleStakeAssetV2(height int, tx *common.Transaction, dat
 		return
 	}
 
-	channelInfo, ok := b.channelMap[stakeAsset.Address.Addresses[0]]
-	if ok {
-		common.Log.Errorf("can't find channel info from %s", stakeAsset.Address.Addresses[0])
+	if stakeAsset.Address == nil || len(stakeAsset.Address.Addresses) == 0 {
+		common.Log.Errorf("staking asset output has no channel address, tx %s", tx.Txid)
+		return
+	}
+	channelAddress := stakeAsset.Address.Addresses[0]
+	channelInfo, ok := b.channelMap[channelAddress]
+	if !ok || channelInfo == nil {
+		common.Log.Errorf("can't find channel info from %s", channelAddress)
 		return
 	}
 	ascend := &common.AscendData{
@@ -877,7 +997,11 @@ func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) 
 		return
 	}
 	info, err := descend.Assets.Find(indexer.NewAssetNameFromString(name))
-	if err != nil || info.Amount.Cmp(amt) != 0 {
+	if err != nil || info == nil {
+		common.Log.Errorf("removeMinerNode %s missing staking asset %s", descend.NullDataUtxo, name)
+		return
+	}
+	if info.Amount.Cmp(amt) != 0 {
 		common.Log.Errorf("removeMinerNode %s invalid asset amt, %s -> %s", descend.NullDataUtxo, info.Amount.String(), amt.String())
 		return
 	}

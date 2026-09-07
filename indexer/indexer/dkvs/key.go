@@ -18,6 +18,7 @@ var allowedNamespaces = map[string]struct{}{
 	"account":  {},
 	"personal": {},
 	"mail":     {},
+	"topic":    {},
 	"blob":     {},
 	"tmp":      {},
 }
@@ -135,13 +136,35 @@ func validateNamespaceShape(parsed ParsedKey) error {
 			return ErrInvalidKey
 		}
 	case "mail":
-		if !validAccountID(parsed.Segments[0]) {
+		if len(parsed.Segments) == 0 || !validAccountID(parsed.Segments[0]) {
 			return ErrInvalidKey
 		}
+		// /mail/<recipient>/msg/<sender>/<message_id>
 		if len(parsed.Segments) == 4 && parsed.Segments[1] == "msg" && validAccountID(parsed.Segments[2]) {
 			return nil
 		}
+		// /mail/<recipient>/share/<package>/<share>
 		if len(parsed.Segments) == 4 && parsed.Segments[1] == "share" {
+			return nil
+		}
+		// /mail/<recipient>/topic/<topic>/msg/<sender>/<message_id>
+		if len(parsed.Segments) == 6 && parsed.Segments[1] == "topic" &&
+			parsed.Segments[3] == "msg" && validAccountID(parsed.Segments[4]) {
+			return nil
+		}
+		// /mail/<recipient>/topic/<topic>/key/<key_seq>
+		if len(parsed.Segments) == 5 && parsed.Segments[1] == "topic" && parsed.Segments[3] == "key" {
+			return nil
+		}
+		return ErrInvalidKey
+	case "topic":
+		// /topic/<topic>/meta
+		// /topic/<topic>/state
+		if len(parsed.Segments) == 2 && (parsed.Segments[1] == "meta" || parsed.Segments[1] == "state") {
+			return nil
+		}
+		// /topic/<topic>/members/<account_id>
+		if len(parsed.Segments) == 3 && parsed.Segments[1] == "members" && validAccountID(parsed.Segments[2]) {
 			return nil
 		}
 		return ErrInvalidKey

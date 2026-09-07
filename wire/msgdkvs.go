@@ -22,17 +22,23 @@ const (
 	MaxDKVSRecordSize     = 16 * 1024
 	MaxDKVSBlobRecordSize = MaxDKVSBlobValueSize + 4*1024
 
-	MaxDKVSRecordsPerMsg  = 200
-	MaxDKVSItemsPerMsg    = 1024
-	MaxDKVSCursorSize     = 512
-	MaxDKVSSyncFilters    = 256
-	MaxDKVSFilterTypeSize = 16
-	MaxDKVSNotifyDataSize = MaxDKVSBlobRecordSize
+	MaxDKVSRecordsPerMsg    = 200
+	MaxDKVSItemsPerMsg      = 1024
+	MaxDKVSCursorSize       = 512
+	MaxDKVSSyncFilters      = 256
+	MaxDKVSFilterTypeSize   = 16
+	MaxDKVSNotifyTargetSize = MaxDKVSPubKeySize * 2
+	MaxDKVSNotifyDataSize   = MaxDKVSBlobRecordSize
 
 	// Leave room for message framing fields, cursors, signatures and not-found
 	// hashes. Record-bearing DKVS messages must fit below this aggregate budget.
 	MaxDKVSRecordsPayloadSize = MaxProtocolMessageLength - 64*1024
 )
+
+// DKVSNotifyEventMessage is the application-message event carried by
+// MsgDKVSNotify. Unlike record events, its Data field is interpreted by the
+// message management module and is never fed into DKVS record relay.
+const DKVSNotifyEventMessage uint8 = 11
 
 type DKVSRecord struct {
 	Version     uint32
@@ -54,6 +60,10 @@ type DKVSInvItem struct {
 }
 
 type MsgDKVSNotify struct {
+	// Target is the final CoreNode validator ID. Empty preserves the ordinary
+	// DKVS broadcast semantics. A non-empty target is routed directionally by
+	// CoreNode/BootstrapNode and must never be used as a broadcast discovery key.
+	Target    string
 	EventType uint8
 	Data      []byte
 }
@@ -95,16 +105,26 @@ type DKVSSyncFilter struct {
 
 // DKVSValueSizeLimit returns the wire-level value limit for a key. Namespace
 // shape and ownership are validated by the DKVS indexer after decoding.
+func isDKVSMailMessageKey(key string) bool {
+	parts := strings.Split(strings.Trim(key, "/"), "/")
+	if len(parts) == 5 && parts[0] == "mail" && parts[2] == "msg" {
+		return true
+	}
+	return len(parts) == 7 && parts[0] == "mail" && parts[2] == "topic" && parts[4] == "msg"
+}
+
 func DKVSValueSizeLimit(key string) uint32 {
-	if strings.HasPrefix(key, "/blob/") {
+	if strings.HasPrefix(key, "/blob/") || isDKVSMailMessageKey(key) {
 		return MaxDKVSBlobValueSize
 	}
 	return MaxDKVSValueSize
 }
 
 // DKVSRecordSizeLimit returns the wire-level encoded record limit for a key.
+// Large /mail message records are admitted only by MessageManager internally;
+// this larger codec bound does not widen generic DKVS write permission.
 func DKVSRecordSizeLimit(key string) int {
-	if strings.HasPrefix(key, "/blob/") {
+	if strings.HasPrefix(key, "/blob/") || isDKVSMailMessageKey(key) {
 		return MaxDKVSBlobRecordSize
 	}
 	return MaxDKVSRecordSize
@@ -316,6 +336,14 @@ func readerLen(r io.Reader) int {
 func (msg *MsgDKVSNotify) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
+	target, err := readVarStringBuf(r, pver, buf)
+	if err != nil {
+		return err
+	}
+	if len(target) > MaxDKVSNotifyTargetSize {
+		return messageError("MsgDKVSNotify.BtcDecode", "dkvs notify target too large")
+	}
+	msg.Target = target
 	if err := readElements(r, &msg.EventType); err != nil {
 		return err
 	}
@@ -334,6 +362,9 @@ func (msg *MsgDKVSNotify) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding)
 }
 
 func (msg *MsgDKVSNotify) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding) error {
+	if len(msg.Target) > MaxDKVSNotifyTargetSize {
+		return messageError("MsgDKVSNotify.BtcEncode", "dkvs notify target too large")
+	}
 	if msg.EventType == 0 {
 		return messageError("MsgDKVSNotify.BtcEncode", "missing dkvs notify event type")
 	}
@@ -345,6 +376,9 @@ func (msg *MsgDKVSNotify) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding)
 	}
 	buf := binarySerializer.Borrow()
 	defer binarySerializer.Return(buf)
+	if err := writeVarStringBuf(w, pver, msg.Target, buf); err != nil {
+		return err
+	}
 	if err := writeElements(w, msg.EventType); err != nil {
 		return err
 	}
@@ -353,7 +387,7 @@ func (msg *MsgDKVSNotify) BtcEncode(w io.Writer, pver uint32, _ MessageEncoding)
 
 func (msg *MsgDKVSNotify) Command() string { return CmdDKVSNotify }
 func (msg *MsgDKVSNotify) MaxPayloadLength(uint32) uint32 {
-	return 1 + MaxVarIntPayload + MaxDKVSNotifyDataSize
+	return MaxVarIntPayload + MaxDKVSNotifyTargetSize + 1 + MaxVarIntPayload + MaxDKVSNotifyDataSize
 }
 
 func (msg *MsgDKVSInv) BtcDecode(r io.Reader, pver uint32, _ MessageEncoding) error {

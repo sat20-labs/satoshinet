@@ -637,8 +637,20 @@ func (m *POSMiner) GenerateNewBlock() (*wire.MsgBlock, error) {
 // submit a new block
 func (m *POSMiner) SubmitNewBlock(block *wire.MsgBlock) (*chainhash.Hash, int32, error) {
 	utils.Log.Debugf("SubmitNewBlock ...")
+	return submitNewBlock(block, m.submitBlock)
+}
+
+func submitNewBlock(block *wire.MsgBlock, submit func(*btcutil.Block) bool) (*chainhash.Hash, int32, error) {
+	if block == nil {
+		return nil, 0, fmt.Errorf("block is nil")
+	}
+	if submit == nil {
+		return nil, 0, fmt.Errorf("block submitter is nil")
+	}
 	newblock := btcutil.NewBlock(block)
-	m.submitBlock(newblock)
+	if !submit(newblock) {
+		return nil, 0, fmt.Errorf("block %s was not accepted", newblock.Hash())
+	}
 	utils.Log.Infof("SubmitNewBlock %d %s", newblock.Height(), newblock.Hash().String())
 	return newblock.Hash(), newblock.Height(), nil
 }

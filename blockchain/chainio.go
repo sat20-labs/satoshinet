@@ -511,14 +511,20 @@ func dbFetchSpendJournalEntry(dbTx database.Tx, block *btcutil.Block) ([]SpentTx
 func dbPutSpendJournalEntry(dbTx database.Tx, blockHash *chainhash.Hash, stxos []SpentTxOut) error {
 	spendBucket := dbTx.Metadata().Bucket(spendJournalBucketName)
 	serialized := serializeSpendJournalEntry(stxos)
-	return spendBucket.Put(blockHash[:], serialized)
+	if err := spendBucket.Put(blockHash[:], serialized); err != nil {
+		return err
+	}
+	return spendBucket.Put(spendJournalAssetsKey(blockHash), []byte{1})
 }
 
 // dbRemoveSpendJournalEntry uses an existing database transaction to remove the
 // spend journal entry for the passed block hash.
 func dbRemoveSpendJournalEntry(dbTx database.Tx, blockHash *chainhash.Hash) error {
 	spendBucket := dbTx.Metadata().Bucket(spendJournalBucketName)
-	return spendBucket.Delete(blockHash[:])
+	if err := spendBucket.Delete(blockHash[:]); err != nil {
+		return err
+	}
+	return spendBucket.Delete(spendJournalAssetsKey(blockHash))
 }
 
 // dbPruneSpendJournalEntry uses an existing database transaction to remove all
@@ -529,6 +535,9 @@ func dbPruneSpendJournalEntry(dbTx database.Tx, blockHashes []chainhash.Hash) er
 	for _, blockHash := range blockHashes {
 		err := spendBucket.Delete(blockHash[:])
 		if err != nil {
+			return err
+		}
+		if err := spendBucket.Delete(spendJournalAssetsKey(&blockHash)); err != nil {
 			return err
 		}
 	}

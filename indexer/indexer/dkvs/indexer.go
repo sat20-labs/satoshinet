@@ -42,11 +42,14 @@ type Indexer struct {
 	mailbox                   MailboxPolicy
 	blob                      BlobPolicy
 	tmp                       TmpPolicy
+	endpointIdentity          string
 	subs                      *subscriptionSet
 	notify                    NotifyFunc
 	subNotify                 SubscriptionNotifyFunc
 	height                    func() uint64
 	mutex                     sync.RWMutex
+	watchMutex                sync.Mutex
+	pathSignals               map[string]*pathWatchSignal
 	generation                uint64
 	policyGeneration          uint64
 	checkpointMutex           sync.Mutex
@@ -73,18 +76,20 @@ func New(db indexercommon.KVDB, cfg Config) *Indexer {
 		systemVerifier = defaultSystemVerifier{}
 	}
 	indexer := &Indexer{
-		db:          db,
-		resolver:    resolver,
-		feeVerifier: feeVerifier,
-		system:      systemVerifier,
-		mailbox:     normalizeMailboxPolicy(cfg.MailboxPolicy),
-		blob:        normalizeBlobPolicy(cfg.BlobPolicy),
-		tmp:         normalizeTmpPolicy(cfg.TmpPolicy),
-		freeLocal:   freeLocal,
-		subs:        newSubscriptionSet(),
-		notify:      cfg.Notify,
-		subNotify:   cfg.Subscription,
-		height:      cfg.CurrentHeight,
+		db:               db,
+		resolver:         resolver,
+		feeVerifier:      feeVerifier,
+		system:           systemVerifier,
+		mailbox:          normalizeMailboxPolicy(cfg.MailboxPolicy),
+		blob:             normalizeBlobPolicy(cfg.BlobPolicy),
+		tmp:              normalizeTmpPolicy(cfg.TmpPolicy),
+		endpointIdentity: strings.TrimSpace(cfg.EndpointID),
+		freeLocal:        freeLocal,
+		subs:             newSubscriptionSet(),
+		notify:           cfg.Notify,
+		subNotify:        cfg.Subscription,
+		height:           cfg.CurrentHeight,
+		pathSignals:      make(map[string]*pathWatchSignal),
 	}
 	indexer.resetFeeUsageLocked()
 	indexer.resetFreeLocalUsageLocked()
@@ -155,6 +160,9 @@ func (i *Indexer) PutLocalWithHash(record *wire.DKVSRecord) (bool, chainhash.Has
 func (i *Indexer) PutRemote(record *wire.DKVSRecord) (bool, error) {
 	record = cloneRecord(record)
 	updated, _, _, _, err := i.put(record, true)
+	if err == nil && updated {
+		i.notifyPathMutation(record)
+	}
 	return updated, err
 }
 
@@ -264,10 +272,12 @@ func (i *Indexer) ClientConfig() ClientConfig {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
 	return ClientConfig{
-		FreeLocal:         i.freeLocal,
-		Blob:              i.blob,
-		MaxBatchMutations: MaxBatchCASMutations,
-		MaxBatchBytes:     MaxBatchCASTotalSize,
+		FreeLocal:              i.freeLocal,
+		Blob:                   i.blob,
+		MaxBatchMutations:      MaxBatchCASMutations,
+		MaxBatchBytes:          MaxBatchCASTotalSize,
+		MaxPrefixesPerTerminal: MaxPrefixesPerTerminal,
+		EndpointID:             i.endpointID(),
 	}
 }
 
@@ -483,12 +493,7 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 		i.mutex.Unlock()
 		return 0, err
 	}
-	type expiredRecord struct {
-		record *wire.DKVSRecord
-		hash   chainhash.Hash
-	}
-	expiredRecords := make([]expiredRecord, 0)
-	pruned := 0
+	expiredRecords := make([]*wire.DKVSRecord, 0)
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
 	for _, key := range i.expiredRecordKeysLocked(height) {
@@ -498,60 +503,56 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 		}
 		if err != nil {
 			i.mutex.Unlock()
-			return pruned, err
+			return len(expiredRecords), err
 		}
 		if !IsExpired(record, height) {
 			i.addRecordExpiryLocked(record)
 			continue
 		}
-		if IsTombstone(record.Flags) || recordHasPaidFeeProof(record) {
+		if IsTombstone(record.Flags) {
 			continue
 		}
-		if err := batch.Delete(recordDBKey(record.Key)); err != nil {
-			i.mutex.Unlock()
-			return pruned, err
-		}
-		hash := RecordHash(record)
-		if err := batch.Delete(hashDBKey(hash)); err != nil {
-			i.mutex.Unlock()
-			return pruned, err
-		}
-		expiredRecords = append(expiredRecords, expiredRecord{record: record, hash: hash})
-		pruned++
+		expiredRecords = append(expiredRecords, record)
 	}
 	compactedDeletes, err := i.compactExpiredDeleteCommandsLocked(batch, now)
 	if err != nil {
 		i.mutex.Unlock()
-		return pruned, err
+		return len(expiredRecords), err
 	}
-	if pruned > 0 {
-		metaRecords := make([]*wire.DKVSRecord, 0, len(expiredRecords))
-		for _, expired := range expiredRecords {
-			metaRecords = append(metaRecords, expired.record)
-		}
-		if err := i.markPathMetaDirtyLocked(batch, metaRecords, height, now); err != nil {
+	var expiryResult expiryCommitResult
+	if len(expiredRecords) != 0 {
+		expiryResult, err = i.stageExpiredRecordsLocked(batch, expiredRecords, height, now)
+		if err != nil {
 			i.mutex.Unlock()
 			return 0, err
 		}
 	}
-	if pruned > 0 || compactedDeletes > 0 {
+	if len(expiredRecords) != 0 || compactedDeletes > 0 {
 		if err := batch.Flush(); err != nil {
 			i.mutex.Unlock()
 			return 0, err
 		}
-	}
-	if pruned > 0 || compactedDeletes > 0 {
 		atomic.AddUint64(&i.generation, 1)
 	}
-	if pruned > 0 {
+	removedKeys := make([]string, 0, len(expiredRecords))
+	for _, record := range expiredRecords {
+		removedKeys = append(removedKeys, record.Key)
 		if i.freeLocalUsageInitialized {
-			for _, expired := range expiredRecords {
-				i.removeFreeLocalUsageLocked(expired.record.Key)
-			}
+			i.removeFreeLocalUsageLocked(record.Key)
+		}
+		if i.feeUsageInitialized {
+			i.removeFeeUsageLocked(record.Key)
+		}
+		if i.recordExpiryInitialized {
+			delete(i.recordExpiryEntries, record.Key)
 		}
 	}
 	i.mutex.Unlock()
-	return pruned, nil
+	if len(expiredRecords) != 0 {
+		i.notifyExpiryCommit(expiryResult)
+		paidRetentionCacheFor(i).remove(removedKeys)
+	}
+	return len(expiredRecords), nil
 }
 
 func recordHasPaidFeeProof(record *wire.DKVSRecord) bool {
@@ -600,6 +601,11 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		snapshot, err := i.readWriteStateSnapshot(record.Key, parsed, validators)
 		if err != nil {
 			return false, 0, chainhash.Hash{}, false, err
+		}
+		if isFreeLocalRecord(record) &&
+			((snapshot.existing != nil && !isFreeLocalRecord(snapshot.existing)) ||
+				(snapshot.deleteState != nil && !snapshot.deleteState.LocalOnly)) {
+			return false, 0, chainhash.Hash{}, false, ErrStorageModeDowngrade
 		}
 
 		// Delete commands free capacity and are authorized by the current key
@@ -655,13 +661,23 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		deleteState := snapshot.deleteState
 		clearNameTransfer := snapshot.requiresResolve && parsed.Namespace == "name"
 		if remote && IsTombstone(record.Flags) &&
-			((existing != nil && isFreeLocalRecord(existing)) || (deleteState != nil && deleteState.LocalOnly)) {
+			((existing != nil && (isEndpointCacheRecord(existing) || pathMode(parsed) == PathLocalOnly)) ||
+				(deleteState != nil && deleteState.LocalOnly) ||
+				isEndpointCacheRecord(record) ||
+				parsed.Namespace == "mail" || pathMode(parsed) == PathLocalOnly) {
 			i.mutex.Unlock()
 			return false, 0, chainhash.Hash{}, false, ErrFreeLocalNotRelayable
 		}
 
 		if IsTombstone(record.Flags) {
 			if existing == nil {
+				// AccountBound mail and PathLocalOnly keys never create a durable
+				// tombstone. A repeated owner delete is simply already applied.
+				if isEndpointCacheRecord(record) || (deleteState != nil && deleteState.LocalOnly) ||
+					parsed.Namespace == "mail" || pathMode(parsed) == PathLocalOnly {
+					i.mutex.Unlock()
+					return false, 0, RecordHash(record), false, nil
+				}
 				if deleteState != nil && deleteState.Record != nil &&
 					CompareRecords(deleteState.Record, record) >= 0 {
 					i.mutex.Unlock()
@@ -698,7 +714,8 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 			if err != nil {
 				return false, 0, chainhash.Hash{}, false, err
 			}
-			return true, EventRecordTombstone, hash, !isFreeLocalRecord(existing), nil
+			return true, EventRecordTombstone, hash,
+				!(isEndpointCacheRecord(existing) || pathMode(parsed) == PathLocalOnly), nil
 		}
 
 		if deleteFloorBlocksRecord(parsed, deleteState, record) {
@@ -1097,6 +1114,7 @@ func (i *Indexer) scanFilteredLocked(cursor []byte, limit int, height, now uint6
 }
 
 func (i *Indexer) emit(eventType uint8, record *wire.DKVSRecord, relay bool) {
+	i.notifyPathMutation(record)
 	i.mutex.RLock()
 	notify := i.notify
 	i.mutex.RUnlock()

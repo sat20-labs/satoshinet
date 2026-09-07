@@ -13,5 +13,5 @@ func (p *BaseIndexer) GetAddressId(address string) uint64 {
 }
 
 func (b *BaseIndexer) IsMainnet() bool {
-	return b.chaincfgParam.Net == wire.MainNet
+	return b != nil && b.chaincfgParam != nil && b.chaincfgParam.Net == wire.MainNet
 }

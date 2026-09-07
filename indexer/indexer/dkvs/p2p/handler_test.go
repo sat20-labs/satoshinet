@@ -207,7 +207,7 @@ func TestHandlerServesSignedSyncResponse(t *testing.T) {
 	}
 }
 
-func TestHandlerQueuesAuthenticatedValidatorPathRepairBeforeRoleClassification(t *testing.T) {
+func TestHandlerRejectsPathSnapshotFromUnclassifiedValidator(t *testing.T) {
 	store := &handlerTestStore{}
 	var peer PeerState
 	var node NodeState
@@ -223,10 +223,29 @@ func TestHandlerQueuesAuthenticatedValidatorPathRepairBeforeRoleClassification(t
 		t.Fatal("test requires an unclassified remote miner")
 	}
 	handler.QueuePathSync("/name/8888.btc")
-	request, ok := sent.(*wire.MsgDKVSSyncRequest)
-	if !ok || request.SessionID == 0 || len(request.Filters) != 1 ||
-		request.Filters[0].Type != pathSyncFilterType || request.Filters[0].Target != "/name/8888.btc" {
-		t.Fatalf("path repair request=%#v", sent)
+	if sent != nil {
+		t.Fatalf("unclassified validator received destructive path request: %#v", sent)
+	}
+}
+
+func TestHandlerRoutesUntrustedPathHintToAuthorizedSource(t *testing.T) {
+	store := &handlerTestStore{}
+	var peer PeerState
+	var node NodeState
+	requested := ""
+	handler := Handler{
+		Store: store, Peer: &peer, Node: &node,
+		ValidatorID:       "ordinary-peer",
+		RequestPathRepair: func(path string) { requested = path },
+	}
+	const accountID = "148cbe135aea8ee9b72f18ca6ddf0efc052e54b6d723cc473a0cc6011766d776"
+	record := &wire.DKVSRecord{Version: dkvs.Version,
+		Key: "/personal/" + accountID + "/data/item", Seq: 2}
+	if !handler.queuePathRepair(record, dkvs.ErrPathDiverged) {
+		t.Fatal("path divergence was not recognized as a repair hint")
+	}
+	if requested != "/personal/"+accountID+"/data" {
+		t.Fatalf("authorized repair path=%q", requested)
 	}
 }
 
@@ -285,8 +304,8 @@ func TestHandlerQueuesDistinctPathRepairsWithoutReplacingActiveSession(t *testin
 	var sent []wire.Message
 	handler := Handler{
 		Store: store, Peer: &peer, Node: &node,
-		ValidatorID: "remote-miner",
-		Send:        func(msg wire.Message) { sent = append(sent, msg) },
+		ValidatorID: "remote-miner", TrustedSource: true,
+		Send: func(msg wire.Message) { sent = append(sent, msg) },
 	}
 	handler.QueuePathSync("/personal/account/a")
 	handler.QueuePathSync("/mail/account/share")
@@ -319,8 +338,8 @@ func TestPathSyncTimeoutAdvancesQueuedPathAndRequeuesTimedOutPath(t *testing.T) 
 	var sent []wire.Message
 	handler := Handler{
 		Store: store, Peer: &peer, Node: &node,
-		ValidatorID: "remote-miner",
-		Send:        func(msg wire.Message) { sent = append(sent, msg) },
+		ValidatorID: "remote-miner", TrustedSource: true,
+		Send: func(msg wire.Message) { sent = append(sent, msg) },
 	}
 	handler.QueuePathSync("/personal/account/a")
 	handler.QueuePathSync("/mail/account/share")
@@ -351,8 +370,8 @@ func TestFailedPathSyncAdvancesNextQueuedPath(t *testing.T) {
 	var sent []wire.Message
 	handler := Handler{
 		Store: store, Peer: &peer, Node: &node,
-		ValidatorID: "remote-miner",
-		Send:        func(msg wire.Message) { sent = append(sent, msg) },
+		ValidatorID: "remote-miner", TrustedSource: true,
+		Send: func(msg wire.Message) { sent = append(sent, msg) },
 	}
 	handler.QueuePathSync("/personal/account/a")
 	handler.QueuePathSync("/mail/account/share")

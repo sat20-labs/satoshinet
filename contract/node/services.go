@@ -147,16 +147,27 @@ func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 		return nil, err
 	}
 	stateStore := NewEVMStateStore(cfg.DB)
-	return NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
+	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
 		ChainParams:         cfg.ChainParams,
 		GasConfig:           gasConfig,
 		NewRuntime:          stateStore.RuntimeFactory(),
+		HistoryDB:           cfg.DB,
 		ContractUTXOs:       evmContractUTXOProvider(cfg.EVMContractUTXOs),
 		ResolveRecipient:    contractframework.ScriptRecipientResolver(cfg.EVMResolveRecipient),
 		ResolveResultOutput: evmResultOutputResolver(cfg),
 		ResolveResultScript: evmResultScriptResolver(cfg.ChainParams),
 		AssetPrecision:      cfg.AssetPrecision,
-	}), nil
+	})
+	validator.cfg.NewRuntime = func(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*evm.Runtime, error) {
+		validator.postStateMu.Lock()
+		hasTransient := len(validator.postStates) != 0
+		validator.postStateMu.Unlock()
+		if !hasTransient {
+			return stateStore.RuntimeFactory()(block, view)
+		}
+		return stateStore.runtimeFactory(validator.EVMBlockPostState)(block, view)
+	}
+	return validator, nil
 }
 
 func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
@@ -177,7 +188,7 @@ func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error)
 		return nil, err
 	}
 	stateStore := NewTemplateStateStore(cfg.DB)
-	return NewTemplateBlockExecutionValidator(TemplateBlockExecutionConfig{
+	validator := NewTemplateBlockExecutionValidator(TemplateBlockExecutionConfig{
 		ChainParams:         cfg.ChainParams,
 		ContractPrefix:      templateContractPrefix(cfg.ChainParams),
 		GasConfig:           gasConfig,
@@ -187,7 +198,17 @@ func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error)
 		ResolveResultScript: templateResultScriptResolver(cfg.ChainParams),
 		ContractUTXOs:       templateContractUTXOProvider(cfg.TemplateContractUTXOs),
 		AssetPrecision:      cfg.AssetPrecision,
-	}), nil
+	})
+	validator.cfg.NewRuntime = func(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*tmplcontract.RuntimeStore, error) {
+		validator.postStateMu.Lock()
+		hasTransient := len(validator.postStates) != 0
+		validator.postStateMu.Unlock()
+		if !hasTransient {
+			return stateStore.RuntimeFactory()(block, view)
+		}
+		return stateStore.runtimeFactory(validator.TemplateBlockPostState)(block, view)
+	}
+	return validator, nil
 }
 
 func NewAgentBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
@@ -334,6 +355,11 @@ func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractfr
 		FixedGasPrice: blockGasConfig.FixedGasPrice,
 		ParentHash:    [32]byte(req.PrevHash),
 	}
+	block, err = evmContextWithHistory(cfg.DB, block)
+	if err != nil {
+		return nil, err
+	}
+
 	resolveCaller := evm.LastInputPreviousOutputCallerResolver(cfg.ChainParams,
 		previousOutputScriptResolver(req.UtxoView))
 	resolveRefund := evm.LastInputPreviousOutputGasRefundRecipientResolver(cfg.ChainParams,
@@ -759,19 +785,20 @@ func NewEVMResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
 			txs = append(txs, msgTx)
 		}
 		blockGasConfig := evmGasConfigForBlock(gasConfig, cfg)
+		blockContext, err := evmContextWithHistory(cfg.DB, evm.BlockContext{
+			ChainID: evmChainID(cfg.ChainParams), Number: uint64(req.Height), Time: uint64(req.Timestamp.Unix()),
+			GasLimit: blockGasConfig.MaxGasPerBlock, FixedGasPrice: blockGasConfig.FixedGasPrice, ParentHash: [32]byte(req.PrevHash),
+		})
+		if err != nil {
+			return mining.ContractBuildResult{}, err
+		}
+
 		result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 			Txs:            txs,
 			Runtime:        runtime,
 			ContractPrefix: contractPrefix,
 			GasConfig:      blockGasConfig,
-			Block: evm.BlockContext{
-				ChainID:       evmChainID(cfg.ChainParams),
-				Number:        uint64(req.Height),
-				Time:          uint64(req.Timestamp.Unix()),
-				GasLimit:      blockGasConfig.MaxGasPerBlock,
-				FixedGasPrice: blockGasConfig.FixedGasPrice,
-				ParentHash:    [32]byte(req.PrevHash),
-			},
+			Block:          blockContext,
 			ResolveCaller: evm.LastInputPreviousOutputCallerResolver(cfg.ChainParams,
 				previousOutputScriptResolver(req.UtxoView)),
 			ResolveGasRefundRecipient: evm.LastInputPreviousOutputGasRefundRecipientResolver(cfg.ChainParams,

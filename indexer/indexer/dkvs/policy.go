@@ -3,21 +3,28 @@ package dkvs
 import "github.com/sat20-labs/satoshinet/wire"
 
 const (
-	DefaultMailboxMaxMsgBytes          = uint64(1024 * 1024)
+	// DKVS TTL is measured in SatoshiNet block heights. These defaults keep
+	// the previous product retention windows assuming the nominal 12-second
+	// block cadence, without reintroducing wall-clock time into record state.
+	DefaultMailboxMaxMsgTTLBlocks   = uint64(30 * 24 * 60 * 60 / 12)
+	DefaultMailboxMaxShareTTLBlocks = uint64(365 * 24 * 60 * 60 / 12)
+	DefaultTmpMaxTTLBlocks          = uint64(24 * 60 * 60 / 12)
+
+	DefaultMailboxMaxMsgBytes          = uint64(8 * 1024 * 1024)
 	DefaultMailboxMaxMessages          = uint64(1024)
-	DefaultMailboxMaxMsgBytesPerSender = uint64(128 * 1024)
+	DefaultMailboxMaxMsgBytesPerSender = uint64(2 * 1024 * 1024)
 	DefaultMailboxMaxMessagesPerSender = uint64(128)
-	DefaultMailboxMaxMsgSize           = MaxRecordValueSize
-	DefaultMailboxMaxMsgTTL            = uint64(30 * 24 * 60 * 60 * 1000)
+	DefaultMailboxMaxMsgSize           = wire.MaxDKVSBlobValueSize
+	DefaultMailboxMaxMsgTTL            = DefaultMailboxMaxMsgTTLBlocks
 	DefaultMailboxMaxShareBytes        = uint64(1024 * 1024)
 	DefaultMailboxMaxShares            = uint64(256)
 	DefaultMailboxMaxShareSize         = MaxRecordValueSize
-	DefaultMailboxMaxShareTTL          = uint64(365 * 24 * 60 * 60 * 1000)
+	DefaultMailboxMaxShareTTL          = DefaultMailboxMaxShareTTLBlocks
 
 	DefaultBlobMaxValueSize              = wire.MaxDKVSBlobValueSize
 	DefaultBlobMaxFreeLocalKeysPerSigner = uint64(1)
 
-	DefaultTmpMaxTTL  = uint64(24 * 60 * 60 * 1000)
+	DefaultTmpMaxTTL  = DefaultTmpMaxTTLBlocks
 	DefaultTmpMaxSize = MaxRecordValueSize
 )
 

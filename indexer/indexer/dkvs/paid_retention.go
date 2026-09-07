@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -279,9 +278,10 @@ func (i *Indexer) PruneExpiredAutopay() (int, error) {
 	return i.PruneExpiredAutopayAt(i.currentHeight())
 }
 
-// PruneExpiredAutopayAt physically removes AUTOPAY records after their payer
-// stopped paying and the node-local cache grace period elapsed. The grace
-// period is derived from the same policy exposed by GET /v3/dkvs/config.
+// PruneExpiredAutopayAt physically removes AUTOPAY records after the payer has
+// stopped paying and the node-local grace period has elapsed. The physical
+// removal, sequence floor, canonical PathMeta update and EXPIRE cursor commit
+// are persisted in one database batch.
 func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 	if i == nil {
 		return 0, nil
@@ -327,24 +327,16 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 	defer batch.Close()
 	removed := make([]*wire.DKVSRecord, 0, len(candidates))
 	for _, item := range candidates {
-		current, err := i.getRaw(item.record.Key)
-		if errors.Is(err, ErrRecordNotFound) || errors.Is(err, indexercommon.ErrKeyNotFound) {
+		current, readErr := i.getRaw(item.record.Key)
+		if errors.Is(readErr, ErrRecordNotFound) {
 			continue
 		}
-		if err != nil {
+		if readErr != nil {
 			i.mutex.Unlock()
-			return 0, err
+			return 0, readErr
 		}
 		if RecordHash(current) != item.hash {
 			continue
-		}
-		if err := batch.Delete(recordDBKey(current.Key)); err != nil {
-			i.mutex.Unlock()
-			return 0, err
-		}
-		if err := batch.Delete(hashDBKey(item.hash)); err != nil {
-			i.mutex.Unlock()
-			return 0, err
 		}
 		removed = append(removed, current)
 	}
@@ -352,7 +344,9 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 		i.mutex.Unlock()
 		return 0, nil
 	}
-	if err := i.markPathMetaDirtyLocked(batch, removed, height, currentUnixMilli()); err != nil {
+	now := currentUnixMilli()
+	expiryResult, err := i.stageExpiredRecordsLocked(batch, removed, height, now)
+	if err != nil {
 		i.mutex.Unlock()
 		return 0, err
 	}
@@ -366,12 +360,16 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 		if i.feeUsageInitialized {
 			i.removeFeeUsageLocked(record.Key)
 		}
+		if i.freeLocalUsageInitialized {
+			i.removeFreeLocalUsageLocked(record.Key)
+		}
 		if i.recordExpiryInitialized {
 			delete(i.recordExpiryEntries, record.Key)
 		}
 	}
 	atomic.AddUint64(&i.generation, 1)
 	i.mutex.Unlock()
+	i.notifyExpiryCommit(expiryResult)
 	paidRetentionCacheFor(i).remove(removedKeys)
 	return len(removed), nil
 }

@@ -150,19 +150,6 @@ func TestEVMStateStoreDelete(t *testing.T) {
 	}
 }
 
-func TestEVMStateStoreRejectsOversizedState(t *testing.T) {
-	db := testEVMStateDB(t)
-	defer db.Close()
-	store := NewEVMStateStore(db)
-	state := evm.NewMemoryStateDB()
-	addr := gethcommon.HexToAddress("0x11112233445566778899aabbccddeeff00112233")
-	state.SetCode(addr, make([]byte, MaxPersistedContractStateBytes+1), 0)
-	err := store.StoreBlockState(&chainhash.Hash{9}, state)
-	if err == nil {
-		t.Fatal("oversized EVM state should be rejected")
-	}
-}
-
 func TestEVMStateStoreDeleteFallsBackToExistingParentTip(t *testing.T) {
 	db := testEVMStateDB(t)
 	defer db.Close()

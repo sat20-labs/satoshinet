@@ -34,17 +34,18 @@ type Peer interface {
 type SignFunc func(payload []byte) ([]byte, error)
 
 type Handler struct {
-	Store           Store
-	Peer            *PeerState
-	Node            *NodeState
-	Send            func(wire.Message)
-	Broadcast       func(*wire.MsgDKVSNotify)
-	Penalize        func(persistent, transient uint32, reason string)
-	LocalServices   wire.ServiceFlag
-	RemoteServices  wire.ServiceFlag
-	TrustedSource   bool
-	MirrorAuthority bool
-	ValidatorID     string
+	Store             Store
+	Peer              *PeerState
+	Node              *NodeState
+	Send              func(wire.Message)
+	Broadcast         func(*wire.MsgDKVSNotify)
+	RequestPathRepair func(string)
+	Penalize          func(persistent, transient uint32, reason string)
+	LocalServices     wire.ServiceFlag
+	RemoteServices    wire.ServiceFlag
+	TrustedSource     bool
+	MirrorAuthority   bool
+	ValidatorID       string
 	// PeerValidatorID remains only as a source-compatible test fixture field.
 	// New callers must set ValidatorID.
 	PeerValidatorID string
@@ -77,11 +78,10 @@ func (h Handler) remoteMiner() bool {
 }
 
 func (h Handler) allowedPathSnapshotSource() bool {
-	// A path repair is requested from the exact peer that announced the
-	// divergence. Its response is bound to the negotiated validator identity
-	// and still passes full record, permission, fee-proof and StateRoot checks.
-	// Generic mirror synchronization remains restricted to TrustedSource.
-	return h.validatorID() != ""
+	// ValidatorID selects the signature key, but it is not authority by itself.
+	// The server sets TrustedSource only after resolving the peer against the
+	// on-chain Core/Bootstrap registry (or a future explicit mirror authority).
+	return h.TrustedSource && h.validatorID() != ""
 }
 
 func (h Handler) allowedIncrementalSource() bool {
@@ -144,6 +144,28 @@ func (h Handler) ShouldRequestSync() bool {
 
 func (h Handler) OnNotify(msg *wire.MsgDKVSNotify) {
 	if !h.valid() || msg == nil {
+		return
+	}
+	// Targeted Notify is an application message transport, never a DKVS
+	// record replication hint. It must be authenticated as coming from a
+	// trusted Core/Bootstrap peer and dispatched before BufferNotify/record
+	// decoding, both of which deliberately understand only Target="" records.
+	if msg.Target != "" {
+		if msg.EventType != wire.DKVSNotifyEventMessage {
+			h.penalize(0, 10, "invalid directed DKVS notify event")
+			h.warnf("reject directed DKVS notify with event type %d", msg.EventType)
+			return
+		}
+		if !h.TrustedSource {
+			h.warnf("reject directed DKVS notify from untrusted source")
+			return
+		}
+		if handled, err := handleDirectedNotify(h.Store, msg); handled {
+			if err != nil {
+				h.warnf("directed DKVS notify failed: %v", err)
+			}
+			return
+		}
 		return
 	}
 	if h.Peer.BufferNotify(msg) {

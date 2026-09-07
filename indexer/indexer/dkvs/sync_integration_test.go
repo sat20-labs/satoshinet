@@ -149,8 +149,7 @@ func TestThreeMinerNotifyAndStartupSyncConverge(t *testing.T) {
 }
 
 func TestOrdinaryNodeMailboxSubscriptionSyncAndNotify(t *testing.T) {
-	miner := testIndexerWithHeight(t, 1)
-	ordinary := testIndexerWithHeight(t, 1)
+	bound := testIndexerWithHeight(t, 1)
 	ownerPriv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -159,56 +158,37 @@ func TestOrdinaryNodeMailboxSubscriptionSyncAndNotify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherOwnerPriv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
 	mailboxID := AccountID(ownerPriv.PubKey().SerializeCompressed())
 	msg1 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
-	if updated, err := miner.PutLocal(signedRecordWithValue(t, senderPriv, msg1, 1, []byte("msg-1"), 0)); err != nil || !updated {
-		t.Fatalf("put msg1 updated=%v err=%v", updated, err)
-	}
-	share1 := "/mail/" + mailboxID + "/share/pkg/share-1"
-	if updated, err := miner.PutLocal(signedRecordWithValue(t, ownerPriv, share1, 1, []byte("share-1"), 0)); err != nil || !updated {
-		t.Fatalf("put share1 updated=%v err=%v", updated, err)
-	}
-	otherMsg := testMailMsgKey(t, otherOwnerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
-	if updated, err := miner.PutLocal(signedRecordWithValue(t, senderPriv, otherMsg, 1, []byte("other"), 0)); err != nil || !updated {
-		t.Fatalf("put other msg updated=%v err=%v", updated, err)
-	}
-
-	records, total, err := ordinary.Subscribe(Subscription{Type: SubscriptionMailbox, Target: mailboxID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 0 || total != 0 {
-		t.Fatalf("ordinary local subscribe records=%d total=%d", len(records), total)
-	}
-	syncFilteredPages(t, miner, ordinary, 1, ordinary.Subscriptions())
-	for _, key := range []string{msg1, share1} {
-		if _, err := ordinary.Get(key); err != nil {
-			t.Fatalf("ordinary missing subscribed key %s: %v", key, err)
+	msg2 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-2")
+	for _, item := range []struct {
+		key   string
+		value string
+	}{{msg1, "msg-1"}, {msg2, "msg-2"}} {
+		if _, err := bound.PutInternalMailbox(internalMailboxTestRecord(item.key, []byte(item.value), 100)); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if _, err := ordinary.Get(otherMsg); err != ErrRecordNotFound {
-		t.Fatalf("ordinary stored unrelated mailbox err=%v", err)
+
+	records, total, err := bound.Subscribe(Subscription{Type: SubscriptionMailbox, Target: mailboxID})
+	if err != nil || total != 2 || len(records) != 2 {
+		t.Fatalf("mailbox subscribe records=%d total=%d err=%v", len(records), total, err)
+	}
+	clientRecords, _, done, _, err := bound.SyncFilteredForClient(nil, 10,
+		[]Subscription{{Type: SubscriptionMailbox, Target: mailboxID}})
+	if err != nil || !done || len(clientRecords) != 2 {
+		t.Fatalf("client mailbox sync records=%d done=%v err=%v", len(clientRecords), done, err)
 	}
 
-	msg2 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-2")
-	record2 := signedRecordWithValue(t, senderPriv, msg2, 2, []byte("msg-2"), 0)
-	if updated, err := miner.PutLocal(record2); err != nil || !updated {
-		t.Fatalf("put msg2 updated=%v err=%v", updated, err)
+	// AccountBound mailbox data is read from the bound CoreNode only and must
+	// not enter the miner/ordinary-node P2P mirror stream.
+	networkRecords, _, networkDone, _, err := bound.SyncFiltered(nil, 10,
+		[]Subscription{{Type: SubscriptionMailbox, Target: mailboxID}})
+	if err != nil || !networkDone || len(networkRecords) != 0 {
+		t.Fatalf("network mailbox sync records=%d done=%v err=%v", len(networkRecords), networkDone, err)
 	}
-	if !ordinary.IsSubscribed(msg2) {
-		t.Fatalf("ordinary subscription does not match %s", msg2)
-	}
-	pullByNotify(t, miner, ordinary, msg2)
-	got, err := ordinary.Get(msg2)
-	if err != nil {
-		t.Fatalf("ordinary notify get: %v", err)
-	}
-	if string(got.Value) != "msg-2" {
-		t.Fatalf("notify value=%q", got.Value)
+	if _, err := bound.GetForRelay(msg1); err != ErrRecordNotFound {
+		t.Fatalf("mailbox record became relayable err=%v", err)
 	}
 }
 

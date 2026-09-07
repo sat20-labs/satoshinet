@@ -1,6 +1,7 @@
 package dkvs
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"strings"
 
@@ -56,9 +57,8 @@ func AccountPersonalKey(accountID, path string) (string, error) {
 	return key, err
 }
 
-// AccountMappingKey returns the public address-to-account lookup key. The
-// mapping value is the raw 32-byte account ID and the record is signed by that
-// same account.
+// AccountMappingKey returns the public address-to-account lookup key. Its
+// value is an AccountServiceDescriptor signed by that same account.
 func AccountMappingKey(network, address string) (string, error) {
 	canonical, _, err := accountNetworkParams(network)
 	if err != nil {
@@ -70,31 +70,140 @@ func AccountMappingKey(network, address string) (string, error) {
 	return key, err
 }
 
-func EncodeAccountMappingValue(accountID string) ([]byte, error) {
+const (
+	AccountServiceDescriptorVersion = uint8(1)
+
+	// AccountServiceCapabilityRGB11Direct advertises direct RGB11 transfers to
+	// the root account's address. Standard invoice transfers do not depend on it.
+	AccountServiceCapabilityRGB11Direct = uint64(1 << 0)
+
+	accountServiceDescriptorFixedSize = 1 + accountIDSize + 33 + 8
+	maxAccountServiceDescriptorSize   = 1024
+	maxAccountServiceExtensionSize    = 512
+)
+
+// AccountServiceExtension is a protocol-defined extension of the one free
+// account service record. Types must be non-zero and strictly increasing so
+// the encoding has exactly one canonical form. Unknown types are preserved by
+// the decoder for forward compatibility.
+type AccountServiceExtension struct {
+	Type  uint16
+	Value []byte
+}
+
+// AccountServiceDescriptor is the bounded, versioned value stored at the one
+// free /account/<network>/<root-address> key. It is not a general-purpose free
+// blob: additions require a protocol-defined capability bit or extension type.
+type AccountServiceDescriptor struct {
+	Version      uint8
+	AccountID    string
+	CoreNodeID   string
+	Capabilities uint64
+	Extensions   []AccountServiceExtension
+}
+
+// EncodeAccountServiceDescriptor builds the single free account control value
+// used for address discovery, Account -> CoreNode routing and small protocol
+// capabilities. The account ID remains the record signer; CoreNode acceptance
+// of the binding remains a separate local operation.
+func EncodeAccountServiceDescriptor(descriptor AccountServiceDescriptor) ([]byte, error) {
+	if descriptor.Version == 0 {
+		descriptor.Version = AccountServiceDescriptorVersion
+	}
+	if descriptor.Version != AccountServiceDescriptorVersion {
+		return nil, ErrInvalidRecord
+	}
+	accountID := strings.ToLower(strings.TrimSpace(descriptor.AccountID))
+	account, err := hex.DecodeString(accountID)
+	if err != nil || len(account) != accountIDSize {
+		return nil, ErrInvalidRecord
+	}
 	if _, err := AccountPubKey(accountID); err != nil {
 		return nil, err
 	}
-	return hex.DecodeString(strings.ToLower(accountID))
+	coreNodeID := strings.ToLower(strings.TrimSpace(descriptor.CoreNodeID))
+	core, err := hex.DecodeString(coreNodeID)
+	if err != nil || len(core) != 33 {
+		return nil, ErrInvalidRecord
+	}
+	if _, err := btcec.ParsePubKey(core); err != nil {
+		return nil, ErrInvalidRecord
+	}
+	size := accountServiceDescriptorFixedSize
+	previousType := uint16(0)
+	for _, extension := range descriptor.Extensions {
+		if extension.Type == 0 || extension.Type <= previousType || len(extension.Value) == 0 ||
+			len(extension.Value) > maxAccountServiceExtensionSize {
+			return nil, ErrInvalidRecord
+		}
+		size += 4 + len(extension.Value)
+		if size > maxAccountServiceDescriptorSize {
+			return nil, ErrInvalidRecord
+		}
+		previousType = extension.Type
+	}
+	value := make([]byte, size)
+	value[0] = descriptor.Version
+	copy(value[1:1+accountIDSize], account)
+	copy(value[1+accountIDSize:1+accountIDSize+33], core)
+	binary.BigEndian.PutUint64(value[1+accountIDSize+33:accountServiceDescriptorFixedSize], descriptor.Capabilities)
+	offset := accountServiceDescriptorFixedSize
+	for _, extension := range descriptor.Extensions {
+		binary.BigEndian.PutUint16(value[offset:offset+2], extension.Type)
+		binary.BigEndian.PutUint16(value[offset+2:offset+4], uint16(len(extension.Value)))
+		copy(value[offset+4:], extension.Value)
+		offset += 4 + len(extension.Value)
+	}
+	return value, nil
 }
 
-func DecodeAccountMappingValue(value []byte) (string, error) {
-	if len(value) != accountIDSize {
-		return "", ErrInvalidRecord
+func DecodeAccountServiceDescriptor(value []byte) (*AccountServiceDescriptor, error) {
+	if len(value) < accountServiceDescriptorFixedSize || len(value) > maxAccountServiceDescriptorSize ||
+		value[0] != AccountServiceDescriptorVersion {
+		return nil, ErrInvalidRecord
 	}
-	accountID, err := CanonicalAccountID(value)
+	accountID, err := CanonicalAccountID(value[1 : 1+accountIDSize])
 	if err != nil {
-		return "", ErrInvalidRecord
+		return nil, ErrInvalidRecord
 	}
-	return accountID, nil
+	core := value[1+accountIDSize : 1+accountIDSize+33]
+	if _, err := btcec.ParsePubKey(core); err != nil {
+		return nil, ErrInvalidRecord
+	}
+	descriptor := &AccountServiceDescriptor{
+		Version:      value[0],
+		AccountID:    accountID,
+		CoreNodeID:   hex.EncodeToString(core),
+		Capabilities: binary.BigEndian.Uint64(value[1+accountIDSize+33 : accountServiceDescriptorFixedSize]),
+	}
+	previousType := uint16(0)
+	for offset := accountServiceDescriptorFixedSize; offset < len(value); {
+		if len(value)-offset < 4 {
+			return nil, ErrInvalidRecord
+		}
+		typ := binary.BigEndian.Uint16(value[offset : offset+2])
+		length := int(binary.BigEndian.Uint16(value[offset+2 : offset+4]))
+		offset += 4
+		if typ == 0 || typ <= previousType || length == 0 || length > maxAccountServiceExtensionSize ||
+			length > len(value)-offset {
+			return nil, ErrInvalidRecord
+		}
+		descriptor.Extensions = append(descriptor.Extensions, AccountServiceExtension{
+			Type: typ, Value: append([]byte(nil), value[offset:offset+length]...),
+		})
+		offset += length
+		previousType = typ
+	}
+	return descriptor, nil
 }
 
 func accountNetworkParams(network string) (string, *chaincfg.Params, error) {
 	switch strings.ToLower(strings.TrimSpace(network)) {
 	case "mainnet", "bitcoin", "bc":
 		return "mainnet", &chaincfg.MainNetParams, nil
-	case "testnet", "testnet3", "tb3":
+	case "testnet3", "tb3":
 		return "testnet3", &chaincfg.TestNetParams, nil
-	case "testnet4", "tb4":
+	case "testnet", "testnet4", "tb4":
 		return "testnet4", &chaincfg.TestNetParams, nil
 	case "signet", "sb":
 		return "signet", &chaincfg.SigNetParams, nil
@@ -165,22 +274,24 @@ func RecordSignerAccountID(record *wire.DKVSRecord, parsed ParsedKey) (string, e
 			return "", ErrPermissionDenied
 		}
 		var err error
-		accountID, err = DecodeAccountMappingValue(record.Value)
+		descriptor, decodeErr := DecodeAccountServiceDescriptor(record.Value)
+		err = decodeErr
 		if err != nil {
 			return "", err
 		}
+		accountID = descriptor.AccountID
 	case "personal", "blob":
 		accountID = parsed.Segments[0]
 	case "mail":
-		if len(parsed.Segments) != 4 {
+		if len(parsed.Segments) < 2 {
 			return "", ErrInvalidKey
 		}
-		if parsed.Segments[1] == "share" || IsTombstone(record.Flags) {
+		if IsTombstone(record.Flags) || parsed.Segments[1] == "share" {
 			accountID = parsed.Segments[0]
-		} else if parsed.Segments[1] == "msg" {
+		} else if len(parsed.Segments) == 4 && parsed.Segments[1] == "msg" {
 			accountID = parsed.Segments[2]
 		} else {
-			return "", ErrInvalidKey
+			return "", ErrPermissionDenied
 		}
 	default:
 		return "", ErrPermissionDenied
@@ -218,6 +329,12 @@ func ValidateRecordIdentity(record *wire.DKVSRecord, parsed ParsedKey) error {
 	if record == nil || record.Version != Version {
 		return ErrInvalidRecord
 	}
+	// The outer mailbox record of a MessageManager delivery has no author key;
+	// the inner encrypted message carries the sender signature. This form is
+	// only creatable through PutInternalMailbox and remains valid for reads.
+	if isInternalMailboxRecord(record) {
+		return nil
+	}
 	accountScoped := isAccountScopedNamespace(parsed.Namespace)
 	if accountScoped && len(record.PubKey) != 0 {
 		return ErrInvalidRecord
@@ -254,15 +371,11 @@ func ValidateRecordIdentity(record *wire.DKVSRecord, parsed ParsedKey) error {
 			return ErrPermissionDenied
 		}
 	case "mail":
-		if parsed.Segments[1] == "share" {
+		if parsed.Segments[1] == "share" || IsTombstone(record.Flags) {
 			if parsed.Segments[0] != accountID {
 				return ErrPermissionDenied
 			}
-		} else if IsTombstone(record.Flags) {
-			if parsed.Segments[0] != accountID {
-				return ErrPermissionDenied
-			}
-		} else if parsed.Segments[1] != "msg" || parsed.Segments[2] != accountID {
+		} else if len(parsed.Segments) != 4 || parsed.Segments[1] != "msg" || parsed.Segments[2] != accountID {
 			return ErrPermissionDenied
 		}
 	default:

@@ -11,8 +11,9 @@ import (
 )
 
 func TestBuildSettlementResultPlansUsesSettledItemFunding(t *testing.T) {
+	contract := testTemplateContract(t)
 	plan := &SettlementPlan{
-		Contract: "tc-address",
+		Contract: contract.MustEncode(),
 		Height:   100,
 		ItemIDs:  []int64{1, 2},
 		Transfers: []SettlementTransfer{{
@@ -25,13 +26,15 @@ func TestBuildSettlementResultPlansUsesSettledItemFunding(t *testing.T) {
 		}},
 	}
 	records := []ExecutionRecord{{
-		ItemIDs: []int64{1},
+		Contract: contract,
+		ItemIDs:  []int64{1},
 		FundingInputs: []OutPoint{{
 			TxID: testHash(1),
 			Vout: 0,
 		}},
 	}, {
-		ItemIDs: []int64{2},
+		Contract: contract,
+		ItemIDs:  []int64{2},
 		FundingInputs: []OutPoint{{
 			TxID: testHash(2),
 			Vout: 1,

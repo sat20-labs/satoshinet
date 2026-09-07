@@ -1,12 +1,9 @@
 package dkvs
 
 import (
-	"errors"
 	"fmt"
 	"sort"
-	"sync/atomic"
 
-	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -55,7 +52,7 @@ func (i *Indexer) GetPathSnapshot(path string) (*PathSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if pathMode(parsed) == PathLocalOnly {
+	if replicationMode(parsed, nil) != ReplicationNetwork {
 		return nil, ErrFreeLocalNotRelayable
 	}
 	height := i.currentHeight()
@@ -132,9 +129,6 @@ func validateSnapshotPermission(record *wire.DKVSRecord, parsed ParsedKey, valid
 	if record == nil {
 		return ErrInvalidRecord
 	}
-	// Account-scoped records are signed by the x-only account identity and
-	// intentionally carry no PubKey. Validate that identity before applying
-	// namespace-specific rules written for traditional pubkey records.
 	if len(record.PubKey) == 0 {
 		return ValidateRecordIdentity(record, parsed)
 	}
@@ -166,7 +160,7 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		return validatedPathSnapshot{}, ErrInvalidSnapshot
 	}
 	prefix, err := ParsePrefix(path)
-	if err != nil || pathMode(prefix) == PathLocalOnly {
+	if err != nil || replicationMode(prefix, nil) != ReplicationNetwork {
 		return validatedPathSnapshot{}, ErrInvalidSnapshot
 	}
 	validators := i.snapshotValidators()
@@ -194,9 +188,7 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
 			return validatedPathSnapshot{}, err
 		}
-		retention, err := verifiedPaidRetentionAfterFeeVerification(
-			record, parsed, validators.feeVerifier, viewHeight,
-		)
+		retention, err := verifiedPaidRetentionAfterFeeVerification(record, parsed, validators.feeVerifier, viewHeight)
 		if err != nil {
 			return validatedPathSnapshot{}, err
 		}
@@ -279,126 +271,4 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		serverTimeMS:  snapshot.ServerTimeMS,
 		policyVersion: validators.policyGeneration,
 	}, nil
-}
-
-func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
-	validated, err := i.validatePathSnapshot(clonePathSnapshot(snapshot))
-	if err != nil {
-		return 0, err
-	}
-	i.mutex.Lock()
-	defer i.mutex.Unlock()
-	if atomic.LoadUint64(&i.policyGeneration) != validated.policyVersion {
-		return 0, ErrConcurrentUpdate
-	}
-	height := validated.meta.ViewHeight
-	now := currentUnixMilli()
-	current, _, _, err := i.scanLocked(validated.path, nil, 0, false, height, now)
-	if err != nil {
-		return 0, err
-	}
-	currentFloors, err := i.scanPathDeleteStatesLocked(validated.path)
-	if err != nil {
-		return 0, err
-	}
-	batch := i.db.NewWriteBatch()
-	defer batch.Close()
-	retentionRemovals := make([]string, 0, len(current))
-	for _, record := range current {
-		if record == nil || isFreeLocalRecord(record) {
-			continue
-		}
-		if err := batch.Delete(recordDBKey(record.Key)); err != nil {
-			return 0, err
-		}
-		if err := batch.Delete(hashDBKey(RecordHash(record))); err != nil {
-			return 0, err
-		}
-		retentionRemovals = append(retentionRemovals, record.Key)
-	}
-	for key, state := range currentFloors {
-		if state != nil && state.LocalOnly {
-			continue
-		}
-		if err := deleteDeleteStateBatch(batch, key); err != nil {
-			return 0, err
-		}
-	}
-	applied := 0
-	for _, record := range validated.active {
-		encoded, err := MarshalRecord(record)
-		if err != nil {
-			return 0, err
-		}
-		hash := RecordHash(record)
-		if err := batch.Put(recordDBKey(record.Key), encoded); err != nil {
-			return 0, err
-		}
-		if err := batch.Put(hashDBKey(hash), []byte(record.Key)); err != nil {
-			return 0, err
-		}
-		applied++
-	}
-	for _, floor := range validated.floors {
-		state := &deleteState{
-			FloorSeq: floor.FloorSeq, PathGeneration: floor.PathGeneration,
-			PubKey: append([]byte(nil), floor.PubKey...), EffectiveHash: floor.EffectiveHash,
-		}
-		if err := putDeleteStateBatch(batch, floor.Key, state); err != nil {
-			return 0, err
-		}
-	}
-	if err := putPathMetaBatch(batch, validated.meta); err != nil {
-		return 0, err
-	}
-	if err := putPathStatusBatch(batch, &PathLocalStatus{
-		Path: validated.path, UpdatedAt: now, LastSyncAt: now, Dirty: false, Stale: false,
-	}); err != nil {
-		return 0, err
-	}
-	if err := batch.Flush(); err != nil {
-		return 0, err
-	}
-	i.resetFeeUsageLocked()
-	i.resetFreeLocalUsageLocked()
-	i.resetRecordExpiryLocked()
-	atomic.AddUint64(&i.generation, 1)
-	retentionCache := paidRetentionCacheFor(i)
-	retentionCache.remove(retentionRemovals)
-	for _, record := range validated.active {
-		if retention := validated.retentions[record.Key]; retention != nil {
-			retentionCache.set(record.Key, *retention)
-		}
-	}
-	return applied, nil
-}
-
-func (i *Indexer) markPathStale(path, peer string, retryState string) error {
-	path = stringsTrimPath(path)
-	if !isCanonicalCollectionPath(path) {
-		return ErrInvalidKey
-	}
-	i.mutex.Lock()
-	defer i.mutex.Unlock()
-	status, err := i.readPathStatusLocked(path)
-	if err != nil {
-		return err
-	}
-	status.Stale = true
-	status.LastSyncPeer = peer
-	status.LocalRetryState = retryState
-	status.UpdatedAt = currentUnixMilli()
-	encoded, err := marshalPathStatus(status)
-	if err != nil {
-		return err
-	}
-	return i.db.Write(pathStatusDBKey(path), encoded)
-}
-
-func replacePathStatusBatch(batch indexercommon.WriteBatch, path string, now uint64) error {
-	return putPathStatusBatch(batch, &PathLocalStatus{Path: path, UpdatedAt: now, LastSyncAt: now})
-}
-
-func isNotFound(err error) bool {
-	return errors.Is(err, ErrRecordNotFound)
 }

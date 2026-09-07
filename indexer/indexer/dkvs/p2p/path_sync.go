@@ -497,7 +497,13 @@ func (h Handler) queuePathRepair(record *wire.DKVSRecord, err error) bool {
 	if pathErr != nil {
 		return false
 	}
-	h.QueuePathSync(path)
+	if h.allowedPathSnapshotSource() {
+		h.QueuePathSync(path)
+	} else if h.RequestPathRepair != nil {
+		// The announcing peer is only a divergence hint. A full destructive
+		// snapshot must be requested from an independently authorized source.
+		h.RequestPathRepair(path)
+	}
 	return true
 }
 

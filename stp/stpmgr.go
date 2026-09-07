@@ -6,11 +6,42 @@ import (
 	"fmt"
 	"log"
 	"plugin"
+	"sync"
 
 	spsbt "github.com/sat20-labs/satoshinet/btcutil/psbt"
 )
 
 var _stpMgr *plugin.Plugin
+var messageServiceMu sync.RWMutex
+var messageServiceHandler func([]byte) ([]byte, error)
+
+func registerMessageServiceHandlerWithPlugin(p *plugin.Plugin, handler func([]byte) ([]byte, error)) error {
+	if p == nil || handler == nil {
+		return nil
+	}
+	symbol, err := p.Lookup("RegisterMessageServiceHandler")
+	if err != nil {
+		return err
+	}
+	f, ok := symbol.(func(func([]byte) ([]byte, error)))
+	if !ok {
+		return fmt.Errorf("RegisterMessageServiceHandler symbol type assertion failed")
+	}
+	f(handler)
+	return nil
+}
+
+func RegisterMessageServiceHandler(handler func([]byte) ([]byte, error)) {
+	messageServiceMu.Lock()
+	messageServiceHandler = handler
+	p := _stpMgr
+	messageServiceMu.Unlock()
+	if p != nil && handler != nil {
+		if err := registerMessageServiceHandlerWithPlugin(p, handler); err != nil {
+			log.Printf("register message service handler failed: %v", err)
+		}
+	}
+}
 
 func LoadSTP(dbPath string) error {
 	if _stpMgr != nil {
@@ -43,6 +74,13 @@ func LoadSTP(dbPath string) error {
 	}
 
 	_stpMgr = p
+	messageServiceMu.RLock()
+	handler := messageServiceHandler
+	messageServiceMu.RUnlock()
+	if err := registerMessageServiceHandlerWithPlugin(p, handler); err != nil {
+		_stpMgr = nil
+		return err
+	}
 	return nil
 }
 

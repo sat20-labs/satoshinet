@@ -170,6 +170,7 @@ type PathMeta struct {
     Version         uint32
     Path            string
     Generation      uint64
+    EndpointGeneration uint64
     StateRoot       Hash
     ActiveRecords   uint64
     ActiveTotalSize uint64
@@ -178,7 +179,12 @@ type PathMeta struct {
 }
 ```
 
-本地时间、最后同步 peer、重试次数、dirty/stale 等运行状态不得进入网络 PathMeta。
+`Generation + StateRoot + ViewHeight` 是节点间可比较的 canonical 状态；
+`EndpointGeneration` 是该服务端本地维护的最小 freshness token，只要该 path 在本端可见的
+内容发生任何变化（包括 FREE_LOCAL）就递增。它不参与 P2P snapshot、relay 或跨节点比较，
+Wallet 只原样保存和回传，不重新计算。
+
+本地时间、最后同步 peer、重试次数、dirty/stale 等运行状态不得进入 canonical PathMeta。
 
 ### 4.2 Generation
 
@@ -208,7 +214,8 @@ PathMeta rebuild、PathSnapshot 和 P2P relay 必须使用完全相同的记录�
 
 `MinExpiryHeight` 从所有有限租期 record 的 `IssueHeight + TTL` 派生。
 
-record 到期不代表 owner mutation，因此不增加 generation；但会在相应 `ViewHeight` 改变 StateRoot。同步必须比较：
+record 到期不代表 owner mutation，因此不增加 canonical `Generation`；但会推进当前服务端的
+`EndpointGeneration`。可 relay record 到期时还会在相应 `ViewHeight` 改变 StateRoot。节点间同步必须比较：
 
 ```text
 Generation + StateRoot + ViewHeight
@@ -280,7 +287,8 @@ expected current record hash 或 expect_absent
 
 - 必须 `TTL > 0`；
 - 只保存在写入 endpoint；
-- 不进入 P2P 和 network PathMeta；
+- 与同 path 的其他数据一样进入本端 prefix snapshot，并推进本端 `EndpointGeneration`；
+- 不进入 P2P，也不进入 canonical `Generation/StateRoot/ViewHeight`；
 - 受 endpoint 的 record/bytes/blob-key quota；
 - 到期后本地清理。
 
@@ -381,20 +389,18 @@ Wallet 启动后：
 
 ### 8.2 持续同步
 
-watch 发现 generation/root 变化，或 watch 请求异常时：
-
-- 立即撤销对应 scope ready；
-- 完整同步并原子替换本地 confirmed replica；
-- 成功后恢复 ready。
+- Wallet 启动时对自己管理的 prefix 执行完整 snapshot，并原子替换本地 confirmed replica；
+- 后台定时把 `prefix + EndpointGeneration` 批量提交给服务端，默认轮询间隔 1 分钟；
+- 服务端只返回 generation 不同的 prefix，Wallet 仅重新 snapshot 这些 prefix；
+- 服务端不保存 Wallet session、cursor、change log 或 watcher；
+- 只读/聚合 prefix 按需直接读取，SDK 使用 5 秒请求超时和 1 分钟内存缓存，不落入 managed replica。
 
 ### 8.3 读写 fail-closed
 
 写入前必须满足：
 
 - 当前 SDK session scope ready；
-- PathMeta 存在；
-- session state 为 idle/confirmed；
-- LastErrorCode 为空；
+- prefix snapshot 已确认并记录本端 generation；
 - endpoint affinity 未失效。
 
 prepared、inflight、conflict、error、stale 或首轮同步未完成时拒绝使用旧缓存写入。
@@ -542,7 +548,6 @@ RGB11 注册为账户管理 provider：`rgb11`。
 
 以下仍可由 RGB 模块使用 DKVS：
 
-- receive capability；
 - address delivery；
 - ACK/NACK；
 - mailbox relay。
@@ -553,6 +558,12 @@ RGB11 注册为账户管理 provider：`rgb11`。
 - 不代表永久备份；
 - 到期后可清理；
 - 永久恢复状态由账户管理 provider 负责。
+
+RGB Direct receive capability 不再使用独立 `/personal` key，而是主账户唯一免费的
+`/account/<network>/<root-address>` 服务描述符中的 capability bit。该记录同时包含主账户
+AccountID 与绑定 CoreNode，并允许增加严格有界、协议定义的 TLV。RGB 的所有子账户状态
+都在主账户内部管理，对 DKVS key 空间透明；SAT20 地址 Direct 转账只支持主账户，子账户
+使用标准 RGB invoice/consignment 转账。
 
 ---
 
@@ -592,7 +603,9 @@ RGB11 注册为账户管理 provider：`rgb11`。
 
 ### Wallet SDK
 
-- 启动同步与 watch 持续更新本地 replica；
+- 启动 snapshot 与定时 prefix generation 轮询持续更新本地 replica；
+- FREE_LOCAL 与其他本端记录使用相同的 prefix status/snapshot 路径，仅 P2P relay 行为不同；
+- 非 managed prefix 使用短超时按需读取和 1 分钟内存缓存；
 - stale/conflict/error scope fail-closed；
 - 多设备写前同步、CAS 冲突后重算；
 - 首个钱包自动启用账户管理；
@@ -615,7 +628,8 @@ RGB11 注册为账户管理 provider：`rgb11`。
 
 ## 13. 最终原则
 
-1. `Seq` 只管理单 key；`PathMeta.Generation` 管理 path。
+1. `Seq` 只管理单 key；canonical `PathMeta.Generation` 管理 P2P path，
+   `EndpointGeneration` 只管理当前服务端的 Wallet freshness。
 2. record 生命周期只由 `IssueHeight + TTL` 表达。
 3. DKVS 解决协议一致性，不解决领域并发合并。
 4. Wallet SDK 本地副本必须持续同步；无法证明最新时 fail-closed。
@@ -633,4 +647,3 @@ FREE_LOCAL policy、typed error、confirmed replica codec 与持久化。该子�
 父级 `sdk/wallet` 只负责 `dkvsManager` 协调和领域适配：endpoint、同步 worker、outbox、
 路径 readiness、账户管理/RGB 调用以及为现有调用方保留的窄兼容 facade。新增底层协议、
 codec 或持久化实现不得继续堆放在父目录；兼容 facade 不得重新实现一份底层逻辑。
-

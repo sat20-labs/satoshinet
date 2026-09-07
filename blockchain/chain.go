@@ -851,7 +851,7 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 
 		// Before we delete the spend journal entry for this back,
 		// we'll fetch it as is so the indexers can utilize if needed.
-		stxos, err := dbFetchSpendJournalEntry(dbTx, block)
+		stxos, err := dbFetchSpendJournalEntryForDisconnect(dbTx, block)
 		if err != nil {
 			return err
 		}
@@ -1148,7 +1148,7 @@ func (b *BlockChain) verifyReorganizationValidity(detachNodes, attachNodes *list
 		// journal.
 		var stxos []SpentTxOut
 		err = b.db.View(func(dbTx database.Tx) error {
-			stxos, err = dbFetchSpendJournalEntry(dbTx, block)
+			stxos, err = dbFetchSpendJournalEntryForDisconnect(dbTx, block)
 			return err
 		})
 		if err != nil {

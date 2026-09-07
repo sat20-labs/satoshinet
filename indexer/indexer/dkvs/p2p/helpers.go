@@ -56,15 +56,17 @@ func notifyEventTypeForRelay(record *wire.DKVSRecord) uint8 {
 	if record == nil {
 		return 0
 	}
-	if dkvs.IsTombstone(record.Flags) {
-		return dkvs.EventRecordTombstone
-	}
 	parsed, err := dkvs.ParseKey(record.Key)
 	if err != nil {
 		return 0
 	}
-	if parsed.Namespace == "mail" && len(parsed.Segments) >= 2 && parsed.Segments[1] == "msg" {
-		return dkvs.EventMailboxMessage
+	// /mail is AccountBound. MessageManager delivers it directionally to the
+	// bound CoreNode and the ordinary DKVS relay layer must never advertise it.
+	if parsed.Namespace == "mail" {
+		return 0
+	}
+	if dkvs.IsTombstone(record.Flags) {
+		return dkvs.EventRecordTombstone
 	}
 	if parsed.Namespace == "sys" && len(parsed.Segments) >= 2 {
 		switch parsed.Segments[0] {
@@ -81,18 +83,19 @@ func NotifyForRecord(record *wire.DKVSRecord) *wire.MsgDKVSNotify {
 	if record == nil {
 		return nil
 	}
-	event, err := dkvs.NewNotifyEvent(notifyEventTypeForRelay(record), record)
+	eventType := notifyEventTypeForRelay(record)
+	if eventType == 0 {
+		return nil
+	}
+	event, err := dkvs.NewNotifyEvent(eventType, record)
 	if err != nil {
 		return nil
 	}
-	return &wire.MsgDKVSNotify{
-		EventType: event.EventType,
-		Data:      event.Data,
-	}
+	return &wire.MsgDKVSNotify{EventType: event.EventType, Data: event.Data}
 }
 
 func RecordFromNotify(msg *wire.MsgDKVSNotify) (*wire.DKVSRecord, error) {
-	if msg == nil {
+	if msg == nil || msg.EventType == wire.DKVSNotifyEventMessage || msg.Target != "" {
 		return nil, dkvs.ErrInvalidRecord
 	}
 	return dkvs.RecordFromNotifyEvent(&dkvs.NotifyEvent{EventType: msg.EventType, Data: msg.Data})

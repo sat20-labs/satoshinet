@@ -247,6 +247,11 @@ func (s *Model) GetDKVSPathMeta(path string) (*dkvsindexer.PathMeta, error) {
 	return s.indexer.GetDKVSPathMeta(path)
 }
 
+func (s *Model) WaitDKVSPath(ctx context.Context, path string, generation uint64,
+	root chainhash.Hash, viewHeight uint64) (*dkvsindexer.PathMeta, bool, error) {
+	return s.indexer.WaitDKVSPath(ctx, path, generation, root, viewHeight)
+}
+
 func (s *Model) SyncDKVSDirectory(prefix string, cursor []byte, limit uint32) ([]*swire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	return s.indexer.SyncDKVSDirectory(prefix, cursor, limit)
 }

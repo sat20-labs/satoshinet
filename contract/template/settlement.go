@@ -1219,7 +1219,7 @@ func settleAMMSell(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64, 
 		item.Done = ItemStatusClosedDirectly
 		return SettlementDeal{}, SettlementTransfer{}, false, nil
 	}
-	newPoolAsset := scommon.DecimalAdd(poolAsset, realSwapAmt)
+	newPoolAsset := poolAsset.AddAlignPrecision(realSwapAmt)
 	newPoolGasDecimal := scommon.DecimalDiv(k, newPoolAsset)
 	if newPoolGasDecimal == nil {
 		return SettlementDeal{}, SettlementTransfer{}, false, fmt.Errorf("failed to calculate AMM sell output")
@@ -1246,7 +1246,7 @@ func settleAMMSell(item *InvokeItem, poolAsset *scommon.Decimal, poolGas int64, 
 	item.OutValue = outGas
 	item.RemainingAmt = nil
 	item.Done = ItemStatusDealt
-	unitPrice := decimalString(scommon.DecimalDiv(scommon.NewDefaultDecimal(outGas), realSwapAmt))
+	unitPrice := decimalString(scommon.DecimalDiv(scommon.NewDecimal(outGas, MaxPriceDivisibility), realSwapAmt))
 	deal := SettlementDeal{
 		SellItemID: item.ID,
 		AssetAmt:   inAsset.String(),

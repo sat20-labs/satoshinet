@@ -1,6 +1,7 @@
 package dkvs
 
 import (
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -55,7 +56,7 @@ func signedFreeAccountRecord(t *testing.T, priv *btcec.PrivateKey, key string, v
 	return record
 }
 
-func accountMappingCapabilityRecords(t *testing.T, signer *btcec.PrivateKey,
+func accountMappingAndPersonalRecords(t *testing.T, signer *btcec.PrivateKey,
 	mappingAddress string) (*wire.DKVSRecord, *wire.DKVSRecord) {
 
 	t.Helper()
@@ -67,16 +68,32 @@ func accountMappingCapabilityRecords(t *testing.T, signer *btcec.PrivateKey,
 	if err != nil {
 		t.Fatal(err)
 	}
-	mappingValue, err := EncodeAccountMappingValue(accountID)
+	core, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	capabilityKey, err := AccountPersonalKey(accountID, "rgb11/receive")
+	mappingValue, err := EncodeAccountServiceDescriptor(AccountServiceDescriptor{
+		AccountID: accountID, CoreNodeID: hex.EncodeToString(core.PubKey().SerializeCompressed()),
+		Capabilities: AccountServiceCapabilityRGB11Direct,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return signedFreeAccountRecord(t, signer, mappingKey, mappingValue, 1),
-		signedFreeAccountRecord(t, signer, capabilityKey, []byte{1, 3}, 1)
+	personalKey, err := AccountPersonalKey(accountID, "test/value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := NewAccountRecord(mappingKey, mappingValue, RecordOptions{Seq: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := SigningHash(mapping)
+	sig, err := schnorr.Sign(signer, hash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping.Signature = sig.Serialize()
+	return mapping, signedFreeAccountRecord(t, signer, personalKey, []byte("value"), 1)
 }
 
 func accountAddress(t *testing.T, priv *btcec.PrivateKey) string {
@@ -87,6 +104,23 @@ func accountAddress(t *testing.T, priv *btcec.PrivateKey) string {
 		t.Fatal(err)
 	}
 	return address
+}
+
+func TestAccountMappingKeyCanonicalizesSatoshiNetTestnetToBitcoinTestnet4(t *testing.T) {
+	key, err := AccountMappingKey(chaincfg.TestNetParams.Name, "tb1ptest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "/account/testnet4/tb1ptest" {
+		t.Fatalf("key = %s", key)
+	}
+	legacy, err := AccountMappingKey("testnet3", "tb1ptest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy != "/account/testnet3/tb1ptest" {
+		t.Fatalf("legacy key = %s", legacy)
+	}
 }
 
 func requireAccountBatchAbsent(t *testing.T, idx *Indexer, records ...*wire.DKVSRecord) {
@@ -114,7 +148,7 @@ func TestAccountMappingAndCapabilityBatchSameOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mapping, capability := accountMappingCapabilityRecords(t, owner, accountAddress(t, owner))
+	mapping, capability := accountMappingAndPersonalRecords(t, owner, accountAddress(t, owner))
 
 	applied, err := idx.PutLocalBatchCAS([]CASMutation{
 		{Record: mapping, Precondition: WritePrecondition{ExpectAbsent: true}},
@@ -140,8 +174,8 @@ func TestAccountMappingAndCapabilityBatchRejectsCrossAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mapping, _ := accountMappingCapabilityRecords(t, mappingOwner, accountAddress(t, mappingOwner))
-	_, capability := accountMappingCapabilityRecords(t, capabilityOwner, accountAddress(t, capabilityOwner))
+	mapping, _ := accountMappingAndPersonalRecords(t, mappingOwner, accountAddress(t, mappingOwner))
+	_, capability := accountMappingAndPersonalRecords(t, capabilityOwner, accountAddress(t, capabilityOwner))
 
 	if _, err := idx.PutLocalBatchCAS([]CASMutation{
 		{Record: mapping, Precondition: WritePrecondition{ExpectAbsent: true}},
@@ -162,7 +196,7 @@ func TestAccountMappingAndCapabilityBatchRejectsForgedMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mapping, capability := accountMappingCapabilityRecords(t, owner, accountAddress(t, other))
+	mapping, capability := accountMappingAndPersonalRecords(t, owner, accountAddress(t, other))
 
 	if _, err := idx.PutLocalBatchCAS([]CASMutation{
 		{Record: mapping, Precondition: WritePrecondition{ExpectAbsent: true}},
@@ -179,7 +213,7 @@ func TestAccountMappingAndCapabilityBatchFailureIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mapping, capability := accountMappingCapabilityRecords(t, owner, accountAddress(t, owner))
+	mapping, capability := accountMappingAndPersonalRecords(t, owner, accountAddress(t, owner))
 	capability.Signature[0] ^= 0xff
 
 	if _, err := idx.PutLocalBatchCAS([]CASMutation{
@@ -240,7 +274,11 @@ func TestAccountIDAndAddressMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := EncodeAccountMappingValue(accountID)
+	core, _ := btcec.NewPrivateKey()
+	value, err := EncodeAccountServiceDescriptor(AccountServiceDescriptor{
+		AccountID: accountID, CoreNodeID: hex.EncodeToString(core.PubKey().SerializeCompressed()),
+		Capabilities: AccountServiceCapabilityRGB11Direct,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,9 +296,9 @@ func TestAccountIDAndAddressMapping(t *testing.T) {
 	if err := VerifyAccountRecordForClient(got, RecordVerificationOptions{ExpectedKey: key}); err != nil {
 		t.Fatalf("client verification failed: %v", err)
 	}
-	mapped, err := DecodeAccountMappingValue(got.Value)
-	if err != nil || mapped != accountID {
-		t.Fatalf("mapped account=%q err=%v", mapped, err)
+	descriptor, err := DecodeAccountServiceDescriptor(got.Value)
+	if err != nil || descriptor.AccountID != accountID {
+		t.Fatalf("mapped account=%q err=%v", descriptor.AccountID, err)
 	}
 }
 
@@ -290,17 +328,32 @@ func TestAccountPersonalAndMailboxPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mail := signedAccountRecord(t, sender, mailKey, []byte("ciphertext"), 1)
-	if updated, err := idx.PutLocal(mail); err != nil || !updated {
-		t.Fatalf("put mail updated=%v err=%v", updated, err)
+	legacy := signedAccountRecord(t, sender, mailKey, []byte("ciphertext"), 1)
+	if _, err := idx.PutLocal(legacy); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("generic mailbox put err=%v", err)
 	}
-	if err := VerifyAccountRecordForClient(mail, RecordVerificationOptions{ExpectedKey: mailKey}); err != nil {
+	mail := &wire.DKVSRecord{
+		Version: Version, Key: mailKey, Value: []byte("ciphertext"),
+		Seq: 1, IssueHeight: 1, TTL: 100,
+	}
+	mail.FeeProof, err = EncodeFeeProof(&FeeProof{Mode: FeeModeFreeLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated, err := idx.PutInternalMailbox(mail); err != nil || !updated {
+		t.Fatalf("internal mailbox put updated=%v err=%v", updated, err)
+	}
+	stored, err := idx.Get(mailKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyAccountRecordForClient(stored, RecordVerificationOptions{ExpectedKey: mailKey}); err != nil {
 		t.Fatal(err)
 	}
 
 	forged := signedAccountRecord(t, receiver, mailKey, []byte("forged"), 2)
 	if _, err := idx.PutLocal(forged); err == nil {
-		t.Fatal("mail record signed by the wrong account was accepted")
+		t.Fatal("generic mailbox replacement was accepted")
 	}
 }
 
@@ -325,7 +378,10 @@ func TestAccountRejectsForgedAddressMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, _ := EncodeAccountMappingValue(accountID)
+	core, _ := btcec.NewPrivateKey()
+	value, _ := EncodeAccountServiceDescriptor(AccountServiceDescriptor{
+		AccountID: accountID, CoreNodeID: hex.EncodeToString(core.PubKey().SerializeCompressed()),
+	})
 	forged := signedAccountRecord(t, priv, key, value, 1)
 	if _, err := idx.PutLocal(forged); err == nil {
 		t.Fatal("mapping to an unrelated address was accepted")

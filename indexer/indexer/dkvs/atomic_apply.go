@@ -282,6 +282,8 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 			}
 		}
 		i.mutex.Unlock()
+		// Include removed records: a deletion-only mirror has applied == 0.
+		i.notifyPathMutations(touched)
 		return applied, nil
 	}
 	return 0, ErrConcurrentUpdate

@@ -299,19 +299,10 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 			}
 			intents = append(intents, record.AssetIntents...)
 			if record.ResultFeeMode != ResultFeeModePlainTxFee {
-				callFee, err := p.GasConfig.CheckedCallFeeDecimalAtHeight(
-					ResultExecutionGas(p.GasConfig, record),
-					uint64(record.Height),
-				)
+				recordGasFee, err := RecordResultGasFee(p.GasConfig, p.Precision, record)
 				if err != nil {
 					return nil, err
 				}
-				resultFee, err := p.GasConfig.CheckedResultBaseFee(uint64(record.Height))
-				if err != nil {
-					return nil, err
-				}
-				recordGasFee := p.Precision.NormalizeUp(p.GasConfig.GasAssetName,
-					DecimalAddAllowNil(callFee, resultFee))
 				gasFee = DecimalAddAllowNil(gasFee, recordGasFee)
 				refund, err := RecordGasRefund(record, available, p.GasConfig.GasAssetName, recordGasFee)
 				if err != nil {
@@ -423,6 +414,22 @@ func ResultExecutionGas(cfg GasConfig, record ExecutionRecord) int64 {
 	default:
 		return record.GasUsed
 	}
+}
+
+// RecordResultGasFee is shared by settlement and execution budget reservations.
+func RecordResultGasFee(cfg GasConfig, precision AssetPrecisionPolicy, record ExecutionRecord) (*scommon.Decimal, error) {
+	if record.ResultFeeMode == ResultFeeModePlainTxFee {
+		return ZeroDecimal(), nil
+	}
+	callFee, err := cfg.CheckedCallFeeDecimalAtHeight(ResultExecutionGas(cfg, record), uint64(record.Height))
+	if err != nil {
+		return nil, err
+	}
+	resultFee, err := cfg.CheckedResultBaseFee(uint64(record.Height))
+	if err != nil {
+		return nil, err
+	}
+	return precision.NormalizeUp(cfg.GasAssetName, DecimalAddAllowNil(callFee, resultFee)), nil
 }
 
 func RecordGasRefund(record ExecutionRecord, available []UTXO, gasAssetName string,

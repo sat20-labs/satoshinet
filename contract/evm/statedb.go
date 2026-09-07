@@ -267,6 +267,12 @@ func (s *MemoryStateDB) CloseContract(addr gethcommon.Address) {
 	prev := acct.Closed
 	s.appendJournal(func() { acct.Closed = prev })
 	acct.Closed = true
+	for _, key := range sortedTriggerKeys(s.triggers) {
+		if GethAddress(key.contract) == addr {
+			trigger := s.triggers[key]
+			s.RemoveTrigger(trigger.Contract, trigger.ID)
+		}
+	}
 }
 
 func (s *MemoryStateDB) ContractClosed(addr gethcommon.Address) bool {

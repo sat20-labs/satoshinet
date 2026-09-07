@@ -56,6 +56,7 @@ func newAutopayMirrorIndexerForPrivateKey(t *testing.T, priv *btcec.PrivateKey,
 		FeeAssetName: "sgas", FullRecordFeePerBlock: "1", AddressParams: &chaincfg.TestNetParams,
 	}, AllowFreeLocal: true}
 	idx := New(database, Config{
+		EndpointID:     "test-core-node",
 		AllowFreeLocal: true,
 		FreeLocalCache: FreeLocalCachePolicy{
 			Enabled: true, MaxTTL: 144, MaxRecordsPerSigner: 10,

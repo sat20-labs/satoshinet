@@ -87,12 +87,27 @@ func TestDKVSConfigUsesLatestIndexedHeight(t *testing.T) {
 }
 
 func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
+	if cfg := (&IndexerMgr{cfg: &Config{}}).dkvsConfig(); cfg.AllowFreeLocal {
+		t.Fatal("manager without chain params should fail closed for free-local writes")
+	}
 	mainnetMgr := &IndexerMgr{
 		cfg:           &Config{},
 		chaincfgParam: &chaincfg.MainNetParams,
 	}
 	if mainnetMgr.dkvsConfig().AllowFreeLocal {
 		t.Fatalf("mainnet dkvs config should not allow free local writes")
+	}
+	renamedMainnet := chaincfg.MainNetParams
+	renamedMainnet.Name = "renamed-mainnet"
+	renamedMainnetMgr := &IndexerMgr{
+		cfg:           &Config{},
+		chaincfgParam: &renamedMainnet,
+	}
+	if renamedMainnetMgr.dkvsConfig().AllowFreeLocal {
+		t.Fatalf("renamed mainnet dkvs config should not allow free local writes")
+	}
+	if defaults := dkvs.NetworkDefaultsForParams(&renamedMainnet); defaults.Enabled {
+		t.Fatalf("renamed mainnet must not inherit testnet DKVS defaults: %+v", defaults)
 	}
 	testnetMgr := &IndexerMgr{
 		cfg:           &Config{},

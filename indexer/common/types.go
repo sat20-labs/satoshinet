@@ -214,12 +214,20 @@ func NewCoreNodeInfo(data *AscendData) *CoreNodeInfo {
 }
 
 func (p *CoreNodeInfo) Clone() *CoreNodeInfo {
+	if p == nil {
+		return nil
+	}
 	n := &CoreNodeInfo{
 		MinerInfo:   p.MinerInfo,
 		ChildMiners: make(map[string]*MinerAscendInfo),
 	}
 	for k2, v2 := range p.ChildMiners {
-		n.ChildMiners[k2] = v2
+		if v2 == nil {
+			n.ChildMiners[k2] = nil
+			continue
+		}
+		cloned := *v2
+		n.ChildMiners[k2] = &cloned
 	}
 	return n
 }

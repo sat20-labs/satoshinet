@@ -64,7 +64,10 @@ func VerifyRecordForClient(record *wire.DKVSRecord, opts RecordVerificationOptio
 	if opts.CheckHash && RecordHash(record) != opts.ExpectedHash {
 		return ErrInvalidRecord
 	}
-	if opts.FeeVerifier != nil && !IsTombstone(record.Flags) {
+	// MessageManager mailbox records are service-delivery containers. Their
+	// author authenticity is verified from the signed inner message, not from an
+	// outer fee/signature record that a fanout would otherwise have to duplicate.
+	if opts.FeeVerifier != nil && !IsTombstone(record.Flags) && !isInternalMailboxRecord(record) {
 		if err := verifyFeeProofWith(opts.FeeVerifier, record, parsed); err != nil {
 			return err
 		}
@@ -152,7 +155,37 @@ func ServiceKey(serviceID, path string) (string, error) {
 }
 
 func MailMsgKey(mailboxID, senderID, msgID string) (string, error) {
-	key := "/mail/" + mailboxID + "/msg/" + senderID + "/" + msgID
+	key := "/mail/" + strings.ToLower(strings.TrimSpace(mailboxID)) + "/msg/" + strings.ToLower(strings.TrimSpace(senderID)) + "/" + strings.TrimSpace(msgID)
+	_, err := ParseKey(key)
+	return key, err
+}
+
+func MailTopicMessageKey(mailboxID, topicName, senderID, senderMsgID string) (string, error) {
+	key := "/mail/" + strings.ToLower(strings.TrimSpace(mailboxID)) + "/topic/" + NormalizeNameID(topicName) + "/msg/" + strings.ToLower(strings.TrimSpace(senderID)) + "/" + strings.TrimSpace(senderMsgID)
+	_, err := ParseKey(key)
+	return key, err
+}
+
+func MailTopicKeyKey(mailboxID, topicName, keySeq string) (string, error) {
+	key := "/mail/" + strings.ToLower(strings.TrimSpace(mailboxID)) + "/topic/" + NormalizeNameID(topicName) + "/key/" + strings.TrimSpace(keySeq)
+	_, err := ParseKey(key)
+	return key, err
+}
+
+func TopicMetaKey(topicName string) (string, error) {
+	key := "/topic/" + NormalizeNameID(topicName) + "/meta"
+	_, err := ParseKey(key)
+	return key, err
+}
+
+func TopicStateKey(topicName string) (string, error) {
+	key := "/topic/" + NormalizeNameID(topicName) + "/state"
+	_, err := ParseKey(key)
+	return key, err
+}
+
+func TopicMemberKey(topicName, accountID string) (string, error) {
+	key := "/topic/" + NormalizeNameID(topicName) + "/members/" + strings.ToLower(strings.TrimSpace(accountID))
 	_, err := ParseKey(key)
 	return key, err
 }
@@ -193,9 +226,7 @@ func ValidateSnapshot(snapshot *Snapshot) error {
 	if err != nil {
 		return err
 	}
-	if checkpoint.ActiveRecordRoot != snapshot.Checkpoint.ActiveRecordRoot ||
-		checkpoint.ActiveRecordCount != snapshot.Checkpoint.ActiveRecordCount ||
-		checkpoint.ActiveRecordTotalSize != snapshot.Checkpoint.ActiveRecordTotalSize {
+	if checkpoint.ActiveRecordRoot != snapshot.Checkpoint.ActiveRecordRoot || checkpoint.ActiveRecordCount != snapshot.Checkpoint.ActiveRecordCount || checkpoint.ActiveRecordTotalSize != snapshot.Checkpoint.ActiveRecordTotalSize {
 		return ErrInvalidSnapshot
 	}
 	if len(checkpoint.NamespaceRoots) != len(snapshot.Checkpoint.NamespaceRoots) {

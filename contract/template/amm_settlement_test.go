@@ -180,6 +180,7 @@ func TestSettleAMMSellUsesConstantProductPool(t *testing.T) {
 	require.Equal(t, int64(0), plan.Deals[0].SellItemID)
 	require.Equal(t, "100", plan.Deals[0].AssetAmt)
 	require.Equal(t, int64(9), plan.Deals[0].SatValue)
+	require.Equal(t, "0.0907258064", plan.Deals[0].UnitPrice)
 	require.Len(t, plan.Transfers, 1)
 	require.Equal(t, int64(9), plan.Transfers[0].SatValue)
 
@@ -188,6 +189,78 @@ func TestSettleAMMSellUsesConstantProductPool(t *testing.T) {
 	requireDecimalString(t, "200", state.AMMData().AssetAInPool)
 	requireDecimalString(t, "11", state.AMMData().AssetBInPool)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+}
+
+func TestSettleAMMSellPreservesFeeAdjustedPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		name, poolAsset, inputAsset, k, wantPoolAsset, wantPrice string
+		wantValue                                                int64
+	}{
+		{"integer asset", "9", "1", "9999", "10", "110.8870967741", 110},
+		{"fractional asset", "9", "0.1", "9999", "9.1", "120.9677419354", 12},
+		// The net input is 0.0000000000992: rounding it to the pool's
+		// ten decimal places before pricing would incorrectly refund the sale.
+		{"state precision boundary", "0.0000000009", "0.0000000001", "0.0000009999", "0.000000001", "1108870967741.9354838709", 110},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const assetName = "ordx:f:test"
+			contract := NewAMMContract(assetName, tc.poolAsset, 1111, tc.k)
+			content, err := contract.Encode()
+			require.NoError(t, err)
+			deploy := DeployPayload{
+				GasLimit: 1000, SubType: TemplateAMM, Version: CurrentTemplateVersion,
+				DeployNonce: 7, ContractContent: content,
+			}
+			addr, _, err := DeriveContractAddress(TestnetContractPrefix, content, "deployer-address", deploy.DeployNonce)
+			require.NoError(t, err)
+			runtime, err := NewRuntimeWithDeployer(addr, deploy, nil, "deployer-address")
+			require.NoError(t, err)
+			poolAssets := wire.TxAssets{{
+				Name: *wire.NewAssetNameFromString(assetName), Amount: *parseDecimalOrZero(tc.poolAsset),
+			}}
+			require.NoError(t, runtime.ApplyFunding(testContractOutput("deploy", 1, addr, 1111, poolAssets), ""))
+			inputAssets := wire.TxAssets{{
+				Name: *wire.NewAssetNameFromString(assetName), Amount: *parseDecimalOrZero(tc.inputAsset),
+			}}
+			applyAMMSwapInvokeForTest(t, runtime, addr, "sell", "seller", OrderTypeSell,
+				strconv.FormatInt(tc.wantValue, 10), "1", SwapInvokeFee, inputAssets, 1)
+
+			before, err := runtime.RuntimeState()
+			require.NoError(t, err)
+			// Exercise the calculation with retained pointers as well as the block
+			// path, so serialization cannot hide mutations to its decimal inputs.
+			item := before.Items[0]
+			input := item.RemainingAmt
+			pool := before.AMMData().AssetAInPool
+			k := before.AMMData().K
+			_, _, dealt, err := settleAMMSell(&item, pool, 1111, 1111, k)
+			require.NoError(t, err)
+			require.True(t, dealt)
+			requireDecimalString(t, tc.inputAsset, input)
+			requireDecimalString(t, tc.poolAsset, pool)
+			requireDecimalString(t, tc.k, k)
+
+			plan, err := runtime.SettleBlock(1)
+			require.NoError(t, err)
+			require.Len(t, plan.Deals, 1)
+			require.Equal(t, tc.wantValue, plan.Deals[0].SatValue)
+			require.Equal(t, tc.wantPrice, plan.Deals[0].UnitPrice)
+			require.Equal(t, tc.inputAsset, plan.Deals[0].AssetAmt)
+			require.Len(t, plan.Transfers, 1)
+			require.Equal(t, "seller", plan.Transfers[0].To)
+			require.Equal(t, SettlementReasonDeal, plan.Transfers[0].Reason)
+			require.Equal(t, tc.wantValue, plan.Transfers[0].SatValue)
+
+			state, err := runtime.RuntimeState()
+			require.NoError(t, err)
+			require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+			require.Equal(t, InvokeReasonNormal, state.Items[0].Reason)
+			require.Nil(t, state.Items[0].RemainingAmt)
+			requireDecimalString(t, tc.wantPoolAsset, state.AMMData().AssetAInPool)
+			requireDecimalString(t, strconv.FormatInt(1111-tc.wantValue, 10), state.AMMData().AssetBInPool)
+			requireAMMPoolInvariant(t, state.AMMData())
+		})
+	}
 }
 
 func TestSettleAMMRejectsSlippage(t *testing.T) {

@@ -72,3 +72,5 @@ func ImportWallet(mn, pw string) error {
 func GetPubKey() ([]byte, error) {
 	return plugin.GetPubKey()
 }
+
+func RegisterMessageServiceHandler(handler func([]byte) ([]byte, error)) {}

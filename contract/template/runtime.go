@@ -178,7 +178,7 @@ func (r *ContractRuntime) SettleBlockWithGasConfigAndPrecision(height int64, gas
 	case *AMMContract:
 		return r.settleAMM(height, assetPrecision)
 	case *ExchangeContract:
-		return r.settleExchange(height, gasConfig.Normalize())
+		return r.settleExchange(height, gasConfig.Normalize(), assetPrecision)
 	case *AutopayContract:
 		state, err := r.RuntimeState()
 		if err != nil {

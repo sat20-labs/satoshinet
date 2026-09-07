@@ -70,10 +70,10 @@ func (i *Indexer) setPathStaleLocked(path, peer, retryState string) error {
 	return i.db.Write(pathStatusDBKey(path), encoded)
 }
 
-// PutRemoteV1 treats a relayable record as a path-change notification.
-// PathMeta.Generation is not carried by the record, so any non-idempotent
-// update must be resolved by the authenticated full path snapshot flow.
-func (i *Indexer) PutRemoteV1(record *wire.DKVSRecord, peer string) (bool, error) {
+// AcceptRemoteRecord treats a relayable record as a path-change notification.
+// Account-bound mailbox records are never valid on this network-replication
+// path: they are delivered only through directed MessageManager envelopes.
+func (i *Indexer) AcceptRemoteRecord(record *wire.DKVSRecord, peer string) (bool, error) {
 	record = cloneRecord(record)
 	if record == nil {
 		return false, ErrInvalidRecord
@@ -81,14 +81,15 @@ func (i *Indexer) PutRemoteV1(record *wire.DKVSRecord, peer string) (bool, error
 	if err := validateRelayableExpiry(record); err != nil {
 		return false, err
 	}
-	if _, err := validateParsedCoreWithVerifier(
-		record, i.currentHeight(), true, false, nil,
-	); err != nil {
+	if _, err := validateParsedCoreWithVerifier(record, i.currentHeight(), true, false, nil); err != nil {
 		return false, err
 	}
 	parsed, err := ParseKey(record.Key)
 	if err != nil {
 		return false, err
+	}
+	if parsed.Namespace == "mail" {
+		return false, ErrFreeLocalNotRelayable
 	}
 	path := collectionPath(parsed)
 	if path == "" || pathMode(parsed) == PathLocalOnly {

@@ -1,285 +1,221 @@
-# DKVS PWA / dApp API Examples
+# DKVS Wallet / PWA API Examples
 
-更新时间：2026-08-06
+更新时间：2026-08-31
 
-本文给 PWA、dApp 和本地 Agent 提供当前 SatoshiNet indexer DKVS REST API 的最小调用样本。它只描述现有 HTTP/API 行为，不替代钱包签名 SDK，也不引入新的 wire command。
+本文只描述 Wallet 应用协议。PWA 业务代码应优先调用 Wallet SDK/WASM 的领域接口，不应自行
+管理 DKVS record、Seq、fee proof、prefix generation 或 outbox。
 
-当前 `sat20wallet/pwa` 已提供 DKVS developer tool 页面：`/wallet/dkvs`。该页面只调用现有 REST API，支持 key/hash 查询、prefix 列表、提交已签名 record、提交 tombstone 和读取 checkpoint；record 签名与 fee proof 仍应由钱包/SDK 或外部流程生成。
+节点间 P2P path sync、checkpoint、全库 snapshot 和节点本地 subscription 管理属于内部或
+管理接口，不是 Wallet 同步协议。
 
-## 约定
+## 1. Wallet 应用接口
 
-- API base URL 示例使用 `http://127.0.0.1:8334`，如果节点配置了 proxy prefix，需要把 prefix 加到 `/v3/dkvs/...` 前。
-- DKVS 写入必须提交已签名的 `DKVSRecord`。PWA 不应手工拼接签名；应通过钱包/SDK 构造 record、附加 fee proof、签名后再提交。
-- Go `[]byte` 字段在 JSON 中是 base64 字符串，包括 `Value`、`PubKey`、`Signature`、`FeeProof`。
-- 默认主网兼容策略下，未配置免费策略或真实 `FeeVerifier` 时，缺少 `FeeProof` 的写入会被拒绝。
-- `/name`、`/svc` 和 `/sys` 默认未开放普通写入，除非节点注入真实 DID resolver 或 system verifier。
-
-
-
-## Read Node Policy Before FREE_LOCAL Writes
-
-FREE_LOCAL retention is node-local policy. Do not hardcode a duration in a PWA or dApp. Read the
-connected service node before each new FREE_LOCAL write, or use the wallet SDK API that performs
-this step:
-
-```js
-async function getDKVSClientConfig() {
-  const body = await dkvsFetch("/v3/dkvs/config");
-  return body.data;
-}
-
-const config = await getDKVSClientConfig();
-if (!config?.free_local?.enabled || !config.free_local.max_ttl_blocks) {
-  throw new Error("The connected node does not provide FREE_LOCAL storage");
-}
-
-// A connected wallet SDK overwrites caller TTL with this node policy before
-// signing. Raw/offline builders must be rebuilt for the selected endpoint.
-const ttlBlocks = config.free_local.max_ttl_blocks;
+```text
+GET  /v3/dkvs/config
+GET  /v3/dkvs/record?key=...
+GET  /v3/dkvs/key-state?key=...
+POST /v3/dkvs/records/batch-cas
+POST /v3/dkvs/prefixes/status
+POST /v3/dkvs/prefixes/snapshot
+POST /v3/dkvs/prefixes/read
 ```
 
-A different endpoint may expose a different policy and cannot be assumed to contain the record.
+以下旧应用接口不再使用：
 
-Generic Blob values are opaque and are not automatically compressed by DKVS. A producer that owns
-an application codec may use a versioned envelope and compress **before encryption**. In particular,
-account-managed data performs bounded, opportunistic pre-encryption compression internally; PWA
-callers do not compress or decompress that payload themselves.
-
-## Record JSON Shape
-
-```json
-{
-  "Version": 1,
-  "Key": "/personal/<account_id>/profile",
-  "Value": "base64-encoded-value",
-  "PubKey": "base64-encoded-compressed-pubkey",
-  "Signature": "base64-encoded-wallet-signature",
-  "Seq": 1,
-  "IssueHeight": 123456,
-  "TTL": 144,
-  "FeeProof": "base64-encoded-compact-fee-proof",
-  "Flags": 0
-}
+```text
+/v3/dkvs/records
+/v3/dkvs/tombstone
+/v3/dkvs/records/prefix
+/v3/dkvs/sync/directory
+/v3/dkvs/watch/directory
+/v3/dkvs/subscriptions/snapshot
+/v3/dkvs/subscriptions/watch
 ```
 
-Tombstone record 使用同一结构，`Value` 为空，`Flags` 包含 `1`。
-
-`IssueHeight` 是聪网可信区块高度，`TTL` 单位为聪网区块。有限记录在
-`IssueHeight + TTL` 高度到期；`TTL=0` 表示没有固定 record 租期，通常由 AUTOPAY
-控制。`ExpiryHeight` 不存入 record。
-
-## Minimal Fetch Wrapper
+## 2. Fetch wrapper
 
 ```js
 const dkvsBase = "http://127.0.0.1:8334";
 
 async function dkvsFetch(path, options = {}) {
-  const res = await fetch(`${dkvsBase}${path}`, {
+  const response = await fetch(`${dkvsBase}${path}`, {
     ...options,
     headers: {
       "content-type": "application/json",
       ...(options.headers || {}),
     },
   });
-  const body = await res.json();
-  if (!res.ok || body.code !== 0) {
-    throw new Error(body.msg || `DKVS request failed: ${res.status}`);
+  const body = await response.json();
+  if (!response.ok || body.code !== 0) {
+    const error = new Error(body.msg || `DKVS request failed: ${response.status}`);
+    error.code = body.error_code || "";
+    throw error;
   }
-  return body;
+  return body.data;
 }
 ```
 
-## Put / Get / Tombstone
+Go `[]byte` 字段在 JSON 中使用 base64，包括 `Value`、`PubKey`、`Signature` 和 `FeeProof`。
+
+## 3. 读取节点策略
+
+FREE_LOCAL 保存期由当前服务节点决定，端上不能硬编码：
 
 ```js
-// signedRecord should come from the wallet SDK.
-async function putDKVSRecord(signedRecord) {
-  const body = await dkvsFetch("/v3/dkvs/records", {
-    method: "POST",
-    body: JSON.stringify(signedRecord),
-  });
-  return body.data;
+async function getDKVSConfig() {
+  return dkvsFetch("/v3/dkvs/config");
 }
 
+const config = await getDKVSConfig();
+if (!config?.free_local?.enabled || !config.free_local.max_ttl_blocks) {
+  throw new Error("The connected endpoint does not provide FREE_LOCAL storage");
+}
+```
+
+Wallet SDK 在线构造 FREE_LOCAL record 时会使用当前节点策略覆盖调用方 TTL。切换 endpoint 后
+必须重新读取；不同 endpoint 不保证含有相同 FREE_LOCAL 数据。
+
+## 4. 单 key 读取
+
+```js
 async function getDKVSRecord(key) {
-  const body = await dkvsFetch(`/v3/dkvs/records?key=${encodeURIComponent(key)}`);
-  return body.data;
+  return dkvsFetch(`/v3/dkvs/record?key=${encodeURIComponent(key)}`);
 }
 
-async function getDKVSRecordByHash(recordHash) {
-  const body = await dkvsFetch(`/v3/dkvs/records?hash=${encodeURIComponent(recordHash)}`);
-  return body.data;
+async function getDKVSKeyState(key) {
+  return dkvsFetch(`/v3/dkvs/key-state?key=${encodeURIComponent(key)}`);
 }
+```
 
-async function tombstoneDKVSRecord(signedTombstone) {
-  const body = await dkvsFetch("/v3/dkvs/tombstone", {
+`key-state` 返回 `never_seen`、`active` 或 `deleted`，以及用于 per-key CAS 的 `seq`、`etag`。
+Wallet SDK 对 unmanaged key 使用 5 秒请求超时和 1 分钟 endpoint-scoped 内存缓存。
+
+## 5. Batch CAS 写入
+
+写入只接受完整的、已签名 record 和 per-key precondition：
+
+```js
+async function putDKVSBatch(request) {
+  return dkvsFetch("/v3/dkvs/records/batch-cas", {
     method: "POST",
-    body: JSON.stringify(signedTombstone),
+    body: JSON.stringify(request),
   });
-  return body.data;
 }
 ```
 
-## Prefix List And Usage
+请求示意：
 
-```js
-async function listDKVSRecords(prefix, start = 0, limit = 100) {
-  const qs = new URLSearchParams({ prefix, start: String(start), limit: String(limit) });
-  const body = await dkvsFetch(`/v3/dkvs/records/prefix?${qs}`);
-  return { records: body.data || [], total: body.total || 0, start: body.start || 0 };
-}
-
-async function getDKVSUsage(prefix) {
-  const qs = new URLSearchParams({ prefix });
-  const body = await dkvsFetch(`/v3/dkvs/usage?${qs}`);
-  return body.data;
+```json
+{
+  "request_id": "random-request-id",
+  "endpoint_id": "required-when-batch-contains-free-local",
+  "mutations": [
+    {
+      "record": {"Version": 1, "Key": "/personal/...", "Seq": 2},
+      "precondition": {"expected_hash": "..."}
+    }
+  ]
 }
 ```
 
-## Subscribe / Unsubscribe
+- 全 batch 原子成功或失败；
+- `expect_absent=true` 用于从未出现的 key；
+- conflict 后必须重新读取全部相关 key，重算业务 value、Seq、ETag 和签名，再用新 request ID 提交；
+- 网络失败重试完全相同的已签名请求；
+- PAID/AUTOPAY 不允许降级成 FREE_LOCAL；
+- 永久协议错误 fail-fast，旧异常 outbox 由维护工具清理。
 
-Subscription `type` 可为 `key`、`prefix`、`mailbox`、`service`。
+## 6. Managed prefix 启动同步
+
+Wallet 对自己管理的 canonical prefix 启动时获取完整 snapshot：
 
 ```js
-async function subscribeDKVS(type, target) {
-  const body = await dkvsFetch("/v3/dkvs/subscriptions", {
+async function getPrefixSnapshot(prefix) {
+  return dkvsFetch("/v3/dkvs/prefixes/snapshot", {
     method: "POST",
-    body: JSON.stringify({ type, target }),
+    body: JSON.stringify({ prefix }),
   });
-  return {
-    initialRecords: body.data || [],
-    subscriptions: body.subscriptions || [],
-    total: body.total || 0,
-  };
-}
-
-async function unsubscribeDKVS(type, target) {
-  const body = await dkvsFetch("/v3/dkvs/subscriptions", {
-    method: "DELETE",
-    body: JSON.stringify({ type, target }),
-  });
-  return body.subscriptions || [];
-}
-
-async function listDKVSSubscriptions() {
-  const body = await dkvsFetch("/v3/dkvs/subscriptions");
-  return body.subscriptions || [];
 }
 ```
 
-Examples:
+返回示意：
 
-```js
-await subscribeDKVS("key", "/tmp/session-123");
-await subscribeDKVS("prefix", "/personal/<account_id>");
-await subscribeDKVS("mailbox", "<mailbox_id>");
-await subscribeDKVS("service", "wallet");
-```
-
-## Mailbox
-
-Mailbox IDs and sender IDs use `hex(sha256(pubkey))`. A message key is `/mail/<mailbox_id>/msg/<sender_id>/<msg_id>`, and `<sender_id>` must match the record signing public key. The sender's AUTOPAY delegate pays for message storage; the recipient does not need a delegate and may submit a fee-free signed tombstone. Share writes remain mailbox-owner paid and signed. Mailbox messages are constrained by both mailbox-wide and per-sender quotas.
-
-```js
-async function readMailboxMessages(mailboxId, start = 0, limit = 100) {
-  return listDKVSRecords(`/mail/${mailboxId}/msg`, start, limit);
-}
-
-async function readMailboxShares(mailboxId, packageId, start = 0, limit = 100) {
-  return listDKVSRecords(`/mail/${mailboxId}/share/${packageId}`, start, limit);
-}
-
-async function sendMailboxMessage(signedMailMessageRecord) {
-  return putDKVSRecord(signedMailMessageRecord);
-}
-
-async function deleteMailboxMessage(signedTombstoneRecord) {
-  return tombstoneDKVSRecord(signedTombstoneRecord);
+```json
+{
+  "endpoint_id": "core-103",
+  "prefix": "/personal/<account_id>/wallet",
+  "generation": 12,
+  "view_height": 3422,
+  "records": [],
+  "key_states": []
 }
 ```
 
-## Single-record Blob
+`generation` 是服务端直接返回的 endpoint-local freshness token。Wallet 只原样持久化和比较，
+不能自行计算。snapshot 包含当前 endpoint 可见的全部记录，包括 FREE_LOCAL。
 
-Blob uses one signed record:
+## 7. Managed prefix 定时检查
 
-- `/blob/<account_id>/<blob_key>`
-
-The value is opaque bytes. Normal DKVS values remain limited to 16 KiB; Blob values may be up to 1 MiB. The key owner is the account encoded by `account_id`. Blob supports both `AUTOPAY` and node-local `FREE_LOCAL`; the connected node's `/v3/dkvs/config` response defines the applicable FREE_LOCAL TTL, byte, record and distinct-Blob-key limits.
-
-```js
-async function getBlob(accountId, blobKey) {
-  return getDKVSRecord(`/blob/${accountId}/${blobKey}`);
-}
-
-async function putSignedBlob(signedBlobRecord) {
-  return putDKVSRecord(signedBlobRecord);
-}
-```
-
-For application synchronization, use the directory RPC rather than the node-to-node P2P protocol:
+Wallet 默认每 1 分钟提交已知状态：
 
 ```js
-async function syncDKVSDirectory(prefix, cursor = null, limit = 100) {
-  const body = await dkvsFetch("/v3/dkvs/sync/directory", {
-    method: "POST",
-    body: JSON.stringify({ prefix, cursor, limit }),
-  });
-  return body.data;
-}
-
-async function watchDKVSDirectory(prefix, root, timeoutSeconds = 20) {
-  const body = await dkvsFetch("/v3/dkvs/watch/directory", {
+async function getChangedPrefixes(endpointId, prefixes) {
+  return dkvsFetch("/v3/dkvs/prefixes/status", {
     method: "POST",
     body: JSON.stringify({
-      prefix,
-      root,
-      timeout_seconds: timeoutSeconds,
+      endpoint_id: endpointId,
+      prefixes, // [{ prefix, generation }]
     }),
   });
-  return body.data;
 }
 ```
 
-Applications that must update multiple keys together should submit a signed atomic batch-CAS request to `/v3/dkvs/records/batch-cas`; any failed precondition or validation rejects the entire batch.
+响应的 `changed` 只包含 generation 不同的 prefix。Wallet 仅重新 snapshot 这些 prefix。
+服务端不保存 Wallet session、cursor、change log 或 watcher。
 
-## Checkpoint And Snapshot
+FREE_LOCAL 与其他记录使用完全相同的 status/snapshot 流程；唯一差异是 FREE_LOCAL 不进入
+P2P relay，也不进入 canonical P2P generation/root。
+
+## 8. Unmanaged / aggregate prefix 直读
+
+只读、聚合或按需数据使用：
 
 ```js
-async function getDKVSCheckpoint() {
-  const body = await dkvsFetch("/v3/dkvs/checkpoint");
-  return body.data;
-}
-
-async function exportDKVSSnapshot() {
-  const body = await dkvsFetch("/v3/dkvs/snapshot");
-  return body.data;
-}
-
-async function applyDKVSSnapshot(snapshot) {
-  const body = await dkvsFetch("/v3/dkvs/snapshot", {
+async function readPrefix(prefix) {
+  return dkvsFetch("/v3/dkvs/prefixes/read", {
     method: "POST",
-    body: JSON.stringify(snapshot),
+    body: JSON.stringify({ prefix }),
   });
-  return body.applied || 0;
 }
 ```
 
-## Name And Service Reads
+该接口无 generation/cursor 语义，不会创建 managed replica。Wallet SDK 使用 5 秒超时和
+1 分钟 endpoint-scoped 内存缓存。
 
-Record-level name reads use `NormalizeNameID(name)` semantics from the Go SDK: DKVS-safe names are used directly; unsafe canonical names map to `hex(sha256(canonical_name))`.
+Mailbox/message 属于按需读取：
 
 ```js
-async function getNameRecord(nameId) {
-  return getDKVSRecord(`/name/${nameId}`);
-}
-
-async function getServiceRecord(serviceName, path) {
-  return getDKVSRecord(`/svc/${serviceName}/${path}`);
-}
-
-async function subscribeService(serviceName) {
-  return subscribeDKVS("service", serviceName);
-}
+const result = await readPrefix(`/mail/${recipientAccountId}/msg`);
 ```
 
-真实 DID owner、active 状态和 DKVS signing key 解析仍依赖后续 Ordinals DID resolver 规格；PWA 不应把 record-level `/name/<name_id>` 读取误认为完整 DID 身份验证。
+它不会被注册为 Wallet managed prefix。
+
+## 9. Blob
+
+Blob key 为：
+
+```text
+/blob/<account_id>/<blob_key>
+```
+
+Blob value 是 opaque bytes，DKVS 底层不自动压缩。账户管理等已知领域 codec 可以在加密前
+使用有边界、自描述的压缩 envelope。Blob 同样支持 AUTOPAY 或 FREE_LOCAL；FREE_LOCAL 在
+本端 status/snapshot 中可见，但不经 P2P relay。
+
+## 10. Record 生命周期
+
+- `IssueHeight` 是可信 SatoshiNet 区块高度；
+- 有限记录在 `IssueHeight + TTL` 到期；
+- `TTL=0` 表示无固定 record 租期，通常由 AUTOPAY 决定；
+- tombstone 使用相同 record 结构，空 Value，Flags 包含 tombstone 位；
+- PWA 不手工拼 record 签名，应调用 Wallet SDK/WASM。

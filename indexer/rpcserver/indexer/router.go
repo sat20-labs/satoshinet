@@ -60,34 +60,25 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/miner/check/:pubkey", s.handle.checkMiner)
 	r.GET(proxy+"/v3/miner/info/:pubkey", s.handle.getMinerInfo)
 
-	// DKVS v1 normative path-oriented API.
-	r.GET(proxy+"/v3/dkvs/pathmeta", s.handle.getDKVSPathMetaV1)
-	r.POST(proxy+"/v3/dkvs/sync/path", s.handle.syncDKVSPath)
-	r.POST(proxy+"/v3/dkvs/watch/path", s.handle.watchDKVSPath)
-	r.POST(proxy+"/v3/dkvs/records/cas", s.handle.putDKVSRecordCAS)
-	r.POST(proxy+"/v3/dkvs/records/batch-cas", s.handle.putDKVSRecordBatchCAS)
-
-	// Read/config and administrative endpoints.
-	r.GET(proxy+"/v3/dkvs/records", s.handle.getDKVSRecord)
-	r.GET(proxy+"/v3/dkvs/records/prefix", s.handle.listDKVSRecords)
-	r.GET(proxy+"/v3/dkvs/usage", s.handle.getDKVSUsage)
+	// DKVS wallet/application protocol. These are the only externally routed
+	// DKVS CRUD/synchronization endpoints; canonical PathMeta/PathSnapshot state
+	// remains node-internal.
 	r.GET(proxy+"/v3/dkvs/config", s.handle.getDKVSConfig)
-	r.GET(proxy+"/v3/dkvs/checkpoint", s.handle.getDKVSCheckpoint)
+	r.GET(proxy+"/v3/dkvs/record", s.handle.getDKVSApplicationRecord)
+	r.GET(proxy+"/v3/dkvs/key-state", s.handle.getDKVSKeyState)
+	r.POST(proxy+"/v3/dkvs/records/batch-cas", s.handle.putDKVSRecordBatchCAS)
+	r.POST(proxy+"/v3/dkvs/prefixes/status", s.handle.getDKVSPrefixStatus)
+	r.POST(proxy+"/v3/dkvs/prefixes/snapshot", s.handle.getDKVSPrefixSnapshot)
+	r.POST(proxy+"/v3/dkvs/prefixes/read", s.handle.readDKVSPrefix)
+
+	// Node-local administration is deliberately separate from the wallet API.
+	r.GET(proxy+"/v3/dkvs/checkpoint", dkvsLocalOnly, s.handle.getDKVSCheckpoint)
 	r.GET(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.getDKVSSnapshot)
 	r.POST(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.applyDKVSSnapshot)
 	r.POST(proxy+"/v3/dkvs/prune", dkvsLocalOnly, s.handle.pruneDKVS)
 	r.POST(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.subscribeDKVS)
 	r.DELETE(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.unsubscribeDKVS)
 	r.GET(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.listDKVSSubscriptions)
-
-	// Development-stage compatibility routes. New SDK code does not use these.
-	r.POST(proxy+"/v3/dkvs/records", s.handle.putDKVSRecord)
-	r.GET(proxy+"/v3/dkvs/path-meta", s.handle.getDKVSPathMeta)
-	r.POST(proxy+"/v3/dkvs/tombstone", s.handle.putDKVSTombstone)
-	r.POST(proxy+"/v3/dkvs/sync", s.handle.syncDKVS)
-	r.POST(proxy+"/v3/dkvs/watch", s.handle.watchDKVS)
-	r.POST(proxy+"/v3/dkvs/sync/directory", s.handle.syncDKVSDirectory)
-	r.POST(proxy+"/v3/dkvs/watch/directory", s.handle.watchDKVSDirectory)
 
 	r.GET(proxy+"/v3/address/summary/:address", s.handle.getAssetSummaryV3)
 	r.GET(proxy+"/v3/address/utxos/:address", s.handle.getAddressUtxosV3)

@@ -1,39 +1,35 @@
 package dkvs
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"errors"
-
-	indexercommon "github.com/sat20-labs/indexer/common"
+	"strings"
 )
 
-var endpointIDKey = []byte("dkvs:endpoint-id")
-
 func (i *Indexer) endpointID() string {
-	if i == nil || i.db == nil {
+	if i == nil {
 		return ""
 	}
-	encoded, err := i.db.Read(endpointIDKey)
-	if err == nil && len(encoded) != 0 {
-		return string(encoded)
-	}
-	if err != nil && !errors.Is(err, indexercommon.ErrKeyNotFound) {
-		return ""
-	}
-	var random [16]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return ""
-	}
-	id := hex.EncodeToString(random[:])
-	if err := i.db.Write(endpointIDKey, []byte(id)); err != nil {
-		return ""
-	}
-	return id
+	return i.endpointIdentity
 }
 
 func (i *Indexer) EndpointID() string {
+	i.mutex.RLock()
+	defer i.mutex.RUnlock()
+	return i.endpointID()
+}
+
+// SetEndpointID binds endpoint-local DKVS state to the CoreNode identity. A
+// running Indexer may be initialized before the node wallet is available, but
+// its identity is immutable once assigned.
+func (i *Indexer) SetEndpointID(endpointID string) error {
+	if i == nil || strings.TrimSpace(endpointID) == "" {
+		return ErrStaleEndpoint
+	}
+	endpointID = strings.TrimSpace(endpointID)
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	return i.endpointID()
+	if i.endpointIdentity != "" && i.endpointIdentity != endpointID {
+		return ErrEndpointMismatch
+	}
+	i.endpointIdentity = endpointID
+	return nil
 }

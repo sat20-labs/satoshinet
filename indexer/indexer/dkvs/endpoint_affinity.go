@@ -1,6 +1,6 @@
 package dkvs
 
-// ValidateBatchEndpointID enforces endpoint affinity for v1 FREE_LOCAL CAS
+// ValidateBatchEndpointID enforces endpoint affinity for FREE_LOCAL CAS
 // requests. Local-only records are scoped to exactly one service node and must
 // never be accepted after a client switches to a different endpoint.
 func (i *Indexer) ValidateBatchEndpointID(mutations []CASMutation, endpointID string) error {

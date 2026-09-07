@@ -25,12 +25,20 @@ const (
 	EventRenewal         = uint8(9)
 	EventExpired         = uint8(10)
 
-	MaxKeySize             = 256
-	MaxKeySegmentSize      = 64
-	MaxNamespaceSize       = 16
-	MaxRecordValueSize     = wire.MaxDKVSValueSize
-	// DefaultFreeLocalMaxTTLBlocks is one day at the 12-second target block interval.
+	MaxKeySize         = 256
+	MaxKeySegmentSize  = 64
+	MaxNamespaceSize   = 16
+	MaxRecordValueSize = wire.MaxDKVSValueSize
+	// DefaultFreeLocalMaxTTLBlocks is 7200 blocks. Its wall-clock duration
+	// depends on the actual block cadence and is not guaranteed to be one day.
 	DefaultFreeLocalMaxTTLBlocks = uint64(24 * 60 * 60 / 12)
+
+	MaxBatchCASMutations   = 64
+	MaxBatchCASTotalSize   = 8 * 1024 * 1024
+	MaxPrefixesPerTerminal = 16
+	MaxPrefixLength        = 256
+	MaxPrefixReadRecords   = 4096
+	MaxPrefixReadBytes     = 16 * 1024 * 1024
 )
 
 type ErrorCode string
@@ -39,10 +47,13 @@ const (
 	ErrorCodeWriteConflict             ErrorCode = "DKVS_WRITE_CONFLICT"
 	ErrorCodeStaleGeneration           ErrorCode = "DKVS_STALE_GENERATION"
 	ErrorCodeStaleEndpoint             ErrorCode = "DKVS_STALE_ENDPOINT"
+	ErrorCodeEndpointMismatch          ErrorCode = "DKVS_ENDPOINT_MISMATCH"
+	ErrorCodeResetRequired             ErrorCode = "DKVS_RESET_REQUIRED"
 	ErrorCodePermissionDenied          ErrorCode = "DKVS_PERMISSION_DENIED"
 	ErrorCodeInvalidSequence           ErrorCode = "DKVS_INVALID_SEQUENCE"
 	ErrorCodePathDiverged              ErrorCode = "DKVS_PATH_DIVERGED"
 	ErrorCodeLocalOnlyEndpointMismatch ErrorCode = "DKVS_LOCAL_ONLY_ENDPOINT_MISMATCH"
+	ErrorCodeStorageModeDowngrade      ErrorCode = "DKVS_STORAGE_MODE_DOWNGRADE"
 	ErrorCodeQuotaExceeded             ErrorCode = "DKVS_QUOTA_EXCEEDED"
 	ErrorCodeInvalidRecord             ErrorCode = "DKVS_INVALID_RECORD"
 	ErrorCodeRecordNotFound            ErrorCode = "DKVS_RECORD_NOT_FOUND"
@@ -69,10 +80,13 @@ var (
 	ErrWriteConflict             = errors.New("dkvs write conflict")
 	ErrStaleGeneration           = errors.New("dkvs stale generation")
 	ErrStaleEndpoint             = errors.New("dkvs stale endpoint")
+	ErrEndpointMismatch          = errors.New("dkvs endpoint mismatch")
+	ErrResetRequired             = errors.New("dkvs subscription reset required")
 	ErrInvalidSequence           = errors.New("dkvs invalid sequence")
 	ErrPathDiverged              = errors.New("dkvs path diverged")
 	ErrPathGenerationGap         = errors.New("dkvs path generation gap")
 	ErrLocalOnlyEndpointMismatch = errors.New("dkvs local-only endpoint mismatch")
+	ErrStorageModeDowngrade      = errors.New("dkvs paid record cannot downgrade to free local")
 	ErrBatchTooLarge             = errors.New("dkvs batch too large")
 	ErrFreeLocalDisabled         = errors.New("dkvs free local cache is disabled")
 	ErrFreeLocalQuotaExceeded    = errors.New("dkvs free local cache quota exceeded")
@@ -85,6 +99,10 @@ func ErrorCodeOf(err error) ErrorCode {
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, ErrEndpointMismatch):
+		return ErrorCodeEndpointMismatch
+	case errors.Is(err, ErrResetRequired):
+		return ErrorCodeResetRequired
 	case errors.Is(err, ErrStaleEndpoint):
 		return ErrorCodeStaleEndpoint
 	case errors.Is(err, ErrStaleGeneration), errors.Is(err, ErrPathGenerationGap):
@@ -95,6 +113,8 @@ func ErrorCodeOf(err error) ErrorCode {
 		return ErrorCodePathDiverged
 	case errors.Is(err, ErrLocalOnlyEndpointMismatch):
 		return ErrorCodeLocalOnlyEndpointMismatch
+	case errors.Is(err, ErrStorageModeDowngrade):
+		return ErrorCodeStorageModeDowngrade
 	case errors.Is(err, ErrPermissionDenied), errors.Is(err, ErrDIDResolverUnavailable):
 		return ErrorCodePermissionDenied
 	case errors.Is(err, ErrFeeCapacityExceeded), errors.Is(err, ErrMailboxFull),
@@ -257,13 +277,8 @@ type Config struct {
 	EndpointID     string
 }
 
-const (
-	MaxBatchCASMutations = 64
-	MaxBatchCASTotalSize = 8 * 1024 * 1024
-)
-
 type WritePrecondition struct {
-	ExpectedHash *chainhash.Hash `json:"expected_hash,omitempty"`
+	ExpectedHash *chainhash.Hash `json:"expected_etag,omitempty"`
 	ExpectAbsent bool            `json:"expect_absent,omitempty"`
 }
 
@@ -276,27 +291,88 @@ type CASMutation struct {
 	Precondition WritePrecondition `json:"precondition"`
 }
 
-type PathWritePrecondition struct {
-	Path               string         `json:"path"`
-	ExpectedRoot       chainhash.Hash `json:"expected_root"`
-	ExpectedGeneration uint64         `json:"expected_generation"`
-}
-
 type BatchCASOptions struct {
-	PathPreconditions []PathWritePrecondition `json:"path_preconditions,omitempty"`
 	// EndpointID pins a FREE_LOCAL batch to the node that owns its local-only
 	// cache. It is ignored when the batch contains no local-only mutations.
 	EndpointID string `json:"endpoint_id,omitempty"`
+	RequestID  string `json:"request_id,omitempty"`
 }
 
 type WriteResult struct {
-	Applied      int                    `json:"applied"`
-	Records      []*wire.DKVSRecord     `json:"records,omitempty"`
-	Hashes       []string               `json:"hashes,omitempty"`
-	PathMeta     map[string]*PathMeta   `json:"pathmeta,omitempty"`
-	ServerTimeMS uint64                 `json:"server_time_ms"`
-	LocalOnly    bool                   `json:"local_only,omitempty"`
-	EndpointID   string                 `json:"endpoint_id,omitempty"`
+	Applied      int                `json:"applied"`
+	Records      []*wire.DKVSRecord `json:"records,omitempty"`
+	Hashes       []string           `json:"etags,omitempty"`
+	PrefixStates []PrefixGeneration `json:"prefix_states,omitempty"`
+	ViewHeight   uint64             `json:"view_height"`
+	ServerTimeMS uint64             `json:"server_time_ms"`
+	LocalOnly    bool               `json:"local_only,omitempty"`
+	EndpointID   string             `json:"endpoint_id,omitempty"`
+	RequestID    string             `json:"request_id,omitempty"`
+}
+
+type StorageMode string
+
+const (
+	StorageModeFreeLocal StorageMode = "FREE_LOCAL"
+	StorageModeAutopay   StorageMode = "AUTOPAY"
+	StorageModePaid      StorageMode = "PAID"
+)
+
+type KeyStateStatus string
+
+const (
+	KeyStateActive    KeyStateStatus = "active"
+	KeyStateDeleted   KeyStateStatus = "deleted"
+	KeyStateNeverSeen KeyStateStatus = "never_seen"
+)
+
+type DKVSKeyState struct {
+	Key          string           `json:"key"`
+	Status       KeyStateStatus   `json:"status"`
+	Seq          uint64           `json:"seq,omitempty"`
+	ETag         string           `json:"etag,omitempty"`
+	ExpiryHeight uint64           `json:"expiry_height,omitempty"`
+	StorageMode  StorageMode      `json:"storage_mode,omitempty"`
+	Record       *wire.DKVSRecord `json:"record,omitempty"`
+}
+
+// PrefixGeneration is the wallet-visible freshness marker for one collection
+// path on a specific endpoint. Generation is copied directly from
+// PathMeta.EndpointGeneration; clients never derive or recalculate it.
+type PrefixGeneration struct {
+	Prefix     string `json:"prefix"`
+	Generation uint64 `json:"generation"`
+}
+
+// PrefixStatusResult reports only paths whose current PathMeta endpoint
+// generation differs from the generation supplied by the client. The server
+// keeps no per-client subscription or cursor state.
+type PrefixStatusResult struct {
+	EndpointID string             `json:"endpoint_id"`
+	ViewHeight uint64             `json:"view_height"`
+	Changed    []PrefixGeneration `json:"changed"`
+}
+
+// PrefixSnapshot is one consistent endpoint-local materialization of a
+// collection path, including FREE_LOCAL records, and its PathMeta endpoint
+// generation.
+type PrefixSnapshot struct {
+	EndpointID string             `json:"endpoint_id"`
+	Prefix     string             `json:"prefix"`
+	Generation uint64             `json:"generation"`
+	ViewHeight uint64             `json:"view_height"`
+	Records    []*wire.DKVSRecord `json:"records"`
+	KeyStates  []DKVSKeyState     `json:"key_states,omitempty"`
+}
+
+// PrefixReadResult is a direct, uncached-by-server read for a read-only or
+// aggregate prefix. It intentionally has no generation or cursor contract.
+type PrefixReadResult struct {
+	EndpointID string             `json:"endpoint_id"`
+	Prefix     string             `json:"prefix"`
+	ViewHeight uint64             `json:"view_height"`
+	Records    []*wire.DKVSRecord `json:"records"`
+	KeyStates  []DKVSKeyState     `json:"key_states,omitempty"`
 }
 
 type SubscriptionType string
@@ -327,20 +403,23 @@ type Usage struct {
 	ActiveTotalSize uint64 `json:"active_total_size"`
 }
 
-// PathMeta contains only network-comparable state. Local timestamps, retry
-// flags and peer information are stored separately in PathLocalStatus.
+// PathMeta keeps canonical relay state plus one endpoint-local generation.
+// Wallet prefix APIs expose only EndpointGeneration as an opaque equality
+// token; canonical StateRoot/Generation remain node-internal.
 type PathMeta struct {
-	Version         uint32         `json:"version"`
-	Path            string         `json:"path"`
-	Generation      uint64         `json:"generation"`
-	StateRoot       chainhash.Hash `json:"state_root"`
-	ActiveRecords   uint64         `json:"active_records"`
-	ActiveTotalSize uint64         `json:"active_total_size"`
-	MinExpiryHeight uint64         `json:"min_expiry_height,omitempty"`
-	ViewHeight      uint64         `json:"view_height"`
+	Version    uint32 `json:"version"`
+	Path       string `json:"path"`
+	Generation uint64 `json:"generation"`
+	// EndpointGeneration changes for every mutation visible on this endpoint,
+	// including FREE_LOCAL. It is the wallet prefix state token and is never
+	// relayed or compared between nodes.
+	EndpointGeneration uint64         `json:"endpoint_generation"`
+	StateRoot          chainhash.Hash `json:"state_root"`
+	ActiveRecords      uint64         `json:"active_records"`
+	ActiveTotalSize    uint64         `json:"active_total_size"`
+	MinExpiryHeight    uint64         `json:"min_expiry_height,omitempty"`
+	ViewHeight         uint64         `json:"view_height"`
 
-	// Deprecated in-memory aliases retained while internal callers migrate.
-	// They are neither serialized to the public API nor used for equality.
 	ActiveRoot    chainhash.Hash `json:"-"`
 	MinExpiryTime uint64         `json:"-"`
 	UpdatedHeight uint64         `json:"-"`
@@ -399,11 +478,12 @@ type BlobPolicy struct {
 }
 
 type ClientConfig struct {
-	FreeLocal         FreeLocalCachePolicy `json:"free_local"`
-	Blob              BlobPolicy           `json:"blob"`
-	MaxBatchMutations int                  `json:"max_batch_mutations"`
-	MaxBatchBytes     int                  `json:"max_batch_record_bytes"`
-	EndpointID        string               `json:"endpoint_id,omitempty"`
+	FreeLocal              FreeLocalCachePolicy `json:"free_local"`
+	Blob                   BlobPolicy           `json:"blob"`
+	MaxBatchMutations      int                  `json:"max_batch_mutations"`
+	MaxBatchBytes          int                  `json:"max_batch_record_bytes"`
+	MaxPrefixesPerTerminal int                  `json:"max_prefixes_per_terminal"`
+	EndpointID             string               `json:"endpoint_id,omitempty"`
 }
 
 type TmpPolicy struct {

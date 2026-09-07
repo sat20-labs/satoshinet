@@ -17,31 +17,52 @@ func DeriveInvokeCallID(invokeTxID string, vout uint32, contract ContractAddress
 func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionRecord,
 	assetPrecision contractframework.AssetPrecisionResolver) ([]ResultPlan, error) {
 
-	inputsByItem := make(map[int64][]OutPoint)
-	feesByItem := make(map[int64]*scommon.Decimal)
-	gasRefundsByItem := make(map[int64]contractframework.ResultGasRefund)
+	// Item IDs are local to a contract. Build each plan with only that
+	// contract's records, leaving the shared settlement framework unchanged.
+	recordsByContract := make(map[string][]ExecutionRecord)
 	for _, record := range records {
-		for _, itemID := range record.ItemIDs {
-			inputsByItem[itemID] = append(inputsByItem[itemID], record.FundingInputs...)
-			feesByItem[itemID] = decimalAddAllowNil(feesByItem[itemID], record.GasFee)
-			if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
-				gasRefundsByItem[itemID] = refund
+		key := record.Contract.MustEncode()
+		recordsByContract[key] = append(recordsByContract[key], record)
+	}
+	var out []ResultPlan
+	for _, plan := range plans {
+		if plan == nil {
+			continue
+		}
+		inputsByItem := make(map[int64][]OutPoint)
+		feesByItem := make(map[int64]*scommon.Decimal)
+		gasRefundsByItem := make(map[int64]contractframework.ResultGasRefund)
+		for _, record := range recordsByContract[plan.Contract] {
+			for _, itemID := range record.ItemIDs {
+				inputsByItem[itemID] = append(inputsByItem[itemID], record.FundingInputs...)
+				feesByItem[itemID] = decimalAddAllowNil(feesByItem[itemID], record.GasFee)
+				if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
+					gasRefundsByItem[itemID] = refund
+				}
 			}
 		}
+		built, err := contractframework.BuildSettlementResultPlans([]*SettlementPlan{plan}, templateSettlementResultOptions(inputsByItem, feesByItem, gasRefundsByItem, assetPrecision))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, built...)
 	}
+	return contractframework.MergeResultPlansByContract(out), nil
+}
 
-	return contractframework.BuildSettlementResultPlans(plans, templateSettlementResultOptions(
-		inputsByItem, feesByItem, gasRefundsByItem, assetPrecision))
+type settlementItemKey struct {
+	contract string
+	id       int64
 }
 
 func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []ResultPlan {
 	out := contractframework.MergeResultPlansByContract(plans)
-	coveredItems := make(map[int64]struct{})
+	coveredItems := make(map[settlementItemKey]struct{})
 	planByContract := make(map[string]int)
 	for i := range out {
 		planByContract[out[i].Contract] = i
 		for _, itemID := range out[i].ItemIDs {
-			coveredItems[itemID] = struct{}{}
+			coveredItems[settlementItemKey{out[i].Contract, itemID}] = struct{}{}
 		}
 	}
 	for _, record := range records {
@@ -71,12 +92,12 @@ func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []R
 	return out
 }
 
-func executionRecordItemsCovered(record ExecutionRecord, covered map[int64]struct{}) bool {
+func executionRecordItemsCovered(record ExecutionRecord, covered map[settlementItemKey]struct{}) bool {
 	if len(record.ItemIDs) == 0 {
 		return false
 	}
 	for _, itemID := range record.ItemIDs {
-		if _, ok := covered[itemID]; !ok {
+		if _, ok := covered[settlementItemKey{record.Contract.MustEncode(), itemID}]; !ok {
 			return false
 		}
 	}

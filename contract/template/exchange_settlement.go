@@ -2,12 +2,14 @@ package template
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
-func (r *ContractRuntime) settleExchange(height int64, gasConfig GasConfig) (*SettlementPlan, error) {
+func (r *ContractRuntime) settleExchange(height int64, gasConfig GasConfig, assetPrecision contractframework.AssetPrecisionResolver) (*SettlementPlan, error) {
 	contract, ok := r.contract.(*ExchangeContract)
 	if !ok {
 		return nil, fmt.Errorf("template %s is not exchange", r.TemplateName())
@@ -41,7 +43,7 @@ func (r *ContractRuntime) settleExchange(height int64, gasConfig GasConfig) (*Se
 			addSettlementInputs(plan, item)
 			changed = true
 		case OrderTypeExchange:
-			if err := settleExchangeItem(&state, contract, item, plan, height, r.base.Deployer(), gasAssetName); err != nil {
+			if err := settleExchangeItem(&state, contract, item, plan, height, r.base.Deployer(), gasAssetName, assetPrecision); err != nil {
 				return nil, err
 			}
 			changed = true
@@ -62,7 +64,7 @@ func (r *ContractRuntime) settleExchange(height int64, gasConfig GasConfig) (*Se
 }
 
 func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract, item *InvokeItem,
-	plan *SettlementPlan, height int64, deployer, gasAssetName string) error {
+	plan *SettlementPlan, height int64, deployer, gasAssetName string, assetPrecision contractframework.AssetPrecisionResolver) error {
 
 	addSettlementInputs(plan, item)
 	plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
@@ -100,7 +102,7 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 	if totalDealA == nil {
 		totalDealA = parseDecimalOrZero("0")
 	}
-	quote := exchangeQuote(contract, height, totalDealA.String(), availableA, inputB)
+	quote := exchangeQuote(contract, height, totalDealA.String(), availableA, inputB, assetPrecision)
 	if quote.OutA.Sign() <= 0 || quote.SpentB.Sign() <= 0 {
 		markExchangeRefunded(state, item, plan, contract, gasAssetName)
 		return nil
@@ -172,7 +174,11 @@ type exchangeQuoteResult struct {
 	UnitPrice *scommon.Decimal
 }
 
-func exchangeQuote(contract *ExchangeContract, height int64, soldA string, availableA, inputB *scommon.Decimal) exchangeQuoteResult {
+func exchangeQuote(contract *ExchangeContract, height int64, soldA string, availableA, inputB *scommon.Decimal, resolvers ...contractframework.AssetPrecisionResolver) exchangeQuoteResult {
+	precision := contractframework.AssetPrecisionPolicy{Fallback: MaxPriceDivisibility}
+	if len(resolvers) > 0 {
+		precision.Resolve = resolvers[0]
+	}
 	outA := parseDecimalOrZero("0")
 	spentB := parseDecimalOrZero("0")
 	currentSold := parseDecimalOrZero(soldA)
@@ -197,9 +203,13 @@ func exchangeQuote(contract *ExchangeContract, height int64, soldA string, avail
 		if fillA.Cmp(tierA) > 0 {
 			fillA = tierA
 		}
-		costB := scommon.DecimalMul(fillA, price)
+		fillA = precision.Normalize(contract.AssetAName, fillA)
+		if fillA.Sign() <= 0 {
+			break
+		}
+		costB := exchangeFillCost(contract.AssetBName, fillA, price, precision)
 		if costB.Cmp(remainingB) > 0 {
-			costB = remainingB
+			break
 		}
 		if costB.Sign() <= 0 {
 			break
@@ -219,6 +229,34 @@ func exchangeQuote(contract *ExchangeContract, height int64, soldA string, avail
 		SpentB:    spentB,
 		UnitPrice: unitPrice,
 	}
+}
+
+// Multiply before rounding. DecimalMul keeps the first operand's precision,
+// which would discard a fractional price after fillA was quantized to an
+// indivisible asset. Integer arithmetic also avoids an intermediate Decimal
+// precision exceeding the supported maximum when both operands are precise.
+func exchangeFillCost(assetB string, fillA, price *scommon.Decimal,
+	precision contractframework.AssetPrecisionPolicy) *scommon.Decimal {
+	target := precision.Normalize(assetB, parseDecimalOrZero("0")).Precision
+	// Template durable amounts use at most MaxPriceDivisibility decimals.
+	// Do not create state that its own decoder cannot restore.
+	if target > MaxPriceDivisibility {
+		target = MaxPriceDivisibility
+	}
+	value := new(big.Int).Mul(fillA.Value, price.Value)
+	shift := fillA.Precision + price.Precision - target
+	if shift > 0 {
+		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(shift)), nil)
+		quotient, remainder := new(big.Int), new(big.Int)
+		quotient.QuoRem(value, divisor, remainder)
+		if remainder.Sign() > 0 {
+			quotient.Add(quotient, big.NewInt(1))
+		}
+		value = quotient
+	} else if shift < 0 {
+		value.Mul(value, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-shift)), nil))
+	}
+	return &scommon.Decimal{Precision: target, Value: value}
 }
 
 func exchangeTierAvailableA(contract *ExchangeContract, soldA *scommon.Decimal) *scommon.Decimal {

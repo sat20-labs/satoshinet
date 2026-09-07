@@ -13,6 +13,7 @@ import (
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -110,6 +111,11 @@ func TestEVMResultUsesPrevCaller(t *testing.T) {
 	deployTx := testEVMDeployTxForCaller(t, 7, testReturn42InitCode(), caller)
 	view := testPreviousAssetOutputView(t, deployTx.TxIn[0].PreviousOutPoint, callerAddr)
 	db := testEVMStateDB(t)
+	defer db.Close()
+	parent := btcutilBlockWithPrev(chainhash.Hash{})
+	if err := db.Update(func(tx database.Tx) error { return tx.StoreBlock(parent) }); err != nil {
+		t.Fatal(err)
+	}
 	builder, err := NewResultBuilder(Config{
 		DB:               db,
 		ChainParams:      &chaincfg.TestNetParams,
@@ -126,7 +132,8 @@ func TestEVMResultUsesPrevCaller(t *testing.T) {
 	}
 	result, err := builder(mining.ContractBuildRequest{
 		Txs:       []*btcutil.Tx{btcutil.NewTx(deployTx)},
-		Height:    100,
+		Height:    1,
+		PrevHash:  *parent.Hash(),
 		Timestamp: time.Unix(1710000000, 0),
 		UtxoView:  view,
 	})

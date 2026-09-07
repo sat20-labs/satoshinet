@@ -127,7 +127,8 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	if err != nil {
 		return DeployResult{Status: ResultStatusInvalid, Err: err}
 	}
-	if _, err := contractframework.SatoshiAmountUint64(req.Value); err != nil {
+	value, err := nativeFundingValue(req.Value, req.FundingOutput)
+	if err != nil {
 		return DeployResult{Status: ResultStatusInvalid, Err: err}
 	}
 	stateSnapshot := r.State.Snapshot()
@@ -144,16 +145,19 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	callContext := &precompileCallContext{}
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, nil, callContext)
 	chainConfig := r.chainConfig(req.Block)
-	evm := vm.NewEVM(r.blockContext(req.Block), r.State, chainConfig, config)
 	pendingBalances := pendingIntentAssetBalanceView{
 		Base:    balances,
 		Prior:   r.AssetIntents,
 		Intents: &capturedIntents,
 	}
+	nativeState := &nativeStateView{MemoryStateDB: r.State, balances: pendingBalances, calls: callContext}
+	evm := vm.NewEVM(r.nativeBlockContext(req.Block, callContext, req.FundingOutput != nil), nativeState, chainConfig, config)
+
 	rules := chainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
 	precompiles := SatoshiNetPrecompiles(pendingBalances, nil, "", r.AssetPrecision, callContext,
 		vm.ActivePrecompiledContracts(rules))
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), nil, precompileAddresses(precompiles), nil)
+	nativeState.precompiles = precompiles
 	evm.SetPrecompiles(precompiles)
 	evm.SetTxContext(vm.TxContext{
 		Origin:   GethAddress(caller),
@@ -163,9 +167,13 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 		GethAddress(caller),
 		contractframework.CloneBytes(req.InitCode),
 		gasLimit,
-		uint256.NewInt(0),
+		uint256.NewInt(value),
 	)
 	contract := r.contractAddressFromGeth(contractAddr)
+	if nativeState.err != nil {
+		err = nativeState.err
+	}
+
 	if err == nil {
 		for i := range capturedTriggers {
 			capturedTriggers[i].Contract = contract
@@ -200,7 +208,8 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	if err != nil {
 		return CallResult{Status: ResultStatusInvalid, Err: err}
 	}
-	if _, err := contractframework.SatoshiAmountUint64(req.Value); err != nil {
+	value, err := nativeFundingValue(req.Value, req.FundingOutput)
+	if err != nil {
 		return CallResult{Status: ResultStatusInvalid, Err: err}
 	}
 	capturedIntents := make([]AssetIntent, 0)
@@ -212,7 +221,6 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	callContext := &precompileCallContext{}
 	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, funding, callContext)
 	chainConfig := r.chainConfig(req.Block)
-	evm := vm.NewEVM(r.blockContext(req.Block), r.State, chainConfig, config)
 	balances := AssetBalanceReader(r.AssetBalances)
 	if req.FundingOutput != nil {
 		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding, target)
@@ -222,11 +230,15 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		Prior:   r.AssetIntents,
 		Intents: &capturedIntents,
 	}
+	nativeState := &nativeStateView{MemoryStateDB: r.State, balances: pendingBalances, calls: callContext}
+	evm := vm.NewEVM(r.nativeBlockContext(req.Block, callContext, req.FundingOutput != nil), nativeState, chainConfig, config)
+
 	rules := chainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
 	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, r.AssetPrecision, callContext,
 		vm.ActivePrecompiledContracts(rules))
 	targetAddress := GethAddress(target)
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), &targetAddress, precompileAddresses(precompiles), nil)
+	nativeState.precompiles = precompiles
 	evm.SetPrecompiles(precompiles)
 	evm.SetTxContext(vm.TxContext{
 		Origin:   GethAddress(caller),
@@ -237,8 +249,12 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		GethAddress(target),
 		contractframework.CloneBytes(req.Input),
 		gasLimit,
-		uint256.NewInt(0),
+		uint256.NewInt(value),
 	)
+	if nativeState.err != nil {
+		err = nativeState.err
+	}
+
 	if err == nil {
 		for i := range capturedTriggers {
 			if ContractAddressHash(capturedTriggers[i].Contract) == (EVMAddress{}) {
@@ -441,15 +457,20 @@ type assetTraceFrame struct {
 }
 
 type precompileCallContext struct {
-	frames []bool
+	frames []evmCallFrame
 }
 
-func (c *precompileCallContext) enter(typ byte) bool {
+type evmCallFrame struct {
+	readOnly    bool
+	codeAddress gethcommon.Address
+}
+
+func (c *precompileCallContext) enter(typ byte, codeAddress gethcommon.Address) bool {
 	if c == nil {
 		return false
 	}
 	readOnly := c.readOnly() || vm.OpCode(typ) == vm.STATICCALL
-	c.frames = append(c.frames, readOnly)
+	c.frames = append(c.frames, evmCallFrame{readOnly: readOnly, codeAddress: codeAddress})
 	return readOnly
 }
 
@@ -461,7 +482,7 @@ func (c *precompileCallContext) exit() {
 }
 
 func (c *precompileCallContext) readOnly() bool {
-	return c != nil && len(c.frames) != 0 && c.frames[len(c.frames)-1]
+	return c != nil && len(c.frames) != 0 && c.frames[len(c.frames)-1].readOnly
 }
 
 func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]AssetIntent,
@@ -477,7 +498,7 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 	frames := make([]assetTraceFrame, 0, 4)
 	tracer.OnEnter = func(depth int, typ byte, from gethcommon.Address,
 		to gethcommon.Address, input []byte, gas uint64, value *big.Int) {
-		readOnly := callContext.enter(typ)
+		readOnly := callContext.enter(typ, to)
 		if baseOnEnter != nil {
 			baseOnEnter(depth, typ, from, to, input, gas, value)
 		}

@@ -29,6 +29,7 @@ func testIndexer(t *testing.T) *Indexer {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return New(db, Config{
+		EndpointID:     "test-core-node",
 		AllowFreeLocal: true,
 		FeeVerifier:    JSONFeeVerifier{AllowFreeLocal: true},
 		CurrentHeight:  func() uint64 { return 1 },
@@ -701,6 +702,9 @@ func testIndexerWithConfig(t *testing.T, cfg Config) *Indexer {
 	t.Cleanup(func() { _ = db.Close() })
 	if cfg.CurrentHeight == nil {
 		cfg.CurrentHeight = func() uint64 { return 1 }
+	}
+	if cfg.EndpointID == "" {
+		cfg.EndpointID = "test-core-node"
 	}
 	if cfg.FeeVerifier == nil && cfg.AllowFreeLocal {
 		cfg.FeeVerifier = JSONFeeVerifier{AllowFreeLocal: cfg.AllowFreeLocal}
@@ -2060,17 +2064,24 @@ func TestMailPermissions(t *testing.T) {
 	}
 	mailboxID := AccountID(ownerPriv.PubKey().SerializeCompressed())
 	msgKey := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
-	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msgKey, 1)); err != nil || !updated {
-		t.Fatalf("mail msg put updated=%v err=%v", updated, err)
+
+	// Generic DKVS Put must not bypass MessageManager admission for message
+	// entries, even when the sender signature itself is otherwise valid.
+	if _, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msgKey, 1)); err == nil {
+		t.Fatal("generic mailbox message put was accepted")
 	}
-	if _, err := idx.PutLocal(signedRecordForKey(t, senderPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != ErrInvalidSignature {
-		t.Fatalf("mail share non-owner err=%v", err)
+	if updated, err := idx.PutInternalMailbox(internalMailboxTestRecord(msgKey, []byte("message"), 100)); err != nil || !updated {
+		t.Fatalf("internal mail msg put updated=%v err=%v", updated, err)
 	}
-	if updated, err := idx.PutLocal(signedRecordForKey(t, ownerPriv, "/mail/"+mailboxID+"/share/pkg/share-1", 1)); err != nil || !updated {
+
+	shareKey := "/mail/" + mailboxID + "/share/pkg/share-1"
+	if _, err := idx.PutLocal(signedAccountRecord(t, senderPriv, shareKey, []byte("share"), 1)); err == nil {
+		t.Fatal("mail share non-owner was accepted")
+	}
+	if updated, err := idx.PutLocal(signedAccountRecord(t, ownerPriv, shareKey, []byte("share"), 1)); err != nil || !updated {
 		t.Fatalf("mail share owner put updated=%v err=%v", updated, err)
 	}
 }
-
 func TestMailboxMessageUpdateAndDeletePermissions(t *testing.T) {
 	idx := testIndexer(t)
 	owner, err := btcec.NewPrivateKey()
@@ -2086,26 +2097,39 @@ func TestMailboxMessageUpdateAndDeletePermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), sender.PubKey().SerializeCompressed(), "message-1")
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 1, []byte("message"), 0)); err != nil || !updated {
+	original := internalMailboxTestRecord(key, []byte("message"), 100)
+	if updated, err := idx.PutInternalMailbox(original); err != nil || !updated {
 		t.Fatalf("initial message updated=%v err=%v", updated, err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, []byte("replace"), 0)); err != ErrInvalidSignature {
-		t.Fatalf("attacker update err=%v", err)
+	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, []byte("replace"), 0)); err == nil {
+		t.Fatal("attacker generic update was accepted")
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, attacker, key, 2, nil, FlagTombstone)); err != ErrInvalidSignature {
-		t.Fatalf("attacker tombstone err=%v", err)
+	if _, err := idx.DeleteInternalMailbox(signedMailboxOwnerTombstoneForTest(t, attacker, key, 2)); err == nil {
+		t.Fatal("attacker tombstone was accepted")
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, owner, key, 2, nil, FlagTombstone)); err != nil || !updated {
+	if updated, err := idx.DeleteInternalMailbox(signedMailboxOwnerTombstoneForTest(t, owner, key, 2)); err != nil || !updated {
 		t.Fatalf("owner tombstone updated=%v err=%v", updated, err)
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 2, []byte("stale"), 0)); err != nil || updated {
-		t.Fatalf("stale message replay updated=%v err=%v", updated, err)
+	if _, err := idx.Get(key); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("deleted mailbox record err=%v", err)
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, sender, key, 3, []byte("reused"), 0)); err != nil || !updated {
-		t.Fatalf("reused message key updated=%v err=%v", updated, err)
+	state, err := idx.GetKeyState(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != KeyStateNeverSeen || state.ETag != "" {
+		t.Fatalf("mailbox deletion retained state: %+v", state)
+	}
+	// The DKVS cache itself keeps no permanent replay marker. MessageManager's
+	// bounded receiver replay window, rather than a per-key tombstone, prevents
+	// a delayed Direct retry from recreating a deleted mailbox item.
+	if updated, err := idx.PutInternalMailbox(original); err != nil || !updated {
+		t.Fatalf("physical mailbox reinsert updated=%v err=%v", updated, err)
+	}
+	if updated, err := idx.PutInternalMailbox(original); err != nil || updated {
+		t.Fatalf("active mailbox duplicate updated=%v err=%v", updated, err)
 	}
 }
-
 func TestMailboxQuotaAndTombstone(t *testing.T) {
 	idx := testIndexerWithConfig(t, Config{
 		AllowFreeLocal: true,
@@ -2121,20 +2145,19 @@ func TestMailboxQuotaAndTombstone(t *testing.T) {
 	}
 	msg1 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-1")
 	msg2 := testMailMsgKey(t, ownerPriv.PubKey().SerializeCompressed(), senderPriv.PubKey().SerializeCompressed(), "msg-2")
-	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msg1, 1)); err != nil || !updated {
+	if updated, err := idx.PutInternalMailbox(internalMailboxTestRecord(msg1, []byte("one"), 100)); err != nil || !updated {
 		t.Fatalf("msg1 put updated=%v err=%v", updated, err)
 	}
-	if _, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msg2, 1)); err != ErrMailboxFull {
+	if _, err := idx.PutInternalMailbox(internalMailboxTestRecord(msg2, []byte("two"), 100)); !errors.Is(err, ErrMailboxFull) {
 		t.Fatalf("msg2 over quota err=%v", err)
 	}
-	if updated, err := idx.PutLocal(signedRecordWithValue(t, ownerPriv, msg1, 2, nil, FlagTombstone)); err != nil || !updated {
+	if updated, err := idx.DeleteInternalMailbox(signedMailboxOwnerTombstoneForTest(t, ownerPriv, msg1, 2)); err != nil || !updated {
 		t.Fatalf("msg tombstone updated=%v err=%v", updated, err)
 	}
-	if updated, err := idx.PutLocal(signedRecordForKey(t, senderPriv, msg2, 1)); err != nil || !updated {
+	if updated, err := idx.PutInternalMailbox(internalMailboxTestRecord(msg2, []byte("two"), 100)); err != nil || !updated {
 		t.Fatalf("msg2 after tombstone updated=%v err=%v", updated, err)
 	}
 }
-
 func TestMailboxSenderIdentityAndQuotaIsolation(t *testing.T) {
 	idx := testIndexerWithConfig(t, Config{
 		AllowFreeLocal: true,
@@ -2161,23 +2184,23 @@ func TestMailboxSenderIdentityAndQuotaIsolation(t *testing.T) {
 	}
 
 	firstKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), firstSender.PubKey().SerializeCompressed(), "same-id")
-	if updated, err := idx.PutLocal(signedRecordForKey(t, firstSender, firstKey, 1)); err != nil || !updated {
+	if updated, err := idx.PutInternalMailbox(internalMailboxTestRecord(firstKey, []byte("first"), 100)); err != nil || !updated {
 		t.Fatalf("first sender put updated=%v err=%v", updated, err)
 	}
 	forgedKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), secondSender.PubKey().SerializeCompressed(), "forged")
-	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, forgedKey, 1)); err != ErrInvalidSignature {
-		t.Fatalf("forged sender id err=%v", err)
+	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, forgedKey, 1)); err == nil {
+		t.Fatal("generic forged sender id was accepted")
 	}
 	firstSecondKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), firstSender.PubKey().SerializeCompressed(), "second")
-	if _, err := idx.PutLocal(signedRecordForKey(t, firstSender, firstSecondKey, 1)); err != ErrMailboxFull {
+	if _, err := idx.PutInternalMailbox(internalMailboxTestRecord(firstSecondKey, []byte("second"), 100)); !errors.Is(err, ErrMailboxFull) {
 		t.Fatalf("per-sender quota err=%v", err)
 	}
 	secondKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), secondSender.PubKey().SerializeCompressed(), "same-id")
-	if updated, err := idx.PutLocal(signedRecordForKey(t, secondSender, secondKey, 1)); err != nil || !updated {
+	if updated, err := idx.PutInternalMailbox(internalMailboxTestRecord(secondKey, []byte("second-sender"), 100)); err != nil || !updated {
 		t.Fatalf("second sender same msg id updated=%v err=%v", updated, err)
 	}
 	thirdKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), thirdSender.PubKey().SerializeCompressed(), "third")
-	if _, err := idx.PutLocal(signedRecordForKey(t, thirdSender, thirdKey, 1)); err != ErrMailboxFull {
+	if _, err := idx.PutInternalMailbox(internalMailboxTestRecord(thirdKey, []byte("third"), 100)); !errors.Is(err, ErrMailboxFull) {
 		t.Fatalf("mailbox-wide quota err=%v", err)
 	}
 
@@ -2186,14 +2209,14 @@ func TestMailboxSenderIdentityAndQuotaIsolation(t *testing.T) {
 	if err != nil || total != 2 || len(records) != 2 {
 		t.Fatalf("mailbox records=%d total=%d err=%v", len(records), total, err)
 	}
-	firstSenderPath := mailboxPrefix + "/" + AccountID(firstSender.PubKey().SerializeCompressed())
-	meta, err := idx.GetPathMeta(firstSenderPath)
-	if err != nil || meta.ActiveRecords != 1 {
-		t.Fatalf("sender path meta=%#v err=%v", meta, err)
+	mailboxPath := "/mail/" + AccountID(owner.PubKey().SerializeCompressed())
+	meta, err := idx.GetPathMeta(mailboxPath)
+	if err != nil || meta.EndpointGeneration == 0 {
+		t.Fatalf("AccountBound mailbox PathMeta missing: meta=%+v err=%v", meta, err)
 	}
 }
-
 func TestMailboxAutopayChargesSenderAndDeleteReleasesCapacity(t *testing.T) {
+	idx := testIndexer(t)
 	owner, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -2202,46 +2225,23 @@ func TestMailboxAutopayChargesSenderAndDeleteReleasesCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contract := "mailbox-autopay"
-	senderPayer, err := P2TRAddressFromPubKeyBytes(sender.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-	idx := testIndexerWithConfig(t, Config{FeeVerifier: AutopayFeeVerifier{
-		StateProvider: testAutopayStateProvider{states: map[string]*AutopayContractState{
-			contract: {
-				TemplateName: "autopay.tc",
-				CurrentBlock: 10,
-				Status:       "active",
-				Delegates: map[string]AutopayDelegateState{
-					senderPayer: {AmountPerBlock: "1", Balance: "10", LastPayHeight: 10, Status: "active"},
-				},
-			},
-		}},
-		FullRecordFeePerBlock: "1",
-		AddressParams:         &chaincfg.TestNetParams,
-	}})
-
 	msgKey := testMailMsgKey(t, owner.PubKey().SerializeCompressed(), sender.PubKey().SerializeCompressed(), "paid")
-	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, sender, msgKey, 1, contract, 100)); err != nil || !updated {
-		t.Fatalf("sender-paid message updated=%v err=%v", updated, err)
+	paid := signedRecordWithStructuredFee(t, sender, msgKey, 1, FeeProof{
+		Mode:         FeeModeOneshot,
+		PoolContract: "message-pool",
+		Payer:        "sender",
+		PaymentTxID:  "message-payment",
+		PaidAmount:   "1",
+	})
+	// MESSAGE_SEND accounting belongs to MessageManager. Attaching any DKVS fee
+	// proof to a generic /mail message record must not bypass that boundary.
+	if _, err := idx.PutLocal(paid); err == nil {
+		t.Fatal("paid generic mailbox put bypassed MessageManager")
 	}
-	secondKey := "/personal/" + AccountID(sender.PubKey().SerializeCompressed()) + "/second"
-	if _, err := idx.PutLocal(signedRecordWithAutopayFee(t, sender, secondKey, 1, contract, 100)); err != ErrFeeCapacityExceeded {
-		t.Fatalf("sender capacity was not consumed err=%v", err)
-	}
-	deleteRecord := signedRecordWithValue(t, owner, msgKey, 2, nil, FlagTombstone)
-	if len(deleteRecord.FeeProof) != 0 {
-		t.Fatal("recipient delete unexpectedly has a fee proof")
-	}
-	if updated, err := idx.PutLocal(deleteRecord); err != nil || !updated {
-		t.Fatalf("recipient free delete updated=%v err=%v", updated, err)
-	}
-	if updated, err := idx.PutLocal(signedRecordWithAutopayFee(t, sender, secondKey, 1, contract, 100)); err != nil || !updated {
-		t.Fatalf("sender capacity after delete updated=%v err=%v", updated, err)
+	if _, err := idx.Get(msgKey); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("generic paid mailbox record became visible: %v", err)
 	}
 }
-
 func TestNotifyEventTypes(t *testing.T) {
 	var events []uint8
 	priv, err := btcec.NewPrivateKey()
@@ -2275,19 +2275,16 @@ func TestNotifyEventTypes(t *testing.T) {
 	if updated, err := idx.PutLocal(renewal); err != nil || !updated {
 		t.Fatalf("renewal updated=%v err=%v", updated, err)
 	}
-	got, err := idx.Get(renewal.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if RecordExpiryHeight(got) != 200 {
-		t.Fatalf("renewal expiry=%d", RecordExpiryHeight(got))
-	}
+
+	// MessageManager internal mailbox commits notify wallet subscriptions, not
+	// the ordinary P2P DKVS Notify callback.
 	mailMsg := testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1")
-	if _, err := idx.PutLocal(signedRecordForKey(t, priv, mailMsg, 1)); err != nil {
+	beforeMail := len(events)
+	if _, err := idx.PutInternalMailbox(internalMailboxTestRecord(mailMsg, []byte("message"), 100)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := idx.PutLocal(signedRecordWithValue(t, priv, mailMsg, 2, nil, FlagTombstone)); err != nil {
-		t.Fatal(err)
+	if len(events) != beforeMail {
+		t.Fatalf("AccountBound mailbox emitted ordinary notify events=%v", events)
 	}
 	if _, err := idx.PutLocal(signedRecordForKey(t, priv, "/sys/checkpoint/1", 1)); err != nil {
 		t.Fatal(err)
@@ -2299,8 +2296,6 @@ func TestNotifyEventTypes(t *testing.T) {
 		EventRecordPut,
 		EventRecordUpdate,
 		EventRenewal,
-		EventMailboxMessage,
-		EventRecordTombstone,
 		EventCheckpointReady,
 		EventSnapshotReady,
 	}
@@ -2313,7 +2308,6 @@ func TestNotifyEventTypes(t *testing.T) {
 		}
 	}
 }
-
 func TestNotifyEventEncoding(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -2365,10 +2359,9 @@ func TestMailboxTTLAndSizePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tooLong := signedRecordForKey(t, priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1"), 1)
-	tooLong.TTL = 11
-	signRecord(t, priv, tooLong)
-	if _, err := ttlIdx.PutLocal(tooLong); err != ErrInvalidRecord {
+	tooLongKey := testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-1")
+	tooLong := internalMailboxTestRecord(tooLongKey, []byte("value"), 11)
+	if _, err := ttlIdx.PutInternalMailbox(tooLong); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("mail ttl err=%v", err)
 	}
 
@@ -2376,12 +2369,12 @@ func TestMailboxTTLAndSizePolicy(t *testing.T) {
 		AllowFreeLocal: true,
 		MailboxPolicy:  MailboxPolicy{MaxMsgSize: 1},
 	})
-	tooLarge := signedRecordWithValue(t, priv, testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-2"), 1, []byte("0123456789abcdef0123456789abcdef0123456789abcdef"), 0)
-	if _, err := sizeIdx.PutLocal(tooLarge); err != ErrRecordTooLarge {
+	tooLargeKey := testMailMsgKey(t, priv.PubKey().SerializeCompressed(), priv.PubKey().SerializeCompressed(), "msg-2")
+	tooLarge := internalMailboxTestRecord(tooLargeKey, []byte("0123456789abcdef0123456789abcdef0123456789abcdef"), 100)
+	if _, err := sizeIdx.PutInternalMailbox(tooLarge); !errors.Is(err, ErrRecordTooLarge) {
 		t.Fatalf("mail size err=%v", err)
 	}
 }
-
 func TestTmpPolicy(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {

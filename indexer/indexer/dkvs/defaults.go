@@ -4,6 +4,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	templatecontract "github.com/sat20-labs/satoshinet/contract/template"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -35,7 +36,7 @@ type NetworkDefaults struct {
 // networks. Mainnet intentionally has no active default fee verifier until the
 // production contract/deployer/recipient are finalized.
 func NetworkDefaultsForParams(params *chaincfg.Params) NetworkDefaults {
-	if params == nil || params.Name == chaincfg.MainNetParams.Name {
+	if params == nil || params.Net == wire.MainNet {
 		return NetworkDefaults{}
 	}
 	defaults := NetworkDefaults{

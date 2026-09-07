@@ -11,6 +11,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/database"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -30,6 +31,7 @@ type EVMBlockExecutionConfig struct {
 	ContractPrefix string
 	GasConfig      evm.GasConfig
 
+	HistoryDB         database.DB
 	NewRuntime        EVMRuntimeFactory
 	BuildBlockContext EVMBlockContextBuilder
 	ResolveCaller     evm.CallerResolver
@@ -88,7 +90,10 @@ func (v *EVMBlockExecutionValidator) ValidateEVMBlock(block *btcutil.Block, view
 		return evmBlockRuleError("missing EVM runtime")
 	}
 	runtime.ContractPrefix = prefix
-	blockCtx := v.blockContext(block)
+	blockCtx, err := v.blockContext(block)
+	if err != nil {
+		return evmBlockRuleError("load EVM block history: %v", err)
+	}
 	hasDueTrigger, err := v.runtimeHasDueTriggers(runtime, blockCtx, prefix)
 	if err != nil {
 		return err
@@ -165,7 +170,11 @@ func (v *EVMBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Blo
 	}
 	prefix := v.contractPrefix()
 	runtime.ContractPrefix = prefix
-	return v.runtimeHasDueTriggers(runtime, v.blockContext(block), prefix)
+	ctx, err := v.blockContext(block)
+	if err != nil {
+		return false, err
+	}
+	return v.runtimeHasDueTriggers(runtime, ctx, prefix)
 }
 
 func (v *EVMBlockExecutionValidator) runtimeHasDueTriggers(runtime *evm.Runtime,
@@ -290,9 +299,9 @@ func (v *EVMBlockExecutionValidator) runtime(block *btcutil.Block, view *blockch
 	return evm.NewRuntime(nil), nil
 }
 
-func (v *EVMBlockExecutionValidator) blockContext(block *btcutil.Block) evm.BlockContext {
+func (v *EVMBlockExecutionValidator) blockContext(block *btcutil.Block) (evm.BlockContext, error) {
 	if v.cfg.BuildBlockContext != nil {
-		return v.cfg.BuildBlockContext(block)
+		return v.contextWithHistory(v.cfg.BuildBlockContext(block))
 	}
 	height := block.Height()
 	if height < 0 {
@@ -302,14 +311,14 @@ func (v *EVMBlockExecutionValidator) blockContext(block *btcutil.Block) evm.Bloc
 	if gasLimit == 0 {
 		gasLimit = math.MaxInt64
 	}
-	return evm.BlockContext{
+	return v.contextWithHistory(evm.BlockContext{
 		ChainID:       evmChainID(v.cfg.ChainParams),
 		Number:        uint64(height),
 		Time:          uint64(block.MsgBlock().Header.Timestamp.Unix()),
 		GasLimit:      gasLimit,
 		FixedGasPrice: v.cfg.GasConfig.FixedGasPrice,
 		ParentHash:    [32]byte(block.MsgBlock().Header.PrevBlock),
-	}
+	})
 }
 
 func (v *EVMBlockExecutionValidator) resultVerifier(prefix string,
@@ -373,4 +382,20 @@ func evmBlockRuleError(format string, args ...interface{}) error {
 		ErrorCode:   blockchain.ErrInvalidEVMBlock,
 		Description: fmt.Sprintf(format, args...),
 	}
+}
+
+func (v *EVMBlockExecutionValidator) contextWithHistory(ctx evm.BlockContext) (evm.BlockContext, error) {
+	if v.cfg.HistoryDB == nil {
+		return ctx, nil
+	}
+	return evmContextWithHistory(v.cfg.HistoryDB, ctx)
+}
+
+func evmContextWithHistory(db database.DB, ctx evm.BlockContext) (evm.BlockContext, error) {
+	hashes, err := recentEVMBlockHashes(db, chainhash.Hash(ctx.ParentHash), ctx.Number)
+	if err != nil {
+		return evm.BlockContext{}, err
+	}
+	ctx.BlockHashes = hashes
+	return ctx, nil
 }

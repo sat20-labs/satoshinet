@@ -226,37 +226,38 @@ type server struct {
 	startupTime   int64
 	dkvsState     dkvsp2p.NodeState
 
-	chainParams          *chaincfg.Params
-	assetIndexer         *indexer.IndexerMgr
-	addrManager          *addrmgr.AddrManager
-	connManager          *connmgr.ConnManager
-	sigCache             *txscript.SigCache
-	hashCache            *txscript.HashCache
-	rpcServer            *rpcServer
-	syncManager          *netsync.SyncManager
-	chain                *blockchain.BlockChain
-	txMemPool            *mempool.TxPool
-	agentOracle          *contractoracle.Service
-	agentStateStore      *contractnode.AgentStateStore
-	agentInvokeMu        sync.Mutex
-	agentInvokePending   map[string]struct{}
-	btcCpuMiner          *btclucky.Miner
-	posMiner             *posminer.POSMiner
-	modifyRebroadcastInv chan interface{}
-	newPeers             chan *serverPeer
-	donePeers            chan *serverPeer
-	banPeers             chan *serverPeer
-	query                chan interface{}
-	relayInv             chan relayMsg
-	broadcast            chan broadcastMsg
-	peerHeightsUpdate    chan updatePeerHeightsMsg
-	wg                   sync.WaitGroup
-	quit                 chan struct{}
-	nat                  NAT
-	db                   database.DB
-	timeSource           blockchain.MedianTimeSource
-	services             wire.ServiceFlag
-	miningPubKey         string
+	chainParams            *chaincfg.Params
+	assetIndexer           *indexer.IndexerMgr
+	addrManager            *addrmgr.AddrManager
+	connManager            *connmgr.ConnManager
+	sigCache               *txscript.SigCache
+	hashCache              *txscript.HashCache
+	rpcServer              *rpcServer
+	syncManager            *netsync.SyncManager
+	chain                  *blockchain.BlockChain
+	txMemPool              *mempool.TxPool
+	agentOracle            *contractoracle.Service
+	agentStateStore        *contractnode.AgentStateStore
+	agentInvokeMu          sync.Mutex
+	agentInvokePending     map[string]struct{}
+	btcCpuMiner            *btclucky.Miner
+	posMiner               *posminer.POSMiner
+	modifyRebroadcastInv   chan interface{}
+	newPeers               chan *serverPeer
+	donePeers              chan *serverPeer
+	banPeers               chan *serverPeer
+	query                  chan interface{}
+	relayInv               chan relayMsg
+	broadcast              chan broadcastMsg
+	peerHeightsUpdate      chan updatePeerHeightsMsg
+	wg                     sync.WaitGroup
+	quit                   chan struct{}
+	nat                    NAT
+	db                     database.DB
+	timeSource             blockchain.MedianTimeSource
+	services               wire.ServiceFlag
+	miningPubKey           string
+	messageBindingResolver MessageBindingResolver
 
 	// The following fields are used for optional indexes.  They will be nil
 	// if the associated index is not enabled.  These fields are set during
@@ -1606,7 +1607,8 @@ func (sp *serverPeer) dkvsHandler() dkvsp2p.Handler {
 		Broadcast: func(msg *wire.MsgDKVSNotify) {
 			sp.server.BroadcastMessage(msg, sp)
 		},
-		Sign: stp.SignMsg,
+		RequestPathRepair: sp.server.requestDKVSPathRepair,
+		Sign:              stp.SignMsg,
 		Penalize: func(persistent, transient uint32, reason string) {
 			sp.addBanScore(persistent, transient, reason)
 		},
@@ -2192,6 +2194,10 @@ type getAddedNodesMsg struct {
 
 type requestDKVSSyncMsg struct{}
 
+type requestDKVSPathRepairMsg struct {
+	path string
+}
+
 type disconnectNodeMsg struct {
 	cmp   func(*serverPeer) bool
 	reply chan error
@@ -2276,6 +2282,16 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 				sp.queueDKVSSyncRequest(nil)
 			}
 		}
+
+	case requestDKVSPathRepairMsg:
+		for _, sp := range state.minerPeers {
+			if sp == nil || !sp.Connected() || !sp.isTrustedDKVSMirrorSource() {
+				continue
+			}
+			sp.dkvsHandler().QueuePathSync(msg.path)
+			return
+		}
+		peerLog.Warnf("no authorized DKVS path snapshot source is connected for %s", msg.path)
 
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
@@ -2635,6 +2651,18 @@ func (s *server) RequestDKVSSyncFromMinerPeers() {
 	go func() {
 		select {
 		case s.query <- requestDKVSSyncMsg{}:
+		case <-s.quit:
+		}
+	}()
+}
+
+func (s *server) requestDKVSPathRepair(path string) {
+	if s == nil || path == "" {
+		return
+	}
+	go func() {
+		select {
+		case s.query <- requestDKVSPathRepairMsg{path: path}:
 		case <-s.quit:
 		}
 	}()
@@ -3697,6 +3725,11 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		agentWhitelist:       agentWhitelist,
 		BtcdDir:              homeDir,
 	}
+	if strings.TrimSpace(s.miningPubKey) != "" {
+		if err := assetIndexer.SetDKVSEndpointID(s.miningPubKey); err != nil {
+			return nil, fmt.Errorf("bind DKVS endpoint to CoreNode identity: %w", err)
+		}
+	}
 	if cfg.MiningPubKey != "" && cfg.MiningPubKey == common.GetBootstrapPubKey() {
 		s.dkvsState.MarkTrusted(time.Now())
 		s.dkvsState.SetReady(true)
@@ -4148,6 +4181,11 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 			shutdownRequestChannel <- struct{}{}
 		}()
 	}
+
+	if err := s.configureProductionMessageService(); err != nil {
+		return nil, fmt.Errorf("configure message service: %w", err)
+	}
+	stp.RegisterMessageServiceHandler(s.handleMessageServiceJSON)
 
 	return &s, nil
 }

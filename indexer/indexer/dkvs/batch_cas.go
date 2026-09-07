@@ -24,7 +24,6 @@ type preparedCASMutation struct {
 
 type batchCASPreparation struct {
 	mutations        []preparedCASMutation
-	pathConditions   []PathWritePrecondition
 	height           uint64
 	now              uint64
 	policyGeneration uint64
@@ -134,52 +133,6 @@ func mutationAlreadyApplied(record *wire.DKVSRecord, snapshot writeStateSnapshot
 	return snapshot.deleteState != nil && snapshot.deleteState.effectiveHash(record.Key) == want
 }
 
-func clonePathWritePreconditions(conditions []PathWritePrecondition) []PathWritePrecondition {
-	cloned := make([]PathWritePrecondition, len(conditions))
-	copy(cloned, conditions)
-	return cloned
-}
-
-func relayableTouchedPaths(mutations []CASMutation) (map[string]struct{}, error) {
-	touched := make(map[string]struct{})
-	for _, mutation := range mutations {
-		if mutation.Record == nil || isFreeLocalRecord(mutation.Record) {
-			continue
-		}
-		path, err := CollectionPathForKey(mutation.Record.Key)
-		if err != nil {
-			return nil, err
-		}
-		touched[path] = struct{}{}
-	}
-	return touched, nil
-}
-
-func validatePathWritePreconditions(mutations []CASMutation, conditions []PathWritePrecondition) error {
-	touched, err := relayableTouchedPaths(mutations)
-	if err != nil {
-		return err
-	}
-	if len(conditions) != len(touched) {
-		return ErrStaleGeneration
-	}
-	seen := make(map[string]struct{}, len(conditions))
-	for _, condition := range conditions {
-		path := stringsTrimPath(condition.Path)
-		if !isCanonicalCollectionPath(path) {
-			return ErrInvalidKey
-		}
-		if _, ok := touched[path]; !ok {
-			return ErrInvalidRecord
-		}
-		if _, ok := seen[path]; ok {
-			return ErrInvalidRecord
-		}
-		seen[path] = struct{}{}
-	}
-	return nil
-}
-
 func stringsTrimPath(path string) string {
 	for len(path) > 1 && path[len(path)-1] == '/' {
 		path = path[:len(path)-1]
@@ -187,18 +140,44 @@ func stringsTrimPath(path string) string {
 	return path
 }
 
-func (i *Indexer) prepareBatchCAS(mutations []CASMutation, options BatchCASOptions) (batchCASPreparation, error) {
+func (i *Indexer) mutationIsLocalOnly(prepared preparedCASMutation) bool {
+	if pathMode(prepared.parsed) == PathLocalOnly {
+		return true
+	}
+	if prepared.snapshot.existing != nil {
+		return isEndpointCacheRecord(prepared.snapshot.existing)
+	}
+	if prepared.snapshot.deleteState != nil {
+		return prepared.snapshot.deleteState.LocalOnly
+	}
+	if prepared.mutation.Record != nil && !IsTombstone(prepared.mutation.Record.Flags) {
+		return isEndpointCacheRecord(prepared.mutation.Record)
+	}
+	// Mail records are always AccountBound and tmp records are always endpoint
+	// local. This also makes a retry of an already-applied local deletion a
+	// local no-op instead of creating a network tombstone.
+	return prepared.parsed.Namespace == "mail"
+}
+
+func storageModeDowngrade(prepared preparedCASMutation) bool {
+	record := prepared.mutation.Record
+	if record == nil || IsTombstone(record.Flags) || !isFreeLocalRecord(record) {
+		return false
+	}
+	if prepared.snapshot.existing != nil && !isFreeLocalRecord(prepared.snapshot.existing) {
+		return true
+	}
+	return prepared.snapshot.deleteState != nil && !prepared.snapshot.deleteState.LocalOnly
+}
+
+func (i *Indexer) prepareBatchCAS(mutations []CASMutation, _ BatchCASOptions) (batchCASPreparation, error) {
 	mutations = cloneCASMutations(mutations)
 	if err := validateCASMutations(mutations); err != nil {
-		return batchCASPreparation{}, err
-	}
-	if err := validatePathWritePreconditions(mutations, options.PathPreconditions); err != nil {
 		return batchCASPreparation{}, err
 	}
 	validators := i.snapshotValidators()
 	prep := batchCASPreparation{
 		mutations:        make([]preparedCASMutation, 0, len(mutations)),
-		pathConditions:   clonePathWritePreconditions(options.PathPreconditions),
 		height:           i.currentHeight(),
 		now:              currentUnixMilli(),
 		policyGeneration: validators.policyGeneration,
@@ -218,6 +197,9 @@ func (i *Indexer) prepareBatchCAS(mutations []CASMutation, options BatchCASOptio
 			prepared.applied = true
 			prep.mutations = append(prep.mutations, prepared)
 			continue
+		}
+		if storageModeDowngrade(prepared) {
+			return batchCASPreparation{}, ErrStorageModeDowngrade
 		}
 		if !IsTombstone(record.Flags) {
 			if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
@@ -243,15 +225,30 @@ func (i *Indexer) prepareBatchCAS(mutations []CASMutation, options BatchCASOptio
 	return prep, nil
 }
 
-func writePreconditionMatches(i *Indexer, existing *wire.DKVSRecord, condition WritePrecondition, height, now uint64) bool {
+func writePreconditionMatches(snapshot writeStateSnapshot, condition WritePrecondition, height, now uint64, i *Indexer) bool {
 	if condition.ExpectAbsent {
-		return !existingRecordActive(i, existing, height, now)
+		return snapshot.existing == nil && snapshot.deleteState == nil
 	}
-	if condition.ExpectedHash == nil || !existingRecordActive(i, existing, height, now) {
+	if condition.ExpectedHash == nil {
 		return false
 	}
-	hash := RecordHash(existing)
-	return *condition.ExpectedHash == hash
+	if existingRecordActive(i, snapshot.existing, height, now) {
+		return RecordHash(snapshot.existing) == *condition.ExpectedHash
+	}
+	if snapshot.deleteState != nil {
+		return snapshot.deleteState.effectiveHash(func() string {
+			if snapshot.existing != nil {
+				return snapshot.existing.Key
+			}
+			if snapshot.deleteState.Record != nil {
+				return snapshot.deleteState.Record.Key
+			}
+			return ""
+		}()) == *condition.ExpectedHash
+	}
+	// Between height expiry and expiry compaction, the expired signed record is
+	// the sequence floor and its hash is the key ETag.
+	return snapshot.existing != nil && RecordHash(snapshot.existing) == *condition.ExpectedHash
 }
 
 func nextCASSequence(snapshot writeStateSnapshot) (uint64, error) {
@@ -268,26 +265,10 @@ func nextCASSequence(snapshot writeStateSnapshot) (uint64, error) {
 	return current + 1, nil
 }
 
-func (i *Indexer) validatePathWritePreconditionsLocked(conditions []PathWritePrecondition, height, now uint64) error {
-	for _, condition := range conditions {
-		meta, err := i.ensurePathMetaLocked(stringsTrimPath(condition.Path), height, now)
-		if err != nil {
-			return err
-		}
-		if meta.Generation != condition.ExpectedGeneration {
-			return ErrStaleGeneration
-		}
-		if meta.StateRoot != condition.ExpectedRoot {
-			return ErrPathDiverged
-		}
-	}
-	return nil
-}
-
-func groupedReadyByPath(ready []preparedCASMutation) map[string][]preparedCASMutation {
+func (i *Indexer) groupedReadyByPath(ready []preparedCASMutation) map[string][]preparedCASMutation {
 	groups := make(map[string][]preparedCASMutation)
 	for _, prepared := range ready {
-		if isFreeLocalRecord(prepared.mutation.Record) {
+		if pathMode(prepared.parsed) == PathLocalOnly {
 			continue
 		}
 		path := collectionPath(prepared.parsed)
@@ -304,7 +285,7 @@ func groupedReadyByPath(ready []preparedCASMutation) map[string][]preparedCASMut
 func (i *Indexer) assignPathGenerationsLocked(ready []preparedCASMutation, height, now uint64) ([]preparedCASMutation, error) {
 	indicesByPath := make(map[string][]int)
 	for index, prepared := range ready {
-		if isFreeLocalRecord(prepared.mutation.Record) {
+		if i.mutationIsLocalOnly(prepared) {
 			continue
 		}
 		path := collectionPath(prepared.parsed)
@@ -352,17 +333,17 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 		}
 		return nil, ErrWriteConflict
 	}
-	if err := i.validatePathWritePreconditionsLocked(prep.pathConditions, height, now); err != nil {
-		return nil, err
-	}
 	ready := make([]preparedCASMutation, 0, len(prep.mutations))
 	for _, prepared := range prep.mutations {
 		record := prepared.mutation.Record
 		existing := prepared.snapshot.existing
+		if storageModeDowngrade(prepared) {
+			return nil, ErrStorageModeDowngrade
+		}
 		if IsExpired(record, height) {
 			return nil, ErrExpiredRecord
 		}
-		if !writePreconditionMatches(i, existing, prepared.mutation.Precondition, height, now) {
+		if !writePreconditionMatches(prepared.snapshot, prepared.mutation.Precondition, height, now, i) {
 			return nil, ErrWriteConflict
 		}
 		nextSeq, err := nextCASSequence(prepared.snapshot)
@@ -617,7 +598,7 @@ func (i *Indexer) validateMailboxRecordStatic(record *wire.DKVSRecord, parsed Pa
 }
 
 func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, now uint64) (map[string]*PathMeta, error) {
-	groups := groupedReadyByPath(ready)
+	groups := i.groupedReadyByPath(ready)
 	metas := make(map[string]*PathMeta, len(groups))
 	for path, group := range groups {
 		current, err := i.ensurePathMetaLocked(path, height, now)
@@ -640,6 +621,9 @@ func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, no
 		}
 		for _, prepared := range group {
 			record := prepared.mutation.Record
+			if i.mutationIsLocalOnly(prepared) {
+				continue
+			}
 			delete(activeByKey, record.Key)
 			delete(deletes, record.Key)
 			if IsTombstone(record.Flags) {
@@ -652,11 +636,28 @@ func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, no
 				activeByKey[record.Key] = record
 			}
 		}
-		generation := current.Generation + uint64(len(group))
+		canonicalChanges := uint64(0)
+		for _, prepared := range group {
+			if !i.mutationIsLocalOnly(prepared) {
+				canonicalChanges++
+			}
+		}
+		generation := current.Generation + canonicalChanges
 		if generation < current.Generation {
 			return nil, ErrStaleGeneration
 		}
-		meta := &PathMeta{Version: pathMetaVersion, Path: path, ViewHeight: height, Generation: generation}
+		endpointGeneration := current.EndpointGeneration + uint64(len(group))
+		if endpointGeneration < current.EndpointGeneration {
+			return nil, ErrStaleGeneration
+		}
+		viewHeight := current.ViewHeight
+		if canonicalChanges != 0 {
+			viewHeight = height
+		}
+		meta := &PathMeta{
+			Version: pathMetaVersion, Path: path, ViewHeight: viewHeight,
+			Generation: generation, EndpointGeneration: endpointGeneration,
+		}
 		activeKeys := make([]string, 0, len(activeByKey))
 		for key := range activeByKey {
 			activeKeys = append(activeKeys, key)
@@ -687,7 +688,8 @@ func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, no
 	return metas, nil
 }
 
-func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now uint64) ([]batchCASEvent, map[string]*PathMeta, error) {
+func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now uint64) (
+	[]batchCASEvent, []PrefixGeneration, error) {
 	metas, err := i.projectPathMetasLocked(ready, height, now)
 	if err != nil {
 		return nil, nil, err
@@ -707,16 +709,27 @@ func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now 
 			if err := batch.Delete(recordDBKey(record.Key)); err != nil {
 				return nil, nil, err
 			}
+			pathGeneration := prepared.pathGeneration
+			if i.mutationIsLocalOnly(prepared) {
+				if meta := metas[collectionPath(prepared.parsed)]; meta != nil {
+					pathGeneration = meta.EndpointGeneration
+				}
+			}
+			localOnly := i.mutationIsLocalOnly(prepared)
 			state := &deleteState{
-				FloorSeq: record.Seq, PathGeneration: prepared.pathGeneration,
+				FloorSeq: record.Seq, PathGeneration: pathGeneration,
 				RelayUntil: deleteRelayUntil(now), PubKey: append([]byte(nil), record.PubKey...),
 				Record: record, EffectiveHash: RecordHash(record),
-				LocalOnly: isFreeLocalRecord(existing) || isFreeLocalRecord(record),
+				LocalOnly: localOnly,
 			}
-			if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
+			if localOnly {
+				if err := deleteDeleteStateBatch(batch, record.Key); err != nil {
+					return nil, nil, err
+				}
+			} else if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
 				return nil, nil, err
 			}
-			events = append(events, batchCASEvent{EventRecordTombstone, record, !state.LocalOnly})
+			events = append(events, batchCASEvent{EventRecordTombstone, record, !localOnly})
 		} else {
 			encoded, err := MarshalRecord(record)
 			if err != nil {
@@ -764,7 +777,49 @@ func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now 
 			paidRetentionCacheFor(i).set(record.Key, *prepared.retention)
 		}
 	}
-	return events, metas, nil
+	prefixStates := make([]PrefixGeneration, 0, len(metas))
+	for path, meta := range metas {
+		prefixStates = append(prefixStates, PrefixGeneration{
+			Prefix: path, Generation: meta.EndpointGeneration,
+		})
+	}
+	sort.Slice(prefixStates, func(a, b int) bool {
+		return prefixStates[a].Prefix < prefixStates[b].Prefix
+	})
+	return events, prefixStates, nil
+}
+
+func (i *Indexer) prefixStatesForPreparedLocked(
+	prepared []preparedCASMutation) ([]PrefixGeneration, error) {
+
+	paths := make(map[string]struct{}, len(prepared))
+	for _, item := range prepared {
+		if pathMode(item.parsed) == PathLocalOnly {
+			continue
+		}
+		path := collectionPath(item.parsed)
+		if path == "" {
+			return nil, ErrInvalidKey
+		}
+		paths[path] = struct{}{}
+	}
+	states := make([]PrefixGeneration, 0, len(paths))
+	for path := range paths {
+		meta, err := i.readPathMetaLocked(path)
+		if err != nil {
+			return nil, err
+		}
+		if meta.EndpointGeneration == 0 {
+			return nil, ErrStaleGeneration
+		}
+		states = append(states, PrefixGeneration{
+			Prefix: path, Generation: meta.EndpointGeneration,
+		})
+	}
+	sort.Slice(states, func(a, b int) bool {
+		return states[a].Prefix < states[b].Prefix
+	})
+	return states, nil
 }
 
 func (i *Indexer) PutLocalBatchCASResultWithOptions(mutations []CASMutation, options BatchCASOptions) (*WriteResult, error) {
@@ -784,9 +839,11 @@ func (i *Indexer) PutLocalBatchCASResultWithOptions(mutations []CASMutation, opt
 			err = i.validateBatchStateLocked(ready, height, now)
 		}
 		var events []batchCASEvent
-		metas := make(map[string]*PathMeta)
+		var prefixStates []PrefixGeneration
 		if err == nil && len(ready) != 0 {
-			events, metas, err = i.commitBatchCASLocked(ready, height, now)
+			events, prefixStates, err = i.commitBatchCASLocked(ready, height, now)
+		} else if err == nil {
+			prefixStates, err = i.prefixStatesForPreparedLocked(prep.mutations)
 		}
 		i.mutex.Unlock()
 		if errors.Is(err, ErrConcurrentUpdate) {
@@ -798,7 +855,11 @@ func (i *Indexer) PutLocalBatchCASResultWithOptions(mutations []CASMutation, opt
 		for _, event := range events {
 			i.emit(event.eventType, event.record, event.relay)
 		}
-		result := &WriteResult{Applied: len(ready), PathMeta: metas, ServerTimeMS: now}
+		result := &WriteResult{
+			Applied: len(ready), ServerTimeMS: now, ViewHeight: height,
+			EndpointID: i.EndpointID(), RequestID: options.RequestID,
+			PrefixStates: prefixStates,
+		}
 		result.Records = make([]*wire.DKVSRecord, 0, len(prep.mutations))
 		result.Hashes = make([]string, 0, len(prep.mutations))
 		for _, prepared := range prep.mutations {
@@ -808,9 +869,6 @@ func (i *Indexer) PutLocalBatchCASResultWithOptions(mutations []CASMutation, opt
 			if isFreeLocalRecord(record) {
 				result.LocalOnly = true
 			}
-		}
-		if result.LocalOnly {
-			result.EndpointID = i.endpointID()
 		}
 		return result, nil
 	}

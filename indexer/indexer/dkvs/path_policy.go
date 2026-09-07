@@ -24,11 +24,16 @@ func collectionPath(parsed ParsedKey) string {
 			return "/svc/" + parsed.Segments[0]
 		}
 	case "mail":
-		if len(parsed.Segments) >= 3 && parsed.Segments[1] == "msg" {
-			return "/mail/" + parsed.Segments[0] + "/msg/" + parsed.Segments[2]
+		if len(parsed.Segments) >= 2 {
+			// A mailbox is one endpoint-managed prefix. Any direct message,
+			// topic delivery, key delivery or share changes the same PathMeta
+			// endpoint generation, so a wallet never needs to know sender/topic
+			// children before it can synchronize its mailbox.
+			return "/mail/" + parsed.Segments[0]
 		}
-		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "share" {
-			return "/mail/" + parsed.Segments[0] + "/share"
+	case "topic":
+		if len(parsed.Segments) >= 2 {
+			return "/topic/" + parsed.Segments[0]
 		}
 	case "blob":
 		if len(parsed.Segments) == 2 {
@@ -51,13 +56,12 @@ func pathMode(parsed ParsedKey) PathMode {
 	case "personal", "blob":
 		return PathOwnerExclusive
 	case "mail":
-		if len(parsed.Segments) >= 2 && parsed.Segments[1] == "msg" {
-			return PathSharedAppend
-		}
-		return PathOwnerExclusive
+		// AccountBound controls replication placement, not prefix semantics.
+		// Mailboxes still have ordinary endpoint PathMeta/snapshot behavior.
+		return PathAuthorityExclusive
 	case "tmp":
 		return PathLocalOnly
-	case "account", "name", "svc", "sys":
+	case "account", "name", "svc", "sys", "topic":
 		return PathAuthorityExclusive
 	default:
 		return PathAuthorityExclusive
@@ -90,10 +94,11 @@ func collectionPathForPrefix(prefix string) string {
 			return prefix
 		}
 	case "mail":
-		if len(parsed.Segments) == 3 && parsed.Segments[1] == "msg" && validAccountID(parsed.Segments[2]) {
+		if len(parsed.Segments) == 1 && validAccountID(parsed.Segments[0]) {
 			return prefix
 		}
-		if len(parsed.Segments) == 2 && parsed.Segments[1] == "share" {
+	case "topic":
+		if len(parsed.Segments) == 1 {
 			return prefix
 		}
 	case "blob":
@@ -115,7 +120,15 @@ func collectionPathForPrefix(prefix string) string {
 func isCanonicalCollectionPath(path string) bool {
 	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
 	parsed, err := ParsePrefix(path)
-	return err == nil && collectionPath(parsed) == path
+	if err != nil || collectionPathForPrefix(path) != path {
+		return false
+	}
+	// These two one-segment forms are read-only aggregates. Their canonical
+	// collection paths contain the second segment selected by each record.
+	if (parsed.Namespace == "personal" || parsed.Namespace == "blob") && len(parsed.Segments) == 1 {
+		return false
+	}
+	return true
 }
 
 func CollectionPathForKey(key string) (string, error) {

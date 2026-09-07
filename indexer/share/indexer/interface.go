@@ -24,25 +24,18 @@ type Indexer interface {
 	GetInternalSyncHeight() int
 	GetBlockInfo(int) (*common.BlockInfo, error)
 
-	// base indexer
 	GetAddressById(addressId uint64) string
 	GetAddressId(address string) uint64
 	GetUtxoById(utxoId uint64) string
 	GetUtxoId(utxo string) uint64
-	// return: utxoId->value
 	GetUTXOsWithAddress(address string) (map[uint64]int64, error)
-	// return: utxo, sat ranges
 
 	GetTickerMap(protocol string) map[string]*common.TickerInfo
 	GetTickerInfo(tickerName *common.TickerName) *common.TickerInfo
 	GetHoldersWithTick(tickerName *common.TickerName) map[string]*indexer.Decimal
 	GetBindingSat(ticker *common.TickerName) int
-	// Asset
-	// return: tick->amount
 	GetAssetSummaryInAddressV3(address string) (map[common.TickerName]*indexer.Decimal, error)
-	// return: tick->UTXOs
 	GetAssetUTXOsInAddress(address string) map[common.TickerName][]*common.TxOutput
-	// return: utxo->asset amount
 	GetAssetUTXOsInAddressWithTickV3(address string, ticker *common.TickerName) (map[uint64]*indexer.AssetsInUtxo, error)
 	HasAssetInUtxo(utxo string) bool
 	GetTxOutputWithUtxo(utxo string) *common.TxOutput
@@ -72,6 +65,7 @@ type Indexer interface {
 	SetDKVSResolver(resolver dkvs_indexer.DIDResolver)
 	SetDKVSFeeVerifier(verifier dkvs_indexer.FeeVerifier)
 	SetDKVSSystemVerifier(verifier dkvs_indexer.SystemVerifier)
+	SetDKVSEndpointID(endpointID string) error
 	PutDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	PutDKVSRecordWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error)
 	PutDKVSRecordCAS(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition) (bool, error)
@@ -91,7 +85,19 @@ type Indexer interface {
 	GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error)
 	GetDKVSFreeLocalCachePolicy() dkvs_indexer.FreeLocalCachePolicy
 	GetDKVSClientConfig() dkvs_indexer.ClientConfig
+
+	// Wallet-facing state/synchronization API: key ETags plus PathMeta
+	// generations. The server keeps no wallet subscription/cursor state.
+	GetDKVSKeyState(key string) (dkvs_indexer.DKVSKeyState, error)
+	GetDKVSPrefixStatus(endpointID string, known []dkvs_indexer.PrefixGeneration) (*dkvs_indexer.PrefixStatusResult, error)
+	GetDKVSPrefixSnapshot(prefix string) (*dkvs_indexer.PrefixSnapshot, error)
+	ReadDKVSPrefix(prefix string) (*dkvs_indexer.PrefixReadResult, error)
+
+	// Node-internal canonical reconciliation state. These are not wallet CAS or
+	// wallet subscription primitives.
 	GetDKVSPathMeta(path string) (*dkvs_indexer.PathMeta, error)
+	WaitDKVSPath(ctx context.Context, path string, generation uint64, root chainhash.Hash,
+		viewHeight uint64) (*dkvs_indexer.PathMeta, bool, error)
 	GetDKVSPathSnapshot(path string) (*dkvs_indexer.PathSnapshot, error)
 	ApplyDKVSPathSnapshot(snapshot *dkvs_indexer.PathSnapshot) (int, error)
 	ApplyDKVSMirror(filters []dkvs_indexer.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error)
