@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
@@ -34,16 +35,53 @@ func TestSettleAMMBuyUsesConstantProductPool(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Deals, 1)
 	require.Equal(t, int64(0), plan.Deals[0].BuyItemID)
-	require.Equal(t, "33.155080214", plan.Deals[0].AssetAmt)
+	require.Equal(t, "33.1550802139", plan.Deals[0].AssetAmt)
 	require.Equal(t, int64(10), plan.Deals[0].SatValue)
 	require.Len(t, plan.Transfers, 1)
-	require.Equal(t, "33.155080214", plan.Transfers[0].AssetAmt)
+	require.Equal(t, "33.1550802139", plan.Transfers[0].AssetAmt)
 
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "66.844919786", state.AMMData().AssetAInPool)
+	requireDecimalString(t, "66.8449197861", state.AMMData().AssetAInPool)
 	requireDecimalString(t, "30", state.AMMData().AssetBInPool)
 	require.Equal(t, ItemStatusDealt, state.Items[0].Done)
+}
+
+func TestAMMSwapOutputsFloorAtFinalUnit(t *testing.T) {
+	const assetName = "ordx:f:qqcom"
+	poolAsset := scommon.NewDecimal(1231, 0)
+	k := ammSettlementK(poolAsset, 4060)
+	assetPrecision := func(name string) (int, bool) { return 0, name == assetName }
+
+	t.Run("buy", func(t *testing.T) {
+		item := &InvokeItem{
+			ID: 1, Address: "buyer", AssetName: assetName, OrderType: OrderTypeBuy,
+			Action: contractcommon.ContractInvokeAPIDefault, InValue: 10, RemainingValue: 10,
+		}
+		deal, transfers, dealt, err := settleAMMBuy(
+			item, poolAsset, 4060, poolAsset, k, assetPrecision,
+		)
+		require.NoError(t, err)
+		require.True(t, dealt)
+		require.Equal(t, "3", deal.AssetAmt)
+		require.Equal(t, "3", item.OutAmt.String())
+		require.Len(t, transfers, 1)
+		require.Equal(t, "3", transfers[0].AssetAmt)
+	})
+
+	t.Run("sell", func(t *testing.T) {
+		amount := scommon.NewDecimal(79, 0)
+		item := &InvokeItem{
+			ID: 2, Address: "seller", AssetName: assetName, OrderType: OrderTypeSell,
+			Action: contractcommon.ContractInvokeAPIDefault, InAmt: amount.Clone(), RemainingAmt: amount.Clone(),
+		}
+		deal, transfer, dealt, err := settleAMMSell(item, poolAsset, 4060, 4060, k)
+		require.NoError(t, err)
+		require.True(t, dealt)
+		require.Equal(t, int64(242), deal.SatValue)
+		require.Equal(t, int64(242), item.OutValue)
+		require.Equal(t, int64(242), transfer.SatValue)
+	})
 }
 
 func TestAMMOverfundUsesActualPoolK(t *testing.T) {
@@ -346,9 +384,9 @@ func TestSettleAMMBuyNeedsFeeAdjustedFunding(t *testing.T) {
 		plan := applyBuy(t, runtime, 101)
 		require.Len(t, plan.Deals, 1)
 		require.Equal(t, int64(101), plan.Deals[0].SatValue)
-		require.Equal(t, "100.0917161078", plan.Deals[0].AssetAmt)
+		require.Equal(t, "100.0917161077", plan.Deals[0].AssetAmt)
 		require.Len(t, plan.Transfers, 1)
-		require.Equal(t, "100.0917161078", plan.Transfers[0].AssetAmt)
+		require.Equal(t, "100.0917161077", plan.Transfers[0].AssetAmt)
 		state, err := runtime.RuntimeState()
 		require.NoError(t, err)
 		require.Equal(t, ItemStatusDealt, state.Items[0].Done)
@@ -962,7 +1000,7 @@ func TestSettleAMMProcessesBatchSwapsSequentially(t *testing.T) {
 	require.Len(t, plan.Deals, 2)
 	require.Equal(t, int64(0), plan.Deals[0].BuyItemID)
 	require.Equal(t, int64(1), plan.Deals[1].BuyItemID)
-	require.Equal(t, "33.155080214", plan.Deals[0].AssetAmt)
+	require.Equal(t, "33.1550802139", plan.Deals[0].AssetAmt)
 	require.Equal(t, "16.6107616302", plan.Deals[1].AssetAmt)
 	require.Equal(t, "alice", plan.Transfers[0].To)
 	require.Equal(t, "bob", plan.Transfers[1].To)
@@ -973,7 +1011,7 @@ func TestSettleAMMProcessesBatchSwapsSequentially(t *testing.T) {
 	require.Equal(t, ItemStatusDealt, state.Items[1].Done)
 	requireDecimalString(t, "40", state.AMMData().AssetBInPool)
 	require.NotNil(t, state.AMMData().AssetAInPool)
-	requireDecimalString(t, "50.2341581558", state.AMMData().AssetAInPool)
+	requireDecimalString(t, "50.2341581559", state.AMMData().AssetAInPool)
 }
 
 func TestSettleAMMRemoveLiquidityCapsAtOwnedAmount(t *testing.T) {

@@ -634,8 +634,10 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 			return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee, gasConfig)
 		}
 	}
-	if err := checkRuntimeAutopayDelegateCapacity(runtime, invoker); err != nil {
-		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee, gasConfig)
+	if !autopayGasOnlyConfig(runtime.Contract(), validated.Payload.Action, validated.Payload.Param) {
+		if err := checkRuntimeAutopayDelegateCapacity(runtime, invoker); err != nil {
+			return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee, gasConfig)
+		}
 	}
 	if err := runtime.CheckInvokeFunding(validated.Payload.Action, validated.Payload.Param, validated.FundingOutput); err != nil {
 		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee, gasConfig)
@@ -644,21 +646,30 @@ func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if _, ok := runtime.Contract().(*AutopayContract); ok {
 		fundingOutput = stripCurrentResultGasFunding(validated.FundingOutput, gasConfig.GasAssetName, resultFee)
 	}
-	item, err := runtime.ApplyInvoke(ApplyInvokeRequest{
-		Action:        validated.Payload.Action,
-		Param:         validated.Payload.Param,
-		CallID:        callID,
-		Invoker:       invoker,
-		FundingOutput: fundingOutput,
-		Height:        e.BlockHeight,
-		Timestamp:     e.BlockHeight,
-		ResultGasFee:  resultFee,
-	})
+	request := ApplyInvokeRequest{
+		Action:         validated.Payload.Action,
+		Param:          validated.Payload.Param,
+		CallID:         callID,
+		Invoker:        invoker,
+		FundingOutput:  fundingOutput,
+		GasAssetName:   gasConfig.GasAssetName,
+		AssetPrecision: e.AssetPrecision,
+		Height:         e.BlockHeight,
+		Timestamp:      e.BlockHeight,
+		ResultGasFee:   resultFee,
+	}
+	// Validate the explicit operator share before applying anything. Keep the
+	// original funding on failure so the existing refund path owns it in full.
+	remainingFunding, err := runtime.splitAutopayGasFunding(request)
+	if err != nil {
+		return e.executeInvalidInvoke(tx, runtime, validated, invoker, callID, resultFee, gasConfig)
+	}
+	item, err := runtime.ApplyInvoke(request)
 	if err != nil {
 		return err
 	}
 	if !templateResultGasIsSeparate(runtime.Contract(), gasConfig.GasAssetName) {
-		if err := runtime.ApplyGasFunding(fundingOutput, gasConfig.GasAssetName); err != nil {
+		if err := runtime.ApplyGasFunding(remainingFunding, gasConfig.GasAssetName); err != nil {
 			return err
 		}
 	}
@@ -715,6 +726,14 @@ func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, runtime *ContractRuntime,
 	runtime.IncrementInvokeCount()
 	gasRefundRecipient := ""
 	if templateUsesFrameworkGasRefund(runtime.Contract(), gasConfig.GasAssetName) {
+		gasRefundRecipient = invoker
+	}
+	// AUTOPAY invalid fee/satoshi funding is refunded by retained item assets.
+	// Only a distinct gas asset needs the framework's per-call gas refund;
+	// enabling it for the fee asset would refund the same principal twice.
+	if autopay, ok := runtime.Contract().(*AutopayContract); ok &&
+		gasConfig.GasAssetName != "" && gasConfig.GasAssetName != autopay.FeeAssetName &&
+		gasConfig.GasAssetName != SatoshiAssetName {
 		gasRefundRecipient = invoker
 	}
 	outcome := contractframework.ExecutionOutcome{

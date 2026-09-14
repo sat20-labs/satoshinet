@@ -18,6 +18,8 @@ type ApplyInvokeRequest struct {
 	CallID                string
 	Invoker               string
 	FundingOutput         ContractOutput
+	GasAssetName          string // Required for explicit AUTOPAY operating-gas funding.
+	AssetPrecision        contractframework.AssetPrecisionResolver
 	Height                int64
 	Timestamp             int64
 	ResultGasFee          *scommon.Decimal
@@ -1246,7 +1248,7 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 			return nil, err
 		}
 		amount := parseDecimalOrZero(param.AmountPerBlock)
-		if amount.Cmp(autopay.minAmountPerBlock()) < 0 {
+		if param.AmountPerBlock != "" && amount.Cmp(autopay.minAmountPerBlock()) < 0 {
 			item.Reason = InvokeReasonInvalid
 		}
 		item.OrderType = OrderTypeValidate

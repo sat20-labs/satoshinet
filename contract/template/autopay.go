@@ -112,6 +112,16 @@ func (c *AutopayContract) CheckInvoke(action string, param []byte) error {
 		if err := config.Decode(param); err != nil {
 			return err
 		}
+		gas, err := autopayConfigGasAmount(config)
+		if err != nil {
+			return err
+		}
+		if config.AmountPerBlock == "" && gas.Sign() > 0 {
+			if config.BlobKeyLimit != 0 {
+				return fmt.Errorf("gas-only autopay config cannot change blob key limit")
+			}
+			return nil
+		}
 		amount, err := contractframework.ParseDecimalAmountString(config.AmountPerBlock)
 		if err != nil || amount.Sign() <= 0 {
 			return fmt.Errorf("invalid autopay amount per block")
@@ -147,6 +157,9 @@ func (c *AutopayContract) CheckInvokePrecision(action string, param []byte,
 	if err := config.Decode(param); err != nil {
 		return err
 	}
+	if config.AmountPerBlock == "" && parseDecimalOrZero(config.GasFundingAmount).Sign() > 0 {
+		return nil
+	}
 	amount, err := contractframework.ParseDecimalAmountString(config.AmountPerBlock)
 	if err != nil {
 		return err
@@ -164,6 +177,84 @@ func (c *AutopayContract) CheckInvokePrecision(action string, param []byte,
 			amount.String(), precision)
 	}
 	return nil
+}
+
+func autopayConfigGasAmount(param AutopayConfigInvokeParam) (*scommon.Decimal, error) {
+	if param.GasFundingAmount == "" {
+		return parseDecimalOrZero("0"), nil
+	}
+	gas, err := contractframework.ParseDecimalAmountString(param.GasFundingAmount)
+	if err != nil || gas.Sign() < 0 {
+		return nil, fmt.Errorf("invalid autopay gas funding amount")
+	}
+	return gas, nil
+}
+
+func autopayGasOnlyConfig(contract Contract, action string, raw []byte) bool {
+	if _, ok := contract.(*AutopayContract); !ok || action != InvokeAPIConfig {
+		return false
+	}
+	var param AutopayConfigInvokeParam
+	return param.Decode(raw) == nil && param.AmountPerBlock == "" &&
+		parseDecimalOrZero(param.GasFundingAmount).Sign() > 0
+}
+
+// splitAutopayGasFunding operates on funding after the current Result fee.
+// Validation precedes every mutation, including on the invalid/refund path.
+func (r *ContractRuntime) splitAutopayGasFunding(req ApplyInvokeRequest) (ContractOutput, error) {
+	output := req.FundingOutput
+	contract, ok := r.Contract().(*AutopayContract)
+	if !ok || req.Action != InvokeAPIConfig {
+		return output, nil
+	}
+	var param AutopayConfigInvokeParam
+	if err := param.Decode(req.Param); err != nil {
+		return output, err
+	}
+	gas, err := autopayConfigGasAmount(param)
+	if err != nil || gas.Sign() == 0 {
+		return output, err
+	}
+	if req.Invoker == "" || req.Invoker != r.base.Deployer() {
+		return output, fmt.Errorf("only autopay deployer may fund operating gas")
+	}
+	if req.GasAssetName == "" {
+		return output, fmt.Errorf("missing autopay gas asset")
+	}
+	precision := 0
+	if req.GasAssetName != SatoshiAssetName {
+		if req.AssetPrecision == nil {
+			return output, fmt.Errorf("missing autopay gas asset precision resolver")
+		}
+		var known bool
+		precision, known = req.AssetPrecision(req.GasAssetName)
+		if !known || precision < 0 || precision > scommon.MAX_PRECISION {
+			return output, fmt.Errorf("unknown autopay gas asset precision")
+		}
+	}
+	if gas.NewPrecision(precision).Cmp(gas) != 0 {
+		return output, fmt.Errorf("autopay gas funding is not exactly representable at precision %d", precision)
+	}
+	available, err := output.AssetAmount(req.GasAssetName)
+	if err != nil {
+		return output, err
+	}
+	if available.Cmp(gas) < 0 {
+		return output, fmt.Errorf("autopay gas funding exceeds net funding")
+	}
+	if err := output.SubAssetAmount(req.GasAssetName, gas); err != nil {
+		return output, err
+	}
+	if param.AmountPerBlock == "" {
+		fee, err := output.AssetAmount(contract.FeeAssetName)
+		if err != nil {
+			return output, err
+		}
+		if fee.Sign() != 0 {
+			return output, fmt.Errorf("gas-only autopay config contains delegate funding")
+		}
+	}
+	return output, nil
 }
 
 func (c *AutopayContract) ApplyFundingState(state *TemplateRuntimeState, output ContractOutput, gasAssetName string) (bool, error) {
@@ -211,6 +302,10 @@ func (c *AutopayContract) ApplyRunningData(state *TemplateRuntimeState, item *In
 		if err != nil {
 			item.Reason = InvokeReasonInvalid
 			return true
+		}
+		autopay.GasBalance = decimalAddAllowNil(autopay.GasBalance, parseDecimalOrZero(param.GasFundingAmount))
+		if param.AmountPerBlock == "" {
+			return true // Pure operator funding must not create or reconfigure a delegate.
 		}
 		c.setDelegateConfig(autopay, item.Address, parseDecimalOrZero(param.AmountPerBlock), param.BlobKeyLimit)
 		// A config invoke may also fund the delegate. The backend has already
@@ -323,6 +418,12 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 	if state == nil {
 		return plan, nil
 	}
+	// Refund newly rejected invokes before any operating-gas or closed-state
+	// gate. Older invalid items may reference inputs consumed by past Results;
+	// this fixes new calls without replaying historical refunds.
+	if _, err := applyInvalidItemsInRange(c, state, plan, height, height); err != nil {
+		return nil, err
+	}
 	closed, err := c.applyAutopayClose(runtime, state, plan, height, gasConfig)
 	if err != nil {
 		return nil, err
@@ -348,9 +449,6 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 	gasConfig = gasConfig.Normalize()
 	triggerGasFee, err := gasConfig.ContractFundingFee(ExecutionKindTrigger, gasConfig.TriggerBaseGas, true, uint64(height))
 	if err != nil {
-		return nil, err
-	}
-	if err := c.rebalanceGasReserve(state, gasConfig, triggerGasFee); err != nil {
 		return nil, err
 	}
 	next := state.AutopayData().NextPayHeight
@@ -511,49 +609,10 @@ func (c *AutopayContract) autopayFundingStatus(state *TemplateRuntimeState, gasC
 	if err != nil {
 		return AutopayStatusFunding
 	}
-	if c.FeeAssetName == gasConfig.Normalize().GasAssetName {
-		availableGas := decimalOrZero(state.AutopayData().GasBalance).AddAlignPrecision(c.totalDelegateBalance(state.AutopayData()))
-		if availableGas.Cmp(gasFee) >= 0 && c.hasActiveDelegate(state.AutopayData()) {
-			return AutopayStatusActive
-		}
-		return AutopayStatusFunding
-	}
 	if decimalOrZero(state.AutopayData().GasBalance).Cmp(gasFee) >= 0 && c.hasActiveDelegate(state.AutopayData()) {
 		return AutopayStatusActive
 	}
 	return AutopayStatusFunding
-}
-
-func (c *AutopayContract) rebalanceGasReserve(state *TemplateRuntimeState, gasConfig GasConfig, needed *scommon.Decimal) error {
-	if state == nil || c.FeeAssetName != gasConfig.GasAssetName {
-		return nil
-	}
-	current := decimalOrZero(state.AutopayData().GasBalance)
-	if current.Cmp(needed) >= 0 {
-		return nil
-	}
-	missing := needed.SubAlignPrecision(current)
-	for _, address := range c.sortedDelegateAddresses(state.AutopayData()) {
-		if missing.Sign() <= 0 {
-			break
-		}
-		delegate := state.AutopayData().AutopayDelegates[address]
-		balance := decimalOrZero(delegate.Balance)
-		if balance.Sign() <= 0 {
-			continue
-		}
-		take := missing
-		if balance.Cmp(take) < 0 {
-			take = balance
-		}
-		delegate.Balance = balance.SubAlignPrecision(take)
-		delegate.Status = c.delegateStatus(delegate)
-		state.AutopayData().AutopayDelegates[address] = delegate
-		state.AutopayData().GasBalance = decimalAddAllowNil(state.AutopayData().GasBalance, take)
-		missing = missing.SubAlignPrecision(take)
-	}
-	state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
-	return nil
 }
 
 func (c *AutopayContract) requiredGasReserve(state *TemplateRuntimeState, gasConfig GasConfig, height int64) (*scommon.Decimal, error) {

@@ -733,14 +733,14 @@ func TestBackendAMMMultiInvokeOneResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.SettlementPlans, 1)
 	require.Len(t, result.SettlementPlans[0].Deals, 2)
-	require.Equal(t, "9.0247452693", result.SettlementPlans[0].Deals[0].AssetAmt)
-	require.Equal(t, "7.5256381499", result.SettlementPlans[0].Deals[1].AssetAmt)
+	require.Equal(t, "9.0247452692", result.SettlementPlans[0].Deals[0].AssetAmt)
+	require.Equal(t, "7.5256381498", result.SettlementPlans[0].Deals[1].AssetAmt)
 	require.Len(t, result.ResultPlans, 1)
 	require.ElementsMatch(t, []int64{0, 1}, result.ResultPlans[0].ItemIDs)
 	require.Contains(t, result.ResultPlans[0].Inputs, OutPoint{TxID: buyA.TxID(), Vout: 0})
 	require.Contains(t, result.ResultPlans[0].Inputs, OutPoint{TxID: buyB.TxID(), Vout: 0})
-	requireResultPlanAssetTo(t, result.ResultPlans[0], "buyer-a", assetName, "9.0247452693")
-	requireResultPlanAssetTo(t, result.ResultPlans[0], "buyer-b", assetName, "7.5256381499")
+	requireResultPlanAssetTo(t, result.ResultPlans[0], "buyer-a", assetName, "9.0247452692")
+	requireResultPlanAssetTo(t, result.ResultPlans[0], "buyer-b", assetName, "7.5256381498")
 }
 
 func TestBackendAMMAddLiqRefundsExcess(t *testing.T) {
@@ -1026,12 +1026,8 @@ func TestBackendAutopayConfigFundsDelegate(t *testing.T) {
 	require.Len(t, result.Records, 1)
 	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
 
-	triggerReserve, err := gasConfig.ContractFundingFee(
-		ExecutionKindTrigger, gasConfig.TriggerBaseGas, true, 100)
-	require.NoError(t, err)
 	expectedBalance := scommon.NewDefaultDecimal(100).
-		SubAlignPrecision(result.Records[0].GasFee).
-		SubAlignPrecision(triggerReserve)
+		SubAlignPrecision(result.Records[0].GasFee)
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
 	delegate, ok := state.AutopayData().AutopayDelegates["delegate-address"]
@@ -1039,7 +1035,149 @@ func TestBackendAutopayConfigFundsDelegate(t *testing.T) {
 	requireDecimalString(t, "10", delegate.AmountPerBlock)
 	requireDecimalString(t, expectedBalance.String(), delegate.Balance)
 	requireDecimalString(t, expectedBalance.String(), state.AutopayData().FeeBalance)
-	requireDecimalString(t, triggerReserve.String(), state.AutopayData().GasBalance)
+	requireDecimalString(t, "0", state.AutopayData().GasBalance)
+	require.Equal(t, AutopayStatusFunding, state.AutopayData().AutopayStatus)
+}
+
+func TestBackendAutopayExplicitOperatingGasFunding(t *testing.T) {
+	for _, tc := range []struct {
+		name, caller, amount, gas string
+		fund                      int64
+		valid                     bool
+	}{
+		{"pure", "deployer-address", "", "400", 450, true},
+		{"mixed", "deployer-address", "10", "400", 550, true},
+		{"unauthorized", "user-address", "", "400", 450, false},
+		{"over-net", "deployer-address", "", "401", 450, false},
+		{"pure-with-business", "deployer-address", "", "400", 550, false},
+		{"negative", "deployer-address", "10", "-1", 450, false},
+		{"mixed-over-precision", "deployer-address", "10", "400.5", 550, false},
+		{"pure-over-precision", "deployer-address", "", "400.5", 450, false},
+		{"exact-decimal", "deployer-address", "", "400.0", 450, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gas := testAutopayGasConfig()
+			gas.TriggerBaseGas, gas.ResultBaseGas = 150000, 50000
+			runtime := testAutopayRuntime(t, "recipient-address", gas.GasAssetName, "10")
+			store := runtimeStoreWith(runtime)
+			param, err := (&AutopayConfigInvokeParam{AmountPerBlock: tc.amount, GasFundingAmount: tc.gas}).Encode()
+			require.NoError(t, err)
+			script, err := InvokeNullDataScript(InvokePayload{GasLimit: gas.InvokeBaseGas, CallNonce: 1, Action: InvokeAPIConfig, Param: param})
+			require.NoError(t, err)
+			tx := wire.NewMsgTx(1)
+			tx.AddTxIn(&wire.TxIn{})
+			tx.AddTxOut(wire.NewTxOut(0, nil, script))
+			tx.AddTxOut(wire.NewTxOut(0, testAsset(gas.GasAssetName, tc.fund), testTemplateContractScript(runtime.Address())))
+			result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+				Txs: []*wire.MsgTx{tx}, Store: store, GasConfig: gas, BlockHeight: 100,
+				ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) { return tc.caller, nil },
+				AssetPrecision: func(name string) (int, bool) { return 0, name == gas.GasAssetName },
+			})
+			require.NoError(t, err)
+			require.Len(t, result.Records, 1)
+			state, err := runtime.RuntimeState()
+			require.NoError(t, err)
+			expectedPrincipal := int64(0)
+			if tc.valid {
+				require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
+				requireDecimalString(t, "400", state.AutopayData().GasBalance)
+				if tc.amount != "" {
+					expectedPrincipal = 100
+					requireDecimalString(t, "100", state.AutopayData().AutopayDelegates[tc.caller].Balance)
+				} else {
+					require.Empty(t, state.AutopayData().AutopayDelegates)
+				}
+			} else {
+				require.Equal(t, ResultStatusInvalid, result.Records[0].Status)
+				requireDecimalString(t, "0", state.AutopayData().GasBalance)
+				require.Empty(t, state.AutopayData().AutopayDelegates)
+			}
+			requireDecimalString(t, fmt.Sprint(expectedPrincipal), state.AutopayData().FeeBalance)
+			provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{tx}, TestnetContractPrefix, ContractTypeTemplate)
+			plans, err := AugmentResultPlans(result.ResultPlans, store, gas, provider, nil)
+			require.NoError(t, err)
+			require.Len(t, plans, 1)
+			requireDecimalString(t, "50", plans[0].GasFee)
+			contractAddress := runtime.Address()
+			if tc.valid {
+				requireResultPlanAssetTo(t, plans[0], contractAddress.MustEncode(), gas.GasAssetName, fmt.Sprint(tc.fund-50))
+				requireNoResultPlanAssetTo(t, plans[0], tc.caller, gas.GasAssetName)
+			} else {
+				requireResultPlanAssetTo(t, plans[0], tc.caller, gas.GasAssetName, fmt.Sprint(tc.fund-50))
+				requireNoResultPlanAssetTo(t, plans[0], contractAddress.MustEncode(), gas.GasAssetName)
+				// Backend prunes terminal items after building their refund plans.
+				require.Empty(t, state.Items)
+				next, err := runtime.SettleBlockWithGasConfig(101, gas)
+				require.NoError(t, err)
+				require.Empty(t, next.Transfers)
+				require.Empty(t, next.Inputs)
+				require.Empty(t, next.ItemIDs)
+				requireDecimalString(t, "0", next.GasFee)
+			}
+		})
+	}
+}
+
+func TestBackendAutopayInvalidDifferentAssetRefundPreservesPool(t *testing.T) {
+	for _, tc := range []struct{ name, caller, funding string }{
+		{"unauthorized", "caller-address", "400"},
+		{"over-net", "deployer-address", "401"},
+	} {
+		for _, seeded := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/seeded=%t", tc.name, seeded), func(t *testing.T) {
+				gas := testAutopayGasConfig()
+				gas.TriggerBaseGas, gas.ResultBaseGas = 150000, 50000
+				const fee = "ordx:f:fee"
+				runtime := testAutopayRuntime(t, "recipient-address", fee, "10")
+				if seeded {
+					require.NoError(t, runtime.ApplyFunding(testContractOutput("old-pool", 0, runtime.Address(), 0,
+						testAssets(fee, 1000, gas.GasAssetName, 600)), gas.GasAssetName))
+					state, err := runtime.RuntimeState()
+					require.NoError(t, err)
+					state.AutopayData().NextPayHeight = 200
+					require.NoError(t, runtime.saveRuntimeState(state))
+				}
+				before, err := runtime.RuntimeState()
+				require.NoError(t, err)
+				param, err := (&AutopayConfigInvokeParam{AmountPerBlock: "10", GasFundingAmount: tc.funding}).Encode()
+				require.NoError(t, err)
+				script, err := InvokeNullDataScript(InvokePayload{GasLimit: gas.InvokeBaseGas, CallNonce: 1, Action: InvokeAPIConfig, Param: param})
+				require.NoError(t, err)
+				tx := wire.NewMsgTx(1)
+				tx.AddTxIn(&wire.TxIn{})
+				tx.AddTxOut(wire.NewTxOut(0, nil, script))
+				tx.AddTxOut(wire.NewTxOut(0, testAssets(fee, 100, gas.GasAssetName, 450), testTemplateContractScript(runtime.Address())))
+				store := runtimeStoreWith(runtime)
+				result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+					Txs: []*wire.MsgTx{tx}, Store: store, GasConfig: gas, BlockHeight: 100,
+					ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) { return tc.caller, nil },
+					AssetPrecision: func(string) (int, bool) { return 0, true },
+				})
+				require.NoError(t, err)
+				require.Len(t, result.Records, 1)
+				require.Equal(t, ResultStatusInvalid, result.Records[0].Status)
+				after, err := runtime.RuntimeState()
+				require.NoError(t, err)
+				require.Equal(t, before.AutopayData().AutopayDelegates, after.AutopayData().AutopayDelegates)
+				requireDecimalString(t, decimalOrZero(before.AutopayData().FeeBalance).String(), after.AutopayData().FeeBalance)
+				requireDecimalString(t, decimalOrZero(before.AutopayData().GasBalance).String(), after.AutopayData().GasBalance)
+				provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, []*wire.MsgTx{tx}, TestnetContractPrefix, ContractTypeTemplate)
+				plans, err := AugmentResultPlans(result.ResultPlans, store, gas, provider, nil)
+				require.NoError(t, err)
+				require.Len(t, plans, 1)
+				requireDecimalString(t, "50", plans[0].GasFee)
+				requireResultPlanAssetTo(t, plans[0], tc.caller, fee, "100")
+				requireResultPlanAssetTo(t, plans[0], tc.caller, gas.GasAssetName, "400")
+				addr := runtime.Address()
+				requireNoResultPlanAssetTo(t, plans[0], addr.MustEncode(), fee)
+				requireNoResultPlanAssetTo(t, plans[0], addr.MustEncode(), gas.GasAssetName)
+				next, err := runtime.SettleBlockWithGasConfig(101, gas)
+				require.NoError(t, err)
+				require.Empty(t, next.Transfers)
+				require.Empty(t, next.Inputs)
+			})
+		}
+	}
 }
 
 func TestBackendAutopayConfigFundsDelegateAndGas(t *testing.T) {
@@ -1087,6 +1225,32 @@ func TestBackendAutopayConfigFundsDelegateAndGas(t *testing.T) {
 	requireDecimalString(t, "100", state.AutopayData().FeeBalance)
 	expectedGas := scommon.NewDefaultDecimal(100).SubAlignPrecision(result.Records[0].GasFee)
 	requireDecimalString(t, expectedGas.String(), state.AutopayData().GasBalance)
+}
+
+func TestBackendAutopayExplicitDifferentAssetGasNotDoubleCounted(t *testing.T) {
+	gas := testAutopayGasConfig()
+	gas.ResultBaseGas = 50000
+	runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:fee", "10")
+	param, err := (&AutopayConfigInvokeParam{AmountPerBlock: "10", GasFundingAmount: "400"}).Encode()
+	require.NoError(t, err)
+	script, err := InvokeNullDataScript(InvokePayload{GasLimit: gas.InvokeBaseGas, CallNonce: 1, Action: InvokeAPIConfig, Param: param})
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, testAssets("ordx:f:fee", 100, gas.GasAssetName, 550), testTemplateContractScript(runtime.Address())))
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs: []*wire.MsgTx{tx}, Store: runtimeStoreWith(runtime), GasConfig: gas, BlockHeight: 100,
+		ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) { return "deployer-address", nil },
+		AssetPrecision: func(string) (int, bool) { return 0, true },
+	})
+	require.NoError(t, err)
+	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	requireDecimalString(t, "100", state.AutopayData().FeeBalance)
+	// 550 - result50 = explicit400 + legacy separate-asset remainder100.
+	requireDecimalString(t, "500", state.AutopayData().GasBalance)
 }
 
 func TestBackendAutopayInvalidConfigDoesNotFundDelegate(t *testing.T) {

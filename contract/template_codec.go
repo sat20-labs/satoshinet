@@ -137,8 +137,9 @@ type TemplateExchangeInvokeParam struct {
 }
 
 type TemplateAutopayConfigInvokeParam struct {
-	AmountPerBlock string `json:"amountPerBlock"`
-	BlobKeyLimit   uint32 `json:"blobKeyLimit"`
+	AmountPerBlock   string `json:"amountPerBlock"`
+	BlobKeyLimit     uint32 `json:"blobKeyLimit"`
+	GasFundingAmount string `json:"gasFundingAmount,omitempty"`
 }
 
 type TemplateCloseInvokeParam struct{}
@@ -258,10 +259,13 @@ func EncodeTemplateAutopayContent(contract TemplateAutopayContract) ([]byte, err
 }
 
 func (p *TemplateAutopayConfigInvokeParam) Encode() ([]byte, error) {
-	return txscript.NewScriptBuilder().
+	builder := txscript.NewScriptBuilder().
 		AddData([]byte(p.AmountPerBlock)).
-		AddInt64(int64(p.BlobKeyLimit)).
-		Script()
+		AddInt64(int64(p.BlobKeyLimit))
+	if p.GasFundingAmount != "" {
+		builder.AddData([]byte(p.GasFundingAmount))
+	}
+	return builder.Script()
 }
 
 func (p *TemplateAutopayConfigInvokeParam) Decode(data []byte) error {
@@ -278,6 +282,10 @@ func (p *TemplateAutopayConfigInvokeParam) Decode(data []byte) error {
 		return fmt.Errorf("invalid blob key limit")
 	}
 	p.BlobKeyLimit = uint32(limit)
+	p.GasFundingAmount = ""
+	if tokenizer.Next() {
+		p.GasFundingAmount = string(tokenizer.Data())
+	}
 	if tokenizer.Next() {
 		return fmt.Errorf("unexpected autopay config fields")
 	}

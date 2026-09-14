@@ -115,12 +115,19 @@ func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, erro
 	if err := r.CheckInvoke(req.Action, req.Param); err != nil {
 		return nil, err
 	}
+	output, err := r.splitAutopayGasFunding(req)
+	if err != nil {
+		return nil, err
+	}
+	req.FundingOutput = output
 	state, err := r.loadRuntimeState()
 	if err != nil {
 		return nil, err
 	}
-	if err := checkAutopayDelegateCapacity(r.contract, &state, req.Invoker); err != nil {
-		return nil, err
+	if !autopayGasOnlyConfig(r.contract, req.Action, req.Param) {
+		if err := checkAutopayDelegateCapacity(r.contract, &state, req.Invoker); err != nil {
+			return nil, err
+		}
 	}
 	item, err := NewInvokeItemFromRequest(r.contract, state.NextItemID, req)
 	if err != nil {

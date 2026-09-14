@@ -6,6 +6,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAutopayConfigOptionalGasFundingCodec(t *testing.T) {
+	legacy := &TemplateAutopayConfigInvokeParam{AmountPerBlock: "10", BlobKeyLimit: 1}
+	raw, err := legacy.Encode()
+	require.NoError(t, err)
+	var decoded TemplateAutopayConfigInvokeParam
+	require.NoError(t, decoded.Decode(raw))
+	require.Equal(t, *legacy, decoded)
+	roundtrip, err := decoded.Encode()
+	require.NoError(t, err)
+	require.Equal(t, raw, roundtrip)
+	for _, param := range []TemplateAutopayConfigInvokeParam{
+		{GasFundingAmount: "400"},
+		{AmountPerBlock: "10", BlobKeyLimit: 2, GasFundingAmount: "400"},
+	} {
+		raw, err := param.Encode()
+		require.NoError(t, err)
+		require.NoError(t, decoded.Decode(raw))
+		require.Equal(t, param, decoded)
+		require.Error(t, decoded.Decode(append(raw, 0x51)))
+	}
+	// Reusing a decoder must not retain the optional field from another call.
+	require.NoError(t, decoded.Decode(raw))
+	require.Empty(t, decoded.GasFundingAmount)
+}
+
 func TestSharedTemplateInvokeDecodersRejectTrailingFields(t *testing.T) {
 	limitInvoke, err := (&TemplateLimitOrderInvokeParam{
 		OrderType: OrderTypeBuy,

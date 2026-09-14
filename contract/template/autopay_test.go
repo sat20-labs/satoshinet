@@ -54,6 +54,150 @@ func TestAutopayPaysDelegatedFeesFromNextBlock(t *testing.T) {
 	require.Equal(t, int64(2), state.AutopayData().PaidBlockCount)
 }
 
+func TestAutopaySameAssetOperatingGasIsolation(t *testing.T) {
+	gas := testAutopayGasConfig()
+	gas.TriggerBaseGas, gas.ResultBaseGas = 150000, 50000
+	runtime := testAutopayRuntime(t, "recipient-address", gas.GasAssetName, "10")
+	for _, address := range []string{"a-user", "z-user"} {
+		_, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{
+			Invoker: address, Height: 100,
+			FundingOutput: testContractOutput(address, 0, runtime.Address(), 0, testAsset(gas.GasAssetName, 10000)),
+		})
+		require.NoError(t, err)
+	}
+	param, err := (&AutopayConfigInvokeParam{GasFundingAmount: "400"}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action: InvokeAPIConfig, Param: param, Invoker: "deployer-address", GasAssetName: gas.GasAssetName,
+		AssetPrecision: func(string) (int, bool) { return 0, true },
+		FundingOutput:  testContractOutput("gas", 0, runtime.Address(), 0, testAsset(gas.GasAssetName, 400)),
+	})
+	require.NoError(t, err)
+	_, err = runtime.SettleBlockWithGasConfig(100, gas)
+	require.NoError(t, err)
+	for height := int64(101); height <= 102; height++ {
+		plan, err := runtime.SettleBlockWithGasConfig(height, gas)
+		require.NoError(t, err)
+		requireDecimalString(t, "200", plan.GasFee)
+	}
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Len(t, state.AutopayData().AutopayDelegates, 2)
+	requireDecimalString(t, "0", state.AutopayData().GasBalance)
+	for _, delegate := range state.AutopayData().AutopayDelegates {
+		requireDecimalString(t, "9980", delegate.Balance)
+		requireDecimalString(t, "20", delegate.TotalPaid)
+	}
+	require.Equal(t, int64(2), state.AutopayData().PaidBlockCount)
+	require.Equal(t, AutopayStatusFunding, state.AutopayData().AutopayStatus)
+	before := state.AutopayData()
+	plan, err := runtime.SettleBlockWithGasConfig(103, gas)
+	require.NoError(t, err)
+	require.Empty(t, plan.Transfers)
+	state, err = runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, before, state.AutopayData())
+}
+
+func TestAutopayGasOnlyFundingPreservesFullDelegateCatalog(t *testing.T) {
+	gas := testAutopayGasConfig()
+	runtime := testAutopayRuntime(t, "recipient-address", gas.GasAssetName, "10")
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	contract := runtime.Contract().(*AutopayContract)
+	for i := 0; i < AutopayMaxDelegates; i++ {
+		contract.setDelegateConfig(state.AutopayData(), fmt.Sprintf("user-%05d", i), parseDecimalOrZero("10"), 2)
+	}
+	require.NoError(t, runtime.saveRuntimeState(state))
+	before := state.AutopayData().AutopayDelegates
+	param, err := (&AutopayConfigInvokeParam{GasFundingAmount: "400"}).Encode()
+	require.NoError(t, err)
+	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
+		Action: InvokeAPIConfig, Param: param, Invoker: "deployer-address", GasAssetName: gas.GasAssetName,
+		AssetPrecision: func(string) (int, bool) { return 0, true },
+		FundingOutput:  testContractOutput("gas", 0, runtime.Address(), 0, testAsset(gas.GasAssetName, 400)),
+	})
+	require.NoError(t, err)
+	state, err = runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, before, state.AutopayData().AutopayDelegates)
+	requireDecimalString(t, "400", state.AutopayData().GasBalance)
+}
+
+func TestAutopayInvalidRefundSkipsHistoricalItems(t *testing.T) {
+	gas := testAutopayGasConfig()
+	gas.TriggerBaseGas, gas.ResultBaseGas = 150000, 50000
+	runtime := testAutopayRuntime(t, "recipient-address", gas.GasAssetName, "10")
+	for _, height := range []int64{99, 100} {
+		_, err := runtime.ApplyInvalidInvoke(ApplyInvokeRequest{
+			Action: InvokeAPIConfig, Invoker: fmt.Sprintf("caller-%d", height), Height: height,
+			FundingOutput: testContractOutput(fmt.Sprintf("%064x", height), 0, runtime.Address(), 0, testAsset(gas.GasAssetName, 450)),
+			ResultGasFee:  parseDecimalOrZero("50"),
+		}, gas.GasAssetName)
+		require.NoError(t, err)
+	}
+	plan, err := runtime.SettleBlockWithGasConfig(100, gas)
+	require.NoError(t, err)
+	require.Len(t, plan.Transfers, 1)
+	require.Equal(t, "caller-100", plan.Transfers[0].To)
+	require.Equal(t, "400", plan.Transfers[0].AssetAmt)
+	require.Equal(t, []int64{1}, plan.ItemIDs)
+	require.Equal(t, []OutPoint{{TxID: fmt.Sprintf("%064x", 100), Vout: 0}}, plan.Inputs)
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, ItemStatusInit, state.Items[0].Done)
+	require.Equal(t, ItemStatusRefunded, state.Items[1].Done)
+	requireDecimalString(t, "0", state.AutopayData().GasBalance)
+	plan, err = runtime.SettleBlockWithGasConfig(101, gas)
+	require.NoError(t, err)
+	require.Empty(t, plan.Transfers)
+	require.Empty(t, plan.Inputs)
+}
+
+func TestAutopayGasFundingRequiresExactAssetPrecision(t *testing.T) {
+	gas := testAutopayGasConfig()
+	runtime := testAutopayRuntime(t, "recipient-address", gas.GasAssetName, "10")
+	for _, amount := range []string{"", "10"} {
+		param, err := (&AutopayConfigInvokeParam{AmountPerBlock: amount, GasFundingAmount: "400.5"}).Encode()
+		require.NoError(t, err)
+		assets := testAsset(gas.GasAssetName, 0)
+		assets[0].Amount = *parseDecimalOrZero("400.5")
+		if amount != "" {
+			assets[0].Amount = *parseDecimalOrZero("500.5")
+		}
+		req := ApplyInvokeRequest{
+			Action: InvokeAPIConfig, Param: param, Invoker: "deployer-address", GasAssetName: gas.GasAssetName,
+			FundingOutput: testContractOutput("precision", 0, runtime.Address(), 0, assets),
+		}
+		_, err = runtime.splitAutopayGasFunding(req)
+		require.ErrorContains(t, err, "precision resolver")
+		req.AssetPrecision = func(string) (int, bool) { return 0, false }
+		_, err = runtime.splitAutopayGasFunding(req)
+		require.ErrorContains(t, err, "unknown autopay gas asset precision")
+		req.AssetPrecision = func(string) (int, bool) { return 0, true }
+		_, err = runtime.splitAutopayGasFunding(req)
+		require.ErrorContains(t, err, "not exactly representable")
+		req.AssetPrecision = func(string) (int, bool) { return 64, true }
+		_, err = runtime.splitAutopayGasFunding(req)
+		require.ErrorContains(t, err, "unknown autopay gas asset precision")
+		req.AssetPrecision = func(string) (int, bool) { return 1, true }
+		remainder, err := runtime.splitAutopayGasFunding(req)
+		require.NoError(t, err)
+		remaining, err := remainder.AssetAmount(gas.GasAssetName)
+		require.NoError(t, err)
+		if amount == "" {
+			requireDecimalString(t, "0", remaining)
+		} else {
+			requireDecimalString(t, "100", remaining)
+		}
+		// Native satoshi gas must remain integral even if a resolver claims otherwise.
+		req.GasAssetName = SatoshiAssetName
+		req.FundingOutput = testContractOutput("native", 0, runtime.Address(), 1000, nil)
+		_, err = runtime.splitAutopayGasFunding(req)
+		require.ErrorContains(t, err, "not exactly representable")
+	}
+}
+
 func TestAutopayDefaultFundingAndCloseReturnsBalances(t *testing.T) {
 	gasConfig := testAutopayGasConfig()
 	runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:test", "10")
