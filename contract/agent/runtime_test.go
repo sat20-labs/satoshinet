@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestRuntime(t *testing.T) *Runtime {
@@ -138,6 +139,19 @@ func TestRuntimeTerminalCloseAllowedAfterBetDeadline(t *testing.T) {
 	if plan == nil || plan.ResultType != "close" || plan.Refund {
 		t.Fatalf("unexpected terminal close plan: %#v", plan)
 	}
+}
+
+func TestRuntimeUnsettledCloseAfterDeadlinePreservesBets(t *testing.T) {
+	runtime := newTestRuntime(t)
+	requireReady(t, runtime)
+	requireBet(t, runtime, "alice", "a", "10000")
+	before := runtime.Clone()
+	plan, err := runtime.ApplyClose(ApplyCloseRequest{
+		Invoker: "deployer", TimeValue: runtime.Contract().BetDeadline + 1,
+	})
+	require.ErrorContains(t, err, "after bet deadline")
+	require.Nil(t, plan)
+	require.Equal(t, before.State(), runtime.State())
 }
 
 func TestRuntimeConfirmSettlesWinnersAndFees(t *testing.T) {

@@ -1,6 +1,11 @@
 package framework
 
-import contract "github.com/sat20-labs/satoshinet/contract"
+import (
+	"crypto/sha256"
+	"sort"
+
+	contract "github.com/sat20-labs/satoshinet/contract"
+)
 
 type EngineState interface {
 	Root() [32]byte
@@ -14,13 +19,8 @@ type RootEngineState struct {
 	StateSnapshot any
 }
 
-func (s RootEngineState) Root() [32]byte {
-	return s.StateRoot
-}
-
-func (s RootEngineState) Snapshot() any {
-	return s.StateSnapshot
-}
+func (s RootEngineState) Root() [32]byte { return s.StateRoot }
+func (s RootEngineState) Snapshot() any { return s.StateSnapshot }
 
 type StateSet struct {
 	Engines map[ModuleType]EngineState
@@ -28,10 +28,7 @@ type StateSet struct {
 }
 
 func NewStateSet() *StateSet {
-	return &StateSet{
-		Engines: make(map[ModuleType]EngineState),
-		Roots:   make(map[ModuleType][32]byte),
-	}
+	return &StateSet{Engines: make(map[ModuleType]EngineState), Roots: make(map[ModuleType][32]byte)}
 }
 
 func (s *StateSet) SetRoot(module ModuleType, root [32]byte) {
@@ -55,26 +52,46 @@ func (s *StateSet) Root(module ModuleType) [32]byte {
 	if s == nil {
 		return [32]byte{}
 	}
-	if s.Roots != nil {
-		if root, ok := s.Roots[module]; ok {
-			return root
-		}
+	if root, ok := s.Roots[module]; ok {
+		return root
 	}
-	if s.Engines != nil && s.Engines[module] != nil {
-		return s.Engines[module].Root()
+	if engine := s.Engines[module]; engine != nil {
+		return engine.Root()
 	}
 	return [32]byte{}
 }
 
 func (s *StateSet) CombinedRoot() [32]byte {
-	if s == nil {
-		return contract.CombineStateRoots([32]byte{}, [32]byte{}, [32]byte{})
+	// Preserve the established three-slot commitment for the built-ins.
+	// Additional registered modules are committed in numeric type order;
+	// adding a runtime can no longer silently omit its state from the root.
+	types := map[ModuleType]bool{ModuleTemplate: true, ModuleEVM: true, ModuleAgent: true}
+	if s != nil {
+		for typ := range s.Roots {
+			types[typ] = true
+		}
+		for typ := range s.Engines {
+			types[typ] = true
+		}
 	}
-	return contract.CombineStateRoots(
-		s.Root(ModuleTemplate),
-		s.Root(ModuleEVM),
-		s.Root(ModuleAgent),
-	)
+	if len(types) == 3 {
+		return contract.CombineStateRoots(s.Root(ModuleTemplate), s.Root(ModuleEVM), s.Root(ModuleAgent))
+	}
+	ordered := make([]int, 0, len(types))
+	for typ := range types {
+		ordered = append(ordered, int(typ))
+	}
+	sort.Ints(ordered)
+	h := sha256.New()
+	h.Write([]byte("SATOSHINET:MODULE_STATE_ROOT\x00"))
+	for _, typ := range ordered {
+		h.Write([]byte{byte(typ)})
+		root := s.Root(ModuleType(typ))
+		h.Write(root[:])
+	}
+	var root [32]byte
+	copy(root[:], h.Sum(nil))
+	return root
 }
 
 func StateSetFromRoots(roots map[ModuleType][32]byte) *StateSet {

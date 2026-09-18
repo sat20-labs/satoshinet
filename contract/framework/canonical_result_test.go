@@ -200,6 +200,8 @@ func TestCanonicalCloseProfit(t *testing.T) {
 	funding := OutPoint{TxID: "close", Vout: 0}
 	profit := OutPoint{TxID: "profit", Vout: 0}
 	value := OutPoint{TxID: "value", Vout: 0}
+	profitAssets, err := NewAssetSet(assetName, mustCanonicalDecimal(t, 100))
+	require.NoError(t, err)
 
 	plans, err := (CanonicalResultPlanner{
 		GasConfig: GasConfig{GasAssetName: "brc20:f:sgas"},
@@ -213,6 +215,7 @@ func TestCanonicalCloseProfit(t *testing.T) {
 		},
 	}).BuildPlans([]ExecutionRecord{{
 		Height:           100,
+		Kind:             ExecutionKindInvoke,
 		Contract:         contractAddr,
 		RequiresResult:   true,
 		FundingInputs:    []OutPoint{funding},
@@ -220,14 +223,15 @@ func TestCanonicalCloseProfit(t *testing.T) {
 		CloseContract:    true,
 		DeployerAddress:  "deployer",
 		BootstrapAddress: "bootstrap",
+		ManagedBalance:   &contract.ManagedBalance{Value: 10, Assets: profitAssets},
 	}})
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	require.ElementsMatch(t, []OutPoint{funding, profit, value}, plans[0].Inputs)
-	requireCanonicalResultValue(t, plans[0].Outputs, "deployer", 6)
-	requireCanonicalResultValue(t, plans[0].Outputs, "bootstrap", 4)
-	requireResultAssetString(t, plans[0].Outputs, "deployer", assetName, "60")
-	requireResultAssetString(t, plans[0].Outputs, "bootstrap", assetName, "40")
+	requireCanonicalResultValue(t, plans[0].Outputs, "deployer", 7)
+	requireCanonicalResultValue(t, plans[0].Outputs, "bootstrap", 3)
+	requireResultAssetString(t, plans[0].Outputs, "deployer", assetName, "70")
+	requireResultAssetString(t, plans[0].Outputs, "bootstrap", assetName, "30")
 	requireNoCanonicalResultOutputTo(t, plans[0].Outputs, contractAddr.MustEncode())
 }
 

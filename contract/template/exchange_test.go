@@ -18,7 +18,7 @@ func TestExchangeDefaultFundAndBuy(t *testing.T) {
 	buyTx := testTemplateDefaultInvokeTx(t, addr, 0, testAsset(contract.AssetBName, 24))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
@@ -74,7 +74,7 @@ func TestExchangeDefaultInvokeRetainsAssetB(t *testing.T) {
 	buyTx := testTemplateDefaultInvokeTx(t, addr, 0, testAsset(gas, 21))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
@@ -116,7 +116,7 @@ func TestExchangeDefaultInvokeRetainsAssetA(t *testing.T) {
 	buyTx := testTemplateDefaultInvokeTx(t, addr, 0, testAsset(contract.AssetBName, 20))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
@@ -159,7 +159,7 @@ func TestExchangeDefaultBuyWithSatoshiAssetB(t *testing.T) {
 	buyTx := testTemplateDefaultInvokeTx(t, addr, 1, nil)
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
@@ -210,7 +210,7 @@ func TestExchangeSoldAmountPriceTiersWithinSingleInvoke(t *testing.T) {
 	buyTx := testTemplateDefaultInvokeTx(t, addr, 0, testAssets(gas, 2, contract.AssetBName, 50))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
 		Store:     store,
 		GasConfig: gasConfig,
@@ -251,7 +251,7 @@ func TestExchangeCloseReturnsRemainingAssetAToDeployer(t *testing.T) {
 	closeTx := testExchangeCloseTx(t, addr, testAsset(gas, 1))
 
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs:       []*wire.MsgTx{deployTx, fundTx, closeTx},
 		Store:     store,
 		GasConfig: gasConfig,
@@ -290,52 +290,37 @@ func TestExchangeBuyThenClosePaysManagedAssetsOnly(t *testing.T) {
 	fundTx := testTemplateDefaultInvokeTx(t, addr, 0, testAssets(gas, 5, contract.AssetAName, 100))
 	buyTx := testTemplateDefaultInvokeTx(t, addr, 0, testAssets(gas, 5, contract.AssetBName, 24))
 	closeTx := testExchangeCloseTx(t, addr, testAsset(gas, 1))
-
 	store := NewRuntimeStore()
-	first, err := ExecuteBlock(BlockExecutionRequest{
-		Txs:       []*wire.MsgTx{deployTx, fundTx, buyTx},
-		Store:     store,
-		GasConfig: gasConfig,
+	first, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs: []*wire.MsgTx{deployTx, fundTx, buyTx}, Store: store, GasConfig: gasConfig,
 		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
-			if contractTx.Kind == TxTypeDeploy || tx == closeTx {
-				return "deployer-address", nil
-			}
-			if tx == buyTx {
-				return "buyer-address", nil
-			}
+			if contractTx.Kind == TxTypeDeploy { return "deployer-address", nil }
+			if tx == buyTx { return "buyer-address", nil }
 			return "funder-address", nil
 		},
 		BlockHeight: 10,
 	})
 	require.NoError(t, err)
-	require.Len(t, first.SettlementPlans, 1)
-	firstStore := store.Clone()
-
-	second, err := ExecuteBlock(BlockExecutionRequest{
-		Txs:       []*wire.MsgTx{closeTx},
-		Store:     store,
-		GasConfig: gasConfig,
-		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
-			return "deployer-address", nil
-		},
+	require.Len(t, first.ResultPlans, 1)
+	firstResultTx := mustBuildTemplateResultTx(t, first.ResultPlans)
+	parentProvider := contractframework.ContractUTXOProviderWithTxOutputs(nil,
+		[]*wire.MsgTx{firstResultTx}, TestnetContractPrefix, ContractTypeTemplate)
+	second, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs: []*wire.MsgTx{closeTx}, Store: store, GasConfig: gasConfig,
+		ContractUTXOs: parentProvider,
+		ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) { return "deployer-address", nil },
 		BlockHeight: 11,
 	})
 	require.NoError(t, err)
 	require.Len(t, second.SettlementPlans, 1)
-
-	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil,
-		[]*wire.MsgTx{deployTx, fundTx, buyTx, closeTx}, TestnetContractPrefix, ContractTypeTemplate)
-	firstPlans, err := AugmentResultPlans(first.ResultPlans, firstStore, gasConfig, provider, nil)
-	require.NoError(t, err)
-	require.Len(t, firstPlans, 1)
-	provider = contractframework.ContractUTXOProviderWithTxOutputs(provider,
-		[]*wire.MsgTx{mustBuildTemplateResultTx(t, firstPlans)}, TestnetContractPrefix, ContractTypeTemplate)
-	secondPlans, err := AugmentResultPlans(second.ResultPlans, store, gasConfig, provider, nil)
-	require.NoError(t, err)
-	require.Len(t, secondPlans, 1)
-	requireResultPlanAssetTo(t, secondPlans[0], "deployer-address", contract.AssetAName, "88")
-	requireResultPlanAssetTo(t, secondPlans[0], "deployer-address", gas, "10.997")
+	require.Len(t, second.ResultPlans, 1)
+	plan := second.ResultPlans[0]
+	requireResultPlanAssetTo(t, plan, "deployer-address", contract.AssetAName, "88")
+	requireResultPlanAssetTo(t, plan, "deployer-address", gas, "0.999")
+	requireNoResultPlanAssetTo(t, plan, "deployer-address", contract.AssetBName)
+	requireNoResultPlanOutputTo(t, plan, addr.MustEncode())
 }
+
 
 func TestExchangeRejectsTooManyPriceSteps(t *testing.T) {
 	steps := make([]ExchangePriceStep, MaxExchangePriceSteps+1)
@@ -364,7 +349,8 @@ func testExchangeContract() *ExchangeContract {
 
 func exchangeTestGasConfig(gasAssetName string) GasConfig {
 	return GasConfig{
-		GasAssetName:    gasAssetName,
+		GasAssetName:     gasAssetName,
+		BootstrapAddress: "bootstrap-address",
 		DeployBaseGas:   1,
 		InvokeBaseGas:   1,
 		ResultBaseGas:   1,

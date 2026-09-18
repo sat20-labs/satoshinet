@@ -9,13 +9,9 @@ import (
 )
 
 type ContractScriptResolver = contractframework.ContractScriptResolver
-
 type ContractOutput = contractframework.ContractOutput
-
 type ContractExistsFunc func(ContractAddress) bool
-
 type DeployValidation = contractframework.DeployValidation
-
 type InvokeValidation = contractframework.InvokeValidation
 
 type ResultValidation struct {
@@ -24,13 +20,10 @@ type ResultValidation struct {
 }
 
 var ParseTx = contractframework.ParseTxFunc(evmParseSpec)
-
 var FindInvokeContractOutputs = contractframework.FindInvokeContractOutputsFunc(evmParseSpec)
-
 var FindContractOutputsForContract = contractframework.FindContractOutputsForContractFunc()
 
 type DeployTxBuildRequest = evmcommon.DeployTxBuildRequest
-
 type InvokeTxBuildRequest = evmcommon.InvokeTxBuildRequest
 
 func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
@@ -44,34 +37,10 @@ func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
 
 func evmParseSpec() contractframework.ParseSpec {
 	return contractframework.ParseSpecFromPayloads(contractframework.PayloadParseSpec{
-		ModuleName:   "EVM",
-		ContractType: ContractTypeEVM,
-		DecodeDeploy: func(data []byte) (contractframework.DeployPayload, error) {
-			payload, err := evmcommon.DecodeDeployPayload(data)
-			if err != nil {
-				return contractframework.DeployPayload{}, err
-			}
-			return contractframework.DeployPayload{
-				Type:            payload.Type,
-				SubType:         payload.SubType,
-				Version:         payload.Version,
-				GasLimit:        payload.GasLimit,
-				DeployNonce:     payload.DeployNonce,
-				ContractContent: contractframework.CloneBytes(payload.ContractContent),
-			}, nil
-		},
-		DecodeInvoke: func(data []byte) (contractframework.InvokePayload, error) {
-			payload, err := evmcommon.DecodeInvokePayload(data)
-			if err != nil {
-				return contractframework.InvokePayload{}, err
-			}
-			return contractframework.InvokePayload{
-				GasLimit:  payload.GasLimit,
-				CallNonce: payload.CallNonce,
-				Action:    payload.Action,
-				Param:     contractframework.CloneBytes(payload.Param),
-			}, nil
-		},
+		ModuleName:          "EVM",
+		ContractType:        ContractTypeEVM,
+		DecodeDeploy:        evmcommon.DecodeDeployPayload,
+		DecodeInvoke:        evmcommon.DecodeInvokePayload,
 		AcceptResult:         true,
 		RequireResultLastOut: true,
 	})
@@ -130,8 +99,5 @@ func ValidateResultTxBasic(tx *wire.MsgTx) (ResultValidation, error) {
 	if parsed.Result.ResultCount == 0 {
 		return ResultValidation{}, errors.New("result count is zero")
 	}
-	return ResultValidation{
-		Payload: *parsed.Result,
-		Inputs:  parsed.Inputs,
-	}, nil
+	return ResultValidation{Payload: *parsed.Result, Inputs: parsed.Inputs}, nil
 }

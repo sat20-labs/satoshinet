@@ -12,15 +12,17 @@ type runtimeStoreSnapshot struct {
 }
 
 type runtimeSnapshot struct {
-	Address         string            `json:"address"`
-	TemplateName    string            `json:"templateName"`
-	TemplateVersion uint32            `json:"templateVersion"`
-	Deployer        string            `json:"deployer"`
-	DeployNonce     uint64            `json:"deployNonce"`
-	ContractContent []byte            `json:"contractContent"`
-	CurrentBlock    int64             `json:"currentBlock"`
-	InvokeCount     uint64            `json:"invokeCount"`
-	State           map[string][]byte `json:"state"`
+	Address         string                         `json:"address"`
+	TemplateName    string                         `json:"templateName"`
+	TemplateVersion uint32                         `json:"templateVersion"`
+	Deployer        string                         `json:"deployer"`
+	DeployNonce     uint64                         `json:"deployNonce"`
+	Flags           ContractFlags                  `json:"flags"`
+	ManagedBalance  *contractcommon.ManagedBalance `json:"managedBalance"`
+	ContractContent []byte                         `json:"contractContent"`
+	CurrentBlock    int64                          `json:"currentBlock"`
+	InvokeCount     uint64                         `json:"invokeCount"`
+	State           map[string][]byte              `json:"state"`
 }
 
 func (s *RuntimeStore) MarshalBinary() ([]byte, error) {
@@ -30,6 +32,12 @@ func (s *RuntimeStore) MarshalBinary() ([]byte, error) {
 		snapshot.Runtimes = make([]runtimeSnapshot, 0, len(keys))
 		for _, key := range keys {
 			runtime := s.runtimes[key]
+			if runtime == nil || runtime.base == nil {
+				return nil, fmt.Errorf("nil template runtime %s", key)
+			}
+			if err := runtime.base.flags.Validate(); err != nil {
+				return nil, err
+			}
 			snapshot.Runtimes = append(snapshot.Runtimes, snapshotRuntime(runtime))
 		}
 	}
@@ -50,6 +58,9 @@ func DecodeRuntimeStore(data []byte, registry *Registry) (*RuntimeStore, error) 
 		if err != nil {
 			return nil, err
 		}
+		if store.Exists(runtime.Address()) {
+			return nil, fmt.Errorf("duplicate template runtime %s", item.Address)
+		}
 		store.Add(runtime)
 	}
 	return store, nil
@@ -61,12 +72,15 @@ func snapshotRuntime(runtime *ContractRuntime) runtimeSnapshot {
 	for key, value := range base.state {
 		state[key] = append([]byte(nil), value...)
 	}
+	managed := base.managed.Clone()
 	return runtimeSnapshot{
 		Address:         base.address.EncodeAddress(),
 		TemplateName:    base.templateName,
 		TemplateVersion: base.templateVersion,
 		Deployer:        base.deployer,
 		DeployNonce:     base.deployNonce,
+		Flags:           base.flags,
+		ManagedBalance:  &managed,
 		ContractContent: append([]byte(nil), base.contractContent...),
 		CurrentBlock:    base.currentBlock,
 		InvokeCount:     base.invokeCount,
@@ -75,17 +89,20 @@ func snapshotRuntime(runtime *ContractRuntime) runtimeSnapshot {
 }
 
 func restoreRuntime(snapshot runtimeSnapshot, registry *Registry) (*ContractRuntime, error) {
+	if snapshot.ManagedBalance == nil {
+		return nil, fmt.Errorf("template snapshot has no managed balance; rebuild the contract state")
+	}
+	if err := snapshot.ManagedBalance.Validate(); err != nil {
+		return nil, err
+	}
 	address, err := contractcommon.DecodeContractAddress(snapshot.Address)
 	if err != nil {
 		return nil, err
 	}
 	deploy := DeployPayload{
-		Type:            ContractTypeTemplate,
-		SubType:         snapshot.TemplateName,
-		Version:         snapshot.TemplateVersion,
-		GasLimit:        1,
-		DeployNonce:     snapshot.DeployNonce,
-		ContractContent: snapshot.ContractContent,
+		Type: ContractTypeTemplate, SubType: snapshot.TemplateName,
+		Version: snapshot.TemplateVersion, GasLimit: 1, DeployNonce: snapshot.DeployNonce,
+		Flags: snapshot.Flags, ContractContent: snapshot.ContractContent,
 	}
 	runtime, err := NewRuntimeWithDeployer(address, deploy, registry, snapshot.Deployer)
 	if err != nil {
@@ -97,6 +114,7 @@ func restoreRuntime(snapshot runtimeSnapshot, registry *Registry) (*ContractRunt
 	}
 	runtime.base.currentBlock = snapshot.CurrentBlock
 	runtime.base.invokeCount = snapshot.InvokeCount
+	runtime.base.managed = snapshot.ManagedBalance.Clone()
 	runtime.base.state = make(map[string][]byte, len(snapshot.State))
 	for key, value := range snapshot.State {
 		runtime.base.state[key] = append([]byte(nil), value...)

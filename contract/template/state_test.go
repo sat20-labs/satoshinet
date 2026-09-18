@@ -314,7 +314,8 @@ func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
 	running.AssetBInPool = scommon.NewDefaultDecimal(2)
 	running.GasBalance = parseDecimalOrZero("3")
 	require.NoError(t, runtime.saveRuntimeState(state))
-
+	before, err := runtime.RuntimeState()
+	require.NoError(t, err)
 	store := NewRuntimeStore()
 	store.Add(runtime)
 	gasAssetName := DefaultGasConfig().GasAssetName
@@ -324,15 +325,11 @@ func TestRuntimeStoreReconcileAssetCachesUsesContractUTXOs(t *testing.T) {
 		return []UTXO{testContractUTXO("actual", 0, contract, 33, actualAssets)}, nil
 	}, DefaultGasConfig())
 	require.NoError(t, err)
-
-	state, err = runtime.RuntimeState()
+	after, err := runtime.RuntimeState()
 	require.NoError(t, err)
-	requireDecimalString(t, "77", state.AMMData().AssetAInPool)
-	requireDecimalString(t, "33", state.AMMData().AssetBInPool)
-	requireDecimalString(t, "5", state.AMMData().GasBalance)
-	requireDecimalString(t, "2541", state.AMMData().K)
-	requireAMMPoolInvariant(t, state.AMMData())
+	require.Equal(t, before, after, "physical surplus must not be imported into managed business state")
 }
+
 
 func testLimitOrderRuntime(t *testing.T) *ContractRuntime {
 	t.Helper()

@@ -11,9 +11,7 @@ import (
 type ContractOutput = contractframework.ContractOutput
 
 var ParseTx = contractframework.ParseTxFunc(templateParseSpec)
-
 var FindInvokeContractOutputs = contractframework.FindInvokeContractOutputsFunc(templateParseSpec)
-
 var FindContractOutputsForContract = contractframework.FindContractOutputsForContractFunc()
 
 type DeployTxBuildRequest struct {
@@ -21,6 +19,7 @@ type DeployTxBuildRequest struct {
 	Contract       Contract
 	Deployer       string
 	DeployNonce    uint64
+	Flags          contractcommon.ContractFlags
 	GasLimit       int64
 	Funding        wire.TxOut
 	Inputs         []wire.OutPoint
@@ -44,6 +43,7 @@ func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, erro
 		Version:         req.Contract.Version(),
 		Deployer:        req.Deployer,
 		DeployNonce:     req.DeployNonce,
+		Flags:           req.Flags,
 		ContractContent: encoded,
 		GasLimit:        req.GasLimit,
 		Funding:         req.Funding,
@@ -60,32 +60,8 @@ func templateParseSpec() contractframework.ParseSpec {
 	return contractframework.ParseSpecFromPayloads(contractframework.PayloadParseSpec{
 		ModuleName:   "template",
 		ContractType: ContractTypeTemplate,
-		DecodeDeploy: func(data []byte) (contractframework.DeployPayload, error) {
-			payload, err := DecodeDeployPayload(data)
-			if err != nil {
-				return contractframework.DeployPayload{}, err
-			}
-			return contractframework.DeployPayload{
-				Type:            payload.Type,
-				SubType:         payload.SubType,
-				Version:         payload.Version,
-				GasLimit:        payload.GasLimit,
-				DeployNonce:     payload.DeployNonce,
-				ContractContent: contractframework.CloneBytes(payload.ContractContent),
-			}, nil
-		},
-		DecodeInvoke: func(data []byte) (contractframework.InvokePayload, error) {
-			payload, err := DecodeInvokePayload(data)
-			if err != nil {
-				return contractframework.InvokePayload{}, err
-			}
-			return contractframework.InvokePayload{
-				GasLimit:  payload.GasLimit,
-				CallNonce: payload.CallNonce,
-				Action:    payload.Action,
-				Param:     contractframework.CloneBytes(payload.Param),
-			}, nil
-		},
+		DecodeDeploy: DecodeDeployPayload,
+		DecodeInvoke: DecodeInvokePayload,
 	})
 }
 
@@ -93,14 +69,10 @@ func templateDeployPayloadFromFramework(payload *contractframework.DeployPayload
 	if payload == nil {
 		return nil
 	}
-	return &DeployPayload{
-		Type:            ContractTypeTemplate,
-		SubType:         payload.SubType,
-		Version:         payload.Version,
-		GasLimit:        payload.GasLimit,
-		DeployNonce:     payload.DeployNonce,
-		ContractContent: contractframework.CloneBytes(payload.ContractContent),
-	}
+	out := *payload
+	out.Type = ContractTypeTemplate
+	out.ContractContent = contractframework.CloneBytes(payload.ContractContent)
+	return &out
 }
 
 func ValidateDeployTxBasic(tx *wire.MsgTx, prefix string, registry *Registry, cfg GasConfig) (DeployValidation, error) {

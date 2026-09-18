@@ -3,13 +3,21 @@ package evm
 import (
 	"testing"
 
-	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
+
+func managedSnapshotFromUTXOs(t *testing.T, utxos []UTXO) *evmcommon.ManagedBalance {
+	t.Helper()
+	balance := &evmcommon.ManagedBalance{}
+	for _, utxo := range utxos {
+		require.NoError(t, balance.Credit(utxo.PhysicalValue(), utxo.TxAssets()))
+	}
+	return balance
+}
 
 func TestCanonicalResultVerifier(t *testing.T) {
 	contract := testContract(t)
@@ -36,6 +44,7 @@ func TestCanonicalResultVerifier(t *testing.T) {
 		mustUTXO(t, funding, contract, gasAssetName, 100, 10),
 		mustUTXO(t, assetInput, contract, SatoshiAssetName, 80, 11),
 	}
+	record.ManagedBalance = managedSnapshotFromUTXOs(t, available)
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: fundingHash, Index: 1}, nil, nil))
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: assetHash, Index: 0}, nil, nil))
@@ -99,13 +108,13 @@ func TestCanonicalResultVerifierDeployUsesFundingUTXO(t *testing.T) {
 	}
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: gasHash, Index: 1}, nil, nil))
+	available := []UTXO{mustUTXO(t, gasInput, contract, "ordx:ft:gas", 20, 1)}
+	record.ManagedBalance = managedSnapshotFromUTXOs(t, available)
 	verifier := CanonicalResultVerifier{
 		GasConfig: GasConfig{GasAssetName: "ordx:ft:gas", FixedGasPrice: 1, DeployBaseGas: 10, ResultBaseGas: 1},
 		UTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
-			return []UTXO{
-				mustUTXO(t, gasInput, contract, "ordx:ft:gas", 20, 1),
-			}, nil
+			return available, nil
 		},
 	}
 	plans, err := verifier.BuildPlans([]ExecutionRecord{record})
@@ -137,13 +146,13 @@ func TestCanonicalResultVerifierInvokeFeeSettlementWithoutAssetIntent(t *testing
 		Amount: *mustDefaultDecimal(t, 99960),
 	}}, []byte{0x51}))
 
+	available := []UTXO{mustUTXO(t, gasInput, contract, gasAssetName, 100000, 1)}
+	record.ManagedBalance = managedSnapshotFromUTXOs(t, available)
 	verifier := CanonicalResultVerifier{
 		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 1, InvokeBaseGas: 20, ResultBaseGas: 10},
 		UTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
-			return []UTXO{
-				mustUTXO(t, gasInput, contract, gasAssetName, 100000, 1),
-			}, nil
+			return available, nil
 		},
 		ResolveOutput: func(*wire.MsgTx) ([]ResultOutput, error) {
 			return []ResultOutput{
@@ -173,13 +182,13 @@ func TestCanonicalResultVerifierRefundsExplicitInvokeGasEscrowToRecipient(t *tes
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: gasHash, Index: 1}, nil, nil))
 
+	available := []UTXO{mustUTXO(t, gasInput, contract, gasAssetName, 100000, 1)}
+	record.ManagedBalance = managedSnapshotFromUTXOs(t, available)
 	verifier := CanonicalResultVerifier{
 		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 1, InvokeBaseGas: 20, ResultBaseGas: 10},
 		UTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
-			return []UTXO{
-				mustUTXO(t, gasInput, contract, gasAssetName, 100000, 1),
-			}, nil
+			return available, nil
 		},
 		ResolveOutput: func(*wire.MsgTx) ([]ResultOutput, error) {
 			return []ResultOutput{
@@ -209,13 +218,13 @@ func TestCanonicalResultVerifierDefaultInvokeKeepsFundingInContractAddress(t *te
 	tx := wire.NewMsgTx(2)
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: fundingHash, Index: 0}, nil, nil))
 
+	available := []UTXO{mustUTXOWithValueAndAsset(t, funding, contract, 100, 1, assetName, 200)}
+	record.ManagedBalance = managedSnapshotFromUTXOs(t, available)
 	verifier := CanonicalResultVerifier{
 		GasConfig: GasConfig{GasAssetName: "ordx:ft:gas", FixedGasPrice: 1, InvokeBaseGas: 20, ResultBaseGas: 10},
 		UTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
-			return []UTXO{
-				mustUTXOWithValueAndAsset(t, funding, contract, 100, 1, assetName, 200),
-			}, nil
+			return available, nil
 		},
 		ResolveOutput: func(*wire.MsgTx) ([]ResultOutput, error) {
 			return []ResultOutput{
@@ -252,14 +261,16 @@ func TestCanonicalResultVerifierTriggerUsesContractGasUTXO(t *testing.T) {
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: gasHash, Index: 0}, nil, nil))
 	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: assetHash, Index: 0}, nil, nil))
 
+	available := []UTXO{
+		mustUTXO(t, assetInput, contract, SatoshiAssetName, 100, 11),
+		mustUTXO(t, gasInput, contract, gasAssetName, 100, 10),
+	}
+	record.ManagedBalance = managedSnapshotFromUTXOs(t, available)
 	verifier := CanonicalResultVerifier{
 		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 2, TriggerBaseGas: 10, ResultBaseGas: 5},
 		UTXOs: func(got ContractAddress) ([]UTXO, error) {
 			require.True(t, contract.Equal(got))
-			return []UTXO{
-				mustUTXO(t, assetInput, contract, SatoshiAssetName, 100, 11),
-				mustUTXO(t, gasInput, contract, gasAssetName, 100, 10),
-			}, nil
+			return available, nil
 		},
 	}
 	plans, err := verifier.BuildPlans([]ExecutionRecord{record})
@@ -272,63 +283,41 @@ func TestCanonicalResultVerifierTriggerUsesContractGasUTXO(t *testing.T) {
 
 func TestBackendWithCanonicalResultVerifier(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
-	contract := testContract(t)
+	contractAddr := testContract(t)
 	runtime := NewRuntime(nil)
-	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
-
-	invokeTx := testInvokeTx(t, contract, InvokePayload{
-		GasLimit:  DefaultGasConfig().InvokeBaseGas,
-		CallNonce: 1,
-		Param:     EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+	runtime.SetCode(ContractAddressHash(contractAddr), callAssetPrecompileCode())
+	seedEVMManagedFixture(t, runtime, contractAddr, 100, nil)
+	invokeTx := testInvokeTx(t, contractAddr, InvokePayload{
+		GasLimit: DefaultGasConfig().InvokeBaseGas, CallNonce: 1,
+		Param: EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	})
-	funding := OutPoint{TxID: invokeTx.TxID(), Vout: 1}
-	assetHash := chainhash.Hash{8}
-	assetInput := OutPoint{TxID: assetHash.String(), Vout: 0}
-	gasAssetName := "ordx:ft:gas"
-	resultTx := testCanonicalResultTx(t, []wire.OutPoint{
-		{Hash: invokeTx.TxHash(), Index: 1},
-		{Hash: assetHash, Index: 0},
-	}, []wire.TxOut{
-		{Value: 77, PkScript: []byte{0x51}},
-		{Value: 23, Assets: wire.TxAssets{{
-			Name:   wire.AssetName{Protocol: "ordx", Type: "ft", Ticker: "gas"},
-			Amount: *scommon.NewDecimal(99950, 8),
-		}}, PkScript: testContractScript(contract)},
-	})
-
-	verifier := CanonicalResultVerifier{
-		GasConfig: GasConfig{GasAssetName: gasAssetName, FixedGasPrice: 1, ResultPackingFee: 0},
-		UTXOs: func(got ContractAddress) ([]UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return []UTXO{
-				mustUTXO(t, funding, contract, gasAssetName, 100000, 10),
-				mustUTXO(t, assetInput, contract, SatoshiAssetName, 100, 11),
-			}, nil
-		},
-		ResolveOutput: func(tx *wire.MsgTx) ([]ResultOutput, error) {
-			return contractframework.ResultOutputsFromTx(tx, TestnetContractPrefix, evmcommon.ParseContractPkScript, func(pkScript []byte) (string, bool, error) {
-				if len(pkScript) == 1 && pkScript[0] == 0x51 {
-					return "tb1qdest", true, nil
-				}
-				return "", false, nil
-			})
-		},
+	assetInput := OutPoint{TxID: chainhash.Hash{8}.String(), Vout: 0}
+	base := func(got ContractAddress) ([]UTXO, error) {
+		require.True(t, contractAddr.Equal(got))
+		return []UTXO{mustUTXO(t, assetInput, contractAddr, SatoshiAssetName, 100, 11)}, nil
 	}
-	executed, err := ExecuteBlock(BlockExecutionRequest{
-		Txs:           []*wire.MsgTx{invokeTx},
-		Runtime:       runtime,
-		Block:         testBlockContext(1),
-		ResolveCaller: fixedCaller(caller),
-		ContractUTXOs: verifier.UTXOs,
-		ResolveResultScript: func(ResultOutput) ([]byte, error) {
-			return []byte{0x51}, nil
-		},
-		AssetPrecision: func(string) (int, bool) { return 8, true },
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(base, []*wire.MsgTx{invokeTx},
+		TestnetContractPrefix, ContractTypeEVM)
+	cfg := DefaultGasConfig()
+	cfg.BootstrapAddress = "bootstrap"
+	precision := SettlementPrecision(func(string) (int, bool) { return 8, true })
+	executed, err := ExecuteWorkBlock(BlockExecutionRequest{
+		Txs: []*wire.MsgTx{invokeTx}, Runtime: runtime, GasConfig: cfg, Block: testBlockContext(1),
+		ResolveCaller: fixedCaller(caller), ContractUTXOs: provider,
+		ResolveResultScript: evmTestResultScriptResolver(t, contractAddr), AssetPrecision: precision.Resolve,
 	})
 	require.NoError(t, err)
+	resultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
+		Status: contractframework.AggregateResultStatus(executed.Records), Records: executed.Records,
+		GasConfig: cfg, UTXOs: provider, Precision: precision,
+		ResolveScript: evmTestResultScriptResolver(t, contractAddr),
+	})
+	require.NoError(t, err)
+	verifier := CanonicalResultVerifier{
+		GasConfig: cfg, UTXOs: provider, Precision: precision,
+		ResolveOutput: evmTestResultOutputResolver(contractAddr), ResolveScript: evmTestResultScriptResolver(t, contractAddr),
+	}
 	require.NoError(t, VerifyResultTxs(ResultVerifyRequest{
-		ResultTxs:    []*wire.MsgTx{resultTx},
-		Execution:    executed,
-		VerifyResult: verifier.Verify,
+		ResultTxs: []*wire.MsgTx{resultTx}, Execution: executed, VerifyResult: verifier.Verify,
 	}))
 }

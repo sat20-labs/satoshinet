@@ -2,6 +2,7 @@ package framework
 
 import (
 	"fmt"
+	"sort"
 
 	contract "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -30,14 +31,17 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 		prefix = contract.TestnetContractPrefix
 	}
 	split := BlockContractSplit{
-		WorkTxs:     make(map[ModuleType][]*wire.MsgTx),
-		ResultTxs:   make(map[ModuleType][]*wire.MsgTx),
+		WorkTxs: make(map[ModuleType][]*wire.MsgTx),
+		ResultTxs: make(map[ModuleType][]*wire.MsgTx),
 		WorkOutputs: make(map[wire.OutPoint]contract.ContractAddress),
 	}
 	modules := make(map[ModuleType]Module, len(req.Modules))
 	for _, module := range req.Modules {
 		if module == nil {
 			continue
+		}
+		if _, exists := modules[module.Type()]; exists {
+			return split, fmt.Errorf("duplicate contract module %d", module.Type())
 		}
 		modules[module.Type()] = module
 	}
@@ -46,9 +50,14 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 		if tx == nil {
 			return split, fmt.Errorf("nil transaction %d", txIndex)
 		}
+		for inputIndex, input := range tx.TxIn {
+			if input == nil {
+				return split, fmt.Errorf("nil input %d in transaction %d", inputIndex, txIndex)
+			}
+		}
 		txType, foundPayload, err := contract.ClassifyTxPayloadType(tx)
 		if err != nil {
-			return split, fmt.Errorf("classify contract payload %s: %w", tx.TxID(), err)
+			return split, fmt.Errorf("classify contract payload at transaction %d: %w", txIndex, err)
 		}
 		if foundPayload && txType == contract.TxTypeCoinbaseStateRoot {
 			continue
@@ -59,8 +68,7 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 				return split, fmt.Errorf("classify CONTRACT_RESULT %s: %w", tx.TxID(), err)
 			}
 			if _, ok := modules[moduleType]; !ok {
-				return split, fmt.Errorf("CONTRACT_RESULT %s belongs to unregistered module %d",
-					tx.TxID(), moduleType)
+				return split, fmt.Errorf("CONTRACT_RESULT %s belongs to unregistered module %d", tx.TxID(), moduleType)
 			}
 			split.ResultTxs[moduleType] = append(split.ResultTxs[moduleType], tx)
 			continue
@@ -70,10 +78,7 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 			if err != nil {
 				return split, err
 			}
-			if !found {
-				continue
-			}
-			if !class.IsWork() {
+			if !found || !class.IsWork() {
 				continue
 			}
 			moduleType := class.ContractType
@@ -89,6 +94,8 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 			continue
 		}
 		for _, moduleType := range defaultTypes {
+			// Dispatch once per module, not once per output. The module's
+			// framework executor expands its outputs in their original order.
 			split.WorkTxs[moduleType] = append(split.WorkTxs[moduleType], tx)
 		}
 		addAllContractOutputs(split.WorkOutputs, tx, prefix)
@@ -138,8 +145,7 @@ func inferResultModule(tx *wire.MsgTx, prefix string, parent UTXOView,
 		}
 		nextType := ModuleType(contractAddr.ContractType())
 		if !found {
-			moduleType = nextType
-			found = true
+			moduleType, found = nextType, true
 			continue
 		}
 		if moduleType != nextType {
@@ -164,34 +170,27 @@ func lookupContractInput(outpoint wire.OutPoint, prefix string, parent UTXOView,
 	return parent.LookupContractAddress(outpoint, prefix)
 }
 
-func defaultInvokeModuleTypes(tx *wire.MsgTx, prefix string,
-	modules map[ModuleType]Module) ([]ModuleType, error) {
-
+func defaultInvokeModuleTypes(tx *wire.MsgTx, prefix string, modules map[ModuleType]Module) ([]ModuleType, error) {
+	outputs, err := contract.FindDefaultInvokeOutputs(tx, prefix, 0)
+	if err != nil {
+		return nil, err
+	}
 	seen := make(map[ModuleType]struct{})
-	for _, contractType := range []ModuleType{ModuleTemplate, ModuleEVM, ModuleAgent} {
-		if _, ok := modules[contractType]; !ok {
-			continue
-		}
-		outputs, err := contract.FindDefaultInvokeOutputs(tx, prefix, byte(contractType))
-		if err != nil {
-			return nil, err
-		}
-		if len(outputs) != 0 {
-			seen[contractType] = struct{}{}
+	for _, output := range outputs {
+		moduleType := ModuleType(output.Contract.ContractType())
+		if _, registered := modules[moduleType]; registered {
+			seen[moduleType] = struct{}{}
 		}
 	}
 	out := make([]ModuleType, 0, len(seen))
-	for _, contractType := range []ModuleType{ModuleTemplate, ModuleEVM, ModuleAgent} {
-		if _, ok := seen[contractType]; ok {
-			out = append(out, contractType)
-		}
+	for moduleType := range seen {
+		out = append(out, moduleType)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out, nil
 }
 
-func addWorkOutputs(out map[wire.OutPoint]contract.ContractAddress, tx *wire.MsgTx,
-	prefix string, moduleType ModuleType) {
-
+func addWorkOutputs(out map[wire.OutPoint]contract.ContractAddress, tx *wire.MsgTx, prefix string, moduleType ModuleType) {
 	for outpoint, contractAddr := range contractOutputs(tx, prefix) {
 		if ModuleType(contractAddr.ContractType()) == moduleType {
 			out[outpoint] = contractAddr
@@ -199,9 +198,7 @@ func addWorkOutputs(out map[wire.OutPoint]contract.ContractAddress, tx *wire.Msg
 	}
 }
 
-func addAllContractOutputs(out map[wire.OutPoint]contract.ContractAddress, tx *wire.MsgTx,
-	prefix string) {
-
+func addAllContractOutputs(out map[wire.OutPoint]contract.ContractAddress, tx *wire.MsgTx, prefix string) {
 	for outpoint, contractAddr := range contractOutputs(tx, prefix) {
 		out[outpoint] = contractAddr
 	}

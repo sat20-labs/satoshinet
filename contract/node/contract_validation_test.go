@@ -193,31 +193,35 @@ func TestCompositeContractStateRootUsesInactiveParentRoots(t *testing.T) {
 	evmRoot := testHashRoot(0x22)
 	agentRoot := testHashRoot(0x33)
 	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot, agentRoot)
-
 	coinbase := testEVMCoinbaseTx()
 	if err := contractengine.UpsertCoinbaseStateRoot(coinbase, expected); err != nil {
 		t.Fatal(err)
 	}
-	block := btcutil.NewBlock(&wire.MsgBlock{
-		Transactions: []*wire.MsgTx{coinbase},
-	})
-
+	// A plain funding output activates EVM through the real default-invoke
+	// dispatch. Other modules must contribute their unchanged parent roots.
+	work := wire.NewMsgTx(2)
+	work.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{0x44}}})
+	work.AddTxOut(testContractTxOut(t, contractcommon.ContractTypeEVM))
+	block := btcutil.NewBlock(&wire.MsgBlock{Transactions: []*wire.MsgTx{coinbase, work}})
 	validator := NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
 		TemplateValidator: testRootValidator{parentRoot: templateRoot},
 		EVMValidator:      testRootValidator{postRoot: evmRoot},
 		AgentValidator:    testRootValidator{parentRoot: agentRoot},
 	})
-	if err := validator.verifyCombinedStateRoot(block, blockchain.NewUtxoViewpoint(), false, true, false); err != nil {
-		t.Fatalf("verifyCombinedStateRoot failed: %v", err)
+	view := blockchain.NewUtxoViewpoint()
+	if err := validator.ValidateContractBlock(block, view); err != nil {
+		t.Fatalf("ValidateContractBlock failed: %v", err)
 	}
-
 	wrongRoot := expected
 	wrongRoot[0] ^= 0xff
 	if err := contractengine.UpsertCoinbaseStateRoot(coinbase, wrongRoot); err != nil {
 		t.Fatal(err)
 	}
-	if err := validator.verifyCombinedStateRoot(block, blockchain.NewUtxoViewpoint(), false, true, false); err == nil {
-		t.Fatal("expected wrong combined contract state root to be rejected")
+	// Construct a fresh wrapper rather than reusing its cached transaction hash.
+	wrongBlock := btcutil.NewBlock(&wire.MsgBlock{Transactions: []*wire.MsgTx{coinbase, work}})
+	if err := validator.ValidateContractBlock(wrongBlock, view); err == nil ||
+		!strings.Contains(err.Error(), "combined contract state root mismatch") {
+		t.Fatalf("expected wrong combined contract state root rejection, got %v", err)
 	}
 }
 

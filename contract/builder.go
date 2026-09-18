@@ -23,6 +23,7 @@ type DeployTxBuildRequest struct {
 	Version         uint32
 	Deployer        string
 	DeployNonce     uint64
+	Flags           ContractFlags
 	ContractContent []byte
 	GasLimit        int64
 	Inputs          []wire.OutPoint
@@ -42,6 +43,9 @@ type InvokeTxBuildRequest struct {
 }
 
 func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, error) {
+	if err := req.Flags.Validate(); err != nil {
+		return nil, ContractAddress{}, err
+	}
 	prefix := req.ContractPrefix
 	if prefix == "" {
 		prefix = TestnetContractPrefix
@@ -103,6 +107,7 @@ func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, erro
 		Version:         version,
 		GasLimit:        req.GasLimit,
 		DeployNonce:     req.DeployNonce,
+		Flags:           req.Flags,
 		ContractContent: cloneBytes(req.ContractContent),
 	})
 	if err != nil {
@@ -151,7 +156,7 @@ func BuildInvokeTx(req InvokeTxBuildRequest) (*wire.MsgTx, error) {
 		GasLimit:  req.GasLimit,
 		CallNonce: req.CallNonce,
 		Action:    action,
-		Param:     cloneBytes(req.Param),
+		Param:     req.Param,
 	})
 	if err != nil {
 		return nil, err
@@ -326,7 +331,7 @@ func rlpEncodeUint(v uint64) []byte {
 
 func rlpEncodeBytes(b []byte) []byte {
 	if len(b) == 1 && b[0] < 0x80 {
-		return []byte{b[0]}
+		return b
 	}
 	if len(b) <= 55 {
 		out := []byte{byte(0x80 + len(b))}

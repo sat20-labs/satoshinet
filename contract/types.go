@@ -70,6 +70,7 @@ type DeployPayload struct {
 	Version         uint32
 	GasLimit        int64
 	DeployNonce     uint64
+	Flags           ContractFlags
 	ContractContent []byte
 }
 

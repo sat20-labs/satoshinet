@@ -5,6 +5,7 @@
 package blockchain
 
 import (
+	"strings"
 	"math"
 	"reflect"
 	"testing"
@@ -149,6 +150,83 @@ func TestCheckConnectBlockTemplate(t *testing.T) {
 	if err == nil {
 		t.Fatal("CheckConnectBlockTemplate: Did not received expected error " +
 			"on block 4 with invalid difficulty bits")
+	}
+}
+
+func TestCheckTransactionSanityRejectsNonCanonicalTxAssets(t *testing.T) {
+	asset := func(protocol, typ, ticker string) wire.AssetInfo {
+		return wire.AssetInfo{
+			Name: wire.AssetName{
+				Protocol: protocol,
+				Type:     typ,
+				Ticker:   ticker,
+			},
+			Amount: *indexerCommon.NewDefaultDecimal(1),
+		}
+	}
+	assetA := asset("ordx", "f", "a")
+	assetB := asset("ordx", "f", "b")
+	assetC := asset("ordx", "n", "a")
+
+	tests := []struct {
+		name        string
+		assets      wire.TxAssets
+		wantErr     bool
+		wantMessage string
+	}{
+		{
+			name:   "canonical order",
+			assets: wire.TxAssets{assetA, assetB, assetC},
+		},
+		{
+			name:        "duplicate",
+			assets:      wire.TxAssets{assetA, assetA},
+			wantErr:     true,
+			wantMessage: "duplicate asset",
+		},
+		{
+			name:        "reverse order",
+			assets:      wire.TxAssets{assetB, assetA},
+			wantErr:     true,
+			wantMessage: "not canonically sorted",
+		},
+		{
+			name:        "non adjacent duplicate",
+			assets:      wire.TxAssets{assetA, assetB, assetA},
+			wantErr:     true,
+			wantMessage: "not canonically sorted",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx := wire.NewMsgTx(1)
+			prevOut := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
+			tx.AddTxIn(wire.NewTxIn(&prevOut, nil, nil))
+			tx.AddTxOut(wire.NewTxOut(1, test.assets, []byte{0x51}))
+
+			err := CheckTransactionSanity(btcutil.NewTx(tx))
+			if !test.wantErr {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected non-canonical TxAssets to be rejected")
+			}
+			ruleErr, ok := err.(RuleError)
+			if !ok {
+				t.Fatalf("expected RuleError, got %T: %v", err, err)
+			}
+			if ruleErr.ErrorCode != ErrBadTxOutValue {
+				t.Fatalf("unexpected error code: got %v want %v",
+					ruleErr.ErrorCode, ErrBadTxOutValue)
+			}
+			if !strings.Contains(ruleErr.Description, test.wantMessage) {
+				t.Fatalf("unexpected error: %v", ruleErr.Description)
+			}
+		})
 	}
 }
 

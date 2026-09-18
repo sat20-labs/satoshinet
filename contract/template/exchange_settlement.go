@@ -35,9 +35,8 @@ func (r *ContractRuntime) settleExchange(height int64, gasConfig GasConfig, asse
 		}
 		switch item.OrderType {
 		case OrderTypeFund:
-			if err := applyExchangeGasFee(&state, contract, item, gasAssetName); err != nil {
-				return nil, err
-			}
+			// Result/call fees are charged exactly once by the framework.
+			// Exchange business inventory must not debit the same fee again.
 			item.Done = ItemStatusDealt
 			plan.ItemIDs = appendPlanItemID(plan.ItemIDs, item.ID)
 			addSettlementInputs(plan, item)
@@ -72,18 +71,9 @@ func settleExchangeItem(state *TemplateRuntimeState, contract *ExchangeContract,
 		markExchangeRefunded(state, item, plan, contract, gasAssetName)
 		return nil
 	}
-	if err := applyExchangeGasFee(state, contract, item, gasAssetName); err != nil {
-		return err
-	}
 	inputB := item.RemainingAmt
 	if inputB == nil {
 		inputB = parseDecimalOrZero("0")
-	}
-	if fee := itemGasFee(item); fee.Sign() > 0 && gasAssetName == contract.AssetBName {
-		inputB = inputB.SubAlignPrecision(fee)
-		if inputB.Sign() < 0 {
-			inputB = parseDecimalOrZero("0")
-		}
 	}
 	if inputB.Sign() <= 0 {
 		item.Reason = InvokeReasonNoEnoughAsset
@@ -282,9 +272,6 @@ func settleExchangeClose(state *TemplateRuntimeState, contract *ExchangeContract
 		item.Done = ItemStatusClosedDirectly
 		return nil
 	}
-	if err := applyExchangeGasFee(state, contract, item, gasAssetName); err != nil {
-		return err
-	}
 	assetA := state.ExchangeData().AssetAInPool
 	if assetA == nil {
 		assetA = parseDecimalOrZero("0")
@@ -315,12 +302,6 @@ func settleExchangeClose(state *TemplateRuntimeState, contract *ExchangeContract
 	if inputB == nil {
 		inputB = parseDecimalOrZero("0")
 	}
-	if fee := itemGasFee(item); fee.Sign() > 0 && gasAssetName == contract.AssetBName {
-		inputB = inputB.SubAlignPrecision(fee)
-		if inputB.Sign() < 0 {
-			inputB = parseDecimalOrZero("0")
-		}
-	}
 	if inputB.Sign() > 0 {
 		plan.Transfers = append(plan.Transfers, SettlementTransfer{
 			ItemID:    item.ID,
@@ -344,12 +325,6 @@ func markExchangeRefunded(state *TemplateRuntimeState, item *InvokeItem, plan *S
 	if refundB == nil {
 		refundB = parseDecimalOrZero("0")
 	}
-	if fee := itemGasFee(item); fee.Sign() > 0 && gasAssetName == contract.AssetBName {
-		refundB = refundB.SubAlignPrecision(fee)
-		if refundB.Sign() < 0 {
-			refundB = parseDecimalOrZero("0")
-		}
-	}
 	item.OutAmt = refundB
 	item.RemainingAmt = nil
 	if refundB.Sign() > 0 {
@@ -365,32 +340,6 @@ func markExchangeRefunded(state *TemplateRuntimeState, item *InvokeItem, plan *S
 		state.ExchangeData().TotalRefundAssetB = parseDecimalOrZero("0")
 	}
 	state.ExchangeData().TotalRefundAssetB = scommon.DecimalAdd(state.ExchangeData().TotalRefundAssetB, refundB)
-}
-
-func applyExchangeGasFee(state *TemplateRuntimeState, contract *ExchangeContract, item *InvokeItem, gasAssetName string) error {
-	fee := itemGasFee(item)
-	if fee.Sign() <= 0 || gasAssetName == "" {
-		return nil
-	}
-	switch gasAssetName {
-	case contract.AssetAName:
-		pool := state.ExchangeData().AssetAInPool
-		if pool == nil {
-			pool = parseDecimalOrZero("0")
-		}
-		if pool.Cmp(fee) < 0 {
-			return fmt.Errorf("insufficient exchange asset A for gas fee")
-		}
-		state.ExchangeData().AssetAInPool = pool.SubAlignPrecision(fee)
-	case contract.AssetBName:
-		return nil
-	default:
-		if state.ExchangeData().GasBalance == nil || state.ExchangeData().GasBalance.Cmp(fee) < 0 {
-			return fmt.Errorf("insufficient exchange gas balance")
-		}
-		state.ExchangeData().GasBalance = state.ExchangeData().GasBalance.SubAlignPrecision(fee)
-	}
-	return nil
 }
 
 func itemGasFee(item *InvokeItem) *scommon.Decimal {

@@ -159,32 +159,25 @@ func TestBackendDefaultInvokeEmptyCall(t *testing.T) {
 func TestBackendDefaultInvokeUnsupportedRefundsFunding(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	deployTx := testDeployTx(t, 3, revertRuntimeInitCode())
-	deployResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
-		{Hash: deployTx.TxHash(), Index: 1},
-	})
-
+	deployResultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{{Hash: deployTx.TxHash(), Index: 1}})
 	deployed := executeWorkAndVerifyResults(t, BlockExecutionRequest{
-		Txs:           []*wire.MsgTx{deployTx},
-		Runtime:       NewRuntime(nil),
-		Block:         testBlockContext(1),
-		ResolveCaller: fixedCaller(caller),
+		Txs: []*wire.MsgTx{deployTx}, Runtime: NewRuntime(nil), Block: testBlockContext(1), ResolveCaller: fixedCaller(caller),
 	}, deployResultTx)
 	require.Len(t, deployed.Records, 1)
-
 	defaultTx := testDefaultInvokeTx(t, deployed.Records[0].Contract, 100,
 		testEVMGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))
 	executed, err := ExecuteBlock(BlockExecutionRequest{
-		Txs:                       []*wire.MsgTx{deployTx, defaultTx},
-		Runtime:                   NewRuntime(nil),
-		Block:                     testBlockContext(1),
-		ResolveCaller:             fixedCaller(caller),
-		ResolveGasRefundRecipient: fixedGasRefundRecipient("tb1qrefund"),
+		Txs: []*wire.MsgTx{deployTx, defaultTx}, Runtime: NewRuntime(nil), Block: testBlockContext(1),
+		ResolveCaller: fixedCaller(caller), ResolveGasRefundRecipient: fixedGasRefundRecipient("tb1qrefund"),
 	})
 	require.NoError(t, err)
 	require.Len(t, executed.Records, 2)
 	record := executed.Records[1]
 	require.Equal(t, TxTypeInvoke, record.Type)
 	require.NotEqual(t, ResultStatusSuccess, record.Status)
+	// Invalid funding prefers its own gas asset. Plain sats are only the
+	// fallback when the Result gas asset is insufficient.
+	require.Equal(t, ResultFeeModeGasAsset, record.ResultFeeMode)
 	require.Equal(t, "tb1qrefund", record.GasRefundRecipient)
 	require.Len(t, record.AssetIntents, 1)
 	require.Equal(t, "tb1qrefund", record.AssetIntents[0].To)
@@ -192,25 +185,22 @@ func TestBackendDefaultInvokeUnsupportedRefundsFunding(t *testing.T) {
 	require.Equal(t, "100", record.AssetIntents[0].Amount.String())
 }
 
+
 func TestBackendIgnoresInvalidDeploy(t *testing.T) {
 	tx := testDeployTx(t, 3, return42InitCode())
-	script, err := evmcommon.DeployNullDataScript(DeployPayload{
-		GasLimit:        0,
-		DeployNonce:     3,
-		ContractContent: return42InitCode(),
-	})
+	script, err := evmcommon.DeployNullDataScript(DeployPayload{GasLimit: 0, DeployNonce: 3, ContractContent: return42InitCode()})
 	require.NoError(t, err)
 	tx.TxOut[0].PkScript = script
-
-	executed, err := ExecuteBlock(BlockExecutionRequest{
-		Txs:           []*wire.MsgTx{tx},
-		Runtime:       NewRuntime(nil),
-		Block:         testBlockContext(1),
+	runtime := NewRuntime(nil)
+	before := runtime.State.StateRoot()
+	_, err = ExecuteBlock(BlockExecutionRequest{
+		Txs: []*wire.MsgTx{tx}, Runtime: runtime, Block: testBlockContext(1),
 		ResolveCaller: fixedCaller(mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")),
 	})
-	require.NoError(t, err)
-	require.Empty(t, executed.Records)
+	require.ErrorContains(t, err, "contract call admission failed")
+	require.Equal(t, before, runtime.State.StateRoot(), "malformed deploy must not mutate parent state")
 }
+
 
 func TestBackendRejectsMissingDeployResult(t *testing.T) {
 	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
@@ -319,6 +309,7 @@ func TestBackendAssetIntentRequiresResultAndVerifier(t *testing.T) {
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	seedEVMManagedFixture(t, runtime, contract, 100, nil)
 
 	invokeTx := testInvokeTx(t, contract, InvokePayload{
 		GasLimit:  DefaultGasConfig().InvokeBaseGas,
@@ -360,6 +351,7 @@ func TestExecuteBlockSettlesTriggersAfterInvokes(t *testing.T) {
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	seedEVMManagedFixture(t, runtime, contract, 100, map[string]string{DefaultGasConfig().GasAssetName: "100000000"})
 	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
 		ID:       "vault-release",
 		Contract: contract,
@@ -419,6 +411,7 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 	contract := testContract(t)
 	runtime := NewRuntime(nil)
 	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	seedEVMManagedFixture(t, runtime, contract, 100, map[string]string{DefaultGasConfig().GasAssetName: "100000000"})
 	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
 		ID:       "vault-release",
 		Contract: contract,
@@ -463,47 +456,46 @@ func TestExecuteBlockSettlesStateRegisteredTrigger(t *testing.T) {
 }
 
 func TestBackendTriggerRequiresResultWithoutInvokeFunding(t *testing.T) {
-	contract := testContract(t)
+	contractAddr := testContract(t)
 	runtime := NewRuntime(nil)
 	configureTestAssetEffects(runtime)
-	runtime.SetCode(ContractAddressHash(contract), callAssetPrecompileCode())
+	runtime.SetCode(ContractAddressHash(contractAddr), callAssetPrecompileCode())
+	cfg := DefaultGasConfig()
+	cfg.BootstrapAddress = "bootstrap"
+	limit := cfg.TriggerBaseGas
+	fee, err := cfg.ContractFundingFee(ExecutionKindTrigger, limit, true, 100)
+	require.NoError(t, err)
+	seedEVMManagedFixture(t, runtime, contractAddr, 100, map[string]string{cfg.GasAssetName: fee.String()})
 	require.NoError(t, runtime.State.RegisterTrigger(Trigger{
-		ID:       "vault-release",
-		Contract: contract,
-		Kind:     TriggerAtHeight,
-		Height:   100,
-		GasLimit: DefaultGasConfig().TriggerBaseGas,
+		ID: "vault-release", Contract: contractAddr, Kind: TriggerAtHeight, Height: 100, GasLimit: limit,
 		Calldata: EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
 	}))
-
-	executor := NewBackend(BlockExecutionRequest{
-		Runtime: runtime,
-		Block:   testBlockContext(100),
-	})
-	err := executor.ExecuteTrigger(TriggerCall{
-		Trigger: Trigger{
-			ID:       "vault-release",
-			Contract: contract,
-			Kind:     TriggerAtHeight,
-			Height:   100,
+	gasInput := OutPoint{TxID: chainhash.Hash{7}.String(), Vout: 0}
+	satsInput := OutPoint{TxID: chainhash.Hash{7}.String(), Vout: 1}
+	built, err := BuildBlockResultTxs(BlockResultBuildRequest{
+		Runtime: runtime, GasConfig: cfg, Block: testBlockContext(100),
+		ContractUTXOs: func(got ContractAddress) ([]UTXO, error) {
+			require.True(t, contractAddr.Equal(got))
+			return []UTXO{
+				mustDecimalUTXO(t, gasInput, contractAddr, cfg.GasAssetName, fee.String(), 1),
+				mustUTXO(t, satsInput, contractAddr, SatoshiAssetName, 100, 1),
+			}, nil
 		},
-		GasLimit: DefaultGasConfig().TriggerBaseGas,
-		Calldata: EncodeTransferAssetCall(SatoshiAssetName, "tb1qdest", "77", nil),
+		ResolveScript: evmTestResultScriptResolver(t, contractAddr), ResolveOutput: evmTestResultOutputResolver(contractAddr),
+		AssetPrecision: func(string) (int, bool) { return 8, true },
 	})
 	require.NoError(t, err)
-	require.Len(t, executor.pending, 1)
-	require.Equal(t, ExecutionKindTrigger, executor.pending[0].Kind)
-	require.Empty(t, executor.pending[0].FundingInputs)
-
-	resultTx := testResultTx(t, ResultStatusSuccess, 1, []wire.OutPoint{
-		{Hash: chainhash.Hash{7}, Index: 0},
-	})
-	require.NoError(t, executor.VerifyAndSettleResultTx(resultTx, nil))
-	executed, err := executor.Finalize()
+	require.Len(t, built.Execution.Records, 1)
+	record := built.Execution.Records[0]
+	require.Equal(t, ExecutionKindTrigger, record.Kind)
+	require.Empty(t, record.FundingInputs)
+	require.Len(t, built.ResultTxs, 1)
+	outputs, err := evmTestResultOutputResolver(contractAddr)(built.ResultTxs[0])
 	require.NoError(t, err)
-	require.Len(t, executed.Records, 1)
-	require.Equal(t, ExecutionKindTrigger, executed.Records[0].Kind)
+	require.Equal(t, int64(77), evmResultSats(outputs, "tb1qdest"))
+	require.Empty(t, runtime.State.Triggers())
 }
+
 
 func TestBackendKeepsTriggerWhenContractGasIsInsufficient(t *testing.T) {
 	contract := testContract(t)

@@ -330,6 +330,31 @@ func CheckTransactionSanity(tx *btcutil.Tx) error {
 				btcutil.MaxSatoshi)
 			return ruleError(ErrBadTxOutValue, str)
 		}
+
+		// TxAssets is a canonical ordered set.  Keep wire decoding limited
+		// to decoding and enforce the transaction-level invariant here so
+		// both mempool admission and block validation reject malformed asset
+		// lists.  Strict ordering also rejects duplicate asset names without
+		// allocating a side map.
+		for i := 1; i < len(txOut.Assets); i++ {
+			prev := txOut.Assets[i-1].Name
+			curr := txOut.Assets[i].Name
+
+			if prev == curr {
+				str := fmt.Sprintf("transaction output contains duplicate asset %s",
+					curr.String())
+				return ruleError(ErrBadTxOutValue, str)
+			}
+			if prev.Protocol > curr.Protocol ||
+				(prev.Protocol == curr.Protocol && prev.Type > curr.Type) ||
+				(prev.Protocol == curr.Protocol && prev.Type == curr.Type &&
+					prev.Ticker > curr.Ticker) {
+
+				str := fmt.Sprintf("transaction output assets are not canonically sorted: %s before %s",
+					prev.String(), curr.String())
+				return ruleError(ErrBadTxOutValue, str)
+			}
+		}
 	}
 
 	// Check for duplicate transaction inputs.

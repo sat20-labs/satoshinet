@@ -71,16 +71,19 @@ type DeployRequest struct {
 	DeployNonce      uint64
 	ExpectedContract ContractAddress
 	FundingOutput    *contractframework.ContractOutput
+	GasAssetName     string
+	GasFeeReserve    *scommon.Decimal
 	Block            BlockContext
 }
 
 type DeployResult struct {
-	Contract    ContractAddress
-	RuntimeCode []byte
-	GasUsed     int64
-	GasLeft     int64
-	Status      ResultStatus
-	Err         error
+	Contract           ContractAddress
+	RuntimeCode        []byte
+	GasUsed            int64
+	GasLeft            int64
+	Status             ResultStatus
+	Err                error
+	RetainedGasFunding *scommon.Decimal
 }
 
 func NewRuntime(state *MemoryStateDB) *Runtime {
@@ -88,9 +91,7 @@ func NewRuntime(state *MemoryStateDB) *Runtime {
 		state = NewMemoryStateDB()
 	}
 	return &Runtime{
-		State:          state,
-		ChainConfig:    newSatoshiNetChainConfigV1(),
-		ContractPrefix: TestnetContractPrefix,
+		State: state, ChainConfig: newSatoshiNetChainConfigV1(), ContractPrefix: TestnetContractPrefix,
 	}
 }
 
@@ -116,9 +117,7 @@ func (r *Runtime) DueTriggerCalls(block BlockContext) []TriggerCall {
 	if r == nil || r.State == nil {
 		return nil
 	}
-	return r.State.DueTriggerCalls(BlockEnvironment{
-		Height: int64(block.Number),
-	})
+	return r.State.DueTriggerCalls(BlockEnvironment{Height: int64(block.Number)})
 }
 
 func (r *Runtime) Deploy(req DeployRequest) DeployResult {
@@ -136,44 +135,32 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	r.State.SetNonce(GethAddress(caller), req.DeployNonce, 0)
 	capturedIntents := make([]AssetIntent, 0)
 	capturedTriggers := make([]Trigger, 0)
+	funding := NewFundingAssetView(contractframework.OptionalContractOutputSlice(req.FundingOutput),
+		req.GasAssetName, req.GasFeeReserve)
 	balances := AssetBalanceReader(r.AssetBalances)
 	if req.FundingOutput != nil {
-		funding := NewFundingAssetView(contractframework.OptionalContractOutputSlice(req.FundingOutput), "", nil)
-		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding,
-			ContractAddressHash(req.ExpectedContract))
+		balances = newManagedFundingAssetView(r.AssetBalances, funding, ContractAddressHash(req.ExpectedContract))
 	}
 	callContext := &precompileCallContext{}
-	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, nil, callContext)
+	config := r.configWithSatoshiNetTrace(req.CallID, &capturedIntents, &capturedTriggers, funding, callContext)
 	chainConfig := r.chainConfig(req.Block)
-	pendingBalances := pendingIntentAssetBalanceView{
-		Base:    balances,
-		Prior:   r.AssetIntents,
-		Intents: &capturedIntents,
-	}
+	pendingBalances := pendingIntentAssetBalanceView{Base: balances, Prior: r.AssetIntents, Intents: &capturedIntents}
 	nativeState := &nativeStateView{MemoryStateDB: r.State, balances: pendingBalances, calls: callContext}
 	evm := vm.NewEVM(r.nativeBlockContext(req.Block, callContext, req.FundingOutput != nil), nativeState, chainConfig, config)
-
 	rules := chainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
-	precompiles := SatoshiNetPrecompiles(pendingBalances, nil, "", r.AssetPrecision, callContext,
+	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, r.AssetPrecision, callContext,
 		vm.ActivePrecompiledContracts(rules))
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), nil, precompileAddresses(precompiles), nil)
 	nativeState.precompiles = precompiles
 	evm.SetPrecompiles(precompiles)
-	evm.SetTxContext(vm.TxContext{
-		Origin:   GethAddress(caller),
-		GasPrice: uint256.NewInt(req.Block.FixedGasPrice),
-	})
+	evm.SetTxContext(vm.TxContext{Origin: GethAddress(caller), GasPrice: uint256.NewInt(req.Block.FixedGasPrice)})
 	_, contractAddr, left, err := evm.Create(
-		GethAddress(caller),
-		contractframework.CloneBytes(req.InitCode),
-		gasLimit,
-		uint256.NewInt(value),
+		GethAddress(caller), contractframework.CloneBytes(req.InitCode), gasLimit, uint256.NewInt(value),
 	)
 	contract := r.contractAddressFromGeth(contractAddr)
 	if nativeState.err != nil {
 		err = nativeState.err
 	}
-
 	if err == nil {
 		for i := range capturedTriggers {
 			capturedTriggers[i].Contract = contract
@@ -187,17 +174,19 @@ func (r *Runtime) Deploy(req DeployRequest) DeployResult {
 	if err != nil {
 		r.State.RevertToSnapshot(stateSnapshot)
 		r.AssetIntents = r.AssetIntents[:intentSnapshot]
+		funding.RevertTo(nil)
 	} else {
 		r.State.Finalise(true)
 		r.State.DiscardSnapshot(stateSnapshot)
 	}
+	var retainedGas *scommon.Decimal
+	if err == nil && req.GasAssetName != "" {
+		retainedGas = funding.ClaimedAssetAmount(req.GasAssetName)
+	}
 	return DeployResult{
-		Contract:    contract,
-		RuntimeCode: r.State.GetCode(contractAddr),
-		GasUsed:     gasUsed(req.Gas, gasLeft),
-		GasLeft:     gasLeft,
-		Status:      ResultStatusFromError(err),
-		Err:         err,
+		Contract: contract, RuntimeCode: r.State.GetCode(contractAddr),
+		GasUsed: gasUsed(req.Gas, gasLeft), GasLeft: gasLeft,
+		Status: ResultStatusFromError(err), Err: err, RetainedGasFunding: retainedGas,
 	}
 }
 
@@ -223,16 +212,11 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	chainConfig := r.chainConfig(req.Block)
 	balances := AssetBalanceReader(r.AssetBalances)
 	if req.FundingOutput != nil {
-		balances = NewFundingOverlayAssetBalanceView(r.AssetBalances, funding, target)
+		balances = newManagedFundingAssetView(r.AssetBalances, funding, target)
 	}
-	pendingBalances := pendingIntentAssetBalanceView{
-		Base:    balances,
-		Prior:   r.AssetIntents,
-		Intents: &capturedIntents,
-	}
+	pendingBalances := pendingIntentAssetBalanceView{Base: balances, Prior: r.AssetIntents, Intents: &capturedIntents}
 	nativeState := &nativeStateView{MemoryStateDB: r.State, balances: pendingBalances, calls: callContext}
 	evm := vm.NewEVM(r.nativeBlockContext(req.Block, callContext, req.FundingOutput != nil), nativeState, chainConfig, config)
-
 	rules := chainConfig.Rules(new(big.Int).SetUint64(req.Block.Number), true, req.Block.Time)
 	precompiles := SatoshiNetPrecompiles(pendingBalances, funding, req.CallerAddress, r.AssetPrecision, callContext,
 		vm.ActivePrecompiledContracts(rules))
@@ -240,21 +224,13 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 	r.State.Prepare(rules, GethAddress(caller), GethAddress(req.Block.Coinbase), &targetAddress, precompileAddresses(precompiles), nil)
 	nativeState.precompiles = precompiles
 	evm.SetPrecompiles(precompiles)
-	evm.SetTxContext(vm.TxContext{
-		Origin:   GethAddress(caller),
-		GasPrice: uint256.NewInt(req.Block.FixedGasPrice),
-	})
+	evm.SetTxContext(vm.TxContext{Origin: GethAddress(caller), GasPrice: uint256.NewInt(req.Block.FixedGasPrice)})
 	ret, left, err := evm.Call(
-		GethAddress(caller),
-		GethAddress(target),
-		contractframework.CloneBytes(req.Input),
-		gasLimit,
-		uint256.NewInt(value),
+		GethAddress(caller), GethAddress(target), contractframework.CloneBytes(req.Input), gasLimit, uint256.NewInt(value),
 	)
 	if nativeState.err != nil {
 		err = nativeState.err
 	}
-
 	if err == nil {
 		for i := range capturedTriggers {
 			if ContractAddressHash(capturedTriggers[i].Contract) == (EVMAddress{}) {
@@ -280,12 +256,8 @@ func (r *Runtime) Call(req CallRequest) CallResult {
 		retainedGas = funding.ClaimedAssetAmount(req.GasAssetName)
 	}
 	return CallResult{
-		ReturnData:         ret,
-		GasUsed:            gasUsed(req.Gas, gasLeft),
-		GasLeft:            gasLeft,
-		Status:             ResultStatusFromError(err),
-		Err:                err,
-		RetainedGasFunding: retainedGas,
+		ReturnData: ret, GasUsed: gasUsed(req.Gas, gasLeft), GasLeft: gasLeft,
+		Status: ResultStatusFromError(err), Err: err, RetainedGasFunding: retainedGas,
 	}
 }
 
@@ -321,19 +293,17 @@ func (r *Runtime) commitCapturedEffects(capturedIntents []AssetIntent, capturedT
 	if len(capturedIntents) > 0 && r.ResolveResultScript == nil {
 		return errors.New("missing Result script resolver")
 	}
-	if len(capturedIntents) > 0 {
-		for i, intent := range capturedIntents {
-			if err := validateExactAssetPrecision(r.AssetPrecision, intent.AssetName, intent.Amount); err != nil {
-				return fmt.Errorf("asset intent %d: %w", i, err)
-			}
-			output, err := contractframework.ResultOutputWithAsset(intent.To, intent.AssetName, intent.Amount)
-			if err != nil {
-				return fmt.Errorf("asset intent %d: %w", i, err)
-			}
-			output.ExtraData = contractframework.CloneBytes(intent.ExtraData)
-			if _, err := contractframework.ResultTxOut(output, r.ResolveResultScript); err != nil {
-				return fmt.Errorf("asset intent %d is not settleable: %w", i, err)
-			}
+	for i, intent := range capturedIntents {
+		if err := validateExactAssetPrecision(r.AssetPrecision, intent.AssetName, intent.Amount); err != nil {
+			return fmt.Errorf("asset intent %d: %w", i, err)
+		}
+		output, err := contractframework.ResultOutputWithAsset(intent.To, intent.AssetName, intent.Amount)
+		if err != nil {
+			return fmt.Errorf("asset intent %d: %w", i, err)
+		}
+		output.ExtraData = contractframework.CloneBytes(intent.ExtraData)
+		if _, err := contractframework.ResultTxOut(output, r.ResolveResultScript); err != nil {
+			return fmt.Errorf("asset intent %d is not settleable: %w", i, err)
 		}
 	}
 	allIntents := append(contractframework.CloneAssetIntents(r.AssetIntents), capturedIntents...)
@@ -427,17 +397,15 @@ func (v pendingIntentAssetBalanceView) AssetBalance(owner EVMAddress, assetName 
 		}
 	}
 	for _, intent := range v.Prior {
-		if ContractAddressHash(intent.From) != owner || intent.AssetName != assetName || intent.Amount == nil {
-			continue
+		if ContractAddressHash(intent.From) == owner && intent.AssetName == assetName && intent.Amount != nil {
+			available = available.SubAlignPrecision(intent.Amount)
 		}
-		available = available.SubAlignPrecision(intent.Amount)
 	}
 	if v.Intents != nil {
 		for _, intent := range *v.Intents {
-			if ContractAddressHash(intent.From) != owner || intent.AssetName != assetName || intent.Amount == nil {
-				continue
+			if ContractAddressHash(intent.From) == owner && intent.AssetName == assetName && intent.Amount != nil {
+				available = available.SubAlignPrecision(intent.Amount)
 			}
-			available = available.SubAlignPrecision(intent.Amount)
 		}
 	}
 	if available.Sign() < 0 {
@@ -475,10 +443,9 @@ func (c *precompileCallContext) enter(typ byte, codeAddress gethcommon.Address) 
 }
 
 func (c *precompileCallContext) exit() {
-	if c == nil || len(c.frames) == 0 {
-		return
+	if c != nil && len(c.frames) != 0 {
+		c.frames = c.frames[:len(c.frames)-1]
 	}
-	c.frames = c.frames[:len(c.frames)-1]
 }
 
 func (c *precompileCallContext) readOnly() bool {
@@ -487,6 +454,7 @@ func (c *precompileCallContext) readOnly() bool {
 
 func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]AssetIntent,
 	capturedTriggers *[]Trigger, funding *FundingAssetView, callContext *precompileCallContext) vm.Config {
+
 	config := r.Config
 	base := config.Tracer
 	tracer := &tracing.Hooks{}
@@ -498,18 +466,15 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 	frames := make([]assetTraceFrame, 0, 4)
 	tracer.OnEnter = func(depth int, typ byte, from gethcommon.Address,
 		to gethcommon.Address, input []byte, gas uint64, value *big.Int) {
+
 		readOnly := callContext.enter(typ, to)
 		if baseOnEnter != nil {
 			baseOnEnter(depth, typ, from, to, input, gas, value)
 		}
 		frames = append(frames, assetTraceFrame{
-			from:            from,
-			to:              to,
-			input:           contractframework.CloneBytes(input),
-			intentLen:       len(*capturedIntents),
-			triggerLen:      len(*capturedTriggers),
-			fundingSnapshot: funding.Snapshot(),
-			readOnly:        readOnly,
+			from: from, to: to, input: contractframework.CloneBytes(input),
+			intentLen: len(*capturedIntents), triggerLen: len(*capturedTriggers),
+			fundingSnapshot: funding.Snapshot(), readOnly: readOnly,
 		})
 	}
 	tracer.OnExit = func(depth int, output []byte, gasUsed uint64, err error, reverted bool) {
@@ -522,13 +487,7 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 		if baseOnExit != nil {
 			baseOnExit(depth, output, gasUsed, err, reverted)
 		}
-		if err != nil || reverted {
-			*capturedIntents = (*capturedIntents)[:frame.intentLen]
-			*capturedTriggers = (*capturedTriggers)[:frame.triggerLen]
-			funding.RevertTo(frame.fundingSnapshot)
-			return
-		}
-		if frame.readOnly {
+		if err != nil || reverted || frame.readOnly {
 			*capturedIntents = (*capturedIntents)[:frame.intentLen]
 			*capturedTriggers = (*capturedTriggers)[:frame.triggerLen]
 			funding.RevertTo(frame.fundingSnapshot)
@@ -542,15 +501,10 @@ func (r *Runtime) configWithSatoshiNetTrace(callID string, capturedIntents *[]As
 			}
 			from := r.contractAddressFromGeth(frame.from)
 			for _, transfer := range transfers {
-				intent := AssetIntent{
-					CallID:    callID,
-					From:      from,
-					To:        transfer.To,
-					AssetName: transfer.AssetName,
-					Amount:    cloneDecimal(transfer.Amount),
-					ExtraData: contractframework.CloneBytes(transfer.ExtraData),
-				}
-				*capturedIntents = append(*capturedIntents, intent)
+				*capturedIntents = append(*capturedIntents, AssetIntent{
+					CallID: callID, From: from, To: transfer.To, AssetName: transfer.AssetName,
+					Amount: cloneDecimal(transfer.Amount), ExtraData: contractframework.CloneBytes(transfer.ExtraData),
+				})
 			}
 		case TriggerPrecompileAddress:
 			if r.State.GetCodeSize(frame.from) == 0 && !r.State.IsNewContract(frame.from) {
@@ -614,15 +568,11 @@ func (r *Runtime) blockContext(ctx BlockContext) vm.BlockContext {
 			}
 			return gethcommon.Hash{}
 		},
-		Coinbase:    GethAddress(ctx.Coinbase),
-		GasLimit:    gasLimit,
-		BlockNumber: new(big.Int).SetUint64(ctx.Number),
-		Time:        ctx.Time,
-		Difficulty:  big.NewInt(0),
-		BaseFee:     big.NewInt(0),
-		BlobBaseFee: big.NewInt(0),
-		// SatoshiNet does not expose a consensus randomness beacon. Returning
-		// zero avoids presenting the predictable parent hash as secure entropy.
+		Coinbase: GethAddress(ctx.Coinbase), GasLimit: gasLimit,
+		BlockNumber: new(big.Int).SetUint64(ctx.Number), Time: ctx.Time,
+		Difficulty: big.NewInt(0), BaseFee: big.NewInt(0), BlobBaseFee: big.NewInt(0),
+		// There is no consensus randomness beacon; do not advertise the
+		// predictable parent hash as secure randomness.
 		Random: &zeroRandom,
 	}
 }

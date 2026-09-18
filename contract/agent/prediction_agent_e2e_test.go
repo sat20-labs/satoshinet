@@ -54,8 +54,9 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 	}
 
 	deployTx, addr := testAgentDeployTxForContract(t, predictionContractForResultServer(resultServer.URL))
-	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0, nil)
 	resultGas := testAgentGasFee(t, DefaultGasConfig().ResultBaseGas).Int64()
+	readyTx := testAgentInvokeTx(t, addr, InvokeAPIReady, nil, 0,
+		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
 	aliceBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "a"), 60000,
 		testAgentAsset(DefaultGasConfig().GasAssetName, resultGas))
 	bobBetTx := testAgentInvokeTx(t, addr, InvokeAPIBet, mustEncodeBet(t, "b"), 40000,
@@ -111,7 +112,7 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 				contract, 0, &wire.TxOut{Value: 10000})}, nil
 		}, []*wire.MsgTx{aliceBetTx, bobBetTx, confirmTx}, TestnetContractPrefix, ContractTypeAgent),
 		ResolveInvoker: testInvokerResolver(map[string]string{confirmTx.TxID(): "core"}),
-		ResolveScript:  testResultScriptResolver,
+		ResolveScript:  agentTestScript,
 		ResolveOutput:  testResultOutputResolver,
 	})
 	if err != nil {
@@ -120,7 +121,7 @@ func TestPredictionAgentE2EConfirmAndSettle(t *testing.T) {
 	if len(built.ResultTxs) != 1 {
 		t.Fatalf("result tx count mismatch: %d", len(built.ResultTxs))
 	}
-	if len(built.ResultTxs[0].TxIn) != 4 {
+	if len(built.ResultTxs[0].TxIn) != 3 {
 		t.Fatalf("result input count mismatch: %d", len(built.ResultTxs[0].TxIn))
 	}
 	if got := built.ResultTxs[0].TxOut[0].Value; got != 6000 {
@@ -1100,6 +1101,9 @@ func testAgentDeployTxForContractWithNonce(t *testing.T, contract PredictionCont
 	tx := wire.NewMsgTx(1)
 	tx.AddTxIn(&wire.TxIn{})
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
-	tx.AddTxOut(wire.NewTxOut(0, nil, testAgentContractScript(addr)))
+	tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{{
+		Name:   *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
+		Amount: *testAgentGasFee(t, DefaultGasConfig().ResultBaseGas),
+	}}, testAgentContractScript(addr)))
 	return tx, addr
 }

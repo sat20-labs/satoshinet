@@ -5,15 +5,14 @@ import (
 
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/holiman/uint256"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMemoryStateDBMarshalBinaryRoundTrip(t *testing.T) {
 	state := NewMemoryStateDB()
 	addr := gethcommon.HexToAddress("0x11112233445566778899aabbccddeeff00112233")
-	slot := gethcommon.HexToHash("0x01")
-	value := gethcommon.HexToHash("0x02")
-
+	slot, value := gethcommon.HexToHash("0x01"), gethcommon.HexToHash("0x02")
 	state.SetNonce(addr, 7, 0)
 	state.AddBalance(addr, uint256.NewInt(123), 0)
 	state.SetCode(addr, []byte{0x60, 0x2a, 0x00}, 0)
@@ -21,17 +20,11 @@ func TestMemoryStateDBMarshalBinaryRoundTrip(t *testing.T) {
 	state.SetContractDeployer(addr, "tb1pdeployer")
 	state.CloseContract(addr)
 	require.NoError(t, state.RegisterTrigger(Trigger{
-		ID:       "vault-release",
-		Contract: testContract(t),
-		Kind:     TriggerAtHeight,
-		Height:   100,
-		GasLimit: 50000,
-		Calldata: []byte{0x01, 0x02},
+		ID: "vault-release", Contract: testContract(t), Kind: TriggerAtHeight,
+		Height: 100, GasLimit: 50000, Calldata: []byte{0x01, 0x02},
 	}))
-
 	encoded, err := state.MarshalBinary()
 	require.NoError(t, err)
-
 	decoded, err := DecodeMemoryStateDB(encoded)
 	require.NoError(t, err)
 	require.Equal(t, state.StateRoot(), decoded.StateRoot())
@@ -46,32 +39,66 @@ func TestMemoryStateDBMarshalBinaryRoundTrip(t *testing.T) {
 	require.Equal(t, state.Triggers(), decoded.Triggers())
 }
 
-func TestStateRootIncludesOwner(t *testing.T) {
+func TestStateRootIncludesImmutableOwner(t *testing.T) {
 	addr := gethcommon.HexToAddress("0x11112233445566778899aabbccddeeff00112233")
-	a := NewMemoryStateDB()
-	b := NewMemoryStateDB()
-	a.SetCode(addr, []byte{0x00}, 0)
-	b.SetCode(addr, []byte{0x00}, 0)
+	a, b, sameOwner := NewMemoryStateDB(), NewMemoryStateDB(), NewMemoryStateDB()
+	for _, state := range []*MemoryStateDB{a, b, sameOwner} {
+		state.SetCode(addr, []byte{0x00}, 0)
+	}
 	require.Equal(t, a.StateRoot(), b.StateRoot())
-
 	a.SetContractDeployer(addr, "tb1pdeployer-a")
 	b.SetContractDeployer(addr, "tb1pdeployer-b")
+	sameOwner.SetContractDeployer(addr, "tb1pdeployer-a")
 	require.NotEqual(t, a.StateRoot(), b.StateRoot())
-
+	require.Equal(t, a.StateRoot(), sameOwner.StateRoot())
+	rootB := b.StateRoot()
 	b.SetContractDeployer(addr, "tb1pdeployer-a")
-	require.Equal(t, a.StateRoot(), b.StateRoot())
-	b.CloseContract(addr)
-	require.NotEqual(t, a.StateRoot(), b.StateRoot())
+	require.Equal(t, rootB, b.StateRoot(), "an invocation cannot replace deployment metadata")
+	deployer, ok := b.ContractDeployer(addr)
+	require.True(t, ok)
+	require.Equal(t, "tb1pdeployer-b", deployer)
+	a.CloseContract(addr)
+	require.NotEqual(t, a.StateRoot(), sameOwner.StateRoot())
+}
+
+func TestStateCodecIncludesImmutableFlagsAndManagedQuantities(t *testing.T) {
+	contract := testContract(t)
+	addr := ContractGethAddress(contract)
+	state := NewMemoryStateDB()
+	state.SetCode(addr, []byte{0x00}, 0)
+	require.NoError(t, state.RegisterContractDeployment(addr, "owner", contractcommon.ContractFlagNonClosable))
+	before := state.StateRoot()
+	balance, ok := state.ManagedBalance(contract)
+	require.True(t, ok)
+	require.NoError(t, balance.Credit(25, nil))
+	require.NotEqual(t, before, state.StateRoot())
+	root := state.StateRoot()
+	require.Error(t, state.RegisterContractDeployment(addr, "other", 0))
+	require.Equal(t, root, state.StateRoot())
+	encoded, err := state.MarshalBinary()
+	require.NoError(t, err)
+	decoded, err := DecodeMemoryStateDB(encoded)
+	require.NoError(t, err)
+	require.Equal(t, root, decoded.StateRoot())
+	require.Equal(t, contractcommon.ContractFlagNonClosable, decoded.ContractDeploymentFlags(addr))
+	require.ErrorIs(t, decoded.ValidateContractClose(addr, "owner"), contractcommon.ErrContractNonClosable)
+	restored, ok := decoded.ManagedBalance(contract)
+	require.True(t, ok)
+	require.Equal(t, int64(25), restored.Value)
+	require.NoError(t, restored.Debit(5, nil))
+	require.Equal(t, int64(25), balance.Value, "serialized quantities must not alias their source")
+	cloned := state.Clone()
+	copyBalance, ok := cloned.ManagedBalance(contract)
+	require.True(t, ok)
+	require.NoError(t, copyBalance.Credit(1, nil))
+	require.Equal(t, int64(25), balance.Value)
 }
 
 func TestMemoryStateDBMarshalBinaryDeterministic(t *testing.T) {
-	a := NewMemoryStateDB()
-	b := NewMemoryStateDB()
+	a, b := NewMemoryStateDB(), NewMemoryStateDB()
 	addr1 := gethcommon.HexToAddress("0x11112233445566778899aabbccddeeff00112233")
 	addr2 := gethcommon.HexToAddress("0xffff2233445566778899aabbccddeeff00112233")
-	slot1 := gethcommon.HexToHash("0x01")
-	slot2 := gethcommon.HexToHash("0x02")
-
+	slot1, slot2 := gethcommon.HexToHash("0x01"), gethcommon.HexToHash("0x02")
 	a.SetState(addr2, slot2, gethcommon.HexToHash("0x22"))
 	a.SetState(addr1, slot1, gethcommon.HexToHash("0x11"))
 	require.NoError(t, a.RegisterTrigger(Trigger{ID: "b", Contract: testContract(t), Kind: TriggerAtHeight, Height: 2, GasLimit: 10}))
@@ -80,7 +107,6 @@ func TestMemoryStateDBMarshalBinaryDeterministic(t *testing.T) {
 	b.SetState(addr2, slot2, gethcommon.HexToHash("0x22"))
 	require.NoError(t, b.RegisterTrigger(Trigger{ID: "a", Contract: testContract(t), Kind: TriggerAtHeight, Height: 1, GasLimit: 10}))
 	require.NoError(t, b.RegisterTrigger(Trigger{ID: "b", Contract: testContract(t), Kind: TriggerAtHeight, Height: 2, GasLimit: 10}))
-
 	encodedA, err := a.MarshalBinary()
 	require.NoError(t, err)
 	encodedB, err := b.MarshalBinary()
@@ -91,12 +117,9 @@ func TestMemoryStateDBMarshalBinaryDeterministic(t *testing.T) {
 func TestMemoryStateDBUnmarshalRejectsMalformedState(t *testing.T) {
 	_, err := DecodeMemoryStateDB([]byte("bad"))
 	require.Error(t, err)
-
-	state := NewMemoryStateDB()
-	encoded, err := state.MarshalBinary()
+	encoded, err := NewMemoryStateDB().MarshalBinary()
 	require.NoError(t, err)
-	encoded = append(encoded, 0x00)
-	_, err = DecodeMemoryStateDB(encoded)
+	_, err = DecodeMemoryStateDB(append(encoded, 0x00))
 	require.Error(t, err)
 }
 
@@ -106,11 +129,9 @@ func TestMemoryStateDBCloneIsIndependent(t *testing.T) {
 	slot := gethcommon.HexToHash("0x01")
 	state.SetState(addr, slot, gethcommon.HexToHash("0x11"))
 	require.NoError(t, state.RegisterTrigger(Trigger{ID: "vault-release", Contract: testContract(t), Kind: TriggerAtHeight, Height: 100, GasLimit: 10}))
-
 	cloned := state.Clone()
 	cloned.SetState(addr, slot, gethcommon.HexToHash("0x22"))
 	cloned.RemoveTrigger(testContract(t), "vault-release")
-
 	require.Equal(t, gethcommon.HexToHash("0x11"), state.GetState(addr, slot))
 	require.Equal(t, gethcommon.HexToHash("0x22"), cloned.GetState(addr, slot))
 	require.Len(t, state.Triggers(), 1)

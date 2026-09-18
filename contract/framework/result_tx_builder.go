@@ -45,9 +45,7 @@ func BuildCanonicalResultTx(req CanonicalResultTxRequest) (*wire.MsgTx, error) {
 		ResultCount:   uint16(len(req.Records)),
 		Plans:         plans,
 		ResolveScript: req.ResolveScript,
-	}, ResultTxBuildOptions{
-		UseInputUTXOs: true,
-	})
+	}, ResultTxBuildOptions{UseInputUTXOs: true})
 }
 
 func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.MsgTx, error) {
@@ -62,23 +60,32 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 	}
 	req.Plans = MergeResultPlansByContract(req.Plans)
 	tx := wire.NewMsgTx(2)
+	seenInputs := make(map[OutPoint]bool)
+	addInput := func(input OutPoint) error {
+		if seenInputs[input] {
+			return fmt.Errorf("duplicate contract Result input %s", input)
+		}
+		outpoint, err := ResultWireOutPoint(input)
+		if err != nil {
+			return err
+		}
+		seenInputs[input] = true
+		tx.AddTxIn(wire.NewTxIn(outpoint, nil, nil))
+		return nil
+	}
 	outputCount := 0
 	for _, plan := range req.Plans {
 		if opts.UseInputUTXOs {
 			for _, input := range plan.InputUTXOs {
-				outpoint, err := ResultWireOutPoint(input.OutPoint)
-				if err != nil {
+				if err := addInput(input.OutPoint); err != nil {
 					return nil, err
 				}
-				tx.AddTxIn(wire.NewTxIn(outpoint, nil, nil))
 			}
 		} else {
 			for _, input := range plan.Inputs {
-				outpoint, err := ResultWireOutPoint(input)
-				if err != nil {
+				if err := addInput(input); err != nil {
 					return nil, err
 				}
-				tx.AddTxIn(wire.NewTxIn(outpoint, nil, nil))
 			}
 		}
 		for _, output := range plan.Outputs {
@@ -100,8 +107,7 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 		return nil, fmt.Errorf("invalid result count %d", resultCount)
 	}
 	script, err := contract.ResultNullDataScript(contract.ResultPayload{
-		Status:      req.Status,
-		ResultCount: uint16(resultCount),
+		Status: req.Status, ResultCount: uint16(resultCount),
 	})
 	if err != nil {
 		return nil, err
@@ -150,6 +156,13 @@ func ResultTxOut(output ResultOutput, resolve ResultRecipientScriptResolver) (*w
 		if err := ValidateAssetDecimal(asset.Amount); err != nil {
 			return nil, fmt.Errorf("asset %s amount: %w", asset.Name.String(), err)
 		}
+	}
+	carrier, err := resultAssetCarrierSats(assets)
+	if err != nil {
+		return nil, err
+	}
+	if output.Value < carrier {
+		return nil, fmt.Errorf("result output has insufficient carrier sats: need %d, have %d", carrier, output.Value)
 	}
 	return wire.NewTxOut(output.Value, assets, pkScript), nil
 }

@@ -8,83 +8,106 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
-	contractapi "github.com/sat20-labs/satoshinet/contract"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
-	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type CompositeContractBlockValidatorConfig struct {
 	ChainParams *chaincfg.Params
+	Modules     []RegisteredContractValidator
 
+	// Convenience wiring for callers that enable a subset of the built-ins.
+	// The constructor converts these fields into the same module registry.
 	TemplateValidator ContractModuleBlockValidator
 	EVMValidator      ContractModuleBlockValidator
 	AgentValidator    ContractModuleBlockValidator
 }
 
 type ContractModuleBlockValidator interface {
-	ValidateContractModuleBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error
+	ValidateContractModuleBlock(*btcutil.Block, *blockchain.UtxoViewpoint) error
 }
 
 type BlockStateProvider interface {
-	BlockPostState(hash *chainhash.Hash) (contractframework.RuntimeStore, bool)
+	BlockPostState(*chainhash.Hash) (contractframework.RuntimeStore, bool)
 }
 
-type BlockStateReleaser interface {
-	ReleaseBlockPostState(hash *chainhash.Hash)
-}
+type BlockStateReleaser interface{ ReleaseBlockPostState(*chainhash.Hash) }
 
 type ParentStateProvider interface {
-	ParentState(block *btcutil.Block, view *blockchain.UtxoViewpoint) (contractframework.RuntimeStore, bool, error)
+	ParentState(*btcutil.Block, *blockchain.UtxoViewpoint) (contractframework.RuntimeStore, bool, error)
 }
 
 type CompositeContractBlockValidator struct {
-	cfg CompositeContractBlockValidatorConfig
-
+	cfg                CompositeContractBlockValidatorConfig
+	registrationError  error
 	assetViewMu        sync.Mutex
 	preparedAssetViews map[chainhash.Hash]blockchain.ContractAssetIndexView
 }
 
-type contractBlockActivity struct {
-	Template bool
-	EVM      bool
-	Agent    bool
-}
+type contractBlockActivity struct{ Template, EVM, Agent bool }
 
 type ContractBlockActivityProvider interface {
-	HasContractBlockActivity(block *btcutil.Block, view *blockchain.UtxoViewpoint) (bool, error)
+	HasContractBlockActivity(*btcutil.Block, *blockchain.UtxoViewpoint) (bool, error)
 }
 
 func NewCompositeContractBlockValidator(cfg CompositeContractBlockValidatorConfig) *CompositeContractBlockValidator {
-	return &CompositeContractBlockValidator{
-		cfg:                cfg,
-		preparedAssetViews: make(map[chainhash.Hash]blockchain.ContractAssetIndexView),
+	if len(cfg.Modules) == 0 {
+		cfg.Modules = []RegisteredContractValidator{
+			{Descriptor: templateModuleDescriptor(), Validator: cfg.TemplateValidator},
+			{Descriptor: evmModuleDescriptor(), Validator: cfg.EVMValidator},
+			{Descriptor: agentModuleDescriptor(), Validator: cfg.AgentValidator},
+		}
+	} else {
+		cfg.Modules = append([]RegisteredContractValidator(nil), cfg.Modules...)
+		// Existing AIDX provider adapters access these built-in configuration
+		// handles. Execution and state dispatch below use only the registry.
+		for _, module := range cfg.Modules {
+			if module.Descriptor.Type() == contractframework.ModuleTemplate {
+				cfg.TemplateValidator = module.Validator
+			}
+			if module.Descriptor.Type() == contractframework.ModuleEVM {
+				cfg.EVMValidator = module.Validator
+			}
+			if module.Descriptor.Type() == contractframework.ModuleAgent {
+				cfg.AgentValidator = module.Validator
+			}
+		}
 	}
+	v := &CompositeContractBlockValidator{cfg: cfg, preparedAssetViews: make(map[chainhash.Hash]blockchain.ContractAssetIndexView)}
+	seen := make(map[contractframework.ModuleType]bool)
+	for _, module := range cfg.Modules {
+		typ := module.Descriptor.Type()
+		if typ == 0 || seen[typ] || module.Descriptor.ClassifyOrder == nil {
+			v.registrationError = fmt.Errorf("invalid or duplicate contract validator registration %d", typ)
+			break
+		}
+		seen[typ] = true
+	}
+	return v
 }
 
-// PrepareContractAssetIndexView binds an isolated AIDX view to one block. The
-// following ValidateContractBlock consumes it atomically; normal direct-tip
-// validation continues to use the production providers configured at startup.
-func (v *CompositeContractBlockValidator) PrepareContractAssetIndexView(
-	blockHash *chainhash.Hash, view blockchain.ContractAssetIndexView) error {
+func (v *CompositeContractBlockValidator) PrepareContractAssetIndexView(hash *chainhash.Hash,
+	view blockchain.ContractAssetIndexView) error {
 
-	if v == nil || blockHash == nil || view == nil {
+	if v == nil || hash == nil || view == nil {
 		return fmt.Errorf("invalid prepared contract asset view")
 	}
 	v.assetViewMu.Lock()
 	defer v.assetViewMu.Unlock()
-	if _, exists := v.preparedAssetViews[*blockHash]; exists {
-		return fmt.Errorf("contract asset view already prepared for block %s", blockHash)
+	if _, exists := v.preparedAssetViews[*hash]; exists {
+		return fmt.Errorf("contract asset view already prepared for block %s", hash)
 	}
-	v.preparedAssetViews[*blockHash] = view
+	v.preparedAssetViews[*hash] = view
 	return nil
 }
 
 func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
 	v.assetViewMu.Lock()
 	defer v.assetViewMu.Unlock()
-
+	if v.registrationError != nil {
+		return v.registrationError
+	}
 	var assetView blockchain.ContractAssetIndexView
 	if block != nil {
 		assetView = v.preparedAssetViews[*block.Hash()]
@@ -99,73 +122,134 @@ func (v *CompositeContractBlockValidator) ValidateContractBlock(block *btcutil.B
 }
 
 func (v *CompositeContractBlockValidator) validateContractBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
-	activity, err := v.blockActivity(block, view)
+	if block == nil || len(block.Transactions()) == 0 {
+		return contractBlockRuleError("missing block")
+	}
+	active, err := v.registeredActivity(block, view)
 	if err != nil {
 		return err
 	}
-
-	if v.cfg.TemplateValidator != nil && activity.Template {
-		if err := v.cfg.TemplateValidator.ValidateContractModuleBlock(block, view); err != nil {
+	anyActive := false
+	for _, yes := range active {
+		anyActive = anyActive || yes
+	}
+	if !anyActive {
+		return nil
+	}
+	modules := make([]contractframework.Module, 0, len(v.cfg.Modules))
+	for _, registration := range v.cfg.Modules {
+		module, err := v.blockModule(registration, block, view, active[registration.Descriptor.Type()])
+		if err != nil {
 			return err
 		}
+		modules = append(modules, module)
 	}
-	if v.cfg.EVMValidator != nil && activity.EVM {
-		if err := v.cfg.EVMValidator.ValidateContractModuleBlock(block, view); err != nil {
-			return err
+	coordinator := contractframework.BlockCoordinator{
+		Modules: modules, Prefix: contractValidationPrefixForParams(v.cfg.ChainParams),
+	}
+	validated, err := coordinator.ValidateBlock(contractframework.BlockValidationRequest{
+		Txs: blockWorkAndResults(block), ParentView: contractNodeUTXOView{view: view},
+	})
+	if err != nil {
+		return contractBlockRuleError("contract block: %v", err)
+	}
+	payload, found, err := contractcommon.FindCoinbaseStateRoot(block.Transactions()[0].MsgTx())
+	if err != nil {
+		return contractBlockRuleError("combined contract state root: %v", err)
+	}
+	if !found {
+		return contractBlockRuleError("combined contract state root: missing state root commitment")
+	}
+	if payload.StateRoot != validated.CombinedRoot {
+		return contractBlockRuleError("combined contract state root mismatch: committed=%x expected=%x",
+			payload.StateRoot, validated.CombinedRoot)
+	}
+	// Cache candidate states only after every module Result and the combined
+	// commitment have passed. State persistence happens in the chain DB tx.
+	for _, registration := range v.cfg.Modules {
+		exec := validated.Executions[registration.Descriptor.Type()]
+		if !active[registration.Descriptor.Type()] && !exec.StateChanged {
+			continue
 		}
-	}
-	if v.cfg.AgentValidator != nil && activity.Agent {
-		if err := v.cfg.AgentValidator.ValidateContractModuleBlock(block, view); err != nil {
-			return err
+		if recorder, ok := registration.Validator.(ContractBlockStateRecorder); ok {
+			if err := recorder.RecordContractBlockState(block, exec); err != nil {
+				return err
+			}
 		}
-	}
-	if activity.Template || activity.EVM || activity.Agent {
-		return v.verifyCombinedStateRoot(block, view, activity.Template, activity.EVM, activity.Agent)
 	}
 	return nil
 }
 
-func (v *CompositeContractBlockValidator) ContractBlockPostState(
-	module contractframework.ModuleType, hash *chainhash.Hash) (contractframework.EngineState, bool) {
+func (v *CompositeContractBlockValidator) blockModule(reg RegisteredContractValidator,
+	block *btcutil.Block, view *blockchain.UtxoViewpoint, active bool) (contractframework.Module, error) {
 
-	switch module {
-	case contractframework.ModuleTemplate:
-		return moduleBlockPostState(v.cfg.TemplateValidator, hash)
-	case contractframework.ModuleEVM:
-		return moduleBlockPostState(v.cfg.EVMValidator, hash)
-	case contractframework.ModuleAgent:
-		return moduleBlockPostState(v.cfg.AgentValidator, hash)
-	default:
-		return nil, false
+	if factory, ok := reg.Validator.(ContractBlockModuleFactory); ok {
+		return factory.ContractBlockModule(block, view)
 	}
+	// A test/custom validator may provide only the existing validator interface.
+	// It still runs inside the coordinator and supplies its verified state. All
+	// built-in production validators implement ContractBlockModuleFactory.
+	return contractframework.ModuleAdapter{
+		ModuleDescriptor: reg.Descriptor,
+		ExecuteWorkBlockFunc: func(req contractframework.WorkExecutionRequest) (contractframework.ExecutionResult, error) {
+			if active {
+				if reg.Validator == nil {
+					return contractframework.ExecutionResult{}, fmt.Errorf("missing %s validator", reg.Descriptor.Name())
+				}
+				if err := reg.Validator.ValidateContractModuleBlock(block, view); err != nil {
+					return contractframework.ExecutionResult{}, err
+				}
+				state, ok := moduleBlockPostState(reg.Validator, block.Hash())
+				if !ok || state == nil {
+					return contractframework.ExecutionResult{}, fmt.Errorf("missing %s post-state", reg.Descriptor.Name())
+				}
+				return contractframework.ExecutionResult{
+					ModuleType: reg.Descriptor.Type(), StateRoot: state.Root(), PostState: state.Snapshot(), StateChanged: true,
+				}, nil
+			}
+			state, found, err := moduleParentState(reg.Validator, block, view)
+			if err != nil {
+				return contractframework.ExecutionResult{}, err
+			}
+			exec := contractframework.ExecutionResult{ModuleType: reg.Descriptor.Type()}
+			if found && state != nil {
+				exec.StateRoot, exec.PostState = state.Root(), state.Snapshot()
+			}
+			return exec, nil
+		},
+		VerifyResultTxsFunc: func(req contractframework.ResultVerifyRequest, exec contractframework.ExecutionResult) error {
+			return nil // The supplied custom validator verified its Result above.
+		},
+	}, nil
 }
 
-// ReleaseContractBlockPostState drops the transient validation snapshot after
-// the state manager has durably stored it. Persisted block states remain
-// available through the module state stores for reorg handling.
-func (v *CompositeContractBlockValidator) ReleaseContractBlockPostState(
-	module contractframework.ModuleType, hash *chainhash.Hash) {
+func (v *CompositeContractBlockValidator) ContractBlockPostState(module contractframework.ModuleType,
+	hash *chainhash.Hash) (contractframework.EngineState, bool) {
 
-	switch module {
-	case contractframework.ModuleTemplate:
-		releaseModuleBlockPostState(v.cfg.TemplateValidator, hash)
-	case contractframework.ModuleEVM:
-		releaseModuleBlockPostState(v.cfg.EVMValidator, hash)
-	case contractframework.ModuleAgent:
-		releaseModuleBlockPostState(v.cfg.AgentValidator, hash)
+	for _, registration := range v.cfg.Modules {
+		if registration.Descriptor.Type() == module {
+			return moduleBlockPostState(registration.Validator, hash)
+		}
+	}
+	return nil, false
+}
+
+func (v *CompositeContractBlockValidator) ReleaseContractBlockPostState(module contractframework.ModuleType, hash *chainhash.Hash) {
+	for _, registration := range v.cfg.Modules {
+		if registration.Descriptor.Type() == module {
+			releaseModuleBlockPostState(registration.Validator, hash)
+			return
+		}
 	}
 }
 
 func releaseModuleBlockPostState(validator ContractModuleBlockValidator, hash *chainhash.Hash) {
-	releaser, ok := validator.(BlockStateReleaser)
-	if ok {
+	if releaser, ok := validator.(BlockStateReleaser); ok {
 		releaser.ReleaseBlockPostState(hash)
 	}
 }
 
-func moduleBlockPostState(validator ContractModuleBlockValidator,
-	hash *chainhash.Hash) (contractframework.EngineState, bool) {
-
+func moduleBlockPostState(validator ContractModuleBlockValidator, hash *chainhash.Hash) (contractframework.EngineState, bool) {
 	provider, ok := validator.(BlockStateProvider)
 	if !ok {
 		return nil, false
@@ -183,171 +267,65 @@ func moduleParentState(validator ContractModuleBlockValidator, block *btcutil.Bl
 	return provider.ParentState(block, view)
 }
 
-func moduleCombinedRoot(validator ContractModuleBlockValidator, label string,
-	block *btcutil.Block, view *blockchain.UtxoViewpoint, hasWork bool) ([32]byte, error) {
+func (v *CompositeContractBlockValidator) registeredActivity(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (map[contractframework.ModuleType]bool, error) {
 
-	if hasWork {
-		postState, ok := moduleBlockPostState(validator, block.Hash())
-		if !ok || postState == nil {
-			return [32]byte{}, contractBlockRuleError("missing %s post-state", label)
-		}
-		return postState.Root(), nil
-	}
-	parentState, ok, err := moduleParentState(validator, block, view)
-	if err != nil {
-		return [32]byte{}, contractBlockRuleError("load %s parent-state: %v", label, err)
-	}
-	if !ok || parentState == nil {
-		return [32]byte{}, nil
-	}
-	return parentState.Root(), nil
-}
-
-func (v *CompositeContractBlockValidator) verifyCombinedStateRoot(block *btcutil.Block,
-	view *blockchain.UtxoViewpoint, hasTemplateWork, hasEVMWork, hasAgentWork bool) error {
-
-	templateRoot, err := moduleCombinedRoot(v.cfg.TemplateValidator, "template", block, view, hasTemplateWork)
-	if err != nil {
-		return err
-	}
-	evmRoot, err := moduleCombinedRoot(v.cfg.EVMValidator, "EVM", block, view, hasEVMWork)
-	if err != nil {
-		return err
-	}
-	agentRoot, err := moduleCombinedRoot(v.cfg.AgentValidator, "agent", block, view, hasAgentWork)
-	if err != nil {
-		return err
-	}
-	expected := contractcommon.CombineStateRoots(templateRoot, evmRoot, agentRoot)
-	payload, found, err := contractapi.FindCoinbaseStateRoot(block.Transactions()[0].MsgTx())
-	if err != nil {
-		return contractBlockRuleError("combined contract state root: %v", err)
-	}
-	if !found {
-		return contractBlockRuleError("combined contract state root: missing state root commitment")
-	}
-	if payload.StateRoot != expected {
-		return contractBlockRuleError(
-			"combined contract state root mismatch: committed=%x expected=%x template=%x evm=%x agent=%x",
-			payload.StateRoot, expected, templateRoot, evmRoot, agentRoot)
-	}
-	return nil
-}
-
-func (v *CompositeContractBlockValidator) blockActivity(block *btcutil.Block,
-	view *blockchain.UtxoViewpoint) (contractBlockActivity, error) {
-
-	var activity contractBlockActivity
+	activity := make(map[contractframework.ModuleType]bool)
 	if block == nil {
 		return activity, nil
 	}
-	_, split, err := splitBlockContractTxs(block, view, v.cfg.ChainParams,
-		contractValidationPrefixForParams(v.cfg.ChainParams))
+	modules := make([]contractframework.Module, 0, len(v.cfg.Modules))
+	for _, registration := range v.cfg.Modules {
+		modules = append(modules, contractframework.ModuleAdapter{ModuleDescriptor: registration.Descriptor})
+	}
+	split, err := contractframework.SplitBlockContractTxs(contractframework.SplitRequest{
+		Txs: blockWorkAndResults(block), Prefix: contractValidationPrefixForParams(v.cfg.ChainParams),
+		Modules: modules, ParentView: contractNodeUTXOView{view: view},
+	})
 	if err != nil {
-		return activity, contractBlockRuleError("contract block activity: %v", err)
+		return nil, contractBlockRuleError("contract block activity: %v", err)
 	}
-	for contractType, workTxs := range split.WorkTxs {
-		if len(workTxs) != 0 {
-			markContractActivity(&activity, byte(contractType))
-		}
-	}
-	for contractType, resultTxs := range split.ResultTxs {
-		if len(resultTxs) != 0 {
-			markContractActivity(&activity, byte(contractType))
-		}
-	}
-	if !activity.Template {
-		if provider, ok := v.cfg.TemplateValidator.(ContractBlockActivityProvider); ok {
-			hasActivity, err := provider.HasContractBlockActivity(block, view)
-			if err != nil {
-				return activity, err
+	for _, registration := range v.cfg.Modules {
+		typ := registration.Descriptor.Type()
+		activity[typ] = len(split.WorkTxs[typ]) != 0 || len(split.ResultTxs[typ]) != 0
+		if !activity[typ] {
+			if provider, ok := registration.Validator.(ContractBlockActivityProvider); ok {
+				activity[typ], err = provider.HasContractBlockActivity(block, view)
+				if err != nil {
+					return nil, err
+				}
 			}
-			activity.Template = hasActivity
-		}
-	}
-	if !activity.EVM {
-		if provider, ok := v.cfg.EVMValidator.(ContractBlockActivityProvider); ok {
-			hasActivity, err := provider.HasContractBlockActivity(block, view)
-			if err != nil {
-				return activity, err
-			}
-			activity.EVM = hasActivity
-		}
-	}
-	if !activity.Agent {
-		if provider, ok := v.cfg.AgentValidator.(ContractBlockActivityProvider); ok {
-			hasActivity, err := provider.HasContractBlockActivity(block, view)
-			if err != nil {
-				return activity, err
-			}
-			activity.Agent = hasActivity
 		}
 	}
 	return activity, nil
 }
 
-type contractActivityModule struct {
-	contractType contractframework.ModuleType
-	priority     int
+func (v *CompositeContractBlockValidator) blockActivity(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (contractBlockActivity, error) {
+
+	activity, err := v.registeredActivity(block, view)
+	return contractBlockActivity{
+		Template: activity[contractframework.ModuleTemplate], EVM: activity[contractframework.ModuleEVM], Agent: activity[contractframework.ModuleAgent],
+	}, err
 }
 
 func contractActivityModules() []contractframework.Module {
 	return []contractframework.Module{
-		contractActivityModule{contractType: contractframework.ModuleTemplate, priority: 1},
-		contractActivityModule{contractType: contractframework.ModuleEVM, priority: 2},
-		contractActivityModule{contractType: contractframework.ModuleAgent, priority: 3},
+		contractframework.ModuleAdapter{ModuleDescriptor: templateModuleDescriptor()},
+		contractframework.ModuleAdapter{ModuleDescriptor: evmModuleDescriptor()},
+		contractframework.ModuleAdapter{ModuleDescriptor: agentModuleDescriptor()},
 	}
 }
 
-func (m contractActivityModule) Name() string {
-	switch m.contractType {
-	case contractframework.ModuleTemplate:
-		return "template"
-	case contractframework.ModuleEVM:
-		return "evm"
-	case contractframework.ModuleAgent:
-		return "agent"
-	default:
-		return "unknown"
+func blockWorkAndResults(block *btcutil.Block) []*wire.MsgTx {
+	if block == nil || len(block.Transactions()) == 0 {
+		return nil
 	}
-}
-
-func (m contractActivityModule) Type() contractframework.ModuleType { return m.contractType }
-func (m contractActivityModule) Priority() int                      { return m.priority }
-
-func (m contractActivityModule) ClassifyTx(tx *wire.MsgTx,
-	prefix string) (contractframework.TxClass, bool, error) {
-
-	class, found, err := contractengine.ClassifyTxForBlockOrderWithPrefix(tx, prefix)
-	if err != nil || !found || class.ContractType != byte(m.contractType) {
-		return contractframework.TxClass{}, false, err
+	out := make([]*wire.MsgTx, 0, len(block.Transactions())-1)
+	for _, tx := range block.Transactions()[1:] {
+		out = append(out, tx.MsgTx())
 	}
-	return contractframework.TxClass{
-		ContractType: m.contractType,
-		TxType:       class.TxType,
-		GasLimit:     class.GasLimit,
-		Priority:     m.priority,
-	}, true, nil
-}
-
-func (m contractActivityModule) ExecuteWorkBlock(req contractframework.WorkExecutionRequest) (contractframework.ExecutionResult, error) {
-	return contractframework.ExecutionResult{ModuleType: m.contractType}, nil
-}
-
-func (m contractActivityModule) BuildResultTxs(req contractframework.ResultBuildRequest,
-	exec contractframework.ExecutionResult) (contractframework.ResultBuildResult, error) {
-
-	return contractframework.ResultBuildResult{}, nil
-}
-
-func (m contractActivityModule) VerifyResultTxs(req contractframework.ResultVerifyRequest,
-	exec contractframework.ExecutionResult) error {
-
-	return nil
-}
-
-func (m contractActivityModule) StateRoot(exec contractframework.ExecutionResult) [32]byte {
-	return exec.StateRoot
+	return out
 }
 
 func splitBlockContractTxs(block *btcutil.Block, view *blockchain.UtxoViewpoint,
@@ -359,68 +337,29 @@ func splitBlockContractTxs(block *btcutil.Block, view *blockchain.UtxoViewpoint,
 	if prefix == "" {
 		prefix = contractValidationPrefixForParams(params)
 	}
-	txs := block.Transactions()
-	_, hasRoot, err := contractapi.FindCoinbaseStateRoot(txs[0].MsgTx())
+	_, hasRoot, err := contractcommon.FindCoinbaseStateRoot(block.Transactions()[0].MsgTx())
 	if err != nil {
 		return false, contractframework.BlockContractSplit{}, err
-	}
-	msgTxs := make([]*wire.MsgTx, 0, len(txs)-1)
-	for _, tx := range txs[1:] {
-		msgTxs = append(msgTxs, tx.MsgTx())
 	}
 	split, err := contractframework.SplitBlockContractTxs(contractframework.SplitRequest{
-		Txs:        msgTxs,
-		Prefix:     prefix,
-		Modules:    contractActivityModules(),
-		ParentView: contractActivityUTXOView{view: view},
+		Txs: blockWorkAndResults(block), Prefix: prefix, Modules: contractActivityModules(),
+		ParentView: contractNodeUTXOView{view: view},
 	})
-	if err != nil {
-		return false, contractframework.BlockContractSplit{}, err
-	}
-	return hasRoot, split, nil
+	return hasRoot, split, err
 }
 
-type contractActivityUTXOView struct {
-	view *blockchain.UtxoViewpoint
-}
+type contractActivityUTXOView = contractNodeUTXOView
 
-func (v contractActivityUTXOView) LookupContractAddress(outpoint wire.OutPoint,
-	prefix string) (contractcommon.ContractAddress, bool, error) {
-
-	if v.view == nil {
-		return contractcommon.ContractAddress{}, false, nil
-	}
-	entry := v.view.LookupEntry(outpoint)
-	if entry == nil {
-		return contractcommon.ContractAddress{}, false, nil
-	}
-	return contractcommon.ParseContractPkScript(entry.PkScript(), prefix)
-}
-
-func markContractActivity(activity *contractBlockActivity, contractType byte) {
-	switch contractType {
-	case contractcommon.ContractTypeTemplate:
-		activity.Template = true
-	case contractcommon.ContractTypeEVM:
-		activity.EVM = true
-	case contractcommon.ContractTypeAgent:
-		activity.Agent = true
-	}
+func markContractActivity(activity *contractBlockActivity, typ byte) {
+	activity.Template = activity.Template || typ == contractcommon.ContractTypeTemplate
+	activity.EVM = activity.EVM || typ == contractcommon.ContractTypeEVM
+	activity.Agent = activity.Agent || typ == contractcommon.ContractTypeAgent
 }
 
 func contractValidationPrefixForParams(params *chaincfg.Params) string {
-	if params == nil {
-		return contractcommon.TestnetContractPrefix
-	}
-	if params.Net == wire.MainNet {
-		return contractcommon.MainnetContractPrefix
-	}
-	return contractcommon.TestnetContractPrefix
+	return contractPrefixForParams(params)
 }
 
 func contractBlockRuleError(format string, args ...interface{}) error {
-	return blockchain.RuleError{
-		ErrorCode:   blockchain.ErrInvalidEVMBlock,
-		Description: fmt.Sprintf(format, args...),
-	}
+	return blockchain.RuleError{ErrorCode: blockchain.ErrInvalidEVMBlock, Description: fmt.Sprintf(format, args...)}
 }

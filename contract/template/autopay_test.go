@@ -251,11 +251,10 @@ func TestAutopayEmptyRecipientPaysMinerFee(t *testing.T) {
 	gasConfig := testAutopayGasConfig()
 	runtime := testAutopayRuntime(t, "", "ordx:f:test", "10")
 	contractAddr := runtime.Address()
-	err := runtime.ApplyFunding(
-		testContractOutput("fund", 0, contractAddr, 0, testAssets("ordx:f:test", 20, gasConfig.GasAssetName, 100)),
-		gasConfig.GasAssetName,
-	)
+	funding := testContractOutput("fund", 0, contractAddr, 0, testAssets("ordx:f:test", 20, gasConfig.GasAssetName, 100))
+	err := runtime.ApplyFunding(funding, gasConfig.GasAssetName)
 	require.NoError(t, err)
+	creditTestManagedOutput(t, runtime, funding)
 	_, err = runtime.SettleBlockWithGasConfig(100, gasConfig)
 	require.NoError(t, err)
 
@@ -321,6 +320,9 @@ func TestAutopayCloseFitsResultOutputLimit(t *testing.T) {
 		Height:    100,
 	}}
 	require.NoError(t, runtime.saveRuntimeState(state))
+	creditTestManagedOutput(t, runtime, testContractOutput(
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 0, runtime.Address(), 0,
+		testAssets("ordx:f:test", int64(AutopayMaxCloseDelegateOutputs), gasConfig.GasAssetName, 100)))
 
 	plan, err := runtime.SettleBlockWithGasConfig(100, gasConfig)
 	require.NoError(t, err)
@@ -422,7 +424,8 @@ func runtimeStoreWith(runtime *ContractRuntime) *RuntimeStore {
 
 func testAutopayGasConfig() GasConfig {
 	return GasConfig{
-		GasAssetName:    "ordx:f:gas",
+		GasAssetName:     "ordx:f:gas",
+		BootstrapAddress: "bootstrap-address",
 		DeployBaseGas:   1,
 		InvokeBaseGas:   1,
 		ResultBaseGas:   1,

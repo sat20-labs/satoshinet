@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
@@ -39,6 +40,8 @@ type memoryAccount struct {
 	NewContract  bool
 	Touched      bool
 	DeployerAddr string
+	DeployFlags  ContractFlags
+	Managed      contractcommon.ManagedBalance
 	Closed       bool
 }
 
@@ -247,8 +250,14 @@ func (s *MemoryStateDB) Exist(addr gethcommon.Address) bool {
 	return ok && !acct.Closed
 }
 
+// SetContractDeployer is retained for state/test construction. It cannot
+// replace already registered deployment metadata. Production CREATE uses the
+// error-returning RegisterContractDeployment method instead.
 func (s *MemoryStateDB) SetContractDeployer(addr gethcommon.Address, recipient string) {
 	acct := s.ensure(addr)
+	if acct.DeployerAddr != "" || acct.Closed {
+		return
+	}
 	prev := acct.DeployerAddr
 	s.appendJournal(func() { acct.DeployerAddr = prev })
 	acct.DeployerAddr = recipient
@@ -398,7 +407,8 @@ func (s *MemoryStateDB) AccessEvents() *state.AccessEvents { return nil }
 
 func (s *MemoryStateDB) Finalise(deleteEmptyObjects bool) {
 	for addr, acct := range s.accounts {
-		if acct.SelfDestruct || (deleteEmptyObjects && acct.Touched && acct.Nonce == 0 && acct.Balance.IsZero() && len(acct.Code) == 0) {
+		if acct.SelfDestruct || (deleteEmptyObjects && acct.Touched && acct.DeployerAddr == "" &&
+			!acct.Closed && acct.Managed.IsZero() && acct.Nonce == 0 && acct.Balance.IsZero() && len(acct.Code) == 0) {
 			previous := acct
 			s.appendJournal(func() { s.accounts[addr] = previous })
 			delete(s.accounts, addr)
@@ -479,6 +489,7 @@ func cloneAccounts(src map[gethcommon.Address]*memoryAccount) map[gethcommon.Add
 		cp.Code = contractframework.CloneBytes(acct.Code)
 		cp.Storage = cloneHashMap(acct.Storage)
 		cp.Transient = cloneHashMap(acct.Transient)
+		cp.Managed = acct.Managed.Clone()
 		dst[addr] = &cp
 	}
 	return dst

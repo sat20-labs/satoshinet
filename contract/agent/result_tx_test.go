@@ -17,150 +17,89 @@ func TestBuildResultTxFromPredictionSettlementPlan(t *testing.T) {
 	requireReady(t, runtime)
 	requireBet(t, runtime, "alice", "a", "60000")
 	requireBet(t, runtime, "bob", "b", "40000")
+	// Business liabilities and framework quantities are separate facts. The
+	// fixture explicitly establishes both; a physical UTXO never authorizes itself.
+	require.NoError(t, runtime.managed.Credit(100000, nil))
 	settlement, err := runtime.ApplyConfirm(ApplyConfirmRequest{
 		Invoker: "core",
 		Param: PredictionConfirmParam{
-			ResultType: ResultTypeOutcome,
-			OutcomeID:  "a",
-			Result:     "Team A 101, Team B 98",
-			ResultURL:  "https://example.com/match/result/123",
-			ObservedAt: runtime.Contract().EventTime + 1,
+			ResultType: ResultTypeOutcome, OutcomeID: "a", Result: "Team A 101, Team B 98",
+			ResultURL: "https://example.com/match/result/123", ObservedAt: runtime.Contract().EventTime + 1,
 		},
 		TimeValue: runtime.Contract().ConfirmAfter + 1,
 	})
-	if err != nil {
-		t.Fatalf("ApplyConfirm failed: %v", err)
-	}
+	require.NoError(t, err)
 	plans, err := contractframework.BuildSettlementResultPlans(
 		[]*PredictionSettlementPlan{settlement}, defaultAgentSettlementResultOptions())
-	if err != nil {
-		t.Fatalf("BuildSettlementResultPlans failed: %v", err)
-	}
-	contract := runtime.Address()
-	txidA := chainhash.Hash{1}
-	txidB := chainhash.Hash{2}
-	plans, err = AugmentResultPlans(plans, func(contract ContractAddress) ([]UTXO, error) {
+	require.NoError(t, err)
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	txidA, txidB := chainhash.Hash{1}, chainhash.Hash{2}
+	plans, err = AugmentResultPlans(plans, func(addr ContractAddress) ([]UTXO, error) {
 		return []UTXO{
-			contractframework.UTXOFromTxOutput(OutPoint{TxID: txidB.String(), Vout: 1}, contract, 11, &wire.TxOut{Value: 40000}),
-			contractframework.UTXOFromTxOutput(OutPoint{TxID: txidA.String(), Vout: 0}, contract, 10, &wire.TxOut{Value: 60000}),
+			contractframework.UTXOFromTxOutput(OutPoint{TxID: txidB.String(), Vout: 1}, addr, 11, &wire.TxOut{Value: 40000}),
+			contractframework.UTXOFromTxOutput(OutPoint{TxID: txidA.String(), Vout: 0}, addr, 10, &wire.TxOut{Value: 60000}),
 		}, nil
-	}, nil, nil, DefaultGasConfig().GasAssetName, "bootstrap")
-	if err != nil {
-		t.Fatalf("AugmentResultPlans failed: %v", err)
-	}
-	if len(plans) != 1 || len(plans[0].Inputs) != 2 {
-		t.Fatalf("unexpected result plans: %#v", plans)
-	}
-	if plans[0].Inputs[0].TxID != txidA.String() {
-		t.Fatalf("inputs not sorted canonically: %#v", plans[0].Inputs)
-	}
-
+	}, store, nil, DefaultGasConfig().GasAssetName, "bootstrap")
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+	require.Len(t, plans[0].Inputs, 2)
+	require.Equal(t, txidA.String(), plans[0].Inputs[0].TxID)
 	resultTx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
-		Status:        ResultStatusSuccess,
-		Plans:         plans,
-		ResolveScript: testResultScriptResolver,
+		Status: ResultStatusSuccess, Plans: plans, ResolveScript: testResultScriptResolver,
 	}, contractframework.ResultTxBuildOptions{})
-	if err != nil {
-		t.Fatalf("BuildResultTx failed: %v", err)
-	}
-	if len(resultTx.TxIn) != 2 {
-		t.Fatalf("input count mismatch: %d", len(resultTx.TxIn))
-	}
-	if len(resultTx.TxOut) != 5 {
-		t.Fatalf("output count mismatch: %d", len(resultTx.TxOut))
-	}
-	if resultTx.TxOut[0].Value != 6000 || resultTx.TxOut[3].Value != 90000 {
-		t.Fatalf("unexpected result output values")
-	}
-	if _, _, err := contractcommonReadResultPayload(resultTx); err != nil {
-		t.Fatalf("missing result payload: %v", err)
-	}
-	if err := contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-		Label:         "agent",
-		ResultTx:      resultTx,
-		Status:        ResultStatusSuccess,
-		Plans:         plans,
-		ResolveScript: testResultScriptResolver,
-		CheckPayload:  true,
-	}); err != nil {
-		t.Fatalf("Verify failed: %v", err)
-	}
-	_ = contract
+	require.NoError(t, err)
+	require.Len(t, resultTx.TxIn, 2)
+	require.Len(t, resultTx.TxOut, 5)
+	require.Equal(t, int64(6000), resultTx.TxOut[0].Value)
+	require.Equal(t, int64(90000), resultTx.TxOut[3].Value)
+	_, _, err = contractcommonReadResultPayload(resultTx)
+	require.NoError(t, err)
+	require.NoError(t, contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
+		Label: "agent", ResultTx: resultTx, Status: ResultStatusSuccess, Plans: plans,
+		ResolveScript: testResultScriptResolver, CheckPayload: true,
+	}))
 }
 
 func TestAugmentResultPlansUsesAssetPrecisionForPredictionPayouts(t *testing.T) {
 	const assetName = "brc20:f:sgas"
-	contract := newTestRuntime(t).Address()
-	assetPrecision := func(name string) (int, bool) {
-		if name == assetName {
-			return 0, true
-		}
-		return 0, false
-	}
+	runtime := newTestRuntimeForBetAsset(t, assetName, "1")
+	addr := runtime.Address()
+	precision := func(name string) (int, bool) { return 0, name == assetName }
 	plans, err := contractframework.BuildSettlementResultPlans([]*PredictionSettlementPlan{{
-		Contract: contract.MustEncode(),
+		Contract: addr.MustEncode(),
 		Transfers: []contractframework.SettlementTransfer{
 			{To: "alice", AssetName: assetName, AssetAmt: "33.3333333333", Reason: "winner_payout"},
 			{To: "bob", AssetName: assetName, AssetAmt: "33.3333333333", Reason: "winner_payout"},
 			{To: "carol", AssetName: assetName, AssetAmt: "33.3333333333", Reason: "winner_payout"},
 		},
-	}}, agentSettlementResultOptions(assetPrecision))
-	if err != nil {
-		t.Fatalf("BuildSettlementResultPlans failed: %v", err)
-	}
-	assets, err := contractframework.NewAssetSetWithPrecision(assetName, "99", MaxPredictionDecimalPrecision, ErrInvalidAsset)
-	if err != nil {
-		t.Fatalf("NewAssetSetWithPrecision failed: %v", err)
-	}
-	augmented, err := AugmentResultPlans(plans, func(contract ContractAddress) ([]UTXO, error) {
+	}}, agentSettlementResultOptions(precision))
+	require.NoError(t, err)
+	assets := mustAssetSet(t, assetName, "99", 0)
+	require.NoError(t, runtime.managed.Credit(0, assets))
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	augmented, err := AugmentResultPlans(plans, func(addr ContractAddress) ([]UTXO, error) {
 		outpoint := OutPoint{TxID: chainhash.Hash{3}.String(), Vout: 0}
-		return []UTXO{contractframework.UTXOFromTxOutput(outpoint, contract, 1, &wire.TxOut{Assets: assets})}, nil
-	}, nil, assetPrecision, DefaultGasConfig().GasAssetName, "bootstrap")
-	if err != nil {
-		t.Fatalf("AugmentResultPlans failed: %v", err)
-	}
-	if len(augmented) != 1 || len(augmented[0].Outputs) != 3 {
-		t.Fatalf("unexpected augmented plans: %#v", augmented)
-	}
-	got := make([]string, 0, len(augmented[0].Outputs))
-	total := int64(0)
+		return []UTXO{contractframework.UTXOFromTxOutput(outpoint, addr, 1, &wire.TxOut{Assets: assets})}, nil
+	}, store, precision, DefaultGasConfig().GasAssetName, "bootstrap")
+	require.NoError(t, err)
+	require.Len(t, augmented, 1)
+	require.Len(t, augmented[0].Outputs, 3)
 	for _, output := range augmented[0].Outputs {
-		if output.AssetName != assetName || len(output.Assets) != 1 {
-			t.Fatalf("unexpected output asset: %#v", output)
-		}
-		amount := output.Assets[0].Amount
-		if amount.Precision != 0 {
-			t.Fatalf("asset precision mismatch: got %d want 0 in %#v", amount.Precision, output)
-		}
-		got = append(got, amount.String())
-		total += amount.Int64()
+		require.Len(t, output.Assets, 1)
+		require.Equal(t, 0, output.Assets[0].Amount.Precision)
+		require.Equal(t, "33", output.Assets[0].Amount.String())
 	}
-	if fmt.Sprint(got) != "[33 33 33]" {
-		t.Fatalf("unexpected payout split: %v", got)
-	}
-	if total != 99 {
-		t.Fatalf("payout total mismatch: got %d want 99", total)
-	}
+	require.Equal(t, "99", sumOutputAmounts(augmented[0].Outputs, assetName))
 }
 
-func TestAugmentResultPlansUsesManagedPredictionPoolAndGas(t *testing.T) {
-	const (
-		betAsset = "brc20:f:sgas"
-		gasAsset = "brc20:f:sgas"
-	)
-	runtime := newTestRuntimeForBetAsset(t, betAsset, "1")
-	runtime.config.AssetPrecision = func(name string) (int, bool) {
-		if name == betAsset {
-			return 18, true
-		}
-		return 0, false
-	}
+func TestAugmentResultPlansRetainsOperatingGasAfterPredictionCompletes(t *testing.T) {
+	const asset = "brc20:f:sgas"
+	runtime := newTestRuntimeForBetAsset(t, asset, "1")
+	runtime.config.AssetPrecision = func(name string) (int, bool) { return 18, name == asset }
 	requireReady(t, runtime)
-	for _, bet := range []struct {
-		address string
-		outcome string
-		amount  string
-	}{
+	for _, bet := range []struct{ address, outcome, amount string }{
 		{"a10", "a", "10"}, {"a20", "a", "20"}, {"a30", "a", "30"},
 		{"b10", "b", "10"}, {"b20", "b", "20"}, {"b30", "b", "30"},
 		{"c10", "c", "10"}, {"c20", "c", "20"}, {"c30", "c", "30"},
@@ -170,48 +109,37 @@ func TestAugmentResultPlansUsesManagedPredictionPoolAndGas(t *testing.T) {
 	settlement, err := runtime.ApplyConfirm(ApplyConfirmRequest{
 		Invoker: "core",
 		Param: PredictionConfirmParam{
-			ResultType: ResultTypeOutcome,
-			OutcomeID:  "a",
-			Result:     "home wins",
-			ResultURL:  "https://example.com/match/result/123",
-			ObservedAt: runtime.Contract().EventTime + 1,
+			ResultType: ResultTypeOutcome, OutcomeID: "a", Result: "home wins",
+			ResultURL: "https://example.com/match/result/123", ObservedAt: runtime.Contract().EventTime + 1,
 		},
 		TimeValue: runtime.Contract().ConfirmAfter + 1,
 	})
-	if err != nil {
-		t.Fatalf("ApplyConfirm failed: %v", err)
-	}
+	require.NoError(t, err)
 	plans, err := contractframework.BuildSettlementResultPlans(
 		[]*PredictionSettlementPlan{settlement}, agentSettlementResultOptions(runtime.config.AssetPrecision))
-	if err != nil {
-		t.Fatalf("BuildSettlementResultPlans failed: %v", err)
-	}
-	runtime.state.Prediction.GasBalance = "200"
+	require.NoError(t, err)
+	physical := mustAssetSet(t, asset, "380", 18)
+	require.NoError(t, runtime.managed.Credit(0, physical))
 	store := NewRuntimeStore()
 	store.Add(runtime)
-	resultFee := mustDecimal(t, "0.01", 18)
-	plans[0].GasFee = resultFee
-	physicalAssets := mustAssetSet(t, betAsset, "380", 18)
-	augmented, err := AugmentResultPlans(plans, func(contract ContractAddress) ([]UTXO, error) {
+	plans[0].GasFee = mustDecimal(t, "0.01", 18)
+	augmented, err := AugmentResultPlans(plans, func(addr ContractAddress) ([]UTXO, error) {
 		outpoint := OutPoint{TxID: chainhash.Hash{4}.String(), Vout: 0}
-		return []UTXO{contractframework.UTXOFromTxOutput(outpoint, contract, 1, &wire.TxOut{Assets: physicalAssets})}, nil
-	}, store, runtime.config.AssetPrecision, gasAsset, "bootstrap")
-	if err != nil {
-		t.Fatalf("AugmentResultPlans failed: %v", err)
-	}
-
-	outputs := outputsByRecipientAndReason(augmented[0].Outputs, betAsset)
+		return []UTXO{contractframework.UTXOFromTxOutput(outpoint, addr, 1, &wire.TxOut{Assets: physical})}, nil
+	}, store, runtime.config.AssetPrecision, asset, "bootstrap")
+	require.NoError(t, err)
+	outputs := outputsByRecipientAndReason(augmented[0].Outputs, asset)
 	assertOutputAmount(t, outputs, "deployer/deployer_fee", "10.8")
 	assertOutputAmount(t, outputs, "agent/agent_fee", "5.4")
 	assertOutputAmount(t, outputs, "bootstrap/bootstrap_fee", "1.8")
 	assertOutputAmount(t, outputs, "a10/winner_payout", "27")
 	assertOutputAmount(t, outputs, "a20/winner_payout", "54")
 	assertOutputAmount(t, outputs, "a30/winner_payout", "81")
-	assertOutputAmount(t, outputs, "deployer/", "119.994")
-	assertOutputAmount(t, outputs, "bootstrap/", "79.996")
-	if got := sumOutputAmounts(augmented[0].Outputs, betAsset); got != "379.99" {
-		t.Fatalf("output total mismatch: got %s want 379.99 in %#v", got, augmented[0].Outputs)
-	}
+	addr := runtime.Address()
+	assertOutputAmount(t, outputs, addr.MustEncode()+"/", "199.99")
+	require.NotContains(t, outputs, "deployer/")
+	require.Equal(t, "379.99", sumOutputAmounts(augmented[0].Outputs, asset))
+	require.False(t, runtime.State().Closed)
 }
 
 func TestInvalidRefundUsesOnlyFundingUTXO(t *testing.T) {
@@ -219,68 +147,51 @@ func TestInvalidRefundUsesOnlyFundingUTXO(t *testing.T) {
 	runtime := newTestRuntime(t)
 	runtime.state.Prediction.GasBalance = "50"
 	runtime.addBet("valid-bettor", "a", "1000")
+	require.NoError(t, runtime.managed.Credit(1000, mustAssetSet(t, gasAsset, "50", 0)))
+	before := runtime.managed.Clone()
 	store := NewRuntimeStore()
 	store.Add(runtime)
-
-	contract := runtime.Address()
+	addr := runtime.Address()
 	managed := OutPoint{TxID: chainhash.Hash{5}.String(), Vout: 1}
 	invalidFunding := OutPoint{TxID: chainhash.Hash{6}.String(), Vout: 1}
 	plans, err := AugmentResultPlans([]ResultPlan{{
-		Contract:   contract.MustEncode(),
-		InputScope: contractframework.ResultInputScopeExplicit,
-		Inputs:     []OutPoint{invalidFunding},
-		GasFee:     mustDecimal(t, "50", 0),
-		Outputs: []ResultOutput{{
-			To:     "invalid-invoker",
-			Value:  200,
-			Reason: "refund",
-		}},
+		Contract: addr.MustEncode(), InputScope: contractframework.ResultInputScopeExplicit,
+		Inputs: []OutPoint{invalidFunding}, GasFee: mustDecimal(t, "50", 0),
+		Outputs: []ResultOutput{{To: "invalid-invoker", Value: 200, Reason: "refund"}},
 	}}, func(got ContractAddress) ([]UTXO, error) {
-		if !got.Equal(contract) {
-			t.Fatalf("unexpected contract %s", got.EncodeAddress())
-		}
+		require.True(t, got.Equal(addr))
 		return []UTXO{
-			contractframework.UTXOFromTxOutput(managed, contract, 10,
+			contractframework.UTXOFromTxOutput(managed, addr, 10,
 				&wire.TxOut{Value: 1000, Assets: mustAssetSet(t, gasAsset, "50", 0)}),
-			contractframework.UTXOFromTxOutput(invalidFunding, contract, 11,
+			contractframework.UTXOFromTxOutput(invalidFunding, addr, 11,
 				&wire.TxOut{Value: 200, Assets: mustAssetSet(t, gasAsset, "50", 0)}),
 		}, nil
-	}, store, func(name string) (int, bool) {
-		return 0, name == gasAsset
-	}, gasAsset, "bootstrap")
+	}, store, func(name string) (int, bool) { return 0, name == gasAsset }, gasAsset, "bootstrap")
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 	require.Equal(t, []OutPoint{invalidFunding}, plans[0].Inputs)
-
-	for _, output := range plans[0].Outputs {
-		require.NotEqual(t, "bootstrap", output.To)
-	}
 	require.Len(t, plans[0].Outputs, 1)
 	require.Equal(t, "invalid-invoker", plans[0].Outputs[0].To)
 	require.Equal(t, int64(200), plans[0].Outputs[0].Value)
+	require.Equal(t, before, runtime.managed)
 }
 
-func TestAgentManagedAssetsIncludesBetAndGas(t *testing.T) {
-	const gasAsset = "brc20:f:sgas"
+func TestAgentManagedQuantitiesParticipateInStateRoot(t *testing.T) {
 	runtime := newTestRuntime(t)
-	runtime.state.Prediction.GasBalance = "50"
-	runtime.addBet("bettor", "a", "1000")
-
-	managed, err := agentManagedAssets(runtime, gasAsset)
+	before := runtime.StateRoot()
+	require.NoError(t, runtime.managed.Credit(1000, mustAssetSet(t, "brc20:f:sgas", "50", 0)))
+	require.NotEqual(t, before, runtime.StateRoot())
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	encoded, err := store.MarshalBinary()
 	require.NoError(t, err)
-	address := runtime.Address()
-	require.Equal(t, address.EncodeAddress(), managed.To)
-	require.Equal(t, int64(1000), managed.Value)
-	require.Len(t, managed.Assets, 1)
-	require.Equal(t, gasAsset, managed.Assets[0].Name.String())
-	require.Equal(t, "50", managed.Assets[0].Amount.String())
-}
-
-func TestAgentManagedAssetsRejectsFractionalSats(t *testing.T) {
-	var managed ResultOutput
-	err := addAgentManagedAmount(&managed, "contract", SatoshiAssetName,
-		mustDecimal(t, "0.5", 1), nil)
-	require.ErrorContains(t, err, "managed sats amount")
+	require.NotContains(t, string(encoded), "managedFunding")
+	decoded, err := DecodeRuntimeStore(encoded)
+	require.NoError(t, err)
+	require.Equal(t, store.StateRoot(), decoded.StateRoot())
+	restored, ok := decoded.Get(runtime.Address())
+	require.True(t, ok)
+	require.Equal(t, runtime.managed, restored.managed)
 }
 
 func testResultScriptResolver(output ResultOutput) ([]byte, error) {
@@ -290,14 +201,12 @@ func testResultScriptResolver(output ResultOutput) ([]byte, error) {
 func testResultOutputResolver(tx *wire.MsgTx) ([]ResultOutput, error) {
 	return contractframework.ResultOutputsFromTx(tx, TestnetContractPrefix,
 		contractcommon.ParseContractPkScript,
-		func(script []byte) (string, bool, error) {
-			return string(script), len(script) != 0, nil
-		})
+		func(script []byte) (string, bool, error) { return string(script), len(script) != 0, nil })
 }
 
 func contractcommonReadResultPayload(tx *wire.MsgTx) (int, ResultPayload, error) {
-	for i, out := range tx.TxOut {
-		payload, err := contractcommon.ReadResultNullDataScript(out.PkScript)
+	for i, output := range tx.TxOut {
+		payload, err := contractcommon.ReadResultNullDataScript(output.PkScript)
 		if err == nil {
 			return i, payload, nil
 		}
@@ -307,52 +216,34 @@ func contractcommonReadResultPayload(tx *wire.MsgTx) (int, ResultPayload, error)
 
 func newTestRuntimeForBetAsset(t *testing.T, betAsset, minBetUnit string) *Runtime {
 	t.Helper()
-	contract := validPredictionContract()
-	contract.BetAsset = betAsset
-	contract.MinBetUnit = minBetUnit
-	contract.Outcomes = append(contract.Outcomes, PredictionOutcome{ID: "c", Text: "draw"})
-	content, err := contract.Encode()
-	if err != nil {
-		t.Fatalf("Encode failed: %v", err)
-	}
-	deployer := "deployer"
+	prediction := validPredictionContract()
+	prediction.BetAsset = betAsset
+	prediction.MinBetUnit = minBetUnit
+	prediction.Outcomes = append(prediction.Outcomes, PredictionOutcome{ID: "c", Text: "draw"})
+	content, err := prediction.Encode()
+	require.NoError(t, err)
 	deploy := DeployPayload{
-		GasLimit:        1000,
-		SubType:         SubtypePrediction,
-		Version:         CurrentAgentVersion,
-		DeployNonce:     9,
-		ContractContent: content,
+		GasLimit: 1000, SubType: SubtypePrediction, Version: CurrentAgentVersion,
+		DeployNonce: 9, ContractContent: content,
 	}
-	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.SubType, content, deployer, deploy.DeployNonce)
-	if err != nil {
-		t.Fatalf("DeriveContractAddress failed: %v", err)
-	}
-	runtime, err := NewRuntimeWithDeployer(addr, deploy, RuntimeConfig{
-		CoreNodeAddress:  "core",
-		AgentAddress:     "agent",
-		BootstrapAddress: "bootstrap",
-	}, deployer)
-	if err != nil {
-		t.Fatalf("NewRuntime failed: %v", err)
-	}
+	addr, _, err := DeriveContractAddress(TestnetContractPrefix, deploy.SubType, content, "deployer", deploy.DeployNonce)
+	require.NoError(t, err)
+	runtime, err := NewRuntimeWithDeployer(addr, deploy, testRuntimeConfig(), "deployer")
+	require.NoError(t, err)
 	return runtime
 }
 
 func mustDecimal(t *testing.T, amount string, precision int) *scommon.Decimal {
 	t.Helper()
 	decimal, err := scommon.NewDecimalFromString(amount, precision)
-	if err != nil {
-		t.Fatalf("NewDecimalFromString(%s) failed: %v", amount, err)
-	}
+	require.NoError(t, err)
 	return decimal
 }
 
 func mustAssetSet(t *testing.T, assetName, amount string, precision int) wire.TxAssets {
 	t.Helper()
 	assets, err := contractframework.NewAssetSetWithPrecision(assetName, amount, precision, ErrInvalidAsset)
-	if err != nil {
-		t.Fatalf("NewAssetSetWithPrecision failed: %v", err)
-	}
+	require.NoError(t, err)
 	return assets
 }
 
@@ -370,19 +261,16 @@ func outputsByRecipientAndReason(outputs []ResultOutput, assetName string) map[s
 				amount = asset.Amount.Clone()
 			}
 		}
-		if amount == nil {
-			continue
+		if amount != nil {
+			out[key] = amount.String()
 		}
-		out[key] = amount.String()
 	}
 	return out
 }
 
 func assertOutputAmount(t *testing.T, outputs map[string]string, key, want string) {
 	t.Helper()
-	if got := outputs[key]; got != want {
-		t.Fatalf("output %s mismatch: got %s want %s in %#v", key, got, want, outputs)
-	}
+	require.Equal(t, want, outputs[key], "output %s in %#v", key, outputs)
 }
 
 func sumOutputAmounts(outputs []ResultOutput, assetName string) string {
@@ -390,14 +278,11 @@ func sumOutputAmounts(outputs []ResultOutput, assetName string) string {
 	name := wire.NewAssetNameFromString(assetName)
 	for _, output := range outputs {
 		if assetName == SatoshiAssetName {
-			total = scommon.DecimalAdd(total, scommon.NewDefaultDecimal(output.Value))
-			continue
-		}
-		if name == nil {
-			continue
-		}
-		if asset, err := output.Assets.Find(name); err == nil && asset != nil {
-			total = total.AddAlignPrecision(asset.Amount.Clone())
+			total = total.AddAlignPrecision(scommon.NewDefaultDecimal(output.Value))
+		} else if name != nil {
+			if asset, err := output.Assets.Find(name); err == nil && asset != nil {
+				total = total.AddAlignPrecision(asset.Amount.Clone())
+			}
 		}
 	}
 	return total.String()

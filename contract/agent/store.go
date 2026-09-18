@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"sort"
 	"strconv"
+
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 )
 
 type byteWriter interface {
@@ -18,21 +20,23 @@ type RuntimeStore struct {
 }
 
 type RuntimeSnapshot struct {
-	Address  string              `json:"address"`
-	Subtype  string              `json:"subtype"`
-	Version  uint32              `json:"version"`
-	Contract PredictionContract  `json:"contract"`
-	State    RuntimeState        `json:"state"`
-	Config   RuntimeConfig       `json:"config"`
-	Deploy   DeployPayloadHeader `json:"deploy"`
+	Address string                        `json:"address"`
+	Subtype string                        `json:"subtype"`
+	Version uint32                        `json:"version"`
+	Contract PredictionContract           `json:"contract"`
+	State RuntimeState                    `json:"state"`
+	Managed contractcommon.ManagedBalance `json:"managed"`
+	Config RuntimeConfig                  `json:"config"`
+	Deploy DeployPayloadHeader            `json:"deploy"`
 }
 
 type DeployPayloadHeader struct {
-	GasLimit     int64  `json:"gas_limit"`
-	Deployer     string `json:"deployer"`
-	DeployNonce  uint64 `json:"deploy_nonce"`
-	ContentHash  []byte `json:"content_hash"`
-	AgentVersion uint32 `json:"agent_version"`
+	GasLimit     int64                        `json:"gas_limit"`
+	Deployer     string                       `json:"deployer"`
+	DeployNonce  uint64                       `json:"deploy_nonce"`
+	Flags        contractcommon.ContractFlags `json:"flags"`
+	ContentHash  []byte                       `json:"content_hash"`
+	AgentVersion uint32                       `json:"agent_version"`
 }
 
 func NewRuntimeStore() *RuntimeStore {
@@ -69,16 +73,9 @@ func (s *RuntimeStore) ActiveNetworkExclusiveExists(runtime *Runtime) bool {
 		return false
 	}
 	for _, existing := range s.runtimes {
-		if existing == nil {
-			continue
+		if existing != nil && existing.NetworkExclusiveKey() == want && existing.NetworkExclusiveActive() {
+			return true
 		}
-		if existing.NetworkExclusiveKey() != want {
-			continue
-		}
-		if !existing.NetworkExclusiveActive() {
-			continue
-		}
-		return true
 	}
 	return false
 }
@@ -88,16 +85,14 @@ func (r *Runtime) NetworkExclusiveKey() string {
 		return ""
 	}
 	sum := sha256.Sum256(r.deploy.ContractContent)
-	return r.deploy.SubType + ":" + strconv.FormatUint(uint64(r.deploy.Version), 10) + ":" +
-		hex.EncodeToString(sum[:])
+	return r.deploy.SubType + ":" + strconv.FormatUint(uint64(r.deploy.Version), 10) + ":" + hex.EncodeToString(sum[:])
 }
 
 func (r *Runtime) NetworkExclusiveActive() bool {
-	if r == nil {
+	if r == nil || r.state.Closed {
 		return false
 	}
-	status := r.state.Status
-	return status != StatusCompleted && status != StatusRejected
+	return r.state.Status != StatusCompleted && r.state.Status != StatusRejected
 }
 
 func (r *Runtime) StateRoot() [32]byte {
@@ -107,8 +102,17 @@ func (r *Runtime) StateRoot() [32]byte {
 	writeUint32(h, r.deploy.Version)
 	writeLengthPrefixed(h, []byte(r.deployer))
 	writeUint64(h, r.deploy.DeployNonce)
+	writeUint32(h, uint32(r.deploy.Flags))
 	writeLengthPrefixed(h, r.deploy.ContractContent)
-	stateJSON, _ := r.StateJSON()
+	managed, err := r.managed.MarshalJSON()
+	if err != nil {
+		return [32]byte{}
+	}
+	writeLengthPrefixed(h, managed)
+	stateJSON, err := r.StateJSON()
+	if err != nil {
+		return [32]byte{}
+	}
 	writeLengthPrefixed(h, stateJSON)
 	var root [32]byte
 	copy(root[:], h.Sum(nil))
@@ -136,10 +140,7 @@ func writeUint64(buf byteWriter, v uint64) {
 
 func (s *RuntimeStore) StateRoot() [32]byte {
 	if s == nil {
-		h := sha256.New()
-		var root [32]byte
-		copy(root[:], h.Sum(nil))
-		return root
+		return sha256.Sum256(nil)
 	}
 	return stateRootFromRuntimes(s.runtimes)
 }
@@ -205,20 +206,16 @@ func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
 		if runtime == nil {
 			continue
 		}
+		if err := runtime.managed.Validate(); err != nil {
+			return nil, err
+		}
 		contentHash := sha256.Sum256(runtime.deploy.ContractContent)
 		out = append(out, RuntimeSnapshot{
-			Address:  runtimeAddressString(runtime),
-			Subtype:  runtime.deploy.SubType,
-			Version:  runtime.deploy.Version,
-			Contract: runtime.Contract(),
-			State:    runtime.State(),
-			Config:   runtime.config,
+			Address: runtimeAddressString(runtime), Subtype: runtime.deploy.SubType, Version: runtime.deploy.Version,
+			Contract: runtime.Contract(), State: runtime.State(), Managed: runtime.managed.Clone(), Config: runtime.config,
 			Deploy: DeployPayloadHeader{
-				GasLimit:     runtime.deploy.GasLimit,
-				Deployer:     runtime.deployer,
-				DeployNonce:  runtime.deploy.DeployNonce,
-				ContentHash:  contentHash[:],
-				AgentVersion: runtime.deploy.Version,
+				GasLimit: runtime.deploy.GasLimit, Deployer: runtime.deployer, DeployNonce: runtime.deploy.DeployNonce,
+				Flags: runtime.deploy.Flags, ContentHash: contentHash[:], AgentVersion: runtime.deploy.Version,
 			},
 		})
 	}

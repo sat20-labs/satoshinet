@@ -12,16 +12,13 @@ import (
 )
 
 type InvokerResolver func(tx *wire.MsgTx, contractTx contract.Tx) (string, error)
-
 type PreviousOutputScriptResolver = contractframework.PreviousOutputScriptResolver
 
 func LastInputInvokerResolver(params *chaincfg.Params) InvokerResolver {
 	return contractframework.LastInputContractActorResolver("agent", params)
 }
 
-func LastInputPreviousOutputInvokerResolver(params *chaincfg.Params,
-	resolve PreviousOutputScriptResolver) InvokerResolver {
-
+func LastInputPreviousOutputInvokerResolver(params *chaincfg.Params, resolve PreviousOutputScriptResolver) InvokerResolver {
 	return contractframework.LastInputPreviousOutputContractActorResolver("agent", params, resolve)
 }
 
@@ -71,68 +68,56 @@ type Backend struct {
 	records         []ExecutionRecord
 	settlementPlans []*PredictionSettlementPlan
 	resultPlans     []ResultPlan
+	utxoOverlay     *contractframework.ContractUTXOOverlay
+	finalized       *BlockExecutionResult
 }
 
-const agentClosePlanReason = "__agent_close__"
-
 func ExecuteBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
+	original := req.Store
+	if original != nil {
+		req.Store = original.Clone()
+	}
 	executor := NewBackend(req)
-	if err := contractframework.NewExecutor(executor.executorConfig()).ExecuteTxs(req.Txs); err != nil {
+	for _, tx := range req.Txs {
+		if err := executor.ExecuteTx(tx); err != nil {
+			return BlockExecutionResult{}, err
+		}
+	}
+	result, err := executor.Finalize()
+	if err != nil {
 		return BlockExecutionResult{}, err
 	}
-	return executor.Finalize()
+	if original != nil {
+		*original = *executor.Store
+	}
+	return result, nil
 }
 
 func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, error) {
-	prefix := req.ContractPrefix
-	if prefix == "" {
-		prefix = TestnetContractPrefix
+	store := NewRuntimeStore()
+	if req.Store != nil {
+		store = req.Store.Clone()
 	}
-	store := req.Store
-	if store == nil {
-		store = NewRuntimeStore()
-	}
-	contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(req.ContractUTXOs, req.Txs, prefix, ContractTypeAgent)
 	executor := NewBackend(BlockExecutionRequest{
-		Store:          store,
-		ContractPrefix: prefix,
-		RuntimeConfig:  req.RuntimeConfig,
-		GasConfig:      req.GasConfig,
-		ContractUTXOs:  contractUTXOs,
-		AssetPrecision: req.AssetPrecision,
-		BlockHeight:    req.BlockHeight,
-		BlockTime:      req.BlockTime,
-		ResolveInvoker: req.ResolveInvoker,
+		Txs: req.Txs, Store: store, ContractPrefix: req.ContractPrefix, RuntimeConfig: req.RuntimeConfig,
+		GasConfig: req.GasConfig, ContractUTXOs: req.ContractUTXOs, AssetPrecision: req.AssetPrecision,
+		BlockHeight: req.BlockHeight, BlockTime: req.BlockTime, ResolveInvoker: req.ResolveInvoker,
 	})
 	result, err := contractframework.BuildSingleResultTxBlock(contractframework.SingleResultBlockRequest[BlockExecutionResult]{
-		ModuleName: "agent",
-		Txs:        req.Txs,
-		Prefix:     prefix,
-		Classify:   ClassifyTxForBlockOrder,
-		IsModule:   func(info TxOrderInfo) bool { return info.IsAgent },
-		IsResult:   func(info TxOrderInfo) bool { return info.Type == TxTypeResult },
-		ExecuteTx:  executor.ExecuteTx,
-		Finalize: func() (BlockExecutionResult, error) {
-			return executor.Finalize()
-		},
-		Plans: func(exec BlockExecutionResult) []ResultPlan {
-			return exec.ResultPlans
-		},
+		ModuleName: "agent", Txs: req.Txs, Prefix: executor.ContractPrefix,
+		Classify:  ClassifyTxForBlockOrder,
+		IsModule:  func(info TxOrderInfo) bool { return info.IsAgent },
+		IsResult:  func(info TxOrderInfo) bool { return info.Type == TxTypeResult },
+		ExecuteTx: executor.ExecuteTx, Finalize: executor.Finalize,
+		Plans: func(exec BlockExecutionResult) []ResultPlan { return exec.ResultPlans },
 		SetPlans: func(exec BlockExecutionResult, plans []ResultPlan) BlockExecutionResult {
-			result := exec
-			result.ResultPlans = plans
-			return result
+			exec.ResultPlans = plans
+			return exec
 		},
 		Policy: contractframework.SingleResultTxPolicy{
-			Label:         "agent",
-			Status:        ResultStatusSuccess,
+			Label: "agent", Status: ResultStatusSuccess,
 			GasAssetName:  req.GasConfig.Normalize().GasAssetName,
-			ResolveScript: req.ResolveScript,
-			ResolveOutput: req.ResolveOutput,
-			Augment: func(plans []ResultPlan) ([]ResultPlan, error) {
-				return AugmentResultPlans(plans, contractUTXOs, executor.Store, req.AssetPrecision,
-					req.GasConfig.Normalize().GasAssetName, req.RuntimeConfig.BootstrapAddress)
-			},
+			ResolveScript: req.ResolveScript, ResolveOutput: req.ResolveOutput,
 		},
 	})
 	if err != nil {
@@ -142,10 +127,10 @@ func BuildBlockResultTxs(req BlockResultBuildRequest) (BlockResultBuildResult, e
 	if !ok {
 		return BlockResultBuildResult{}, errors.New("agent result build execution has unexpected type")
 	}
-	return BlockResultBuildResult{
-		ResultTxs: result.ResultTxs,
-		Execution: execution,
-	}, nil
+	if req.Store != nil {
+		*req.Store = *store
+	}
+	return BlockResultBuildResult{ResultTxs: result.ResultTxs, Execution: execution}, nil
 }
 
 func NewBackend(req BlockExecutionRequest) *Backend {
@@ -159,59 +144,58 @@ func NewBackend(req BlockExecutionRequest) *Backend {
 	if prefix == "" {
 		prefix = TestnetContractPrefix
 	}
+	overlay := contractframework.NewContractUTXOOverlay(contractframework.ContractUTXOOverlayConfig{
+		Prefix: prefix, ContractType: ContractTypeAgent,
+		Base: contractframework.WithoutBlockOutputs(req.ContractUTXOs, req.Txs),
+	})
 	return &Backend{
-		Store:          store,
-		ContractPrefix: prefix,
-		RuntimeConfig:  req.RuntimeConfig,
-		GasConfig:      req.GasConfig,
-		ContractUTXOs:  req.ContractUTXOs,
-		AssetPrecision: req.AssetPrecision,
-		BlockHeight:    req.BlockHeight,
-		BlockTime:      req.BlockTime,
-		ResolveInvoker: req.ResolveInvoker,
+		Store: store, ContractPrefix: prefix, RuntimeConfig: req.RuntimeConfig,
+		GasConfig: req.GasConfig, ContractUTXOs: overlay.Provider, AssetPrecision: req.AssetPrecision,
+		BlockHeight: req.BlockHeight, BlockTime: req.BlockTime, ResolveInvoker: req.ResolveInvoker,
+		utxoOverlay: overlay,
 	}
 }
 
 func (e *Backend) ExecuteTx(tx *wire.MsgTx) error {
-	return contractframework.NewExecutor(e.executorConfig()).ExecuteTx(tx)
+	if e.finalized != nil {
+		return fmt.Errorf("agent block has already been finalized")
+	}
+	if err := contractframework.NewExecutor(e.executorConfig()).ExecuteTx(tx); err != nil {
+		return err
+	}
+	return e.utxoOverlay.ApplyTx(tx, e.BlockHeight)
 }
 
 func (e *Backend) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
-	return contractframework.NewExecutor(e.executorConfig()).ExecuteParsedTx(tx, parsed)
+	if e.finalized != nil {
+		return fmt.Errorf("agent block has already been finalized")
+	}
+	if err := contractframework.NewExecutor(e.executorConfig()).ExecuteParsedTx(tx, parsed); err != nil {
+		return err
+	}
+	return e.utxoOverlay.ApplyTx(tx, e.BlockHeight)
 }
 
 func (e *Backend) executorConfig() contractframework.ExecutorConfig {
 	return contractframework.ExecutorConfig{
-		Backend:   e,
-		Prefix:    e.ContractPrefix,
-		ParseSpec: agentParseSpec(),
-		Resolver:  StandardContractScriptResolver,
+		Backend: e, Prefix: e.ContractPrefix, ParseSpec: agentParseSpec(), Resolver: StandardContractScriptResolver,
 		Context: contractframework.ExecutionContext{
-			Prefix:    e.ContractPrefix,
-			Height:    e.BlockHeight,
-			Time:      e.BlockTime,
-			GasConfig: e.GasConfig,
+			Prefix: e.ContractPrefix, Height: e.BlockHeight, Time: e.BlockTime, GasConfig: e.GasConfig,
 		},
 		ResolveActor: func(tx *wire.MsgTx, contractTx contract.Tx) (string, error) {
 			if e.ResolveInvoker == nil {
-				return "", nil
+				return "", fmt.Errorf("%w: missing agent invoker resolver", contractframework.ErrCallAdmission)
 			}
 			return e.ResolveInvoker(tx, contractTx)
 		},
 	}
 }
 
-func (e *Backend) ContractType() byte {
-	return ContractTypeAgent
-}
-
-func (e *Backend) Name() string {
-	return "agent"
-}
-
-func (e *Backend) Priority() int {
-	return 3
-}
+func (e *Backend) ContractType() byte  { return ContractTypeAgent }
+func (e *Backend) Name() string        { return "agent" }
+func (e *Backend) Priority() int       { return 3 }
+func (e *Backend) StateRoot() [32]byte { return e.Store.StateRoot() }
+func (e *Backend) Snapshot() any       { return e.Store }
 
 func (e *Backend) Deploy(ctx contractframework.ExecutionContext, tx contract.Tx) (contractframework.ExecutionOutcome, error) {
 	before := len(e.records)
@@ -232,16 +216,9 @@ func (e *Backend) Invoke(ctx contractframework.ExecutionContext, tx contract.Tx)
 func (e *Backend) DefaultInvoke(ctx contractframework.ExecutionContext,
 	tx contract.Tx, funding contract.FundingOutput) (contractframework.ExecutionOutcome, bool, error) {
 
-	before := len(e.records)
-	output := contractframework.ContractOutputFromFunding(funding)
-	if err := e.executeDefaultInvokeOutput(output); err != nil {
-		return contractframework.ExecutionOutcome{}, false, err
-	}
-	if len(e.records) == before {
-		return contractframework.ExecutionOutcome{}, false, nil
-	}
-	outcome, err := e.lastOutcomeSince(before)
-	return outcome, true, err
+	// Prediction has no implicit bet action. Unhandled funding is refunded by
+	// the common executor instead of being absorbed into the prediction pool.
+	return contractframework.ExecutionOutcome{}, false, nil
 }
 
 func (e *Backend) FinalizeBlock(ctx contractframework.ExecutionContext) ([]contractframework.ExecutionOutcome, error) {
@@ -252,227 +229,265 @@ func (e *Backend) FinalizeBlock(ctx contractframework.ExecutionContext) ([]contr
 	return contractframework.ExecutionOutcomesFromRecords(result.Records), nil
 }
 
-func (e *Backend) StateRoot() [32]byte {
-	return e.Store.StateRoot()
-}
-
-func (e *Backend) Snapshot() any {
-	return e.Store
-}
-
-func (e *Backend) executeDefaultInvokeOutput(output ContractOutput) error {
-	if !e.Store.Exists(output.Contract) {
-		return errors.New("default invoke target contract does not exist")
-	}
-	return nil
-}
-
 func (e *Backend) Finalize() (BlockExecutionResult, error) {
+	if e.finalized != nil {
+		return cloneAgentBlockResult(*e.finalized), nil
+	}
 	e.Store.AdvancePredictionStatuses(e.BlockHeight, e.BlockTime)
-	resultPlans := contractframework.AddGasFeesToResultPlans(e.resultPlans, e.records)
-	return BlockExecutionResult{
-		Records:         contractframework.CloneExecutionRecords(e.records),
-		SettlementPlans: cloneSettlementPlans(e.settlementPlans),
-		ResultPlans:     contractframework.CloneResultPlans(resultPlans),
-		StateRoot:       e.Store.StateRoot(),
-	}, nil
+	plans := contractframework.AddGasFeesToResultPlans(e.resultPlans, e.records)
+	plans = contractframework.AttachCallFunding(plans, e.records)
+	records := contractframework.BindExecutionBalances(e.records, e.ManagedBalance)
+	var err error
+	plans, err = AugmentResultPlans(plans, e.ContractUTXOs, e.Store, e.AssetPrecision,
+		e.GasConfig.Normalize().GasAssetName, e.RuntimeConfig.BootstrapAddress)
+	if err != nil {
+		return BlockExecutionResult{}, err
+	}
+	if err := contractframework.ApplyManagedResultBalances(plans, e.ManagedBalance, e.Store.ContractClosed); err != nil {
+		return BlockExecutionResult{}, err
+	}
+	for _, key := range e.Store.sortedKeys() {
+		if runtime := e.Store.runtimes[key]; runtime != nil && runtime.state.Closed {
+			runtime.state.Prediction.GasBalance = ""
+		}
+	}
+	result := BlockExecutionResult{
+		Records: records, SettlementPlans: cloneSettlementPlans(e.settlementPlans),
+		ResultPlans: contractframework.CloneResultPlans(plans), StateRoot: e.Store.StateRoot(),
+	}
+	e.finalized = &result
+	return cloneAgentBlockResult(result), nil
+}
+
+func cloneAgentBlockResult(result BlockExecutionResult) BlockExecutionResult {
+	result.Records = contractframework.CloneExecutionRecords(result.Records)
+	result.PendingRecords = contractframework.CloneExecutionRecords(result.PendingRecords)
+	result.SettlementPlans = cloneSettlementPlans(result.SettlementPlans)
+	result.ResultPlans = contractframework.CloneResultPlans(result.ResultPlans)
+	return result
+}
+
+func (e *Backend) resultFee() (*scommon.Decimal, error) {
+	fee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	if err != nil {
+		return nil, err
+	}
+	policy := contractframework.AssetPrecisionPolicy{Fallback: contract.GasFeePrecision, Resolve: e.AssetPrecision}
+	return policy.NormalizeUp(e.GasConfig.Normalize().GasAssetName, fee), nil
 }
 
 func (e *Backend) executeDeploy(tx *wire.MsgTx) error {
-	parsed, err := ParseTx(tx, StandardContractScriptResolver(e.ContractPrefix))
-	if err != nil {
-		return err
-	}
-	contractTx := contractframework.ContractTxFromParsed(tx, parsed, ContractTypeAgent)
-	if e.ResolveInvoker != nil {
-		actor, err := e.ResolveInvoker(tx, contractTx)
-		if err != nil {
-			return err
-		}
-		contractTx.Actor = actor
-	}
-	return e.executeDeployTx(tx, parsed, contractTx)
+	return e.ExecuteTx(tx)
 }
 
 func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx contract.Tx) error {
 	validated, err := contractframework.ValidateParsedDeployBasic(parsed, "agent", e.GasConfig)
 	if err != nil {
-		return nil
+		return fmt.Errorf("%w: %v", contractframework.ErrCallAdmission, err)
 	}
 	deployer := contractTx.Actor
 	if deployer == "" {
-		return errors.New("agent deployer is empty")
+		return fmt.Errorf("%w: agent deployer is empty", contractframework.ErrCallAdmission)
 	}
 	deployPayload := agentDeployPayloadFromFramework(&validated.Payload)
-	deployPayload.Type = ContractTypeAgent
-	addr, _, err := DeriveContractAddress(
-		e.ContractPrefix,
-		deployPayload.SubType,
-		deployPayload.ContractContent,
-		deployer,
-		deployPayload.DeployNonce,
-	)
+	addr, _, err := DeriveContractAddress(e.ContractPrefix, deployPayload.SubType,
+		deployPayload.ContractContent, deployer, deployPayload.DeployNonce)
 	if err != nil {
 		return err
 	}
-	runtime, err := NewRuntimeWithDeployer(addr, *deployPayload, e.RuntimeConfig, deployer)
+	funding, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(e.ContractPrefix), addr)
 	if err != nil {
 		return err
 	}
-	fundingOutputs, err := FindContractOutputsForContract(tx, StandardContractScriptResolver(e.ContractPrefix), addr)
+	if len(funding) != 1 {
+		return fmt.Errorf("%w: agent DEPLOY must use exactly one derived contract output", contractframework.ErrCallAdmission)
+	}
+	fee, err := e.resultFee()
 	if err != nil {
 		return err
 	}
-	if len(fundingOutputs) == 0 {
-		return fmt.Errorf("agent DEPLOY output does not match derived contract %s", addr.MustEncode())
-	}
-	if len(fundingOutputs) > 1 {
-		return fmt.Errorf("agent DEPLOY must use at most one contract output")
-	}
-	fundingOutput := fundingOutputs[0]
-	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	gasName := e.GasConfig.Normalize().GasAssetName
+	ready, err := contractframework.OutputHasRequiredGas(funding[0], gasName, fee)
 	if err != nil {
 		return err
 	}
-	if e.Store.Exists(addr) || e.Store.ActiveNetworkExclusiveExists(runtime) {
-		outcome := contractframework.ExecutionOutcome{
-			Height:         e.BlockHeight,
-			TxID:           tx.TxID(),
-			Type:           TxTypeDeploy,
-			Kind:           ExecutionKindDeploy,
-			CallID:         DeriveDeployCallID(tx.TxID(), addr),
-			Contract:       addr,
-			Status:         ResultStatusInvalid,
-			GasLimit:       validated.Payload.GasLimit,
-			FundingInputs:  []OutPoint{fundingOutput.OutPoint},
-			RequiresResult: true,
-		}
-		e.appendOutcome(outcome)
-		if resultPlan, ok := stateResultPlan(addr, fundingOutput); ok {
-			outcome.GasFee = resultFee
-			e.records[len(e.records)-1] = outcome.ToRecord()
-			e.resultPlans = append(e.resultPlans, resultPlan)
-		}
-		return nil
+	if !ready {
+		return fmt.Errorf("%w: agent deployment has insufficient Result gas", contractframework.ErrCallAdmission)
 	}
+	reject := func() error {
+		_, err := e.appendFundingFailure(contractframework.FundingFailureRequest{
+			Height: e.BlockHeight, TxID: tx.TxID(), Kind: ExecutionKindDeploy,
+			Contract: addr, CallID: DeriveDeployCallID(tx.TxID(), addr), Recipient: deployer,
+			Funding: funding, GasLimit: validated.Payload.GasLimit, GasAsset: gasName, GasFee: fee,
+		})
+		return err
+	}
+	runtime, runtimeErr := NewRuntimeWithDeployer(addr, *deployPayload, e.RuntimeConfig, deployer)
+	if runtimeErr != nil || e.Store.Exists(addr) || e.Store.ActiveNetworkExclusiveExists(runtime) {
+		return reject()
+	}
+	business, err := contractframework.SummarizeBusinessFunding(funding, gasName)
+	if err != nil {
+		return err
+	}
+	if business.PlainSat != 0 || len(business.Assets) != 0 {
+		return reject()
+	}
+	gas, err := funding[0].AssetAmount(gasName)
+	if err != nil {
+		return err
+	}
+	runtime.addGasBalance(gas.SubAlignPrecision(fee).String())
 	e.Store.Add(runtime)
-	outcome := contractframework.ExecutionOutcome{
-		Height:         e.BlockHeight,
-		TxID:           tx.TxID(),
-		Type:           TxTypeDeploy,
-		Kind:           ExecutionKindDeploy,
-		CallID:         DeriveDeployCallID(tx.TxID(), addr),
-		Contract:       addr,
-		Status:         ResultStatusSuccess,
-		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  []OutPoint{fundingOutput.OutPoint},
-		RequiresResult: true,
-	}
-	e.appendOutcome(outcome)
-	if resultPlan, ok := stateResultPlan(addr, fundingOutput); ok {
-		outcome.GasFee = resultFee
-		e.records[len(e.records)-1] = outcome.ToRecord()
-		e.resultPlans = append(e.resultPlans, resultPlan)
-	}
+	e.appendOutcome(contractframework.ExecutionOutcome{
+		Height: e.BlockHeight, TxID: tx.TxID(), Type: TxTypeDeploy, Kind: ExecutionKindDeploy,
+		CallID: DeriveDeployCallID(tx.TxID(), addr), Contract: addr, Status: ResultStatusSuccess,
+		GasLimit: validated.Payload.GasLimit, FundingInputs: []OutPoint{funding[0].OutPoint},
+		GasFee: fee, RequiresResult: true,
+	})
+	e.resultPlans = append(e.resultPlans, ResultPlan{Contract: addr.EncodeAddress(), Inputs: []OutPoint{funding[0].OutPoint}})
 	return nil
 }
 
 func (e *Backend) executeInvoke(tx *wire.MsgTx, parsed ParsedTx) error {
-	return e.executeInvokeTx(tx, parsed, contractframework.ContractTxFromParsed(tx, parsed, ContractTypeAgent))
+	return e.ExecuteParsedTx(tx, parsed)
 }
 
 func (e *Backend) executeInvokeTx(tx *wire.MsgTx, parsed ParsedTx, contractTx contract.Tx) error {
 	validated, err := ValidateParsedInvokeTxBasic(parsed, e.Store.Exists, e.GasConfig)
 	if err != nil {
-		return nil
+		return fmt.Errorf("%w: %v", contractframework.ErrCallAdmission, err)
 	}
 	runtime, ok := e.Store.Get(validated.Contract)
 	if !ok {
-		return nil
+		return fmt.Errorf("%w: unknown agent contract", contractframework.ErrCallAdmission)
 	}
-	invoker := ""
-	if contractTx.Actor != "" {
-		invoker = contractTx.Actor
-	} else if e.ResolveInvoker != nil {
-		invoker, err = e.ResolveInvoker(tx, contractTx)
+	invoker := contractTx.Actor
+	if invoker == "" {
+		return fmt.Errorf("%w: missing agent invoker", contractframework.ErrCallAdmission)
+	}
+	fee, err := e.resultFee()
+	if err != nil {
+		return err
+	}
+	gasName := e.GasConfig.Normalize().GasAssetName
+	reject := func() error { return e.executeInvalidInvoke(tx, validated, invoker) }
+	if err := runtime.CheckInvocationLifecycle(validated.Payload.Action, invoker); err != nil {
+		return reject()
+	}
+	switch validated.Payload.Action {
+	case InvokeAPIReady, InvokeAPIReject, InvokeAPIBet, InvokeAPIConfirm, InvokeAPIClose:
+	default:
+		return reject()
+	}
+	ready, err := contractframework.OutputHasRequiredGas(validated.FundingOutput, gasName, fee)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return reject()
+	}
+	if validated.Payload.Action != InvokeAPIBet && validated.Payload.Action != InvokeAPIClose {
+		business, err := contractframework.SummarizeBusinessFunding([]ContractOutput{validated.FundingOutput}, gasName)
 		if err != nil {
-			return nil
+			return err
+		}
+		if business.PlainSat != 0 || len(business.Assets) != 0 {
+			return reject()
+		}
+	}
+	if validated.Payload.Action == InvokeAPIBet {
+		for _, asset := range validated.FundingOutput.TxAssets() {
+			name := asset.Name.String()
+			if name != gasName && name != runtime.Contract().BetAsset {
+				return reject()
+			}
+		}
+		if gasName != SatoshiAssetName && runtime.Contract().BetAsset != SatoshiAssetName && validated.FundingOutput.PlainValue() != 0 {
+			return reject()
 		}
 	}
 
+	// Business validation runs on a local candidate. A rejected invocation may
+	// not leave a partially mutated bet, confirmation or close state behind.
+	candidate := runtime.Clone()
 	var settlement *PredictionSettlementPlan
-	var settlementIntents []AssetIntent
 	switch validated.Payload.Action {
 	case InvokeAPIReady:
-		err = runtime.ApplyReady(ApplyReadyRequest{Invoker: invoker})
+		err = candidate.ApplyReady(ApplyReadyRequest{Invoker: invoker})
 	case InvokeAPIReject:
-		err = e.applyReject(runtime, validated, invoker)
+		err = e.applyReject(candidate, validated, invoker)
 	case InvokeAPIBet:
-		settlement, err = e.applyBet(runtime, validated, invoker)
+		settlement, err = e.applyBet(candidate, validated, invoker)
 	case InvokeAPIConfirm:
-		settlement, err = e.applyConfirm(runtime, validated, invoker)
+		settlement, err = e.applyConfirm(candidate, validated, invoker)
 	case InvokeAPIClose:
-		settlement, err = e.applyClose(runtime, validated, invoker)
+		settlement, err = e.applyClose(candidate, validated, invoker)
 	default:
 		err = fmt.Errorf("unsupported agent action %s", validated.Payload.Action)
 	}
 	if err != nil {
-		return e.executeInvalidInvoke(tx, validated, invoker)
+		if errors.Is(err, contractframework.ErrAccountingInvariant) {
+			return err
+		}
+		return reject()
 	}
+	plan := ResultPlan{
+		Contract: validated.Contract.MustEncode(), Height: e.BlockHeight,
+		Inputs: []OutPoint{validated.FundingOutput.OutPoint},
+	}
+	var intents []AssetIntent
+	if settlement != nil {
+		settlement.Height = e.BlockHeight
+		settlement.Inputs = []OutPoint{validated.FundingOutput.OutPoint}
+		plan, err = contractframework.BuildSettlementResultPlan(settlement, e.settlementResultOptions())
+		if err != nil {
+			return err
+		}
+		intents, err = contractframework.BuildSettlementAssetIntents(settlement, e.settlementResultOptions())
+		if err != nil {
+			return err
+		}
+	}
+	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract)
+	outcome := contractframework.ExecutionOutcome{
+		Height: e.BlockHeight, TxID: tx.TxID(), Type: TxTypeInvoke, Kind: ExecutionKindInvoke,
+		CallID: callID, Contract: validated.Contract, Status: ResultStatusSuccess,
+		GasLimit: validated.Payload.GasLimit, FundingInputs: []OutPoint{validated.FundingOutput.OutPoint},
+		GasFee: fee, GasRefundRecipient: invoker, AssetIntents: intents, RequiresResult: true,
+	}
+	if validated.Payload.Action == InvokeAPIBet && candidate.Contract().BetAsset == gasName {
+		stake, _, err := betAndGasFundingAmount(validated.FundingOutput, gasName, gasName, fee)
+		if err != nil {
+			return err
+		}
+		outcome.RetainedGasFunding = parseDecimalOrZero(stake)
+	}
+	if validated.Payload.Action == InvokeAPIClose {
+		outcome.CloseContract = true
+		outcome.DeployerAddress = candidate.deployer
+		outcome.BootstrapAddress = e.RuntimeConfig.BootstrapAddress
+		refunds, err := contractframework.NonGasFundingRefundIntents(validated.Contract,
+			[]ContractOutput{validated.FundingOutput}, gasName, invoker)
+		if err != nil {
+			return err
+		}
+		for i := range refunds {
+			refunds[i].CallID = callID
+		}
+		refundOutputs, err := resultOutputsFromAssetIntents(refunds)
+		if err != nil {
+			return err
+		}
+		plan.Outputs = append(plan.Outputs, refundOutputs...)
+		outcome.AssetIntents = append(outcome.AssetIntents, refunds...)
+	}
+	*runtime = *candidate
 	if settlement != nil {
 		e.settlementPlans = append(e.settlementPlans, settlement)
-		resultPlan, err := contractframework.BuildSettlementResultPlan(settlement, e.settlementResultOptions())
-		if err != nil {
-			return err
-		}
-		if validated.Payload.Action == InvokeAPIClose {
-			resultPlan.Outputs = append(resultPlan.Outputs, ResultOutput{
-				To:     validated.Contract.EncodeAddress(),
-				Reason: agentClosePlanReason,
-			})
-		}
-		settlementIntents, err = contractframework.BuildSettlementAssetIntents(settlement, e.settlementResultOptions())
-		if err != nil {
-			return err
-		}
-		e.resultPlans = append(e.resultPlans, resultPlan)
 	}
-
-	requiresResult := settlement != nil
-	var readyResultPlan ResultPlan
-	if validated.Payload.Action == InvokeAPIReady || validated.Payload.Action == InvokeAPIReject {
-		var ok bool
-		readyResultPlan, ok = stateResultPlan(validated.Contract, validated.FundingOutput)
-		requiresResult = ok
-	}
-	outcome := contractframework.ExecutionOutcome{
-		Height:         e.BlockHeight,
-		TxID:           tx.TxID(),
-		Type:           TxTypeInvoke,
-		Kind:           ExecutionKindInvoke,
-		CallID:         DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract),
-		Contract:       validated.Contract,
-		GasLimit:       validated.Payload.GasLimit,
-		FundingInputs:  []OutPoint{validated.FundingOutput.OutPoint},
-		AssetIntents:   settlementIntents,
-		RequiresResult: requiresResult,
-	}
-	if validated.Payload.Action == InvokeAPIClose && err == nil {
-		outcome.CloseContract = true
-		outcome.DeployerAddress = runtime.deployer
-		outcome.BootstrapAddress = e.RuntimeConfig.BootstrapAddress
-	}
-	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
-	if err != nil {
-		return err
-	}
-	if outcome.RequiresResult {
-		outcome.GasFee = resultFee
-	}
+	e.resultPlans = append(e.resultPlans, plan)
 	e.appendOutcome(outcome)
-	if (validated.Payload.Action == InvokeAPIReady || validated.Payload.Action == InvokeAPIReject) && requiresResult {
-		e.resultPlans = append(e.resultPlans, readyResultPlan)
-	}
 	return nil
 }
 
@@ -481,60 +496,28 @@ func (e *Backend) appendOutcome(outcome contractframework.ExecutionOutcome) {
 }
 
 func (e *Backend) executeInvalidInvoke(tx *wire.MsgTx, validated InvokeValidation, invoker string) error {
-	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	fee, err := e.resultFee()
 	if err != nil {
 		return err
 	}
-	gasConfig := e.GasConfig.Normalize()
-	hasResultGas, err := contractframework.OutputHasRequiredGas(validated.FundingOutput, gasConfig.GasAssetName, resultFee)
-	if err != nil {
-		return err
-	}
-	if !hasResultGas {
-		return nil
-	}
-	refundIntents, err := contractframework.NonGasFundingRefundIntents(validated.Contract,
-		[]ContractOutput{validated.FundingOutput}, gasConfig.GasAssetName, invoker)
-	if err != nil {
-		return err
-	}
-	refundOutputs, err := resultOutputsFromAssetIntents(refundIntents)
-	if err != nil {
-		return err
-	}
-	callID := DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract)
-	e.resultPlans = append(e.resultPlans, ResultPlan{
-		Contract:   validated.Contract.EncodeAddress(),
-		InputScope: contractframework.ResultInputScopeExplicit,
-		Inputs:     []OutPoint{validated.FundingOutput.OutPoint},
-		Outputs:    refundOutputs,
+	_, err = e.appendFundingFailure(contractframework.FundingFailureRequest{
+		Height: e.BlockHeight, TxID: tx.TxID(), Kind: ExecutionKindInvoke,
+		Contract:  validated.Contract,
+		CallID:    DeriveInvokeCallID(tx.TxID(), validated.FundingOutput.Vout, validated.Contract),
+		Recipient: invoker, Funding: []ContractOutput{validated.FundingOutput},
+		GasLimit: validated.Payload.GasLimit, GasAsset: e.GasConfig.Normalize().GasAssetName, GasFee: fee,
 	})
-	outcome := contractframework.ExecutionOutcome{
-		Height:             e.BlockHeight,
-		TxID:               tx.TxID(),
-		Type:               TxTypeInvoke,
-		Kind:               ExecutionKindInvoke,
-		CallID:             callID,
-		Contract:           validated.Contract,
-		Status:             ResultStatusInvalid,
-		GasLimit:           validated.Payload.GasLimit,
-		GasFee:             resultFee,
-		FundingInputs:      []OutPoint{validated.FundingOutput.OutPoint},
-		GasRefundRecipient: invoker,
-		AssetIntents:       refundIntents,
-		RequiresResult:     true,
-	}
-	e.appendOutcome(outcome)
-	return nil
+	return err
 }
 
 func resultOutputsFromAssetIntents(intents []AssetIntent) ([]ResultOutput, error) {
 	outputs := make([]ResultOutput, 0, len(intents))
 	for _, intent := range intents {
-		output := ResultOutput{To: intent.To, Reason: "refund"}
-		if err := output.AddAsset(intent.AssetName, intent.Amount); err != nil {
+		output, err := contractframework.ResultOutputWithAsset(intent.To, intent.AssetName, intent.Amount)
+		if err != nil {
 			return nil, err
 		}
+		output.Reason = "refund"
 		if !contractframework.ResultOutputIsZero(output) {
 			outputs = append(outputs, output)
 		}
@@ -551,10 +534,7 @@ func (e *Backend) applyReject(runtime *Runtime, validated InvokeValidation, invo
 	if err != nil {
 		return err
 	}
-	return runtime.ApplyReject(ApplyRejectRequest{
-		Invoker: invoker,
-		Param:   param,
-	})
+	return runtime.ApplyReject(ApplyRejectRequest{Invoker: invoker, Param: param})
 }
 
 func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker string) (*PredictionSettlementPlan, error) {
@@ -562,16 +542,12 @@ func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker
 	if err != nil {
 		return nil, err
 	}
-	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
+	fee, err := e.resultFee()
 	if err != nil {
 		return nil, err
 	}
-	amount, gasAmount, err := betAndGasFundingAmount(
-		validated.FundingOutput,
-		runtime.Contract().BetAsset,
-		e.GasConfig.Normalize().GasAssetName,
-		resultFee,
-	)
+	amount, _, err := betAndGasFundingAmount(validated.FundingOutput,
+		runtime.Contract().BetAsset, e.GasConfig.Normalize().GasAssetName, fee)
 	if err != nil {
 		return nil, err
 	}
@@ -579,13 +555,11 @@ func (e *Backend) applyBet(runtime *Runtime, validated InvokeValidation, invoker
 	if err != nil {
 		return nil, err
 	}
+	// Result fees and unused call gas are accounted by the framework, not by
+	// the operating-gas cache. Only the actual stake becomes a user liability.
 	return nil, runtime.ApplyBet(ApplyBetRequest{
-		Invoker:   invoker,
-		Param:     param,
-		AssetName: runtime.Contract().BetAsset,
-		Amount:    amount,
-		GasAmount: gasAmount,
-		TimeValue: timeValue,
+		Invoker: invoker, Param: param, AssetName: runtime.Contract().BetAsset,
+		Amount: amount, TimeValue: timeValue,
 	})
 }
 
@@ -598,47 +572,7 @@ func (e *Backend) applyConfirm(runtime *Runtime, validated InvokeValidation, inv
 	if err != nil {
 		return nil, err
 	}
-	gasAmount, err := confirmGasFundingAmount(validated.FundingOutput, e.GasConfig.Normalize().GasAssetName)
-	if err != nil {
-		return nil, err
-	}
-	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
-	if err != nil {
-		return nil, err
-	}
-	resultFeeAmount := ""
-	if resultFee != nil && resultFee.Sign() > 0 {
-		resultFeeAmount = resultFee.String()
-	}
-	probeStore := e.Store.Clone()
-	probe, ok := probeStore.Get(validated.Contract)
-	if !ok {
-		return nil, fmt.Errorf("agent contract runtime is missing")
-	}
-	settlement, err := probe.ApplyConfirm(ApplyConfirmRequest{
-		Invoker:      invoker,
-		Param:        param,
-		GasAmount:    gasAmount,
-		ResultGasFee: resultFeeAmount,
-		TimeValue:    timeValue,
-	})
-	if err != nil {
-		return nil, err
-	}
-	settlement.Inputs = append(settlement.Inputs, validated.FundingOutput.OutPoint)
-	if err := e.checkSettlementFunding(settlement, probeStore); err != nil {
-		return nil, err
-	}
-	if _, err := contractframework.BuildSettlementAssetIntents(settlement, e.settlementResultOptions()); err != nil {
-		return nil, err
-	}
-	return runtime.ApplyConfirm(ApplyConfirmRequest{
-		Invoker:      invoker,
-		Param:        param,
-		GasAmount:    gasAmount,
-		ResultGasFee: resultFeeAmount,
-		TimeValue:    timeValue,
-	})
+	return runtime.ApplyConfirm(ApplyConfirmRequest{Invoker: invoker, Param: param, TimeValue: timeValue})
 }
 
 func (e *Backend) applyClose(runtime *Runtime, validated InvokeValidation, invoker string) (*PredictionSettlementPlan, error) {
@@ -649,33 +583,7 @@ func (e *Backend) applyClose(runtime *Runtime, validated InvokeValidation, invok
 	if err != nil {
 		return nil, err
 	}
-	plan, err := runtime.ApplyClose(ApplyCloseRequest{Invoker: invoker, TimeValue: timeValue})
-	if err != nil {
-		return nil, err
-	}
-	plan.Inputs = []OutPoint{validated.FundingOutput.OutPoint}
-	return plan, nil
-}
-
-func (e *Backend) checkSettlementFunding(settlement *PredictionSettlementPlan, store *RuntimeStore) error {
-	if settlement == nil || e.ContractUTXOs == nil {
-		return nil
-	}
-	plan, err := contractframework.BuildSettlementResultPlan(settlement, e.settlementResultOptions())
-	if err != nil {
-		return err
-	}
-	resultFee, err := e.GasConfig.ResultFee(e.BlockHeight)
-	if err != nil {
-		return err
-	}
-	plan.GasFee = resultFee
-	if store == nil {
-		store = e.Store
-	}
-	_, err = AugmentResultPlans([]ResultPlan{plan}, e.ContractUTXOs, store, e.AssetPrecision,
-		e.GasConfig.Normalize().GasAssetName, e.RuntimeConfig.BootstrapAddress)
-	return err
+	return runtime.ApplyClose(ApplyCloseRequest{Invoker: invoker, TimeValue: timeValue})
 }
 
 func (e *Backend) settlementResultOptions() contractframework.SettlementResultOptions {
@@ -725,41 +633,15 @@ func betAndGasFundingAmount(output ContractOutput, betAssetName, gasAssetName st
 	if betAssetName == "" || betAssetName != gasAssetName {
 		return betTotalText, gasTotalText, nil
 	}
-
 	betTotal := parseDecimalOrZero(betTotalText)
 	gasReserve := zeroDecimal()
 	if requiredGas != nil && requiredGas.Sign() > 0 {
 		gasReserve = requiredGas.Clone()
 	}
 	if betTotal.Cmp(gasReserve) < 0 {
-		return "", "", fmt.Errorf("prediction bet funding %s is below required gas %s",
-			betTotal.String(), gasReserve.String())
+		return "", "", fmt.Errorf("prediction bet funding %s is below required gas %s", betTotal.String(), gasReserve.String())
 	}
 	return betTotal.SubAlignPrecision(gasReserve).String(), gasReserve.String(), nil
-}
-
-func confirmGasFundingAmount(output ContractOutput, gasAssetName string) (string, error) {
-	if gasAssetName == "" {
-		return "", nil
-	}
-	amount, err := fundingAmount(output, gasAssetName)
-	if err != nil {
-		return "", err
-	}
-	if parseDecimalOrZero(amount).Sign() == 0 {
-		return "", nil
-	}
-	return amount, nil
-}
-
-func stateResultPlan(contract ContractAddress, output ContractOutput) (ResultPlan, bool) {
-	if output.PhysicalValue() != 0 || len(output.TxAssets()) != 0 {
-		return ResultPlan{}, false
-	}
-	return ResultPlan{
-		Contract: contract.EncodeAddress(),
-		Inputs:   []OutPoint{output.OutPoint},
-	}, true
 }
 
 func cloneSettlementPlans(in []*PredictionSettlementPlan) []*PredictionSettlementPlan {

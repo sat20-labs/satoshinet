@@ -43,11 +43,23 @@ func (s *MemoryStateDB) MarshalBinary() ([]byte, error) {
 	writeUvarint(&buf, uint64(len(addresses)))
 	for _, addr := range addresses {
 		acct := s.accounts[addr]
+		if acct == nil {
+			return nil, fmt.Errorf("nil EVM account %s", addr)
+		}
+		if err := acct.DeployFlags.Validate(); err != nil {
+			return nil, err
+		}
 		buf.Write(addr.Bytes())
 		writeUvarint(&buf, acct.Nonce)
 		writeBytes(&buf, acct.Balance.Bytes())
 		writeBytes(&buf, acct.Code)
 		writeBytes(&buf, []byte(acct.DeployerAddr))
+		writeUvarint(&buf, uint64(acct.DeployFlags))
+		managed, err := acct.Managed.MarshalJSON()
+		if err != nil {
+			return nil, fmt.Errorf("encode EVM managed balance %s: %w", addr, err)
+		}
+		writeBytes(&buf, managed)
 		if acct.Closed {
 			buf.WriteByte(1)
 		} else {
@@ -124,6 +136,9 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 		if _, err := io.ReadFull(r, addr[:]); err != nil {
 			return nil, fmt.Errorf("decode account address %d: %w", i, err)
 		}
+		if state.account(addr) != nil {
+			return nil, fmt.Errorf("duplicate EVM account %s", addr)
+		}
 		acct := state.ensure(addr)
 		nonce, err := binary.ReadUvarint(r)
 		if err != nil {
@@ -133,6 +148,9 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 		balanceBytes, err := readBytes(r)
 		if err != nil {
 			return nil, fmt.Errorf("decode account balance %d: %w", i, err)
+		}
+		if len(balanceBytes) > 32 {
+			return nil, fmt.Errorf("account balance %d overflows uint256", i)
 		}
 		acct.Balance = *new(uint256.Int).SetBytes(balanceBytes)
 		code, err := readBytes(r)
@@ -145,11 +163,32 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 			return nil, fmt.Errorf("decode account deployer address %d: %w", i, err)
 		}
 		acct.DeployerAddr = string(deployerAddr)
+		flags, err := binary.ReadUvarint(r)
+		if err != nil {
+			return nil, fmt.Errorf("decode account deployment flags %d: %w", i, err)
+		}
+		if flags > uint64(^uint32(0)) {
+			return nil, fmt.Errorf("account deployment flags %d overflow uint32", i)
+		}
+		acct.DeployFlags = ContractFlags(flags)
+		if err := acct.DeployFlags.Validate(); err != nil {
+			return nil, err
+		}
+		managed, err := readBytes(r)
+		if err != nil {
+			return nil, fmt.Errorf("decode account managed balance %d: %w", i, err)
+		}
+		if err := acct.Managed.UnmarshalJSON(managed); err != nil {
+			return nil, fmt.Errorf("decode account managed balance %d: %w", i, err)
+		}
 		closed, err := r.ReadByte()
 		if err != nil {
 			return nil, fmt.Errorf("decode account closed %d: %w", i, err)
 		}
-		acct.Closed = closed != 0
+		if closed > 1 {
+			return nil, fmt.Errorf("invalid EVM closed flag %d", closed)
+		}
+		acct.Closed = closed == 1
 
 		storageCount, err := binary.ReadUvarint(r)
 		if err != nil {

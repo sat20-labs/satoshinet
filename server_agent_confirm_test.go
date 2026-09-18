@@ -21,12 +21,12 @@ func TestAgentConfirmFundingUnavailableError(t *testing.T) {
 	}
 }
 
-func TestAgentConfirmFundingOutput(t *testing.T) {
+func TestAgentInvokeFundingOutput(t *testing.T) {
 	gasFee := common.NewDecimal(50, 0)
 	gasAssetName := contractnode.DefaultGasConfig().GasAssetName
-	output, err := agentConfirmFundingOutput(gasFee, gasAssetName)
+	output, err := agentInvokeFundingOutput(gasFee, gasAssetName)
 	if err != nil {
-		t.Fatalf("agentConfirmFundingOutput failed: %v", err)
+		t.Fatalf("agentInvokeFundingOutput failed: %v", err)
 	}
 	if output.Value != 0 {
 		t.Fatalf("unexpected sats value: got %d want 0", output.Value)
@@ -43,16 +43,16 @@ func TestAgentConfirmFundingOutput(t *testing.T) {
 	}
 }
 
-func TestAgentConfirmFundingOutputAllowsEmptyTopUp(t *testing.T) {
+func TestAgentInvokeFundingOutputAllowsEmptyTopUp(t *testing.T) {
 	gasAssetName := contractnode.DefaultGasConfig().GasAssetName
-	output, err := agentConfirmFundingOutput(nil, gasAssetName)
+	output, err := agentInvokeFundingOutput(nil, gasAssetName)
 	if err != nil {
 		t.Fatalf("nil top-up should be accepted: %v", err)
 	}
 	if output.Value != 0 || len(output.Assets) != 0 {
 		t.Fatalf("unexpected nil top-up output: value=%d assets=%v", output.Value, output.Assets)
 	}
-	output, err = agentConfirmFundingOutput(common.NewDecimal(0, 0), gasAssetName)
+	output, err = agentInvokeFundingOutput(common.NewDecimal(0, 0), gasAssetName)
 	if err != nil {
 		t.Fatalf("zero top-up should be accepted: %v", err)
 	}
@@ -61,19 +61,19 @@ func TestAgentConfirmFundingOutputAllowsEmptyTopUp(t *testing.T) {
 	}
 }
 
-func TestAgentConfirmExternalGasFundingIncludesInvokeFee(t *testing.T) {
-	if got, err := agentConfirmExternalGasFunding(nil, nil); err != nil || got != nil {
+func TestAgentInvokeExternalGasFundingIncludesResultFee(t *testing.T) {
+	if got, err := agentInvokeExternalGasFunding(nil, nil); err != nil || got != nil {
 		t.Fatalf("nil fees should not require external gas funding: got=%v err=%v", got, err)
 	}
 	invokeFee := common.NewDecimal(100, 0)
-	if got, err := agentConfirmExternalGasFunding(invokeFee, nil); err != nil || got == nil || got.Cmp(invokeFee) != 0 {
+	if got, err := agentInvokeExternalGasFunding(invokeFee, nil); err != nil || got == nil || got.Cmp(invokeFee) != 0 {
 		t.Fatalf("unexpected invoke-only gas funding: got=%v err=%v want=%s", got, err, invokeFee.String())
 	}
-	topUp := common.NewDecimal(37, 0)
+	resultFee := common.NewDecimal(37, 0)
 	want := common.NewDecimal(137, 0)
-	got, err := agentConfirmExternalGasFunding(invokeFee, topUp)
+	got, err := agentInvokeExternalGasFunding(invokeFee, resultFee)
 	if err != nil || got == nil || got.Cmp(want) != 0 {
-		t.Fatalf("unexpected invoke plus top-up gas funding: got=%v err=%v want=%s", got, err, want.String())
+		t.Fatalf("unexpected invoke plus Result gas funding: got=%v err=%v want=%s", got, err, want.String())
 	}
 }
 

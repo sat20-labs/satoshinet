@@ -23,7 +23,19 @@ func TestPayloadGoldenBytes(t *testing.T) {
 				DeployNonce:     7,
 				ContractContent: []byte{0x60, 0x00},
 			}),
-			want: "010203736f6c0088a40107026000",
+			want: "010203736f6c0088a4010700026000",
+		},
+		{
+			name: "evm non-closable deploy",
+			got: EncodeDeployPayload(DeployPayload{
+				Type:            ContractTypeEVM,
+				SubType:         "sol",
+				GasLimit:        21000,
+				DeployNonce:     7,
+				Flags:           ContractFlagNonClosable,
+				ContractContent: []byte{0x60, 0x00},
+			}),
+			want: "010203736f6c0088a4010701026000",
 		},
 		{
 			name: "evm invoke",
@@ -45,7 +57,7 @@ func TestPayloadGoldenBytes(t *testing.T) {
 				DeployNonce:     7,
 				ContractContent: []byte{0xaa},
 			}),
-			want: "0101017801010701aa",
+			want: "010101780101070001aa",
 		},
 		{
 			name: "template invoke",
@@ -67,7 +79,7 @@ func TestPayloadGoldenBytes(t *testing.T) {
 				DeployNonce:     7,
 				ContractContent: []byte{0xaa},
 			}),
-			want: "0103017001010701aa",
+			want: "010301700101070001aa",
 		},
 		{
 			name: "agent invoke",

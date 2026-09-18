@@ -14,7 +14,9 @@ func ContractTxFromParsed(tx *wire.MsgTx, parsed ParsedTx, contractType byte) co
 		Funding:      ContractFundingOutputs(parsed.ContractOutputs),
 		Inputs:       ContractTxInputs(tx),
 	}
-	if tx != nil {
+	if parsed.TxID != "" {
+		out.TxID = parsed.TxID
+	} else if tx != nil {
 		out.TxID = tx.TxID()
 	}
 	if len(parsed.ContractOutputs) != 0 {

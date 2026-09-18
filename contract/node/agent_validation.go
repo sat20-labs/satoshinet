@@ -14,12 +14,10 @@ import (
 )
 
 type AgentBlockExecutionConfig struct {
-	ChainParams *chaincfg.Params
-
-	ContractPrefix string
-	RuntimeConfig  agent.RuntimeConfig
-	GasConfig      agent.GasConfig
-
+	ChainParams         *chaincfg.Params
+	ContractPrefix      string
+	RuntimeConfig       agent.RuntimeConfig
+	GasConfig           agent.GasConfig
 	NewRuntime          AgentRuntimeFactory
 	ResolveInvoker      agent.InvokerResolver
 	ContractUTXOs       agent.ContractUTXOProvider
@@ -29,96 +27,66 @@ type AgentBlockExecutionConfig struct {
 }
 
 type AgentBlockExecutionValidator struct {
-	cfg AgentBlockExecutionConfig
-
+	cfg         AgentBlockExecutionConfig
 	postStateMu sync.Mutex
 	postStates  map[chainhash.Hash]*agent.RuntimeStore
 }
 
 func NewAgentBlockExecutionValidator(cfg AgentBlockExecutionConfig) *AgentBlockExecutionValidator {
-	return &AgentBlockExecutionValidator{
-		cfg:        cfg,
-		postStates: make(map[chainhash.Hash]*agent.RuntimeStore),
-	}
+	return &AgentBlockExecutionValidator{cfg: cfg, postStates: make(map[chainhash.Hash]*agent.RuntimeStore)}
 }
 
 func (v *AgentBlockExecutionValidator) ValidateAgentBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
-	if block == nil {
-		return agentBlockRuleError("missing block")
-	}
-	if view == nil {
-		return agentBlockRuleError("missing UTXO view")
-	}
-	txs := block.Transactions()
-	if len(txs) == 0 {
-		return agentBlockRuleError("missing coinbase transaction")
-	}
-
-	prefix := v.contractPrefix()
-	hasRoot, split, err := splitBlockContractTxs(block, view, v.cfg.ChainParams, prefix)
-	if err != nil {
-		return agentBlockRuleError("split agent contract txs: %v", err)
-	}
-	blockTxs := split.WorkTxs[contractframework.ModuleAgent]
-	resultTxs := split.ResultTxs[contractframework.ModuleAgent]
-	hasExecution := len(blockTxs) != 0 || len(resultTxs) != 0
-
-	store, err := v.runtime(block, view)
-	if err != nil {
-		return agentBlockRuleError("load agent runtime: %v", err)
-	}
-	hasDueTrigger := store.HasDuePredictionStatusAdvance(
-		int64(block.Height()), block.MsgBlock().Header.Timestamp.Unix())
-	if !hasRoot && !hasExecution && !hasDueTrigger {
-		return nil
-	}
-	if (hasExecution || hasDueTrigger) && !hasRoot {
-		return agentBlockRuleError("missing agent state root commitment")
-	}
-	gasConfig := v.cfg.GasConfig
-	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
-	contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(
-		v.cfg.ContractUTXOs, blockTxs, prefix, agent.ContractTypeAgent)
-
-	executed, err := agent.ExecuteBlock(agent.BlockExecutionRequest{
-		Txs:            blockTxs,
-		Store:          store,
-		ContractPrefix: prefix,
-		RuntimeConfig:  v.cfg.RuntimeConfig,
-		GasConfig:      gasConfig,
-		ContractUTXOs:  contractUTXOs,
-		AssetPrecision: v.cfg.AssetPrecision,
-		BlockHeight:    int64(block.Height()),
-		BlockTime:      block.MsgBlock().Header.Timestamp.Unix(),
-		ResolveInvoker: agent.LastInputPreviousOutputInvokerResolver(
-			v.cfg.ChainParams, previousOutputScriptResolver(view)),
-	})
-	if err != nil {
-		return agentBlockRuleError("validate agent block: %v", err)
-	}
-	resultPlans, err := agent.AugmentResultPlans(executed.ResultPlans, contractUTXOs, store, v.cfg.AssetPrecision,
-		gasConfig.Normalize().GasAssetName, v.cfg.RuntimeConfig.BootstrapAddress)
-	if err != nil {
-		return agentBlockRuleError("agent result plan: %v", err)
-	}
-	if len(resultPlans) == 0 {
-		if len(resultTxs) != 0 {
-			return agentBlockRuleError("unexpected agent RESULT transaction")
-		}
-	} else if len(resultTxs) > 1 {
-		return agentBlockRuleError("unexpected extra agent RESULT transactions")
-	}
-	if err := v.verifyResults(resultTxs, resultPlans); err != nil {
-		return agentBlockRuleError("agent result: %v", err)
-	}
-	v.rememberPostState(block.Hash(), store.Clone())
-	return nil
+	return validateStandaloneModule(block, view, v.cfg.ChainParams, v.contractPrefix(), contractframework.ModuleAgent, v, v)
 }
 
-func (v *AgentBlockExecutionValidator) ValidateContractModuleBlock(block *btcutil.Block,
-	view *blockchain.UtxoViewpoint) error {
-
+func (v *AgentBlockExecutionValidator) ValidateContractModuleBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
 	return v.ValidateAgentBlock(block, view)
+}
+
+func (v *AgentBlockExecutionValidator) ContractBlockModule(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (contractframework.Module, error) {
+
+	if block == nil {
+		return nil, agentBlockRuleError("missing block")
+	}
+	parent, err := v.runtime(block, view)
+	if err != nil {
+		return nil, agentBlockRuleError("load agent runtime: %v", err)
+	}
+	if parent == nil {
+		return nil, agentBlockRuleError("missing agent runtime")
+	}
+	gas := v.cfg.GasConfig
+	gas.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
+	return contractframework.NewSettlementModule(contractframework.SettlementModuleConfig{
+		Descriptor: agentModuleDescriptor(), ParentRoot: parent.StateRoot(), GasConfig: gas,
+		ResolveScript: v.cfg.ResolveResultScript, ResolveOutput: v.cfg.ResolveResultOutput,
+		Execute: func(work contractframework.WorkExecutionRequest) (contractframework.BackendBlockExecutionResult, any, error) {
+			// Execution clones mutable state and only replaces this wrapper on success.
+			candidate := *parent
+			exec, err := agent.ExecuteBlock(agent.BlockExecutionRequest{
+				Txs: work.Txs, Store: &candidate, ContractPrefix: v.contractPrefix(),
+				RuntimeConfig: v.cfg.RuntimeConfig, GasConfig: gas, ContractUTXOs: v.cfg.ContractUTXOs,
+				AssetPrecision: v.cfg.AssetPrecision, BlockHeight: int64(block.Height()),
+				BlockTime:      block.MsgBlock().Header.Timestamp.Unix(),
+				ResolveInvoker: agent.LastInputPreviousOutputInvokerResolver(v.cfg.ChainParams, previousOutputScriptResolver(view)),
+			})
+			return exec, &candidate, err
+		},
+	})
+}
+
+func (v *AgentBlockExecutionValidator) RecordContractBlockState(block *btcutil.Block, exec contractframework.ExecutionResult) error {
+	state, ok := exec.PostState.(*agent.RuntimeStore)
+	if block == nil || !ok || state == nil || exec.ModuleType != contractframework.ModuleAgent {
+		return agentBlockRuleError("invalid agent post-state snapshot")
+	}
+	if state.StateRoot() != exec.StateRoot {
+		return agentBlockRuleError("agent post-state root changed after validation")
+	}
+	v.rememberPostState(block.Hash(), state)
+	return nil
 }
 
 func (v *AgentBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
@@ -134,8 +102,10 @@ func (v *AgentBlockExecutionValidator) HasContractBlockActivity(block *btcutil.B
 	if err != nil {
 		return false, agentBlockRuleError("load agent runtime: %v", err)
 	}
-	return store.HasDuePredictionStatusAdvance(
-		int64(block.Height()), block.MsgBlock().Header.Timestamp.Unix()), nil
+	if store == nil {
+		return false, agentBlockRuleError("missing agent runtime")
+	}
+	return store.HasDuePredictionStatusAdvance(int64(block.Height()), block.MsgBlock().Header.Timestamp.Unix()), nil
 }
 
 func (v *AgentBlockExecutionValidator) AgentBlockPostState(hash *chainhash.Hash) (*agent.RuntimeStore, bool) {
@@ -192,8 +162,8 @@ func (v *AgentBlockExecutionValidator) ReleaseBlockPostState(hash *chainhash.Has
 
 func (v *AgentBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*agent.RuntimeStore, error) {
 	if block != nil {
-		prevHash := block.MsgBlock().Header.PrevBlock
-		if state, ok := v.AgentBlockPostState(&prevHash); ok {
+		prev := block.MsgBlock().Header.PrevBlock
+		if state, ok := v.AgentBlockPostState(&prev); ok {
 			return state, nil
 		}
 	}
@@ -203,31 +173,23 @@ func (v *AgentBlockExecutionValidator) runtime(block *btcutil.Block, view *block
 	return agent.NewRuntimeStore(), nil
 }
 
-func (v *AgentBlockExecutionValidator) verifyResults(resultTxs []*wire.MsgTx, plans []agent.ResultPlan) error {
+func (v *AgentBlockExecutionValidator) verifyResults(txs []*wire.MsgTx, plans []agent.ResultPlan) error {
 	if len(plans) == 0 {
-		if len(resultTxs) != 0 {
+		if len(txs) != 0 {
 			return fmt.Errorf("unexpected agent RESULT transactions")
 		}
 		return nil
 	}
-	if len(resultTxs) != 1 {
-		return fmt.Errorf("agent result transaction count mismatch: got %d want 1", len(resultTxs))
+	if len(txs) != 1 {
+		return fmt.Errorf("agent result transaction count mismatch: got %d want 1", len(txs))
 	}
-	if v.cfg.ResolveResultOutput == nil {
-		return fmt.Errorf("missing agent result output resolver")
-	}
-	if v.cfg.ResolveResultScript == nil {
-		return fmt.Errorf("missing agent result output script resolver")
+	if v.cfg.ResolveResultOutput == nil || v.cfg.ResolveResultScript == nil {
+		return fmt.Errorf("missing agent result output resolver or script resolver")
 	}
 	return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-		Label:         "agent",
-		ResultTx:      resultTxs[0],
-		Status:        agent.ResultStatusSuccess,
-		Plans:         plans,
-		GasAssetName:  contractGasAssetNameForParams(v.cfg.ChainParams),
-		Resolve:       v.cfg.ResolveResultOutput,
-		ResolveScript: v.cfg.ResolveResultScript,
-		CheckPayload:  true,
+		Label: "agent", ResultTx: txs[0], Status: agent.ResultStatusSuccess, Plans: plans,
+		GasAssetName: contractGasAssetNameForParams(v.cfg.ChainParams), Resolve: v.cfg.ResolveResultOutput,
+		ResolveScript: v.cfg.ResolveResultScript, CheckPayload: true, UseInputUTXO: true,
 	})
 }
 
@@ -235,15 +197,9 @@ func (v *AgentBlockExecutionValidator) contractPrefix() string {
 	if v.cfg.ContractPrefix != "" {
 		return v.cfg.ContractPrefix
 	}
-	if v.cfg.ChainParams != nil {
-		return agent.ContractPrefixForNet(v.cfg.ChainParams.Net)
-	}
-	return agent.TestnetContractPrefix
+	return contractPrefixForParams(v.cfg.ChainParams)
 }
 
 func agentBlockRuleError(format string, args ...interface{}) error {
-	return blockchain.RuleError{
-		ErrorCode:   blockchain.ErrInvalidEVMBlock,
-		Description: fmt.Sprintf(format, args...),
-	}
+	return contractBlockRuleError(format, args...)
 }

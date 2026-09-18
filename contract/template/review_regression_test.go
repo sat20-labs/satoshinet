@@ -48,7 +48,7 @@ func TestReviewExchangeIndivisibleAssetRefund(t *testing.T) {
 	fund := testTemplateDefaultInvokeTx(t, addr, 0, testAsset(contract.AssetAName, 100))
 	buy := testTemplateDefaultInvokeTx(t, addr, 0, testAsset(contract.AssetBName, 1))
 	store := NewRuntimeStore()
-	result, err := ExecuteBlock(BlockExecutionRequest{
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
 		Txs: []*wire.MsgTx{deploy, fund, buy}, Store: store, BlockHeight: 10,
 		GasConfig: exchangeTestGasConfig(DefaultGasConfig().GasAssetName),
 		AssetPrecision: func(name string) (int, bool) {

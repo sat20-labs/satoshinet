@@ -5,6 +5,7 @@ import (
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,13 +65,15 @@ func TestReviewTriggersShareGasBudget(t *testing.T) {
 				amount = amount.AddAlignPrecision(fee)
 			}
 			utxo := mustDecimalUTXO(t, OutPoint{TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, c, cfg.GasAssetName, amount.String(), 1)
+			seedEVMManagedFixture(t, runtime, c, 0, map[string]string{cfg.GasAssetName: amount.String()})
 			_, err = BuildBlockResultTxs(BlockResultBuildRequest{Runtime: runtime, GasConfig: cfg, Block: testBlockContext(2), ContractUTXOs: func(ContractAddress) ([]UTXO, error) { return []UTXO{utxo}, nil }, ResolveScript: evmTestResultScriptResolver(t, c), ResolveOutput: evmTestResultOutputResolver(c), AssetPrecision: func(string) (int, bool) { return 18, true }})
 			require.NoError(t, err)
 			require.Len(t, runtime.State.Triggers(), tc.wantPending)
 			if tc.wantPending == 1 {
 				require.Equal(t, "second", runtime.State.Triggers()[0].ID)
-				// A later block with new funding can execute the deferred task.
+				// A later block with replacement managed funding can execute the deferred task.
 				utxo.OutPoint.Vout++
+				seedEVMManagedFixture(t, runtime, c, 0, map[string]string{cfg.GasAssetName: amount.String()})
 				_, err = BuildBlockResultTxs(BlockResultBuildRequest{Runtime: runtime, GasConfig: cfg, Block: testBlockContext(3), ContractUTXOs: func(ContractAddress) ([]UTXO, error) { return []UTXO{utxo}, nil }, ResolveScript: evmTestResultScriptResolver(t, c), ResolveOutput: evmTestResultOutputResolver(c), AssetPrecision: func(string) (int, bool) { return 18, true }})
 				require.NoError(t, err)
 				require.Empty(t, runtime.State.Triggers())
@@ -87,19 +90,35 @@ func TestReviewTriggerBudgetIncludesPendingRefundAndTransfer(t *testing.T) {
 		fee, err := cfg.ContractFundingFee(ExecutionKindTrigger, limit, true, 2)
 		require.NoError(t, err)
 		utxo := mustDecimalUTXO(t, OutPoint{TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, c, cfg.GasAssetName, fee.String(), 1)
-		backend := NewBackend(BlockExecutionRequest{Runtime: NewRuntime(nil), GasConfig: cfg, Block: testBlockContext(2), ContractUTXOs: func(ContractAddress) ([]UTXO, error) { return []UTXO{utxo}, nil }})
+		runtime := NewRuntime(nil)
+		runtime.SetCode(ContractAddressHash(c), []byte{0})
+		seedEVMManagedFixture(t, runtime, c, 0, map[string]string{cfg.GasAssetName: fee.String()})
+		backend := NewBackend(BlockExecutionRequest{Runtime: runtime, GasConfig: cfg, Block: testBlockContext(2), ContractUTXOs: func(ContractAddress) ([]UTXO, error) { return []UTXO{utxo}, nil }})
 		record := ExecutionRecord{Contract: c, Kind: ExecutionKindInvoke, Height: 2, RequiresResult: true}
 		if refund {
-			record.FundingInputs = []OutPoint{utxo.OutPoint}
+			funding := wire.NewMsgTx(2)
+			funding.AddTxOut(&wire.TxOut{Assets: utxo.TxAssets()})
+			backend.fundingTx = funding
+			record.FundingInputs = []OutPoint{{TxID: funding.TxID(), Vout: 0}}
 			record.GasRefundRecipient = "tb1qrefund"
 		} else {
 			record.ResultFeeMode = contractframework.ResultFeeModePlainTxFee
 			record.AssetIntents = []AssetIntent{{From: c, To: "tb1qdest", AssetName: cfg.GasAssetName, Amount: fee.Clone()}}
 		}
-		backend.pending = []ExecutionRecord{record}
-		ready, err := backend.triggerHasGasBudget(c, limit)
-		require.NoError(t, err)
-		require.False(t, ready, "pending refund=%v must reserve its funds", refund)
+		require.NoError(t, backend.appendRecord(record))
+		backend.fundingTx = nil
+		backend.ContractUTXOs = func(ContractAddress) ([]UTXO, error) {
+			t.Fatal("budget lookup must not rescan historical UTXOs")
+			return nil, nil
+		}
+		if !refund {
+			backend.Runtime.AssetIntents = contractframework.CloneAssetIntents(record.AssetIntents)
+		}
+		for i := 0; i < 3; i++ {
+			ready, err := backend.triggerHasGasBudget(c, limit)
+			require.NoError(t, err)
+			require.False(t, ready, "pending refund=%v must reserve its funds", refund)
+		}
 	}
 }
 
@@ -115,6 +134,7 @@ func TestReviewTriggerCannotTransferItsGasReserve(t *testing.T) {
 			utxo := mustDecimalUTXO(t, OutPoint{TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, c, cfg.GasAssetName, amount.String(), 1)
 			runtime := NewRuntime(nil)
 			runtime.SetCode(ContractAddressHash(c), callAssetPrecompileCode())
+			seedEVMManagedFixture(t, runtime, c, 0, map[string]string{cfg.GasAssetName: amount.String()})
 			transfer := "1"
 			if spendReserve {
 				transfer = amount.String()
@@ -123,7 +143,8 @@ func TestReviewTriggerCannotTransferItsGasReserve(t *testing.T) {
 			provider := func(ContractAddress) ([]UTXO, error) { return []UTXO{utxo}, nil }
 			backend := NewBackend(BlockExecutionRequest{Runtime: runtime, GasConfig: cfg, Block: testBlockContext(2), ContractUTXOs: provider, ResolveResultScript: func(ResultOutput) ([]byte, error) { return []byte{0x51}, nil }, AssetPrecision: func(string) (int, bool) { return 10, true }})
 			require.NoError(t, backend.ExecuteTrigger(runtime.DueTriggerCalls(testBlockContext(2))[0]))
-			_, err = (contractframework.CanonicalResultPlanner{GasConfig: cfg, UTXOs: provider, Precision: SettlementPrecision(nil)}).BuildPlans(backend.pending)
+			backend.bindManagedSnapshots()
+			_, err = backend.resultPlans(backend.pending)
 			require.NoError(t, err, "a transfer must not consume funds reserved for its execution fee")
 			if spendReserve {
 				require.Empty(t, runtime.AssetIntents)
@@ -144,13 +165,16 @@ func TestReviewTriggerBudgetUsesSettlementPrecisionAndContractScope(t *testing.T
 	precision := SettlementPrecision(func(string) (int, bool) { return 0, true })
 	fee := precision.NormalizeUp(cfg.GasAssetName, rawFee)
 	utxo := mustDecimalUTXO(t, OutPoint{TxID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, c, cfg.GasAssetName, fee.String(), 1)
-	backend := NewBackend(BlockExecutionRequest{Runtime: NewRuntime(nil), GasConfig: cfg, Block: testBlockContext(2), ContractUTXOs: func(ContractAddress) ([]UTXO, error) { return []UTXO{utxo}, nil }, AssetPrecision: precision.Resolve})
+	runtime := NewRuntime(nil)
+	runtime.SetCode(ContractAddressHash(c), []byte{0})
+	seedEVMManagedFixture(t, runtime, c, 0, map[string]string{cfg.GasAssetName: fee.String()})
+	backend := NewBackend(BlockExecutionRequest{Runtime: runtime, GasConfig: cfg, Block: testBlockContext(2), ContractUTXOs: func(ContractAddress) ([]UTXO, error) { return []UTXO{utxo}, nil }, AssetPrecision: precision.Resolve})
 	other := backend.Runtime.contractAddressFromGeth(GethAddress(mustEVMAddress(t, "0x2222222222222222222222222222222222222222")))
-	backend.pending = []ExecutionRecord{{Contract: other, Kind: ExecutionKindTrigger, Height: 2, GasUsed: limit, RequiresResult: true}}
+	require.NoError(t, backend.appendRecord(ExecutionRecord{Contract: other, Kind: ExecutionKindTrigger, Height: 2, GasUsed: limit, RequiresResult: true}))
 	ready, err := backend.triggerHasGasBudget(c, limit)
 	require.NoError(t, err)
 	require.True(t, ready, "another contract must not consume this contract's budget")
-	backend.pending[0].Contract = c
+	require.NoError(t, backend.appendRecord(ExecutionRecord{Contract: c, Kind: ExecutionKindTrigger, Height: 2, GasUsed: limit, RequiresResult: true}))
 	ready, err = backend.triggerHasGasBudget(c, limit)
 	require.NoError(t, err)
 	require.False(t, ready, "each execution fee must round up just as Result settlement does")

@@ -46,11 +46,9 @@ func SelectCanonicalInputs(req CanonicalSelectionRequest) (CanonicalSelection, e
 	if req.AssetName == "" || req.Required == nil {
 		return CanonicalSelection{}, ErrInvalidAsset
 	}
-
 	selected := make([]UTXO, 0)
 	total := ZeroDecimal()
 	used := make(map[string]struct{})
-
 	for _, out := range req.RequiredFirst {
 		u, ok := FindUTXO(req.Available, out)
 		if !ok {
@@ -74,7 +72,6 @@ func SelectCanonicalInputs(req CanonicalSelectionRequest) (CanonicalSelection, e
 		selected = append(selected, u)
 		total = total.AddAlignPrecision(amount)
 	}
-
 	candidates := make([]UTXO, 0, len(req.Available))
 	for _, u := range req.Available {
 		if !u.Contract.Equal(req.Contract) {
@@ -93,7 +90,6 @@ func SelectCanonicalInputs(req CanonicalSelectionRequest) (CanonicalSelection, e
 		candidates = append(candidates, u)
 	}
 	SortUTXOsForCanonicalSelection(candidates)
-
 	for _, u := range candidates {
 		if total.Cmp(req.Required) >= 0 {
 			break
@@ -108,11 +104,7 @@ func SelectCanonicalInputs(req CanonicalSelectionRequest) (CanonicalSelection, e
 	if total.Cmp(req.Required) < 0 {
 		return CanonicalSelection{}, ErrInsufficientFunds
 	}
-	return CanonicalSelection{
-		Inputs: selected,
-		Total:  total,
-		Change: total.SubAlignPrecision(req.Required),
-	}, nil
+	return CanonicalSelection{Inputs: selected, Total: total, Change: total.SubAlignPrecision(req.Required)}, nil
 }
 
 func FindUTXO(utxos []UTXO, out OutPoint) (UTXO, bool) {
@@ -124,6 +116,9 @@ func FindUTXO(utxos []UTXO, out OutPoint) (UTXO, bool) {
 	return UTXO{}, false
 }
 
+// BuildCanonicalResultPlan is the low-level physical input selector. Runtime
+// settlement uses CanonicalResultPlanner below, which also enforces managed
+// quantities and the common surplus policy.
 func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	if req.GasAssetName == "" {
 		return ResultPlan{}, ErrInvalidAsset
@@ -131,7 +126,6 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 	if err := validateIntentContracts(req.Contract, req.Intents); err != nil {
 		return ResultPlan{}, err
 	}
-
 	requiredByAsset := make(map[string]*scommon.Decimal)
 	gasFee := req.Precision.NormalizeUp(req.GasAssetName, req.GasFee)
 	if gasFee != nil && gasFee.Sign() > 0 {
@@ -151,7 +145,6 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 			requiredByAsset[intent.AssetName] = amount
 		}
 	}
-
 	assets := sortedAssetNames(requiredByAsset, req.GasAssetName)
 	inputs := make([]UTXO, 0)
 	selected := make(map[OutPoint]UTXO)
@@ -181,12 +174,9 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 		if covered.Cmp(required) >= 0 {
 			continue
 		}
-		available := filterUnselectedUTXOs(req.Available, selected)
 		selection, err := SelectCanonicalInputs(CanonicalSelectionRequest{
-			Contract:  req.Contract,
-			AssetName: assetName,
-			Required:  required.SubAlignPrecision(covered),
-			Available: available,
+			Contract: req.Contract, AssetName: assetName,
+			Required: required.SubAlignPrecision(covered), Available: filterUnselectedUTXOs(req.Available, selected),
 		})
 		if err != nil {
 			return ResultPlan{}, err
@@ -216,43 +206,21 @@ func BuildCanonicalResultPlan(req ResultPlanRequest) (ResultPlan, error) {
 			return ResultPlan{}, err
 		}
 	}
-
-	intentBuilder := newResultOutputAccumulator()
-	outputs := make([]ResultOutput, 0, len(req.Intents))
-	for _, intent := range req.Intents {
-		amount := req.Precision.Normalize(intent.AssetName, intent.Amount.Clone())
-		if amount == nil || amount.Sign() <= 0 {
-			continue
-		}
-		if len(intent.ExtraData) != 0 {
-			output, err := ResultOutputWithAsset(intent.To, intent.AssetName, amount)
-			if err != nil {
-				return ResultPlan{}, err
-			}
-			output.ExtraData = CloneBytes(intent.ExtraData)
-			outputs = append(outputs, output)
-			continue
-		}
-		if err := intentBuilder.Add(intent.To, intent.AssetName, amount, nil); err != nil {
-			return ResultPlan{}, err
-		}
+	outputs, err := canonicalIntentOutputs(req.Contract, req.Intents, req.Precision)
+	if err != nil {
+		return ResultPlan{}, err
 	}
-	outputs = append(outputs, intentBuilder.Outputs()...)
 	outputs = append(outputs, changeBuilder.Outputs()...)
-	outputs = NormalizeResultOutputsPrecision(outputs, req.Precision)
 	return ResultPlan{
-		Contract:   req.Contract.MustEncode(),
-		GasFee:     CloneDecimal(gasFee),
-		InputUTXOs: inputs,
-		Outputs:    outputs,
+		Contract: req.Contract.MustEncode(), GasFee: CloneDecimal(gasFee), InputUTXOs: inputs,
+		Outputs: NormalizeResultOutputsPrecision(outputs, req.Precision),
 	}, nil
 }
 
+// BuildPlans is the single canonical VM settlement path, shared by building
+// and verification. Physical UTXOs are selected normally; spending authority is
+// the quantity snapshot, never a set of managed outpoints.
 func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultPlan, error) {
-	if len(settled) == 0 {
-		return nil, nil
-	}
-
 	groups := make([]canonicalRecordGroup, 0)
 	groupIndex := make(map[string]int)
 	for _, record := range settled {
@@ -278,108 +246,119 @@ func (p CanonicalResultPlanner) BuildPlans(settled []ExecutionRecord) ([]ResultP
 	if p.UTXOs == nil {
 		return nil, fmt.Errorf("missing contract UTXO provider")
 	}
-	if p.GasConfig.GasAssetName == "" {
+	cfg := p.GasConfig.Normalize()
+	if cfg.GasAssetName == "" {
 		return nil, fmt.Errorf("missing gas asset name")
 	}
-
 	plans := make([]ResultPlan, 0, len(groups))
 	for _, group := range groups {
-		available, err := p.UTXOs(group.Contract)
+		plan := ResultPlan{Contract: group.Contract.MustEncode(), ResultCount: len(group.Records)}
+		view, err := CollectResultPlanUTXOs(plan, p.UTXOs)
 		if err != nil {
 			return nil, err
 		}
 		intents := make([]AssetIntent, 0)
-		var gasFee *scommon.Decimal
-		funding := make([]OutPoint, 0)
+		var managed *contract.ManagedBalance
 		var closeRecord *ExecutionRecord
 		for _, record := range group.Records {
+			if record.ManagedBalance != nil {
+				balance := record.ManagedBalance.Clone()
+				managed = &balance
+			}
 			if record.CloseContract {
+				if record.Status != contract.ResultStatusSuccess || closeRecord != nil {
+					return nil, fmt.Errorf("%w: invalid close outcome", ErrAccountingInvariant)
+				}
 				cp := record
 				closeRecord = &cp
 			}
-			intents = append(intents, record.AssetIntents...)
-			if record.ResultFeeMode != ResultFeeModePlainTxFee {
-				recordGasFee, err := RecordResultGasFee(p.GasConfig, p.Precision, record)
-				if err != nil {
-					return nil, err
-				}
-				gasFee = DecimalAddAllowNil(gasFee, recordGasFee)
-				refund, err := RecordGasRefund(record, available, p.GasConfig.GasAssetName, recordGasFee)
-				if err != nil {
-					return nil, err
-				}
-				if refund != nil {
-					intents = append(intents, *refund)
-				}
+			plan.Height = record.Height
+			plan.CallFunding = append(plan.CallFunding, record.FundingInputs...)
+			if record.Status != contract.ResultStatusSuccess {
+				plan.RefundFunding = append(plan.RefundFunding, record.FundingInputs...)
 			}
-			funding = append(funding, record.FundingInputs...)
-		}
-		if closeRecord != nil {
-			plan, err := p.buildClosePlan(group.Contract, available, intents, gasFee, funding, group.Records, *closeRecord)
+			intents = append(intents, CloneAssetIntents(record.AssetIntents)...)
+			if record.ResultFeeMode == ResultFeeModePlainTxFee {
+				continue
+			}
+			if record.ResultFeeMode == ResultFeeModeSatoshiFee {
+				plan.SatoshiFee += InvalidRefundSatoshiFee
+				continue
+			}
+			fee, err := RecordResultGasFee(cfg, p.Precision, record)
 			if err != nil {
 				return nil, err
 			}
-			plan.ResultCount = len(group.Records)
-			plans = append(plans, plan)
-			continue
+			plan.GasFee = DecimalAddAllowNil(plan.GasFee, fee)
+			refund, err := RecordGasRefund(record, view.UTXOs, cfg.GasAssetName, fee)
+			if err != nil {
+				return nil, err
+			}
+			if refund != nil {
+				intents = append(intents, *refund)
+			}
 		}
-		plan, err := BuildCanonicalResultPlan(ResultPlanRequest{
-			Contract:               group.Contract,
-			Available:              available,
-			Intents:                intents,
-			GasAssetName:           p.GasConfig.GasAssetName,
-			GasFee:                 gasFee,
-			RequiredGasFundingUTXO: funding,
-			Precision:              p.Precision,
-		})
+		if managed == nil {
+			return nil, fmt.Errorf("%w: missing managed quantity snapshot", ErrAccountingInvariant)
+		}
+		plan.CallFunding = UniqueOutPoints(plan.CallFunding)
+		plan.RefundFunding = UniqueOutPoints(plan.RefundFunding)
+		plan.Outputs, err = canonicalIntentOutputs(group.Contract, intents, p.Precision)
 		if err != nil {
 			return nil, err
 		}
-		plan.ResultCount = len(group.Records)
+		req := ManagedResultRequest{
+			Plan: plan, View: view, Managed: *managed, Closed: closeRecord != nil,
+			BootstrapAddress: cfg.BootstrapAddress, GasAssetName: cfg.GasAssetName, Precision: p.Precision,
+		}
+		if closeRecord != nil {
+			req.DeployerAddress = closeRecord.DeployerAddress
+			if closeRecord.BootstrapAddress != "" {
+				req.BootstrapAddress = closeRecord.BootstrapAddress
+			}
+		}
+		plan, err = AugmentManagedResultPlan(req)
+		if err != nil {
+			return nil, err
+		}
 		plans = append(plans, plan)
 	}
 	return plans, nil
 }
 
-func (p CanonicalResultPlanner) buildClosePlan(contractAddr contract.ContractAddress, available []UTXO,
-	intents []AssetIntent, gasFee *scommon.Decimal, funding []OutPoint, records []ExecutionRecord,
-	closeRecord ExecutionRecord) (ResultPlan, error) {
+func canonicalIntentOutputs(addr contract.ContractAddress, intents []AssetIntent,
+	precision AssetPrecisionPolicy) ([]ResultOutput, error) {
 
-	plan, err := BuildCanonicalResultPlan(ResultPlanRequest{
-		Contract:               contractAddr,
-		Available:              available,
-		Intents:                intents,
-		GasAssetName:           p.GasConfig.GasAssetName,
-		GasFee:                 gasFee,
-		RequiredGasFundingUTXO: funding,
-		Precision:              p.Precision,
-	})
-	if err != nil {
-		return ResultPlan{}, err
+	if err := validateIntentContracts(addr, intents); err != nil {
+		return nil, err
 	}
-	contractText := contractAddr.MustEncode()
-	plan.Contract = contractText
-	plan.Outputs = removeContractRetainOutputs(plan.Outputs, contractText)
-	plan.GasFee = CloneDecimal(gasFee)
-	view, err := CollectResultPlanUTXOs(ResultPlan{Contract: contractText}, func(got contract.ContractAddress) ([]UTXO, error) {
-		if !got.Equal(contractAddr) {
-			return nil, nil
+	builder := newResultOutputAccumulator()
+	outputs := make([]ResultOutput, 0)
+	for _, intent := range intents {
+		if intent.AssetName == "" || intent.Amount == nil || intent.To == "" {
+			return nil, ErrInvalidAsset
 		}
-		return available, nil
-	})
-	if err != nil {
-		return ResultPlan{}, err
+		if err := ValidateAssetDecimal(*intent.Amount); err != nil {
+			return nil, err
+		}
+		amount := precision.Normalize(intent.AssetName, intent.Amount.Clone())
+		if amount == nil || amount.IsZero() {
+			continue
+		}
+		if len(intent.ExtraData) != 0 || intent.BindingSat != 0 {
+			output, err := resultOutputFromIntent(intent, amount)
+			if err != nil {
+				return nil, err
+			}
+			output.ExtraData = CloneBytes(intent.ExtraData)
+			outputs = append(outputs, output)
+			continue
+		}
+		if err := builder.Add(intent.To, intent.AssetName, amount, nil); err != nil {
+			return nil, err
+		}
 	}
-	return AugmentResultPlanWithManagedState(ManagedResultAugmentRequest{
-		Plan:             plan,
-		View:             view,
-		GasAssetName:     p.GasConfig.GasAssetName,
-		GasFee:           gasFee,
-		Precision:        p.Precision,
-		DeployerAddress:  closeRecord.DeployerAddress,
-		BootstrapAddress: closeRecord.BootstrapAddress,
-		SurplusMode:      ResultSurplusAsProfit,
-	})
+	return append(outputs, builder.Outputs()...), nil
 }
 
 func removeContractRetainOutputs(outputs []ResultOutput, contractText string) []ResultOutput {
@@ -388,10 +367,9 @@ func removeContractRetainOutputs(outputs []ResultOutput, contractText string) []
 	}
 	out := outputs[:0]
 	for _, output := range outputs {
-		if output.To == contractText {
-			continue
+		if output.To != contractText {
+			out = append(out, output)
 		}
-		out = append(out, output)
 	}
 	return out
 }
@@ -409,16 +387,13 @@ func ResultExecutionGas(cfg GasConfig, record ExecutionRecord) int64 {
 			return 0
 		}
 		return record.GasUsed - baseGas
-	case ExecutionKindTrigger:
-		return record.GasUsed
 	default:
 		return record.GasUsed
 	}
 }
 
-// RecordResultGasFee is shared by settlement and execution budget reservations.
 func RecordResultGasFee(cfg GasConfig, precision AssetPrecisionPolicy, record ExecutionRecord) (*scommon.Decimal, error) {
-	if record.ResultFeeMode == ResultFeeModePlainTxFee {
+	if record.ResultFeeMode == ResultFeeModePlainTxFee || record.ResultFeeMode == ResultFeeModeSatoshiFee {
 		return ZeroDecimal(), nil
 	}
 	callFee, err := cfg.CheckedCallFeeDecimalAtHeight(ResultExecutionGas(cfg, record), uint64(record.Height))
@@ -435,12 +410,13 @@ func RecordResultGasFee(cfg GasConfig, precision AssetPrecisionPolicy, record Ex
 func RecordGasRefund(record ExecutionRecord, available []UTXO, gasAssetName string,
 	recordGasFee *scommon.Decimal) (*AssetIntent, error) {
 
+	if record.ResultFeeMode != ResultFeeModeGasAsset {
+		return nil, nil
+	}
 	return ResultGasRefundIntent(ResultGasRefund{
-		CallID:             record.CallID,
-		To:                 record.GasRefundRecipient,
-		Inputs:             append([]OutPoint(nil), record.FundingInputs...),
-		GasFee:             CloneDecimal(recordGasFee),
-		RetainedGasFunding: CloneDecimal(record.RetainedGasFunding),
+		CallID: record.CallID, To: record.GasRefundRecipient,
+		Inputs: append([]OutPoint(nil), record.FundingInputs...),
+		GasFee: CloneDecimal(recordGasFee), RetainedGasFunding: CloneDecimal(record.RetainedGasFunding),
 	}, record.Contract, available, gasAssetName)
 }
 
@@ -457,33 +433,24 @@ func ResultGasRefundIntent(refund ResultGasRefund, contractAddr contract.Contrac
 	if fundingGas == nil || fundingGas.Sign() == 0 {
 		return nil, nil
 	}
-	gasFee := refund.GasFee
-	if gasFee == nil {
-		gasFee = ZeroDecimal()
-	}
-	retained := refund.RetainedGasFunding
-	if retained == nil {
-		retained = ZeroDecimal()
-	}
-	if retained.Sign() < 0 {
-		return nil, fmt.Errorf("retained gas funding is negative")
+	gasFee := CloneDecimal(refund.GasFee)
+	retained := CloneDecimal(refund.RetainedGasFunding)
+	if retained.Sign() < 0 || gasFee.Sign() < 0 {
+		return nil, fmt.Errorf("negative gas fee or retained funding")
 	}
 	nonRefundable := gasFee.AddAlignPrecision(retained)
 	if fundingGas.Cmp(nonRefundable) <= 0 {
 		return nil, nil
 	}
 	return &AssetIntent{
-		CallID:    refund.CallID,
-		From:      contractAddr,
-		To:        refund.To,
-		AssetName: gasAssetName,
-		Amount:    fundingGas.SubAlignPrecision(nonRefundable),
+		CallID: refund.CallID, From: contractAddr, To: refund.To,
+		AssetName: gasAssetName, Amount: fundingGas.SubAlignPrecision(nonRefundable),
 	}, nil
 }
 
 func TotalOutpointAsset(available []UTXO, outpoints []OutPoint, assetName string) (*scommon.Decimal, error) {
 	total := ZeroDecimal()
-	for _, outpoint := range outpoints {
+	for _, outpoint := range UniqueOutPoints(outpoints) {
 		utxo, ok := FindUTXO(available, outpoint)
 		if !ok {
 			return nil, fmt.Errorf("required input %s not available", outpoint)
@@ -550,10 +517,7 @@ type resultOutputAccumulator struct {
 }
 
 func newResultOutputAccumulator() *resultOutputAccumulator {
-	return &resultOutputAccumulator{
-		order: make([]string, 0),
-		items: make(map[string]ResultOutput),
-	}
+	return &resultOutputAccumulator{order: make([]string, 0), items: make(map[string]ResultOutput)}
 }
 
 func (a *resultOutputAccumulator) Add(to, assetName string, amount *scommon.Decimal, extraData []byte) error {
@@ -563,10 +527,7 @@ func (a *resultOutputAccumulator) Add(to, assetName string, amount *scommon.Deci
 	key := to + "\x00" + string(extraData)
 	output, ok := a.items[key]
 	if !ok {
-		output = ResultOutput{
-			To:        to,
-			ExtraData: CloneBytes(extraData),
-		}
+		output = ResultOutput{To: to, ExtraData: CloneBytes(extraData)}
 		a.order = append(a.order, key)
 	}
 	if err := output.AddAsset(assetName, amount); err != nil {
@@ -599,17 +560,15 @@ func ResultOutputHasSingleAsset(output ResultOutput, assetName string, amount *s
 	if output.Value != 0 || len(output.Assets) != 1 {
 		return false
 	}
-	return output.Assets[0].Name.String() == assetName &&
-		output.Assets[0].Amount.Cmp(amount) == 0
+	return output.Assets[0].Name.String() == assetName && output.Assets[0].Amount.Cmp(amount) == 0
 }
 
 func filterUnselectedUTXOs(utxos []UTXO, selected map[OutPoint]UTXO) []UTXO {
 	available := make([]UTXO, 0, len(utxos))
 	for _, u := range utxos {
-		if _, ok := selected[u.OutPoint]; ok {
-			continue
+		if _, ok := selected[u.OutPoint]; !ok {
+			available = append(available, u)
 		}
-		available = append(available, u)
 	}
 	return available
 }

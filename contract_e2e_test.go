@@ -24,156 +24,68 @@ func TestEVMEndToEndDeployInvokeReplayAndReorg(t *testing.T) {
 		gasAsset    = "ordx:ft:gas"
 	)
 	caller := mustE2EEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
-	cfg := evm.GasConfig{
-		GasAssetName:     gasAsset,
-		FixedGasPrice:    1,
-		ResultPackingFee: 100,
-		MaxGasPerInvoke:  500000,
-		MaxGasPerBlock:   1000000,
-	}
-	blockCtx := evm.BlockContext{
-		Number:        100,
-		Time:          1710000000,
-		GasLimit:      1000000,
-		FixedGasPrice: cfg.FixedGasPrice,
-	}
-
+	cfg := evm.DefaultGasConfig()
+	cfg.GasAssetName = gasAsset
+	cfg.FixedGasPrice = 1
+	cfg.ResultBaseGas = 100
+	blockCtx := evm.BlockContext{Number: 100, Time: 1710000000, GasLimit: cfg.MaxGasPerBlock, FixedGasPrice: 1}
 	runtimeCode := e2ECallAssetPrecompileCode()
-	contract, err := evm.DeriveCreateContractAddress(
-		evm.TestnetContractPrefix, caller, deployNonce,
-	)
+	contract, err := evm.DeriveCreateContractAddress(evm.TestnetContractPrefix, caller, deployNonce)
 	require.NoError(t, err)
-
 	deployTx := e2EDeployTx(t, contract, deployNonce, e2EInitCode(runtimeCode), 500000, gasAsset)
-	probeDeployResultTx := e2EResultTx(t, evm.ResultStatusSuccess, 1, []wire.OutPoint{
-		{Hash: deployTx.TxHash(), Index: 1},
-	})
 	invokeTx := e2EInvokeTx(t, contract, evm.InvokePayload{
-		GasLimit:  200000,
-		CallNonce: 1,
-		Action:    evmcommon.ContractInvokeAPICall,
-		Param:     e2ETransferAssetParam(t, evm.SatoshiAssetName, "tb1qe2edest", "77"),
+		GasLimit: 200000, Action: evmcommon.ContractInvokeAPICall,
+		Param: e2ETransferAssetParam(t, evm.SatoshiAssetName, "tb1qe2edest", "77"),
 	}, 500000, gasAsset)
-	probeInvokeResultTx := e2EResultTx(t, evm.ResultStatusSuccess, 1, []wire.OutPoint{{
-		Hash:  invokeTx.TxHash(),
-		Index: 1,
-	}})
+	invokeTx.TxOut[1].Value = 100
+	work := []*wire.MsgTx{deployTx, invokeTx}
 
-	probeRuntime := evm.NewRuntime(nil)
-	probe, err := evm.ExecuteBlock(evm.BlockExecutionRequest{
-		Txs: []*wire.MsgTx{
-			deployTx, invokeTx, probeDeployResultTx, probeInvokeResultTx,
-		},
-		Runtime:        probeRuntime,
-		ContractPrefix: evm.TestnetContractPrefix,
-		GasConfig:      cfg,
-		Block:          blockCtx,
-		ResolveCaller:  e2EFixedCaller(caller),
-	})
-	require.NoError(t, err)
-	require.Len(t, probe.Records, 2)
-	require.Equal(t, evm.ExecutionKindDeploy, probe.Records[0].Kind)
-	require.Equal(t, evm.ExecutionKindInvoke, probe.Records[1].Kind)
-	require.True(t, probe.Records[1].RequiresResult)
-	require.Len(t, probe.Records[1].AssetIntents, 1)
-
-	invokeRecord := probe.Records[1]
-	assetInputHash := chainhash.Hash{0xaa}
-	deployGasAssets, err := evm.NewAssetSet(gasAsset, scommon.NewDefaultDecimal(500000))
-	require.NoError(t, err)
-	invokeGasAssets, err := evm.NewAssetSet(gasAsset, scommon.NewDefaultDecimal(500000))
-	require.NoError(t, err)
-	available := []evm.UTXO{
-		e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, deployGasAssets, 100),
-		e2EUTXO(evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1}, contract, 0, invokeGasAssets, 100),
-		e2EUTXO(evm.OutPoint{TxID: assetInputHash.String(), Vout: 0}, contract, 100, nil, 99),
-	}
-	deployResultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
-		Status:    evm.ResultStatusSuccess,
-		Records:   []evm.ExecutionRecord{probe.Records[0]},
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return available, nil
-		},
+	builderRuntime := evm.NewRuntime(nil)
+	built, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
+		Txs: work, Runtime: builderRuntime, ContractPrefix: evm.TestnetContractPrefix,
+		GasConfig: cfg, Block: blockCtx, ResolveCaller: e2EFixedCaller(caller),
+		ResolveGasRefundRecipient: e2EFixedRefundRecipient("tb1qe2edest"),
 		ResolveScript: e2EResultScriptResolver(t, contract),
+		ResolveOutput: e2EResultOutputResolver(contract),
 	})
 	require.NoError(t, err)
-	invokeResultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
-		Status:    evm.ResultStatusSuccess,
-		Records:   []evm.ExecutionRecord{invokeRecord},
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return available, nil
-		},
-		ResolveScript: e2EResultScriptResolver(t, contract),
-	})
-	require.NoError(t, err)
+	require.Len(t, built.Execution.Records, 2)
+	require.Len(t, built.ResultTxs, 1)
+	require.Equal(t, evm.ExecutionKindDeploy, built.Execution.Records[0].Kind)
+	require.Equal(t, evm.ExecutionKindInvoke, built.Execution.Records[1].Kind)
 
-	resultVerifier := evm.CanonicalResultVerifier{
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return available, nil
-		},
-		ResolveOutput: func(tx *wire.MsgTx) ([]evm.ResultOutput, error) {
-			return contractframework.ResultOutputsFromTx(
-				tx, evm.TestnetContractPrefix, evmcommon.ParseContractPkScript, e2ERecipientResolver)
-		},
+	replayRuntime := evm.NewRuntime(nil)
+	replayed, err := evm.ExecuteWorkBlock(evm.BlockExecutionRequest{
+		Txs: work, Runtime: replayRuntime, ContractPrefix: evm.TestnetContractPrefix,
+		GasConfig: cfg, Block: blockCtx, ResolveCaller: e2EFixedCaller(caller),
+		ResolveGasRefundRecipient: e2EFixedRefundRecipient("tb1qe2edest"),
+		ResolveResultScript: e2EResultScriptResolver(t, contract),
+	})
+	require.NoError(t, err)
+	require.Equal(t, built.Execution.StateRoot, replayed.StateRoot)
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, work, evm.TestnetContractPrefix, evm.ContractTypeEVM)
+	verifier := evm.CanonicalResultVerifier{
+		GasConfig: cfg, UTXOs: provider, ResolveOutput: e2EResultOutputResolver(contract),
+		ResolveScript: e2EResultScriptResolver(t, contract),
 	}
+	require.NoError(t, evm.VerifyResultTxs(evm.ResultVerifyRequest{
+		ResultTxs: built.ResultTxs, Execution: replayed, VerifyResult: verifier.Verify,
+	}))
 
 	coinbase := e2ECoinbaseTx()
-	replayRuntime := evm.NewRuntime(nil)
-	replayed, err := evm.ExecuteBlock(evm.BlockExecutionRequest{
-		Txs: []*wire.MsgTx{
-			coinbase, deployTx, invokeTx, deployResultTx, invokeResultTx,
-		},
-		Runtime:        replayRuntime,
-		ContractPrefix: evm.TestnetContractPrefix,
-		GasConfig:      cfg,
-		Block:          blockCtx,
-		ResolveCaller:  e2EFixedCaller(caller),
-		VerifyResult:   resultVerifier.Verify,
-	})
-	require.NoError(t, err)
-	require.NotEqual(t, [32]byte{}, replayed.StateRoot)
 	require.NoError(t, evm.UpsertCoinbaseStateRoot(coinbase, replayed.StateRoot))
-
-	verifiedRuntime := evm.NewRuntime(nil)
-	verified, err := evm.ExecuteBlockAndVerifyStateRoot(evm.BlockExecutionRequest{
-		Txs: []*wire.MsgTx{
-			coinbase, deployTx, invokeTx, deployResultTx, invokeResultTx,
-		},
-		CoinbaseTx:     coinbase,
-		Runtime:        verifiedRuntime,
-		ContractPrefix: evm.TestnetContractPrefix,
-		GasConfig:      cfg,
-		Block:          blockCtx,
-		ResolveCaller:  e2EFixedCaller(caller),
-		VerifyResult:   resultVerifier.Verify,
-	})
-	require.NoError(t, err)
-	require.Equal(t, replayed.StateRoot, verified.StateRoot)
+	require.NoError(t, evm.VerifyCoinbaseStateRoot(coinbase, replayed.StateRoot))
 
 	store := contractnode.NewEVMStateStore(e2EDatabase(t))
 	parentHash := chainhash.Hash{0x01}
 	parentState := evm.NewMemoryStateDB()
 	require.NoError(t, store.StoreBlockState(&parentHash, parentState))
-
 	mainHash := chainhash.Hash{0x02}
 	require.NoError(t, store.StoreBlockState(&mainHash, replayRuntime.State))
-
-	altBlock := btcutil.NewBlock(&wire.MsgBlock{
-		Header: wire.BlockHeader{PrevBlock: parentHash},
-		Transactions: []*wire.MsgTx{
-			e2ECoinbaseTx(),
-		},
-	})
+	altBlock := btcutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{PrevBlock: parentHash}, Transactions: []*wire.MsgTx{e2ECoinbaseTx()}})
 	altRuntime, err := store.RuntimeFactory()(altBlock, nil)
 	require.NoError(t, err)
 	require.Equal(t, parentState.StateRoot(), altRuntime.State.StateRoot())
-
 	loadedMain, err := store.LoadBlockState(&mainHash)
 	require.NoError(t, err)
 	require.Equal(t, replayed.StateRoot, loadedMain.StateRoot())
@@ -181,115 +93,65 @@ func TestEVMEndToEndDeployInvokeReplayAndReorg(t *testing.T) {
 
 func TestEVMEndToEndDecimalAssetTransfer(t *testing.T) {
 	const (
-		gasAsset      = "ordx:ft:gas"
+		gasAsset = "ordx:ft:gas"
 		transferAsset = "ordx:ft:usd"
 	)
 	caller := mustE2EEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract, err := evm.DeriveCreateContractAddress(evm.TestnetContractPrefix, caller, 8)
 	require.NoError(t, err)
-	blockCtx := evm.BlockContext{Number: 100, Time: 1710000000, GasLimit: 1000000, FixedGasPrice: 1}
-	cfg := evm.GasConfig{
-		GasAssetName:     gasAsset,
-		FixedGasPrice:    1,
-		ResultPackingFee: 100,
-		MaxGasPerInvoke:  500000,
-		MaxGasPerBlock:   1000000,
-	}
-
+	cfg := evm.DefaultGasConfig()
+	cfg.GasAssetName = gasAsset
+	cfg.FixedGasPrice = 1
+	cfg.ResultBaseGas = 100
+	blockCtx := evm.BlockContext{Number: 100, Time: 1710000000, GasLimit: cfg.MaxGasPerBlock, FixedGasPrice: 1}
 	deployTx := e2EDeployTx(t, contract, 8, e2EInitCode(e2ECallAssetPrecompileCode()), 500000, gasAsset)
 	invokeTx := e2EInvokeTx(t, contract, evm.InvokePayload{
-		GasLimit:  200000,
-		CallNonce: 1,
-		Action:    evmcommon.ContractInvokeAPICall,
-		Param:     e2ETransferAssetParam(t, transferAsset, "tb1qe2edest", "1.25"),
+		GasLimit: 200000, Action: evmcommon.ContractInvokeAPICall,
+		Param: e2ETransferAssetParam(t, transferAsset, "tb1qe2edest", "1.25"),
 	}, 500000, gasAsset)
+	amount, err := evm.ParseDecimalAmountString("2.5")
+	require.NoError(t, err)
+	require.NoError(t, invokeTx.TxOut[1].Assets.Merge(e2EDecimalAsset(transferAsset, amount)))
+	work := []*wire.MsgTx{deployTx, invokeTx}
 	runtime := evm.NewRuntime(nil)
-	executor := evm.NewBackend(evm.BlockExecutionRequest{
-		Runtime:        runtime,
-		ContractPrefix: evm.TestnetContractPrefix,
-		GasConfig:      cfg,
-		Block:          blockCtx,
-		ResolveCaller:  e2EFixedCaller(caller),
-	})
-	require.NoError(t, executor.ExecuteTx(deployTx))
-	deployPending := executor.PendingRecords()
-	require.Len(t, deployPending, 1)
-	deployResultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
-		Status:    evm.ResultStatusSuccess,
-		Records:   deployPending,
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return []evm.UTXO{
-				e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
-			}, nil
-		},
-		ResolveScript: e2EResultScriptResolver(t, contract),
+	built, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
+		Txs: work, Runtime: runtime, ContractPrefix: evm.TestnetContractPrefix,
+		GasConfig: cfg, Block: blockCtx, ResolveCaller: e2EFixedCaller(caller),
+		ResolveGasRefundRecipient: e2EFixedRefundRecipient("tb1qe2edest"),
+		ResolveScript: e2EResultScriptResolver(t, contract), ResolveOutput: e2EResultOutputResolver(contract),
+		AssetPrecision: func(name string) (int, bool) { return 2, name == transferAsset },
 	})
 	require.NoError(t, err)
-	require.NoError(t, executor.ExecuteTx(deployResultTx))
-	require.NoError(t, executor.ExecuteTx(invokeTx))
-	pending := executor.PendingRecords()
-	require.Len(t, pending, 1)
-
-	assetAmount, err := evm.ParseDecimalAmountString("2.5")
+	require.Len(t, built.ResultTxs, 1)
+	outputs, err := e2EResultOutputResolver(contract)(built.ResultTxs[0])
 	require.NoError(t, err)
-	available := []evm.UTXO{
-		e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
-		e2EUTXO(evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
-		e2EUTXO(evm.OutPoint{TxID: chainhash.Hash{0xbb}.String(), Vout: 0}, contract, 0, e2EDecimalAsset(transferAsset, assetAmount), 99),
-	}
-	resultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
-		Status:    evm.ResultStatusSuccess,
-		Records:   pending,
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return available, nil
-		},
-		ResolveScript: e2EResultScriptResolver(t, contract),
-	})
+	want, err := evm.ParseDecimalAmountString("1.25")
 	require.NoError(t, err)
-	outputs, err := contractframework.ResultOutputsFromTx(resultTx, evm.TestnetContractPrefix, evmcommon.ParseContractPkScript, e2ERecipientResolver)
-	require.NoError(t, err)
-	require.NotEmpty(t, outputs)
-	wantAmount, err := evm.ParseDecimalAmountString("1.25")
-	require.NoError(t, err)
-	var foundTransfer bool
+	var external, retained bool
 	for _, output := range outputs {
-		if output.To != "tb1qe2edest" {
-			continue
-		}
 		for _, asset := range output.Assets {
-			if asset.Name.String() == transferAsset &&
-				asset.Amount.Cmp(wantAmount) == 0 {
-				foundTransfer = true
-			}
+			if asset.Name.String() != transferAsset || asset.Amount.Cmp(want) != 0 { continue }
+			if output.To == "tb1qe2edest" { external = true }
+			if output.To == contract.MustEncode() { retained = true }
 		}
 	}
-	require.True(t, foundTransfer)
+	require.True(t, external)
+	require.True(t, retained)
 
-	verifier := evm.CanonicalResultVerifier{
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return available, nil
-		},
-		ResolveOutput: func(tx *wire.MsgTx) ([]evm.ResultOutput, error) {
-			return contractframework.ResultOutputsFromTx(tx, evm.TestnetContractPrefix, evmcommon.ParseContractPkScript, e2ERecipientResolver)
-		},
-	}
 	replayRuntime := evm.NewRuntime(nil)
-	_, err = evm.ExecuteBlock(evm.BlockExecutionRequest{
-		Txs:            []*wire.MsgTx{deployTx, invokeTx, deployResultTx, resultTx},
-		Runtime:        replayRuntime,
-		ContractPrefix: evm.TestnetContractPrefix,
-		GasConfig:      cfg,
-		Block:          blockCtx,
-		ResolveCaller:  e2EFixedCaller(caller),
-		VerifyResult:   verifier.Verify,
+	replayed, err := evm.ExecuteWorkBlock(evm.BlockExecutionRequest{
+		Txs: work, Runtime: replayRuntime, ContractPrefix: evm.TestnetContractPrefix,
+		GasConfig: cfg, Block: blockCtx, ResolveCaller: e2EFixedCaller(caller),
+		ResolveGasRefundRecipient: e2EFixedRefundRecipient("tb1qe2edest"),
+		ResolveResultScript: e2EResultScriptResolver(t, contract),
+		AssetPrecision: func(name string) (int, bool) { return 2, name == transferAsset },
 	})
 	require.NoError(t, err)
+	require.Equal(t, evm.ResultStatusSuccess, replayed.Records[1].Status)
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, work, evm.TestnetContractPrefix, evm.ContractTypeEVM)
+	verifier := evm.CanonicalResultVerifier{GasConfig: cfg, UTXOs: provider,
+		ResolveOutput: e2EResultOutputResolver(contract), ResolveScript: e2EResultScriptResolver(t, contract)}
+	require.NoError(t, evm.VerifyResultTxs(evm.ResultVerifyRequest{ResultTxs: built.ResultTxs, Execution: replayed, VerifyResult: verifier.Verify}))
 }
 
 func TestEVMEndToEndRejectsWrongResultOutput(t *testing.T) {
@@ -297,88 +159,42 @@ func TestEVMEndToEndRejectsWrongResultOutput(t *testing.T) {
 	caller := mustE2EEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract, err := evm.DeriveCreateContractAddress(evm.TestnetContractPrefix, caller, 9)
 	require.NoError(t, err)
-	blockCtx := evm.BlockContext{Number: 100, Time: 1710000000, GasLimit: 1000000, FixedGasPrice: 1}
-	cfg := evm.GasConfig{
-		GasAssetName:     gasAsset,
-		FixedGasPrice:    1,
-		ResultPackingFee: 100,
-		MaxGasPerInvoke:  500000,
-		MaxGasPerBlock:   1000000,
-	}
+	cfg := evm.DefaultGasConfig()
+	cfg.GasAssetName = gasAsset
+	cfg.FixedGasPrice = 1
+	cfg.ResultBaseGas = 100
+	blockCtx := evm.BlockContext{Number: 100, Time: 1710000000, GasLimit: cfg.MaxGasPerBlock, FixedGasPrice: 1}
 	deployTx := e2EDeployTx(t, contract, 9, e2EInitCode(e2ECallAssetPrecompileCode()), 500000, gasAsset)
 	invokeTx := e2EInvokeTx(t, contract, evm.InvokePayload{
-		GasLimit:  200000,
-		CallNonce: 1,
-		Action:    evmcommon.ContractInvokeAPICall,
-		Param:     e2ETransferAssetParam(t, evm.SatoshiAssetName, "tb1qe2edest", "77"),
+		GasLimit: 200000, Action: evmcommon.ContractInvokeAPICall,
+		Param: e2ETransferAssetParam(t, evm.SatoshiAssetName, "tb1qe2edest", "77"),
 	}, 500000, gasAsset)
-
-	runtime := evm.NewRuntime(nil)
-	executor := evm.NewBackend(evm.BlockExecutionRequest{
-		Runtime:        runtime,
-		ContractPrefix: evm.TestnetContractPrefix,
-		GasConfig:      cfg,
-		Block:          blockCtx,
-		ResolveCaller:  e2EFixedCaller(caller),
-	})
-	require.NoError(t, executor.ExecuteTx(deployTx))
-	deployPending := executor.PendingRecords()
-	require.Len(t, deployPending, 1)
-	deployResultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
-		Status:    evm.ResultStatusSuccess,
-		Records:   deployPending,
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return []evm.UTXO{
-				e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
-			}, nil
-		},
-		ResolveScript: e2EResultScriptResolver(t, contract),
+	invokeTx.TxOut[1].Value = 100
+	work := []*wire.MsgTx{deployTx, invokeTx}
+	built, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
+		Txs: work, Runtime: evm.NewRuntime(nil), ContractPrefix: evm.TestnetContractPrefix,
+		GasConfig: cfg, Block: blockCtx, ResolveCaller: e2EFixedCaller(caller),
+		ResolveGasRefundRecipient: e2EFixedRefundRecipient("tb1qe2edest"),
+		ResolveScript: e2EResultScriptResolver(t, contract), ResolveOutput: e2EResultOutputResolver(contract),
 	})
 	require.NoError(t, err)
-	require.NoError(t, executor.ExecuteTx(deployResultTx))
-	require.NoError(t, executor.ExecuteTx(invokeTx))
-	pending := executor.PendingRecords()
-	require.Len(t, pending, 1)
-	available := []evm.UTXO{
-		e2EUTXO(evm.OutPoint{TxID: deployTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
-		e2EUTXO(evm.OutPoint{TxID: invokeTx.TxID(), Vout: 1}, contract, 0, e2EAsset(gasAsset, 500000), 100),
-		e2EUTXO(evm.OutPoint{TxID: chainhash.Hash{0xcc}.String(), Vout: 0}, contract, 100, nil, 99),
-	}
-	resultTx, err := contractframework.BuildCanonicalResultTx(contractframework.CanonicalResultTxRequest{
-		Status:    evm.ResultStatusSuccess,
-		Records:   pending,
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return available, nil
-		},
-		ResolveScript: e2EResultScriptResolver(t, contract),
-	})
-	require.NoError(t, err)
-	resultTx.TxOut[0].Value = 78
+	require.Len(t, built.ResultTxs, 1)
+	bad := built.ResultTxs[0].Copy()
+	require.NotEmpty(t, bad.TxOut)
+	bad.TxOut[0].Value++
 
-	verifier := evm.CanonicalResultVerifier{
-		GasConfig: cfg,
-		UTXOs: func(got evm.ContractAddress) ([]evm.UTXO, error) {
-			require.True(t, contract.Equal(got))
-			return available, nil
-		},
-		ResolveOutput: func(tx *wire.MsgTx) ([]evm.ResultOutput, error) {
-			return contractframework.ResultOutputsFromTx(tx, evm.TestnetContractPrefix, evmcommon.ParseContractPkScript, e2ERecipientResolver)
-		},
-	}
 	replayRuntime := evm.NewRuntime(nil)
-	_, err = evm.ExecuteBlock(evm.BlockExecutionRequest{
-		Txs:            []*wire.MsgTx{deployTx, invokeTx, deployResultTx, resultTx},
-		Runtime:        replayRuntime,
-		ContractPrefix: evm.TestnetContractPrefix,
-		GasConfig:      cfg,
-		Block:          blockCtx,
-		ResolveCaller:  e2EFixedCaller(caller),
-		VerifyResult:   verifier.Verify,
+	replayed, err := evm.ExecuteWorkBlock(evm.BlockExecutionRequest{
+		Txs: work, Runtime: replayRuntime, ContractPrefix: evm.TestnetContractPrefix,
+		GasConfig: cfg, Block: blockCtx, ResolveCaller: e2EFixedCaller(caller),
+		ResolveGasRefundRecipient: e2EFixedRefundRecipient("tb1qe2edest"),
+		ResolveResultScript: e2EResultScriptResolver(t, contract),
 	})
+	require.NoError(t, err)
+	provider := contractframework.ContractUTXOProviderWithTxOutputs(nil, work, evm.TestnetContractPrefix, evm.ContractTypeEVM)
+	verifier := evm.CanonicalResultVerifier{GasConfig: cfg, UTXOs: provider,
+		ResolveOutput: e2EResultOutputResolver(contract), ResolveScript: e2EResultScriptResolver(t, contract)}
+	err = evm.VerifyResultTxs(evm.ResultVerifyRequest{ResultTxs: []*wire.MsgTx{bad}, Execution: replayed, VerifyResult: verifier.Verify})
 	require.Error(t, err)
 }
 
@@ -387,7 +203,7 @@ func e2EDeployTx(t *testing.T, contract evm.ContractAddress, nonce uint64, initC
 	contractScript, err := evm.ContractPkScript(contract)
 	require.NoError(t, err)
 	script, err := evmcommon.DeployNullDataScript(evm.DeployPayload{
-		GasLimit:        300000,
+		GasLimit:        evm.DefaultGasConfig().DeployBaseGas,
 		DeployNonce:     nonce,
 		ContractContent: initCode,
 	})
@@ -454,11 +270,20 @@ func e2EFixedCaller(caller evm.EVMAddress) evm.CallerResolver {
 func e2EResultScriptResolver(t *testing.T, contract evm.ContractAddress) evm.ResultRecipientScriptResolver {
 	t.Helper()
 	return func(output evm.ResultOutput) ([]byte, error) {
-		if output.To == contract.MustEncode() {
-			return evm.ContractPkScript(contract)
-		}
+		if output.To == contract.MustEncode() { return evm.ContractPkScript(contract) }
 		return []byte{0x51}, nil
 	}
+}
+
+func e2EResultOutputResolver(contract evm.ContractAddress) evm.ResultOutputResolver {
+	return func(tx *wire.MsgTx) ([]evm.ResultOutput, error) {
+		return contractframework.ResultOutputsFromTx(tx, evm.TestnetContractPrefix,
+			evmcommon.ParseContractPkScript, e2ERecipientResolver)
+	}
+}
+
+func e2EFixedRefundRecipient(recipient string) evm.GasRefundRecipientResolver {
+	return func(*wire.MsgTx, evmcommon.Tx) (string, bool, error) { return recipient, true, nil }
 }
 
 func e2ERecipientResolver(pkScript []byte) (string, bool, error) {

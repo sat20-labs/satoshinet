@@ -307,6 +307,7 @@ func CollectResultPlanUTXOs(plan ResultPlan, provider ContractUTXOProvider) (Res
 		return ResultPlanUTXOView{}, err
 	}
 	SortUTXOsForCanonicalSelection(utxos)
+	physical := contract.ManagedBalance{}
 	for _, utxo := range utxos {
 		if !utxo.Contract.Equal(contractAddr) {
 			continue
@@ -316,20 +317,14 @@ func CollectResultPlanUTXOs(plan ResultPlan, provider ContractUTXOProvider) (Res
 				continue
 			}
 		}
-		nextValue, overflow := AddInt64(view.Value, utxo.PhysicalValue())
-		if overflow {
-			return ResultPlanUTXOView{}, fmt.Errorf("contract UTXO value overflows int64")
+		if err := physical.Credit(utxo.PhysicalValue(), utxo.TxAssets()); err != nil {
+			return ResultPlanUTXOView{}, fmt.Errorf("invalid contract UTXO quantity: %w", err)
 		}
-		view.Value = nextValue
 		view.UTXOs = append(view.UTXOs, utxo.Clone())
 		view.Inputs = append(view.Inputs, utxo.OutPoint)
-		assets := utxo.TxAssets()
-		if len(assets) != 0 {
-			if err := view.Assets.Merge(assets); err != nil {
-				return ResultPlanUTXOView{}, err
-			}
-		}
 	}
+	view.Value = physical.Value
+	view.Assets = physical.Assets.Clone()
 	view.Inputs = UniqueOutPoints(view.Inputs)
 	if plan.InputScope == ResultInputScopeExplicit && len(view.Inputs) != len(requested) {
 		return ResultPlanUTXOView{}, fmt.Errorf("explicit result input is not available")

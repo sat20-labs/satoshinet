@@ -275,8 +275,8 @@ func TestNetworkEVMCloseProfit(t *testing.T) {
 	fixture.sendAndWaitTx(t, closeTx)
 
 	requireAssetSummaryZero(t, fixture.bootstrapNode, contract.MustEncode(), profitAsset)
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, profitAsset, "60")
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, bootstrapAddr, profitAsset, "40")
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, profitAsset, "70")
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, bootstrapAddr, profitAsset, "30")
 	fixture.requireNodesSynced(t)
 }
 

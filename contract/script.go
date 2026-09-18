@@ -149,10 +149,22 @@ func ReadNullDataScript(script []byte) (TxType, []byte, error) {
 		return 0, nil, fmt.Errorf("script is missing contract content type")
 	}
 	contentType := uint8(tokenizer.ExtractInt64())
-	if !tokenizer.Next() || tokenizer.Data() == nil {
+	if !tokenizer.Next() {
 		return 0, nil, fmt.Errorf("script is missing contract payload")
 	}
 	content := tokenizer.Data()
+	if content == nil {
+		switch op := tokenizer.Opcode(); {
+		case op == txscript.OP_0:
+			content = []byte{0x00}
+		case op == txscript.OP_1NEGATE:
+			content = []byte{0x81}
+		case op >= txscript.OP_1 && op <= txscript.OP_16:
+			content = []byte{byte(txscript.AsSmallInt(op))}
+		default:
+			return 0, nil, fmt.Errorf("script is missing contract payload")
+		}
+	}
 	if len(content) > MaxNullDataPayloadLen {
 		return 0, nil, fmt.Errorf("data size %d is larger than max allowed size %d", len(content), MaxNullDataPayloadLen)
 	}

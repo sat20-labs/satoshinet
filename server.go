@@ -39,8 +39,6 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/connmgr"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
-	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	contractnode "github.com/sat20-labs/satoshinet/contract/node"
 	contractoracle "github.com/sat20-labs/satoshinet/contract/oracle"
 	"github.com/sat20-labs/satoshinet/database"
@@ -3047,15 +3045,16 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 		return nil, fmt.Errorf("agent %s transaction is already in mempool", action)
 	}
 	gasConfig := contractnode.DefaultGasConfig()
-	topUpGas, err := s.agentConfirmGasTopUp(contract, action, gasConfig)
+	nextHeight := int64(s.chain.BestSnapshot().Height) + 1
+	invokeFee, err := gasConfig.InvokeFee(nextHeight)
 	if err != nil {
 		return nil, err
 	}
-	invokeFee, err := gasConfig.InvokeFee(int64(s.chain.BestSnapshot().Height) + 1)
+	resultFee, err := gasConfig.ResultFee(nextHeight)
 	if err != nil {
 		return nil, err
 	}
-	externalGas, err := agentConfirmExternalGasFunding(invokeFee, topUpGas)
+	externalGas, err := agentInvokeExternalGasFunding(invokeFee, resultFee)
 	if err != nil {
 		return nil, err
 	}
@@ -3067,7 +3066,7 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 	if funding.ChangeOutput != nil {
 		changeOutputs = append(changeOutputs, funding.ChangeOutput)
 	}
-	confirmFunding, err := agentConfirmFundingOutput(topUpGas, gasConfig.GasAssetName)
+	invokeFunding, err := agentInvokeFundingOutput(resultFee, gasConfig.GasAssetName)
 	if err != nil {
 		return nil, err
 	}
@@ -3077,7 +3076,7 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 		CallNonce:    uint64(time.Now().UnixNano()),
 		Action:       action,
 		Param:        param,
-		Funding:      confirmFunding,
+		Funding:      invokeFunding,
 		Inputs:       funding.InputOutPoints(),
 		ExtraOutputs: changeOutputs,
 	})
@@ -3114,85 +3113,37 @@ func (s *server) submitAgentInvokeTx(contract contractcommon.ContractAddress, ac
 	return signedTx, nil
 }
 
-func agentConfirmFundingOutput(topUpGas *common.Decimal, gasAssetName string) (wire.TxOut, error) {
-	if topUpGas == nil || topUpGas.Sign() == 0 {
+func agentInvokeFundingOutput(resultFee *common.Decimal, gasAssetName string) (wire.TxOut, error) {
+	if resultFee == nil || resultFee.Sign() == 0 {
 		return wire.TxOut{}, nil
 	}
-	if topUpGas.Sign() < 0 {
-		return wire.TxOut{}, fmt.Errorf("invalid agent confirm gas top up")
+	if resultFee.Sign() < 0 {
+		return wire.TxOut{}, fmt.Errorf("invalid agent Result gas fee")
 	}
 	gasAsset := wire.NewAssetNameFromString(gasAssetName)
 	if gasAsset == nil {
 		return wire.TxOut{}, fmt.Errorf("invalid agent gas asset name")
 	}
 	return wire.TxOut{
-		Assets: wire.TxAssets{{
-			Name:   *gasAsset,
-			Amount: *topUpGas.Clone(),
-		}},
+		Assets: wire.TxAssets{{Name: *gasAsset, Amount: *resultFee.Clone()}},
 	}, nil
 }
 
-func agentConfirmExternalGasFunding(invokeFee, topUpGas *common.Decimal) (*common.Decimal, error) {
+func agentInvokeExternalGasFunding(invokeFee, resultFee *common.Decimal) (*common.Decimal, error) {
 	required := common.NewDecimal(0, 0)
-	if invokeFee != nil {
-		if invokeFee.Sign() < 0 {
+	for _, fee := range []*common.Decimal{invokeFee, resultFee} {
+		if fee == nil {
+			continue
+		}
+		if fee.Sign() < 0 {
 			return nil, fmt.Errorf("invalid agent invoke gas fee")
 		}
-		required = invokeFee.Clone()
-	}
-	if topUpGas != nil {
-		if topUpGas.Sign() < 0 {
-			return nil, fmt.Errorf("invalid agent confirm gas top up")
-		}
-		required = required.AddAlignPrecision(topUpGas)
+		required = required.AddAlignPrecision(fee)
 	}
 	if required.Sign() <= 0 {
 		return nil, nil
 	}
 	return required, nil
-}
-
-func (s *server) agentConfirmGasTopUp(contract contractcommon.ContractAddress, action string,
-	gasConfig contractframework.GasConfig) (*common.Decimal, error) {
-
-	if s == nil || s.chain == nil {
-		return nil, fmt.Errorf("agent confirm submitter is not ready")
-	}
-	if strings.TrimSpace(action) != agentcontract.InvokeAPIConfirm {
-		return nil, nil
-	}
-	resultFee, err := gasConfig.ResultFee(int64(s.chain.BestSnapshot().Height) + 1)
-	if err != nil {
-		return nil, err
-	}
-	if resultFee == nil || resultFee.Sign() <= 0 {
-		return nil, nil
-	}
-	if s == nil || s.agentStateStore == nil {
-		return resultFee.Clone(), nil
-	}
-	_, store, err := s.agentStateStore.LoadTip()
-	if err != nil {
-		srvrLog.Warnf("agent confirm gas top up uses full result fee: load agent state failed: %v", err)
-		return resultFee.Clone(), nil
-	}
-	runtime, ok := store.Get(contract)
-	if !ok || runtime == nil {
-		return resultFee.Clone(), nil
-	}
-	current := common.NewDecimal(0, resultFee.Precision)
-	if gasBalance := strings.TrimSpace(runtime.State().Prediction.GasBalance); gasBalance != "" {
-		current, err = common.NewDecimalFromString(gasBalance, agentcontract.MaxPredictionDecimalPrecision)
-		if err != nil {
-			return nil, err
-		}
-		current = current.NewPrecision(resultFee.Precision)
-	}
-	if current.Cmp(resultFee) >= 0 {
-		return nil, nil
-	}
-	return resultFee.SubAlignPrecision(current), nil
 }
 
 func (s *server) selectAgentConfirmFundingUTXOs(minGasFee *common.Decimal) (contractcommon.FundingSelection, error) {

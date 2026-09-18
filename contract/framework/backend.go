@@ -16,6 +16,7 @@ type ExecutionContext struct {
 	Time      int64
 	GasConfig GasConfig
 	Assets    ContractAssetView
+	TxID      string
 	RawTx     *wire.MsgTx
 	ParsedTx  ParsedTx
 }
@@ -29,6 +30,12 @@ type Backend interface {
 	Invoke(ctx ExecutionContext, tx contract.Tx) (ExecutionOutcome, error)
 	DefaultInvoke(ctx ExecutionContext, tx contract.Tx, funding contract.FundingOutput) (ExecutionOutcome, bool, error)
 	FinalizeBlock(ctx ExecutionContext) ([]ExecutionOutcome, error)
+
+	// Common policy is enforced by Executor. Each runtime exposes its existing
+	// state storage; no separate framework state tree or UTXO registry is used.
+	Lifecycle(contract.ContractAddress) (contract.ContractLifecycle, bool, error)
+	RejectFunding(ctx ExecutionContext, tx contract.Tx) (ExecutionOutcome, error)
+	ManagedBalance(contract.ContractAddress) (*contract.ManagedBalance, bool)
 
 	StateRoot() [32]byte
 	Snapshot() any

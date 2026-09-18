@@ -65,8 +65,7 @@ type foldedRootSinglePassModule struct {
 func (m foldedRootSinglePassModule) BuildBlockResults(req ResultBuildRequest) (ResultBuildResult, ExecutionResult, error) {
 	*m.calls = append(*m.calls, m.Name()+":build-block")
 	*m.workSeen = append(*m.workSeen, req.Txs...)
-	return ResultBuildResult{},
-		ExecutionResult{ModuleType: m.Type(), StateRoot: m.root}, nil
+	return ResultBuildResult{}, ExecutionResult{ModuleType: m.Type(), StateRoot: m.root}, nil
 }
 
 func TestBlockCoordinatorValidationSplitsByModule(t *testing.T) {
@@ -74,9 +73,7 @@ func TestBlockCoordinatorValidationSplitsByModule(t *testing.T) {
 	evmWork := testWorkTx(t, contract.TxTypeInvoke, testContractAddress(t, ModuleEVM, 2))
 	templatePrev := wire.OutPoint{Hash: chainhash.Hash{3}, Index: 0}
 	evmPrev := wire.OutPoint{Hash: chainhash.Hash{4}, Index: 0}
-	templateResult := testResultTx(t, templatePrev)
-	evmResult := testResultTx(t, evmPrev)
-
+	templateResult, evmResult := testResultTx(t, templatePrev), testResultTx(t, evmPrev)
 	var calls []string
 	var templateWorkSeen, evmWorkSeen, templateResultsSeen, evmResultsSeen []*wire.MsgTx
 	coordinator := BlockCoordinator{
@@ -84,13 +81,11 @@ func TestBlockCoordinatorValidationSplitsByModule(t *testing.T) {
 		Modules: []Module{
 			recordingModule{
 				stubModule: stubModule{name: "evm", moduleType: ModuleEVM, priority: 2},
-				calls:      &calls, workSeen: &evmWorkSeen, resultSeen: &evmResultsSeen,
-				root: testRoot(2),
+				calls: &calls, workSeen: &evmWorkSeen, resultSeen: &evmResultsSeen, root: testRoot(2),
 			},
 			recordingModule{
 				stubModule: stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
-				calls:      &calls, workSeen: &templateWorkSeen, resultSeen: &templateResultsSeen,
-				root: testRoot(1),
+				calls: &calls, workSeen: &templateWorkSeen, resultSeen: &templateResultsSeen, root: testRoot(1),
 			},
 		},
 	}
@@ -98,14 +93,11 @@ func TestBlockCoordinatorValidationSplitsByModule(t *testing.T) {
 		Txs: []*wire.MsgTx{templateWork, evmWork, templateResult, evmResult},
 		ParentView: stubUTXOView{
 			templatePrev: testContractAddress(t, ModuleTemplate, 3),
-			evmPrev:      testContractAddress(t, ModuleEVM, 4),
+			evmPrev: testContractAddress(t, ModuleEVM, 4),
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{
-		"template:execute", "template:verify",
-		"evm:execute", "evm:verify",
-	}, calls)
+	require.Equal(t, []string{"template:execute", "template:verify", "evm:execute", "evm:verify"}, calls)
 	require.Equal(t, []*wire.MsgTx{templateWork}, templateWorkSeen)
 	require.Equal(t, []*wire.MsgTx{evmWork}, evmWorkSeen)
 	require.Equal(t, []*wire.MsgTx{templateResult}, templateResultsSeen)
@@ -119,109 +111,84 @@ func TestBlockCoordinatorBuildResultsUsesDeterministicModuleOrder(t *testing.T) 
 	templateResult := testResultTx(t, wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0})
 	evmResult := testResultTx(t, wire.OutPoint{Hash: chainhash.Hash{2}, Index: 0})
 	var calls []string
-	var templateWorkSeen, evmWorkSeen, noResults []*wire.MsgTx
+	var templateWorkSeen, evmWorkSeen, templateResultsSeen, evmResultsSeen []*wire.MsgTx
 	coordinator := BlockCoordinator{
 		Prefix: contract.TestnetContractPrefix,
 		Modules: []Module{
 			recordingModule{
-				stubModule:  stubModule{name: "evm", moduleType: ModuleEVM, priority: 2},
-				calls:       &calls,
-				workSeen:    &evmWorkSeen,
-				resultSeen:  &noResults,
-				builtResult: evmResult,
-				root:        testRoot(2),
+				stubModule: stubModule{name: "evm", moduleType: ModuleEVM, priority: 2},
+				calls: &calls, workSeen: &evmWorkSeen, resultSeen: &evmResultsSeen, builtResult: evmResult, root: testRoot(2),
 			},
 			recordingModule{
-				stubModule:  stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
-				calls:       &calls,
-				workSeen:    &templateWorkSeen,
-				resultSeen:  &noResults,
-				builtResult: templateResult,
-				root:        testRoot(1),
+				stubModule: stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
+				calls: &calls, workSeen: &templateWorkSeen, resultSeen: &templateResultsSeen, builtResult: templateResult, root: testRoot(1),
 			},
 		},
 	}
-	got, err := coordinator.BuildResults(ResultCoordinatorBuildRequest{
-		Txs: []*wire.MsgTx{evmWork, templateWork},
-	})
+	got, err := coordinator.BuildResults(ResultCoordinatorBuildRequest{Txs: []*wire.MsgTx{evmWork, templateWork}})
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"template:execute", "template:build",
-		"evm:execute", "evm:build",
+		"template:execute", "template:build", "template:verify",
+		"evm:execute", "evm:build", "evm:verify",
 	}, calls)
 	require.Equal(t, []*wire.MsgTx{templateResult, evmResult}, got.ResultTxs)
-	require.Empty(t, noResults)
+	require.Equal(t, []*wire.MsgTx{templateWork}, templateWorkSeen)
+	require.Equal(t, []*wire.MsgTx{evmWork}, evmWorkSeen)
+	require.Equal(t, []*wire.MsgTx{templateResult}, templateResultsSeen, "each module verifies only its own generated Result")
+	require.Equal(t, []*wire.MsgTx{evmResult}, evmResultsSeen)
 	require.Equal(t, contract.CombineStateRoots(testRoot(1), testRoot(2), [32]byte{}), got.CombinedRoot)
 }
 
-func TestBlockCoordinatorBuildResultsDoesNotExposeForeignResults(t *testing.T) {
+func TestBlockCoordinatorBuildResultsRejectsExternalResultsBeforeExecution(t *testing.T) {
 	templateWork := testWorkTx(t, contract.TxTypeInvoke, testContractAddress(t, ModuleTemplate, 1))
 	evmWork := testWorkTx(t, contract.TxTypeInvoke, testContractAddress(t, ModuleEVM, 2))
 	templatePrev := wire.OutPoint{Hash: chainhash.Hash{3}, Index: 0}
 	templateResult := testResultTx(t, templatePrev)
-	evmResult := testResultTx(t, wire.OutPoint{Hash: chainhash.Hash{4}, Index: 0})
-
 	var calls []string
-	var templateWorkSeen, evmWorkSeen, noResults []*wire.MsgTx
+	var templateWorkSeen, evmWorkSeen, resultsSeen []*wire.MsgTx
 	coordinator := BlockCoordinator{
 		Prefix: contract.TestnetContractPrefix,
 		Modules: []Module{
 			recordingModule{
-				stubModule:  stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
-				calls:       &calls,
-				workSeen:    &templateWorkSeen,
-				resultSeen:  &noResults,
-				builtResult: templateResult,
-				root:        testRoot(1),
+				stubModule: stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
+				calls: &calls, workSeen: &templateWorkSeen, resultSeen: &resultsSeen, root: testRoot(1),
 			},
 			recordingModule{
-				stubModule:  stubModule{name: "evm", moduleType: ModuleEVM, priority: 2},
-				calls:       &calls,
-				workSeen:    &evmWorkSeen,
-				resultSeen:  &noResults,
-				builtResult: evmResult,
-				root:        testRoot(2),
+				stubModule: stubModule{name: "evm", moduleType: ModuleEVM, priority: 2},
+				calls: &calls, workSeen: &evmWorkSeen, resultSeen: &resultsSeen, root: testRoot(2),
 			},
 		},
 	}
 	got, err := coordinator.BuildResults(ResultCoordinatorBuildRequest{
 		Txs: []*wire.MsgTx{templateWork, templateResult, evmWork},
-		ParentView: stubUTXOView{
-			templatePrev: testContractAddress(t, ModuleTemplate, 3),
-		},
+		ParentView: stubUTXOView{templatePrev: testContractAddress(t, ModuleTemplate, 3)},
 	})
-	require.NoError(t, err)
-	require.Equal(t, []*wire.MsgTx{templateWork}, templateWorkSeen)
-	require.Equal(t, []*wire.MsgTx{evmWork}, evmWorkSeen)
-	require.Empty(t, noResults)
-	require.Equal(t, []*wire.MsgTx{templateResult, evmResult}, got.ResultTxs)
-	require.Equal(t, []*wire.MsgTx{templateResult}, got.ContractSplit.ResultTxs[ModuleTemplate])
+	require.ErrorIs(t, err, ErrCallAdmission)
+	require.Empty(t, calls)
+	require.Empty(t, templateWorkSeen)
+	require.Empty(t, evmWorkSeen)
+	require.Empty(t, resultsSeen)
+	require.Empty(t, got.ResultTxs)
 }
 
 func TestBlockCoordinatorBuildResultsUsesSinglePassModule(t *testing.T) {
 	templateWork := testWorkTx(t, contract.TxTypeInvoke, testContractAddress(t, ModuleTemplate, 1))
 	templateResult := testResultTx(t, wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0})
 	var calls []string
-	var templateWorkSeen, noResults []*wire.MsgTx
+	var templateWorkSeen, resultsSeen []*wire.MsgTx
 	coordinator := BlockCoordinator{
 		Prefix: contract.TestnetContractPrefix,
-		Modules: []Module{
-			singlePassBuildModule{recordingModule{
-				stubModule:  stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
-				calls:       &calls,
-				workSeen:    &templateWorkSeen,
-				resultSeen:  &noResults,
-				builtResult: templateResult,
-				root:        testRoot(1),
-			}},
-		},
+		Modules: []Module{singlePassBuildModule{recordingModule{
+			stubModule: stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
+			calls: &calls, workSeen: &templateWorkSeen, resultSeen: &resultsSeen,
+			builtResult: templateResult, root: testRoot(1),
+		}}},
 	}
-	got, err := coordinator.BuildResults(ResultCoordinatorBuildRequest{
-		Txs: []*wire.MsgTx{templateWork},
-	})
+	got, err := coordinator.BuildResults(ResultCoordinatorBuildRequest{Txs: []*wire.MsgTx{templateWork}})
 	require.NoError(t, err)
-	require.Equal(t, []string{"template:build-block"}, calls)
+	require.Equal(t, []string{"template:build-block", "template:verify"}, calls)
 	require.Equal(t, []*wire.MsgTx{templateWork}, templateWorkSeen)
+	require.Equal(t, []*wire.MsgTx{templateResult}, resultsSeen)
 	require.Equal(t, []*wire.MsgTx{templateResult}, got.ResultTxs)
 	require.Equal(t, contract.CombineStateRoots(testRoot(1), [32]byte{}, [32]byte{}), got.CombinedRoot)
 }
@@ -232,23 +199,17 @@ func TestBlockCoordinatorBuildResultsCommitsParticipatingModuleRoot(t *testing.T
 	var templateWorkSeen, noResults []*wire.MsgTx
 	coordinator := BlockCoordinator{
 		Prefix: contract.TestnetContractPrefix,
-		Modules: []Module{
-			foldedRootSinglePassModule{recordingModule{
-				stubModule: stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
-				calls:      &calls,
-				workSeen:   &templateWorkSeen,
-				resultSeen: &noResults,
-				root:       testRoot(1),
-			}},
-		},
+		Modules: []Module{foldedRootSinglePassModule{recordingModule{
+			stubModule: stubModule{name: "template", moduleType: ModuleTemplate, priority: 1},
+			calls: &calls, workSeen: &templateWorkSeen, resultSeen: &noResults, root: testRoot(1),
+		}}},
 	}
-	got, err := coordinator.BuildResults(ResultCoordinatorBuildRequest{
-		Txs: []*wire.MsgTx{templateWork},
-	})
+	got, err := coordinator.BuildResults(ResultCoordinatorBuildRequest{Txs: []*wire.MsgTx{templateWork}})
 	require.NoError(t, err)
-	require.Equal(t, []string{"template:build-block"}, calls)
+	require.Equal(t, []string{"template:build-block", "template:verify"}, calls)
 	require.Equal(t, []*wire.MsgTx{templateWork}, templateWorkSeen)
 	require.Empty(t, got.ResultTxs)
+	require.Empty(t, noResults)
 	require.Equal(t, contract.CombineStateRoots(testRoot(1), [32]byte{}, [32]byte{}), got.CombinedRoot)
 }
 

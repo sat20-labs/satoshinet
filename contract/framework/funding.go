@@ -120,10 +120,11 @@ func NonGasFundingRefundIntents(contractAddr contract.ContractAddress, outputs [
 				continue
 			}
 			intents = append(intents, AssetIntent{
-				From:      contractAddr,
-				To:        recipient,
-				AssetName: name,
-				Amount:    asset.Amount.Clone(),
+				From:       contractAddr,
+				To:         recipient,
+				AssetName:  name,
+				Amount:     asset.Amount.Clone(),
+				BindingSat: asset.BindingSat,
 			})
 		}
 	}

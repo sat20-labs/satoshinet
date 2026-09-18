@@ -16,6 +16,7 @@ func EncodeDeployPayload(p DeployPayload) []byte {
 	writeUvarint(&buf, uint64(p.Version))
 	writeGasUvarint(&buf, p.GasLimit)
 	writeUvarint(&buf, p.DeployNonce)
+	writeUvarint(&buf, uint64(p.Flags))
 	writeBytes(&buf, p.ContractContent)
 	return buf.Bytes()
 }
@@ -52,6 +53,17 @@ func DecodeDeployPayload(data []byte) (DeployPayload, error) {
 	if err != nil {
 		return DeployPayload{}, fmt.Errorf("decode deploy nonce: %w", err)
 	}
+	flags, err := r.readUvarint()
+	if err != nil {
+		return DeployPayload{}, fmt.Errorf("decode deploy flags: %w", err)
+	}
+	if flags > uint64(^uint32(0)) {
+		return DeployPayload{}, errors.New("deploy flags overflow uint32")
+	}
+	policy := ContractFlags(flags)
+	if err := policy.Validate(); err != nil {
+		return DeployPayload{}, err
+	}
 	content, err := r.readBytes()
 	if err != nil {
 		return DeployPayload{}, fmt.Errorf("decode deploy contract content: %w", err)
@@ -65,6 +77,7 @@ func DecodeDeployPayload(data []byte) (DeployPayload, error) {
 		Version:         uint32(version),
 		GasLimit:        gasLimitInt,
 		DeployNonce:     nonce,
+		Flags:           policy,
 		ContractContent: content,
 	}, nil
 }
@@ -138,6 +151,9 @@ func DecodeResultPayload(data []byte) (ResultPayload, error) {
 	if err != nil {
 		return ResultPayload{}, fmt.Errorf("decode result status: %w", err)
 	}
+	if ResultStatus(status) > ResultStatusInvalid {
+		return ResultPayload{}, fmt.Errorf("unknown result status %d", status)
+	}
 	count, err := r.readUvarint()
 	if err != nil {
 		return ResultPayload{}, fmt.Errorf("decode result count: %w", err)
@@ -148,6 +164,9 @@ func DecodeResultPayload(data []byte) (ResultPayload, error) {
 	flags, err := r.readByte()
 	if err != nil {
 		return ResultPayload{}, fmt.Errorf("decode result flags: %w", err)
+	}
+	if flags & ^byte(1) != 0 {
+		return ResultPayload{}, fmt.Errorf("unknown result flags %#x", flags)
 	}
 	p := ResultPayload{
 		Status:       ResultStatus(status),
@@ -243,12 +262,17 @@ func (r *payloadReader) readByte() (byte, error) {
 }
 
 func (r *payloadReader) readUvarint() (uint64, error) {
+	before := r.Len()
 	v, err := binary.ReadUvarint(r)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return 0, io.ErrUnexpectedEOF
 		}
 		return 0, err
+	}
+	var canonical [binary.MaxVarintLen64]byte
+	if binary.PutUvarint(canonical[:], v) != before-r.Len() {
+		return 0, errors.New("non-canonical payload varint")
 	}
 	return v, nil
 }

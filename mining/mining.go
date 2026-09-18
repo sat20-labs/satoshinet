@@ -994,7 +994,9 @@ mempoolLoop:
 			blockchain.WitnessScaleFactor)
 	coinbaseTx.MsgTx().TxOut[0].Value += totalFees
 	if len(totalFeeAssets) > 0 {
-		coinbaseTx.MsgTx().TxOut[0].Assets = append(coinbaseTx.MsgTx().TxOut[0].Assets, totalFeeAssets...)
+		if err := coinbaseTx.MsgTx().TxOut[0].Assets.Merge(totalFeeAssets); err != nil {
+			return nil, fmt.Errorf("merge coinbase fee assets: %w", err)
+		}
 	}
 	txFees[0] = -totalFees
 

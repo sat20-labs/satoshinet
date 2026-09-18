@@ -74,6 +74,7 @@ func TestEVMBlockExecutionValidatorVerifiesCoinbaseStateRoot(t *testing.T) {
 
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
 		GasConfig:    evm.GasConfig{GasAssetName: evm.DefaultGasConfig().GasAssetName, FixedGasPrice: 1, MaxGasPerBlock: evm.DefaultGasConfig().MaxGasPerBlock},
+		ResolveCaller: fixedTestCaller(caller),
 		VerifyResult: func(*wire.MsgTx, []evm.ExecutionRecord) error { return nil },
 	})
 	if err := validator.ValidateEVMBlock(block, prevView); err != nil {
@@ -159,107 +160,87 @@ func TestEVMBlockExecutionValidatorAllowsBlocksWithoutEVMWork(t *testing.T) {
 }
 
 func TestEVMBlockExecutionValidatorResolvesTriggers(t *testing.T) {
-	contract := testContractAddressForBlockchain(t)
+	contractAddr := testContractAddressForBlockchain(t)
 	runtime := evm.NewRuntime(nil)
-	runtime.SetCode(evm.ContractAddressHash(contract), []byte{0x00})
-	if err := runtime.State.RegisterTrigger(evm.Trigger{
-		ID:       "vault-release",
-		Contract: contract,
-		Kind:     evm.TriggerAtHeight,
-		Height:   100,
-		GasLimit: evm.DefaultGasConfig().TriggerBaseGas,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	blockTime := time.Unix(1710000000, 0)
-	triggerGasInput := wire.OutPoint{Hash: chainhash.Hash{9}, Index: 0}
-	gasAsset := evm.DefaultGasConfig().GasAssetName
+	runtime.SetCode(evm.ContractAddressHash(contractAddr), []byte{0x00})
 	gasConfig := evm.DefaultGasConfig()
 	gasConfig.FixedGasPrice = 1
-	triggerGasFee := testEVMValidatorContractFundingFee(t,
-		evm.ExecutionKindTrigger, evm.DefaultGasConfig().TriggerBaseGas, true, 100)
-	resultTx := testEVMResultTxWithInputs(t, evm.ResultStatusSuccess, 1, []wire.OutPoint{triggerGasInput})
-	contractScript, err := evm.ContractPkScript(contract)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultFee, err := evm.DefaultGasConfig().ResultFee(100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	change := triggerGasFee.SubAlignPrecision(resultFee)
-	resultTx.TxOut = append([]*wire.TxOut{wire.NewTxOut(0, wire.TxAssets{{
-		Name:   *wire.NewAssetNameFromString(gasAsset),
-		Amount: *change,
-	}}, contractScript)}, resultTx.TxOut...)
+	gasConfig.BootstrapAddress = "bootstrap-address"
+	limit := gasConfig.TriggerBaseGas
+	triggerGasFee := testEVMValidatorContractFundingFee(t, evm.ExecutionKindTrigger, limit, true, 100)
+	managed, ok := runtime.State.ManagedBalance(contractAddr)
+	if !ok { t.Fatal("missing EVM managed balance") }
+	if err := managed.Credit(0, wire.TxAssets{{
+		Name: *wire.NewAssetNameFromString(gasConfig.GasAssetName), Amount: *triggerGasFee.Clone(),
+	}}); err != nil { t.Fatal(err) }
+	if err := runtime.State.RegisterTrigger(evm.Trigger{
+		ID: "vault-release", Contract: contractAddr, Kind: evm.TriggerAtHeight, Height: 100, GasLimit: limit,
+	}); err != nil { t.Fatal(err) }
+	blockTime := time.Unix(1710000000, 0)
+	triggerGasInput := wire.OutPoint{Hash: chainhash.Hash{9}, Index: 0}
 	contractUTXOs := func(got evm.ContractAddress) ([]evm.UTXO, error) {
-		if !contract.Equal(got) {
-			t.Fatalf("unexpected contract %s", got.MustEncode())
-		}
-		outpoint := evm.WireOutPointToEVM(triggerGasInput)
-		return []evm.UTXO{
-			contractframework.UTXOFromTxOutput(outpoint, contract, 0, &wire.TxOut{
-				Assets: wire.TxAssets{{
-					Name:   *wire.NewAssetNameFromString(gasAsset),
-					Amount: *triggerGasFee,
-				}},
-			}),
-		}, nil
+		if !contractAddr.Equal(got) { t.Fatalf("unexpected contract %s", got.MustEncode()) }
+		return []evm.UTXO{contractframework.UTXOFromTxOutput(
+			evm.WireOutPointToEVM(triggerGasInput), contractAddr, 0,
+			&wire.TxOut{Assets: wire.TxAssets{{Name: *wire.NewAssetNameFromString(gasConfig.GasAssetName), Amount: *triggerGasFee.Clone()}}},
+		)}, nil
 	}
-
-	executed, err := evm.ExecuteBlock(evm.BlockExecutionRequest{
-		Runtime:   runtime.Clone(),
-		GasConfig: gasConfig,
-		Block:     evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: evm.DefaultGasConfig().MaxGasPerBlock, FixedGasPrice: 1},
-		ResolveTriggers: func(evm.TriggerResolutionContext) ([]evm.TriggerCall, error) {
-			return []evm.TriggerCall{{
-				Trigger:  evm.Trigger{ID: "vault-release", Contract: contract, Kind: evm.TriggerAtHeight, Height: 100},
-				GasLimit: evm.DefaultGasConfig().TriggerBaseGas,
-			}}, nil
-		},
+	resolveScript := func(output evm.ResultOutput) ([]byte, error) {
+		if addr, err := evm.DecodeContractAddress(output.To); err == nil { return evm.ContractPkScript(addr) }
+		return []byte{txscript.OP_TRUE}, nil
+	}
+	resolveOutput := func(resultTx *wire.MsgTx) ([]evm.ResultOutput, error) {
+		return contractframework.ResultOutputsFromTx(resultTx, evm.TestnetContractPrefix, evmcommon.ParseContractPkScript,
+			func(pkScript []byte) (string, bool, error) {
+				if len(pkScript) == 1 && pkScript[0] == txscript.OP_TRUE { return "recipient", true, nil }
+				return "", false, nil
+			})
+	}
+	builtRuntime := runtime.Clone()
+	built, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
+		Runtime: builtRuntime, GasConfig: gasConfig,
+		Block: evm.BlockContext{Number: 100, Time: uint64(blockTime.Unix()), GasLimit: gasConfig.MaxGasPerBlock, FixedGasPrice: 1},
 		ContractUTXOs: contractUTXOs,
-		AssetPrecision: func(string) (int, bool) {
-			return 0, true
+		ResolveTriggers: func(evm.TriggerResolutionContext) ([]evm.TriggerCall, error) {
+			return []evm.TriggerCall{{Trigger: evm.Trigger{ID: "vault-release", Contract: contractAddr,
+				Kind: evm.TriggerAtHeight, Height: 100}, GasLimit: limit}}, nil
 		},
+		ResolveScript: resolveScript, ResolveOutput: resolveOutput,
+		AssetPrecision: func(string) (int, bool) { return 8, true },
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil { t.Fatal(err) }
+	if len(built.Execution.Records) != 1 || built.Execution.Records[0].Kind != evm.ExecutionKindTrigger {
+		t.Fatalf("unexpected trigger execution: %#v", built.Execution.Records)
 	}
+	if len(built.ResultTxs) != 1 { t.Fatalf("expected one canonical trigger Result, got %d", len(built.ResultTxs)) }
 	coinbase := testEVMCoinbaseTx()
-	if err := evm.UpsertCoinbaseStateRoot(coinbase, executed.StateRoot); err != nil {
-		t.Fatal(err)
-	}
-	block := btcutil.NewBlock(&wire.MsgBlock{
-		Header:       wire.BlockHeader{Timestamp: blockTime},
-		Transactions: []*wire.MsgTx{coinbase, resultTx},
-	})
+	if err := evm.UpsertCoinbaseStateRoot(coinbase, built.Execution.StateRoot); err != nil { t.Fatal(err) }
+	block := btcutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{Timestamp: blockTime},
+		Transactions: append([]*wire.MsgTx{coinbase}, built.ResultTxs...)})
 	block.SetHeight(100)
-
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
 		GasConfig: gasConfig,
-		NewRuntime: func(*btcutil.Block, *blockchain.UtxoViewpoint) (*evm.Runtime, error) {
-			return runtime.Clone(), nil
-		},
+		NewRuntime: func(*btcutil.Block, *blockchain.UtxoViewpoint) (*evm.Runtime, error) { return runtime.Clone(), nil },
 		ResolveTriggers: func(evm.TriggerResolutionContext) ([]evm.TriggerCall, error) {
-			return []evm.TriggerCall{{
-				Trigger:  evm.Trigger{ID: "vault-release", Contract: contract, Kind: evm.TriggerAtHeight, Height: 100},
-				GasLimit: evm.DefaultGasConfig().TriggerBaseGas,
-			}}, nil
+			return []evm.TriggerCall{{Trigger: evm.Trigger{ID: "vault-release", Contract: contractAddr,
+				Kind: evm.TriggerAtHeight, Height: 100}, GasLimit: limit}}, nil
 		},
-		ContractUTXOs: contractUTXOs,
-		AssetPrecision: func(string) (int, bool) {
-			return 0, true
-		},
+		ContractUTXOs: contractUTXOs, ResolveResultScript: resolveScript, ResolveResultOutput: resolveOutput,
+		AssetPrecision: func(string) (int, bool) { return 8, true },
 	})
 	view := blockchain.NewUtxoViewpoint()
-	view.Entries()[triggerGasInput] = blockchain.NewUtxoEntry(wire.NewTxOut(1, wire.TxAssets{{
-		Name:   *wire.NewAssetNameFromString(gasAsset),
-		Amount: *triggerGasFee,
-	}}, contractScript), 1, false)
-	if err := validator.ValidateEVMBlock(block, view); err != nil {
-		t.Fatal(err)
-	}
+	contractScript, err := evm.ContractPkScript(contractAddr)
+	if err != nil { t.Fatal(err) }
+	view.Entries()[triggerGasInput] = blockchain.NewUtxoEntry(&wire.TxOut{
+		Assets: wire.TxAssets{{Name: *wire.NewAssetNameFromString(gasConfig.GasAssetName), Amount: *triggerGasFee.Clone()}},
+		PkScript: contractScript,
+	}, 1, false)
+	if err := validator.ValidateEVMBlock(block, view); err != nil { t.Fatal(err) }
+	postState, ok := validator.EVMBlockPostState(block.Hash())
+	if !ok { t.Fatal("expected EVM trigger post-state") }
+	if postState.StateRoot() != built.Execution.StateRoot { t.Fatal("unexpected trigger post-state root") }
 }
+
 
 func TestEVMBlockExecutionValidatorAdvancesDueTriggerWithoutResult(t *testing.T) {
 	contract := testContractAddressForBlockchain(t)
@@ -310,7 +291,7 @@ func TestEVMBlockExecutionValidatorAdvancesDueTriggerWithoutResult(t *testing.T)
 		ContractUTXOs: contractUTXOs,
 	})
 	err = validator.ValidateEVMBlock(missingRootBlock, blockchain.NewUtxoViewpoint())
-	if err == nil || !strings.Contains(err.Error(), "missing EVM state root commitment") {
+	if err == nil || !strings.Contains(err.Error(), "state root commitment") {
 		t.Fatalf("unexpected missing root error: %v", err)
 	}
 

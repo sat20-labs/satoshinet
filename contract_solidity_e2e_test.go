@@ -21,6 +21,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	evmcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/contract/evm"
+	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -146,18 +147,17 @@ func TestEVMEndToEndSolidityVaultTriggerAssetSettlement(t *testing.T) {
 
 	releaseBlock := evm.BlockContext{Number: 301, Time: 1710000060, GasLimit: 5000000, FixedGasPrice: 1}
 	inputs := []evm.UTXO{
-		{
-			OutPoint: evm.OutPoint{TxID: strings.Repeat("11", 32), Vout: 0},
-			Contract: contract,
-			Assets:   e2EAsset(gasAsset, 2000000),
-			Height:   300,
-		},
-		{
-			OutPoint: evm.OutPoint{TxID: strings.Repeat("22", 32), Vout: 0},
-			Contract: contract,
-			Assets:   e2EDecimalAsset(vaultAsset, mustE2EDecimal(t, "2.50")),
-			Height:   300,
-		},
+		contractframework.UTXOFromTxOutput(
+			evm.OutPoint{TxID: strings.Repeat("11", 32), Vout: 0}, contract, 300,
+			&wire.TxOut{Assets: e2EAsset(gasAsset, 2000000)}),
+		contractframework.UTXOFromTxOutput(
+			evm.OutPoint{TxID: strings.Repeat("22", 32), Vout: 0}, contract, 300,
+			&wire.TxOut{Assets: e2EDecimalAsset(vaultAsset, mustE2EDecimal(t, "2.50"))}),
+	}
+	managed, ok := rt.State.ManagedBalance(contract)
+	require.True(t, ok)
+	for _, input := range inputs {
+		require.NoError(t, managed.Credit(input.PhysicalValue(), input.TxAssets()))
 	}
 	build, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
 		Runtime:        rt,
@@ -170,12 +170,15 @@ func TestEVMEndToEndSolidityVaultTriggerAssetSettlement(t *testing.T) {
 		},
 		ResolveScript: solidityE2EResultScriptResolver(contract),
 		ResolveOutput: func(tx *wire.MsgTx) ([]evm.ResultOutput, error) {
-			return evm.ResultOutputsFromTx(tx, evm.TestnetContractPrefix, solidityE2ERecipientResolver)
+			return contractframework.ResultOutputsFromTx(tx, evm.TestnetContractPrefix,
+				evmcommon.ParseContractPkScript, solidityE2ERecipientResolver)
 		},
+		AssetPrecision: func(name string) (int, bool) { return 2, name == vaultAsset },
 	})
 	require.NoError(t, err)
 	require.Len(t, build.ResultTxs, 1)
 	require.Len(t, build.Execution.Records, 1)
+	require.Equal(t, evm.ResultStatusSuccess, build.Execution.Records[0].Status)
 	require.Len(t, rt.State.Triggers(), 0)
 
 	index := newSolidityE2EAssetIndex(t, contract)
@@ -184,18 +187,10 @@ func TestEVMEndToEndSolidityVaultTriggerAssetSettlement(t *testing.T) {
 	}
 	require.Equal(t, "1.25", index.AssetBalance(recipientAddr, vaultAsset).String())
 	require.Equal(t, "1.25", index.AssetBalance(contract.MustEncode(), vaultAsset).String())
-	triggerBaseGas := cfg.TriggerBaseGas
-	if triggerBaseGas == 0 {
-		triggerBaseGas = evmcommon.TriggerBaseGas
-	}
-	callFee, err := cfg.CheckedCallFeeDecimalAtHeight(
-		evmcommon.EffectiveGas(build.Execution.Records[0].GasUsed, triggerBaseGas),
-		build.Execution.Records[0].Height,
-	)
+	recordFee, err := contractframework.RecordResultGasFee(
+		cfg, evm.SettlementPrecision(nil), build.Execution.Records[0])
 	require.NoError(t, err)
-	resultFee, err := cfg.CheckedCallFeeDecimalAtHeight(cfg.ResultPackingFee, build.Execution.Records[0].Height)
-	require.NoError(t, err)
-	gasChange := scommon.NewDefaultDecimal(2000000).SubAlignPrecision(callFee.AddAlignPrecision(resultFee))
+	gasChange := scommon.NewDefaultDecimal(2000000).SubAlignPrecision(recordFee)
 	require.Equal(t, gasChange.String(), index.AssetBalance(contract.MustEncode(), gasAsset).String())
 }
 
@@ -266,15 +261,25 @@ func deployCompiledSolidityTx(t *testing.T, rt *evm.Runtime, caller evm.EVMAddre
 	constructorArgs []interface{}, nonce uint64, block evm.BlockContext) evm.ContractAddress {
 	t.Helper()
 	initCode := solidityDeployCode(t, compiled, constructorArgs)
+	cfg := evm.DefaultGasConfig()
+	gasLimit := block.GasLimit
+	if cfg.MaxGasPerInvoke > 0 && gasLimit > cfg.MaxGasPerInvoke {
+		gasLimit = cfg.MaxGasPerInvoke
+	}
+	if gasLimit < cfg.DeployBaseGas {
+		gasLimit = cfg.DeployBaseGas
+	}
+	fundingGas, err := cfg.ContractFundingFee(evm.ExecutionKindDeploy, gasLimit, true, block.Number)
+	require.NoError(t, err)
 	tx, contract, err := evm.BuildDeployTx(evm.DeployTxBuildRequest{
-		ContractPrefix: evm.TestnetContractPrefix,
-		Caller:         caller,
-		GasLimit:       block.GasLimit,
-		DeployNonce:    nonce,
-		InitCode:       initCode,
+		ContractPrefix:  evm.TestnetContractPrefix,
+		Deployer:        caller.String(),
+		GasLimit:        gasLimit,
+		DeployNonce:     nonce,
+		ContractContent: initCode,
 		Funding: wire.TxOut{Assets: wire.TxAssets{{
-			Name:   *wire.NewAssetNameFromString(evm.DefaultGasConfig().GasAssetName),
-			Amount: *scommon.NewDefaultDecimal(int64(block.GasLimit)),
+			Name:   *wire.NewAssetNameFromString(cfg.GasAssetName),
+			Amount: *fundingGas.Clone(),
 		}}},
 		Inputs: []wire.OutPoint{{Hash: mustSolidityE2EHash(t, byte(nonce)), Index: 0}},
 	})
@@ -283,21 +288,21 @@ func deployCompiledSolidityTx(t *testing.T, rt *evm.Runtime, caller evm.EVMAddre
 	parsed, err := evm.ParseTx(tx, evm.StandardContractScriptResolver(evm.TestnetContractPrefix))
 	require.NoError(t, err)
 	require.NotNil(t, parsed.Deploy)
-	require.Equal(t, initCode, parsed.Deploy.InitCode)
+	require.Equal(t, initCode, parsed.Deploy.ContractContent)
 	require.GreaterOrEqual(t, len(tx.TxOut), 2)
 
-	executor := evm.NewBlockExecutor(evm.BlockExecutionRequest{
+	executed, err := evm.ExecuteWorkBlock(evm.BlockExecutionRequest{
+		Txs:            []*wire.MsgTx{tx},
 		Runtime:        rt,
 		ContractPrefix: evm.TestnetContractPrefix,
-		GasConfig:      evm.DefaultGasConfig(),
+		GasConfig:      cfg,
 		Block:          block,
 		ResolveCaller:  e2EFixedCaller(caller),
 	})
-	require.NoError(t, executor.ExecuteTx(tx))
-	pending := executor.PendingRecords()
-	require.Len(t, pending, 1)
-	require.Equal(t, evm.ResultStatusSuccess, pending[0].Status)
-	require.True(t, contract.Equal(pending[0].Contract))
+	require.NoError(t, err)
+	require.Len(t, executed.Records, 1)
+	require.Equal(t, evm.ResultStatusSuccess, executed.Records[0].Status)
+	require.True(t, contract.Equal(executed.Records[0].Contract))
 	return contract
 }
 
@@ -443,7 +448,8 @@ func newSolidityE2EAssetIndex(t *testing.T, contract evm.ContractAddress) *solid
 
 func (i *solidityE2EAssetIndex) ApplyResultTx(t *testing.T, tx *wire.MsgTx) {
 	t.Helper()
-	outputs, err := evm.ResultOutputsFromTx(tx, evm.TestnetContractPrefix, solidityE2ERecipientResolver)
+	outputs, err := contractframework.ResultOutputsFromTx(tx, evm.TestnetContractPrefix,
+		evmcommon.ParseContractPkScript, solidityE2ERecipientResolver)
 	require.NoError(t, err)
 	for _, output := range outputs {
 		if output.Value > 0 {

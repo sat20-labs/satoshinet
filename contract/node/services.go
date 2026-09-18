@@ -8,7 +8,6 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	agentcontract "github.com/sat20-labs/satoshinet/contract/agent"
-	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/contract/evm"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	tmplcontract "github.com/sat20-labs/satoshinet/contract/template"
@@ -41,11 +40,9 @@ type ContractUTXO struct {
 	ReservedReason string
 }
 
-type ContractUTXOProvider func(contract contractcommon.ContractAddress) ([]ContractUTXO, error)
+type ContractUTXOProvider func(contractcommon.ContractAddress) ([]ContractUTXO, error)
 
-func DefaultGasConfig() GasConfig {
-	return contractframework.DefaultGasConfig()
-}
+func DefaultGasConfig() GasConfig { return contractframework.DefaultGasConfig() }
 
 type Config struct {
 	DB          database.DB
@@ -64,6 +61,8 @@ type Config struct {
 	TemplateResolveRecipient ScriptRecipientResolver
 	AgentResolveRecipient    ScriptRecipientResolver
 
+	AdditionalModules []ModuleRegistration
+
 	BlockValidator       blockchain.ContractBlockValidator
 	ContractStateManager blockchain.ContractStateManager
 	ResultBuilder        mining.ContractResultBuilder
@@ -72,35 +71,41 @@ type Config struct {
 }
 
 func NewServices(cfg Config) (*Services, error) {
-	blockValidator := cfg.BlockValidator
-	if blockValidator == nil {
-		validator, err := newBlockValidator(cfg)
+	cfg, err := normalizedServiceConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	registrations, err := contractModuleRegistrations(cfg)
+	if err != nil {
+		return nil, err
+	}
+	validator := cfg.BlockValidator
+	if validator == nil {
+		validator, err = newBlockValidator(cfg)
 		if err != nil {
 			return nil, err
 		}
-		blockValidator = validator
 	}
-
-	resultBuilder := cfg.ResultBuilder
-	if resultBuilder == nil {
-		builder, err := NewResultBuilder(cfg)
+	builder := cfg.ResultBuilder
+	if builder == nil {
+		builder, err = NewResultBuilder(cfg)
 		if err != nil {
 			return nil, err
 		}
-		resultBuilder = builder
 	}
-
-	contractStateManager := cfg.ContractStateManager
-	if contractStateManager == nil {
-		contractStateManager = NewContractStateManager()
+	manager := cfg.ContractStateManager
+	if manager == nil {
+		registered := &ContractStateManager{codecs: make(map[contractframework.ModuleType]ModuleStateCodec)}
+		for _, registration := range registrations {
+			if err := registered.RegisterStateCodec(registration.StateCodec); err != nil {
+				return nil, err
+			}
+		}
+		manager = registered
 	}
-
 	return &Services{
-		BlockValidator:       blockValidator,
-		ContractStateManager: contractStateManager,
-		ResultBuilder:        resultBuilder,
-		MempoolPolicy:        cfg.MempoolPolicy,
-		QueryService:         cfg.QueryService,
+		BlockValidator: validator, ContractStateManager: manager, ResultBuilder: builder,
+		MempoolPolicy: cfg.MempoolPolicy, QueryService: cfg.QueryService,
 	}, nil
 }
 
@@ -108,55 +113,41 @@ func newBlockValidator(cfg Config) (blockchain.ContractBlockValidator, error) {
 	if cfg.DB == nil {
 		return nil, fmt.Errorf("missing contract service DB")
 	}
-	evmValidator, err := NewEVMBlockValidator(cfg)
+	registrations, err := contractModuleRegistrations(cfg)
 	if err != nil {
 		return nil, err
 	}
-	templateValidator, err := NewTemplateBlockValidator(cfg)
-	if err != nil {
-		return nil, err
-	}
-	agentValidator, err := NewAgentBlockValidator(cfg)
-	if err != nil {
-		return nil, err
+	validators := make([]RegisteredContractValidator, 0, len(registrations))
+	for _, registration := range registrations {
+		validator, err := registration.NewValidator(cfg)
+		if err != nil {
+			return nil, err
+		}
+		validators = append(validators, RegisteredContractValidator{Descriptor: registration.Descriptor, Validator: validator})
 	}
 	return NewCompositeContractBlockValidator(CompositeContractBlockValidatorConfig{
-		ChainParams:       cfg.ChainParams,
-		TemplateValidator: templateValidator,
-		EVMValidator:      evmValidator,
-		AgentValidator:    agentValidator,
+		ChainParams: cfg.ChainParams, Modules: validators,
 	}), nil
 }
 
 func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
-	if cfg.EVMContractUTXOs == nil {
-		return nil, fmt.Errorf("missing EVM contract UTXO provider")
+	cfg, err := normalizedServiceConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.EVMResolveRecipient == nil {
-		return nil, fmt.Errorf("missing EVM result recipient resolver")
+	if cfg.EVMContractUTXOs == nil || cfg.EVMResolveRecipient == nil || cfg.AssetPrecision == nil {
+		return nil, fmt.Errorf("missing EVM contract UTXO provider, result recipient resolver or asset precision resolver")
 	}
-	if cfg.AssetPrecision == nil {
-		return nil, fmt.Errorf("missing EVM asset precision resolver")
-	}
-	gasConfig := evmGasConfigFromCommon(cfg.GasConfig)
-	if gasConfig == (evm.GasConfig{}) {
-		gasConfig = evm.DefaultGasConfig()
-	}
-	gasConfig.BootstrapAddress = cfg.BootstrapAddress
-	if err := gasConfig.Validate(); err != nil {
+	gas := evmGasConfigForBlock(defaultGasConfig(cfg.GasConfig), cfg)
+	if err := gas.Validate(); err != nil {
 		return nil, err
 	}
 	stateStore := NewEVMStateStore(cfg.DB)
 	validator := NewEVMBlockExecutionValidator(EVMBlockExecutionConfig{
-		ChainParams:         cfg.ChainParams,
-		GasConfig:           gasConfig,
-		NewRuntime:          stateStore.RuntimeFactory(),
-		HistoryDB:           cfg.DB,
-		ContractUTXOs:       evmContractUTXOProvider(cfg.EVMContractUTXOs),
-		ResolveRecipient:    contractframework.ScriptRecipientResolver(cfg.EVMResolveRecipient),
-		ResolveResultOutput: evmResultOutputResolver(cfg),
-		ResolveResultScript: evmResultScriptResolver(cfg.ChainParams),
-		AssetPrecision:      cfg.AssetPrecision,
+		ChainParams: cfg.ChainParams, GasConfig: gas, NewRuntime: stateStore.RuntimeFactory(), HistoryDB: cfg.DB,
+		ContractUTXOs: evmContractUTXOProvider(cfg.EVMContractUTXOs), ResolveRecipient: cfg.EVMResolveRecipient,
+		ResolveResultOutput: evmResultOutputResolver(cfg), ResolveResultScript: evmResultScriptResolver(cfg.ChainParams),
+		AssetPrecision: cfg.AssetPrecision,
 	})
 	validator.cfg.NewRuntime = func(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*evm.Runtime, error) {
 		validator.postStateMu.Lock()
@@ -171,33 +162,23 @@ func NewEVMBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
 }
 
 func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
-	if cfg.TemplateContractUTXOs == nil {
-		return nil, fmt.Errorf("missing template contract UTXO provider")
+	cfg, err := normalizedServiceConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.TemplateResolveRecipient == nil {
-		return nil, fmt.Errorf("missing template result recipient resolver")
+	if cfg.TemplateContractUTXOs == nil || cfg.TemplateResolveRecipient == nil || cfg.AssetPrecision == nil {
+		return nil, fmt.Errorf("missing template contract UTXO provider, result recipient resolver or asset precision resolver")
 	}
-	if cfg.AssetPrecision == nil {
-		return nil, fmt.Errorf("missing template asset precision resolver")
-	}
-	gasConfig := templateGasConfigFromCommon(cfg.GasConfig, cfg)
-	if gasConfig == (tmplcontract.GasConfig{}) {
-		gasConfig = tmplcontract.DefaultGasConfig()
-	}
-	if err := gasConfig.Validate(); err != nil {
+	gas := templateGasConfigFromCommon(cfg.GasConfig, cfg)
+	if err := gas.Validate(); err != nil {
 		return nil, err
 	}
 	stateStore := NewTemplateStateStore(cfg.DB)
 	validator := NewTemplateBlockExecutionValidator(TemplateBlockExecutionConfig{
-		ChainParams:         cfg.ChainParams,
-		ContractPrefix:      templateContractPrefix(cfg.ChainParams),
-		GasConfig:           gasConfig,
-		Registry:            templateRegistry(),
-		NewRuntime:          stateStore.RuntimeFactory(),
-		ResolveOutput:       templateResultOutputResolver(cfg),
+		ChainParams: cfg.ChainParams, ContractPrefix: templateContractPrefix(cfg.ChainParams), GasConfig: gas,
+		Registry: templateRegistry(), NewRuntime: stateStore.RuntimeFactory(), ResolveOutput: templateResultOutputResolver(cfg),
 		ResolveResultScript: templateResultScriptResolver(cfg.ChainParams),
-		ContractUTXOs:       templateContractUTXOProvider(cfg.TemplateContractUTXOs),
-		AssetPrecision:      cfg.AssetPrecision,
+		ContractUTXOs:       templateContractUTXOProvider(cfg.TemplateContractUTXOs), AssetPrecision: cfg.AssetPrecision,
 	})
 	validator.cfg.NewRuntime = func(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*tmplcontract.RuntimeStore, error) {
 		validator.postStateMu.Lock()
@@ -212,82 +193,70 @@ func NewTemplateBlockValidator(cfg Config) (ContractModuleBlockValidator, error)
 }
 
 func NewAgentBlockValidator(cfg Config) (ContractModuleBlockValidator, error) {
-	if cfg.AgentContractUTXOs == nil {
-		return nil, fmt.Errorf("missing agent contract UTXO provider")
+	cfg, err := normalizedServiceConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.AgentResolveRecipient == nil {
-		return nil, fmt.Errorf("missing agent result recipient resolver")
+	if cfg.AgentContractUTXOs == nil || cfg.AgentResolveRecipient == nil || cfg.AssetPrecision == nil {
+		return nil, fmt.Errorf("missing agent contract UTXO provider, result recipient resolver or asset precision resolver")
 	}
-	if cfg.AssetPrecision == nil {
-		return nil, fmt.Errorf("missing agent asset precision resolver")
-	}
-	gasConfig := agentGasConfigFromCommon(cfg.GasConfig)
-	if gasConfig == (agentcontract.GasConfig{}) {
-		gasConfig = agentcontract.DefaultGasConfig()
+	gas := agentGasConfigForBlock(defaultGasConfig(cfg.GasConfig), cfg.ChainParams)
+	if err := gas.Validate(); err != nil {
+		return nil, err
 	}
 	stateStore := NewAgentStateStore(cfg.DB)
 	return NewAgentBlockExecutionValidator(AgentBlockExecutionConfig{
-		ChainParams:         cfg.ChainParams,
-		ContractPrefix:      agentContractPrefix(cfg.ChainParams),
-		RuntimeConfig:       cfg.AgentRuntime,
-		GasConfig:           gasConfig,
-		NewRuntime:          stateStore.RuntimeFactory(),
-		ResolveResultOutput: agentResultOutputResolver(cfg),
+		ChainParams: cfg.ChainParams, ContractPrefix: agentContractPrefix(cfg.ChainParams), RuntimeConfig: cfg.AgentRuntime,
+		GasConfig: gas, NewRuntime: stateStore.RuntimeFactory(), ResolveResultOutput: agentResultOutputResolver(cfg),
 		ResolveResultScript: agentResultScriptResolver(cfg.ChainParams),
-		ContractUTXOs:       agentContractUTXOProvider(cfg.AgentContractUTXOs),
-		AssetPrecision:      cfg.AssetPrecision,
+		ContractUTXOs:       agentContractUTXOProvider(cfg.AgentContractUTXOs), AssetPrecision: cfg.AssetPrecision,
 	}), nil
 }
 
 func NewResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
+	var err error
+	cfg, err = normalizedServiceConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.DB == nil {
 		return nil, fmt.Errorf("missing contract service DB")
+	}
+	if _, err := contractModuleRegistrations(cfg); err != nil {
+		return nil, err
 	}
 	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
 		modules, err := miningModulesForRequest(cfg, req)
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
-		if len(modules) == 0 {
-			return mining.ContractBuildResult{}, nil
-		}
-		coordinator := contractframework.BlockCoordinator{
-			Modules: modules,
-			Prefix:  contractPrefixForParams(cfg.ChainParams),
-		}
+		coordinator := contractframework.BlockCoordinator{Modules: modules, Prefix: contractPrefixForParams(cfg.ChainParams)}
 		result, err := coordinator.BuildResults(contractframework.ResultCoordinatorBuildRequest{
-			Txs:        msgTxs(req.Txs),
-			ParentView: contractNodeUTXOView{view: req.UtxoView},
+			Txs: msgTxs(req.Txs), ParentView: contractNodeUTXOView{view: req.UtxoView},
 		})
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
-		return mining.ContractBuildResult{
-			ResultTxs: result.ResultTxs,
-			StateRoot: result.CombinedRoot,
-		}, nil
+		return mining.ContractBuildResult{ResultTxs: result.ResultTxs, StateRoot: result.CombinedRoot}, nil
 	}, nil
 }
 
 func miningModulesForRequest(cfg Config, req mining.ContractBuildRequest) ([]contractframework.Module, error) {
-	modules := make([]contractframework.Module, 0, 3)
-	templateModule, err := newTemplateMiningModule(cfg, req)
+	registrations, err := contractModuleRegistrations(cfg)
 	if err != nil {
 		return nil, err
 	}
-	modules = append(modules, templateModule)
-
-	evmModule, err := newEVMMiningModule(cfg, req)
-	if err != nil {
-		return nil, err
+	modules := make([]contractframework.Module, 0, len(registrations))
+	for _, registration := range registrations {
+		module, err := registration.NewMiningModule(cfg, req)
+		if err != nil {
+			return nil, err
+		}
+		if module == nil || module.Type() != registration.Descriptor.Type() {
+			return nil, fmt.Errorf("contract module factory returned the wrong module")
+		}
+		modules = append(modules, module)
 	}
-	modules = append(modules, evmModule)
-
-	agentModule, err := newAgentMiningModule(cfg, req)
-	if err != nil {
-		return nil, err
-	}
-	modules = append(modules, agentModule)
 	return modules, nil
 }
 
@@ -300,627 +269,189 @@ func contractPrefixForRequest(reqPrefix, cfgPrefix string) string {
 
 func evmModuleDescriptor() contractframework.ModuleDescriptor {
 	return contractframework.ModuleDescriptor{
-		NameValue:     "evm",
-		TypeValue:     contractframework.ModuleEVM,
-		PriorityValue: 2,
-		DefaultPrefix: contractcommon.TestnetContractPrefix,
-		ClassifyOrder: evm.ClassifyTxForBlockOrder,
-		MatchesOrder:  func(info contractframework.TxOrderInfo) bool { return info.IsEVM },
+		NameValue: "evm", TypeValue: contractframework.ModuleEVM, PriorityValue: 2,
+		DefaultPrefix: contractcommon.TestnetContractPrefix, ClassifyOrder: evm.ClassifyTxForBlockOrder,
+		MatchesOrder: func(info contractframework.TxOrderInfo) bool { return info.IsEVM },
 	}
 }
 
 func templateModuleDescriptor() contractframework.ModuleDescriptor {
 	return contractframework.ModuleDescriptor{
-		NameValue:     "template",
-		TypeValue:     contractframework.ModuleTemplate,
-		PriorityValue: 1,
-		DefaultPrefix: contractcommon.TestnetContractPrefix,
-		ClassifyOrder: tmplcontract.ClassifyTxForBlockOrder,
-		MatchesOrder:  func(info contractframework.TxOrderInfo) bool { return info.IsTemplate },
+		NameValue: "template", TypeValue: contractframework.ModuleTemplate, PriorityValue: 1,
+		DefaultPrefix: contractcommon.TestnetContractPrefix, ClassifyOrder: tmplcontract.ClassifyTxForBlockOrder,
+		MatchesOrder: func(info contractframework.TxOrderInfo) bool { return info.IsTemplate },
 	}
 }
 
 func agentModuleDescriptor() contractframework.ModuleDescriptor {
 	return contractframework.ModuleDescriptor{
-		NameValue:     "agent",
-		TypeValue:     contractframework.ModuleAgent,
-		PriorityValue: 3,
-		DefaultPrefix: contractcommon.TestnetContractPrefix,
-		ClassifyOrder: agentcontract.ClassifyTxForBlockOrder,
-		MatchesOrder:  func(info contractframework.TxOrderInfo) bool { return info.IsAgent },
+		NameValue: "agent", TypeValue: contractframework.ModuleAgent, PriorityValue: 3,
+		DefaultPrefix: contractcommon.TestnetContractPrefix, ClassifyOrder: agentcontract.ClassifyTxForBlockOrder,
+		MatchesOrder: func(info contractframework.TxOrderInfo) bool { return info.IsAgent },
 	}
 }
 
 func newEVMMiningModule(cfg Config, req mining.ContractBuildRequest) (contractframework.Module, error) {
-	gasConfig := evmGasConfigFromCommon(cfg.GasConfig)
-	if gasConfig == (evm.GasConfig{}) {
-		gasConfig = evm.DefaultGasConfig()
-	}
-	if err := gasConfig.Validate(); err != nil {
+	gas := evmGasConfigForBlock(defaultGasConfig(cfg.GasConfig), cfg)
+	if err := gas.Validate(); err != nil {
 		return nil, err
 	}
-	stateStore := NewEVMStateStore(cfg.DB)
-	runtime, err := stateStore.RuntimeFactory()(buildParentBlock(req), nil)
+	parent, err := NewEVMStateStore(cfg.DB).RuntimeFactory()(buildParentBlock(req), nil)
 	if err != nil {
 		return nil, err
 	}
-	blockGasConfig := gasConfig
-	blockGasConfig = evmGasConfigForBlock(blockGasConfig, cfg)
-	contractPrefix := evmContractPrefix(cfg.ChainParams)
-	block := evm.BlockContext{
-		ChainID:       evmChainID(cfg.ChainParams),
-		Number:        uint64(req.Height),
-		Time:          uint64(req.Timestamp.Unix()),
-		GasLimit:      blockGasConfig.MaxGasPerBlock,
-		FixedGasPrice: blockGasConfig.FixedGasPrice,
-		ParentHash:    [32]byte(req.PrevHash),
-	}
-	block, err = evmContextWithHistory(cfg.DB, block)
+	block, err := evmContextWithHistory(cfg.DB, evm.BlockContext{
+		ChainID: evmChainID(cfg.ChainParams), Number: uint64(req.Height), Time: uint64(req.Timestamp.Unix()),
+		GasLimit: gas.Normalize().MaxGasPerBlock, FixedGasPrice: gas.Normalize().FixedGasPrice, ParentHash: [32]byte(req.PrevHash),
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	resolveCaller := evm.LastInputPreviousOutputCallerResolver(cfg.ChainParams,
-		previousOutputScriptResolver(req.UtxoView))
-	resolveRefund := evm.LastInputPreviousOutputGasRefundRecipientResolver(cfg.ChainParams,
-		previousOutputScriptResolver(req.UtxoView))
-	contractUTXOs := evmContractUTXOProvider(cfg.EVMContractUTXOs)
+	resolvePrevious := previousOutputScriptResolver(req.UtxoView)
 	resolveScript := evmResultScriptResolver(cfg.ChainParams)
-	resolveOutput := evmResultOutputResolver(cfg)
-	return contractframework.ModuleAdapter{
-		ModuleDescriptor: evmModuleDescriptor(),
-		ExecuteWorkBlockFunc: func(work contractframework.WorkExecutionRequest) (contractframework.ExecutionResult, error) {
-			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
-			executed, err := evm.ExecuteWorkBlock(evm.BlockExecutionRequest{
-				Txs:                       work.Txs,
-				Runtime:                   runtime,
-				ContractPrefix:            prefix,
-				GasConfig:                 blockGasConfig,
-				Block:                     block,
-				ResolveCaller:             resolveCaller,
-				ResolveGasRefundRecipient: resolveRefund,
-				ResolveResultScript:       resolveScript,
-				ContractUTXOs:             contractUTXOs,
-				AssetPrecision:            cfg.AssetPrecision,
+	return contractframework.NewSettlementModule(contractframework.SettlementModuleConfig{
+		Descriptor: evmModuleDescriptor(), ParentRoot: parent.State.StateRoot(), GasConfig: gas,
+		ResolveScript: resolveScript, ResolveOutput: evmResultOutputResolver(cfg), CountRecords: true, UseRecordStatus: true,
+		Execute: func(work contractframework.WorkExecutionRequest) (contractframework.BackendBlockExecutionResult, any, error) {
+			// Execution clones mutable state and only replaces this wrapper on success.
+			candidate := *parent
+			exec, err := evm.ExecuteWorkBlock(evm.BlockExecutionRequest{
+				Txs: work.Txs, Runtime: &candidate, ContractPrefix: contractPrefixForRequest(work.Prefix, evmContractPrefix(cfg.ChainParams)),
+				GasConfig: gas, Block: block,
+				ResolveCaller:             evm.LastInputPreviousOutputCallerResolver(cfg.ChainParams, resolvePrevious),
+				ResolveGasRefundRecipient: evm.LastInputPreviousOutputGasRefundRecipientResolver(cfg.ChainParams, resolvePrevious),
+				ResolveResultScript:       resolveScript, ContractUTXOs: evmContractUTXOProvider(cfg.EVMContractUTXOs),
+				AssetPrecision: cfg.AssetPrecision,
 			})
-			if err != nil {
-				return contractframework.ExecutionResult{}, err
-			}
-			return contractframework.NewExecutionResult(
-				contractframework.ModuleEVM,
-				executed.Records,
-				executed.PendingRecords,
-				executed.StateRoot,
-				executed,
-			), nil
+			return exec, candidate.State, err
 		},
-		BuildBlockResultsFunc: func(work contractframework.ResultBuildRequest) (
-			contractframework.ResultBuildResult, contractframework.ExecutionResult, error) {
-			var parentRoot [32]byte
-			if runtime != nil && runtime.State != nil {
-				parentRoot = runtime.State.StateRoot()
-			}
-			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
-			result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
-				Txs:                       work.Txs,
-				Runtime:                   runtime,
-				ContractPrefix:            prefix,
-				GasConfig:                 blockGasConfig,
-				Block:                     block,
-				ResolveCaller:             resolveCaller,
-				ResolveGasRefundRecipient: resolveRefund,
-				ContractUTXOs:             contractUTXOs,
-				ResolveScript:             resolveScript,
-				ResolveOutput:             resolveOutput,
-				AssetPrecision:            cfg.AssetPrecision,
-			})
-			if err != nil {
-				return contractframework.ResultBuildResult{}, contractframework.ExecutionResult{}, err
-			}
-			build, exec := contractframework.WrapModuleBlockResult(contractframework.ModuleBlockResultSpec{
-				ModuleType: contractframework.ModuleEVM,
-				ParentRoot: parentRoot,
-				Result: contractframework.BlockResultBuildResult{
-					ResultTxs: result.ResultTxs,
-					Execution: result.Execution,
-				},
-				Records: func(exec any) []contractframework.ExecutionRecord {
-					return exec.(evm.BlockExecutionResult).Records
-				},
-				Pending: func(exec any) []contractframework.ExecutionRecord {
-					return exec.(evm.BlockExecutionResult).PendingRecords
-				},
-				StateRoot: func(exec any) [32]byte {
-					return exec.(evm.BlockExecutionResult).StateRoot
-				},
-			})
-			return build, exec, nil
-		},
-		BuildResultTxsFunc: func(work contractframework.ResultBuildRequest,
-			exec contractframework.ExecutionResult) (contractframework.ResultBuildResult, error) {
-			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
-			result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
-				Txs:                       work.Txs,
-				Runtime:                   runtime,
-				ContractPrefix:            prefix,
-				GasConfig:                 blockGasConfig,
-				Block:                     block,
-				ResolveCaller:             resolveCaller,
-				ResolveGasRefundRecipient: resolveRefund,
-				ContractUTXOs:             contractUTXOs,
-				ResolveScript:             resolveScript,
-				ResolveOutput:             resolveOutput,
-				AssetPrecision:            cfg.AssetPrecision,
-			})
-			if err != nil {
-				return contractframework.ResultBuildResult{}, err
-			}
-			return contractframework.ResultBuildResult{
-				ResultTxs: result.ResultTxs,
-				StateRoot: result.Execution.StateRoot,
-			}, nil
-		},
-		VerifyResultTxsFunc: func(verifyReq contractframework.ResultVerifyRequest, exec contractframework.ExecutionResult) error {
-			evmExec, ok := exec.PostState.(evm.BlockExecutionResult)
-			if !ok {
-				evmExec = evm.BlockExecutionResult{
-					Records:        contractframework.CloneExecutionRecords(exec.Records),
-					PendingRecords: contractframework.CloneExecutionRecords(exec.PendingRecords),
-					StateRoot:      exec.StateRoot,
-				}
-			}
-			return evm.VerifyResultTxs(evm.ResultVerifyRequest{
-				ResultTxs:      verifyReq.ResultTxs,
-				Execution:      evmExec,
-				ContractPrefix: contractPrefixForRequest(verifyReq.Prefix, contractPrefix),
-			})
-		},
-	}, nil
+	})
 }
 
 func newTemplateMiningModule(cfg Config, req mining.ContractBuildRequest) (contractframework.Module, error) {
-	gasConfig := templateGasConfigFromCommon(cfg.GasConfig, cfg)
-	if gasConfig == (tmplcontract.GasConfig{}) {
-		gasConfig = tmplcontract.DefaultGasConfig()
-	}
-	if err := gasConfig.Validate(); err != nil {
+	gas := templateGasConfigFromCommon(cfg.GasConfig, cfg)
+	if err := gas.Validate(); err != nil {
 		return nil, err
 	}
-	stateStore := NewTemplateStateStore(cfg.DB)
-	store, err := stateStore.RuntimeFactory()(buildParentBlock(req), nil)
+	parent, err := NewTemplateStateStore(cfg.DB).RuntimeFactory()(buildParentBlock(req), nil)
 	if err != nil {
 		return nil, err
 	}
-	blockGasConfig := templateGasConfigForBlock(gasConfig, cfg.ChainParams)
-	registry := templateRegistry()
-	contractPrefix := templateContractPrefix(cfg.ChainParams)
-	contractUTXOs := templateContractUTXOProvider(cfg.TemplateContractUTXOs)
-	resolveInvoker := tmplcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams,
-		previousOutputScriptResolver(req.UtxoView))
-	resolveScript := templateResultScriptResolver(cfg.ChainParams)
-	resolveOutput := templateResultOutputResolver(cfg)
-	return contractframework.ModuleAdapter{
-		ModuleDescriptor: templateModuleDescriptor(),
-		ExecuteWorkBlockFunc: func(work contractframework.WorkExecutionRequest) (contractframework.ExecutionResult, error) {
-			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
-			executed, err := tmplcontract.ExecuteBlock(tmplcontract.BlockExecutionRequest{
-				Txs:            work.Txs,
-				Store:          store,
-				Registry:       registry,
-				ContractPrefix: prefix,
-				GasConfig:      blockGasConfig,
-				ContractUTXOs: contractframework.ContractUTXOProviderWithTxOutputs(
-					contractUTXOs, work.Txs, prefix, tmplcontract.ContractTypeTemplate),
-				AssetPrecision: cfg.AssetPrecision,
-				BlockHeight:    int64(req.Height),
-				ResolveInvoker: resolveInvoker,
+	return contractframework.NewSettlementModule(contractframework.SettlementModuleConfig{
+		Descriptor: templateModuleDescriptor(), ParentRoot: parent.StateRoot(), GasConfig: gas,
+		ResolveScript: templateResultScriptResolver(cfg.ChainParams), ResolveOutput: templateResultOutputResolver(cfg),
+		PlanCount: templateResultPlanCount,
+		Execute: func(work contractframework.WorkExecutionRequest) (contractframework.BackendBlockExecutionResult, any, error) {
+			// Execution clones mutable state and only replaces this wrapper on success.
+			candidate := *parent
+			exec, err := tmplcontract.ExecuteBlock(tmplcontract.BlockExecutionRequest{
+				Txs: work.Txs, Store: &candidate, Registry: templateRegistry(),
+				ContractPrefix: contractPrefixForRequest(work.Prefix, templateContractPrefix(cfg.ChainParams)),
+				GasConfig:      gas, ContractUTXOs: templateContractUTXOProvider(cfg.TemplateContractUTXOs),
+				AssetPrecision: cfg.AssetPrecision, BlockHeight: int64(req.Height),
+				ResolveInvoker: tmplcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams, previousOutputScriptResolver(req.UtxoView)),
 			})
-			if err != nil {
-				return contractframework.ExecutionResult{}, err
-			}
-			overlay := contractframework.ContractUTXOProviderWithTxOutputs(
-				contractUTXOs, work.Txs, prefix, tmplcontract.ContractTypeTemplate)
-			resultPlans, err := tmplcontract.AugmentResultPlans(executed.ResultPlans, store, blockGasConfig, overlay, cfg.AssetPrecision)
-			if err != nil {
-				return contractframework.ExecutionResult{}, err
-			}
-			executed.ResultPlans = resultPlans
-			return contractframework.NewExecutionResult(
-				contractframework.ModuleTemplate,
-				executed.Records,
-				nil,
-				executed.StateRoot,
-				executed,
-			), nil
+			return exec, &candidate, err
 		},
-		BuildBlockResultsFunc: func(work contractframework.ResultBuildRequest) (
-			contractframework.ResultBuildResult, contractframework.ExecutionResult, error) {
-			var parentRoot [32]byte
-			if store != nil {
-				parentRoot = store.StateRoot()
-			}
-			result, err := tmplcontract.BuildBlockResultTxs(tmplcontract.BlockResultBuildRequest{
-				Txs:            work.Txs,
-				Store:          store,
-				Registry:       registry,
-				ContractPrefix: contractPrefixForRequest(work.Prefix, contractPrefix),
-				GasConfig:      blockGasConfig,
-				ContractUTXOs:  contractUTXOs,
-				AssetPrecision: cfg.AssetPrecision,
-				BlockHeight:    int64(req.Height),
-				ResolveInvoker: resolveInvoker,
-				ResolveScript:  resolveScript,
-				ResolveOutput:  resolveOutput,
-			})
-			if err != nil {
-				return contractframework.ResultBuildResult{}, contractframework.ExecutionResult{}, err
-			}
-			build, exec := contractframework.WrapModuleBlockResult(contractframework.ModuleBlockResultSpec{
-				ModuleType: contractframework.ModuleTemplate,
-				ParentRoot: parentRoot,
-				Result: contractframework.BlockResultBuildResult{
-					ResultTxs: result.ResultTxs,
-					Execution: result.Execution,
-				},
-				Records: func(exec any) []contractframework.ExecutionRecord {
-					return exec.(tmplcontract.BlockExecutionResult).Records
-				},
-				StateRoot: func(exec any) [32]byte {
-					return exec.(tmplcontract.BlockExecutionResult).StateRoot
-				},
-			})
-			return build, exec, nil
-		},
-		BuildResultTxsFunc: func(work contractframework.ResultBuildRequest,
-			exec contractframework.ExecutionResult) (contractframework.ResultBuildResult, error) {
-			result, err := tmplcontract.BuildBlockResultTxs(tmplcontract.BlockResultBuildRequest{
-				Txs:            work.Txs,
-				Store:          store,
-				Registry:       registry,
-				ContractPrefix: contractPrefixForRequest(work.Prefix, contractPrefix),
-				GasConfig:      blockGasConfig,
-				ContractUTXOs:  contractUTXOs,
-				AssetPrecision: cfg.AssetPrecision,
-				BlockHeight:    int64(req.Height),
-				ResolveInvoker: resolveInvoker,
-				ResolveScript:  resolveScript,
-				ResolveOutput:  resolveOutput,
-			})
-			if err != nil {
-				return contractframework.ResultBuildResult{}, err
-			}
-			return contractframework.ResultBuildResult{
-				ResultTxs: result.ResultTxs,
-				StateRoot: result.Execution.StateRoot,
-			}, nil
-		},
-		VerifyResultTxsFunc: func(verifyReq contractframework.ResultVerifyRequest, exec contractframework.ExecutionResult) error {
-			return contractframework.VerifySingleResultTx(contractframework.SingleResultTxVerifyRequest{
-				Label:        "template",
-				ResultTxs:    verifyReq.ResultTxs,
-				Expectations: templateExecutionResultPlans(exec),
-				Verify: func(tx *wire.MsgTx, plans []tmplcontract.ResultPlan) error {
-					return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-						Label:        "template",
-						ResultTx:     tx,
-						Status:       tmplcontract.ResultStatusSuccess,
-						Plans:        plans,
-						GasAssetName: blockGasConfig.Normalize().GasAssetName,
-						Resolve:      resolveOutput,
-						PlanCount:    templateResultPlanCount,
-						CheckPayload: true,
-					})
-				},
-			})
-		},
-	}, nil
+	})
 }
 
 func newAgentMiningModule(cfg Config, req mining.ContractBuildRequest) (contractframework.Module, error) {
-	gasConfig := agentGasConfigFromCommon(cfg.GasConfig)
-	if gasConfig == (agentcontract.GasConfig{}) {
-		gasConfig = agentcontract.DefaultGasConfig()
+	gas := agentGasConfigForBlock(defaultGasConfig(cfg.GasConfig), cfg.ChainParams)
+	if err := gas.Validate(); err != nil {
+		return nil, err
 	}
-	stateStore := NewAgentStateStore(cfg.DB)
-	store, err := stateStore.RuntimeFactory()(buildParentBlock(req), nil)
+	parent, err := NewAgentStateStore(cfg.DB).RuntimeFactory()(buildParentBlock(req), nil)
 	if err != nil {
 		return nil, err
 	}
-	blockGasConfig := agentGasConfigForBlock(gasConfig, cfg.ChainParams)
-	contractPrefix := agentContractPrefix(cfg.ChainParams)
-	contractUTXOs := agentContractUTXOProvider(cfg.AgentContractUTXOs)
-	resolveInvoker := agentcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams,
-		previousOutputScriptResolver(req.UtxoView))
-	resolveScript := agentResultScriptResolver(cfg.ChainParams)
-	resolveOutput := agentResultOutputResolver(cfg)
-	blockHeight := int64(req.Height)
-	blockTime := req.Timestamp.Unix()
-	return contractframework.ModuleAdapter{
-		ModuleDescriptor: agentModuleDescriptor(),
-		ExecuteWorkBlockFunc: func(work contractframework.WorkExecutionRequest) (contractframework.ExecutionResult, error) {
-			prefix := contractPrefixForRequest(work.Prefix, contractPrefix)
-			overlay := contractframework.ContractUTXOProviderWithTxOutputs(
-				contractUTXOs, work.Txs, prefix, agentcontract.ContractTypeAgent)
-			executed, err := agentcontract.ExecuteBlock(agentcontract.BlockExecutionRequest{
-				Txs:            work.Txs,
-				Store:          store,
-				ContractPrefix: prefix,
-				RuntimeConfig:  cfg.AgentRuntime,
-				GasConfig:      blockGasConfig,
-				ContractUTXOs:  overlay,
-				AssetPrecision: cfg.AssetPrecision,
-				BlockHeight:    blockHeight,
-				BlockTime:      blockTime,
-				ResolveInvoker: resolveInvoker,
+	return contractframework.NewSettlementModule(contractframework.SettlementModuleConfig{
+		Descriptor: agentModuleDescriptor(), ParentRoot: parent.StateRoot(), GasConfig: gas,
+		ResolveScript: agentResultScriptResolver(cfg.ChainParams), ResolveOutput: agentResultOutputResolver(cfg),
+		Execute: func(work contractframework.WorkExecutionRequest) (contractframework.BackendBlockExecutionResult, any, error) {
+			// Execution clones mutable state and only replaces this wrapper on success.
+			candidate := *parent
+			exec, err := agentcontract.ExecuteBlock(agentcontract.BlockExecutionRequest{
+				Txs: work.Txs, Store: &candidate,
+				ContractPrefix: contractPrefixForRequest(work.Prefix, agentContractPrefix(cfg.ChainParams)),
+				RuntimeConfig:  cfg.AgentRuntime, GasConfig: gas, ContractUTXOs: agentContractUTXOProvider(cfg.AgentContractUTXOs),
+				AssetPrecision: cfg.AssetPrecision, BlockHeight: int64(req.Height), BlockTime: req.Timestamp.Unix(),
+				ResolveInvoker: agentcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams, previousOutputScriptResolver(req.UtxoView)),
 			})
-			if err != nil {
-				return contractframework.ExecutionResult{}, err
-			}
-			resultPlans, err := agentcontract.AugmentResultPlans(executed.ResultPlans, overlay, store, cfg.AssetPrecision,
-				blockGasConfig.Normalize().GasAssetName, cfg.AgentRuntime.BootstrapAddress)
-			if err != nil {
-				return contractframework.ExecutionResult{}, err
-			}
-			executed.ResultPlans = resultPlans
-			return contractframework.NewExecutionResult(
-				contractframework.ModuleAgent,
-				executed.Records,
-				nil,
-				executed.StateRoot,
-				executed,
-			), nil
+			return exec, &candidate, err
 		},
-		BuildBlockResultsFunc: func(work contractframework.ResultBuildRequest) (
-			contractframework.ResultBuildResult, contractframework.ExecutionResult, error) {
-			var parentRoot [32]byte
-			if store != nil {
-				parentRoot = store.StateRoot()
-			}
-			result, err := agentcontract.BuildBlockResultTxs(agentcontract.BlockResultBuildRequest{
-				Txs:            work.Txs,
-				Store:          store,
-				ContractPrefix: contractPrefixForRequest(work.Prefix, contractPrefix),
-				RuntimeConfig:  cfg.AgentRuntime,
-				GasConfig:      blockGasConfig,
-				ContractUTXOs:  contractUTXOs,
-				AssetPrecision: cfg.AssetPrecision,
-				BlockHeight:    blockHeight,
-				BlockTime:      blockTime,
-				ResolveInvoker: resolveInvoker,
-				ResolveScript:  resolveScript,
-				ResolveOutput:  resolveOutput,
-			})
-			if err != nil {
-				return contractframework.ResultBuildResult{}, contractframework.ExecutionResult{}, err
-			}
-			build, exec := contractframework.WrapModuleBlockResult(contractframework.ModuleBlockResultSpec{
-				ModuleType: contractframework.ModuleAgent,
-				ParentRoot: parentRoot,
-				Result: contractframework.BlockResultBuildResult{
-					ResultTxs: result.ResultTxs,
-					Execution: result.Execution,
-				},
-				Records: func(exec any) []contractframework.ExecutionRecord {
-					return exec.(agentcontract.BlockExecutionResult).Records
-				},
-				StateRoot: func(exec any) [32]byte {
-					return exec.(agentcontract.BlockExecutionResult).StateRoot
-				},
-			})
-			return build, exec, nil
-		},
-		BuildResultTxsFunc: func(work contractframework.ResultBuildRequest,
-			exec contractframework.ExecutionResult) (contractframework.ResultBuildResult, error) {
-			result, err := agentcontract.BuildBlockResultTxs(agentcontract.BlockResultBuildRequest{
-				Txs:            work.Txs,
-				Store:          store,
-				ContractPrefix: contractPrefixForRequest(work.Prefix, contractPrefix),
-				RuntimeConfig:  cfg.AgentRuntime,
-				GasConfig:      blockGasConfig,
-				ContractUTXOs:  contractUTXOs,
-				AssetPrecision: cfg.AssetPrecision,
-				BlockHeight:    blockHeight,
-				BlockTime:      blockTime,
-				ResolveInvoker: resolveInvoker,
-				ResolveScript:  resolveScript,
-				ResolveOutput:  resolveOutput,
-			})
-			if err != nil {
-				return contractframework.ResultBuildResult{}, err
-			}
-			return contractframework.ResultBuildResult{
-				ResultTxs: result.ResultTxs,
-				StateRoot: result.Execution.StateRoot,
-			}, nil
-		},
-		VerifyResultTxsFunc: func(verifyReq contractframework.ResultVerifyRequest, exec contractframework.ExecutionResult) error {
-			return contractframework.VerifySingleResultTx(contractframework.SingleResultTxVerifyRequest{
-				Label:        "agent",
-				ResultTxs:    verifyReq.ResultTxs,
-				Expectations: agentExecutionResultPlans(exec),
-				Verify: func(tx *wire.MsgTx, plans []agentcontract.ResultPlan) error {
-					return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-						Label:        "agent",
-						ResultTx:     tx,
-						Status:       agentcontract.ResultStatusSuccess,
-						Plans:        plans,
-						GasAssetName: blockGasConfig.Normalize().GasAssetName,
-						Resolve:      resolveOutput,
-						CheckPayload: true,
-					})
-				},
-			})
-		},
-	}, nil
+	})
 }
 
+// Single-engine entry points retain their API but use the same registered
+// execute/build/verify adapter; none replays work during Result construction.
 func NewEVMResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
-	gasConfig := evmGasConfigFromCommon(cfg.GasConfig)
-	if gasConfig == (evm.GasConfig{}) {
-		gasConfig = evm.DefaultGasConfig()
-	}
-	if err := gasConfig.Validate(); err != nil {
+	return newSingleModuleResultBuilder(cfg, newEVMMiningModule)
+}
+func NewTemplateResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
+	return newSingleModuleResultBuilder(cfg, newTemplateMiningModule)
+}
+func NewAgentResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
+	return newSingleModuleResultBuilder(cfg, newAgentMiningModule)
+}
+
+func newSingleModuleResultBuilder(cfg Config,
+	factory func(Config, mining.ContractBuildRequest) (contractframework.Module, error)) (mining.ContractResultBuilder, error) {
+
+	var err error
+	cfg, err = normalizedServiceConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
-	stateStore := NewEVMStateStore(cfg.DB)
-	contractPrefix := evmContractPrefix(cfg.ChainParams)
-	resolveOutput := evmResultOutputResolver(cfg)
+	if err := defaultGasConfig(cfg.GasConfig).Validate(); err != nil {
+		return nil, err
+	}
 	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
-		parentBlock := buildParentBlock(req)
-		runtime, err := stateStore.RuntimeFactory()(parentBlock, nil)
+		module, err := factory(cfg, req)
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
-		parentRoot := runtime.State.StateRoot()
-		txs := make([]*wire.MsgTx, 0, len(req.Txs))
-		for _, tx := range req.Txs {
-			msgTx := tx.MsgTx()
-			class, found, err := contractengine.ClassifyTxForBlockOrder(msgTx, cfg.ChainParams)
+		prefix := contractPrefixForParams(cfg.ChainParams)
+		var work []*wire.MsgTx
+		for _, tx := range msgTxs(req.Txs) {
+			class, belongs, err := module.ClassifyTx(tx, prefix)
 			if err != nil {
 				return mining.ContractBuildResult{}, err
 			}
-			if !found || class.ContractType != contractcommon.ContractTypeEVM {
-				continue
+			if belongs {
+				if class.IsResult() {
+					return mining.ContractBuildResult{}, fmt.Errorf("external contract RESULT is not work")
+				}
+				work = append(work, tx)
 			}
-			txs = append(txs, msgTx)
 		}
-		blockGasConfig := evmGasConfigForBlock(gasConfig, cfg)
-		blockContext, err := evmContextWithHistory(cfg.DB, evm.BlockContext{
-			ChainID: evmChainID(cfg.ChainParams), Number: uint64(req.Height), Time: uint64(req.Timestamp.Unix()),
-			GasLimit: blockGasConfig.MaxGasPerBlock, FixedGasPrice: blockGasConfig.FixedGasPrice, ParentHash: [32]byte(req.PrevHash),
-		})
+		exec, err := module.ExecuteWorkBlock(contractframework.WorkExecutionRequest{Txs: work, Prefix: prefix})
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
-
-		result, err := evm.BuildBlockResultTxs(evm.BlockResultBuildRequest{
-			Txs:            txs,
-			Runtime:        runtime,
-			ContractPrefix: contractPrefix,
-			GasConfig:      blockGasConfig,
-			Block:          blockContext,
-			ResolveCaller: evm.LastInputPreviousOutputCallerResolver(cfg.ChainParams,
-				previousOutputScriptResolver(req.UtxoView)),
-			ResolveGasRefundRecipient: evm.LastInputPreviousOutputGasRefundRecipientResolver(cfg.ChainParams,
-				previousOutputScriptResolver(req.UtxoView)),
-			ContractUTXOs:  evmContractUTXOProvider(cfg.EVMContractUTXOs),
-			ResolveScript:  evmResultScriptResolver(cfg.ChainParams),
-			ResolveOutput:  resolveOutput,
-			AssetPrecision: cfg.AssetPrecision,
-		})
+		result, err := module.BuildResultTxs(contractframework.ResultBuildRequest{Txs: work, Prefix: prefix}, exec)
 		if err != nil {
 			return mining.ContractBuildResult{}, err
 		}
-		if len(result.Execution.Records) == 0 && result.Execution.StateRoot == parentRoot {
-			return mining.ContractBuildResult{}, nil
-		}
-		return mining.ContractBuildResult{
-			ResultTxs: result.ResultTxs,
-			StateRoot: result.Execution.StateRoot,
-		}, nil
-	}, nil
-}
-
-func NewTemplateResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
-	gasConfig := templateGasConfigFromCommon(cfg.GasConfig, cfg)
-	if gasConfig == (tmplcontract.GasConfig{}) {
-		gasConfig = tmplcontract.DefaultGasConfig()
-	}
-	if err := gasConfig.Validate(); err != nil {
-		return nil, err
-	}
-	stateStore := NewTemplateStateStore(cfg.DB)
-	contractPrefix := templateContractPrefix(cfg.ChainParams)
-	resolveOutput := templateResultOutputResolver(cfg)
-	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
-		store, err := stateStore.RuntimeFactory()(buildParentBlock(req), nil)
-		if err != nil {
+		if err := module.VerifyResultTxs(contractframework.ResultVerifyRequest{ResultTxs: result.ResultTxs, Prefix: prefix}, exec); err != nil {
 			return mining.ContractBuildResult{}, err
 		}
-		txs := msgTxs(req.Txs)
-		blockGasConfig := templateGasConfigForBlock(gasConfig, cfg.ChainParams)
-		result, err := tmplcontract.BuildBlockResultTxs(tmplcontract.BlockResultBuildRequest{
-			Txs:            txs,
-			Store:          store,
-			Registry:       templateRegistry(),
-			ContractPrefix: contractPrefix,
-			GasConfig:      blockGasConfig,
-			ContractUTXOs:  templateContractUTXOProvider(cfg.TemplateContractUTXOs),
-			AssetPrecision: cfg.AssetPrecision,
-			BlockHeight:    int64(req.Height),
-			ResolveInvoker: tmplcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams,
-				previousOutputScriptResolver(req.UtxoView)),
-			ResolveScript: templateResultScriptResolver(cfg.ChainParams),
-			ResolveOutput: resolveOutput,
-		})
-		if err != nil {
-			return mining.ContractBuildResult{}, err
-		}
-		return mining.ContractBuildResult{
-			ResultTxs: result.ResultTxs,
-			StateRoot: result.Execution.StateRoot,
-		}, nil
-	}, nil
-}
-
-func NewAgentResultBuilder(cfg Config) (mining.ContractResultBuilder, error) {
-	gasConfig := agentGasConfigFromCommon(cfg.GasConfig)
-	if gasConfig == (agentcontract.GasConfig{}) {
-		gasConfig = agentcontract.DefaultGasConfig()
-	}
-	stateStore := NewAgentStateStore(cfg.DB)
-	contractPrefix := agentContractPrefix(cfg.ChainParams)
-	resolveOutput := agentResultOutputResolver(cfg)
-	return func(req mining.ContractBuildRequest) (mining.ContractBuildResult, error) {
-		store, err := stateStore.RuntimeFactory()(buildParentBlock(req), nil)
-		if err != nil {
-			return mining.ContractBuildResult{}, err
-		}
-		parentRoot := store.StateRoot()
-		txs := msgTxs(req.Txs)
-		blockGasConfig := agentGasConfigForBlock(gasConfig, cfg.ChainParams)
-		result, err := agentcontract.BuildBlockResultTxs(agentcontract.BlockResultBuildRequest{
-			Txs:            txs,
-			Store:          store,
-			ContractPrefix: contractPrefix,
-			RuntimeConfig:  cfg.AgentRuntime,
-			GasConfig:      blockGasConfig,
-			ContractUTXOs:  agentContractUTXOProvider(cfg.AgentContractUTXOs),
-			AssetPrecision: cfg.AssetPrecision,
-			BlockHeight:    int64(req.Height),
-			BlockTime:      req.Timestamp.Unix(),
-			ResolveInvoker: agentcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams,
-				previousOutputScriptResolver(req.UtxoView)),
-			ResolveScript: agentResultScriptResolver(cfg.ChainParams),
-			ResolveOutput: resolveOutput,
-		})
-		if err != nil {
-			return mining.ContractBuildResult{}, err
-		}
-		if len(result.Execution.Records) == 0 && len(result.ResultTxs) == 0 &&
-			result.Execution.StateRoot == parentRoot {
-			return mining.ContractBuildResult{}, nil
-		}
-		return mining.ContractBuildResult{
-			ResultTxs: result.ResultTxs,
-			StateRoot: result.Execution.StateRoot,
-		}, nil
+		return mining.ContractBuildResult{ResultTxs: result.ResultTxs, StateRoot: result.StateRoot}, nil
 	}, nil
 }
 
 func buildParentBlock(req mining.ContractBuildRequest) *btcutil.Block {
-	return btcutil.NewBlock(&wire.MsgBlock{
-		Header: wire.BlockHeader{
-			PrevBlock: req.PrevHash,
-			Timestamp: req.Timestamp,
-		},
-	})
+	return btcutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{PrevBlock: req.PrevHash, Timestamp: req.Timestamp}})
 }
 
 func msgTxs(txs []*btcutil.Tx) []*wire.MsgTx {
 	out := make([]*wire.MsgTx, 0, len(txs))
 	for _, tx := range txs {
-		out = append(out, tx.MsgTx())
+		if tx == nil {
+			out = append(out, nil)
+		} else {
+			out = append(out, tx.MsgTx())
+		}
 	}
 	return out
 }
@@ -931,246 +462,116 @@ func contractBitcoinNet(params *chaincfg.Params) wire.BitcoinNet {
 	}
 	return params.Net
 }
-
-func evmChainID(params *chaincfg.Params) uint64 {
-	return uint64(contractBitcoinNet(params))
-}
-
+func evmChainID(params *chaincfg.Params) uint64 { return uint64(contractBitcoinNet(params)) }
 func contractGasAssetNameForParams(params *chaincfg.Params) string {
 	return contractcommon.GasAssetNameForNet(contractBitcoinNet(params))
 }
-
 func defaultGasConfig(base GasConfig) GasConfig {
 	if base == (GasConfig{}) {
-		base = contractframework.DefaultGasConfig()
+		return contractframework.DefaultGasConfig()
 	}
 	return base
 }
-
-func evmGasConfigFromCommon(base GasConfig) evm.GasConfig {
-	if base == (GasConfig{}) {
-		return evm.GasConfig{}
-	}
-	return evm.GasConfig{
-		GasAssetName:             base.GasAssetName,
-		BootstrapAddress:         base.BootstrapAddress,
-		GasPriceDenominator:      base.GasPriceDenominator,
-		InitialGasPriceNumerator: base.InitialGasPriceNumerator,
-		GasPriceDecayInterval:    base.GasPriceDecayInterval,
-		GasPriceDecayNumerator:   base.GasPriceDecayNumerator,
-		GasPriceDecayDenominator: base.GasPriceDecayDenominator,
-		GasPriceFloorNumerator:   base.GasPriceFloorNumerator,
-		DeployBaseGas:            base.DeployBaseGas,
-		InvokeBaseGas:            base.InvokeBaseGas,
-		ResultBaseGas:            base.ResultBaseGas,
-		TriggerBaseGas:           base.TriggerBaseGas,
-		MaxGasPerInvoke:          base.MaxGasPerInvoke,
-		MaxGasPerTrigger:         base.MaxGasPerTrigger,
-		MaxGasPerBlock:           base.MaxGasPerBlock,
-		FixedGasPrice:            base.FixedGasPrice,
-		ResultPackingFee:         base.ResultPackingFee,
-	}
-}
-
+func evmGasConfigFromCommon(base GasConfig) evm.GasConfig { return base }
 func evmGasConfigForBlock(base evm.GasConfig, cfg Config) evm.GasConfig {
-	out := base
-	out.GasAssetName = contractGasAssetNameForParams(cfg.ChainParams)
-	out.BootstrapAddress = cfg.BootstrapAddress
-	return out
+	base.GasAssetName = contractGasAssetNameForParams(cfg.ChainParams)
+	base.BootstrapAddress = cfg.BootstrapAddress
+	return base
 }
-
 func templateGasConfigFromCommon(base GasConfig, cfg Config) tmplcontract.GasConfig {
-	out := defaultGasConfig(base)
-	out.GasAssetName = contractGasAssetNameForParams(cfg.ChainParams)
-	out.BootstrapAddress = cfg.BootstrapAddress
-	return out
+	base = defaultGasConfig(base)
+	base.GasAssetName = contractGasAssetNameForParams(cfg.ChainParams)
+	base.BootstrapAddress = cfg.BootstrapAddress
+	return base
 }
-
 func templateGasConfigForBlock(base tmplcontract.GasConfig, params *chaincfg.Params) tmplcontract.GasConfig {
-	cfg := base
-	cfg.GasAssetName = contractGasAssetNameForParams(params)
-	return cfg
+	base.GasAssetName = contractGasAssetNameForParams(params)
+	return base
 }
-
-func agentGasConfigFromCommon(base GasConfig) agentcontract.GasConfig {
-	return defaultGasConfig(base)
-}
-
+func agentGasConfigFromCommon(base GasConfig) agentcontract.GasConfig { return defaultGasConfig(base) }
 func agentGasConfigForBlock(base agentcontract.GasConfig, params *chaincfg.Params) agentcontract.GasConfig {
-	cfg := base
-	cfg.GasAssetName = contractGasAssetNameForParams(params)
-	return cfg
+	base.GasAssetName = contractGasAssetNameForParams(params)
+	return base
 }
 
 func contractPrefixForParams(params *chaincfg.Params) string {
-	if params == nil {
-		return contractcommon.TestnetContractPrefix
-	}
-	if params.Net == wire.MainNet {
+	if contractBitcoinNet(params) == wire.MainNet {
 		return contractcommon.MainnetContractPrefix
 	}
 	return contractcommon.TestnetContractPrefix
 }
+func templateRegistry() *tmplcontract.Registry              { return tmplcontract.NewDefaultRegistry() }
+func evmContractPrefix(params *chaincfg.Params) string      { return contractPrefixForParams(params) }
+func templateContractPrefix(params *chaincfg.Params) string { return contractPrefixForParams(params) }
+func agentContractPrefix(params *chaincfg.Params) string    { return contractPrefixForParams(params) }
 
-func templateRegistry() *tmplcontract.Registry {
-	return tmplcontract.NewDefaultRegistry()
-}
-
-func evmContractPrefix(params *chaincfg.Params) string {
-	if params == nil {
-		return evm.TestnetContractPrefix
-	}
-	return evm.ContractPrefixForNet(params.Net)
-}
-
-func templateContractPrefix(params *chaincfg.Params) string {
-	if params == nil {
-		return tmplcontract.TestnetContractPrefix
-	}
-	return tmplcontract.ContractPrefixForNet(params.Net)
-}
-
-func agentContractPrefix(params *chaincfg.Params) string {
-	if params == nil {
-		return agentcontract.TestnetContractPrefix
-	}
-	return agentcontract.ContractPrefixForNet(params.Net)
-}
-
-func evmContractUTXOProvider(provider ContractUTXOProvider) evm.ContractUTXOProvider {
+func frameworkContractUTXOProvider(provider ContractUTXOProvider) contractframework.ContractUTXOProvider {
 	if provider == nil {
 		return nil
 	}
-	return func(contract evm.ContractAddress) ([]evm.UTXO, error) {
-		utxos, err := provider(contract)
+	return func(addr contractcommon.ContractAddress) ([]contractframework.UTXO, error) {
+		utxos, err := provider(addr)
 		if err != nil {
 			return nil, err
 		}
-		out := make([]evm.UTXO, 0, len(utxos))
+		out := make([]contractframework.UTXO, 0, len(utxos))
 		for _, utxo := range utxos {
 			if utxo.Value < 0 {
-				return nil, fmt.Errorf("negative EVM contract output value")
+				return nil, fmt.Errorf("negative contract output value")
 			}
-			outpoint := evm.WireOutPointToEVM(utxo.OutPoint)
-			next := contractframework.UTXOFromTxOutput(outpoint, contract, utxo.Height, &wire.TxOut{
-				Value:  utxo.Value,
-				Assets: utxo.Assets.Clone(),
-			})
-			next.IsGasFunding = utxo.IsGasFunding
-			next.SourceCallID = utxo.SourceCallID
-			next.ReservedReason = utxo.ReservedReason
+			next := contractframework.UTXOFromTxOutput(contractframework.OutPoint{
+				TxID: utxo.OutPoint.Hash.String(), Vout: utxo.OutPoint.Index,
+			}, addr, utxo.Height, &wire.TxOut{Value: utxo.Value, Assets: utxo.Assets.Clone()})
+			next.IsGasFunding, next.SourceCallID, next.ReservedReason = utxo.IsGasFunding, utxo.SourceCallID, utxo.ReservedReason
 			out = append(out, next)
 		}
 		return out, nil
 	}
 }
-
+func evmContractUTXOProvider(provider ContractUTXOProvider) evm.ContractUTXOProvider {
+	return frameworkContractUTXOProvider(provider)
+}
 func templateContractUTXOProvider(provider ContractUTXOProvider) tmplcontract.ContractUTXOProvider {
-	if provider == nil {
-		return nil
-	}
-	return func(contract tmplcontract.ContractAddress) ([]tmplcontract.UTXO, error) {
-		utxos, err := provider(contract)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]tmplcontract.UTXO, 0, len(utxos))
-		for _, utxo := range utxos {
-			outpoint := tmplcontract.WireOutPointToTemplate(utxo.OutPoint)
-			out = append(out, contractframework.UTXOFromTxOutput(outpoint, contract, utxo.Height, &wire.TxOut{
-				Value:  utxo.Value,
-				Assets: utxo.Assets.Clone(),
-			}))
-		}
-		return out, nil
-	}
+	return frameworkContractUTXOProvider(provider)
 }
-
 func agentContractUTXOProvider(provider ContractUTXOProvider) agentcontract.ContractUTXOProvider {
-	if provider == nil {
-		return nil
-	}
-	return func(contract agentcontract.ContractAddress) ([]agentcontract.UTXO, error) {
-		utxos, err := provider(contract)
+	return frameworkContractUTXOProvider(provider)
+}
+
+func contractResultScriptResolver(params *chaincfg.Params) contractframework.ResultRecipientScriptResolver {
+	return func(output contractframework.ResultOutput) ([]byte, error) {
+		if addr, err := contractcommon.DecodeContractAddress(output.To); err == nil {
+			return contractcommon.ContractPkScript(addr)
+		}
+		address, err := btcutil.DecodeAddress(output.To, params)
 		if err != nil {
 			return nil, err
 		}
-		out := make([]agentcontract.UTXO, 0, len(utxos))
-		for _, utxo := range utxos {
-			outpoint := agentcontract.WireOutPointToAgent(utxo.OutPoint)
-			out = append(out, contractframework.UTXOFromTxOutput(outpoint, contract, utxo.Height, &wire.TxOut{
-				Value:  utxo.Value,
-				Assets: utxo.Assets.Clone(),
-			}))
-		}
-		return out, nil
+		return txscript.PayToAddrScript(address)
 	}
 }
-
 func evmResultScriptResolver(params *chaincfg.Params) evm.ResultRecipientScriptResolver {
-	return func(output evm.ResultOutput) ([]byte, error) {
-		if contract, err := evm.DecodeContractAddress(output.To); err == nil {
-			return evm.ContractPkScript(contract)
-		}
-		addr, err := btcutil.DecodeAddress(output.To, params)
-		if err != nil {
-			return nil, err
-		}
-		return txscript.PayToAddrScript(addr)
-	}
+	return contractResultScriptResolver(params)
 }
-
-func evmResultOutputResolver(cfg Config) evm.ResultOutputResolver {
-	contractPrefix := evmContractPrefix(cfg.ChainParams)
-	return func(resultTx *wire.MsgTx) ([]evm.ResultOutput, error) {
-		return contractframework.ResultOutputsFromTx(resultTx, contractPrefix,
-			contractcommon.ParseContractPkScript,
-			contractframework.ScriptRecipientResolver(cfg.EVMResolveRecipient))
-	}
-}
-
 func templateResultScriptResolver(params *chaincfg.Params) tmplcontract.ResultRecipientScriptResolver {
-	return func(output tmplcontract.ResultOutput) ([]byte, error) {
-		if contract, err := tmplcontract.DecodeContractAddress(output.To); err == nil {
-			return tmplcontract.ContractPkScript(contract)
-		}
-		addr, err := btcutil.DecodeAddress(output.To, params)
-		if err != nil {
-			return nil, err
-		}
-		return txscript.PayToAddrScript(addr)
-	}
+	return contractResultScriptResolver(params)
 }
-
-func templateResultOutputResolver(cfg Config) tmplcontract.ResultOutputResolver {
-	contractPrefix := templateContractPrefix(cfg.ChainParams)
-	return func(resultTx *wire.MsgTx) ([]tmplcontract.ResultOutput, error) {
-		return contractframework.ResultOutputsFromTx(resultTx, contractPrefix,
-			contractcommon.ParseContractPkScript,
-			contractframework.ScriptRecipientResolver(cfg.TemplateResolveRecipient))
-	}
-}
-
 func agentResultScriptResolver(params *chaincfg.Params) agentcontract.ResultRecipientScriptResolver {
-	return func(output agentcontract.ResultOutput) ([]byte, error) {
-		if contract, err := agentcontract.DecodeContractAddress(output.To); err == nil {
-			return agentcontract.ContractPkScript(contract)
-		}
-		addr, err := btcutil.DecodeAddress(output.To, params)
-		if err != nil {
-			return nil, err
-		}
-		return txscript.PayToAddrScript(addr)
+	return contractResultScriptResolver(params)
+}
+func contractResultOutputResolver(params *chaincfg.Params, recipient ScriptRecipientResolver) contractframework.ResultOutputResolver {
+	return func(tx *wire.MsgTx) ([]contractframework.ResultOutput, error) {
+		return contractframework.ResultOutputsFromTx(tx, contractPrefixForParams(params), contractcommon.ParseContractPkScript, recipient)
 	}
 }
-
+func evmResultOutputResolver(cfg Config) evm.ResultOutputResolver {
+	return contractResultOutputResolver(cfg.ChainParams, cfg.EVMResolveRecipient)
+}
+func templateResultOutputResolver(cfg Config) tmplcontract.ResultOutputResolver {
+	return contractResultOutputResolver(cfg.ChainParams, cfg.TemplateResolveRecipient)
+}
 func agentResultOutputResolver(cfg Config) agentcontract.ResultOutputResolver {
-	contractPrefix := agentContractPrefix(cfg.ChainParams)
-	return func(resultTx *wire.MsgTx) ([]agentcontract.ResultOutput, error) {
-		return contractframework.ResultOutputsFromTx(resultTx, contractPrefix,
-			contractcommon.ParseContractPkScript,
-			contractframework.ScriptRecipientResolver(cfg.AgentResolveRecipient))
-	}
+	return contractResultOutputResolver(cfg.ChainParams, cfg.AgentResolveRecipient)
 }
 
 func templateResultPlanCount(plan tmplcontract.ResultPlan) int {
@@ -1179,23 +580,6 @@ func templateResultPlanCount(plan tmplcontract.ResultPlan) int {
 	}
 	return 1
 }
-
-func templateExecutionResultPlans(exec contractframework.ExecutionResult) []tmplcontract.ResultPlan {
-	result, ok := exec.PostState.(tmplcontract.BlockExecutionResult)
-	if !ok {
-		return nil
-	}
-	return result.ResultPlans
-}
-
-func agentExecutionResultPlans(exec contractframework.ExecutionResult) []agentcontract.ResultPlan {
-	result, ok := exec.PostState.(agentcontract.BlockExecutionResult)
-	if !ok {
-		return nil
-	}
-	return result.ResultPlans
-}
-
 func previousOutputScriptResolver(view *blockchain.UtxoViewpoint) func(wire.OutPoint) ([]byte, bool) {
 	return func(outpoint wire.OutPoint) ([]byte, bool) {
 		if view == nil {
@@ -1209,13 +593,9 @@ func previousOutputScriptResolver(view *blockchain.UtxoViewpoint) func(wire.OutP
 	}
 }
 
-type contractNodeUTXOView struct {
-	view *blockchain.UtxoViewpoint
-}
+type contractNodeUTXOView struct{ view *blockchain.UtxoViewpoint }
 
-func (v contractNodeUTXOView) LookupContractAddress(outpoint wire.OutPoint,
-	prefix string) (contractcommon.ContractAddress, bool, error) {
-
+func (v contractNodeUTXOView) LookupContractAddress(outpoint wire.OutPoint, prefix string) (contractcommon.ContractAddress, bool, error) {
 	if v.view == nil {
 		return contractcommon.ContractAddress{}, false, nil
 	}

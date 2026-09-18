@@ -95,10 +95,7 @@ func WrapModuleBlockResult(spec ModuleBlockResultSpec) (ResultBuildResult, Execu
 		stateRoot,
 		spec.Result.Execution,
 	)
-	return ResultBuildResult{
-		ResultTxs: spec.Result.ResultTxs,
-		StateRoot: resultRoot,
-	}, exec
+	return ResultBuildResult{ResultTxs: spec.Result.ResultTxs, StateRoot: resultRoot}, exec
 }
 
 func moduleBlockPending(spec ModuleBlockResultSpec, exec any) []ExecutionRecord {
@@ -109,18 +106,43 @@ func moduleBlockPending(spec ModuleBlockResultSpec, exec any) []ExecutionRecord 
 }
 
 func BuildSingleResultTxBlock[T any](req SingleResultBlockRequest[T]) (BlockResultBuildResult, error) {
-	for _, tx := range req.Txs {
-		payloadType, foundPayload, payloadErr := contract.ClassifyTxPayloadType(tx)
-		if payloadErr == nil && foundPayload && payloadType == contract.TxTypeResult {
-			return BlockResultBuildResult{}, fmt.Errorf("%s input already contains RESULT", req.ModuleName)
+	if req.Classify == nil || req.IsModule == nil || req.IsResult == nil ||
+		req.ExecuteTx == nil || req.Finalize == nil || req.Plans == nil {
+		return BlockResultBuildResult{}, fmt.Errorf("missing %s Result block callbacks", req.ModuleName)
+	}
+	work := make([]*wire.MsgTx, 0, len(req.Txs))
+	// Classification failure is not a foreign-module no-op. Complete this
+	// admission pass before executing any work so miners cannot silently omit
+	// a damaged call that independent block replay would reject.
+	for index, tx := range req.Txs {
+		if tx == nil {
+			return BlockResultBuildResult{}, fmt.Errorf("%w: nil work transaction %d", ErrCallAdmission, index)
+		}
+		for inputIndex, input := range tx.TxIn {
+			if input == nil {
+				return BlockResultBuildResult{}, fmt.Errorf("%w: nil input %d in work transaction %d", ErrCallAdmission, inputIndex, index)
+			}
+		}
+		payloadType, foundPayload, err := contract.ClassifyTxPayloadType(tx)
+		if err != nil {
+			return BlockResultBuildResult{}, fmt.Errorf("%w: %v", ErrCallAdmission, err)
+		}
+		if foundPayload && payloadType == contract.TxTypeResult {
+			return BlockResultBuildResult{}, fmt.Errorf("%w: %s input already contains RESULT", ErrCallAdmission, req.ModuleName)
 		}
 		info, err := req.Classify(tx, req.Prefix)
-		if err != nil || !req.IsModule(info) {
+		if err != nil {
+			return BlockResultBuildResult{}, fmt.Errorf("%w: classify %s transaction %d: %v", ErrCallAdmission, req.ModuleName, index, err)
+		}
+		if !req.IsModule(info) {
 			continue
 		}
 		if req.IsResult(info) {
-			return BlockResultBuildResult{}, fmt.Errorf("%s input already contains RESULT", req.ModuleName)
+			return BlockResultBuildResult{}, fmt.Errorf("%w: %s input already contains RESULT", ErrCallAdmission, req.ModuleName)
 		}
+		work = append(work, tx)
+	}
+	for _, tx := range work {
 		if err := req.ExecuteTx(tx); err != nil {
 			return BlockResultBuildResult{}, err
 		}
@@ -147,8 +169,5 @@ func BuildSingleResultTxBlock[T any](req SingleResultBlockRequest[T]) (BlockResu
 		}
 		resultTxs = append(resultTxs, tx)
 	}
-	return BlockResultBuildResult{
-		ResultTxs: resultTxs,
-		Execution: any(execution),
-	}, nil
+	return BlockResultBuildResult{ResultTxs: resultTxs, Execution: any(execution)}, nil
 }

@@ -3,6 +3,7 @@ package framework
 import (
 	"testing"
 
+	scommon "github.com/sat20-labs/indexer/common"
 	"github.com/stretchr/testify/require"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -64,6 +65,23 @@ func TestCollectResultPlanUTXOsUsesExplicitInputs(t *testing.T) {
 	require.Equal(t, int64(200), view.Value)
 	require.Len(t, view.UTXOs, 1)
 	require.Equal(t, second, view.UTXOs[0].OutPoint)
+}
+
+func TestCollectResultPlanUTXOsMergesSameAssetAcrossUTXOs(t *testing.T) {
+	addr := testContractAddress(t, ModuleTemplate, 1)
+	name := *wire.NewAssetNameFromString("brc20:f:sgas")
+	first := OutPoint{TxID: chainhash.Hash{4}.String(), Vout: 0}
+	second := OutPoint{TxID: chainhash.Hash{5}.String(), Vout: 0}
+	view, err := CollectResultPlanUTXOs(ResultPlan{Contract: addr.MustEncode()},
+		func(contract.ContractAddress) ([]UTXO, error) {
+			return []UTXO{
+				UTXOFromTxOutput(first, addr, 10, &wire.TxOut{Assets: wire.TxAssets{{Name: name, Amount: *scommon.NewDefaultDecimal(5)}}}),
+				UTXOFromTxOutput(second, addr, 11, &wire.TxOut{Assets: wire.TxAssets{{Name: name, Amount: *scommon.NewDefaultDecimal(5)}}}),
+			}, nil
+		})
+	require.NoError(t, err)
+	require.Len(t, view.Assets, 1)
+	require.Equal(t, "10", view.Assets[0].Amount.String())
 }
 
 func TestCollectResultPlanUTXOsRejectsMissingExplicitInput(t *testing.T) {

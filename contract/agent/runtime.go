@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -26,6 +27,7 @@ type Runtime struct {
 	contract PredictionContract
 	config   RuntimeConfig
 	state    RuntimeState
+	managed  contractcommon.ManagedBalance
 }
 
 func (cfg RuntimeConfig) AgentSubtypeEnabled(subtype string) bool {
@@ -37,6 +39,7 @@ func (cfg RuntimeConfig) AgentSubtypeEnabled(subtype string) bool {
 
 type RuntimeState struct {
 	Status     string                 `json:"status"`
+	Closed     bool                   `json:"closed,omitempty"`
 	Prediction PredictionRuntimeState `json:"prediction"`
 }
 
@@ -130,6 +133,9 @@ func NewRuntime(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig
 }
 
 func NewRuntimeWithDeployer(address ContractAddress, deploy DeployPayload, cfg RuntimeConfig, deployer string) (*Runtime, error) {
+	if err := deploy.Flags.Validate(); err != nil {
+		return nil, err
+	}
 	if !cfg.AgentSubtypeEnabled(deploy.SubType) {
 		return nil, fmt.Errorf("agent subtype %s is disabled on this network", deploy.SubType)
 	}
@@ -149,12 +155,9 @@ func NewRuntimeWithDeployer(address ContractAddress, deploy DeployPayload, cfg R
 	if contract.Subtype != deploy.SubType {
 		return nil, fmt.Errorf("agent subtype mismatch %s != %s", contract.Subtype, deploy.SubType)
 	}
+	deploy.ContractContent = contractframework.CloneBytes(deploy.ContractContent)
 	return &Runtime{
-		address:  address,
-		deploy:   deploy,
-		deployer: deployer,
-		contract: contract,
-		config:   cfg,
+		address: address, deploy: deploy, deployer: deployer, contract: contract, config: cfg,
 		state: RuntimeState{
 			Status: StatusPendingReady,
 			Prediction: PredictionRuntimeState{
@@ -170,26 +173,17 @@ func (r *Runtime) Clone() *Runtime {
 		return nil
 	}
 	out := *r
-	out.deploy.ContractContent = append([]byte(nil), r.deploy.ContractContent...)
+	out.deploy.ContractContent = contractframework.CloneBytes(r.deploy.ContractContent)
 	out.state = r.state.Clone()
+	out.managed = r.managed.Clone()
 	return &out
 }
 
-func (r *Runtime) Address() ContractAddress {
-	return r.address
-}
-
-func (r *Runtime) Contract() PredictionContract {
-	return r.contract
-}
-
-func (r *Runtime) State() RuntimeState {
-	return r.state.Clone()
-}
-
-func (r *Runtime) StateJSON() ([]byte, error) {
-	return json.Marshal(r.state)
-}
+func (r *Runtime) Address() ContractAddress                      { return r.address }
+func (r *Runtime) Contract() PredictionContract                  { return r.contract }
+func (r *Runtime) State() RuntimeState                           { return r.state.Clone() }
+func (r *Runtime) DeploymentFlags() contractcommon.ContractFlags { return r.deploy.Flags }
+func (r *Runtime) StateJSON() ([]byte, error)                    { return json.Marshal(r.state) }
 
 func (r *Runtime) LoadStateJSON(data []byte) error {
 	var state RuntimeState
@@ -203,9 +197,18 @@ func (r *Runtime) LoadStateJSON(data []byte) error {
 	return nil
 }
 
+func (r *Runtime) CheckInvocationLifecycle(action, actor string) error {
+	return (contractcommon.ContractLifecycle{
+		Deployer: r.deployer, Flags: r.deploy.Flags, Closed: r.state.Closed,
+	}).CheckInvoke(action, actor)
+}
+
 func (r *Runtime) ApplyReady(req ApplyReadyRequest) error {
 	if err := r.requireCoreNode(req.Invoker); err != nil {
 		return err
+	}
+	if r.state.Closed {
+		return contractcommon.ErrContractClosed
 	}
 	if r.state.Status != StatusPendingReady {
 		return fmt.Errorf("agent contract is not pending ready")
@@ -219,6 +222,9 @@ func (r *Runtime) ApplyReject(req ApplyRejectRequest) error {
 	if err := r.requireCoreNode(req.Invoker); err != nil {
 		return err
 	}
+	if r.state.Closed {
+		return contractcommon.ErrContractClosed
+	}
 	if r.state.Status != StatusPendingReady {
 		return fmt.Errorf("agent contract is not pending ready")
 	}
@@ -228,14 +234,15 @@ func (r *Runtime) ApplyReject(req ApplyRejectRequest) error {
 	r.state.Status = StatusRejected
 	r.state.Prediction.Status = PredictionStatusRejected
 	r.state.Prediction.Rejections = append(r.state.Prediction.Rejections, PredictionRejectRecord{
-		Agent:     req.Invoker,
-		Reason:    req.Param.Reason,
-		CheckedAt: req.Param.CheckedAt,
+		Agent: req.Invoker, Reason: req.Param.Reason, CheckedAt: req.Param.CheckedAt,
 	})
 	return nil
 }
 
 func (r *Runtime) ApplyBet(req ApplyBetRequest) error {
+	if r.state.Closed {
+		return contractcommon.ErrContractClosed
+	}
 	if r.state.Status != StatusReady {
 		return fmt.Errorf("agent contract is not ready")
 	}
@@ -263,7 +270,7 @@ func (r *Runtime) ApplyBet(req ApplyBetRequest) error {
 }
 
 func (r *Runtime) AdvancePredictionStatus(timeValue int64) bool {
-	if r == nil || r.state.Status != StatusReady {
+	if r == nil || r.state.Closed || r.state.Status != StatusReady {
 		return false
 	}
 	changed := false
@@ -282,6 +289,9 @@ func (r *Runtime) ApplyConfirm(req ApplyConfirmRequest) (*PredictionSettlementPl
 	if err := r.requireCoreNode(req.Invoker); err != nil {
 		return nil, err
 	}
+	if r.state.Closed {
+		return nil, contractcommon.ErrContractClosed
+	}
 	if r.state.Status != StatusReady {
 		return nil, fmt.Errorf("agent contract is not ready")
 	}
@@ -294,51 +304,41 @@ func (r *Runtime) ApplyConfirm(req ApplyConfirmRequest) (*PredictionSettlementPl
 	if err := req.Param.Check(r.contract); err != nil {
 		return nil, err
 	}
-	r.addGasBalance(req.GasAmount)
-	r.spendGasBalance(req.ResultGasFee)
-	r.state.Prediction.Status = PredictionStatusConfirmed
-	r.state.Prediction.Confirmations = append(r.state.Prediction.Confirmations, PredictionConfirmRecord{
-		Agent:        req.Invoker,
-		ResultType:   req.Param.ResultType,
-		OutcomeID:    req.Param.OutcomeID,
-		Result:       req.Param.Result,
-		ResultURL:    req.Param.ResultURL,
-		ObservedAt:   req.Param.ObservedAt,
-		AgentVersion: req.Param.AgentVersion,
-		ModelVersion: req.Param.ModelVersion,
-	})
 	plan, err := r.buildSettlementPlan(req.Param)
 	if err != nil {
 		return nil, err
 	}
+	r.addGasBalance(req.GasAmount)
+	r.spendGasBalance(req.ResultGasFee)
+	r.state.Prediction.Confirmations = append(r.state.Prediction.Confirmations, PredictionConfirmRecord{
+		Agent: req.Invoker, ResultType: req.Param.ResultType, OutcomeID: req.Param.OutcomeID,
+		Result: req.Param.Result, ResultURL: req.Param.ResultURL, ObservedAt: req.Param.ObservedAt,
+		AgentVersion: req.Param.AgentVersion, ModelVersion: req.Param.ModelVersion,
+	})
 	r.state.Status = StatusCompleted
 	r.state.Prediction.Status = PredictionStatusSettled
 	return plan, nil
 }
 
 func (r *Runtime) ApplyClose(req ApplyCloseRequest) (*PredictionSettlementPlan, error) {
-	if req.Invoker == "" || req.Invoker != r.deployer {
-		return nil, fmt.Errorf("invoker is not deployer")
-	}
-	if r.state.Status == StatusCompleted || r.state.Status == StatusRejected {
-		return &PredictionSettlementPlan{
-			Contract:   r.address.EncodeAddress(),
-			AssetName:  r.contract.BetAsset,
-			ResultType: "close",
-		}, nil
-	}
-	if req.TimeValue > r.contract.BetDeadline {
-		return nil, fmt.Errorf("prediction deployer close is disabled after bet deadline")
+	if err := r.CheckInvocationLifecycle(InvokeAPIClose, req.Invoker); err != nil {
+		return nil, err
 	}
 	plan := &PredictionSettlementPlan{
-		Contract:   r.address.EncodeAddress(),
-		AssetName:  r.contract.BetAsset,
-		ResultType: "close",
-		Refund:     true,
+		Contract: r.address.EncodeAddress(), AssetName: r.contract.BetAsset, ResultType: "close",
 	}
-	r.addRefundTransfers(plan)
-	r.state.Status = StatusCompleted
-	r.state.Prediction.Status = PredictionStatusRefundable
+	if r.state.Status != StatusCompleted && r.state.Status != StatusRejected {
+		if req.TimeValue > r.contract.BetDeadline {
+			return nil, fmt.Errorf("prediction deployer close is disabled after bet deadline")
+		}
+		plan.Refund = true
+		r.addRefundTransfers(plan)
+		r.state.Status = StatusCompleted
+		r.state.Prediction.Status = PredictionStatusRefundable
+	}
+	// Terminal markets may release remaining profit; an unsettled market may
+	// only be cancelled through its betting deadline.
+	r.state.Closed = true
 	return plan, nil
 }
 

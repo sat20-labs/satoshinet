@@ -33,9 +33,11 @@ type ResultGasRefund struct {
 	RetainedGasFunding *scommon.Decimal `json:"retainedGasFunding,omitempty"`
 }
 
-// ResultInputScope specifies which contract UTXOs a result plan may spend.
-// Most settlement plans rebuild the full contract balance. Refund-only plans
-// must be limited to the funding UTXOs that caused the invalid call.
+// ResultInputScope specifies which physical inputs are eligible for selection.
+// AllContractUTXOs makes the whole address available, without forcing a sweep. A
+// refund-only plan can spend just its call funding without rewriting the
+// existing contract balance. This is transaction construction, not persisted
+// managed/unmanaged UTXO classification.
 type ResultInputScope byte
 
 const (
@@ -49,12 +51,20 @@ type ResultPlan struct {
 	Height      int64             `json:"height,omitempty"`
 	ItemIDs     []int64           `json:"itemIds,omitempty"`
 	GasFee      *scommon.Decimal  `json:"gasFee,omitempty"`
+	SatoshiFee  int64             `json:"satoshiFee,omitempty"`
 	GasRefunds  []ResultGasRefund `json:"gasRefunds,omitempty"`
 	InputScope  ResultInputScope  `json:"inputScope,omitempty"`
 	Inputs      []OutPoint        `json:"inputs,omitempty"`
-	InputUTXOs  []UTXO            `json:"inputUtxos,omitempty"`
-	FeeOutputs  []ResultOutput    `json:"feeOutputs,omitempty"`
-	Outputs     []ResultOutput    `json:"outputs,omitempty"`
+	CallFunding []OutPoint        `json:"callFunding,omitempty"`
+	// RefundFunding is the current failed calls' escrow. It is never added to
+	// the persistent managed balance and is used only to construct this Result.
+	RefundFunding []OutPoint     `json:"refundFunding,omitempty"`
+	InputUTXOs    []UTXO         `json:"inputUtxos,omitempty"`
+	FeeOutputs    []ResultOutput `json:"feeOutputs,omitempty"`
+	Outputs       []ResultOutput `json:"outputs,omitempty"`
+	// Set only by the framework's quantity settlement. This execution-local
+	// value is the remainder before profit distribution, not a UTXO registry.
+	ManagedRemainder *contract.ManagedBalance `json:"-"`
 }
 
 func CloneResultPlans(plans []ResultPlan) []ResultPlan {
@@ -66,9 +76,7 @@ func CloneResultPlans(plans []ResultPlan) []ResultPlan {
 }
 
 // MergeResultPlansByContract collapses all result work for one contract into a
-// single plan while preserving the first-seen contract and output order.  A
-// Result TX spends contract UTXOs once, so allowing multiple independent plans
-// for the same contract can otherwise duplicate inputs during augmentation.
+// single plan while preserving the first-seen contract and output order.
 func MergeResultPlansByContract(plans []ResultPlan) []ResultPlan {
 	out := make([]ResultPlan, 0, len(plans))
 	index := make(map[string]int, len(plans))
@@ -102,14 +110,20 @@ func MergeResultPlansByContract(plans []ResultPlan) []ResultPlan {
 		}
 		merged.ItemIDs = appendUniqueInt64s(merged.ItemIDs, plan.ItemIDs)
 		merged.GasFee = DecimalAddAllowNil(merged.GasFee, plan.GasFee)
+		merged.SatoshiFee += plan.SatoshiFee
 		merged.GasRefunds = append(merged.GasRefunds, CloneResultGasRefunds(plan.GasRefunds)...)
 		if merged.InputScope != plan.InputScope {
 			merged.InputScope = ResultInputScopeAllContractUTXOs
 		}
 		merged.Inputs = UniqueOutPoints(append(merged.Inputs, plan.Inputs...))
+		merged.CallFunding = UniqueOutPoints(append(merged.CallFunding, plan.CallFunding...))
+		merged.RefundFunding = UniqueOutPoints(append(merged.RefundFunding, plan.RefundFunding...))
 		merged.InputUTXOs = appendUniqueUTXOs(merged.InputUTXOs, plan.InputUTXOs)
 		merged.FeeOutputs = append(merged.FeeOutputs, CloneResultOutputs(plan.FeeOutputs)...)
 		merged.Outputs = append(merged.Outputs, CloneResultOutputs(plan.Outputs)...)
+		// A merged business plan must be accounted as a whole before it is
+		// committed. Finalized per-contract plans are produced after this merge.
+		merged.ManagedRemainder = nil
 	}
 	return out
 }
@@ -150,6 +164,12 @@ func CloneResultPlan(plan ResultPlan) ResultPlan {
 	out.ItemIDs = append([]int64(nil), plan.ItemIDs...)
 	out.GasRefunds = CloneResultGasRefunds(plan.GasRefunds)
 	out.Inputs = append([]OutPoint(nil), plan.Inputs...)
+	out.CallFunding = append([]OutPoint(nil), plan.CallFunding...)
+	out.RefundFunding = append([]OutPoint(nil), plan.RefundFunding...)
+	if plan.ManagedRemainder != nil {
+		balance := plan.ManagedRemainder.Clone()
+		out.ManagedRemainder = &balance
+	}
 	out.InputUTXOs = make([]UTXO, len(plan.InputUTXOs))
 	for i := range plan.InputUTXOs {
 		out.InputUTXOs[i] = plan.InputUTXOs[i].Clone()
@@ -301,7 +321,7 @@ func ResultOutputIsZero(output ResultOutput) bool {
 
 func CompactResultOutputs(outputs []ResultOutput) ([]ResultOutput, error) {
 	out := make([]ResultOutput, 0, len(outputs))
-	index := make(map[string]int)
+	indices := make(map[string][]int)
 	for _, output := range outputs {
 		output = NormalizeResultOutput(output)
 		if ResultOutputIsZero(output) {
@@ -312,31 +332,46 @@ func CompactResultOutputs(outputs []ResultOutput) ([]ResultOutput, error) {
 			out = append(out, output)
 			continue
 		}
-		if existing, found := index[key]; found {
-			value, overflow := AddInt64(out[existing].Value, output.Value)
+
+		merged := false
+		for _, existing := range indices[key] {
+			candidate := CloneResultOutput(out[existing])
+			value, overflow := AddInt64(candidate.Value, output.Value)
 			if overflow {
 				return nil, fmt.Errorf("compacted result output value overflows int64")
 			}
-			out[existing].Value = value
+			candidate.Value = value
 			if len(output.Assets) != 0 {
-				builder := scommon.NewTxAssetsBuilder(len(out[existing].Assets) + len(output.Assets))
-				builder.AddSlice(out[existing].Assets)
+				builder := scommon.NewTxAssetsBuilder(len(candidate.Assets) + len(output.Assets))
+				builder.AddSlice(candidate.Assets)
 				builder.AddSlice(output.Assets)
-				merged := builder.Build()
-				for _, asset := range merged {
+				candidate.Assets = builder.Build()
+				for _, asset := range candidate.Assets {
 					if err := ValidateAssetDecimal(asset.Amount); err != nil {
 						return nil, fmt.Errorf("compacted result asset %s: %w", asset.Name.String(), err)
 					}
 				}
-				out[existing].Assets = merged
 			}
+			carrier, err := resultAssetCarrierSats(candidate.Assets)
+			if err != nil {
+				return nil, err
+			}
+			if candidate.Value < carrier {
+				continue
+			}
+			out[existing] = candidate
+			merged = true
+			break
+		}
+		if merged {
 			continue
 		}
-		index[key] = len(out)
+		indices[key] = append(indices[key], len(out))
 		out = append(out, output)
 	}
 	return out, nil
 }
+
 
 func compactResultOutputKey(output ResultOutput) (string, bool) {
 	if len(output.ExtraData) != 0 || output.AssetName != "" || output.AssetAmt != "" || output.Reason != "" {

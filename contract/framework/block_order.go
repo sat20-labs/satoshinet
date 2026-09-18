@@ -72,8 +72,23 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string, spec TxOrder
 		}
 		info.GasLimit = deploy.GasLimit
 	case contract.TxTypeInvoke:
-		_, err := FindInvokeContractOutputs(tx, spec.Resolver(contractPrefix), parseSpec)
+		// A genuine foreign-module transaction is a no-op for this classifier,
+		// not a parsing error. Malformed invocations of this module still fail.
+		hasOutput, err := HasContractOutput(tx, spec.Resolver(contractPrefix))
 		if err != nil {
+			return TxOrderInfo{}, err
+		}
+		if !hasOutput {
+			hasForeign, err := HasContractOutput(tx, ContractScriptResolverForType(contractPrefix, 0))
+			if err != nil {
+				return TxOrderInfo{}, err
+			}
+			if hasForeign {
+				return TxOrderInfo{}, nil
+			}
+			return TxOrderInfo{}, fmt.Errorf("%s INVOKE has no contract output", parseSpec.ModuleName)
+		}
+		if _, err := FindInvokeContractOutputs(tx, spec.Resolver(contractPrefix), parseSpec); err != nil {
 			return TxOrderInfo{}, err
 		}
 		invoke, err := parseSpec.DecodeInvoke(payload)
@@ -89,30 +104,18 @@ func ClassifyTxForBlockOrder(tx *wire.MsgTx, contractPrefix string, spec TxOrder
 }
 
 func classifyOrderPayload(tx *wire.MsgTx, moduleName string) (contract.TxType, []byte, bool, error) {
-	if tx == nil {
-		return 0, nil, false, fmt.Errorf("missing transaction")
+	// Use the same strict envelope classification as admission and block
+	// splitting, including malformed headers and singleton/mixed payloads.
+	txType, found, err := contract.ClassifyTxPayloadType(tx)
+	if err != nil || !found {
+		return 0, nil, false, err
 	}
-	var txType contract.TxType
 	payload := make([]byte, 0)
-	for i, txOut := range tx.TxOut {
-		if txOut == nil {
-			return 0, nil, false, fmt.Errorf("nil output %d", i)
-		}
+	for _, txOut := range tx.TxOut {
 		nextType, content, err := contract.ReadNullDataScript(txOut.PkScript)
-		if err != nil {
-			continue
+		if err == nil && nextType == txType {
+			payload = append(payload, content...)
 		}
-		if txType == 0 {
-			txType = nextType
-		} else if txType != nextType {
-			return 0, nil, false, fmt.Errorf("transaction contains mixed %s OP_RETURN output types", moduleName)
-		} else if txType != contract.TxTypeDeploy && txType != contract.TxTypeInvoke {
-			return 0, nil, false, fmt.Errorf("transaction contains multiple singleton %s OP_RETURN outputs", moduleName)
-		}
-		payload = append(payload, content...)
-	}
-	if txType == 0 {
-		return 0, nil, false, nil
 	}
 	return txType, payload, true, nil
 }

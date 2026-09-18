@@ -228,6 +228,9 @@ func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []Re
 		if record.GasFee != nil && record.GasFee.Sign() != 0 {
 			out[i].GasFee = DecimalAddAllowNil(out[i].GasFee, record.GasFee)
 		}
+		if record.ResultFeeMode == ResultFeeModeSatoshiFee {
+			out[i].SatoshiFee += InvalidRefundSatoshiFee
+		}
 		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
 		out[i].Inputs = UniqueOutPoints(out[i].Inputs)
 		if refund := ResultGasRefundFromRecord(record); refund.To != "" {
@@ -237,8 +240,31 @@ func AddGasFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []Re
 	return out
 }
 
+
+func AddSatoshiFeesToResultPlans(plans []ResultPlan, records []ExecutionRecord) []ResultPlan {
+	out := MergeResultPlansByContract(plans)
+	index := make(map[string]int, len(out))
+	for i := range out {
+		index[out[i].Contract] = i
+	}
+	for _, record := range records {
+		if !record.RequiresResult || record.ResultFeeMode != ResultFeeModeSatoshiFee {
+			continue
+		}
+		key := record.Contract.MustEncode()
+		i, ok := index[key]
+		if !ok {
+			i = len(out)
+			index[key] = i
+			out = append(out, ResultPlan{Contract: key, Height: record.Height})
+		}
+		out[i].SatoshiFee += InvalidRefundSatoshiFee
+	}
+	return out
+}
+
 func ResultGasRefundFromRecord(record ExecutionRecord) ResultGasRefund {
-	if record.GasRefundRecipient == "" || len(record.FundingInputs) == 0 {
+	if record.ResultFeeMode != ResultFeeModeGasAsset || record.GasRefundRecipient == "" || len(record.FundingInputs) == 0 {
 		return ResultGasRefund{}
 	}
 	return ResultGasRefund{

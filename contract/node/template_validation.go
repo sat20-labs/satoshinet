@@ -13,115 +13,93 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-type TemplateRuntimeFactory func(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*template.RuntimeStore, error)
+type TemplateRuntimeFactory func(*btcutil.Block, *blockchain.UtxoViewpoint) (*template.RuntimeStore, error)
 
 type TemplateBlockExecutionConfig struct {
-	ChainParams *chaincfg.Params
-
-	ContractPrefix string
-	GasConfig      template.GasConfig
-	Registry       *template.Registry
-
+	ChainParams         *chaincfg.Params
+	ContractPrefix      string
+	GasConfig           template.GasConfig
+	Registry            *template.Registry
 	NewRuntime          TemplateRuntimeFactory
 	ResolveInvoker      template.InvokerResolver
 	ResolveOutput       template.ResultOutputResolver
 	ResolveResultScript template.ResultRecipientScriptResolver
 	ContractUTXOs       template.ContractUTXOProvider
 	AssetPrecision      contractframework.AssetPrecisionResolver
-	VerifyResult        func(resultTx *wire.MsgTx, expected []template.ResultPlan, status template.ResultStatus) error
+	VerifyResult        func(*wire.MsgTx, []template.ResultPlan, template.ResultStatus) error
 }
 
 type TemplateBlockExecutionValidator struct {
-	cfg TemplateBlockExecutionConfig
-
+	cfg         TemplateBlockExecutionConfig
 	postStateMu sync.Mutex
 	postStates  map[chainhash.Hash]*template.RuntimeStore
 }
 
 func NewTemplateBlockExecutionValidator(cfg TemplateBlockExecutionConfig) *TemplateBlockExecutionValidator {
-	return &TemplateBlockExecutionValidator{
-		cfg:        cfg,
-		postStates: make(map[chainhash.Hash]*template.RuntimeStore),
-	}
+	return &TemplateBlockExecutionValidator{cfg: cfg, postStates: make(map[chainhash.Hash]*template.RuntimeStore)}
 }
 
 func (v *TemplateBlockExecutionValidator) ValidateTemplateBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
-	if block == nil {
-		return templateBlockRuleError("missing block")
-	}
-	if view == nil {
-		return templateBlockRuleError("missing UTXO view")
-	}
-	txs := block.Transactions()
-	if len(txs) == 0 {
-		return templateBlockRuleError("missing coinbase transaction")
-	}
-
-	prefix := v.contractPrefix()
-	hasRoot, split, err := splitBlockContractTxs(block, view, v.cfg.ChainParams, prefix)
-	if err != nil {
-		return templateBlockRuleError("split template contract txs: %v", err)
-	}
-	blockTxs := split.WorkTxs[contractframework.ModuleTemplate]
-	resultTxs := split.ResultTxs[contractframework.ModuleTemplate]
-	hasExecution := len(blockTxs) != 0 || len(resultTxs) != 0
-	if !hasRoot && !hasExecution {
-		return nil
-	}
-	if hasExecution && !hasRoot {
-		return templateBlockRuleError("missing template state root commitment")
-	}
-
-	store, err := v.runtime(block, view)
-	if err != nil {
-		return templateBlockRuleError("load template runtime: %v", err)
-	}
-	gasConfig := v.cfg.GasConfig
-	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
-	contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(
-		v.cfg.ContractUTXOs, blockTxs, prefix, template.ContractTypeTemplate)
-
-	executed, err := template.ExecuteBlock(template.BlockExecutionRequest{
-		Txs:            blockTxs,
-		Store:          store,
-		Registry:       v.cfg.Registry,
-		ContractPrefix: prefix,
-		GasConfig:      gasConfig,
-		ContractUTXOs:  contractUTXOs,
-		AssetPrecision: v.cfg.AssetPrecision,
-		BlockHeight:    int64(block.Height()),
-		ResolveInvoker: template.LastInputPreviousOutputInvokerResolver(
-			v.cfg.ChainParams, previousOutputScriptResolver(view)),
-	})
-	if err != nil {
-		return templateBlockRuleError("validate template block: %v", err)
-	}
-	augmentStore := store.Clone()
-	resultPlans, err := template.AugmentResultPlans(executed.ResultPlans, augmentStore, gasConfig, contractUTXOs, v.cfg.AssetPrecision)
-	if err != nil {
-		return templateBlockRuleError("template result plan: %v", err)
-	}
-	if len(resultPlans) == 0 {
-		if len(resultTxs) != 0 {
-			return templateBlockRuleError("unexpected template RESULT transaction")
-		}
-	} else if len(resultTxs) > 1 {
-		return templateBlockRuleError("unexpected extra template RESULT transactions")
-	}
-	if err := v.verifyResults(resultTxs, resultPlans); err != nil {
-		return templateBlockRuleError("template result: %v", err)
-	}
-	v.rememberPostState(block.Hash(), store.Clone())
-	if store.StateRoot() != executed.StateRoot {
-		return templateBlockRuleError("post-state root changed after validation")
-	}
-	return nil
+	return validateStandaloneModule(block, view, v.cfg.ChainParams, v.contractPrefix(), contractframework.ModuleTemplate, v, v)
 }
 
-func (v *TemplateBlockExecutionValidator) ValidateContractModuleBlock(block *btcutil.Block,
-	view *blockchain.UtxoViewpoint) error {
-
+func (v *TemplateBlockExecutionValidator) ValidateContractModuleBlock(block *btcutil.Block, view *blockchain.UtxoViewpoint) error {
 	return v.ValidateTemplateBlock(block, view)
+}
+
+func (v *TemplateBlockExecutionValidator) ContractBlockModule(block *btcutil.Block,
+	view *blockchain.UtxoViewpoint) (contractframework.Module, error) {
+
+	if block == nil {
+		return nil, templateBlockRuleError("missing block")
+	}
+	parent, err := v.runtime(block, view)
+	if err != nil {
+		return nil, templateBlockRuleError("load template runtime: %v", err)
+	}
+	if parent == nil {
+		return nil, templateBlockRuleError("missing template runtime")
+	}
+	gas := v.cfg.GasConfig
+	gas.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
+	module, err := contractframework.NewSettlementModule(contractframework.SettlementModuleConfig{
+		Descriptor: templateModuleDescriptor(), ParentRoot: parent.StateRoot(), GasConfig: gas,
+		ResolveScript: v.cfg.ResolveResultScript, ResolveOutput: v.cfg.ResolveOutput, PlanCount: templateResultPlanCount,
+		Execute: func(work contractframework.WorkExecutionRequest) (contractframework.BackendBlockExecutionResult, any, error) {
+			// Execution clones mutable state and only replaces this wrapper on success.
+			candidate := *parent
+			exec, err := template.ExecuteBlock(template.BlockExecutionRequest{
+				Txs: work.Txs, Store: &candidate, Registry: v.cfg.Registry, ContractPrefix: v.contractPrefix(),
+				GasConfig: gas, ContractUTXOs: v.cfg.ContractUTXOs, AssetPrecision: v.cfg.AssetPrecision,
+				BlockHeight:    int64(block.Height()),
+				ResolveInvoker: template.LastInputPreviousOutputInvokerResolver(v.cfg.ChainParams, previousOutputScriptResolver(view)),
+			})
+			return exec, &candidate, err
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if v.cfg.VerifyResult != nil {
+		// Existing trusted embedding/test hook. Production services use the
+		// canonical verifier installed by NewSettlementModule.
+		module.VerifyResultTxsFunc = func(req contractframework.ResultVerifyRequest, exec contractframework.ExecutionResult) error {
+			return v.verifyResults(req.ResultTxs, exec.ResultPlans)
+		}
+	}
+	return module, nil
+}
+
+func (v *TemplateBlockExecutionValidator) RecordContractBlockState(block *btcutil.Block, exec contractframework.ExecutionResult) error {
+	state, ok := exec.PostState.(*template.RuntimeStore)
+	if block == nil || !ok || state == nil || exec.ModuleType != contractframework.ModuleTemplate {
+		return templateBlockRuleError("invalid template post-state snapshot")
+	}
+	if state.StateRoot() != exec.StateRoot {
+		return templateBlockRuleError("template post-state root changed after validation")
+	}
+	v.rememberPostState(block.Hash(), state)
+	return nil
 }
 
 func (v *TemplateBlockExecutionValidator) HasContractBlockActivity(block *btcutil.Block,
@@ -142,18 +120,11 @@ func (v *TemplateBlockExecutionValidator) HasContractBlockActivity(block *btcuti
 	}
 	probe := store.Clone()
 	before := probe.StateRoot()
-
-	gasConfig := v.cfg.GasConfig
-	gasConfig.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
-	if v.cfg.ContractUTXOs != nil {
-		contractUTXOs := contractframework.ContractUTXOProviderWithTxOutputs(
-			v.cfg.ContractUTXOs, nil, v.contractPrefix(), template.ContractTypeTemplate)
-		if err := probe.ReconcileAssetCaches(contractUTXOs, gasConfig); err != nil {
-			return false, templateBlockRuleError("template activity reconcile: %v", err)
-		}
-	}
-	plans, err := probe.SettleBlockWithGasConfigAndPrecision(
-		int64(block.Height()), gasConfig.Normalize(), v.cfg.AssetPrecision)
+	gas := v.cfg.GasConfig
+	gas.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
+	// The activity probe uses business scheduling only. Physical quantities
+	// are checked during actual settlement, not adopted into business caches.
+	plans, err := probe.SettleBlockWithGasConfigAndPrecision(int64(block.Height()), gas.Normalize(), v.cfg.AssetPrecision)
 	if err != nil {
 		return false, templateBlockRuleError("template activity settle: %v", err)
 	}
@@ -214,8 +185,8 @@ func (v *TemplateBlockExecutionValidator) ReleaseBlockPostState(hash *chainhash.
 
 func (v *TemplateBlockExecutionValidator) runtime(block *btcutil.Block, view *blockchain.UtxoViewpoint) (*template.RuntimeStore, error) {
 	if block != nil {
-		prevHash := block.MsgBlock().Header.PrevBlock
-		if state, ok := v.TemplateBlockPostState(&prevHash); ok {
+		prev := block.MsgBlock().Header.PrevBlock
+		if state, ok := v.TemplateBlockPostState(&prev); ok {
 			return state, nil
 		}
 	}
@@ -225,35 +196,26 @@ func (v *TemplateBlockExecutionValidator) runtime(block *btcutil.Block, view *bl
 	return template.NewRuntimeStore(), nil
 }
 
-func (v *TemplateBlockExecutionValidator) verifyResults(resultTxs []*wire.MsgTx, plans []template.ResultPlan) error {
+func (v *TemplateBlockExecutionValidator) verifyResults(txs []*wire.MsgTx, plans []template.ResultPlan) error {
 	if len(plans) == 0 {
-		if len(resultTxs) != 0 {
+		if len(txs) != 0 {
 			return fmt.Errorf("unexpected template RESULT transactions")
 		}
 		return nil
 	}
-	if len(resultTxs) != 1 {
-		return fmt.Errorf("template result transaction count mismatch: got %d want 1", len(resultTxs))
+	if len(txs) != 1 {
+		return fmt.Errorf("template result transaction count mismatch: got %d want 1", len(txs))
 	}
 	if v.cfg.VerifyResult != nil {
-		return v.cfg.VerifyResult(resultTxs[0], plans, template.ResultStatusSuccess)
+		return v.cfg.VerifyResult(txs[0], plans, template.ResultStatusSuccess)
 	}
-	if v.cfg.ResolveOutput == nil {
-		return fmt.Errorf("missing template result output resolver")
-	}
-	if v.cfg.ResolveResultScript == nil {
-		return fmt.Errorf("missing template result output script resolver")
+	if v.cfg.ResolveOutput == nil || v.cfg.ResolveResultScript == nil {
+		return fmt.Errorf("missing template result output resolver or script resolver")
 	}
 	return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-		Label:         "template",
-		ResultTx:      resultTxs[0],
-		Status:        template.ResultStatusSuccess,
-		Plans:         plans,
-		GasAssetName:  contractGasAssetNameForParams(v.cfg.ChainParams),
-		Resolve:       v.cfg.ResolveOutput,
-		ResolveScript: v.cfg.ResolveResultScript,
-		PlanCount:     templateResultPlanCount,
-		CheckPayload:  true,
+		Label: "template", ResultTx: txs[0], Status: template.ResultStatusSuccess, Plans: plans,
+		GasAssetName: contractGasAssetNameForParams(v.cfg.ChainParams), Resolve: v.cfg.ResolveOutput,
+		ResolveScript: v.cfg.ResolveResultScript, PlanCount: templateResultPlanCount, CheckPayload: true, UseInputUTXO: true,
 	})
 }
 
@@ -261,15 +223,9 @@ func (v *TemplateBlockExecutionValidator) contractPrefix() string {
 	if v.cfg.ContractPrefix != "" {
 		return v.cfg.ContractPrefix
 	}
-	if v.cfg.ChainParams != nil {
-		return template.ContractPrefixForNet(v.cfg.ChainParams.Net)
-	}
-	return template.TestnetContractPrefix
+	return contractPrefixForParams(v.cfg.ChainParams)
 }
 
 func templateBlockRuleError(format string, args ...interface{}) error {
-	return blockchain.RuleError{
-		ErrorCode:   blockchain.ErrInvalidEVMBlock,
-		Description: fmt.Sprintf(format, args...),
-	}
+	return contractBlockRuleError(format, args...)
 }

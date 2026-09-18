@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	DefaultDeployerProfitBPS  = int64(6000)
-	DefaultBootstrapProfitBPS = int64(4000)
-	TotalProfitBPS            = int64(10000)
+	DefaultDeployerProfitBPS  = contract.DeployerProfitBPS
+	DefaultBootstrapProfitBPS = contract.BootstrapProfitBPS
+	TotalProfitBPS            = contract.TotalProfitBPS
 )
 
 type ResultSurplusMode byte
@@ -71,13 +71,14 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 		if err != nil {
 			return ResultPlan{}, err
 		}
-		// The physical contract balance has already reserved the full result
-		// fee above. If managed gas is insufficient, the unpaid part is covered
-		// by unmanaged gas held at the contract address.
 	}
 	managedAssets = capResultOutputByAvailable(managedAssets, remainingValue, remainingAssets, req.Precision)
 	if !ResultOutputIsZero(managedAssets) {
-		outputs = append(outputs, splitSurplusOutput(managedAssets, managedSurplusRequest(req))...)
+		split, err := splitSurplusOutput(managedAssets, managedSurplusRequest(req))
+		if err != nil {
+			return ResultPlan{}, err
+		}
+		outputs = append(outputs, split...)
 	}
 
 	outputValue, err := resultOutputsValue(outputs)
@@ -136,7 +137,11 @@ func AugmentResultPlanWithManagedState(req ManagedResultAugmentRequest) (ResultP
 		Value:  surplusValue,
 		Assets: NormalizeAssetSetPrecision(surplusAssets, req.Precision),
 	}
-	outputs = append(outputs, splitSurplusOutput(surplus, req)...)
+	split, err := splitSurplusOutput(surplus, req)
+	if err != nil {
+		return ResultPlan{}, err
+	}
+	outputs = append(outputs, split...)
 	out.Outputs, err = CompactResultOutputs(outputs)
 	if err != nil {
 		return ResultPlan{}, err
@@ -340,24 +345,43 @@ func surplusRecipient(req ManagedResultAugmentRequest) string {
 	return req.Plan.Contract
 }
 
-func splitSurplusOutput(surplus ResultOutput, req ManagedResultAugmentRequest) []ResultOutput {
+func splitSurplusOutput(surplus ResultOutput, req ManagedResultAugmentRequest) ([]ResultOutput, error) {
 	surplus = NormalizeResultOutputPrecision(surplus, req.Precision)
 	if ResultOutputIsZero(surplus) {
-		return nil
+		return nil, nil
 	}
+	surplus.To = surplusRecipient(req)
 	if req.SurplusMode != ResultSurplusAsProfit || req.DeployerAddress == "" ||
 		req.BootstrapAddress == "" || req.DeployerAddress == req.BootstrapAddress {
 
-		return []ResultOutput{surplus}
+		return []ResultOutput{surplus}, nil
 	}
 
 	deployerOut := ResultOutput{To: req.DeployerAddress}
 	bootstrapOut := ResultOutput{To: req.BootstrapAddress}
-	deployerOut.Value = splitInt64ByBPS(surplus.Value, DefaultDeployerProfitBPS)
-	bootstrapOut.Value = surplus.Value - deployerOut.Value
 	deployerOut.Assets, bootstrapOut.Assets = SplitAssetsByBPS(surplus.Assets, DefaultDeployerProfitBPS)
 	deployerOut = NormalizeResultOutputPrecision(deployerOut, req.Precision)
 	bootstrapOut = NormalizeResultOutputPrecision(bootstrapOut, req.Precision)
+
+	deployerCarrier, err := resultAssetCarrierSats(deployerOut.Assets)
+	if err != nil {
+		return nil, err
+	}
+	bootstrapCarrier, err := resultAssetCarrierSats(bootstrapOut.Assets)
+	if err != nil {
+		return nil, err
+	}
+	totalCarrier, overflow := AddInt64(deployerCarrier, bootstrapCarrier)
+	if overflow || totalCarrier > surplus.Value {
+		return nil, fmt.Errorf("%w: insufficient carrier sats for profit split: need %d, available %d",
+			ErrAccountingInvariant, totalCarrier, surplus.Value)
+	}
+
+	plainValue := surplus.Value - totalCarrier
+	deployerPlain := splitInt64ByBPS(plainValue, DefaultDeployerProfitBPS)
+	bootstrapPlain := plainValue - deployerPlain
+	deployerOut.Value = deployerCarrier + deployerPlain
+	bootstrapOut.Value = bootstrapCarrier + bootstrapPlain
 
 	out := make([]ResultOutput, 0, 2)
 	if !ResultOutputIsZero(deployerOut) {
@@ -366,7 +390,25 @@ func splitSurplusOutput(surplus ResultOutput, req ManagedResultAugmentRequest) [
 	if !ResultOutputIsZero(bootstrapOut) {
 		out = append(out, bootstrapOut)
 	}
-	return out
+	return out, nil
+}
+
+// SplitContractProfit uses the protocol's single profit policy. Callers must
+// supply only profit, after user liabilities and fees have been settled.
+func SplitContractProfit(profit ResultOutput, deployer, bootstrap string,
+	precision AssetPrecisionPolicy) ([]ResultOutput, error) {
+
+	profit = NormalizeResultOutputPrecision(profit, precision)
+	if ResultOutputIsZero(profit) {
+		return nil, nil
+	}
+	if deployer == "" || bootstrap == "" {
+		return nil, fmt.Errorf("missing contract profit recipient")
+	}
+	return splitSurplusOutput(profit, ManagedResultAugmentRequest{
+		Precision: precision, DeployerAddress: deployer, BootstrapAddress: bootstrap,
+		SurplusMode: ResultSurplusAsProfit,
+	})
 }
 
 func resultOutputsValue(outputs []ResultOutput) (int64, error) {
@@ -426,16 +468,19 @@ func SplitAssetsByBPS(assets wire.TxAssets, deployerBPS int64) (wire.TxAssets, w
 	deployer := make(wire.TxAssets, 0, len(assets))
 	bootstrap := make(wire.TxAssets, 0, len(assets))
 	for _, asset := range assets {
-		deployerAmt := asset.Amount.MulBigInt(big.NewInt(deployerBPS)).DivBigInt(big.NewInt(TotalProfitBPS))
-		bootstrapAmt := scommon.DecimalSub(asset.Amount.Clone(), deployerAmt)
-		if deployerAmt.Sign() > 0 {
+		// Split integer smallest units, rounding the deployer's share down.
+		// The bootstrap receives the exact remainder, including the final unit.
+		units := new(big.Int).Mul(asset.Amount.Value, big.NewInt(deployerBPS))
+		units.Quo(units, big.NewInt(TotalProfitBPS))
+		remaining := new(big.Int).Sub(asset.Amount.Value, units)
+		if units.Sign() > 0 {
 			next := asset
-			next.Amount = *deployerAmt
+			next.Amount = scommon.Decimal{Precision: asset.Amount.Precision, Value: units}
 			deployer = append(deployer, next)
 		}
-		if bootstrapAmt.Sign() > 0 {
+		if remaining.Sign() > 0 {
 			next := asset
-			next.Amount = *bootstrapAmt
+			next.Amount = scommon.Decimal{Precision: asset.Amount.Precision, Value: remaining}
 			bootstrap = append(bootstrap, next)
 		}
 	}

@@ -4,11 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
@@ -34,16 +35,32 @@ func (s *RuntimeStore) Add(runtime *ContractRuntime) {
 	s.runtimes[runtime.URL()] = runtime
 }
 
+// Clone forks mutable execution state. Contract descriptors are not mutated
+// by block execution and can be shared with the candidate store.
 func (s *RuntimeStore) Clone() *RuntimeStore {
-	encoded, err := s.MarshalBinary()
-	if err != nil {
-		return NewRuntimeStore()
+	out := NewRuntimeStore()
+	if s == nil {
+		return out
 	}
-	clone, err := DecodeRuntimeStore(encoded, nil)
-	if err != nil {
-		return NewRuntimeStore()
+	for key, runtime := range s.runtimes {
+		if runtime == nil {
+			out.runtimes[key] = nil
+			continue
+		}
+		cloned := *runtime
+		if runtime.base != nil {
+			base := *runtime.base
+			base.contractContent = contractframework.CloneBytes(runtime.base.contractContent)
+			base.managed = runtime.base.managed.Clone()
+			base.state = make(map[string][]byte, len(runtime.base.state))
+			for stateKey, value := range runtime.base.state {
+				base.state[stateKey] = contractframework.CloneBytes(value)
+			}
+			cloned.base = &base
+		}
+		out.runtimes[key] = &cloned
 	}
-	return clone
+	return out
 }
 
 func (s *RuntimeStore) Get(contract ContractAddress) (*ContractRuntime, bool) {
@@ -60,10 +77,7 @@ func (s *RuntimeStore) Exists(contract ContractAddress) bool {
 }
 
 func (s *RuntimeStore) ActiveNetworkExclusiveExists(runtime *ContractRuntime) bool {
-	if s == nil || runtime == nil {
-		return false
-	}
-	if !runtime.Contract().NetworkExclusive() {
+	if s == nil || runtime == nil || !runtime.Contract().NetworkExclusive() {
 		return false
 	}
 	want := runtime.NetworkExclusiveKey()
@@ -71,16 +85,9 @@ func (s *RuntimeStore) ActiveNetworkExclusiveExists(runtime *ContractRuntime) bo
 		return false
 	}
 	for _, existing := range s.runtimes {
-		if existing == nil {
-			continue
+		if existing != nil && existing.NetworkExclusiveKey() == want && existing.NetworkExclusiveActive() {
+			return true
 		}
-		if existing.NetworkExclusiveKey() != want {
-			continue
-		}
-		if !existing.NetworkExclusiveActive() {
-			continue
-		}
-		return true
 	}
 	return false
 }
@@ -90,8 +97,7 @@ func (r *ContractRuntime) NetworkExclusiveKey() string {
 		return ""
 	}
 	sum := sha256.Sum256(r.base.contractContent)
-	return r.base.templateName + ":" + strconv.FormatUint(uint64(r.base.templateVersion), 10) + ":" +
-		hex.EncodeToString(sum[:])
+	return r.base.templateName + ":" + strconv.FormatUint(uint64(r.base.templateVersion), 10) + ":" + hex.EncodeToString(sum[:])
 }
 
 func (r *ContractRuntime) NetworkExclusiveActive() bool {
@@ -100,7 +106,7 @@ func (r *ContractRuntime) NetworkExclusiveActive() bool {
 	}
 	state, err := r.RuntimeState()
 	if err != nil {
-		return false
+		return true // Corruption cannot free an occupied deployment slot.
 	}
 	return !state.ClosedForContract(r.Contract())
 }
@@ -119,10 +125,8 @@ func (s *RuntimeStore) Snapshots() ([]RuntimeSnapshot, error) {
 		}
 		address := runtime.Address()
 		out = append(out, RuntimeSnapshot{
-			Address:      address.EncodeAddress(),
-			TemplateName: runtime.TemplateName(),
-			Version:      runtime.Version(),
-			State:        cloneRuntimeState(state),
+			Address: address.EncodeAddress(), TemplateName: runtime.TemplateName(),
+			Version: runtime.Version(), State: cloneRuntimeState(state),
 		})
 	}
 	return out, nil
@@ -142,16 +146,14 @@ func (s *RuntimeStore) SettleBlockWithGasConfigAndPrecision(height int64, gasCon
 	if s == nil {
 		return nil, nil
 	}
-	keys := make([]string, 0, len(s.runtimes))
-	for key := range s.runtimes {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
 	plans := make([]*SettlementPlan, 0)
-	for _, key := range keys {
-		runtimeGasConfig := GasConfigForRuntime(gasConfig, s.runtimes[key])
-		plan, err := s.runtimes[key].SettleBlockWithGasConfigAndPrecision(height, runtimeGasConfig, assetPrecision)
+	for _, key := range s.sortedKeys() {
+		runtime := s.runtimes[key]
+		if runtime == nil {
+			return nil, fmt.Errorf("nil template runtime %s", key)
+		}
+		runtimeGasConfig := GasConfigForRuntime(gasConfig, runtime)
+		plan, err := runtime.SettleBlockWithGasConfigAndPrecision(height, runtimeGasConfig, assetPrecision)
 		if err != nil {
 			return nil, err
 		}
@@ -162,151 +164,30 @@ func (s *RuntimeStore) SettleBlockWithGasConfigAndPrecision(height int64, gasCon
 	return plans, nil
 }
 
-func (s *RuntimeStore) ReconcileAssetCaches(contractUTXOs ContractUTXOProvider, gasConfig GasConfig) error {
-	return s.reconcileAssetCaches(contractUTXOs, gasConfig, false)
-}
-
-func (s *RuntimeStore) reconcileAssetCaches(contractUTXOs ContractUTXOProvider, gasConfig GasConfig, skipEmpty bool) error {
-	if s == nil || contractUTXOs == nil {
+// ReconcileAssetCaches now validates backing quantities without importing an
+// address's unsolicited balance into AMM/exchange inventory. Business pools
+// change only through accepted operations and their settlement, never by
+// observing extra physical UTXOs.
+func (s *RuntimeStore) ReconcileAssetCaches(provider ContractUTXOProvider, _ GasConfig) error {
+	if s == nil || provider == nil {
 		return nil
 	}
-	gasAssetName := gasConfig.Normalize().GasAssetName
 	for _, key := range s.sortedKeys() {
 		runtime := s.runtimes[key]
-		if runtime == nil {
-			continue
+		if runtime == nil || runtime.base == nil {
+			return fmt.Errorf("nil template runtime %s", key)
 		}
-		utxos, err := contractUTXOs(runtime.Address())
+		view, err := contractframework.CollectResultPlanUTXOs(ResultPlan{Contract: key}, provider)
 		if err != nil {
 			return err
 		}
-		if skipEmpty && len(utxos) == 0 {
-			continue
-		}
-		state, err := runtime.loadRuntimeState()
-		if err != nil {
-			return err
-		}
-		if !reconcileRunningAssetCache(runtime.Contract(), &state, utxos, gasAssetName) {
-			continue
-		}
-		if amm, ok := runtime.Contract().(*AMMContract); ok {
-			_ = amm
-			running := state.AMMData()
-			if !running.TradingReady {
-				running.TradingReady = running.ammTradingReady()
-			}
-		}
-		if err := runtime.saveRuntimeState(state); err != nil {
-			return err
+		physical := contractcommon.ManagedBalance{Value: view.Value, Assets: view.Assets}
+		managed := runtime.base.managed
+		if err := physical.Debit(managed.Value, managed.Assets); err != nil {
+			return fmt.Errorf("%w: %s: %v", contractframework.ErrAccountingInvariant, key, err)
 		}
 	}
 	return nil
-}
-
-func reconcileRunningAssetCache(contract Contract, state *TemplateRuntimeState, utxos []UTXO, gasAssetName string) bool {
-	if state == nil {
-		return false
-	}
-	assetA, assetB, ok := runtimePoolAssets(contract)
-	if !ok {
-		return false
-	}
-	utxos = filterPendingItemUTXOs(state.Items, utxos)
-	assetAAmount, assetAOK := sumUTXOAssetAmount(utxos, assetA)
-	assetBAmount, assetBOK := sumUTXOAssetAmount(utxos, assetB)
-	changed := false
-	getPools := func() (*scommon.Decimal, *scommon.Decimal, *scommon.Decimal) {
-		switch contract.(type) {
-		case *AMMContract:
-			running := state.AMMData()
-			return running.AssetAInPool, running.AssetBInPool, running.GasBalance
-		case *ExchangeContract:
-			running := state.ExchangeData()
-			return running.AssetAInPool, running.AssetBInPool, running.GasBalance
-		default:
-			return nil, nil, nil
-		}
-	}
-	setAssetA := func(v *scommon.Decimal) {
-		switch contract.(type) {
-		case *AMMContract:
-			state.AMMData().AssetAInPool = v
-		case *ExchangeContract:
-			state.ExchangeData().AssetAInPool = v
-		}
-	}
-	setAssetB := func(v *scommon.Decimal) {
-		switch contract.(type) {
-		case *AMMContract:
-			state.AMMData().AssetBInPool = v
-		case *ExchangeContract:
-			state.ExchangeData().AssetBInPool = v
-		}
-	}
-	setGas := func(v *scommon.Decimal) {
-		switch contract.(type) {
-		case *AMMContract:
-			state.AMMData().GasBalance = v
-		case *ExchangeContract:
-			state.ExchangeData().GasBalance = v
-		}
-	}
-	currentA, currentB, currentGas := getPools()
-	if assetAOK && !decimalEqualAllowNil(currentA, assetAAmount) {
-		setAssetA(assetAAmount)
-		changed = true
-	}
-	if assetBOK && !decimalEqualAllowNil(currentB, assetBAmount) {
-		setAssetB(assetBAmount)
-		changed = true
-	}
-	if gasAssetName != "" && gasAssetName != assetA && gasAssetName != assetB {
-		gasAmount, ok := sumUTXOAssetAmount(utxos, gasAssetName)
-		if ok && !decimalEqualAllowNil(currentGas, gasAmount) {
-			setGas(gasAmount)
-			changed = true
-		}
-	}
-	if _, ok := contract.(*AMMContract); ok && syncAMMPoolInvariant(state.AMMData()) {
-		changed = true
-	}
-	return changed
-}
-
-func filterPendingItemUTXOs(items []InvokeItem, utxos []UTXO) []UTXO {
-	if len(items) == 0 || len(utxos) == 0 {
-		return utxos
-	}
-	pending := make(map[OutPoint]struct{})
-	for i := range items {
-		item := &items[i]
-		if item == nil || item.Finished() || item.InUtxos == "" {
-			continue
-		}
-		for _, raw := range strings.Split(item.InUtxos, ",") {
-			raw = strings.TrimSpace(raw)
-			if raw == "" {
-				continue
-			}
-			outpoint, err := ParseOutPoint(raw)
-			if err != nil {
-				continue
-			}
-			pending[WireOutPointToTemplate(outpoint)] = struct{}{}
-		}
-	}
-	if len(pending) == 0 {
-		return utxos
-	}
-	out := make([]UTXO, 0, len(utxos))
-	for _, utxo := range utxos {
-		if _, ok := pending[utxo.OutPoint]; ok {
-			continue
-		}
-		out = append(out, utxo)
-	}
-	return out
 }
 
 func runtimePoolAssets(contract Contract) (assetA, assetB string, ok bool) {
@@ -325,10 +206,7 @@ func sumUTXOAssetAmount(utxos []UTXO, assetName string) (*scommon.Decimal, bool)
 		return nil, false
 	}
 	total, err := contractframework.SumUTXOAssetAmount(utxos, assetName)
-	if err != nil {
-		return nil, false
-	}
-	return total, true
+	return total, err == nil
 }
 
 func decimalEqualAllowNil(a, b *scommon.Decimal) bool {
@@ -343,20 +221,15 @@ func decimalEqualAllowNil(a, b *scommon.Decimal) bool {
 
 func (s *RuntimeStore) StateRoot() [32]byte {
 	h := sha256.New()
-	if s == nil {
-		var root [32]byte
-		copy(root[:], h.Sum(nil))
-		return root
-	}
-	keys := make([]string, 0, len(s.runtimes))
-	for key := range s.runtimes {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		writeLengthPrefixed(h, []byte(key))
-		root := s.runtimes[key].StateRoot()
-		writeLengthPrefixed(h, root[:])
+	if s != nil {
+		for _, key := range s.sortedKeys() {
+			writeLengthPrefixed(h, []byte(key))
+			if s.runtimes[key] == nil {
+				return [32]byte{}
+			}
+			root := s.runtimes[key].StateRoot()
+			writeLengthPrefixed(h, root[:])
+		}
 	}
 	var root [32]byte
 	copy(root[:], h.Sum(nil))

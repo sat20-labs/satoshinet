@@ -40,9 +40,13 @@ func TestExecuteWorkBlockCountsCurrentFundingOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Records, 1)
 	require.Equal(t, ResultStatusInvalid, result.Records[0].Status)
-	require.Empty(t, result.Records[0].AssetIntents,
-		"a transfer above the current funding must not succeed through double counting")
-	require.Empty(t, runtime.AssetIntents)
+	require.Len(t, result.Records[0].AssetIntents, 1,
+		"the failed transfer must produce only its funding refund intent")
+	refund := result.Records[0].AssetIntents[0]
+	require.Equal(t, caller.String(), refund.To)
+	require.Equal(t, fundingOrderTestAsset, refund.AssetName)
+	require.Equal(t, "10", refund.Amount.String())
+	require.Empty(t, runtime.AssetIntents, "the reverted EVM transfer itself must leave no intent")
 }
 
 func TestExecuteWorkBlockDoesNotExposeLaterFunding(t *testing.T) {
@@ -222,7 +226,12 @@ func TestBuildBlockResultTxsCountsCurrentFundingOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Execution.Records, 1)
 	require.Equal(t, ResultStatusInvalid, result.Execution.Records[0].Status)
-	require.Empty(t, result.Execution.Records[0].AssetIntents)
+	require.Len(t, result.Execution.Records[0].AssetIntents, 1)
+	refund := result.Execution.Records[0].AssetIntents[0]
+	require.Equal(t, caller.String(), refund.To)
+	require.Equal(t, fundingOrderTestAsset, refund.AssetName)
+	require.Equal(t, "10", refund.Amount.String())
+	require.Empty(t, runtime.AssetIntents)
 }
 
 func TestBuildBlockResultTxsDoesNotExposeLaterFunding(t *testing.T) {

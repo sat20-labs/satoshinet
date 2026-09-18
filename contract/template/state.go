@@ -1350,7 +1350,15 @@ func checkInvokeFunding(contract Contract, action string, param []byte, output C
 			}
 		case OrderTypeSell:
 			requiredAsset := firstNonEmpty(invokeParam.AssetName, assetName)
-			if err := requireFundingAsset(output, requiredAsset, invokeParam.Amt); err != nil {
+			if _, isAMM := contract.(*AMMContract); isAMM {
+				amount, err := fundingAssetAmount(output, requiredAsset)
+				if err != nil {
+					return err
+				}
+				if amount.Sign() <= 0 {
+					return fmt.Errorf("invoke funding asset %s amount must be positive", requiredAsset)
+				}
+			} else if err := requireFundingAsset(output, requiredAsset, invokeParam.Amt); err != nil {
 				return err
 			}
 			if got := fundingValue(output); got != SwapInvokeFee {

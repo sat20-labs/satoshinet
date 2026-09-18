@@ -2,7 +2,6 @@ package template
 
 import (
 	"fmt"
-	"math/big"
 
 	scommon "github.com/sat20-labs/indexer/common"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -17,8 +16,6 @@ func DeriveInvokeCallID(invokeTxID string, vout uint32, contract ContractAddress
 func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionRecord,
 	assetPrecision contractframework.AssetPrecisionResolver) ([]ResultPlan, error) {
 
-	// Item IDs are local to a contract. Build each plan with only that
-	// contract's records, leaving the shared settlement framework unchanged.
 	recordsByContract := make(map[string][]ExecutionRecord)
 	for _, record := range records {
 		key := record.Contract.MustEncode()
@@ -36,18 +33,21 @@ func BuildSettlementResultPlans(plans []*SettlementPlan, records []ExecutionReco
 			for _, itemID := range record.ItemIDs {
 				inputsByItem[itemID] = append(inputsByItem[itemID], record.FundingInputs...)
 				feesByItem[itemID] = decimalAddAllowNil(feesByItem[itemID], record.GasFee)
-				if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
-					gasRefundsByItem[itemID] = refund
+				if record.ResultFeeMode == contractframework.ResultFeeModeGasAsset {
+					if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
+						gasRefundsByItem[itemID] = refund
+					}
 				}
 			}
 		}
-		built, err := contractframework.BuildSettlementResultPlans([]*SettlementPlan{plan}, templateSettlementResultOptions(inputsByItem, feesByItem, gasRefundsByItem, assetPrecision))
+		built, err := contractframework.BuildSettlementResultPlans([]*SettlementPlan{plan},
+			templateSettlementResultOptions(inputsByItem, feesByItem, gasRefundsByItem, assetPrecision))
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, built...)
 	}
-	return contractframework.MergeResultPlansByContract(out), nil
+	return contractframework.AttachCallFunding(contractframework.MergeResultPlansByContract(out), records), nil
 }
 
 type settlementItemKey struct {
@@ -66,30 +66,35 @@ func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []R
 		}
 	}
 	for _, record := range records {
-		if !record.RequiresResult {
+		if !record.RequiresResult || executionRecordItemsCovered(record, coveredItems) {
 			continue
 		}
-		if len(record.ItemIDs) > 0 && executionRecordItemsCovered(record, coveredItems) {
-			continue
-		}
-		contract := record.Contract.MustEncode()
-		i, ok := planByContract[contract]
+		address := record.Contract.MustEncode()
+		i, ok := planByContract[address]
 		if !ok {
 			i = len(out)
-			planByContract[contract] = i
-			out = append(out, ResultPlan{Contract: contract, Height: record.Height})
+			planByContract[address] = i
+			scope := contractframework.ResultInputScopeAllContractUTXOs
+			if record.Status != ResultStatusSuccess && len(record.FundingInputs) != 0 {
+				scope = contractframework.ResultInputScopeExplicit
+			}
+			out = append(out, ResultPlan{Contract: address, Height: record.Height, InputScope: scope})
+		}
+		if record.Status == ResultStatusSuccess || record.Kind == ExecutionKindTrigger {
+			out[i].InputScope = contractframework.ResultInputScopeAllContractUTXOs
 		}
 		if record.GasFee != nil && record.GasFee.Sign() != 0 {
 			out[i].GasFee = contractframework.DecimalAddAllowNil(out[i].GasFee, record.GasFee)
 		}
-		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
-		out[i].Inputs = contractframework.UniqueOutPoints(out[i].Inputs)
+		out[i].Inputs = contractframework.UniqueOutPoints(append(out[i].Inputs, record.FundingInputs...))
 		out[i].ItemIDs = appendMissingItemIDs(out[i].ItemIDs, record.ItemIDs)
-		if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
-			out[i].GasRefunds = append(out[i].GasRefunds, refund)
+		if record.ResultFeeMode == contractframework.ResultFeeModeGasAsset {
+			if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
+				out[i].GasRefunds = append(out[i].GasRefunds, refund)
+			}
 		}
 	}
-	return out
+	return contractframework.AttachCallFunding(out, records)
 }
 
 func executionRecordItemsCovered(record ExecutionRecord, covered map[settlementItemKey]struct{}) bool {
@@ -114,7 +119,8 @@ func appendMissingItemIDs(ids []int64, more []int64) []int64 {
 func BuildSettlementAssetIntentsByItem(plan *SettlementPlan,
 	assetPrecision contractframework.AssetPrecisionResolver) (map[int64][]AssetIntent, error) {
 
-	return contractframework.BuildSettlementAssetIntentsByItem(plan, templateSettlementResultOptions(nil, nil, nil, assetPrecision))
+	return contractframework.BuildSettlementAssetIntentsByItem(plan,
+		templateSettlementResultOptions(nil, nil, nil, assetPrecision))
 }
 
 func templateSettlementResultOptions(inputsByItem map[int64][]OutPoint,
@@ -124,592 +130,85 @@ func templateSettlementResultOptions(inputsByItem map[int64][]OutPoint,
 
 	return contractframework.SettlementResultOptions{
 		SatoshiAssetName: SatoshiAssetName,
-		Precision:        contractframework.AssetPrecisionPolicy{Fallback: MaxPriceDivisibility, Resolve: assetPrecision},
-		InvalidAsset:     ErrInvalidAsset,
-		InputsByItem:     inputsByItem,
-		FeesByItem:       feesByItem,
-		GasRefundsByItem: gasRefundsByItem,
+		Precision: contractframework.AssetPrecisionPolicy{
+			Fallback: MaxPriceDivisibility, Resolve: assetPrecision,
+		},
+		InvalidAsset: ErrInvalidAsset, InputsByItem: inputsByItem,
+		FeesByItem: feesByItem, GasRefundsByItem: gasRefundsByItem,
 	}
 }
 
 func AugmentResultPlans(plans []ResultPlan, store *RuntimeStore, gasConfig GasConfig,
-	contractUTXOs ContractUTXOProvider,
+	provider ContractUTXOProvider,
 	assetPrecision contractframework.AssetPrecisionResolver) ([]ResultPlan, error) {
 
+	out := contractframework.MergeResultPlansByContract(plans)
 	precision := templateSettlementResultOptions(nil, nil, nil, assetPrecision).Precision
-	gasConfig = gasConfig.Normalize()
-	out := contractframework.CloneResultPlans(plans)
 	for i := range out {
-		view, err := contractframework.CollectResultPlanUTXOs(out[i], contractUTXOs)
+		if out[i].ManagedRemainder != nil {
+			continue // Finalize already produced this canonical per-contract plan.
+		}
+		if provider == nil {
+			return nil, fmt.Errorf("missing template contract UTXO provider")
+		}
+		addr, err := DecodeContractAddress(out[i].Contract)
 		if err != nil {
 			return nil, err
 		}
-		contract := view.Contract
-		planGasConfig := gasConfig
+		closed, deployer, err := closedContractChangeRecipient(addr, store)
+		if err != nil {
+			return nil, err
+		}
+		cfg := gasConfig.Normalize()
+		managed := contractcommon.ManagedBalance{}
 		if store != nil {
-			if runtime, ok := store.Get(contract); ok {
-				planGasConfig = GasConfigForRuntime(gasConfig, runtime)
+			if balance, exists := store.ManagedBalance(addr); exists {
+				managed = balance.Clone()
+			}
+			if runtime, ok := store.Get(addr); ok {
+				cfg = GasConfigForRuntime(cfg, runtime)
 			}
 		}
-		if contractUTXOs != nil {
-			closed, deployer, err := closedContractChangeRecipient(contract, store)
-			if err != nil {
-				return nil, err
-			}
-			retain, err := contractChangeOutput(contract, store, planGasConfig, view.Assets)
-			if err != nil {
-				return nil, err
-			}
-			mode := contractframework.ResultSurplusToContract
-			managedMode := contractframework.ResultSurplusToContract
-			if closed {
-				mode = contractframework.ResultSurplusAsProfit
-				managedMode = contractframework.ResultSurplusAsProfit
-			}
-			augmented, err := contractframework.AugmentResultPlanWithManagedState(
-				contractframework.ManagedResultAugmentRequest{
-					Plan:             out[i],
-					View:             view,
-					ManagedAssets:    retain,
-					GasAssetName:     planGasConfig.GasAssetName,
-					GasFee:           out[i].GasFee,
-					Precision:        precision,
-					ManagedGasPaid:   templateManagedGasPaid(contract, store, out[i]),
-					DeployerAddress:  deployer,
-					BootstrapAddress: planGasConfig.BootstrapAddress,
-					ManagedMode:      managedMode,
-					SurplusMode:      mode,
-				})
-			if err != nil {
-				return nil, err
-			}
-			out[i] = augmented
-		} else {
-			change, err := contractChangeOutput(contract, store, planGasConfig, nil)
-			if err != nil {
-				return nil, err
-			}
-			change = contractframework.NormalizeResultOutputPrecision(change, precision)
-			if !contractframework.ResultOutputIsZero(change) {
-				out[i].Outputs = append(out[i].Outputs, change)
-			}
+		if closed {
+			out[i].InputScope = contractframework.ResultInputScopeAllContractUTXOs
 		}
-		out[i].Inputs = contractframework.UniqueOutPoints(out[i].Inputs)
+		view, err := contractframework.CollectResultPlanUTXOs(out[i], provider)
+		if err != nil {
+			return nil, err
+		}
+		out[i], err = contractframework.AugmentManagedResultPlan(contractframework.ManagedResultRequest{
+			Plan: out[i], View: view, Managed: managed,
+			Closed: closed, DeployerAddress: deployer, BootstrapAddress: cfg.BootstrapAddress,
+			GasAssetName: cfg.GasAssetName, Precision: precision,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
 
-func templateManagedGasPaid(contract ContractAddress, store *RuntimeStore, plan ResultPlan) bool {
-	if store == nil {
-		return false
-	}
-	runtime, ok := store.Get(contract)
-	if !ok || runtime == nil {
-		return false
-	}
-	if _, ok := runtime.Contract().(*ExchangeContract); ok {
-		return true
-	}
-	if _, ok := runtime.Contract().(*AutopayContract); ok {
-		return plan.GasFee != nil && plan.GasFee.Sign() > 0
-	}
-	if len(plan.ItemIDs) == 0 {
-		return false
-	}
-	state, err := runtime.RuntimeState()
-	if err != nil {
-		return false
-	}
-	ids := make(map[int64]struct{}, len(plan.ItemIDs))
-	for _, id := range plan.ItemIDs {
-		ids[id] = struct{}{}
-	}
-	for i := range state.Items {
-		item := &state.Items[i]
-		if _, ok := ids[item.ID]; ok && item.Reason == InvokeReasonInvalid {
-			return true
-		}
-	}
-	return false
-}
-
-func capClosedResultOutputsByAvailable(outputs []ResultOutput, availableAssets wire.TxAssets, availableValue int64, gasAssetName string, gasFee *scommon.Decimal) ([]ResultOutput, error) {
-	out := contractframework.CloneResultOutputs(outputs)
-	if err := capResultOutputValuesByAvailable(out, availableValue); err != nil {
-		return nil, err
-	}
-	capResultOutputAssetsByAvailable(out, availableAssets, gasAssetName, gasFee)
-	return contractframework.CompactResultOutputs(out)
-}
-
-func capResultOutputValuesByAvailable(outputs []ResultOutput, availableValue int64) error {
-	total, err := resultOutputsValue(outputs)
-	if err != nil {
-		return err
-	}
-	if total <= 0 || availableValue < 0 || total <= availableValue {
-		return nil
-	}
-	originalValues := make([]int64, len(outputs))
-	remaining := availableValue
-	for i := range outputs {
-		originalValues[i] = outputs[i].Value
-		if outputs[i].Value <= 0 {
-			outputs[i].Value = 0
-			continue
-		}
-		scaled := new(big.Int).Mul(big.NewInt(outputs[i].Value), big.NewInt(availableValue))
-		scaled.Div(scaled, big.NewInt(total))
-		outputs[i].Value = scaled.Int64()
-		remaining -= outputs[i].Value
-	}
-	for i := range outputs {
-		if remaining <= 0 {
-			break
-		}
-		if originalValues[i] <= 0 {
-			continue
-		}
-		outputs[i].Value++
-		remaining--
-	}
-	return nil
-}
-
-func capResultOutputAssetsByAvailable(outputs []ResultOutput, availableAssets wire.TxAssets, gasAssetName string, gasFee *scommon.Decimal) {
-	requested := resultRequestedAssetTotals(outputs)
-	if len(requested) == 0 {
-		return
-	}
-	limits := availableAssetLimits(availableAssets, gasAssetName, gasFee)
-	for i := range outputs {
-		if len(outputs[i].Assets) == 0 {
-			continue
-		}
-		nextAssets := make(wire.TxAssets, 0, len(outputs[i].Assets))
-		for _, asset := range outputs[i].Assets {
-			key := asset.Name.String()
-			limit := limits[key]
-			total := requested[key]
-			if limit == nil || limit.Sign() <= 0 || total == nil || total.Sign() <= 0 {
-				if assetNameKey(outputs[i].AssetName) == key {
-					outputs[i].AssetAmt = ""
-				}
-				continue
-			}
-			amount := asset.Amount.Clone()
-			if total.Cmp(limit) > 0 {
-				amount = decimalMulByFraction(amount, limit, total)
-			}
-			if amount.Sign() <= 0 {
-				if assetNameKey(outputs[i].AssetName) == key {
-					outputs[i].AssetAmt = ""
-				}
-				continue
-			}
-			next := asset
-			next.Amount = *amount
-			nextAssets = append(nextAssets, next)
-			if assetNameKey(outputs[i].AssetName) == key {
-				outputs[i].AssetAmt = amount.String()
-			}
-		}
-		if len(nextAssets) == 0 {
-			outputs[i].Assets = nil
-			outputs[i].AssetName = ""
-			outputs[i].AssetAmt = ""
-		} else {
-			outputs[i].Assets = nextAssets
-		}
-	}
-}
-
-func resultRequestedAssetTotals(outputs []ResultOutput) map[string]*scommon.Decimal {
-	totals := make(map[string]*scommon.Decimal)
-	for _, output := range outputs {
-		for _, asset := range output.Assets {
-			key := asset.Name.String()
-			totals[key] = decimalAddAllowNil(totals[key], asset.Amount.Clone())
-		}
-	}
-	return totals
-}
-
-func decimalMulByFraction(amount, numerator, denominator *scommon.Decimal) *scommon.Decimal {
-	if amount == nil || numerator == nil || denominator == nil || denominator.Sign() <= 0 {
-		return parseDecimalOrZero("0")
-	}
-	return scommon.DecimalMulV2(amount, numerator).Div(denominator)
-}
-
-func availableAssetLimits(availableAssets wire.TxAssets, gasAssetName string, gasFee *scommon.Decimal) map[string]*scommon.Decimal {
-	limits := make(map[string]*scommon.Decimal)
-	for _, asset := range availableAssets {
-		limits[asset.Name.String()] = asset.Amount.Clone()
-	}
-	if gasAssetName != "" && gasFee != nil && gasFee.Sign() > 0 {
-		limit := limits[assetNameKey(gasAssetName)]
-		if limit != nil {
-			limit = limit.SubAlignPrecision(gasFee)
-			if limit.Sign() < 0 {
-				limit = parseDecimalOrZero("0")
-			}
-			limits[assetNameKey(gasAssetName)] = limit
-		}
-	}
-	return limits
-}
-
-func assetNameKey(assetName string) string {
-	name := wire.NewAssetNameFromString(assetName)
-	if name == nil {
-		return assetName
-	}
-	return name.String()
-}
-
-func closedContractChangeRecipient(contract ContractAddress, store *RuntimeStore) (bool, string, error) {
+func closedContractChangeRecipient(addr ContractAddress, store *RuntimeStore) (bool, string, error) {
 	if store == nil {
 		return false, "", nil
 	}
-	runtime, ok := store.Get(contract)
+	runtime, ok := store.Get(addr)
 	if !ok || runtime == nil {
 		return false, "", nil
 	}
-	state, err := runtime.loadRuntimeState()
-	if err != nil {
-		return false, "", err
-	}
-	return state.ClosedForContract(runtime.Contract()), runtime.RuntimeBase().Deployer(), nil
+	closed, err := store.ContractClosed(addr)
+	return closed, runtime.RuntimeBase().Deployer(), err
 }
 
-func splitClosedProfitChange(change ResultOutput, deployer, bootstrap string) []ResultOutput {
-	if contractframework.ResultOutputIsZero(change) {
-		return nil
-	}
-	if deployer == "" || bootstrap == "" || deployer == bootstrap {
-		change.To = deployer
-		return []ResultOutput{change}
-	}
-	deployerOut := ResultOutput{To: deployer}
-	bootstrapOut := ResultOutput{To: bootstrap}
-	deployerOut.Value = change.Value * 6 / 10
-	bootstrapOut.Value = change.Value - deployerOut.Value
-	deployerOut.Assets, bootstrapOut.Assets = splitAssetsByBPS(change.Assets, 6000)
-	out := make([]ResultOutput, 0, 2)
-	if !contractframework.ResultOutputIsZero(deployerOut) {
-		out = append(out, deployerOut)
-	}
-	if !contractframework.ResultOutputIsZero(bootstrapOut) {
-		out = append(out, bootstrapOut)
-	}
-	return out
-}
+func BuildCanonicalSettlementResultTx(status ResultStatus, settlementPlans []*SettlementPlan,
+	records []ExecutionRecord, resolve ResultRecipientScriptResolver) (*wire.MsgTx, []ResultPlan, error) {
 
-func splitAssetsByBPS(assets wire.TxAssets, deployerBPS int64) (wire.TxAssets, wire.TxAssets) {
-	if len(assets) == 0 {
-		return nil, nil
-	}
-	deployer := make(wire.TxAssets, 0, len(assets))
-	bootstrap := make(wire.TxAssets, 0, len(assets))
-	for _, asset := range assets {
-		deployerAmt := asset.Amount.MulBigInt(big.NewInt(deployerBPS)).DivBigInt(big.NewInt(10000))
-		bootstrapAmt := scommon.DecimalSub(asset.Amount.Clone(), deployerAmt)
-		if deployerAmt.Sign() > 0 {
-			next := asset
-			next.Amount = *deployerAmt
-			deployer = append(deployer, next)
-		}
-		if bootstrapAmt.Sign() > 0 {
-			next := asset
-			next.Amount = *bootstrapAmt
-			bootstrap = append(bootstrap, next)
-		}
-	}
-	if len(deployer) == 0 {
-		deployer = nil
-	}
-	if len(bootstrap) == 0 {
-		bootstrap = nil
-	}
-	return deployer, bootstrap
-}
-
-func resultAssetsChange(available wire.TxAssets, outputs []ResultOutput, gasAssetName string, gasFee *scommon.Decimal) (wire.TxAssets, error) {
-	if len(available) == 0 {
-		return nil, nil
-	}
-	spent := wire.TxAssets(nil)
-	for _, output := range outputs {
-		if len(output.Assets) == 0 {
-			continue
-		}
-		if err := spent.Merge(output.Assets); err != nil {
-			return nil, err
-		}
-	}
-	change := available.Clone()
-	if err := change.Split(spent); err != nil {
-		return nil, err
-	}
-	if gasFee != nil && gasFee.Sign() > 0 {
-		feeAssets, err := newGasAssetSet(gasAssetName, gasFee.String())
-		if err != nil {
-			return nil, err
-		}
-		if err := change.Split(feeAssets); err != nil {
-			return nil, fmt.Errorf("insufficient gas asset for result fee: %w", err)
-		}
-	}
-	if len(change) == 0 {
-		return nil, nil
-	}
-	return change, nil
-}
-
-func resultOutputsValue(outputs []ResultOutput) (int64, error) {
-	value := int64(0)
-	for _, output := range outputs {
-		next, overflow := contractframework.AddInt64(value, output.Value)
-		if overflow {
-			return 0, fmt.Errorf("template result output value overflows int64")
-		}
-		value = next
-	}
-	return value, nil
-}
-
-func contractChangeOutput(contract ContractAddress, store *RuntimeStore, gasConfig GasConfig, availableAssets wire.TxAssets) (ResultOutput, error) {
-	if store == nil {
-		return ResultOutput{}, nil
-	}
-	runtime, ok := store.Get(contract)
-	if !ok || runtime == nil {
-		return ResultOutput{}, nil
-	}
-	state, err := runtime.loadRuntimeState()
-	if err != nil {
-		return ResultOutput{}, err
-	}
-
-	assets := wire.TxAssets{}
-	if autopay, ok := runtime.Contract().(*AutopayContract); ok {
-		running := state.AutopayData()
-		if running.FeeBalance != nil && running.FeeBalance.Sign() > 0 &&
-			autopay.FeeAssetName != SatoshiAssetName {
-			feeAssets, err := newAssetSet(autopay.FeeAssetName, running.FeeBalance.String())
-			if err != nil {
-				return ResultOutput{}, err
-			}
-			if err := assets.Merge(feeAssets); err != nil {
-				return ResultOutput{}, err
-			}
-		}
-		gasAssetName := gasConfig.GasAssetName
-		if gasAssetName == "" {
-			gasAssetName = DefaultGasConfig().GasAssetName
-		}
-		if running.GasBalance != nil && running.GasBalance.Sign() > 0 &&
-			gasAssetName != SatoshiAssetName {
-			gasAssets, err := newGasAssetSet(gasAssetName, running.GasBalance.String())
-			if err != nil {
-				return ResultOutput{}, err
-			}
-			if err := assets.Merge(gasAssets); err != nil {
-				return ResultOutput{}, err
-			}
-		}
-		if len(assets) == 0 {
-			assets = nil
-		} else if len(availableAssets) != 0 {
-			assets = capAssetsByAvailable(assets, availableAssets)
-		}
-		to := contract.MustEncode()
-		if running.Closed {
-			to = runtime.RuntimeBase().Deployer()
-		}
-		value := int64(0)
-		if autopay.FeeAssetName == SatoshiAssetName {
-			feeValue, err := decimalInt64(running.FeeBalance)
-			if err != nil {
-				return ResultOutput{}, fmt.Errorf("autopay fee balance: %w", err)
-			}
-			var overflow bool
-			value, overflow = contractframework.AddInt64(value, feeValue)
-			if overflow {
-				return ResultOutput{}, fmt.Errorf("autopay fee balance overflows int64")
-			}
-		}
-		if gasAssetName == SatoshiAssetName {
-			gasValue, err := decimalInt64(running.GasBalance)
-			if err != nil {
-				return ResultOutput{}, fmt.Errorf("autopay gas balance: %w", err)
-			}
-			var overflow bool
-			value, overflow = contractframework.AddInt64(value, gasValue)
-			if overflow {
-				return ResultOutput{}, fmt.Errorf("autopay gas balance overflows int64")
-			}
-		}
-		return ResultOutput{To: to, Value: value, Assets: assets}, nil
-	}
-	assetName := contractAssetName(runtime.Contract())
-	assetAInPool, assetBInPool := state.PoolBalancesForContract(runtime.Contract())
-	if assetName != "" && assetAInPool != nil && assetAInPool.Sign() > 0 {
-		poolAssets, err := newAssetSet(assetName, assetAInPool.String())
-		if err != nil {
-			return ResultOutput{}, err
-		}
-		if err := assets.Merge(poolAssets); err != nil {
-			return ResultOutput{}, err
-		}
-	}
-	if exchange, ok := runtime.Contract().(*ExchangeContract); ok &&
-		exchange.AssetBName != "" &&
-		exchange.AssetBName != SatoshiAssetName &&
-		assetBInPool != nil &&
-		assetBInPool.Sign() > 0 {
-		poolAssets, err := newAssetSet(exchange.AssetBName, assetBInPool.String())
-		if err != nil {
-			return ResultOutput{}, err
-		}
-		if err := assets.Merge(poolAssets); err != nil {
-			return ResultOutput{}, err
-		}
-	}
-	openValue, openAssets, err := openOrderManagedAssets(runtime.Contract(), &state)
-	if err != nil {
-		return ResultOutput{}, err
-	}
-	if len(openAssets) != 0 {
-		if err := assets.Merge(openAssets); err != nil {
-			return ResultOutput{}, err
-		}
-	}
-	gasAssetName := gasConfig.GasAssetName
-	if gasAssetName == "" {
-		gasAssetName = DefaultGasConfig().GasAssetName
-	}
-	gasBalance := state.GasBalanceForContract(runtime.Contract())
-	if gasBalance != nil && gasBalance.Sign() > 0 {
-		gasAssets, err := newGasAssetSet(gasAssetName, gasBalance.String())
-		if err != nil {
-			return ResultOutput{}, err
-		}
-		if err := assets.Merge(gasAssets); err != nil {
-			return ResultOutput{}, err
-		}
-	}
-	if len(assets) == 0 {
-		assets = nil
-	} else if len(availableAssets) != 0 {
-		assets = capAssetsByAvailable(assets, availableAssets)
-	}
-	to := contract.MustEncode()
-	if state.ClosedForContract(runtime.Contract()) {
-		to = runtime.RuntimeBase().Deployer()
-	}
-	changeValue, err := contractChangeValue(runtime.Contract(), assetBInPool)
-	if err != nil {
-		return ResultOutput{}, err
-	}
-	value, overflow := contractframework.AddInt64(changeValue, openValue)
-	if overflow {
-		return ResultOutput{}, fmt.Errorf("contract change value overflows int64")
-	}
-	return ResultOutput{
-		To:     to,
-		Value:  value,
-		Assets: assets,
-	}, nil
-}
-
-func openOrderManagedAssets(contract Contract, state *TemplateRuntimeState) (int64, wire.TxAssets, error) {
-	if state == nil {
-		return 0, nil, nil
-	}
-	limit, ok := contract.(*LimitOrderContract)
-	if !ok {
-		return 0, nil, nil
-	}
-	var value int64
-	var assets wire.TxAssets
-	for i := range state.Items {
-		item := &state.Items[i]
-		if item.Finished() || item.Reason != InvokeReasonNormal {
-			continue
-		}
-		switch item.OrderType {
-		case OrderTypeBuy:
-			var overflow bool
-			value, overflow = contractframework.AddInt64(value, item.RemainingValue)
-			if overflow {
-				return 0, nil, fmt.Errorf("open limit order value overflows int64")
-			}
-		case OrderTypeSell:
-			if item.RemainingAmt == nil || item.RemainingAmt.Sign() <= 0 {
-				continue
-			}
-			poolAssets, err := newAssetSet(limit.AssetName, item.RemainingAmt.String())
-			if err != nil {
-				return 0, nil, err
-			}
-			if err := assets.Merge(poolAssets); err != nil {
-				return 0, nil, err
-			}
-		}
-	}
-	return value, assets, nil
-}
-
-func contractChangeValue(contract Contract, assetB *scommon.Decimal) (int64, error) {
-	if exchange, ok := contract.(*ExchangeContract); ok {
-		if exchange.AssetBName == SatoshiAssetName {
-			return decimalInt64(assetB)
-		}
-		return 0, nil
-	}
-	return decimalInt64(assetB)
-}
-
-func capAssetsByAvailable(assets, available wire.TxAssets) wire.TxAssets {
-	if len(assets) == 0 || len(available) == 0 {
-		return assets
-	}
-	out := make(wire.TxAssets, 0, len(assets))
-	for _, asset := range assets {
-		availableAsset, err := available.Find(&asset.Name)
-		if err != nil || availableAsset == nil {
-			continue
-		}
-		amount := asset.Amount.Clone()
-		if amount.Cmp(&availableAsset.Amount) > 0 {
-			amount = availableAsset.Amount.Clone()
-		}
-		if amount.Sign() <= 0 {
-			continue
-		}
-		out = append(out, scommon.AssetInfo{
-			Name:       asset.Name,
-			Amount:     *amount,
-			BindingSat: availableAsset.BindingSat,
-		})
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func BuildCanonicalSettlementResultTx(status ResultStatus, settlementPlans []*SettlementPlan, records []ExecutionRecord, resolve ResultRecipientScriptResolver) (*wire.MsgTx, []ResultPlan, error) {
 	plans, err := BuildSettlementResultPlans(settlementPlans, records, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	tx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
-		Status:        status,
-		Plans:         plans,
-		ResolveScript: resolve,
+		Status: status, Plans: plans, ResolveScript: resolve,
 	}, contractframework.ResultTxBuildOptions{PlanCount: resultPlanCount})
 	if err != nil {
 		return nil, nil, err

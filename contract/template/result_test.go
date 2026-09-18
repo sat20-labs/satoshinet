@@ -217,27 +217,68 @@ func TestAugmentClosedAMMCloseOutputsRejectInsufficientContractBalance(t *testin
 	running.AssetAInPool = parseDecimalOrZero("100")
 	running.AssetBInPool = parseDecimalOrZero("20")
 	require.NoError(t, runtime.saveRuntimeState(state))
+	creditTestManagedOutput(t, runtime, testContractOutput("managed", 0, addr, 20, testAsset("ordx:f:test", 100)))
 	store := NewRuntimeStore()
 	store.Add(runtime)
 	provider := func(contract ContractAddress) ([]UTXO, error) {
 		return []UTXO{testContractUTXO(testHash(9), 0, contract, 5, testAsset("ordx:f:test", 40))}, nil
 	}
-	plans := []ResultPlan{{
-		Contract: addr.EncodeAddress(),
-		ItemIDs:  []int64{1},
-		Outputs: []ResultOutput{{
-			To:        "lp-address",
-			Value:     20,
-			AssetName: "ordx:f:test",
-			AssetAmt:  "100",
-			Assets:    testAsset("ordx:f:test", 100),
-		}},
-	}}
-
+	plans := []ResultPlan{{Contract: addr.EncodeAddress(), ItemIDs: []int64{1}, Outputs: []ResultOutput{{
+		To: "lp-address", Value: 20, AssetName: "ordx:f:test", AssetAmt: "100", Assets: testAsset("ordx:f:test", 100),
+	}}}}
 	_, err := AugmentResultPlans(plans, store, DefaultGasConfig(), provider, nil)
-	require.ErrorContains(t, err, "only 5 sats are available")
+	require.ErrorContains(t, err, "physical balance does not cover managed balance")
 }
+
 
 func testHash(n byte) string {
 	return fmt.Sprintf("%064x", n)
+}
+
+
+func TestTemplateResultTxPreservesOrdXBindingSat(t *testing.T) {
+	runtime := testAMMRuntime(t)
+	addr := runtime.Address()
+	const assetName = "ordx:f:test"
+	assets := testAsset(assetName, 2)
+	require.Len(t, assets, 1)
+	assets[0].BindingSat = 2
+	creditTestManagedOutput(t, runtime, testContractOutput("managed-bound", 0, addr, 1, assets))
+
+	store := NewRuntimeStore()
+	store.Add(runtime)
+	provider := func(contract ContractAddress) ([]UTXO, error) {
+		require.True(t, addr.Equal(contract))
+		return []UTXO{testContractUTXO(testHash(8), 0, contract, 1, assets)}, nil
+	}
+	plans, err := AugmentResultPlans([]ResultPlan{{
+		Contract: addr.MustEncode(),
+		Outputs: []ResultOutput{{
+			To: "buyer", AssetName: assetName, AssetAmt: "1", Assets: testAsset(assetName, 1),
+		}},
+	}}, store, DefaultGasConfig(), provider, nil)
+	require.NoError(t, err)
+	require.Len(t, plans, 1)
+
+	tx, err := contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
+		Status: ResultStatusSuccess, ResultCount: 1, Plans: plans,
+		ResolveScript: func(ResultOutput) ([]byte, error) { return []byte{0x51}, nil },
+	}, contractframework.ResultTxBuildOptions{UseInputUTXOs: true})
+	require.NoError(t, err)
+
+	var boundValues []int64
+	for _, txOut := range tx.TxOut {
+		if txOut == nil {
+			continue
+		}
+		asset, findErr := txOut.Assets.Find(wire.NewAssetNameFromString(assetName))
+		if findErr != nil || asset == nil {
+			continue
+		}
+		require.Equal(t, "1", asset.Amount.String())
+		require.Equal(t, uint32(2), asset.BindingSat)
+		boundValues = append(boundValues, txOut.Value)
+	}
+	require.ElementsMatch(t, []int64{0, 1}, boundValues,
+		"partial OrdX output uses zero carrier sats while the remaining physical sat stays with contract change")
 }

@@ -74,6 +74,28 @@ func TestBuildDeployTxSplitsLargeInitCode(t *testing.T) {
 	require.Equal(t, uint32(2), funding[0].Vout)
 }
 
+func TestBuildDeployTxSplitsVeryLargeInitCode(t *testing.T) {
+	caller := mustEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
+	initCode := make([]byte, evmcommon.MaxNullDataPayloadLen*128+33)
+	for i := range initCode {
+		initCode[i] = byte(i)
+	}
+	tx, _, err := BuildDeployTx(DeployTxBuildRequest{
+		ContractPrefix: TestnetContractPrefix, Deployer: caller.String(),
+		GasLimit: DefaultGasConfig().DeployBaseGas, DeployNonce: 44, ContractContent: initCode,
+		Funding: wire.TxOut{Assets: wire.TxAssets{{
+			Name: *wire.NewAssetNameFromString(DefaultGasConfig().GasAssetName),
+			Amount: *mustDefaultDecimal(t, 100000),
+		}}},
+		Inputs: []wire.OutPoint{{Hash: chainhash.Hash{44}, Index: 0}},
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(tx.TxOut), 100)
+	parsed, err := ParseTx(tx, StandardContractScriptResolver(TestnetContractPrefix))
+	require.NoError(t, err)
+	require.Equal(t, initCode, parsed.Deploy.ContractContent)
+}
+
 func TestBuildInvokeTx(t *testing.T) {
 	contract := testContract(t)
 	tx, err := BuildInvokeTx(InvokeTxBuildRequest{

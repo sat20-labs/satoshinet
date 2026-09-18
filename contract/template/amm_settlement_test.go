@@ -103,15 +103,17 @@ func TestAMMOverfundUsesActualPoolK(t *testing.T) {
 		UnitPrice: "10",
 	}).Encode()
 	require.NoError(t, err)
+	buyOutput := testContractOutput("buy", 1, addr, 10, nil)
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:        InvokeAPISwap,
 		Param:         param,
 		CallID:        DeriveInvokeCallID("buy", 1, addr),
 		Invoker:       "buyer",
-		FundingOutput: testContractOutput("buy", 1, addr, 10, nil),
+		FundingOutput: buyOutput,
 		Height:        1,
 	})
 	require.NoError(t, err)
+	creditTestManagedOutput(t, runtime, buyOutput)
 
 	plan, err := runtime.SettleBlock(1)
 	require.NoError(t, err)
@@ -152,6 +154,7 @@ func TestAMMRetentionUpdatesPoolK(t *testing.T) {
 func TestSettleAMMBuyResultOutputsUseAssetPrecision(t *testing.T) {
 	runtime := testAMMRuntime(t)
 	fundAMMRuntime(t, runtime)
+	creditTestManagedOutput(t, runtime, testContractOutput("deploy", 1, runtime.Address(), 20, testAsset("ordx:f:test", 100)))
 	addr := runtime.Address()
 	param, err := (&LimitOrderInvokeParam{
 		OrderType: OrderTypeBuy,
@@ -179,7 +182,7 @@ func TestSettleAMMBuyResultOutputsUseAssetPrecision(t *testing.T) {
 	}
 	resultPlans, err := BuildSettlementResultPlans([]*SettlementPlan{plan}, nil, assetPrecision)
 	require.NoError(t, err)
-	resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), nil, assetPrecision)
+	resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), managedPhysicalProvider(t, runtime), assetPrecision)
 	require.NoError(t, err)
 	require.Len(t, resultPlans, 1)
 	require.Len(t, resultPlans[0].Outputs, 2)
@@ -189,7 +192,7 @@ func TestSettleAMMBuyResultOutputsUseAssetPrecision(t *testing.T) {
 	require.Equal(t, "33", resultPlans[0].Outputs[0].Assets[0].Amount.String())
 	require.Equal(t, addr.MustEncode(), resultPlans[0].Outputs[1].To)
 	require.Len(t, resultPlans[0].Outputs[1].Assets, 1)
-	require.Equal(t, "66", resultPlans[0].Outputs[1].Assets[0].Amount.String())
+	require.Equal(t, "67", resultPlans[0].Outputs[1].Assets[0].Amount.String())
 }
 
 func TestSettleAMMSellUsesConstantProductPool(t *testing.T) {
@@ -340,6 +343,7 @@ func TestSettleAMMBuyNeedsFeeAdjustedFunding(t *testing.T) {
 		t.Helper()
 		runtime := testAMMRuntimeWithAsset(t, assetName, 100000, 100000, "10000000000")
 		fundAMMRuntimeWithAsset(t, runtime, assetName, 100000, 100000)
+		creditTestManagedOutput(t, runtime, testContractOutput("deploy", 1, runtime.Address(), 100000, testAsset(assetName, 100000)))
 		return runtime
 	}
 	applyBuy := func(t *testing.T, runtime *ContractRuntime, value int64) *SettlementPlan {
@@ -352,15 +356,17 @@ func TestSettleAMMBuyNeedsFeeAdjustedFunding(t *testing.T) {
 			UnitPrice: strconv.FormatInt(value, 10),
 		}).Encode()
 		require.NoError(t, err)
+		funding := testContractOutput(testHash(byte(value)), 1, addr, value, nil)
 		_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
 			Action:        InvokeAPISwap,
 			Param:         param,
 			CallID:        DeriveInvokeCallID(testHash(byte(value)), 1, addr),
 			Invoker:       "buyer",
-			FundingOutput: testContractOutput(testHash(byte(value)), 1, addr, value, nil),
+			FundingOutput: funding,
 			Height:        1,
 		})
 		require.NoError(t, err)
+		creditTestManagedOutput(t, runtime, funding)
 		plan, err := runtime.SettleBlock(1)
 		require.NoError(t, err)
 		return plan
@@ -397,7 +403,7 @@ func TestSettleAMMBuyNeedsFeeAdjustedFunding(t *testing.T) {
 			return 0, name == assetName
 		})
 		require.NoError(t, err)
-		resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), nil, func(name string) (int, bool) {
+		resultPlans, err = AugmentResultPlans(resultPlans, store, DefaultGasConfig(), managedPhysicalProvider(t, runtime), func(name string) (int, bool) {
 			return 0, name == assetName
 		})
 		require.NoError(t, err)
@@ -748,6 +754,7 @@ func TestSettleAMMAddLiqResultRefundsExcess(t *testing.T) {
 	assetName := "brc20:f:ooxx"
 	runtime := testAMMRuntimeWithAsset(t, assetName, 10, 10, "100")
 	fundAMMRuntimeWithAsset(t, runtime, assetName, 10, 10)
+	creditTestManagedOutput(t, runtime, testContractOutput("deploy", 1, runtime.Address(), 10, testAsset(assetName, 10)))
 	addr := runtime.Address()
 	addParam, err := (&AddLiquidityInvokeParam{
 		OrderType: OrderTypeAddLiquidity,
@@ -756,15 +763,17 @@ func TestSettleAMMAddLiqResultRefundsExcess(t *testing.T) {
 		Value:     6,
 	}).Encode()
 	require.NoError(t, err)
+	addOutput := testContractOutput("add", 1, addr, 6, testAsset(assetName, 8))
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:        InvokeAPIAddLiquidity,
 		Param:         addParam,
 		CallID:        DeriveInvokeCallID("add", 1, addr),
 		Invoker:       "alice",
-		FundingOutput: testContractOutput("add", 1, addr, 6, testAsset(assetName, 8)),
+		FundingOutput: addOutput,
 		Height:        1,
 	})
 	require.NoError(t, err)
+	creditTestManagedOutput(t, runtime, addOutput)
 
 	plan, err := runtime.SettleBlock(1)
 	require.NoError(t, err)
@@ -772,7 +781,10 @@ func TestSettleAMMAddLiqResultRefundsExcess(t *testing.T) {
 	store.Add(runtime)
 	provider := func(contractAddr ContractAddress) ([]contractframework.UTXO, error) {
 		require.True(t, addr.Equal(contractAddr))
-		return []contractframework.UTXO{testContractUTXO("pool", 0, addr, 16, testAsset(assetName, 18))}, nil
+		return []contractframework.UTXO{
+			testContractUTXO("deploy", 1, addr, 10, testAsset(assetName, 10)),
+			testContractUTXO("add", 1, addr, 6, testAsset(assetName, 8)),
+		}, nil
 	}
 	assetPrecision := func(name string) (int, bool) {
 		return 0, name == assetName
@@ -783,8 +795,10 @@ func TestSettleAMMAddLiqResultRefundsExcess(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resultPlans, 1)
 	requireResultPlanAssetTo(t, resultPlans[0], "alice", assetName, "2")
-	requireResultPlanAssetTo(t, resultPlans[0], addr.MustEncode(), assetName, "16")
-	requireResultPlanValueTo(t, resultPlans[0], addr.MustEncode(), 16)
+	requireResultPlanAssetTo(t, resultPlans[0], addr.MustEncode(), assetName, "6")
+	requireResultPlanValueTo(t, resultPlans[0], addr.MustEncode(), 6)
+	require.Len(t, resultPlans[0].Inputs, 1)
+	require.Equal(t, int64(16), resultPlans[0].ManagedRemainder.Value)
 	requireNoResultPlanOutputTo(t, resultPlans[0], "bootstrap-address")
 }
 

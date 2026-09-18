@@ -1,65 +1,34 @@
 package evm
 
 import (
+	"fmt"
+
 	scommon "github.com/sat20-labs/indexer/common"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
 )
 
-// triggerGasBudget reserves settlement fees and refunds in addition to the next
-// call's maximum fee. Runtime already subtracts pending explicit asset intents.
+// Trigger execution uses the same quantity view as an ordinary call. Earlier
+// fees/refunds are already reserved by pendingFeeAssetView; earlier transfer
+// intents are subtracted here for admission and by Runtime during execution.
+// The returned reserve therefore contains only this trigger's maximum fee.
 func (e *Backend) triggerGasBudget(contract ContractAddress, gasLimit int64) (*scommon.Decimal, bool, error) {
-	if e.ContractUTXOs == nil {
-		return nil, true, nil
-	}
 	cfg := e.GasConfig.Normalize()
-	precision := e.settlementPrecision
-	reserve, err := contractframework.RecordResultGasFee(cfg, precision, ExecutionRecord{
+	reserve, err := contractframework.RecordResultGasFee(cfg, e.settlementPrecision, ExecutionRecord{
 		Kind: ExecutionKindTrigger, Height: int64(e.Block.Number), GasUsed: gasLimit,
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	utxos, err := e.ContractUTXOs(contract)
+	if e.Runtime == nil || e.Runtime.AssetBalances == nil {
+		return nil, false, fmt.Errorf("missing managed asset view")
+	}
+	available, err := (pendingIntentAssetBalanceView{
+		Base: e.Runtime.AssetBalances, Prior: e.Runtime.AssetIntents,
+	}).AssetBalance(ContractAddressHash(contract), cfg.GasAssetName)
 	if err != nil {
 		return nil, false, err
 	}
-	total := zeroDecimal()
-	for _, utxo := range utxos {
-		if !utxo.Contract.Equal(contract) {
-			continue
-		}
-		amount, err := utxo.AssetAmount(cfg.GasAssetName)
-		if err != nil {
-			return nil, false, err
-		}
-		total = total.AddAlignPrecision(amount)
-	}
-	spent := zeroDecimal()
-	for _, record := range e.pending {
-		if !record.Contract.Equal(contract) {
-			continue
-		}
-		fee, err := contractframework.RecordResultGasFee(cfg, precision, record)
-		if err != nil {
-			return nil, false, err
-		}
-		reserve = reserve.AddAlignPrecision(fee)
-		if record.ResultFeeMode != contractframework.ResultFeeModePlainTxFee {
-			refund, err := contractframework.RecordGasRefund(record, utxos, cfg.GasAssetName, fee)
-			if err != nil {
-				return nil, false, err
-			}
-			if refund != nil {
-				reserve = reserve.AddAlignPrecision(precision.Normalize(cfg.GasAssetName, refund.Amount))
-			}
-		}
-		for _, intent := range record.AssetIntents {
-			if intent.From.Equal(contract) && intent.AssetName == cfg.GasAssetName && intent.Amount != nil && intent.Amount.Sign() > 0 {
-				spent = spent.AddAlignPrecision(precision.Normalize(cfg.GasAssetName, intent.Amount))
-			}
-		}
-	}
-	return reserve, total.Cmp(reserve.AddAlignPrecision(spent)) >= 0, nil
+	return reserve, available.Cmp(reserve) >= 0, nil
 }
 
 type triggerReservedAssetView struct {
@@ -70,13 +39,16 @@ type triggerReservedAssetView struct {
 }
 
 func (v triggerReservedAssetView) AssetBalance(owner EVMAddress, assetName string) (*scommon.Decimal, error) {
+	if v.base == nil {
+		return nil, fmt.Errorf("missing managed asset view")
+	}
 	amount, err := v.base.AssetBalance(owner, assetName)
 	if err != nil || amount == nil || owner != v.owner || assetName != v.assetName {
 		return amount, err
 	}
 	available := amount.SubAlignPrecision(v.reserve)
 	if available.Sign() < 0 {
-		return zeroDecimal(), nil
+		return nil, fmt.Errorf("%w: trigger fee exceeds managed balance", contractframework.ErrAccountingInvariant)
 	}
 	return available, nil
 }

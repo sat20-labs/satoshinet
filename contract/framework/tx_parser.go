@@ -59,7 +59,11 @@ func (o ContractOutput) PlainValue() int64 {
 	if output == nil {
 		return 0
 	}
-	return output.GetPlainSat()
+	carrier := output.OutValue.Assets.GetBindingSatAmout()
+	if output.OutValue.Value < carrier {
+		return 0
+	}
+	return output.OutValue.Value - carrier
 }
 
 func (o ContractOutput) IndexerTxOutput() *l2common.TxOutput {
@@ -165,21 +169,10 @@ func (o OutPoint) String() string {
 	return fmt.Sprintf("%s:%d", o.TxID, o.Vout)
 }
 
-type DeployPayload struct {
-	Type            byte
-	SubType         string
-	Version         uint32
-	GasLimit        int64
-	DeployNonce     uint64
-	ContractContent []byte
-}
-
-type InvokePayload struct {
-	GasLimit  int64
-	CallNonce uint64
-	Action    string
-	Param     []byte
-}
+// The public envelope is also the execution envelope. Maintaining a second
+// struct silently drops new deployment policy fields in runtime adapters.
+type DeployPayload = contract.DeployPayload
+type InvokePayload = contract.InvokePayload
 
 type ParseSpec struct {
 	ModuleName           string
@@ -238,6 +231,7 @@ func FindContractOutputsForContractFunc() func(*wire.MsgTx, ContractScriptResolv
 }
 
 type ParsedTx struct {
+	TxID            string
 	Type            contract.TxType
 	Payload         []byte
 	PayloadIndex    int
@@ -250,11 +244,11 @@ type ParsedTx struct {
 }
 
 func ParseTx(tx *wire.MsgTx, resolver ContractScriptResolver, spec ParseSpec) (ParsedTx, error) {
-
 	if tx == nil {
 		return ParsedTx{}, errors.New("missing transaction")
 	}
-	parsed := ParsedTx{PayloadIndex: -1}
+	txid := tx.TxID()
+	parsed := ParsedTx{TxID: txid, PayloadIndex: -1}
 	for i, txIn := range tx.TxIn {
 		if txIn == nil {
 			return ParsedTx{}, fmt.Errorf("nil input %d", i)
@@ -275,11 +269,9 @@ func ParseTx(tx *wire.MsgTx, resolver ContractScriptResolver, spec ParseSpec) (P
 			parsed.Type = txType
 			parsed.PayloadIndex = i
 		} else if parsed.Type != txType {
-			return ParsedTx{},
-				fmt.Errorf("transaction contains mixed %s OP_RETURN output types", spec.ModuleName)
+			return ParsedTx{}, fmt.Errorf("transaction contains mixed %s OP_RETURN output types", spec.ModuleName)
 		} else if txType != contract.TxTypeDeploy && txType != contract.TxTypeInvoke {
-			return ParsedTx{},
-				fmt.Errorf("transaction contains multiple singleton %s OP_RETURN outputs", spec.ModuleName)
+			return ParsedTx{}, fmt.Errorf("transaction contains multiple singleton %s OP_RETURN outputs", spec.ModuleName)
 		}
 		payloadParts = append(payloadParts, payload)
 	}
@@ -303,15 +295,14 @@ func ParseTx(tx *wire.MsgTx, resolver ContractScriptResolver, spec ParseSpec) (P
 			return ParsedTx{}, err
 		}
 		parsed.Invoke = &payload
-		outputs, err := FindInvokeContractOutputs(tx, resolver, spec)
+		outputs, err := findInvokeContractOutputs(tx, resolver, spec, txid)
 		if err != nil {
 			return ParsedTx{}, err
 		}
 		parsed.ContractOutputs = outputs
 	case contract.TxTypeResult:
 		if !spec.AcceptResult {
-			return ParsedTx{},
-				fmt.Errorf("%s RESULT transactions are built by block execution and are not accepted as external input", spec.ModuleName)
+			return ParsedTx{}, fmt.Errorf("%s RESULT transactions are built by block execution and are not accepted as external input", spec.ModuleName)
 		}
 		if len(payloadParts) != 1 {
 			return ParsedTx{}, fmt.Errorf("%s RESULT must use exactly one OP_RETURN", spec.ModuleName)
@@ -339,13 +330,22 @@ func ParseTx(tx *wire.MsgTx, resolver ContractScriptResolver, spec ParseSpec) (P
 	return parsed, nil
 }
 
-func FindInvokeContractOutputs(tx *wire.MsgTx, resolver ContractScriptResolver,
-	spec ParseSpec) ([]ContractOutput, error) {
+func FindInvokeContractOutputs(tx *wire.MsgTx, resolver ContractScriptResolver, spec ParseSpec) ([]ContractOutput, error) {
+	return findInvokeContractOutputs(tx, resolver, spec, "")
+}
 
+func findInvokeContractOutputs(tx *wire.MsgTx, resolver ContractScriptResolver, spec ParseSpec,
+	txid string) ([]ContractOutput, error) {
+
+	if tx == nil {
+		return nil, errors.New("missing transaction")
+	}
 	if resolver == nil {
 		return nil, errors.New("missing contract script resolver")
 	}
-	txid := tx.TxID()
+	if txid == "" {
+		txid = tx.TxID()
+	}
 	var contractAddr *contract.ContractAddress
 	outputs := make([]ContractOutput, 0)
 	for i, txOut := range tx.TxOut {
@@ -380,9 +380,7 @@ func FindInvokeContractOutputs(tx *wire.MsgTx, resolver ContractScriptResolver,
 	return outputs, nil
 }
 
-func FindContractOutputsForContract(tx *wire.MsgTx, resolver ContractScriptResolver,
-	contractAddr contract.ContractAddress) ([]ContractOutput, error) {
-
+func FindContractOutputsForContract(tx *wire.MsgTx, resolver ContractScriptResolver, contractAddr contract.ContractAddress) ([]ContractOutput, error) {
 	if resolver == nil {
 		return nil, errors.New("missing contract script resolver")
 	}
@@ -425,10 +423,7 @@ func HasContractOutput(tx *wire.MsgTx, resolver ContractScriptResolver) (bool, e
 }
 
 func WireOutPointToFramework(out wire.OutPoint) OutPoint {
-	return OutPoint{
-		TxID: out.Hash.String(),
-		Vout: out.Index,
-	}
+	return OutPoint{TxID: out.Hash.String(), Vout: out.Index}
 }
 
 func CloneBytes(src []byte) []byte {
