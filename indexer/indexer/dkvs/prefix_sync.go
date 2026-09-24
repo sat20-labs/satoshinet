@@ -1,11 +1,129 @@
 package dkvs
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"sort"
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/wire"
 )
+
+// PrefixDelta reads only the current records indexed after the caller's
+// endpoint-local generation. It is sampled under the same lock as PathMeta.
+func (i *Indexer) PrefixDelta(prefix, endpointID string, after uint64) (*PrefixDeltaResult, error) {
+	if i == nil {
+		return nil, ErrInvalidRecord
+	}
+	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "/")
+	if !isCanonicalCollectionPath(prefix) {
+		return nil, ErrInvalidKey
+	}
+	parsed, err := ParsePrefix(prefix)
+	if err != nil || pathMode(parsed) == PathLocalOnly {
+		return nil, ErrInvalidKey
+	}
+	if endpointID == "" || i.endpointID() == "" {
+		return nil, ErrStaleEndpoint
+	}
+	if endpointID != i.endpointID() {
+		return nil, ErrEndpointMismatch
+	}
+	height, now := i.currentHeight(), currentUnixMilli()
+	i.mutex.Lock()
+	defer i.mutex.Unlock()
+	meta, err := i.ensurePathMetaLocked(prefix, height, now)
+	if err != nil {
+		return nil, err
+	}
+	if after > meta.EndpointGeneration {
+		return nil, ErrStaleGeneration
+	}
+	baseline, baselineFound, err := i.prefixChangeBaselineLocked(prefix)
+	if err != nil {
+		return nil, err
+	}
+	if !baselineFound {
+		if _, err := i.ensurePrefixChangeBaselineLocked(prefix, meta.EndpointGeneration); err != nil {
+			return nil, err
+		}
+		return nil, ErrStaleGeneration
+	}
+	if after < baseline {
+		return nil, ErrStaleGeneration
+	}
+	result := &PrefixDeltaResult{EndpointID: endpointID, Prefix: prefix,
+		Generation: meta.EndpointGeneration, ViewHeight: height,
+		Records: make([]*wire.DKVSRecord, 0)}
+	if after == meta.EndpointGeneration {
+		return result, nil
+	}
+	base := prefixChangeDBPrefix(prefix)
+	seek := append([]byte{}, base...)
+	var next [8]byte
+	binary.BigEndian.PutUint64(next[:], after+1)
+	seek = append(seek, next[:]...)
+	totalBytes := 0
+	err = i.db.BatchReadV2(base, seek, false, func(indexKey, _ []byte) error {
+		if !bytes.HasPrefix(indexKey, base) || len(indexKey) < len(base)+8 {
+			return ErrInvalidRecord
+		}
+		generation := binary.BigEndian.Uint64(indexKey[len(base) : len(base)+8])
+		if generation <= after {
+			return nil
+		}
+		if generation > meta.EndpointGeneration {
+			return errStopScan
+		}
+		key := string(indexKey[len(base)+8:])
+		if key == "" {
+			return ErrInvalidRecord
+		}
+		current, found, readErr := i.changedGenerationLocked(key)
+		if readErr != nil {
+			return readErr
+		}
+		if !found || current != generation {
+			return nil
+		}
+		record, readErr := i.getRaw(key)
+		if errors.Is(readErr, ErrRecordNotFound) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+		if i.activeError(record, height, now) != nil {
+			return nil
+		}
+		if len(result.Records) >= MaxPrefixReadRecords {
+			return ErrBatchTooLarge
+		}
+		size := RecordSize(record)
+		if size > MaxPrefixReadBytes-totalBytes {
+			return ErrBatchTooLarge
+		}
+		totalBytes += size
+		result.Records = append(result.Records, cloneRecord(record))
+		return nil
+	})
+	if errors.Is(err, errStopScan) {
+		err = nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(result.Records, func(a, b int) bool { return result.Records[a].Key < result.Records[b].Key })
+	for _, record := range result.Records {
+		state, stateErr := i.keyStateLocked(record.Key, false, height, now)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		result.KeyStates = append(result.KeyStates, state)
+	}
+	return result, nil
+}
 
 func normalizePrefixGenerations(values []PrefixGeneration) ([]PrefixGeneration, error) {
 	if len(values) == 0 || len(values) > MaxPrefixesPerTerminal {
@@ -123,6 +241,9 @@ func (i *Indexer) PrefixSnapshot(prefix string) (*PrefixSnapshot, error) {
 			return nil, stateErr
 		}
 		states = append(states, state)
+	}
+	if _, err := i.ensurePrefixChangeBaselineLocked(prefix, meta.EndpointGeneration); err != nil {
+		return nil, err
 	}
 	return &PrefixSnapshot{
 		EndpointID: i.endpointID(), Prefix: prefix, Generation: meta.EndpointGeneration,

@@ -30,6 +30,18 @@ type dkvsPrefixSnapshotResp struct {
 	Data      *dkvsindexer.PrefixSnapshot `json:"data,omitempty"`
 }
 
+type dkvsPrefixDeltaReq struct {
+	Prefix          string `json:"prefix"`
+	EndpointID      string `json:"endpoint_id"`
+	AfterGeneration uint64 `json:"after_generation"`
+}
+
+type dkvsPrefixDeltaResp struct {
+	indexerwire.BaseResp
+	ErrorCode string                         `json:"error_code,omitempty"`
+	Data      *dkvsindexer.PrefixDeltaResult `json:"data,omitempty"`
+}
+
 type dkvsPrefixReadReq struct {
 	Prefix string `json:"prefix"`
 }
@@ -43,7 +55,28 @@ type dkvsPrefixReadResp struct {
 type dkvsSubscriptionBackend interface {
 	GetDKVSPrefixStatus(string, []dkvsindexer.PrefixGeneration) (*dkvsindexer.PrefixStatusResult, error)
 	GetDKVSPrefixSnapshot(string) (*dkvsindexer.PrefixSnapshot, error)
+	GetDKVSPrefixDelta(string, string, uint64) (*dkvsindexer.PrefixDeltaResult, error)
 	ReadDKVSPrefix(string) (*dkvsindexer.PrefixReadResult, error)
+}
+
+func (s *Handle) getDKVSPrefixDelta(c *gin.Context) {
+	resp := &dkvsPrefixDeltaResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	var req dkvsPrefixDeltaReq
+	if err := bindDKVSJSON(c, &req, dkvsSyncHTTPBodyLimit); err != nil {
+		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	backend, err := s.dkvsSubscriptionBackend()
+	if err == nil {
+		resp.Data, err = backend.GetDKVSPrefixDelta(req.Prefix, req.EndpointID, req.AfterGeneration)
+	}
+	if err != nil {
+		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
+		c.JSON(dkvsHTTPStatus(err), resp)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (s *Handle) getDKVSPrefixStatus(c *gin.Context) {

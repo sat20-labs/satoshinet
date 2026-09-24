@@ -260,6 +260,19 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 		if err == nil {
 			err = i.markPathMetaDirtyLocked(batch, touched, height, now)
 		}
+		if err == nil {
+			seen := make(map[string]struct{}, len(touched))
+			for _, record := range touched {
+				if _, duplicate := seen[record.Key]; duplicate {
+					continue
+				}
+				seen[record.Key] = struct{}{}
+				_, present := incoming[record.Key]
+				if err = i.markDirtyChangedRecordBatch(batch, record.Key, present); err != nil {
+					break
+				}
+			}
+		}
 		if err == nil && len(touched) != 0 {
 			err = batch.Flush()
 		}

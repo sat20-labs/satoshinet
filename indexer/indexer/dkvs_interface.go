@@ -242,6 +242,13 @@ func (p *IndexerMgr) GetDKVSPrefixSnapshot(prefix string) (*dkvs.PrefixSnapshot,
 	return p.dkvsIndexer.PrefixSnapshot(prefix)
 }
 
+func (p *IndexerMgr) GetDKVSPrefixDelta(prefix, endpointID string, after uint64) (*dkvs.PrefixDeltaResult, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.PrefixDelta(prefix, endpointID, after)
+}
+
 func (p *IndexerMgr) ReadDKVSPrefix(prefix string) (*dkvs.PrefixReadResult, error) {
 	if p.dkvsIndexer == nil {
 		return nil, errDKVSNotInitialized

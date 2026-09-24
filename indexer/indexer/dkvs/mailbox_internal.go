@@ -191,6 +191,9 @@ func (i *Indexer) PutInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 		err = i.markPathMetaDirtyLocked(batch, []*wire.DKVSRecord{record}, height, now)
 	}
 	if err == nil {
+		err = i.markDirtyChangedRecordBatch(batch, record.Key, true)
+	}
+	if err == nil {
 		err = batch.Flush()
 	}
 	if err != nil {

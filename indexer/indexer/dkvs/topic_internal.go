@@ -111,6 +111,12 @@ func (i *Indexer) PutInternalTopicValues(values map[string][]byte) (int, error) 
 		i.mutex.Unlock()
 		return 0, err
 	}
+	for _, record := range changed {
+		if err := i.markDirtyChangedRecordBatch(batch, record.Key, true); err != nil {
+			i.mutex.Unlock()
+			return 0, err
+		}
+	}
 	if err := batch.Flush(); err != nil {
 		i.mutex.Unlock()
 		return 0, err

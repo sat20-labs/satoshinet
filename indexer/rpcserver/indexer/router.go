@@ -69,6 +69,7 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.POST(proxy+"/v3/dkvs/records/batch-cas", s.handle.putDKVSRecordBatchCAS)
 	r.POST(proxy+"/v3/dkvs/prefixes/status", s.handle.getDKVSPrefixStatus)
 	r.POST(proxy+"/v3/dkvs/prefixes/snapshot", s.handle.getDKVSPrefixSnapshot)
+	r.POST(proxy+"/v3/dkvs/prefixes/delta", s.handle.getDKVSPrefixDelta)
 	r.POST(proxy+"/v3/dkvs/prefixes/read", s.handle.readDKVSPrefix)
 
 	// Node-local administration is deliberately separate from the wallet API.

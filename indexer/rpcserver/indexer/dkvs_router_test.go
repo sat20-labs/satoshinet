@@ -26,6 +26,7 @@ func TestDKVSWalletRoutesExposeOnlyFinalApplicationProtocol(t *testing.T) {
 		"POST /v3/dkvs/records/batch-cas",
 		"POST /v3/dkvs/prefixes/status",
 		"POST /v3/dkvs/prefixes/snapshot",
+		"POST /v3/dkvs/prefixes/delta",
 		"POST /v3/dkvs/prefixes/read",
 	} {
 		if _, ok := got[route]; !ok {

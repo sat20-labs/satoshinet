@@ -47,6 +47,11 @@ func (i *Indexer) stageExpiredRecordsLocked(batch indexercommon.WriteBatch,
 		}
 
 		path := collectionPath(parsed)
+		if path != "" && pathMode(parsed) != PathLocalOnly {
+			if err := i.clearChangedRecordBatch(batch, path, record.Key); err != nil {
+				return result, err
+			}
+		}
 		localOnly := isEndpointCacheRecord(record) || pathMode(parsed) == PathLocalOnly || path == ""
 		var pathGeneration uint64
 		if path != "" && pathMode(parsed) != PathLocalOnly {

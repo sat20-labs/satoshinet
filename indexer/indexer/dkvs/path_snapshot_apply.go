@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 )
 
 func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
@@ -58,6 +59,25 @@ func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
 	}
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
+	oldHashes := make(map[string]chainhash.Hash, len(current))
+	for _, record := range current {
+		if record != nil && !isFreeLocalRecord(record) {
+			oldHashes[record.Key] = RecordHash(record)
+		}
+	}
+	for _, record := range validated.active {
+		if oldHash, exists := oldHashes[record.Key]; !exists || oldHash != RecordHash(record) {
+			if err := i.markChangedRecordBatch(batch, validated.path, record.Key, endpointGeneration); err != nil {
+				return 0, err
+			}
+		}
+		delete(oldHashes, record.Key)
+	}
+	for key := range oldHashes {
+		if err := i.clearChangedRecordBatch(batch, validated.path, key); err != nil {
+			return 0, err
+		}
+	}
 	retentionRemovals := make([]string, 0, len(current))
 	for _, record := range current {
 		if record == nil || isFreeLocalRecord(record) {

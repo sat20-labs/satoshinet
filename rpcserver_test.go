@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"testing"
@@ -52,16 +53,13 @@ func TestEVMEstimateRuntimePreflightsNativeAssetTransfer(t *testing.T) {
 		Amount:    "1",
 	}})
 	require.NoError(t, err)
-	balances := evmcontract.NewContractUTXOAssetView(
-		evmcontract.TestnetContractPrefix,
-		rpcEVMEstimateUTXOProvider(nil, contractAddr, funding, 1),
-	)
 	precision := contractframework.AssetPrecisionResolver(func(assetName string) (int, bool) {
 		return 0, assetName == "brc20:f:ooxx"
 	})
-	runtime := newEVMEstimateRuntime(
+	block := evmcontract.BlockContext{GasLimit: 1000000}
+	runtime := newEVMInvokeEstimateRuntime(
 		evmcontract.NewMemoryStateDB(), &chaincfg.TestNetParams,
-		evmcontract.DefaultGasConfig().Normalize(), balances, precision,
+		evmcontract.DefaultGasConfig().Normalize(), precision, block,
 	)
 	runtime.SetCode(evmcontract.ContractAddressHash(contractAddr), rpcCallAssetPrecompileCode())
 
@@ -77,11 +75,103 @@ func TestEVMEstimateRuntimePreflightsNativeAssetTransfer(t *testing.T) {
 		),
 		Gas:           100000,
 		FundingOutput: funding,
-		Block:         evmcontract.BlockContext{GasLimit: 1000000},
+		Block:         block,
 	})
 	require.Equal(t, evmcontract.ResultStatusSuccess, result.Status)
 	require.NoError(t, result.Err)
 	require.Len(t, runtime.AssetIntents, 1)
+}
+
+func TestEVMEstimateFundingKeepsBusinessGas(t *testing.T) {
+	contractAddr, err := evmcontract.NewContractAddress(
+		evmcontract.TestnetContractPrefix,
+		evmcontract.AddressVersionV1,
+		evmcontract.ContractTypeEVM,
+		evmcontract.EVMAddress{1},
+	)
+	require.NoError(t, err)
+	gasConfig := evmcontract.DefaultGasConfig().Normalize()
+	reserve, err := gasConfig.ContractFundingFee(
+		contractframework.ExecutionKindInvoke, 1_000_000, true, 0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "950", reserve.String())
+
+	businessFunding, err := evmEstimateFundingOutput(contractAddr, 0, []btcjson.EVMEstimateFundingAsset{{
+		AssetName: gasConfig.GasAssetName,
+		Amount:    "1000",
+	}})
+	require.NoError(t, err)
+	funding, err := evmEstimateFundingWithGas(businessFunding, gasConfig.GasAssetName, reserve)
+	require.NoError(t, err)
+	businessAmount, err := businessFunding.AssetAmount(gasConfig.GasAssetName)
+	require.NoError(t, err)
+	require.Equal(t, "1000", businessAmount.String())
+	physicalAmount, err := funding.AssetAmount(gasConfig.GasAssetName)
+	require.NoError(t, err)
+	require.Equal(t, "1950", physicalAmount.String())
+	view := evmcontract.NewFundingAssetView(
+		[]contractframework.ContractOutput{*funding}, gasConfig.GasAssetName, reserve,
+	)
+	ret, err := evmcontract.NewAssetPrecompile(nil, view).Run(
+		evmcontract.EncodeFundingAssetAmountCall(gasConfig.GasAssetName),
+	)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(ret), 32)
+	length := binary.BigEndian.Uint64(ret[24:32])
+	require.GreaterOrEqual(t, len(ret), 32+int(length))
+	require.Equal(t, "1000", string(ret[32:32+length]))
+}
+
+func TestEVMEstimateCannotSpendUnclaimedGasReserve(t *testing.T) {
+	contractAddr, err := evmcontract.NewContractAddress(
+		evmcontract.TestnetContractPrefix,
+		evmcontract.AddressVersionV1,
+		evmcontract.ContractTypeEVM,
+		evmcontract.EVMAddress{1},
+	)
+	require.NoError(t, err)
+	gasConfig := evmcontract.DefaultGasConfig().Normalize()
+	const gasLimit = int64(1_000_000)
+	reserve, err := gasConfig.ContractFundingFee(
+		contractframework.ExecutionKindInvoke, gasLimit, true, 0,
+	)
+	require.NoError(t, err)
+	businessFunding, err := evmEstimateFundingOutput(contractAddr, 0, nil)
+	require.NoError(t, err)
+	funding, err := evmEstimateFundingWithGas(businessFunding, gasConfig.GasAssetName, reserve)
+	require.NoError(t, err)
+	precision := contractframework.AssetPrecisionResolver(func(assetName string) (int, bool) {
+		return 0, assetName == gasConfig.GasAssetName
+	})
+	block := evmcontract.BlockContext{GasLimit: gasLimit}
+	runtime := newEVMInvokeEstimateRuntime(
+		evmcontract.NewMemoryStateDB(), &chaincfg.TestNetParams, gasConfig, precision, block,
+	)
+	code := rpcCallAssetPrecompileCode()
+	code = code[:len(code)-1] // Replace STOP with a branch that reverts on failed CALL.
+	revertOffset := byte(len(code) + 5)
+	code = append(code, 0x15, 0x60, revertOffset, 0x57, 0x00, 0x5b, 0x60, 0, 0x60, 0, 0xfd)
+	runtime.SetCode(evmcontract.ContractAddressHash(contractAddr), code)
+
+	result := runtime.Call(evmcontract.CallRequest{
+		CallerAddress: "0x1111111111111111111111111111111111111111",
+		TargetAddress: contractAddr.MustEncode(),
+		CallID:        "estimate-unclaimed-gas-reserve",
+		Input: evmcontract.EncodeTransferAssetCall(
+			gasConfig.GasAssetName,
+			"tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g",
+			reserve.String(),
+			nil,
+		),
+		Gas:           gasLimit,
+		FundingOutput: funding,
+		GasAssetName:  gasConfig.GasAssetName,
+		GasFeeReserve: reserve,
+		Block:         block,
+	})
+	require.NotEqual(t, evmcontract.ResultStatusSuccess, result.Status)
+	require.Empty(t, runtime.AssetIntents, "the unclaimed gas reserve must not fund a contract transfer")
 }
 
 func rpcCallAssetPrecompileCode() []byte {

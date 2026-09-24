@@ -332,6 +332,21 @@ func (i *Indexer) ensurePathMetaLocked(path string, height, now uint64) (*PathMe
 	if err != nil {
 		return nil, err
 	}
+	// When the earliest known canonical expiry is still in the future, a
+	// height-only view advance cannot change this path's contents or root.
+	// Keep its generation and avoid rescanning every key on each block.
+	if !status.Dirty && height > meta.ViewHeight && meta.MinExpiryHeight > height {
+		meta = clonePathMeta(meta)
+		meta.ViewHeight = height
+		encoded, marshalErr := marshalPathMeta(meta)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		if writeErr := i.db.Write(pathMetaDBKey(path), encoded); writeErr != nil {
+			return nil, writeErr
+		}
+		return meta, nil
+	}
 	if pathMetaNeedsRebuild(meta, status, height) {
 		return i.rebuildPathMetaLocked(path, height, now)
 	}

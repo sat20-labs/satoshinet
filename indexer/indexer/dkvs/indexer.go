@@ -781,6 +781,9 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		if err == nil {
 			err = putPathMetaBatch(batch, meta)
 		}
+		if err == nil && meta != nil {
+			err = i.markChangedRecordBatch(batch, meta.Path, record.Key, meta.EndpointGeneration)
+		}
 		if err == nil {
 			err = batch.Flush()
 		}

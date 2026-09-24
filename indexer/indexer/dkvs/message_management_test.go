@@ -181,6 +181,10 @@ func TestMessageMailboxPrefixSnapshotSeesCommittedDelivery(t *testing.T) {
 	if len(read.Records) != 1 || read.Records[0].Key != record.Key {
 		t.Fatalf("prefix snapshot did not surface committed mailbox delivery: %#v", read)
 	}
+	delta, err := idx.PrefixDelta(prefix, initial.EndpointID, initial.Generation)
+	if err != nil || len(delta.Records) != 1 || delta.Records[0].Key != record.Key {
+		t.Fatalf("prefix delta did not surface committed mailbox delivery: delta=%+v err=%v", delta, err)
+	}
 }
 
 func TestMessageKeyShapesAndNoMailboxAlias(t *testing.T) {

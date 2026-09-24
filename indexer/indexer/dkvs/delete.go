@@ -269,6 +269,11 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 	if err := batch.Delete(hashDBKey(oldHash)); err != nil {
 		return chainhash.Hash{}, err
 	}
+	if meta != nil {
+		if err := i.clearChangedRecordBatch(batch, meta.Path, record.Key); err != nil {
+			return chainhash.Hash{}, err
+		}
+	}
 	if localOnly {
 		// Endpoint-local cache data has no durable delete history. The endpoint
 		// generation above is sufficient to invalidate client snapshots, while
@@ -408,6 +413,9 @@ func (i *Indexer) deleteMirrorRecordLocked(record *wire.DKVSRecord, height, now 
 		return err
 	}
 	if err := i.markPathMetaDirtyLocked(batch, []*wire.DKVSRecord{record}, height, now); err != nil {
+		return err
+	}
+	if err := i.markDirtyChangedRecordBatch(batch, record.Key, false); err != nil {
 		return err
 	}
 	if err := batch.Flush(); err != nil {

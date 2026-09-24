@@ -365,6 +365,17 @@ type PrefixSnapshot struct {
 	KeyStates  []DKVSKeyState     `json:"key_states,omitempty"`
 }
 
+// PrefixDelta contains current records changed after one endpoint-local
+// generation. Removed and expired records are omitted by design.
+type PrefixDeltaResult struct {
+	EndpointID string             `json:"endpoint_id"`
+	Prefix     string             `json:"prefix"`
+	Generation uint64             `json:"generation"`
+	ViewHeight uint64             `json:"view_height"`
+	Records    []*wire.DKVSRecord `json:"records"`
+	KeyStates  []DKVSKeyState     `json:"key_states,omitempty"`
+}
+
 // PrefixReadResult is a direct, uncached-by-server read for a read-only or
 // aggregate prefix. It intentionally has no generation or cursor contract.
 type PrefixReadResult struct {

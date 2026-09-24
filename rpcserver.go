@@ -29,6 +29,7 @@ import (
 
 	"github.com/btcsuite/websocket"
 	gethcommon "github.com/ethereum/go-ethereum/common"
+	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/blockchain/indexers"
@@ -1071,23 +1072,25 @@ func handleEstimateEVMInvoke(s *rpcServer, cmd interface{}, closeChan <-chan str
 		GasLimit:      gasConfig.MaxGasPerBlock,
 		FixedGasPrice: gasConfig.FixedGasPrice,
 	}
-	fundingOutput, err := evmEstimateFundingOutput(contractAddr, value, req.Funding)
+	businessFunding, err := evmEstimateFundingOutput(contractAddr, value, req.Funding)
 	if err != nil {
 		return nil, btcjson.NewRPCError(btcjson.ErrRPCInvalidParameter, err.Error())
 	}
-	baseProvider := rpcEVMContractUTXOProvider(s.cfg.AssetIndexManager)
-	provider := rpcEVMEstimateUTXOProvider(baseProvider, contractAddr, fundingOutput, int64(best.Height))
-	assetBalances := evmcontract.NewContractUTXOAssetView(evmcontract.ContractPrefixForNet(s.cfg.ChainParams.Net), provider)
-
 	try := func(gas int64) evmcontract.CallResult {
-		runtime := newEVMEstimateRuntime(
-			state.Clone(), s.cfg.ChainParams, gasConfig, assetBalances,
-			contractAssetPrecisionResolver(s.cfg.AssetIndexManager),
-		)
 		reserve, reserveErr := gasConfig.ContractFundingFee(contractframework.ExecutionKindInvoke, gas, true, block.Number)
 		if reserveErr != nil {
 			return evmcontract.CallResult{Status: evmcontract.ResultStatusInvalid, Err: reserveErr}
 		}
+		fundingOutput, fundingErr := evmEstimateFundingWithGas(
+			businessFunding, gasConfig.GasAssetName, reserve,
+		)
+		if fundingErr != nil {
+			return evmcontract.CallResult{Status: evmcontract.ResultStatusInvalid, Err: fundingErr}
+		}
+		runtime := newEVMInvokeEstimateRuntime(
+			state.Clone(), s.cfg.ChainParams, gasConfig,
+			contractAssetPrecisionResolver(s.cfg.AssetIndexManager), block,
+		)
 		return runtime.Call(evmcontract.CallRequest{
 			CallerAddress: req.Caller,
 			TargetAddress: contractAddr.MustEncode(),
@@ -1124,6 +1127,20 @@ func newEVMEstimateRuntime(state *evmcontract.MemoryStateDB, params *chaincfg.Pa
 	runtime.AssetBalances = balances
 	runtime.AssetPrecision = evmcontract.SettlementPrecision(assetPrecision)
 	runtime.ResolveResultScript = evmEstimateResultScriptResolver(params)
+	return runtime
+}
+
+// Invoke estimation reads the same accepted managed balances as block execution.
+// The current funding output is made available by Runtime.Call only as it is
+// explicitly claimed; its gas reserve must never appear in the base balance.
+func newEVMInvokeEstimateRuntime(state *evmcontract.MemoryStateDB, params *chaincfg.Params,
+	gasConfig evmcontract.GasConfig, assetPrecision contractframework.AssetPrecisionResolver,
+	block evmcontract.BlockContext) *evmcontract.Runtime {
+
+	runtime := newEVMEstimateRuntime(state, params, gasConfig, nil, assetPrecision)
+	evmcontract.NewBackend(evmcontract.BlockExecutionRequest{
+		Runtime: runtime, ContractPrefix: runtime.ContractPrefix, GasConfig: gasConfig, Block: block,
+	})
 	return runtime
 }
 
@@ -1341,59 +1358,26 @@ func evmEstimateFundingOutput(contractAddr contractcommon.ContractAddress, value
 	return &output, nil
 }
 
-func rpcEVMContractUTXOProvider(assetIndexer *indexer.IndexerMgr) evmcontract.ContractUTXOProvider {
-	nodeProvider := evmContractUTXOProvider(assetIndexer)
-	if nodeProvider == nil {
-		return nil
-	}
-	return func(contractAddr evmcontract.ContractAddress) ([]evmcontract.UTXO, error) {
-		utxos, err := nodeProvider(contractAddr)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]evmcontract.UTXO, 0, len(utxos))
-		for _, utxo := range utxos {
-			if utxo.Value < 0 {
-				return nil, fmt.Errorf("negative EVM contract output value")
-			}
-			next := contractframework.UTXOFromTxOutput(
-				contractframework.WireOutPointToFramework(utxo.OutPoint),
-				contractAddr,
-				utxo.Height,
-				&wire.TxOut{Value: utxo.Value, Assets: utxo.Assets.Clone()},
-			)
-			next.IsGasFunding = utxo.IsGasFunding
-			next.SourceCallID = utxo.SourceCallID
-			next.ReservedReason = utxo.ReservedReason
-			out = append(out, next)
-		}
-		return out, nil
-	}
-}
+func evmEstimateFundingWithGas(businessFunding *contractframework.ContractOutput,
+	gasAssetName string, reserve *indexercommon.Decimal) (*contractframework.ContractOutput, error) {
 
-func rpcEVMEstimateUTXOProvider(base evmcontract.ContractUTXOProvider, contractAddr evmcontract.ContractAddress,
-	funding *contractframework.ContractOutput, height int64) evmcontract.ContractUTXOProvider {
-
-	return func(got evmcontract.ContractAddress) ([]evmcontract.UTXO, error) {
-		utxos := make([]evmcontract.UTXO, 0)
-		if base != nil {
-			baseUTXOs, err := base(got)
-			if err != nil {
-				return nil, err
-			}
-			utxos = append(utxos, baseUTXOs...)
-		}
-		if got.MustEncode() == contractAddr.MustEncode() && funding != nil {
-			utxo := contractframework.UTXO{
-				OutPoint: funding.OutPoint,
-				Contract: contractAddr,
-				Height:   height,
-				TxOutput: funding.IndexerTxOutput(),
-			}
-			utxos = append(utxos, utxo)
-		}
-		return utxos, nil
+	if businessFunding == nil {
+		return nil, fmt.Errorf("missing estimate funding output")
 	}
+	output := businessFunding.IndexerTxOutput()
+	if output == nil {
+		return nil, fmt.Errorf("missing estimate funding transaction output")
+	}
+	reserveAssets, err := contractframework.NewAssetSet(gasAssetName, reserve)
+	if err != nil {
+		return nil, err
+	}
+	if err := output.OutValue.Assets.Merge(reserveAssets); err != nil {
+		return nil, err
+	}
+	withGas := *businessFunding
+	withGas.TxOutput = output
+	return &withGas, nil
 }
 
 func estimateEVMInvokeGas(try func(int64) evmcontract.CallResult, requestedGas, baseGas,

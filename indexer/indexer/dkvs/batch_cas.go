@@ -753,6 +753,17 @@ func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now 
 				return nil, nil, err
 			}
 		}
+		if meta := metas[collectionPath(prepared.parsed)]; meta != nil {
+			if IsTombstone(record.Flags) {
+				if err := i.clearChangedRecordBatch(batch, meta.Path, record.Key); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				if err := i.markChangedRecordBatch(batch, meta.Path, record.Key, meta.EndpointGeneration); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
 	}
 	for path, meta := range metas {
 		if err := putPathMetaBatch(batch, meta); err != nil {
