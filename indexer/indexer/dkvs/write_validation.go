@@ -284,7 +284,7 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 		return false, ValidateRecordIdentity(record, parsed)
 	}
 	if isRGB11RegistryRecord(record, parsed) {
-		return false, validateRGB11RegistryPermissionWith(record, parsed, validators.resolver)
+		return false, validateRGB11RegistryPermissionWith(record, parsed, validators.system)
 	}
 	switch parsed.Namespace {
 	case "name", "svc":
