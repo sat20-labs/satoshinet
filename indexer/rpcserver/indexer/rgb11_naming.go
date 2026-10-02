@@ -44,8 +44,10 @@ func (h *Handle) queryRGB11Naming(c *gin.Context, query rgb11names.Query) {
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		switch {
-		case errors.Is(err, rgb11names.ErrInvalid): status = http.StatusBadRequest
-		case errors.Is(err, rgb11names.ErrNotFound): status = http.StatusNotFound
+		case errors.Is(err, rgb11names.ErrInvalid):
+			status = http.StatusBadRequest
+		case errors.Is(err, rgb11names.ErrNotFound):
+			status = http.StatusNotFound
 		}
 		c.JSON(status, gin.H{"code": -1, "msg": err.Error()})
 		return

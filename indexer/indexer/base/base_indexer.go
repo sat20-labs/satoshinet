@@ -8,6 +8,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	"github.com/sat20-labs/satoshinet/indexer/indexer/rgb11names"
 	"github.com/sat20-labs/satoshinet/indexer/indexer/stp"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -62,6 +63,10 @@ type BaseIndexer struct {
 	blockprocCB BlockProcCallback
 	updateDBCB  UpdateDBCallback
 
+	rgb11Names         *rgb11names.Index
+	rgb11NamingSource  rgb11names.EventSource
+	rgb11NamingStarted bool
+
 	mutex sync.RWMutex // 仅对需要提供给节点实时访问的数据加锁
 }
 
@@ -114,6 +119,7 @@ func (b *BaseIndexer) SetBlockCallback(cb1 BlockProcCallback) {
 
 func (b *BaseIndexer) reset() {
 	b.loadSyncStatsFromDB()
+	b.initRGB11NamingIndex()
 
 	b.blocksChan = make(chan *common.Block, BLOCK_PREFETCH)
 
@@ -225,6 +231,9 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 	newInst.miningAddress = b.miningAddress
 
 	newInst.stats = b.stats.Clone()
+	newInst.rgb11Names = b.rgb11Names.Clone()
+	newInst.rgb11NamingSource = b.rgb11NamingSource
+	newInst.rgb11NamingStarted = b.rgb11NamingStarted
 	newInst.blockprocCB = b.blockprocCB
 	newInst.updateDBCB = b.updateDBCB
 
@@ -701,10 +710,20 @@ func (b *BaseIndexer) UpdateDB() {
 		common.Log.Panicf("BaseIndexer.updateBasicDB-> Error setting in db %v", err)
 	}
 
-	//startTime = time.Now()
+	// Naming records and SyncStats share this exact durable batch.
+	var namingAck func()
+	if b.rgb11Names != nil {
+		namingAck, err = b.rgb11Names.Stage(wb)
+		if err != nil {
+			common.Log.Panicf("stage RGB11 naming index failed: %v", err)
+		}
+	}
 	err = wb.Flush()
 	if err != nil {
 		common.Log.Panicf("BaseIndexer.updateBasicDB-> Error satwb flushing writes to db %v", err)
+	}
+	if namingAck != nil {
+		namingAck()
 	}
 	//common.Log.Infof("BaseIndexer.updateBasicDB-> flush db,  cost: %v", time.Since(startTime))
 
@@ -778,9 +797,15 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 		return b.handleReorg(block)
 	}
 
+	var namingErr error
 	func() {
 		b.mutex.Lock()
 		defer b.mutex.Unlock()
+
+		namingErr = b.applyRGB11NamingBlockLocked(block)
+		if namingErr != nil {
+			return
+		}
 
 		// localStartTime := time.Now()
 		b.prefetchIndexesFromDB(block)
@@ -800,6 +825,10 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 			delete(b.prevBlockHashMap, b.lastHeight-b.keepBlockHistory)
 		}
 	}()
+	if namingErr != nil {
+		common.Log.Errorf("RGB11 naming block %d rejected before base mutation: %v", block.Height, namingErr)
+		return -2
+	}
 
 	// localStartTime = time.Now()
 	b.blockprocCB(block)
@@ -1544,6 +1573,12 @@ func (b *BaseIndexer) generateAddressId() uint64 {
 func (b *BaseIndexer) CheckSelf() bool {
 
 	common.Log.Info("BaseIndexer->checkSelf ... ")
+	if b.rgb11Names != nil {
+		if err := b.rgb11Names.CheckSelf(); err != nil {
+			common.Log.Errorf("RGB11 naming CheckSelf failed: %v", err)
+			return false
+		}
+	}
 	// for height, leak := range b.leakBlocks.SatsLeakBlocks {
 	// 	common.Log.Infof("block %d leak %d", height, leak)
 	// }

@@ -25,14 +25,14 @@ const (
 )
 
 var (
-	ErrInvalid       = errors.New("invalid RGB11 naming data")
-	ErrNotFound      = errors.New("RGB11 naming record not found")
-	ErrOwner         = errors.New("RGB11 naming owner/address mismatch")
-	ErrConflict      = errors.New("RGB11 naming immutable record conflict")
-	ErrOrder         = errors.New("RGB11 naming block/event order mismatch")
-	ErrCorrupt       = errors.New("RGB11 naming index is inconsistent")
-	ErrUnavailable   = errors.New("RGB11 naming index unavailable")
-	ErrOrdinalLimit  = errors.New("RGB11 naming ordinal exhausted")
+	ErrInvalid      = errors.New("invalid RGB11 naming data")
+	ErrNotFound     = errors.New("RGB11 naming record not found")
+	ErrOwner        = errors.New("RGB11 naming owner/address mismatch")
+	ErrConflict     = errors.New("RGB11 naming immutable record conflict")
+	ErrOrder        = errors.New("RGB11 naming block/event order mismatch")
+	ErrCorrupt      = errors.New("RGB11 naming index is inconsistent")
+	ErrUnavailable  = errors.New("RGB11 naming index unavailable")
+	ErrOrdinalLimit = errors.New("RGB11 naming ordinal exhausted")
 )
 
 type Cursor struct {
@@ -99,11 +99,11 @@ type EventSource interface {
 }
 
 type Binding struct {
-	DID       string   `json:"did"`
-	Address   string   `json:"address"`
-	Sat       uint64   `json:"sat"`
-	Revision  uint64   `json:"owner_revision"`
-	BoundAt   Position `json:"bound_at"`
+	DID      string   `json:"did"`
+	Address  string   `json:"address"`
+	Sat      uint64   `json:"sat"`
+	Revision uint64   `json:"owner_revision"`
+	BoundAt  Position `json:"bound_at"`
 }
 
 type Registration struct {

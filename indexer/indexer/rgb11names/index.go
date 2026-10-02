@@ -114,6 +114,9 @@ func (s *Index) ApplyBlock(block *common.Block, events []Event) error {
 	if s == nil || block == nil || block.Height < 0 || !validHash(block.Hash) || len(events) > MaxBlockEvents {
 		return ErrInvalid
 	}
+	if len(events) == 0 {
+		events = []Event{}
+	}
 	raw, err := json.Marshal(events)
 	if err != nil {
 		return err
@@ -144,9 +147,15 @@ func (s *Index) ApplyBlock(block *common.Block, events []Event) error {
 			}
 		}
 		count := 0
-		if event.Ownership != nil { count++ }
-		if event.Bind != nil { count++ }
-		if event.Register != nil { count++ }
+		if event.Ownership != nil {
+			count++
+		}
+		if event.Bind != nil {
+			count++
+		}
+		if event.Register != nil {
+			count++
+		}
 		if count != 1 || event.TxIndex == 0 && event.Ownership == nil {
 			return ErrInvalid
 		}
@@ -181,7 +190,9 @@ func (s *Index) applyOwnership(t *transaction, fact Ownership) error {
 	}
 	if fact.Address != "" {
 		address, err := canonicalAddress(fact.Address, s.params)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		fact.Address = address
 	}
 	var old Ownership
@@ -191,29 +202,47 @@ func (s *Index) applyOwnership(t *transaction, fact Ownership) error {
 			(fact.Revision == old.Revision && fact.Address != old.Address) {
 			return ErrOwner
 		}
-	} else if err != ErrNotFound { return err }
+	} else if err != ErrNotFound {
+		return err
+	}
 	return t.put("owner/"+fact.DID, fact)
 }
 
 func (s *Index) applyBind(t *transaction, request Bind, at Position) error {
-	if ValidateDID(request.DID) != nil { return ErrInvalid }
+	if ValidateDID(request.DID) != nil {
+		return ErrInvalid
+	}
 	address, err := canonicalAddress(request.Address, s.params)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	var owner Ownership
-	if err := t.get("owner/"+request.DID, &owner); err != nil { return err }
-	if owner.Address != address { return ErrOwner }
+	if err := t.get("owner/"+request.DID, &owner); err != nil {
+		return err
+	}
+	if owner.Address != address {
+		return ErrOwner
+	}
 	var old Binding
 	if err := t.get("bind/"+address, &old); err == nil {
-		if old.DID == owner.DID && old.Sat == owner.Sat && old.Revision == owner.Revision { return nil }
-	} else if err != ErrNotFound { return err }
+		if old.DID == owner.DID && old.Sat == owner.Sat && old.Revision == owner.Revision {
+			return nil
+		}
+	} else if err != ErrNotFound {
+		return err
+	}
 	return t.put("bind/"+address, Binding{DID: owner.DID, Address: address, Sat: owner.Sat, Revision: owner.Revision, BoundAt: at})
 }
 
 func activeBinding(t *transaction, address string) (Binding, Ownership, error) {
 	var binding Binding
 	var owner Ownership
-	if err := t.get("bind/"+address, &binding); err != nil { return binding, owner, err }
-	if err := t.get("owner/"+binding.DID, &owner); err != nil { return binding, owner, err }
+	if err := t.get("bind/"+address, &binding); err != nil {
+		return binding, owner, err
+	}
+	if err := t.get("owner/"+binding.DID, &owner); err != nil {
+		return binding, owner, err
+	}
 	if owner.Address != address || owner.Sat != binding.Sat || owner.Revision != binding.Revision {
 		return binding, owner, ErrNotFound
 	}
@@ -222,31 +251,57 @@ func activeBinding(t *transaction, address string) (Binding, Ownership, error) {
 
 func (s *Index) applyRegistration(t *transaction, request Register, at Position) error {
 	base, err := NormalizeTicker(request.BaseTicker)
-	if err != nil || !validContractID(request.ContractID) || !validOutpoint(request.GenesisOutpoint) || (request.AssetType != "f" && request.AssetType != "n") { return ErrInvalid }
+	if err != nil || !validContractID(request.ContractID) || !validOutpoint(request.GenesisOutpoint) || (request.AssetType != "f" && request.AssetType != "n") {
+		return ErrInvalid
+	}
 	address, err := canonicalAddress(request.GenesisAddress, s.params)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	var old Registration
 	if err := t.get("contract/"+request.ContractID, &old); err == nil {
-		if old.BaseTicker != base || old.AssetType != request.AssetType || old.GenesisOutpoint != request.GenesisOutpoint || old.GenesisAddress != address { return ErrConflict }
+		if old.BaseTicker != base || old.AssetType != request.AssetType || old.GenesisOutpoint != request.GenesisOutpoint || old.GenesisAddress != address {
+			return ErrConflict
+		}
 		// Repeated deposits reuse the original name, even after DID transfer.
 		return nil
-	} else if err != ErrNotFound { return err }
+	} else if err != ErrNotFound {
+		return err
+	}
 	author, err := canonicalAddress(request.AuthorizedBy, s.params)
-	if err != nil || author != address { return ErrOwner }
+	if err != nil || author != address {
+		return ErrOwner
+	}
 	binding, _, err := activeBinding(t, address)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	key := "counter/" + binding.DID + "/" + base
 	var counter uint64
-	if err := t.get(key, &counter); err != nil && err != ErrNotFound { return err }
-	if counter == math.MaxUint64 { return ErrOrdinalLimit }
+	if err := t.get(key, &counter); err != nil && err != ErrNotFound {
+		return err
+	}
+	if counter == math.MaxUint64 {
+		return ErrOrdinalLimit
+	}
 	ordinal := counter + 1
 	name, err := BuildAssetName(base, request.AssetType, binding.DID, ordinal)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	var collision string
-	if err := t.get("name/"+name, &collision); err == nil { return ErrConflict } else if err != ErrNotFound { return err }
+	if err := t.get("name/"+name, &collision); err == nil {
+		return ErrConflict
+	} else if err != ErrNotFound {
+		return err
+	}
 	registration := Registration{ContractID: request.ContractID, AssetName: name, BaseTicker: base, AssetType: request.AssetType, ProviderDID: binding.DID, ProviderSat: binding.Sat, Ordinal: ordinal, GenesisOutpoint: request.GenesisOutpoint, GenesisAddress: address, RegisteredAt: at}
-	if err := t.put("contract/"+request.ContractID, registration); err != nil { return err }
-	if err := t.put("name/"+name, request.ContractID); err != nil { return err }
+	if err := t.put("contract/"+request.ContractID, registration); err != nil {
+		return err
+	}
+	if err := t.put("name/"+name, request.ContractID); err != nil {
+		return err
+	}
 	return t.put(key, ordinal)
 }
 
@@ -255,21 +310,31 @@ func (s *Index) applyRegistration(t *transaction, request Register, at Position)
 // counters and the base sync-height together; failed IO retains pending changes.
 // Do not Subtract naming deltas before flushing a backup snapshot.
 func (s *Index) Stage(batch idx.WriteBatch) (func(), error) {
-	if s == nil || batch == nil { return nil, ErrUnavailable }
+	if s == nil || batch == nil {
+		return nil, ErrUnavailable
+	}
 	s.mu.RLock()
 	staged := make(map[string][]byte, len(s.dirty))
-	for k, v := range s.dirty { staged[k] = v }
+	for k, v := range s.dirty {
+		staged[k] = v
+	}
 	parent := s.parent
 	s.mu.RUnlock()
 	keys := make([]string, 0, len(staged))
-	for k := range staged { keys = append(keys, k) }
+	for k := range staged {
+		keys = append(keys, k)
+	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		if err := batch.Put([]byte(dbPrefix+k), append([]byte(nil), staged[k]...)); err != nil { return nil, err }
+		if err := batch.Put([]byte(dbPrefix+k), append([]byte(nil), staged[k]...)); err != nil {
+			return nil, err
+		}
 	}
 	return func() {
 		s.acknowledge(staged)
-		if parent != nil { parent.acknowledge(staged) }
+		if parent != nil {
+			parent.acknowledge(staged)
+		}
 	}, nil
 }
 
@@ -277,6 +342,8 @@ func (s *Index) acknowledge(staged map[string][]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, v := range staged {
-		if current, ok := s.dirty[k]; ok && bytes.Equal(current, v) { delete(s.dirty, k) }
+		if current, ok := s.dirty[k]; ok && bytes.Equal(current, v) {
+			delete(s.dirty, k)
+		}
 	}
 }

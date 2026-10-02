@@ -9,6 +9,7 @@ import (
 	base_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/base"
 	contract_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/contract"
 	dkvs_indexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/sat20-labs/satoshinet/indexer/indexer/rgb11names"
 
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 
@@ -32,6 +33,8 @@ type Config struct {
 	DataPath string
 	RPCCfg   *RPCConfig
 	DKVS     *DKVSIntegrationConfig
+	// Node-internal verified block effects; nil keeps naming ingestion disabled.
+	RGB11NamingSource rgb11names.EventSource
 }
 
 type DKVSIntegrationConfig struct {
@@ -153,6 +156,11 @@ func (b *IndexerMgr) initLocked() {
 	}
 	b.compiling = base_indexer.NewBaseIndexer(b.baseDB, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 	b.compiling.Init()
+	if b.cfg != nil {
+		if err := b.compiling.ConfigureRGB11NamingSource(b.cfg.RGB11NamingSource); err != nil {
+			common.Log.Panicf("configure RGB11 naming source failed: %v", err)
+		}
+	}
 	b.contractIndexer = contract_indexer.NewIndexer(b.baseDB, b.chaincfgParam)
 	b.dkvsIndexer = dkvs_indexer.New(b.dkvsDB, b.dkvsConfig())
 	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
