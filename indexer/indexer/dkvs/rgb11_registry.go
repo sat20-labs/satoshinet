@@ -199,6 +199,57 @@ func validateRGB11RegistryPermissionWith(record *wire.DKVSRecord, parsed ParsedK
 	return system.CanWriteSystem(record.Key, record.PubKey)
 }
 
+func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
+	replacedKeys map[string]struct{}, height, now uint64) error {
+
+	incoming := make(map[string]string)
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		parsed, err := ParseKey(record.Key)
+		if err != nil || parsed.Namespace != RGB11RegistryNamespace {
+			continue
+		}
+		contractID, err := DecodeRGB11ContractID(record.Value)
+		if err != nil {
+			return ErrInvalidRecord
+		}
+		if key, duplicate := incoming[contractID]; duplicate && key != record.Key {
+			return ErrInvalidRecord
+		}
+		incoming[contractID] = record.Key
+	}
+	if len(incoming) == 0 {
+		return nil
+	}
+
+	existing, _, _, err := i.scanLocked("/rgb11", nil, 0, true, height, now)
+	if err != nil {
+		return err
+	}
+	for _, record := range existing {
+		if record == nil {
+			continue
+		}
+		if _, replaced := replacedKeys[record.Key]; replaced {
+			continue
+		}
+		parsed, err := ParseKey(record.Key)
+		if err != nil || parsed.Namespace != RGB11RegistryNamespace {
+			continue
+		}
+		contractID, err := DecodeRGB11ContractID(record.Value)
+		if err != nil {
+			return ErrInvalidRecord
+		}
+		if incomingKey, duplicate := incoming[contractID]; duplicate && incomingKey != record.Key {
+			return ErrInvalidRecord
+		}
+	}
+	return nil
+}
+
 func (i *Indexer) validateRGB11RegistryInsertLocked(record *wire.DKVSRecord, parsed ParsedKey,
 	height, now uint64) error {
 
