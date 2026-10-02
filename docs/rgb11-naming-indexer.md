@@ -92,11 +92,18 @@ The RGB11 SDK adds an immutable registration descriptor to the encoded `transcen
 
 ```text
 marker          = rgb11-reg-v1
-ContractID      = full ContractID
 BaseTicker      = original RGB ticker
 GenesisOutpoint = deterministic RGB Genesis provider outpoint
 GenesisAddress  = address resolved from that Genesis outpoint
 ```
+
+The full ContractID is **not duplicated** in this suffix. It is already the ticker of the signed contract asset identity:
+
+```text
+rgb11:<type>:<full ContractID>
+```
+
+The indexer derives ContractID from that signed AssetName. This keeps the deploy OP_RETURN within the existing payload limit and avoids redundant on-chain bytes.
 
 The descriptor deliberately does **not** contain:
 
