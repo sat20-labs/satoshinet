@@ -191,7 +191,7 @@ func validateRGB11RegistryStored(record *wire.DKVSRecord, parsed ParsedKey) erro
 	return err
 }
 
-func validateRGB11RegistryPermissionWith(record *wire.DKVSRecord, parsed ParsedKey, resolver DIDResolver) error {
+func validateRGB11RegistryPermissionWith(record *wire.DKVSRecord, parsed ParsedKey, system SystemVerifier) error {
 	if !isRGB11RegistryRecord(record, parsed) || IsTombstone(record.Flags) || record.TTL != 0 {
 		return ErrInvalidRecord
 	}
@@ -205,17 +205,10 @@ func validateRGB11RegistryPermissionWith(record *wire.DKVSRecord, parsed ParsedK
 	if _, err := DecodeRGB11RegistryContracts(record.Value); err != nil {
 		return err
 	}
-	if resolver == nil {
-		return ErrDIDResolverUnavailable
-	}
-	identity, err := resolver.ResolveName(parsed.Segments[0])
-	if err != nil {
-		return err
-	}
-	if !identity.Active || identity.CanonicalName != parsed.Segments[0] {
+	if system == nil {
 		return ErrPermissionDenied
 	}
-	return identity.CanSign(record.PubKey)
+	return system.CanWriteSystem(record.Key, record.PubKey)
 }
 
 func validateRGB11RegistryMutation(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord) error {
@@ -239,6 +232,38 @@ func validateRGB11RegistryMutation(record *wire.DKVSRecord, parsed ParsedKey, ex
 	for i := range current {
 		if next[i] != current[i] {
 			return ErrInvalidRecord
+		}
+	}
+	return nil
+}
+
+func (i *Indexer) validateRGB11RegistryMutationLocked(record *wire.DKVSRecord, parsed ParsedKey,
+	existing *wire.DKVSRecord, height, now uint64) error {
+
+	if err := validateRGB11RegistryMutation(record, parsed, existing); err != nil {
+		return err
+	}
+	next, err := DecodeRGB11RegistryContracts(record.Value)
+	if err != nil || len(next) == 0 {
+		return ErrInvalidRecord
+	}
+	added := next[len(next)-1]
+	records, _, _, err := i.scanLocked("/rgb11", nil, 0, true, height, now)
+	if err != nil {
+		return err
+	}
+	for _, candidate := range records {
+		if candidate == nil || candidate.Key == record.Key {
+			continue
+		}
+		ids, err := DecodeRGB11RegistryContracts(candidate.Value)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if id == added {
+				return ErrInvalidRecord
+			}
 		}
 	}
 	return nil
