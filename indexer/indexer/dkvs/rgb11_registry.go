@@ -11,7 +11,6 @@ import (
 )
 
 const (
-	RGB11RegistryVersion       = byte(1)
 	RGB11RegistryNamespace     = "rgb11"
 	RGB11RegistryContractBytes = 32
 )
@@ -65,68 +64,69 @@ func NormalizeRGB11Ticker(raw string) (string, error) {
 	return ticker, nil
 }
 
-func RGB11RegistryKey(providerDID, ticker string) (string, error) {
-	if err := ValidatePrimaryDIDName(providerDID); err != nil {
-		return "", err
+func RGB11RegistryKey(providerDID, ticker string, ordinal uint64) (string, error) {
+	if err := ValidatePrimaryDIDName(providerDID); err != nil || !validSegment(providerDID) || ordinal == 0 {
+		return "", ErrInvalidRecord
 	}
 	base, err := NormalizeRGB11Ticker(ticker)
 	if err != nil {
 		return "", err
 	}
-	key := "/rgb11/" + providerDID + "/" + base
+	key := "/rgb11/" + providerDID + "/" + base + "/" + strconv.FormatUint(ordinal, 10)
 	if _, err := ParseKey(key); err != nil {
 		return "", err
 	}
 	return key, nil
 }
 
-func EncodeRGB11RegistryContracts(contractIDs []string) ([]byte, error) {
-	if len(contractIDs) == 0 {
-		return nil, ErrInvalidRecord
+func RGB11RegistryPrefix(providerDID, ticker string) (string, error) {
+	if err := ValidatePrimaryDIDName(providerDID); err != nil || !validSegment(providerDID) {
+		return "", ErrInvalidRecord
 	}
-	value := make([]byte, 1, 1+len(contractIDs)*RGB11RegistryContractBytes)
-	value[0] = RGB11RegistryVersion
-	seen := make(map[string]struct{}, len(contractIDs))
-	for _, id := range contractIDs {
-		if len(id) != 64 || id != strings.ToLower(id) {
-			return nil, ErrInvalidRecord
-		}
-		raw, err := hex.DecodeString(id)
-		if err != nil || len(raw) != RGB11RegistryContractBytes || strings.Trim(id, "0") == "" {
-			return nil, ErrInvalidRecord
-		}
-		if _, ok := seen[id]; ok {
-			return nil, ErrInvalidRecord
-		}
-		seen[id] = struct{}{}
-		value = append(value, raw...)
+	base, err := NormalizeRGB11Ticker(ticker)
+	if err != nil {
+		return "", err
 	}
-	if len(value) > wire.MaxDKVSRecordSize {
-		return nil, ErrInvalidRecord
-	}
-	return value, nil
+	return "/rgb11/" + providerDID + "/" + base, nil
 }
 
-func DecodeRGB11RegistryContracts(value []byte) ([]string, error) {
-	if len(value) < 1+RGB11RegistryContractBytes || value[0] != RGB11RegistryVersion ||
-		(len(value)-1)%RGB11RegistryContractBytes != 0 {
+func parseRGB11RegistryKey(parsed ParsedKey) (provider, ticker string, ordinal uint64, err error) {
+	if parsed.Namespace != RGB11RegistryNamespace || len(parsed.Segments) != 3 ||
+		ValidatePrimaryDIDName(parsed.Segments[0]) != nil || !validSegment(parsed.Segments[0]) {
+		return "", "", 0, ErrInvalidKey
+	}
+	ticker, err = NormalizeRGB11Ticker(parsed.Segments[1])
+	if err != nil || ticker != parsed.Segments[1] {
+		return "", "", 0, ErrInvalidKey
+	}
+	ordinal, err = strconv.ParseUint(parsed.Segments[2], 10, 64)
+	if err != nil || ordinal == 0 || strconv.FormatUint(ordinal, 10) != parsed.Segments[2] {
+		return "", "", 0, ErrInvalidKey
+	}
+	return parsed.Segments[0], ticker, ordinal, nil
+}
+
+func EncodeRGB11ContractID(contractID string) ([]byte, error) {
+	if len(contractID) != RGB11RegistryContractBytes*2 ||
+		contractID != strings.ToLower(contractID) || strings.Trim(contractID, "0") == "" {
 		return nil, ErrInvalidRecord
 	}
-	count := (len(value) - 1) / RGB11RegistryContractBytes
-	ids := make([]string, 0, count)
-	seen := make(map[string]struct{}, count)
-	for offset := 1; offset < len(value); offset += RGB11RegistryContractBytes {
-		id := hex.EncodeToString(value[offset : offset+RGB11RegistryContractBytes])
-		if strings.Trim(id, "0") == "" {
-			return nil, ErrInvalidRecord
-		}
-		if _, ok := seen[id]; ok {
-			return nil, ErrInvalidRecord
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
+	raw, err := hex.DecodeString(contractID)
+	if err != nil || len(raw) != RGB11RegistryContractBytes {
+		return nil, ErrInvalidRecord
 	}
-	return ids, nil
+	return raw, nil
+}
+
+func DecodeRGB11ContractID(value []byte) (string, error) {
+	if len(value) != RGB11RegistryContractBytes {
+		return "", ErrInvalidRecord
+	}
+	id := hex.EncodeToString(value)
+	if strings.Trim(id, "0") == "" {
+		return "", ErrInvalidRecord
+	}
+	return id, nil
 }
 
 func BuildRGB11AssetName(providerDID, ticker string, ordinal uint64) (string, error) {
@@ -143,122 +143,96 @@ func BuildRGB11AssetName(providerDID, ticker string, ordinal uint64) (string, er
 	return "rgb11:f:" + base + "@" + providerDID, nil
 }
 
-func RGB11RegistrationFromRecord(record *wire.DKVSRecord, contractID string) (*RGB11Registration, error) {
+func RGB11RegistrationFromRecord(record *wire.DKVSRecord) (*RGB11Registration, error) {
 	if record == nil {
 		return nil, ErrRecordNotFound
 	}
 	parsed, err := ParseKey(record.Key)
-	if err != nil || parsed.Namespace != RGB11RegistryNamespace || len(parsed.Segments) != 2 {
-		return nil, ErrInvalidRecord
-	}
-	ids, err := DecodeRGB11RegistryContracts(record.Value)
 	if err != nil {
 		return nil, err
 	}
-	for index, id := range ids {
-		if id != contractID {
-			continue
-		}
-		ordinal := uint64(index + 1)
-		name, err := BuildRGB11AssetName(parsed.Segments[0], parsed.Segments[1], ordinal)
-		if err != nil {
-			return nil, err
-		}
-		return &RGB11Registration{
-			ContractID: id, AssetName: name, ProviderDID: parsed.Segments[0],
-			BaseTicker: parsed.Segments[1], Ordinal: ordinal,
-		}, nil
+	provider, ticker, ordinal, err := parseRGB11RegistryKey(parsed)
+	if err != nil {
+		return nil, err
 	}
-	return nil, ErrRecordNotFound
+	contractID, err := DecodeRGB11ContractID(record.Value)
+	if err != nil {
+		return nil, err
+	}
+	name, err := BuildRGB11AssetName(provider, ticker, ordinal)
+	if err != nil {
+		return nil, err
+	}
+	return &RGB11Registration{
+		ContractID: contractID, AssetName: name, ProviderDID: provider,
+		BaseTicker: ticker, Ordinal: ordinal,
+	}, nil
 }
 
 func isRGB11RegistryRecord(record *wire.DKVSRecord, parsed ParsedKey) bool {
-	return record != nil && parsed.Namespace == RGB11RegistryNamespace && len(parsed.Segments) == 2
+	if record == nil || parsed.Namespace != RGB11RegistryNamespace {
+		return false
+	}
+	_, _, _, err := parseRGB11RegistryKey(parsed)
+	return err == nil
 }
 
 func validateRGB11RegistryStored(record *wire.DKVSRecord, parsed ParsedKey) error {
 	if !isRGB11RegistryRecord(record, parsed) || IsTombstone(record.Flags) ||
-		record.TTL != 0 || len(record.FeeProof) != 0 || len(record.PubKey) == 0 {
+		record.Seq != 1 || record.TTL != 0 || len(record.FeeProof) != 0 || len(record.PubKey) == 0 {
 		return ErrInvalidRecord
 	}
 	if err := VerifySignature(record); err != nil {
 		return err
 	}
-	if err := ValidatePrimaryDIDName(parsed.Segments[0]); err != nil {
-		return err
-	}
-	base, err := NormalizeRGB11Ticker(parsed.Segments[1])
-	if err != nil || base != parsed.Segments[1] {
-		return ErrInvalidRecord
-	}
-	_, err = DecodeRGB11RegistryContracts(record.Value)
+	_, err := DecodeRGB11ContractID(record.Value)
 	return err
 }
 
-func validateRGB11RegistryMutation(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord) error {
-	if !isRGB11RegistryRecord(record, parsed) {
-		return ErrInvalidRecord
-	}
-	next, err := DecodeRGB11RegistryContracts(record.Value)
+func (i *Indexer) validateRGB11RegistryInsertLocked(record *wire.DKVSRecord, parsed ParsedKey,
+	height, now uint64) error {
+
+	provider, ticker, ordinal, err := parseRGB11RegistryKey(parsed)
 	if err != nil {
 		return err
 	}
-	if existing == nil {
-		if len(next) != 1 {
-			return ErrInvalidRecord
-		}
-		return nil
-	}
-	current, err := DecodeRGB11RegistryContracts(existing.Value)
-	if err != nil || len(next) != len(current)+1 {
-		return ErrInvalidRecord
-	}
-	for i := range current {
-		if next[i] != current[i] {
-			return ErrInvalidRecord
-		}
-	}
-	return nil
-}
-
-func (i *Indexer) validateRGB11RegistryMutationLocked(record *wire.DKVSRecord, parsed ParsedKey,
-	existing *wire.DKVSRecord, height, now uint64) error {
-
-	if err := validateRGB11RegistryMutation(record, parsed, existing); err != nil {
+	if _, err := DecodeRGB11ContractID(record.Value); err != nil {
 		return err
 	}
-	next, err := DecodeRGB11RegistryContracts(record.Value)
-	if err != nil || len(next) == 0 {
-		return ErrInvalidRecord
-	}
-	added := next[len(next)-1]
-	records, _, _, err := i.scanLocked("/rgb11", nil, 0, true, height, now)
+	prefix, _ := RGB11RegistryPrefix(provider, ticker)
+	records, _, _, err := i.scanLocked(prefix, nil, 0, true, height, now)
 	if err != nil {
 		return err
 	}
-	for _, candidate := range records {
+	if uint64(len(records))+1 != ordinal {
+		return ErrInvalidSequence
+	}
+	added, _ := DecodeRGB11ContractID(record.Value)
+	all, _, _, err := i.scanLocked("/rgb11", nil, 0, true, height, now)
+	if err != nil {
+		return err
+	}
+	for _, candidate := range all {
 		if candidate == nil || candidate.Key == record.Key {
 			continue
 		}
-		ids, err := DecodeRGB11RegistryContracts(candidate.Value)
+		id, err := DecodeRGB11ContractID(candidate.Value)
 		if err != nil {
 			return err
 		}
-		for _, id := range ids {
-			if id == added {
-				return ErrInvalidRecord
-			}
+		if id == added {
+			return ErrInvalidRecord
 		}
 	}
 	return nil
 }
 
 func (i *Indexer) LookupRGB11Contract(contractID string) (*RGB11Registration, error) {
-	if i == nil || len(contractID) != 64 || contractID != strings.ToLower(contractID) {
+	if i == nil {
 		return nil, ErrInvalidRecord
 	}
-	if _, err := hex.DecodeString(contractID); err != nil || strings.Trim(contractID, "0") == "" {
-		return nil, ErrInvalidRecord
+	if _, err := EncodeRGB11ContractID(contractID); err != nil {
+		return nil, err
 	}
 	records, _, _, err := i.scan("/rgb11", nil, 0, true)
 	if err != nil {
@@ -266,12 +240,12 @@ func (i *Indexer) LookupRGB11Contract(contractID string) (*RGB11Registration, er
 	}
 	var found *RGB11Registration
 	for _, record := range records {
-		reg, err := RGB11RegistrationFromRecord(record, contractID)
-		if errors.Is(err, ErrRecordNotFound) {
-			continue
-		}
+		reg, err := RGB11RegistrationFromRecord(record)
 		if err != nil {
 			return nil, err
+		}
+		if reg.ContractID != contractID {
+			continue
 		}
 		if found != nil && found.AssetName != reg.AssetName {
 			return nil, ErrInvalidRecord
@@ -294,27 +268,32 @@ func (i *Indexer) LookupRGB11AssetName(assetName string) (*RGB11Registration, er
 		return nil, err
 	}
 	for _, record := range records {
-		parsed, err := ParseKey(record.Key)
-		if err != nil || parsed.Namespace != RGB11RegistryNamespace || len(parsed.Segments) != 2 {
-			continue
-		}
-		ids, err := DecodeRGB11RegistryContracts(record.Value)
+		reg, err := RGB11RegistrationFromRecord(record)
 		if err != nil {
 			return nil, err
 		}
-		for index, id := range ids {
-			ordinal := uint64(index + 1)
-			name, err := BuildRGB11AssetName(parsed.Segments[0], parsed.Segments[1], ordinal)
-			if err != nil {
-				return nil, err
-			}
-			if name == assetName {
-				return &RGB11Registration{
-					ContractID: id, AssetName: name, ProviderDID: parsed.Segments[0],
-					BaseTicker: parsed.Segments[1], Ordinal: ordinal,
-				}, nil
-			}
+		if reg.AssetName == assetName {
+			return reg, nil
 		}
 	}
 	return nil, ErrRecordNotFound
+}
+
+func (i *Indexer) RGB11RegistryCount(providerDID, ticker string) (uint64, error) {
+	if i == nil {
+		return 0, ErrInvalidRecord
+	}
+	prefix, err := RGB11RegistryPrefix(providerDID, ticker)
+	if err != nil {
+		return 0, err
+	}
+	records, _, _, err := i.scan(prefix, nil, 0, true)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(len(records)), nil
+}
+
+func IsRGB11RegistryNotFound(err error) bool {
+	return errors.Is(err, ErrRecordNotFound)
 }
