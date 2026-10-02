@@ -11,18 +11,18 @@ import (
 func rgb11TestContractID(n int) string { return fmt.Sprintf("%064x", n) }
 
 func rgb11SignedRegistryRecord(t *testing.T, signer *btcec.PrivateKey, provider, ticker string,
-	contractIDs []string, seq, height uint64) *Record {
+	ordinal uint64, contractID string, height uint64) *Record {
 
 	t.Helper()
-	key, err := RGB11RegistryKey(provider, ticker)
+	key, err := RGB11RegistryKey(provider, ticker, ordinal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := EncodeRGB11RegistryContracts(contractIDs)
+	value, err := EncodeRGB11ContractID(contractID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := NewSignedRecord(signer, key, value, RecordOptions{Seq: seq, IssueHeight: height})
+	record, err := NewSignedRecord(signer, key, value, RecordOptions{Seq: 1, IssueHeight: height})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,9 +36,9 @@ func TestRGB11RegistryCoreNodeInternalWriteAndDKVSSync(t *testing.T) {
 	}
 	source := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
 
-	first := rgb11SignedRegistryRecord(t, coreKey, "alice", "USDT",
-		[]string{rgb11TestContractID(1)}, 1, 100)
-
+	first := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USDT", 1, rgb11TestContractID(1), 100,
+	)
 	if _, err := source.PutLocal(first); !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("ordinary DKVS put created RGB11 registry: %v", err)
 	}
@@ -46,10 +46,11 @@ func TestRGB11RegistryCoreNodeInternalWriteAndDKVSSync(t *testing.T) {
 		t.Fatalf("CoreNode internal first write updated=%v err=%v", updated, err)
 	}
 
-	second := rgb11SignedRegistryRecord(t, coreKey, "alice", "USDT",
-		[]string{rgb11TestContractID(1), rgb11TestContractID(2)}, 2, 100)
+	second := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USDT", 2, rgb11TestContractID(2), 100,
+	)
 	if updated, err := source.PutInternalRGB11Registry(second); err != nil || !updated {
-		t.Fatalf("CoreNode internal append updated=%v err=%v", updated, err)
+		t.Fatalf("CoreNode internal second write updated=%v err=%v", updated, err)
 	}
 	if updated, err := source.PutInternalRGB11Registry(second); err != nil || updated {
 		t.Fatalf("idempotent retry updated=%v err=%v", updated, err)
@@ -63,14 +64,14 @@ func TestRGB11RegistryCoreNodeInternalWriteAndDKVSSync(t *testing.T) {
 		t.Fatalf("registration=%+v", reg)
 	}
 
-	// RGB11 naming is DKVS state. A fresh node learns it through DKVS path
-	// synchronization; no SatoshiNet block replay participates in rebuilding it.
-	snapshot, err := source.GetPathSnapshot("/rgb11/alice")
+	// RGB11 naming is DKVS state. A fresh node learns the provider/ticker path
+	// through DKVS synchronization; no SatoshiNet block replay rebuilds names.
+	snapshot, err := source.GetPathSnapshot("/rgb11/alice/usdt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	target := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
-	if applied, err := target.ApplyPathSnapshot(snapshot); err != nil || applied != 1 {
+	if applied, err := target.ApplyPathSnapshot(snapshot); err != nil || applied != 2 {
 		t.Fatalf("apply RGB11 DKVS snapshot applied=%d err=%v", applied, err)
 	}
 	targetReg, err := target.LookupRGB11Contract(rgb11TestContractID(2))
@@ -79,24 +80,34 @@ func TestRGB11RegistryCoreNodeInternalWriteAndDKVSSync(t *testing.T) {
 	}
 }
 
-func TestRGB11RegistryRejectsMutationAndContractIDReuse(t *testing.T) {
+func TestRGB11RegistryRejectsMutationContractReuseAndOrdinalGaps(t *testing.T) {
 	coreKey, _ := btcec.NewPrivateKey()
 	idx := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
 
-	first := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD",
-		[]string{rgb11TestContractID(10)}, 1, 100)
+	first := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USD", 1, rgb11TestContractID(10), 100,
+	)
 	if _, err := idx.PutInternalRGB11Registry(first); err != nil {
 		t.Fatal(err)
 	}
 
-	reordered := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD",
-		[]string{rgb11TestContractID(11), rgb11TestContractID(10)}, 2, 100)
-	if _, err := idx.PutInternalRGB11Registry(reordered); !errors.Is(err, ErrInvalidRecord) {
-		t.Fatalf("registry reorder accepted: %v", err)
+	conflict := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USD", 1, rgb11TestContractID(11), 100,
+	)
+	if _, err := idx.PutInternalRGB11Registry(conflict); !errors.Is(err, ErrWriteConflict) {
+		t.Fatalf("immutable registration changed: %v", err)
 	}
 
-	otherNamespace := rgb11SignedRegistryRecord(t, coreKey, "company", "USD",
-		[]string{rgb11TestContractID(10)}, 1, 100)
+	gap := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USD", 3, rgb11TestContractID(11), 100,
+	)
+	if _, err := idx.PutInternalRGB11Registry(gap); !errors.Is(err, ErrInvalidSequence) {
+		t.Fatalf("ordinal gap accepted: %v", err)
+	}
+
+	otherNamespace := rgb11SignedRegistryRecord(
+		t, coreKey, "company", "USD", 1, rgb11TestContractID(10), 100,
+	)
 	if _, err := idx.PutInternalRGB11Registry(otherNamespace); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("same ContractID registered in a second namespace: %v", err)
 	}
@@ -107,34 +118,25 @@ func TestRGB11RegistryRejectsMutationAndContractIDReuse(t *testing.T) {
 	}
 }
 
-func TestRGB11RegistrySequenceAndKeyBoundaries(t *testing.T) {
-	coreKey, _ := btcec.NewPrivateKey()
-	idx := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
-
-	if _, err := RGB11RegistryKey("abcdefghijk", "USD"); err == nil {
+func TestRGB11RegistryKeyAndValueBoundaries(t *testing.T) {
+	if _, err := RGB11RegistryKey("abcdefghijk", "USD", 1); err == nil {
 		t.Fatal("11-character DID accepted")
 	}
-	if _, err := RGB11RegistryKey("alice", "USD_2"); err == nil {
+	if _, err := RGB11RegistryKey("alice", "USD_2", 1); err == nil {
 		t.Fatal("reserved ticker suffix accepted")
 	}
-	if _, err := EncodeRGB11RegistryContracts([]string{rgb11TestContractID(1), rgb11TestContractID(1)}); err == nil {
-		t.Fatal("duplicate ContractID accepted")
+	if _, err := RGB11RegistryKey("alice", "USD", 0); err == nil {
+		t.Fatal("zero ordinal accepted")
 	}
+	if _, err := EncodeRGB11ContractID(strings64("0")); err == nil {
+		t.Fatal("zero ContractID accepted")
+	}
+}
 
-	badSeq := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD",
-		[]string{rgb11TestContractID(20)}, 2, 100)
-	if _, err := idx.PutInternalRGB11Registry(badSeq); !errors.Is(err, ErrInvalidSequence) {
-		t.Fatalf("new registry accepted non-1 sequence: %v", err)
+func strings64(value string) string {
+	result := ""
+	for len(result) < 64 {
+		result += value
 	}
-
-	first := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD",
-		[]string{rgb11TestContractID(20)}, 1, 100)
-	if _, err := idx.PutInternalRGB11Registry(first); err != nil {
-		t.Fatal(err)
-	}
-	skipSeq := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD",
-		[]string{rgb11TestContractID(20), rgb11TestContractID(21)}, 3, 100)
-	if _, err := idx.PutInternalRGB11Registry(skipSeq); !errors.Is(err, ErrInvalidSequence) {
-		t.Fatalf("registry accepted sequence gap: %v", err)
-	}
+	return result[:64]
 }
