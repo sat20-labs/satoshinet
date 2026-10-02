@@ -2,122 +2,222 @@
 
 ## Scope
 
-This change implements the **indexer-side state machine and persistence**, following `sat20wallet/docs/rgb11-asset-naming-design.md` and wallet PR #10. It does not implement RGB custody, Transcend deposit/withdraw, private-channel operations, RGB balance crediting, or a production naming transaction/proof adapter.
+This change implements the SatoshiNet **indexer-side** RGB11 naming registry and Primary Ordinals DID binding required before STP/Transcend supports RGB asset deposit/withdraw.
 
-The current deployment has no `RGB11NamingSource`. It indexes empty naming effects and reports `source_configured=false`. This is deliberate: arbitrary OP_RETURN data, a normal transfer recipient, an unsigned RPC request, or caller-supplied `verified=true` must not be able to assign a provider identity.
+It does **not** implement RGB custody, RGB balance crediting, Transcend deposit/withdraw, private-channel splicing, or RGB consignment validation on bridge ingress. Those remain later STP work.
 
-The future STP Transcend-channel integration supplies verified effects through the existing block-indexing lifecycle. This is an internal integration contract, **not a signature or RGB validation implementation**. A complete, externally usable Bind/registration flow still needs that adapter and the corresponding transaction/wallet entrypoints.
+RGB11 naming is built into the L2 indexer and is active by default. There is no RGB11 feature flag and no `Config.RGB11NamingSource`.
 
-## Identity and names
+## Identity model
 
-- Strict identity: all 32 bytes of the RGB ContractID, encoded as **64 lowercase hex characters** at the indexer boundary. This is lossless encoding, not a fingerprint or another hash. An RGB adapter decodes the standard RGB textual ContractID before calling this API.
-- Registered name: `rgb11:<existing asset type>:<normalized ticker>[_ordinal]@<canonical DID>`.
-- The first ordinal is 1 and is omitted in the name. The second is `_2`.
-- Asset type retains its existing meaning (`f` or `n`); it is not a provider/locator field.
-- Counter namespace: `(canonical provider DID, normalized base ticker)`, shared across asset types.
-- Normalization matches the wallet implementation (lowercase ASCII alphanumeric plus hyphens). Raw `_digits` suffixes, `@` and `:` are rejected before normalization. Ticker input is bounded to 1024 bytes.
-- No fingerprint generation, collision extension, old-name compatibility, local-address fallback or editable SDK label enters this registry.
-- Existing canonical-history mappings are never deleted or reassigned. Repeating an already registered ContractID returns its original mapping, without spending another ordinal or consulting the address's newly selected DID. Conflicting genesis/ticker/type facts are rejected.
+Strict RGB identity is the complete ContractID. No fingerprint is generated or accepted as a second identity.
 
-## Trusted event source
+The registered SatoshiNet asset name is:
 
-`rgb11names.EventSource.RGB11NamingEvents(*common.Block)` is configured once at indexer startup using `Config.RGB11NamingSource`. It is inherited by validation and RPC snapshots and cannot be replaced after block processing starts.
+```text
+rgb11:<existing type>:<baseTicker>[_ordinal]@<providerDID>
+```
 
-The source MUST:
+Examples:
 
-1. Return effects only for transactions already accepted by chain/contract validation.
-2. Authenticate Bind actions to the address controlling the DID. For a new registration, authenticate the genesis-address authorization bound to the full ContractID; merely referencing another party's outpoint is not proof of control.
-3. Verify the complete RGB ContractID ↔ genesis outpoint/address ↔ original ticker/type relationship. Never use a transfer's current recipient/terminal outpoint instead of genesis.
-4. Verify Ordinals DID existence, canonical spelling, immutable sat lineage, and ownership against an immutable, hash-identified L1 view.
-5. Emit every ownership change, including transfer away and back. `Ownership.Revision` advances for a change; it does not advance merely for a new confirmation/proof of the same owner.
-6. Return the same ordered effects when a block is replayed. Do not query the latest wall-clock HTTP state while replaying historical blocks.
-7. Filter invalid user actions according to the upstream protocol before returning approved effects. An invalid *approved* effect or a missing dependency is an integration error and stops the indexer before advancing its base state.
-8. Avoid synchronous calls back into the compiling indexer; the source executes under its snapshot lock.
+```text
+rgb11:f:usdt@tether
+rgb11:f:usdt_2@tether
+```
 
-These requirements are intentionally not replaced with boolean flags. This PR does not expose a registration mutation RPC. Once a database has naming effects, restarting without its source permits historical reads but blocks further indexing instead of silently retaining stale ownership state.
+Rules:
 
-## Indexed effects
+- asset type keeps its existing meaning;
+- provider is the Primary Ordinals DID of the RGB Genesis address;
+- DID is 1-10 Unicode code points, canonical lowercase, and is never truncated;
+- the first ordinal is 1 and omitted; later values use `_2`, `_3`, ...;
+- the ordinal namespace is `(provider DID, normalized base ticker)`;
+- ordinals follow successful L2 registration order and are never reused in canonical history;
+- a registered `ContractID <-> AssetName` mapping is immutable;
+- local SDK labels never enter this registry.
 
-Each event is matched against its block transaction ID and transaction index. Events are strictly ordered by `(tx_index, event_index)`; the indexer rejects duplicate/reordered positions rather than silently sorting them. Bind/registration effects cannot originate from a coinbase transaction. At most 4096 naming events are accepted per block.
+## Primary DID Bind
 
-### Ownership
+Primary DID Bind is a generic SatoshiNet identity operation, not an RGB11- or Transcend-specific operation.
 
-`Ownership { DID, Sat, Address, Revision, L1Height, L1Hash }`
+The SatoshiNet OP_RETURN content type is:
 
-The source supplies verified facts. The indexer checks canonical addresses/network, monotonic revision and L1 height, and stable DID→sat identity. Conflicting hashes at the same L1 height are rejected. The same revision cannot change owner. Empty owner means explicitly inactive/burned.
+```text
+CONTENT_TYPE_PRIMARYDIDBIND = OP_DATA_45
+```
 
-### Primary DID Bind
+The inner bind payload contains:
 
-`Bind { DID, Address }`
+```text
+DID
+public key
+DER ECDSA signature
+```
 
-The canonical DID must contain **1–10 Unicode code points**, use canonical lowercase spelling, and contain no whitespace, control/format characters or reserved naming separators. It is never truncated. The current indexed DID owner must equal the binding address.
+The signature covers:
 
-An address has one primary slot. Binding another owned DID replaces that slot. The binding captures the ownership revision; a transfer invalidates it, including transfer away and back. The new owner must Bind explicitly. A later proof of the same owner/revision does not invalidate the binding.
+```text
+satoshinet-primary-did-bind-v1|<network>|<did>
+```
 
-### Registration
+The indexer derives the P2TR address from the supplied public key. This proves control of the SatoshiNet address performing the Bind operation.
 
-`Register { ContractID, BaseTicker, AssetType, GenesisOutpoint, GenesisAddress, AuthorizedBy }`
+The indexer then reuses the existing DKVS/L1 Ordinals DID resolver to resolve the DID. A valid bind requires:
 
-For first registration:
+1. the DID passes the <=10-character canonical-name rule;
+2. the bind signature is valid;
+3. the P2TR address derived from the signing public key is a current owner address returned by the L1 resolver;
+4. the L1 resolver reports the DID active;
+5. the resolver exposes the current DID owner UTXO.
 
-- the authenticated address must equal the canonical genesis address;
-- that address must have an active primary DID whose current indexed ownership revision still matches;
-- the indexer allocates the next ordinal in the normalized provider/ticker namespace;
-- the immutable registration, reverse AssetName→ContractID mapping, and counter are staged together.
+The owner UTXO is stored as the ownership revision token. If the DID sat moves, its owner UTXO changes, so the old Primary DID Bind becomes inactive. A transfer away and later back to the same address therefore still requires an explicit new Bind.
 
-Provider DID/sat, original normalized ticker/type, genesis facts, ordinal and registration position are captured. Later Bind changes or DID transfers cannot rename a historical registration. The DID's next owner continues its namespace; counters do not restart at a new address.
+An address has one Primary DID slot. A later valid Bind replaces the selected DID for future registrations. Existing RGB11 asset names never change.
 
-The indexer does not create a `TickerInfo` balance entry, mint/credit an asset, or alter any existing STP asset gate. Naming registration alone is never proof that an asset is deposited or spendable on SatoshiNet.
+### L1 replay boundary
 
-## Atomic persistence and snapshots
+The current L1 name endpoint exposes current owner state and owner UTXO. That is sufficient to validate a live Bind and to detect subsequent owner-UTXO changes, but it is **not yet a cryptographic historical ownership proof**.
 
-`BaseIndexer` owns the naming subindex. Naming effects are applied before the base mutates the corresponding block. An event-source failure or invalid effect leaves both naming cursor and base height unchanged. Within a naming block, either all effects are applied or none are; a failed block consumes no ordinal.
+A production-grade full historical rebuild must eventually consume a replayable L1 ownership proof/attestation pinned to an L1 block, rather than querying wall-clock current ownership for an old L2 Bind. This limitation is explicit; it must not be hidden behind a `verified` boolean.
 
-`Index.Stage(baseWriteBatch)` adds naming data to the **same batch** as UTXOs and `SyncStats`. The returned acknowledgment is invoked only after successful Flush. Failed stage/flush retains the pending naming writes.
+The persisted SatoshiNet registry remains deterministic after it has been written. This open item concerns rebuilding Primary DID Bind history from genesis on a fresh node.
 
-Buffer snapshots copy immutable metadata values. Unlike a live lookup that falls back to a newer database state, an older RPC snapshot remains unchanged after subsequent live flushes. Naming deltas are not subtracted before the backup flush; acknowledgment removes only matching pending versions, preserving newer live updates.
+## Automatic RGB11 registration from transcend.tc
 
-On restart, the persisted naming cursor must equal the base indexer's persisted sync height/hash. A mismatch, corrupt reverse mapping, orphan counter or inconsistent provider lineage fails closed. An existing pre-feature database with no naming namespace starts from its existing base checkpoint; no historical fingerprint-name migration is introduced.
+There is no public "register RGB asset name" mutation API.
 
-Tests use the repository's default Pebble backend. The persistence boundary requires a transactional batch backend; a backend that splits a batch into independently visible transactions must not be used to claim the same crash-atomicity guarantee without additional validation.
+The first valid RGB11 `transcend.tc` channel-contract deployment is the registration trigger.
 
-As with the existing base indexer, unflushed/uncommitted fork state may be dropped and replayed from the durable checkpoint. Ordinal non-reuse applies to canonical history, not to abandoned branches. No new deep-reorg policy is introduced.
+The RGB11 SDK adds an immutable registration descriptor to the encoded `transcend.tc` contract content:
 
-Naming metadata is kept in memory separately from the much larger UTXO/asset ledger. RPC and flush clones copy metadata map membership; values are immutable. There are no mutable record pointers returned to callers.
+```text
+marker          = rgb11-reg-v1
+ContractID      = full ContractID
+BaseTicker      = original RGB ticker
+GenesisOutpoint = deterministic RGB Genesis provider outpoint
+GenesisAddress  = address resolved from that Genesis outpoint
+```
 
-## Read-only HTTP API
+The descriptor deliberately does **not** contain:
 
-Routes are under the existing network/proxy prefix:
+- Provider DID;
+- ordinal;
+- final SatoshiNet AssetName.
+
+Those values are assigned by SatoshiNet state.
+
+Because the descriptor is part of the encoded channel-contract content, the existing Transcend deployment invoice signatures cover it.
+
+### L2 indexer recognition
+
+For every accepted L2 block the base indexer scans STP OP_RETURN records.
+
+A `CONTENT_TYPE_DEPLOYCONTRACT` entry is eligible for RGB11 automatic registration only when all of the following hold:
+
+1. it decodes as a `transcend.tc` deployment;
+2. the embedded asset is `rgb11:f:<full ContractID>` or the supported RGB11 type;
+3. the descriptor ContractID exactly equals that asset ContractID;
+4. the contract path is the expected RGB11 asset + `transcend.tc` path;
+5. the deployment funds an already known SatoshiNet channel;
+6. both existing channel participants' signatures verify over the exact unsigned deploy invoice;
+7. descriptor ticker, Genesis outpoint and Genesis address pass canonical validation.
+
+Arbitrary or malformed OP_RETURN data cannot create a registration.
+
+After a candidate passes channel-deploy authentication, the indexer checks the Genesis address's active Primary DID Bind. If it exists and is still backed by the current owner UTXO, the indexer allocates the next ordinal and atomically writes:
+
+```text
+ContractID -> Registration
+AssetName  -> ContractID
+(providerDID, baseTicker) -> maxOrdinal
+```
+
+If no valid Primary DID Bind exists, the `transcend.tc` deployment itself remains valid, but canonical RGB11 name registration is skipped. A naming-policy failure must not invalidate an otherwise valid channel-contract deployment.
+
+A repeated Transcend deployment for an already registered ContractID reuses the immutable original mapping and consumes no ordinal.
+
+## Important STP boundary
+
+The automatic registration described above recognizes an authenticated channel-contract deployment and its descriptor. It does **not** prove that an RGB consignment entering the bridge actually matches that descriptor.
+
+When STP/Transcend RGB deposit support is implemented, ingress validation must verify the real RGB consignment/ContractID and its Genesis facts against the registered descriptor before any L2 balance is credited.
+
+Naming registration alone never creates, mints, or credits an RGB asset on SatoshiNet.
+
+## Persistence and rollback
+
+The naming subindex is owned by `BaseIndexer`.
+
+Naming state and base `SyncStats`/UTXO state are staged into the same database write batch. A failed batch retains pending naming writes for retry.
+
+The persisted naming cursor must match the base indexer's persisted height/hash on restart. Reverse-map, counter and provider-lineage corruption fails closed.
+
+Uncommitted fork state can be discarded and replayed using the existing indexer rollback policy. Ordinal non-reuse applies to canonical history, not abandoned branches.
+
+## Read-only RPC
+
+Routes are read-only:
 
 | Method | Route | Purpose |
 |---|---|---|
-| GET | `/v3/rgb11/naming/status` | Indexed height/hash and whether a source is configured |
-| GET | `/v3/names/primary/:address` | Active primary DID and its hash-identified L1 ownership fact |
-| GET | `/v3/rgb11/contract/:contractid` | Full ContractID → immutable registration |
-| GET | `/v3/rgb11/name/:assetname` | Full AssetName → immutable registration/ContractID |
-| GET | `/v3/rgb11/ordinal?provider=alice&ticker=USD` | Current maximum ordinal; read only, not a reservation |
+| GET | `/v3/rgb11/naming/status` | Naming snapshot height/hash |
+| GET | `/v3/names/primary/:address` | Current active Primary DID |
+| GET | `/v3/rgb11/contract/:contractid` | ContractID -> registration |
+| GET | `/v3/rgb11/name/:assetname` | AssetName -> registration/ContractID |
+| GET | `/v3/rgb11/ordinal?provider=alice&ticker=USD` | Current max ordinal |
 
-Success uses `{ "code": 0, "msg": "ok", "data": ... }`. `data.indexed_at` supplies the exact snapshot height/hash. Invalid input returns 400, a missing/inactive record returns 404, and unavailable/corrupt state returns 503. A backend without the optional naming reader capability returns 503 rather than pretending to have an empty authoritative registry.
+There is no HTTP naming mutation route and no ordinal-reservation endpoint.
 
-There are no POST/PUT/DELETE naming routes. `source_configured=true` identifies an installed integration; it is not a claim that an untrusted source is cryptographically verified by this module.
+## SDK integration
+
+Before SatoshiNet registration, the wallet keeps the human-readable RGB11 name as mutable SDK-local metadata.
+
+If the Genesis address has no qualified Primary DID, the default local name is:
+
+```text
+ticker@<genesis-address-last-12>
+```
+
+The immutable wallet asset key remains the full ContractID projection.
+
+For a validated RGB11 contract, the SDK can build a `TranscendRegistrationDescriptor` from:
+
+- full ContractID;
+- original base ticker;
+- deterministic Genesis provider outpoint;
+- Genesis address.
+
+`TranscendContract.Encode()` requires and appends this descriptor for RGB11 assets. Non-RGB11 Transcend contracts preserve their previous encoding.
 
 ## Test coverage
 
-The new tests cover:
+Indexer coverage includes:
 
-- 10/11-character and Unicode DID boundaries, reserved ticker syntax and canonical formatting;
-- active owner/address validation, replacement of a primary DID, and normalized-ticker namespace collisions;
-- multiple same-block registrations, ordinal allocation and repeated ContractID idempotency;
-- DID transfer, transfer-back without automatic rebind, and historical provider/name freeze;
-- incorrect authorization, changed genesis/ticker/type, malformed event unions/order/transaction identity;
-- all-or-nothing event failure, counter overflow, collision/corruption refusal and replay determinism;
-- failed storage stage/flush followed by retry, persisted base/name cursor matching, restart and unflushed replay;
-- old RPC snapshots after newer flushes, copy isolation and concurrent readers under the race detector;
-- actual BaseIndexer block processing and shared-batch flush/restart, with authenticated-effect fixtures;
-- registry→real database→restart→production Gin routes, plus refusal of all mutation HTTP methods.
+- DID 10/11-character boundary;
+- signed Primary DID Bind;
+- L1 owner-address validation;
+- owner-UTXO transfer invalidating an old Bind;
+- transfer-away/back requiring rebind;
+- signed known-channel `transcend.tc` deployment recognition;
+- malformed/unsigned/non-channel deployment refusal;
+- automatic `ContractID <-> AssetName` registration;
+- same-provider ordinal allocation and immutable mappings;
+- missing Primary DID causing registration skip without rejecting the channel deployment;
+- shared database batch, restart and RPC snapshot behavior;
+- race tests and full indexer regression.
 
-These are indexer/storage/RPC integration tests. They do **not** claim to validate a real Transcend deposit/withdraw, an Ordinals proof oracle or an issuer signature implementation.
+The wallet PR adds:
 
-## Next integration (not part of this change)
+- local mutable-name identity regression tests;
+- RGB11 Transcend descriptor validation and encode/decode round-trip;
+- connected SDK e2e coverage for issue -> local name -> local rename -> immutable balance/key -> descriptor creation -> Transcend contract round-trip.
 
-A production adapter should derive these effects from the selected validated contract/chain mechanism, supply replayable L1 ownership facts, and authenticate genesis-address authorization. Wallet Bind/registration entrypoints then submit the corresponding actions. The later Transcend channel implementation can reuse existing mappings when assets enter/exit, keeping custody verification and naming assignment separate.
+## Deferred work
+
+Not part of this PR:
+
+- RGB deposit/withdraw through Transcend;
+- RGB private-channel splicing;
+- L2 RGB balance credit/debit;
+- RGB consignment validation against the registration descriptor;
+- final replayable L1 Ordinals ownership proof format for fresh-node historical Primary DID Bind rebuild.
