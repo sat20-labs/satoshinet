@@ -271,6 +271,9 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 	if len(record.PubKey) == 0 {
 		return false, ValidateRecordIdentity(record, parsed)
 	}
+	if isPrimaryDIDRecord(record, parsed) {
+		return false, validatePrimaryDIDRecordWith(record, parsed, validators.resolver)
+	}
 	switch parsed.Namespace {
 	case "name", "svc":
 		if existing != nil && bytes.Equal(existing.PubKey, record.PubKey) && !requiresResolve {
