@@ -202,7 +202,8 @@ func validateRGB11RegistryPermissionWith(record *wire.DKVSRecord, parsed ParsedK
 func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 	replacedKeys map[string]struct{}, height, now uint64) error {
 
-	incoming := make(map[string]string)
+	incomingByContract := make(map[string]string)
+	incomingByKey := make(map[string]string)
 	for _, record := range records {
 		if record == nil {
 			continue
@@ -215,12 +216,16 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 		if err != nil {
 			return ErrInvalidRecord
 		}
-		if key, duplicate := incoming[contractID]; duplicate && key != record.Key {
+		if key, duplicate := incomingByContract[contractID]; duplicate && key != record.Key {
 			return ErrInvalidRecord
 		}
-		incoming[contractID] = record.Key
+		if old, duplicate := incomingByKey[record.Key]; duplicate && old != contractID {
+			return ErrWriteConflict
+		}
+		incomingByContract[contractID] = record.Key
+		incomingByKey[record.Key] = contractID
 	}
-	if len(incoming) == 0 {
+	if len(incomingByContract) == 0 && len(replacedKeys) == 0 {
 		return nil
 	}
 
@@ -232,9 +237,6 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 		if record == nil {
 			continue
 		}
-		if _, replaced := replacedKeys[record.Key]; replaced {
-			continue
-		}
 		parsed, err := ParseKey(record.Key)
 		if err != nil || parsed.Namespace != RGB11RegistryNamespace {
 			continue
@@ -243,7 +245,16 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 		if err != nil {
 			return ErrInvalidRecord
 		}
-		if incomingKey, duplicate := incoming[contractID]; duplicate && incomingKey != record.Key {
+		if incomingID, present := incomingByKey[record.Key]; present {
+			if incomingID != contractID {
+				return ErrWriteConflict
+			}
+		} else if _, replaced := replacedKeys[record.Key]; replaced {
+			// RGB11 registry paths are append-only. An authoritative path
+			// snapshot may add later ordinals but may never erase history.
+			return ErrInvalidRecord
+		}
+		if incomingKey, duplicate := incomingByContract[contractID]; duplicate && incomingKey != record.Key {
 			return ErrInvalidRecord
 		}
 	}
