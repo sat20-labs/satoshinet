@@ -156,7 +156,6 @@ func (b *IndexerMgr) initLocked() {
 	b.contractIndexer = contract_indexer.NewIndexer(b.baseDB, b.chaincfgParam)
 	dkvsCfg := b.dkvsConfig()
 	b.dkvsIndexer = dkvs_indexer.New(b.dkvsDB, dkvsCfg)
-	b.compiling.SetRGB11DIDResolver(dkvsCfg.Resolver)
 	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
 	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
