@@ -29,12 +29,7 @@ func TestPrimaryDIDPersonalRecordValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolver := StaticDIDResolver{Names: map[string]DIDIdentity{
-		"alice": {
-			CanonicalName:  "alice",
-			OwnerAddresses: []string{address},
-			AddressParams: &chaincfg.TestNetParams,
-			Active: true,
-		},
+		"alice": {CanonicalName: "alice", OwnerAddresses: []string{address}, AddressParams: &chaincfg.TestNetParams, Active: true},
 	}}
 	record := &wire.DKVSRecord{Key: key, PubKey: pub, Value: []byte("alice")}
 	if err := validatePrimaryDIDRecordWith(record, parsed, resolver); err != nil {
@@ -55,12 +50,7 @@ func TestPrimaryDIDPersonalRecordValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolver.Names["alice"] = DIDIdentity{
-		CanonicalName:  "alice",
-		OwnerAddresses: []string{wrongAddress},
-		AddressParams: &chaincfg.TestNetParams,
-		Active: true,
-	}
+	resolver.Names["alice"] = DIDIdentity{CanonicalName: "alice", OwnerAddresses: []string{wrongAddress}, AddressParams: &chaincfg.TestNetParams, Active: true}
 	if err := validatePrimaryDIDRecordWith(record, parsed, resolver); !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("DID owned by another address accepted: %v", err)
 	}
