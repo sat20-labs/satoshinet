@@ -89,9 +89,6 @@ type Indexer interface {
 	GetDKVSUsage(prefix string) (*dkvs_indexer.Usage, error)
 	GetDKVSFreeLocalCachePolicy() dkvs_indexer.FreeLocalCachePolicy
 	GetDKVSClientConfig() dkvs_indexer.ClientConfig
-	GetRGB11RegistrationByContract(contractID string) (*dkvs_indexer.RGB11Registration, error)
-	GetRGB11RegistrationByName(assetName string) (*dkvs_indexer.RGB11Registration, error)
-	GetRGB11RegistryCount(providerDID, ticker string) (uint64, error)
 
 	// Wallet-facing state/synchronization API: key ETags plus PathMeta
 	// generations. The server keeps no wallet subscription/cursor state.
