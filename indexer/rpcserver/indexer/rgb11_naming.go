@@ -1,7 +1,6 @@
 package indexer
 
 import (
-	"encoding/hex"
 	"errors"
 	"net/http"
 
@@ -18,7 +17,6 @@ type rgb11DKVSReader interface {
 
 type rgb11DKVSWriter interface {
 	PutDKVSInternalRGB11Registry(record *wire.DKVSRecord) (bool, error)
-	IsCoreNode(pubkey string) bool
 }
 
 type rgb11RegisterRequest struct {
@@ -104,10 +102,6 @@ func (s *Service) handleRGB11InternalRegister(c *gin.Context) {
 		rgb11RegistryError(c, dkvsindexer.ErrInvalidKey, false)
 		return
 	}
-	if len(req.Record.PubKey) == 0 || !writer.IsCoreNode(hex.EncodeToString(req.Record.PubKey)) {
-		c.JSON(http.StatusForbidden, gin.H{"code": -1, "msg": "RGB11 registry writer is not a CoreNode"})
-		return
-	}
 	updated, err := writer.PutDKVSInternalRGB11Registry(req.Record)
 	if err != nil {
 		rgb11RegistryError(c, err, false)
@@ -133,6 +127,8 @@ func rgb11RegistryError(c *gin.Context, err error, unavailable bool) {
 		status = http.StatusNotFound
 	case errors.Is(err, dkvsindexer.ErrInvalidRecord), errors.Is(err, dkvsindexer.ErrInvalidKey):
 		status = http.StatusBadRequest
+	case errors.Is(err, dkvsindexer.ErrPermissionDenied):
+		status = http.StatusForbidden
 	}
 	c.JSON(status, gin.H{"code": -1, "msg": err.Error()})
 }
