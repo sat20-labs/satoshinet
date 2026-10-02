@@ -1,7 +1,7 @@
-// Package rgb11names indexes naming effects, not RGB balances or bridge proofs.
-// An EventSource must supply authenticated, deterministic effects from an
-// already validated block. No HTTP write API or caller-controlled "verified"
-// flag is provided. The STP/contract adapter is deliberately outside this package.
+// Package rgb11names indexes SatoshiNet Primary DID bindings and RGB11
+// ContractID <-> AssetName registrations. It does not index RGB balances or
+// bridge proofs. Block effects are derived by the SatoshiNet indexer from
+// authenticated chain operations; there is no public mutation API.
 package rgb11names
 
 import (
@@ -63,10 +63,9 @@ type Bind struct {
 	Address string `json:"address"`
 }
 
-// Register contains facts whose ContractID/genesis/ticker linkage and address
-// authorization MUST have been checked by EventSource. Referencing an outpoint
-// is not proof of controlling it. ContractID is the complete 32 bytes encoded
-// as 64 lowercase hex characters, NOT a hash/fingerprint of the ContractID.
+// Register contains facts extracted from an authenticated transcend.tc deploy.
+// ContractID is the complete 32 bytes encoded as 64 lowercase hex characters,
+// NOT a hash/fingerprint. Registration itself does not mint or credit assets.
 type Register struct {
 	ContractID      string `json:"contract_id"`
 	BaseTicker      string `json:"base_ticker"`
