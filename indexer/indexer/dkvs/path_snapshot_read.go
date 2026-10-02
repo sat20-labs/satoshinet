@@ -221,6 +221,11 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		}
 	}
 	sort.Slice(active, func(a, b int) bool { return active[a].Key < active[b].Key })
+	if prefix.Namespace == RGB11RegistryNamespace {
+		if err := validateRGB11PathRecords(path, active); err != nil {
+			return validatedPathSnapshot{}, err
+		}
+	}
 	orderedFloors := make([]DeleteFloor, 0, len(floors))
 	for _, floor := range floors {
 		orderedFloors = append(orderedFloors, floor)
