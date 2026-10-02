@@ -75,7 +75,6 @@ type Register struct {
 	AssetType       string `json:"asset_type"`
 	GenesisOutpoint string `json:"genesis_outpoint"`
 	GenesisAddress  string `json:"genesis_address"`
-	AuthorizedBy    string `json:"authorized_by"`
 }
 
 // Exactly one effect must be populated. Position is checked against the block,
@@ -134,7 +133,6 @@ type Counter struct {
 
 type Result struct {
 	Cursor           Cursor        `json:"indexed_at"`
-	SourceConfigured bool          `json:"source_configured"`
 	Binding          *Binding      `json:"binding,omitempty"`
 	Ownership        *Ownership    `json:"ownership,omitempty"`
 	Registration     *Registration `json:"registration,omitempty"`
