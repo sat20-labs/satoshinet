@@ -17,16 +17,6 @@ func (s *Index) Lookup(query Query) (*Result, error) {
 	switch query.Kind {
 	case "status":
 		return result, nil
-	case "primary":
-		address, err := canonicalAddress(query.Value, s.params)
-		if err != nil {
-			return nil, err
-		}
-		binding, owner, err := activeBinding(txn, address)
-		if err != nil {
-			return nil, err
-		}
-		result.Binding, result.Ownership = &binding, &owner
 	case "contract":
 		if !validContractID(query.Value) {
 			return nil, ErrInvalid
@@ -75,9 +65,7 @@ func validPosition(position Position, cursor Cursor) bool {
 	return position.Height >= 0 && position.Height <= cursor.Height && position.TxIndex > 0 && validHash(position.TxID)
 }
 
-// CheckSelf verifies both mapping directions, immutable provider lineage,
-// counter continuity, ownership and primary-binding references. Stale binds
-// after DID transfer are retained as inactive records and are not corruption.
+// CheckSelf verifies both mapping directions and exact ordinal continuity.
 func (s *Index) CheckSelf() error {
 	if s == nil {
 		return ErrUnavailable
@@ -95,43 +83,11 @@ func (s *Index) CheckSelf() error {
 			if t.get(key, &persisted) != nil || persisted != s.tip || !validHash(persisted.EventsHash) {
 				return ErrCorrupt
 			}
-		case strings.HasPrefix(key, "owner/"):
-			var owner Ownership
-			if t.get(key, &owner) != nil || key != "owner/"+owner.DID || ValidateDID(owner.DID) != nil ||
-				owner.OwnerUtxo == "" || !validOutpoint(owner.OwnerUtxo) || owner.OwnerSat < 0 {
-				return ErrCorrupt
-			}
-			if owner.Address != "" {
-				address, err := canonicalAddress(owner.Address, s.params)
-				if err != nil || address != owner.Address {
-					return ErrCorrupt
-				}
-			}
-		case strings.HasPrefix(key, "bind/"):
-			var binding Binding
-			if t.get(key, &binding) != nil || key != "bind/"+binding.Address || !validPosition(binding.BoundAt, s.tip.Cursor) {
-				return ErrCorrupt
-			}
-			address, err := canonicalAddress(binding.Address, s.params)
-			if err != nil || address != binding.Address {
-				return ErrCorrupt
-			}
-			if ValidateDID(binding.DID) != nil || binding.OwnerUtxo == "" || !validOutpoint(binding.OwnerUtxo) || binding.OwnerSat < 0 {
-				return ErrCorrupt
-			}
-			var owner Ownership
-			if t.get("owner/"+binding.DID, &owner) != nil {
-				return ErrCorrupt
-			}
-			// A stale binding after DID transfer is valid historical state. Its
-			// owner UTXO may differ from the DID's current ownership snapshot.
 		case strings.HasPrefix(key, "contract/"):
 			var record Registration
-			if t.get(key, &record) != nil || key != "contract/"+record.ContractID || !validContractID(record.ContractID) || !validOutpoint(record.GenesisOutpoint) || !validPosition(record.RegisteredAt, s.tip.Cursor) {
-				return ErrCorrupt
-			}
-			address, err := canonicalAddress(record.GenesisAddress, s.params)
-			if err != nil || address != record.GenesisAddress {
+			if t.get(key, &record) != nil || key != "contract/"+record.ContractID ||
+				!validContractID(record.ContractID) || !validOutpoint(record.GenesisOutpoint) ||
+				!validPosition(record.RegisteredAt, s.tip.Cursor) || ValidateDID(record.ProviderDID) != nil {
 				return ErrCorrupt
 			}
 			base, err := NormalizeTicker(record.BaseTicker)
@@ -144,13 +100,6 @@ func (s *Index) CheckSelf() error {
 			}
 			var id string
 			if t.get("name/"+name, &id) != nil || id != record.ContractID {
-				return ErrCorrupt
-			}
-			var owner Ownership
-			if t.get("owner/"+record.ProviderDID, &owner) != nil {
-				return ErrCorrupt
-			}
-			if record.ProviderSat != 0 && owner.OwnerSat != 0 && uint64(owner.OwnerSat) != record.ProviderSat {
 				return ErrCorrupt
 			}
 			ns := "counter/" + record.ProviderDID + "/" + base
@@ -170,7 +119,7 @@ func (s *Index) CheckSelf() error {
 				return ErrCorrupt
 			}
 		case strings.HasPrefix(key, "counter/"):
-			// Checked against the registrations below, including orphan counters.
+			// Checked against registrations below.
 		default:
 			return fmt.Errorf("%w: unknown key %q", ErrCorrupt, key)
 		}
@@ -191,7 +140,6 @@ func (s *Index) CheckSelf() error {
 	return nil
 }
 
-// HasEffects distinguishes an empty, disabled registry from an activated one.
 func (s *Index) HasEffects() bool {
 	if s == nil {
 		return false
