@@ -932,6 +932,8 @@ func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRe
 	switch parsed.Namespace {
 	case "name", "svc", "sys", "tmp":
 		return nil
+	case RGB11RegistryNamespace:
+		return validateRGB11RegistryStored(record, parsed)
 	case "personal":
 		if len(parsed.Segments) < 2 || parsed.Segments[0] != AccountID(record.PubKey) {
 			return ErrPermissionDenied
