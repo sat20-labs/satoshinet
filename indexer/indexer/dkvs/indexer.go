@@ -971,7 +971,13 @@ func (i *Indexer) validateStatefulLocked(record *wire.DKVSRecord, parsed ParsedK
 	case "tmp":
 		return i.validateTmp(record)
 	case RGB11RegistryNamespace:
-		return ErrPermissionDenied
+		if existing != nil {
+			if bytes.Equal(existing.Value, record.Value) {
+				return nil
+			}
+			return ErrWriteConflict
+		}
+		return i.validateRGB11RegistryInsertLocked(record, parsed, height, now)
 	default:
 		return nil
 	}
