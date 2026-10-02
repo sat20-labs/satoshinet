@@ -84,6 +84,12 @@ type Event struct {
 	Ownership  *Ownership `json:"ownership,omitempty"`
 	Bind       *Bind      `json:"bind,omitempty"`
 	Register   *Register  `json:"register,omitempty"`
+
+	// Optional is used only for auto-discovered RGB11 registrations. A signed
+	// transcend deployment without a currently valid Primary DID bind is still
+	// a valid SatoshiNet transaction, but it does not register a canonical RGB11
+	// name. Primary DID bind/ownership events themselves are never optional.
+	Optional bool `json:"optional,omitempty"`
 }
 
 type Binding struct {
