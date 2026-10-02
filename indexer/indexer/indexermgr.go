@@ -1,7 +1,6 @@
 package indexer
 
 import (
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -37,14 +36,13 @@ type Config struct {
 }
 
 type coreNodeDKVSSystemVerifier struct {
-	manager  *IndexerMgr
 	fallback dkvs_indexer.SystemVerifier
 }
 
 func (v coreNodeDKVSSystemVerifier) CanWriteSystem(key string, pubKey []byte) error {
 	if strings.HasPrefix(key, "/rgb11/") {
-		if v.manager == nil || v.manager.compiling == nil || len(pubKey) == 0 ||
-			!v.manager.compiling.IsCoreNode(hex.EncodeToString(pubKey)) {
+		signer := fmt.Sprintf("%x", pubKey)
+		if signer != indexer.GetBootstrapPubKey() && signer != indexer.GetCoreNodePubKey() {
 			return dkvs_indexer.ErrPermissionDenied
 		}
 		return nil
@@ -302,7 +300,7 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 	if systemVerifier == nil && ext.SystemVerifierHTTPEndpoint != "" {
 		systemVerifier = dkvs_indexer.HTTPSystemVerifier{Endpoint: ext.SystemVerifierHTTPEndpoint}
 	}
-	cfg.SystemVerifier = coreNodeDKVSSystemVerifier{manager: b, fallback: systemVerifier}
+	cfg.SystemVerifier = coreNodeDKVSSystemVerifier{fallback: systemVerifier}
 	cfg.MailboxPolicy = ext.MailboxPolicy
 	cfg.BlobPolicy = ext.BlobPolicy
 	cfg.TmpPolicy = ext.TmpPolicy
