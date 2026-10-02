@@ -397,7 +397,6 @@ func (p *IndexerMgr) ApplyDKVSMirror(filters []dkvs.Subscription, records []*wir
 	return p.dkvsIndexer.ApplyMirror(filters, records, root)
 }
 
-
 func (p *IndexerMgr) GetRGB11RegistrationByContract(contractID string) (*dkvs.RGB11Registration, error) {
 	if p == nil || p.dkvsIndexer == nil {
 		return nil, errDKVSNotInitialized
