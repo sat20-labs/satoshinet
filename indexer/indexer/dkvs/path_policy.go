@@ -20,8 +20,8 @@ func collectionPath(parsed ParsedKey) string {
 			return "/name/" + parsed.Segments[0]
 		}
 	case "rgb11":
-		if len(parsed.Segments) == 2 {
-			return "/rgb11/" + parsed.Segments[0]
+		if len(parsed.Segments) == 3 {
+			return "/rgb11/" + parsed.Segments[0] + "/" + parsed.Segments[1]
 		}
 	case "svc":
 		if len(parsed.Segments) >= 1 {
@@ -94,8 +94,12 @@ func collectionPathForPrefix(prefix string) string {
 			return prefix
 		}
 	case "rgb11":
-		if len(parsed.Segments) == 1 && ValidatePrimaryDIDName(parsed.Segments[0]) == nil {
-			return prefix
+		if len(parsed.Segments) == 2 &&
+			ValidatePrimaryDIDName(parsed.Segments[0]) == nil {
+			base, err := NormalizeRGB11Ticker(parsed.Segments[1])
+			if err == nil && base == parsed.Segments[1] {
+				return prefix
+			}
 		}
 	case "svc":
 		if len(parsed.Segments) == 1 {
