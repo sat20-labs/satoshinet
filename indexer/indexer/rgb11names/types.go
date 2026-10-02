@@ -142,7 +142,8 @@ type Result struct {
 }
 
 func ValidateDID(did string) error {
-	if !utf8.ValidString(did) || did == "" || utf8.RuneCountInString(did) > MaxDIDCharacters || did != strings.ToLower(did) {
+	if len(did) == 0 || len(did) > MaxDIDCharacters*utf8.UTFMax || !utf8.ValidString(did) ||
+		utf8.RuneCountInString(did) > MaxDIDCharacters || did != strings.ToLower(did) {
 		return ErrInvalid
 	}
 	for _, r := range did {
@@ -157,7 +158,7 @@ func ValidateDID(did string) error {
 // ordinal suffix rejection before normalization. Counter keys use this result,
 // so different raw spellings that normalize equally cannot collide.
 func NormalizeTicker(raw string) (string, error) {
-	if !utf8.ValidString(raw) || len(raw) > MaxTickerBytes || strings.ContainsAny(raw, "@:") {
+	if len(raw) > MaxTickerBytes || !utf8.ValidString(raw) || strings.ContainsAny(raw, "@:") {
 		return "", ErrInvalid
 	}
 	raw = strings.TrimSpace(raw)
@@ -209,6 +210,10 @@ func BuildAssetName(ticker, assetType, provider string, ordinal uint64) (string,
 }
 
 func validHash(text string) bool {
+	// Reject oversized HTTP query values before decoding or allocating.
+	if len(text) != 64 {
+		return false
+	}
 	raw, err := hex.DecodeString(text)
 	return err == nil && len(raw) == 32 && text == strings.ToLower(text)
 }
@@ -218,12 +223,15 @@ func validContractID(text string) bool {
 }
 
 func validOutpoint(text string) bool {
+	if len(text) < 66 || len(text) > 75 || text[64] != ':' || !validHash(text[:64]) {
+		return false
+	}
 	outpoint, err := wire.NewOutPointFromString(text)
 	return err == nil && outpoint.String() == text
 }
 
 func canonicalAddress(text string, params *chaincfg.Params) (string, error) {
-	if params == nil || text == "" || text != strings.TrimSpace(text) || len(text) > 128 {
+	if params == nil || len(text) == 0 || len(text) > 128 || text != strings.TrimSpace(text) {
 		return "", ErrInvalid
 	}
 	address, err := btcutil.DecodeAddress(text, params)
