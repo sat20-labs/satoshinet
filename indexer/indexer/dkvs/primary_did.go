@@ -41,7 +41,14 @@ func validatePrimaryDIDRecordWith(record *wire.DKVSRecord, parsed ParsedKey, res
 	if !isPrimaryDIDRecord(record, parsed) {
 		return nil
 	}
-	if parsed.Segments[0] != AccountID(record.PubKey) {
+	pubKey := record.PubKey
+	if len(pubKey) == 0 {
+		var err error
+		pubKey, err = AccountPubKey(parsed.Segments[0])
+		if err != nil {
+			return ErrPermissionDenied
+		}
+	} else if parsed.Segments[0] != AccountID(pubKey) {
 		return ErrPermissionDenied
 	}
 	if IsTombstone(record.Flags) {
@@ -61,5 +68,5 @@ func validatePrimaryDIDRecordWith(record *wire.DKVSRecord, parsed ParsedKey, res
 	if !identity.Active || identity.CanonicalName != did {
 		return ErrPermissionDenied
 	}
-	return identity.CanSign(record.PubKey)
+	return identity.CanSign(pubKey)
 }
