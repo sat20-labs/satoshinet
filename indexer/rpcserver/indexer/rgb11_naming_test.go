@@ -24,11 +24,7 @@ type namingHTTPIndexer struct {
 }
 
 func (f *namingHTTPIndexer) GetRGB11Naming(q rgb11names.Query) (*rgb11names.Result, error) {
-	r, err := f.names.Lookup(q)
-	if err == nil {
-		r.SourceConfigured = true
-	}
-	return r, err
+	return f.names.Lookup(q)
 }
 
 func TestRGB11NamingHTTPRegistryE2E(t *testing.T) {
@@ -50,9 +46,9 @@ func TestRGB11NamingHTTPRegistryE2E(t *testing.T) {
 	// The fixed fixture stands for already authenticated upstream effects.
 	// This test covers the real index/store/router, not STP proof verification.
 	events := []rgb11names.Event{
-		{TxIndex: 1, EventIndex: 0, TxID: id(102), Ownership: &rgb11names.Ownership{DID: "alice", Address: a, Sat: 42, Revision: 1, L1Height: 900000, L1Hash: id(200)}},
+		{TxIndex: 1, EventIndex: 0, TxID: id(102), Ownership: &rgb11names.Ownership{DID: "alice", Address: a, OwnerUtxo: id(200) + ":0", OwnerSat: 42, InscriptionID: id(201) + "i0"}},
 		{TxIndex: 1, EventIndex: 1, TxID: id(102), Bind: &rgb11names.Bind{DID: "alice", Address: a}},
-		{TxIndex: 1, EventIndex: 2, TxID: id(102), Register: &rgb11names.Register{ContractID: id(1), BaseTicker: "USD", AssetType: "f", GenesisOutpoint: id(300) + ":0", GenesisAddress: a, AuthorizedBy: a}},
+		{TxIndex: 1, EventIndex: 2, TxID: id(102), Register: &rgb11names.Register{ContractID: id(1), BaseTicker: "USD", AssetType: "f", GenesisOutpoint: id(300) + ":0", GenesisAddress: a}},
 	}
 	if err := names.ApplyBlock(block, events); err != nil {
 		t.Fatal(err)
