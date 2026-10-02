@@ -1,312 +1,215 @@
-# RGB11 资产命名与 SatoshiNet DKVS 注册设计
+# RGB11 naming on SatoshiNet
 
-## 1. 范围
+## Scope
 
-本实现为后续 STP / Transcend 支持 RGB11 资产进入、退出聪网提供名称与注册基础设施。
+This change provides the SatoshiNet-side storage and query primitives required by future STP/Transcend RGB11 ingress/egress.
 
-本阶段实现：
+It does **not** implement RGB custody, RGB balance crediting, Transcend deposit/withdraw, private-channel splicing, or RGB consignment validation.
 
-- Primary Ordinals DID 的 DKVS personal 参数；
-- RGB11 canonical name 的 DKVS 注册表；
-- ContractID <-> AssetName 查询；
-- CoreNode 内部注册入口；
-- DKVS 同步、快照与恢复；
-- Wallet SDK 所需的只读接口和测试基础。
+RGB11 naming state is stored in DKVS. It is **not** reconstructed from SatoshiNet block replay.
 
-本阶段不实现 RGB11 deposit / withdraw、private-channel splicing、RGB consignment ingress validation、L2 RGB11 余额 credit/debit，也不在 Transcend 插件中接入注册调用。
+## Identity model
 
-RGB11 naming 默认启用，不存在 Config.RGB11NamingSource 或其他 naming feature flag。
+Strict RGB identity remains the complete ContractID.
 
-## 2. 身份模型
+The canonical SatoshiNet asset name is:
 
-RGB11 严格资产身份始终是完整 ContractID。不再使用 fingerprint，也不引入 ContractID 的短 hash 作为第二套身份。
+```text
+rgb11:f:<baseTicker>[_ordinal]@<providerDID>
+```
 
-正式进入聪网后的 canonical AssetName：
+Examples:
 
-~~~text
-rgb11:f:<baseTicker>@<providerDID>
-rgb11:f:<baseTicker>_2@<providerDID>
-rgb11:f:<baseTicker>_3@<providerDID>
-~~~
+```text
+rgb11:f:usdt@tether
+rgb11:f:usdt_2@tether
+```
 
-规则：
+Rules:
 
-- protocol 固定为 rgb11；
-- type 保留现有资产类型含义，不作为 provider 唯一性字段；
-- provider 使用 Primary Ordinals DID；
-- DID 最长 10 个字符；
-- 第一个 ordinal 为 1，但名称中省略 _1；
-- ordinal >= 2 时显示 _<ordinal>；
-- ordinal namespace 为 (providerDID, normalized baseTicker)；
-- ContractID 一旦获得 canonical AssetName，映射不可修改；
-- ordinal 永不复用。
+- `f` keeps its existing asset-type meaning;
+- provider is an Ordinals DID;
+- a DID must be at most 10 Unicode code points to be selected as Primary DID;
+- the first ordinal is 1 and is omitted from the displayed name;
+- later assets use `_2`, `_3`, ...;
+- the ordinal namespace is `(providerDID, normalized baseTicker)`;
+- ContractID is never shortened to a fingerprint;
+- once a ContractID is registered, its canonical AssetName is immutable.
 
-## 3. Primary DID
+## Primary DID
 
-Primary DID 不使用单独的 L2 OP_RETURN Bind 交易，唯一存储位置为：
+Primary DID is ordinary account metadata stored in DKVS:
 
-~~~text
+```text
 /personal/<account_id>/primary_did
-~~~
+```
 
-value 只保存 canonical DID 字符串，例如：
+The record value is only the canonical DID string.
 
-~~~text
-alice
-~~~
+No inscription ID, owner address, owner UTXO or duplicate DID metadata is stored in this personal record because the L1 Indexer already resolves current DID ownership and inscription data.
 
-不重复保存 inscription_id、owner address、owner UTXO、sat、L1 height 等可由 L1 Indexer 查询的字段。
+A write is accepted only when:
 
-写入 primary_did 时验证：
+1. the DKVS record is signed by the account itself;
+2. the DID is canonical lowercase and no longer than 10 Unicode code points;
+3. the configured L1 DID resolver reports the DID active;
+4. that DID is currently owned by the P2TR address derived from the signing account key.
 
-1. record pubkey 对应当前 account；
-2. DID 是合法 canonical Ordinals DID；
-3. DID 长度 <= 10；
-4. DID 可安全作为 DKVS canonical identifier；
-5. L1 DID resolver 返回该 DID active；
-6. L1 DID resolver 返回的当前 owner 与 record pubkey 派生的 P2TR 地址一致。
+Deleting the personal parameter is allowed by the account owner.
 
-Primary DID 是账户当前身份选择，可以修改。Primary DID 修改不会重命名已经正式注册的 RGB11 资产。
+Primary DID remains mutable. Changing it does not rename any already registered RGB11 asset.
 
-## 4. RGB11 canonical registry
+## RGB11 registry storage
 
-### 4.1 DKVS 是唯一持久化来源
+Canonical RGB11 registrations are DKVS network state under:
 
-RGB11 canonical name 不是 BaseIndexer 区块状态。
-
-它不进入 BaseIndexer naming subindex，不跟随 L2 block checkpoint，也不在 SatoshiNet block replay 中重新计算或重新分配 ordinal。
-
-唯一持久化来源是 DKVS。
-
-节点恢复时应优先恢复/同步 DKVS；之后即使进行聪网区块重放，也不会重建或修改 RGB11 名称。
-
-### 4.2 一资产一 key
-
-每个正式注册使用一个 immutable DKVS key：
-
-~~~text
+```text
 /rgb11/<providerDID>/<baseTicker>/<ordinal>
-~~~
+```
 
-value 只保存完整 32-byte ContractID。
+Example:
 
-例如：
+```text
+/rgb11/tether/usdt/1
+/rgb11/tether/usdt/2
+```
 
-~~~text
-/rgb11/tether/usdt/1 -> <32-byte ContractID A>
-/rgb11/tether/usdt/2 -> <32-byte ContractID B>
-/rgb11/alice/usdt/1  -> <32-byte ContractID C>
-~~~
+The value is exactly the raw 32-byte ContractID.
 
-对应：
+Nothing else is repeated in the value:
 
-~~~text
-/rgb11/tether/usdt/1 => rgb11:f:usdt@tether
-/rgb11/tether/usdt/2 => rgb11:f:usdt_2@tether
-~~~
+- provider is already in the key;
+- base ticker is already in the key;
+- ordinal is already in the key;
+- AssetName is deterministically derived from the key;
+- ContractID is stored as the only value because it cannot be derived from the other fields.
 
-value 不重复保存 provider、ticker、ordinal、AssetName、Genesis address、Genesis outpoint、inscription 或 fingerprint。
+This representation keeps the registry compact and makes each successful ordinal an immutable DKVS fact.
 
-### 4.3 不可变与 ordinal
+## Registry invariants
 
-RGB11 registry record：
+For each `(providerDID, baseTicker)` namespace:
 
-- Seq = 1；
-- TTL = 0；
-- 不允许 tombstone；
-- 不允许更新 value；
-- 不允许覆盖既有 ordinal；
-- 不允许删除；
-- 不使用普通 DKVS fee proof。
+- ordinal starts at 1;
+- there are no gaps;
+- an ordinal cannot be reused;
+- an existing key cannot be changed to another ContractID;
+- the same ContractID cannot appear in another RGB11 registry key;
+- registry records are permanent (`TTL=0`) and cannot be tombstoned;
+- ordinary wallet DKVS writes cannot create registry entries.
 
-同一 (providerDID, baseTicker) 下只能创建当前最后 ordinal + 1。不能跳号，ordinal 永不复用。
+The derived name is:
 
-### 4.4 ContractID 全局唯一
+```text
+ordinal == 1:
+  rgb11:f:<ticker>@<provider>
 
-完整 ContractID 在整个 /rgb11 namespace 中只能出现一次。
+ordinal > 1:
+  rgb11:f:<ticker>_<ordinal>@<provider>
+```
 
-因此必须保持：
+## Registration authority
 
-~~~text
-ContractID -> exactly one AssetName
-AssetName  -> exactly one ContractID
-~~~
+The RGB11 registry is not directly writable by ordinary wallets.
 
-## 5. 谁负责注册
+A future Transcend/STP registration flow calls the node-internal RGB11 registry write after it has validated the bridge/channel operation and the relevant RGB11 facts.
 
-Wallet SDK 不允许直接写 /rgb11。普通 DKVS Put、DKVS CAS 和 Wallet API 都不能创建 canonical mapping。
+The node-internal path requires a signed DKVS record and is exposed only through the local CoreNode administration boundary. The HTTP route is loopback-only and additionally checks that the record signer is a known CoreNode.
 
-/rgb11 必须由处理对应 transcend.tc 合约部署的 CoreNode 写入。
+This PR deliberately does not implement the Transcend deposit/withdraw flow itself.
 
-后续 Transcend 流程预期为：
+## Relationship to transcend.tc
 
-~~~text
-transcend.tc deploy
-        |
-        v
-CoreNode validates deploy
-        |
-        v
-resolve ContractID / base ticker / Genesis address
-        |
-        v
-read /personal/<account>/primary_did
-        |
-        v
-L1 Indexer verifies Owner(primary_did) == Genesis address
-        |
-        v
-read current /rgb11/<provider>/<ticker>
-        |
-        v
-allocate next ordinal
-        |
-        v
-CoreNode signs immutable DKVS record
-        |
-        v
-internal RGB11 registry write
-~~~
+A future first RGB11 Transcend ingress should follow this order:
 
-Transcend 插件实际调用将在后续 STP/RGB ingress 工作中接入；本 PR 只提供聪网端能力。
+1. determine the RGB ContractID and immutable Genesis facts from the RGB11 contract;
+2. read the Genesis address account's `primary_did`;
+3. use the L1 Indexer to verify that the DID currently belongs to the Genesis address;
+4. allocate the next RGB11 ordinal through the trusted Transcend/STP registration path;
+5. persist the immutable registry record in DKVS;
+6. use the resulting canonical AssetName for the SatoshiNet/Transcend operation.
 
-## 6. CoreNode 内部写入口
+The Transcend deploy payload therefore does **not** need to duplicate naming metadata that already exists in DKVS or can be obtained from RGB/L1 state.
 
-SatoshiNet 提供本机内部路由：
+In particular, no RGB11 naming descriptor is required in the contract deployment merely to reconstruct names later.
 
-~~~text
-POST /v3/rgb11/register
-~~~
+## DKVS synchronization and block replay
 
-规则：
+RGB11 naming belongs to DKVS, not BaseIndexer block state.
 
-- 只允许 loopback 本机调用；
-- 不属于公开 Wallet DKVS API；
-- 接收完整、已签名 DKVSRecord；
-- record key 必须属于 /rgb11；
-- record signer pubkey 必须是当前 SatoshiNet CoreNode；
-- 最终调用 PutInternalRGB11Registry。
+A node that restores or rebuilds follows this conceptual order:
 
-DKVS 内部写再次验证 record signature、canonical key、ContractID、Seq=1、TTL=0、无 FeeProof、ordinal 连续、key 不存在和 ContractID 全局未注册。
+```text
+DKVS synchronization
+    ↓
+RGB11 registry available
+    ↓
+SatoshiNet block replay / ordinary index reconstruction
+```
 
-## 7. Transcend deploy payload
+SatoshiNet block replay does not:
 
-RGB11 naming 不向 transcend.tc deploy payload 增加 naming descriptor。
+- allocate RGB11 ordinals;
+- recreate ContractID/AssetName mappings;
+- query historical Primary DID state;
+- rename RGB11 assets.
 
-不重复携带 ContractID、provider DID、Genesis address、Genesis outpoint、ordinal 或 AssetName。
+This avoids making canonical asset names depend on historical replay order or current external DID state.
 
-能从其他确定来源取得的数据，不重复写入 deploy payload。
+## Query API
 
-## 8. DKVS 同步与恢复
+Read-only RGB11 queries are derived from the synchronized DKVS registry:
 
-RGB11 registry 属于 network-replicated DKVS 状态，但只有 CoreNode 内部业务路径可以创建。
-
-canonical path：
-
-~~~text
-/rgb11/<provider>/<ticker>
-~~~
-
-其记录为：
-
-~~~text
-.../1
-.../2
-.../3
-~~~
-
-path snapshot 必须满足 ordinal 从 1 连续排列，不能缺号或乱序。
-
-DKVS full path repair 现有协议要求 TrustedSource、ValidatorID 和 signed sync response。因此接收历史 /rgb11 snapshot 时，不需要动态要求原 record signer现在仍然是 CoreNode；历史注册不会因为 CoreNode 后续退出而失效。
-
-单条 record 仍保留创建时的 CoreNode DKVS 签名。
-
-SatoshiNet block replay 明确不创建、不删除、不重建、不重新排序任何 RGB11 naming record。
-
-## 9. 查询接口
-
-只读接口：
-
-| Method | Route | 作用 |
+| Method | Route | Purpose |
 |---|---|---|
-| GET | /v3/rgb11/naming/status | naming source = DKVS |
-| GET | /v3/rgb11/contract/:contractid | ContractID -> registration |
-| GET | /v3/rgb11/name/:assetname | AssetName -> ContractID / registration |
-| GET | /v3/rgb11/ordinal?provider=...&ticker=... | 当前 max ordinal |
+| GET | `/v3/rgb11/naming/status` | reports that DKVS is the naming source |
+| GET | `/v3/rgb11/contract/:contractid` | ContractID -> canonical registration |
+| GET | `/v3/rgb11/name/:assetname` | AssetName -> ContractID/registration |
+| GET | `/v3/rgb11/ordinal?provider=alice&ticker=USD` | number of allocated ordinals |
 
-Primary DID 直接通过 /personal/<account>/primary_did 读取，不从 RGB11 registry 复制查询。
+Primary DID is read through the existing DKVS personal record API, not through a second RGB11-specific Primary DID state table.
 
-## 10. Wallet SDK 边界
+## Wallet behavior before registration
 
-RGB11 尚未进入聪网时：
+Before an RGB11 asset enters SatoshiNet, its human-readable name is SDK-local metadata and may change.
 
-- 严格 identity = ContractID；
-- local SDK name 可修改；
-- 没有合格 DID 时默认 ticker@<GenesisAddress 后12位>；
-- Primary DID 修改不会自动把本地名称变成 canonical name。
+If no qualified DID is available, the default local label is:
 
-Wallet 可以写 /personal/<account>/primary_did，但不能写 /rgb11。
+```text
+ticker@<genesis-address-last-12>
+```
 
-正式注册之后，Wallet 可以读取 CoreNode/DKVS 已产生的 canonical mapping 并本地缓存用于展示；本地缓存不是 authority。
+The strict wallet identity remains the complete ContractID.
 
-## 11. 不变量
+Changing a local label or Primary DID before SatoshiNet registration does not alter RGB state, balances, proofs or ContractID.
 
-1. Primary DID 最长 10 字符。
-2. /personal/<account>/primary_did 只能由 account 自身更新。
-3. /rgb11 不能通过普通 DKVS 写 API 创建。
-4. 每个 /rgb11/.../<ordinal> key 永久不可变。
-5. ordinal 从 1 连续递增且不复用。
-6. ContractID 全局只能注册一次。
-7. AssetName 能确定唯一 ContractID。
-8. fingerprint 不参与 RGB11 naming。
-9. Wallet local name 不参与资产严格 identity。
-10. block replay 不参与 RGB11 naming reconstruction。
-11. DKVS 是 canonical mapping 的唯一持久化来源。
+## Test coverage
 
-## 12. 测试覆盖
+The SatoshiNet tests cover:
 
-SatoshiNet：
+- Primary DID 10/11-character boundary;
+- account-owned `/personal/.../primary_did` write;
+- rejection when the DID belongs to another address;
+- RGB11 registry key/value canonicalization;
+- immutable ordinal records;
+- gap rejection;
+- duplicate ContractID rejection;
+- ordinary DKVS write rejection;
+- node-internal registration and idempotent retry;
+- DKVS PathSnapshot synchronization of RGB11 registry state;
+- ContractID -> AssetName and AssetName -> ContractID queries;
+- local-only CoreNode registration endpoint authorization;
+- full indexer package regression.
 
-- Primary DID <=10 成功；
-- 11 字符 DID 拒绝；
-- Primary DID owner 不匹配拒绝；
-- 普通 DKVS Put 写 /rgb11 被拒绝；
-- CoreNode internal writer 成功；
-- 非 CoreNode internal HTTP writer 拒绝；
-- 非 loopback writer 拒绝；
-- ordinal 连续；
-- ordinal gap 拒绝；
-- overwrite 拒绝；
-- ContractID 跨 namespace 重复拒绝；
-- DKVS path snapshot 在 fresh node 恢复同一 mapping；
-- 恢复不依赖 SatoshiNet block replay；
-- race test；
-- full indexer tests；
-- full node compile。
+The wallet tests cover local RGB11 naming and Primary DID SDK behavior. STP/Transcend RGB deposit/withdraw e2e remains deferred until that feature is implemented.
 
-Wallet SDK：
+## Deferred work
 
-- ContractID 与 local display name 分离；
-- local rename 不影响余额、proof、transfer identity；
-- primary_did 真实 DKVS 写入与读取；
-- 11 字符 DID 拒绝；
-- 非当前 owner DID 拒绝；
-- Primary DID 可替换；
-- 正式 CoreNode 注册前 local RGB11 name 仍可修改；
-- Wallet 无 /rgb11 写入口。
+Not part of this PR:
 
-## 13. 后续 STP / Transcend 接入
-
-后续 RGB11 ingress 实现中，Transcend CoreNode 在处理 transcend.tc 部署时调用本 PR 提供的 internal registration capability。
-
-下一阶段需要继续实现：
-
-- 从真实 RGB Contract / consignment 验证 ContractID；
-- 确定 Genesis provider address；
-- 验证 Primary DID 当前 L1 owner 与 Genesis address 一致；
-- 生成并签署 /rgb11 immutable record；
-- 定义注册失败与合约部署失败之间的事务边界；
-- deposit / withdraw；
-- L2 balance credit/debit。
-
-这些不属于本 PR。
+- RGB11 Transcend deposit/withdraw;
+- RGB11 private-channel splicing;
+- RGB consignment validation on SatoshiNet ingress;
+- L2 RGB balance credit/debit;
+- calling the internal RGB11 DKVS registration from the Transcend service;
+- final STP e2e that proves registration + deposit + withdrawal.
