@@ -46,23 +46,6 @@ type Position struct {
 	EventIndex uint32 `json:"event_index"`
 }
 
-// Ownership is a verified Ordinals DID ownership snapshot. OwnerUtxo is the
-// revision token: when the DID sat moves, the owner UTXO changes. A later
-// transfer back to the same address therefore still invalidates an older bind.
-// An empty Address is an explicit inactive/burned ownership state.
-type Ownership struct {
-	DID           string `json:"did"`
-	Address       string `json:"address"`
-	OwnerUtxo     string `json:"owner_utxo"`
-	OwnerSat      int64  `json:"owner_sat,omitempty"`
-	InscriptionID string `json:"inscription_id,omitempty"`
-}
-
-type Bind struct {
-	DID     string `json:"did"`
-	Address string `json:"address"`
-}
-
 // Register contains facts extracted from an authenticated transcend.tc deploy.
 // ContractID is the complete 32 bytes encoded as 64 lowercase hex characters,
 // NOT a hash/fingerprint. Registration itself does not mint or credit assets.
@@ -71,33 +54,21 @@ type Register struct {
 	BaseTicker      string `json:"base_ticker"`
 	AssetType       string `json:"asset_type"`
 	GenesisOutpoint string `json:"genesis_outpoint"`
-	GenesisAddress  string `json:"genesis_address"`
+	ProviderDID     string `json:"provider_did"`
 }
 
 // Exactly one effect must be populated. Position is checked against the block,
 // and events must arrive in strictly increasing transaction/event order.
 type Event struct {
-	TxIndex    uint32     `json:"tx_index"`
-	EventIndex uint32     `json:"event_index"`
-	TxID       string     `json:"txid"`
-	Ownership  *Ownership `json:"ownership,omitempty"`
-	Bind       *Bind      `json:"bind,omitempty"`
-	Register   *Register  `json:"register,omitempty"`
+	TxIndex    uint32    `json:"tx_index"`
+	EventIndex uint32    `json:"event_index"`
+	TxID       string    `json:"txid"`
+	Register   *Register `json:"register,omitempty"`
 
-	// Optional is used only for auto-discovered RGB11 registrations. A signed
-	// transcend deployment without a currently valid Primary DID bind is still
-	// a valid SatoshiNet transaction, but it does not register a canonical RGB11
-	// name. Primary DID bind/ownership events themselves are never optional.
+	// Optional is used for auto-discovered transcend deployments. A malformed
+	// or policy-ineligible naming descriptor never invalidates the underlying
+	// SatoshiNet channel-contract deployment.
 	Optional bool `json:"optional,omitempty"`
-}
-
-type Binding struct {
-	DID           string   `json:"did"`
-	Address       string   `json:"address"`
-	OwnerUtxo     string   `json:"owner_utxo"`
-	OwnerSat      int64    `json:"owner_sat,omitempty"`
-	InscriptionID string   `json:"inscription_id,omitempty"`
-	BoundAt       Position `json:"bound_at"`
 }
 
 type Registration struct {
@@ -106,10 +77,8 @@ type Registration struct {
 	BaseTicker      string   `json:"base_ticker"`
 	AssetType       string   `json:"asset_type"`
 	ProviderDID     string   `json:"provider_did"`
-	ProviderSat     uint64   `json:"provider_sat"`
 	Ordinal         uint64   `json:"ordinal"`
 	GenesisOutpoint string   `json:"genesis_outpoint"`
-	GenesisAddress  string   `json:"genesis_address"`
 	RegisteredAt    Position `json:"registered_at"`
 }
 
