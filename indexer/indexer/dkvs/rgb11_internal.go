@@ -30,6 +30,13 @@ func (i *Indexer) PutInternalRGB11Registry(record *wire.DKVSRecord) (bool, error
 	if err := validateRGB11RegistryStored(record, parsed); err != nil {
 		return false, err
 	}
+	validators := i.snapshotValidators()
+	if validators.system == nil {
+		return false, ErrPermissionDenied
+	}
+	if err := validators.system.CanWriteSystem(record.Key, record.PubKey); err != nil {
+		return false, err
+	}
 
 	i.mutex.Lock()
 	existing, err := i.getRaw(record.Key)
