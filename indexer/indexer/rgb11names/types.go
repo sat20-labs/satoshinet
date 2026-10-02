@@ -128,11 +128,11 @@ type Counter struct {
 }
 
 type Result struct {
-	Cursor           Cursor        `json:"indexed_at"`
-	Binding          *Binding      `json:"binding,omitempty"`
-	Ownership        *Ownership    `json:"ownership,omitempty"`
-	Registration     *Registration `json:"registration,omitempty"`
-	Counter          *Counter      `json:"counter,omitempty"`
+	Cursor       Cursor        `json:"indexed_at"`
+	Binding      *Binding      `json:"binding,omitempty"`
+	Ownership    *Ownership    `json:"ownership,omitempty"`
+	Registration *Registration `json:"registration,omitempty"`
+	Counter      *Counter      `json:"counter,omitempty"`
 }
 
 func ValidateDID(did string) error {

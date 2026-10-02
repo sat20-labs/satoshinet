@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	TranscendTemplateName        = "transcend.tc"
+	TranscendTemplateName       = "transcend.tc"
 	RGB11RegistrationDescriptor = "rgb11-reg-v1"
 )
 

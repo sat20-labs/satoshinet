@@ -166,9 +166,9 @@ type DIDIdentity struct {
 	// them. OwnerUtxo is the revision token used by SatoshiNet Primary DID Bind:
 	// a transfer away and back necessarily produces a different owner UTXO and
 	// therefore requires a new bind.
-	OwnerUtxo      string
-	OwnerSat       int64
-	InscriptionID  string
+	OwnerUtxo     string
+	OwnerSat      int64
+	InscriptionID string
 }
 
 func (id DIDIdentity) CanSign(pubKey []byte) error {
