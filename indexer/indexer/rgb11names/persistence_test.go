@@ -26,11 +26,10 @@ func flush(t *testing.T, s *Index, db idx.KVDB) {
 
 func TestBufferedSnapshotFlushPreservesNewerLiveNames(t *testing.T) {
 	s, db := newIndex(t)
-	a := address(t, 1)
-	apply(t, s, 0, own("alice", a, 1), bind("alice", a), register(1, a, "USD"))
+		apply(t, s, 0, register(1, "alice", "USD"))
 	backup := s.Clone()
 	querySnapshot := s.Clone()
-	apply(t, s, 1, register(2, a, "USD"))
+	apply(t, s, 1, register(2, "alice", "USD"))
 	flush(t, backup, db)
 	if lookup(t, s, 2).Ordinal != 2 {
 		t.Fatal("backup flush lost newer live state")
@@ -46,7 +45,7 @@ func TestBufferedSnapshotFlushPreservesNewerLiveNames(t *testing.T) {
 		t.Fatalf("unflushed registration survived restart: %v", err)
 	}
 	// A replay after dropping an uncommitted branch obtains the same ordinal.
-	apply(t, reloaded, 1, register(2, a, "USD"))
+	apply(t, reloaded, 1, register(2, "alice", "USD"))
 	if lookup(t, reloaded, 2) != lookup(t, s, 2) {
 		t.Fatal("replay diverged")
 	}
@@ -90,8 +89,7 @@ func TestFailedStageOrFlushRetainsPendingChanges(t *testing.T) {
 	for _, stageFailure := range []bool{true, false} {
 		t.Run(fmt.Sprint(stageFailure), func(t *testing.T) {
 			s, db := newIndex(t)
-			a := address(t, 1)
-			apply(t, s, 0, own("alice", a, 1), bind("alice", a), register(1, a, "USD"))
+						apply(t, s, 0, register(1, "alice", "USD"))
 			pending := len(s.dirty)
 			batch := &failingBatch{WriteBatch: db.NewWriteBatch(), putError: stageFailure}
 			_, err := s.Stage(batch)
@@ -124,8 +122,7 @@ func TestFailedStageOrFlushRetainsPendingChanges(t *testing.T) {
 
 func TestCorruptReverseMappingFailsStartup(t *testing.T) {
 	s, db := newIndex(t)
-	a := address(t, 1)
-	apply(t, s, 0, own("alice", a, 1), bind("alice", a), register(1, a, "USD"))
+		apply(t, s, 0, register(1, "alice", "USD"))
 	flush(t, s, db)
 	if err := db.Write([]byte(dbPrefix+"name/rgb11:f:usd@alice"), []byte(`"`+id(99)+`"`)); err != nil {
 		t.Fatal(err)
@@ -137,8 +134,7 @@ func TestCorruptReverseMappingFailsStartup(t *testing.T) {
 
 func TestLookupCopiesAndConcurrentSnapshotReaders(t *testing.T) {
 	s, _ := newIndex(t)
-	a := address(t, 1)
-	apply(t, s, 0, own("alice", a, 1), bind("alice", a), register(1, a, "USD"))
+		apply(t, s, 0, register(1, "alice", "USD"))
 	r, err := s.Lookup(Query{Kind: "contract", Value: id(1)})
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +154,7 @@ func TestLookupCopiesAndConcurrentSnapshotReaders(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				if _, err := view.Lookup(Query{Kind: "primary", Value: a}); err != nil {
+				if _, err := view.Lookup(Query{Kind: "contract", Value: id(1)}); err != nil {
 					t.Error(err)
 					return
 				}
@@ -166,7 +162,7 @@ func TestLookupCopiesAndConcurrentSnapshotReaders(t *testing.T) {
 		}()
 	}
 	for n := 1; n < 15; n++ {
-		apply(t, s, n, register(n+1, a, "USD"))
+		apply(t, s, n, register(n+1, "alice", "USD"))
 	}
 	wg.Wait()
 }
