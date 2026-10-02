@@ -63,7 +63,7 @@ type BaseIndexer struct {
 	blockprocCB BlockProcCallback
 	updateDBCB  UpdateDBCallback
 
-	rgb11Names       *rgb11names.Index
+	rgb11Names *rgb11names.Index
 
 	mutex sync.RWMutex // 仅对需要提供给节点实时访问的数据加锁
 }
