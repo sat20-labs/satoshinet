@@ -46,17 +46,16 @@ type Position struct {
 	EventIndex uint32 `json:"event_index"`
 }
 
-// Ownership is a verified Ordinals fact, not a user declaration. Revision must
-// advance on every ownership change, including a transfer away and back. The
-// source must retain the same Sat for a DID and pin the L1 facts to block hashes.
+// Ownership is a verified Ordinals DID ownership snapshot. OwnerUtxo is the
+// revision token: when the DID sat moves, the owner UTXO changes. A later
+// transfer back to the same address therefore still invalidates an older bind.
 // An empty Address is an explicit inactive/burned ownership state.
 type Ownership struct {
-	DID      string `json:"did"`
-	Sat      uint64 `json:"sat"`
-	Address  string `json:"address"`
-	Revision uint64 `json:"revision"`
-	L1Height uint64 `json:"l1_height"`
-	L1Hash   string `json:"l1_hash"`
+	DID           string `json:"did"`
+	Address       string `json:"address"`
+	OwnerUtxo     string `json:"owner_utxo"`
+	OwnerSat      int64  `json:"owner_sat,omitempty"`
+	InscriptionID string `json:"inscription_id,omitempty"`
 }
 
 type Bind struct {
@@ -88,11 +87,12 @@ type Event struct {
 }
 
 type Binding struct {
-	DID      string   `json:"did"`
-	Address  string   `json:"address"`
-	Sat      uint64   `json:"sat"`
-	Revision uint64   `json:"owner_revision"`
-	BoundAt  Position `json:"bound_at"`
+	DID           string   `json:"did"`
+	Address       string   `json:"address"`
+	OwnerUtxo     string   `json:"owner_utxo"`
+	OwnerSat      int64    `json:"owner_sat,omitempty"`
+	InscriptionID string   `json:"inscription_id,omitempty"`
+	BoundAt       Position `json:"bound_at"`
 }
 
 type Registration struct {
