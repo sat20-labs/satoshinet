@@ -30,7 +30,7 @@ func TestPrimaryDIDPersonalRecordValidation(t *testing.T) {
 	}
 	resolver := StaticDIDResolver{Names: map[string]DIDIdentity{
 		"alice": {
-			CanonicalName: "alice",
+			CanonicalName:  "alice",
 			OwnerAddresses: []string{address},
 			AddressParams: &chaincfg.TestNetParams,
 			Active: true,
@@ -56,7 +56,7 @@ func TestPrimaryDIDPersonalRecordValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolver.Names["alice"] = DIDIdentity{
-		CanonicalName: "alice",
+		CanonicalName:  "alice",
 		OwnerAddresses: []string{wrongAddress},
 		AddressParams: &chaincfg.TestNetParams,
 		Active: true,
