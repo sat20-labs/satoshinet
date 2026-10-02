@@ -57,10 +57,6 @@ func ParseTranscendRegistration(contractPath string, content []byte, params *cha
 	if string(magic) != RGB11RegistrationDescriptor {
 		return nil, ErrNotFound
 	}
-	contractIDRaw, err := nextData("contract id")
-	if err != nil {
-		return nil, err
-	}
 	tickerRaw, err := nextData("base ticker")
 	if err != nil {
 		return nil, err
@@ -76,8 +72,8 @@ func ParseTranscendRegistration(contractPath string, content []byte, params *cha
 	if tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("%w: trailing RGB11 registration fields", ErrInvalid)
 	}
-	contractID := string(contractIDRaw)
-	if !validContractID(contractID) || asset.Ticker != contractID {
+	contractID := asset.Ticker
+	if !validContractID(contractID) {
 		return nil, ErrInvalid
 	}
 	if asset.String()+"_"+TranscendTemplateName != contractPath {
@@ -104,10 +100,9 @@ func ParseTranscendRegistration(contractPath string, content []byte, params *cha
 // EncodeTranscendRegistrationSuffix is kept in the indexer package as the
 // canonical wire fixture for tests and SDK cross-checks. Production contract
 // construction lives in sat20wallet.
-func EncodeTranscendRegistrationSuffix(contractID, ticker, outpoint, address string) ([]byte, error) {
+func EncodeTranscendRegistrationSuffix(ticker, outpoint, address string) ([]byte, error) {
 	return txscript.NewScriptBuilder().
 		AddData([]byte(RGB11RegistrationDescriptor)).
-		AddData([]byte(contractID)).
 		AddData([]byte(ticker)).
 		AddData([]byte(outpoint)).
 		AddData([]byte(strings.TrimSpace(address))).
