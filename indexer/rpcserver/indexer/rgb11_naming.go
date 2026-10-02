@@ -18,9 +18,6 @@ func (s *Service) initRGB11NamingRoutes(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/rgb11/naming/status", func(c *gin.Context) {
 		s.handle.queryRGB11Naming(c, rgb11names.Query{Kind: "status"})
 	})
-	r.GET(proxy+"/v3/names/primary/:address", func(c *gin.Context) {
-		s.handle.queryRGB11Naming(c, rgb11names.Query{Kind: "primary", Value: c.Param("address")})
-	})
 	r.GET(proxy+"/v3/rgb11/contract/:contractid", func(c *gin.Context) {
 		s.handle.queryRGB11Naming(c, rgb11names.Query{Kind: "contract", Value: c.Param("contractid")})
 	})
