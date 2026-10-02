@@ -131,6 +131,42 @@ func (p *IndexerMgr) NotifyDKVSNameTransfers(names []string) error {
 	return p.dkvsIndexer.NotifyNameTransfers(names)
 }
 
+func (p *IndexerMgr) GetRGB11RegistrationByContract(contractID string) (*dkvs.RGB11Registration, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.LookupRGB11Contract(contractID)
+}
+
+func (p *IndexerMgr) GetRGB11RegistrationByName(assetName string) (*dkvs.RGB11Registration, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.LookupRGB11AssetName(assetName)
+}
+
+func (p *IndexerMgr) GetRGB11RegistryCount(providerDID, ticker string) (uint64, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return 0, errDKVSNotInitialized
+	}
+	key, err := dkvs.RGB11RegistryKey(providerDID, ticker)
+	if err != nil {
+		return 0, err
+	}
+	record, err := p.dkvsIndexer.Get(key)
+	if errors.Is(err, dkvs.ErrRecordNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	contracts, err := dkvs.DecodeRGB11RegistryContracts(record.Value)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(len(contracts)), nil
+}
+
 func (p *IndexerMgr) GetDKVSRecord(key string) (*wire.DKVSRecord, error) {
 	if p.dkvsIndexer == nil {
 		return nil, errDKVSNotInitialized
