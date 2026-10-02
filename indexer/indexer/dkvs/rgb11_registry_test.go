@@ -48,8 +48,15 @@ func TestRGB11RegistryCoreNodeInternalWriteAndDKVSSync(t *testing.T) {
 	first := rgb11SignedRegistryRecord(
 		t, coreKey, "alice", "USDT", 1, rgb11TestContractID(1), 100,
 	)
-	if _, err := source.PutLocal(first); !errors.Is(err, ErrPermissionDenied) {
-		t.Fatalf("ordinary DKVS put created RGB11 registry: %v", err)
+	ordinaryKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorized := rgb11SignedRegistryRecord(
+		t, ordinaryKey, "alice", "USDT", 1, rgb11TestContractID(1), 100,
+	)
+	if _, err := source.PutLocal(unauthorized); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("ordinary wallet signer created RGB11 registry: %v", err)
 	}
 	if updated, err := source.PutInternalRGB11Registry(first); err != nil || !updated {
 		t.Fatalf("CoreNode internal first write updated=%v err=%v", updated, err)
@@ -150,7 +157,6 @@ func strings64(value string) string {
 	return result[:64]
 }
 
-
 func TestRGB11RegistrySnapshotSupportsDoubleDigitOrdinals(t *testing.T) {
 	coreKey, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -179,7 +185,6 @@ func TestRGB11RegistrySnapshotSupportsDoubleDigitOrdinals(t *testing.T) {
 	}
 }
 
-
 func TestRGB11RegistrySnapshotRejectsUnknownSigner(t *testing.T) {
 	coreKey, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -205,5 +210,31 @@ func TestRGB11RegistrySnapshotRejectsUnknownSigner(t *testing.T) {
 	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
 	if _, err := target.ApplyPathSnapshot(snapshot); !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("unknown signer snapshot accepted: %v", err)
+	}
+}
+
+
+func TestRGB11RegistryRemoteRelayRequiresCoreSigner(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	record := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USD", 1, rgb11TestContractID(300), 100,
+	)
+	if updated, err := target.PutRemote(record); err != nil || !updated {
+		t.Fatalf("authorized CoreNode relay updated=%v err=%v", updated, err)
+	}
+
+	attacker, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := rgb11SignedRegistryRecord(
+		t, attacker, "alice", "USD", 2, rgb11TestContractID(301), 100,
+	)
+	if _, err := target.PutRemote(forged); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("unknown signer relay accepted: %v", err)
 	}
 }
