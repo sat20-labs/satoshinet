@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	PrimaryDIDPersonalPath = "primary_did"
+	PrimaryDIDPersonalPath  = "primary_did"
 	MaxPrimaryDIDCharacters = 10
 )
 
