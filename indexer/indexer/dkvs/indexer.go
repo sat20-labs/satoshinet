@@ -970,6 +970,8 @@ func (i *Indexer) validateStatefulLocked(record *wire.DKVSRecord, parsed ParsedK
 		return i.validateBlobLocked(record, parsed, height, now)
 	case "tmp":
 		return i.validateTmp(record)
+	case RGB11RegistryNamespace:
+		return validateRGB11RegistryMutation(record, parsed, existing)
 	default:
 		return nil
 	}
