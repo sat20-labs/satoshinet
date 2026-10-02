@@ -213,7 +213,6 @@ func TestRGB11RegistrySnapshotRejectsUnknownSigner(t *testing.T) {
 	}
 }
 
-
 func TestRGB11RegistryRemoteRelayRequiresCoreSigner(t *testing.T) {
 	coreKey, err := btcec.NewPrivateKey()
 	if err != nil {
