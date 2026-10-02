@@ -140,3 +140,32 @@ func strings64(value string) string {
 	}
 	return result[:64]
 }
+
+
+func TestRGB11RegistrySnapshotSupportsDoubleDigitOrdinals(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
+	for ordinal := uint64(1); ordinal <= 12; ordinal++ {
+		record := rgb11SignedRegistryRecord(
+			t, coreKey, "alice", "USD", ordinal, rgb11TestContractID(int(100+ordinal)), 100,
+		)
+		if _, err := source.PutInternalRGB11Registry(record); err != nil {
+			t.Fatalf("ordinal %d: %v", ordinal, err)
+		}
+	}
+	snapshot, err := source.GetPathSnapshot("/rgb11/alice/usd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
+	if applied, err := target.ApplyPathSnapshot(snapshot); err != nil || applied != 12 {
+		t.Fatalf("apply double-digit snapshot applied=%d err=%v", applied, err)
+	}
+	reg, err := target.LookupRGB11Contract(rgb11TestContractID(112))
+	if err != nil || reg.Ordinal != 12 || reg.AssetName != "rgb11:f:usd_12@alice" {
+		t.Fatalf("registration=%+v err=%v", reg, err)
+	}
+}
