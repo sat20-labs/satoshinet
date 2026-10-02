@@ -14,7 +14,6 @@ import (
 
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
-	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -86,15 +85,6 @@ type Event struct {
 	Ownership  *Ownership `json:"ownership,omitempty"`
 	Bind       *Bind      `json:"bind,omitempty"`
 	Register   *Register  `json:"register,omitempty"`
-}
-
-// EventSource is a node-internal integration seam. Implementations must verify
-// signatures, RGB genesis commitments and L1 DID facts before returning effects.
-// Replay of a block must return identical effects; querying the latest HTTP L1
-// state during replay is prohibited. Source errors must not advance index state.
-// A nil source means no naming effects are enabled on the current deployment.
-type EventSource interface {
-	RGB11NamingEvents(*common.Block) ([]Event, error)
 }
 
 type Binding struct {
