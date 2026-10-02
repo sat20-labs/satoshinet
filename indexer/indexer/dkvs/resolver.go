@@ -306,8 +306,11 @@ type l1NSNameResponse struct {
 }
 
 type l1NSNameData struct {
-	Name    string `json:"name,omitempty"`
-	Address string `json:"address,omitempty"`
+	Name          string `json:"name,omitempty"`
+	Address       string `json:"address,omitempty"`
+	Utxo          string `json:"utxo,omitempty"`
+	Sat           int64  `json:"sat,omitempty"`
+	InscriptionID string `json:"inscriptionId,omitempty"`
 }
 
 func (r l1NSNameResponse) identity(requestName string, params *chaincfg.Params) (DIDIdentity, error) {
@@ -330,6 +333,9 @@ func (r l1NSNameResponse) identity(requestName string, params *chaincfg.Params) 
 		OwnerAddresses: normalizeOwnerAddresses(nil, r.Data.Address),
 		AddressParams:  params,
 		Active:         true,
+		OwnerUtxo:      strings.TrimSpace(r.Data.Utxo),
+		OwnerSat:       r.Data.Sat,
+		InscriptionID:  strings.TrimSpace(r.Data.InscriptionID),
 	}, nil
 }
 
