@@ -19,17 +19,16 @@ type namingHTTPIndexer struct {
 	byContract map[string]*dkvsindexer.RGB11Registration
 	byName     map[string]*dkvsindexer.RGB11Registration
 	count      uint64
-	corePubKey string
+	corePubKey []byte
 	wrote      *wire.DKVSRecord
-}
-
-func (f *namingHTTPIndexer) IsCoreNode(pubkey string) bool {
-	return pubkey != "" && pubkey == f.corePubKey
 }
 
 func (f *namingHTTPIndexer) PutDKVSInternalRGB11Registry(record *wire.DKVSRecord) (bool, error) {
 	if record == nil {
 		return false, dkvsindexer.ErrInvalidRecord
+	}
+	if !bytes.Equal(record.PubKey, f.corePubKey) {
+		return false, dkvsindexer.ErrPermissionDenied
 	}
 	copyRecord := *record
 	copyRecord.Value = append([]byte(nil), record.Value...)
@@ -95,7 +94,7 @@ func TestRGB11NamingHTTPUsesDKVSRegistry(t *testing.T) {
 	}
 
 	corePubKey := []byte{2, 3, 4}
-	fixture.corePubKey = "020304"
+	fixture.corePubKey = append([]byte(nil), corePubKey...)
 	record := &wire.DKVSRecord{
 		Version: dkvsindexer.Version,
 		Key:     "/rgb11/alice/usd/1",
@@ -115,7 +114,7 @@ func TestRGB11NamingHTTPUsesDKVSRegistry(t *testing.T) {
 		t.Fatalf("CoreNode internal register status=%d body=%s wrote=%+v", response.Code, response.Body.String(), fixture.wrote)
 	}
 
-	fixture.corePubKey = "different"
+	fixture.corePubKey = []byte("different")
 	request = httptest.NewRequest(http.MethodPost, "/testnet/v3/rgb11/register", bytes.NewReader(body))
 	request.RemoteAddr = "127.0.0.1:12345"
 	response = httptest.NewRecorder()
