@@ -755,7 +755,7 @@ func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now 
 		}
 		if meta := metas[collectionPath(prepared.parsed)]; meta != nil {
 			if IsTombstone(record.Flags) {
-				if err := i.clearChangedRecordBatch(batch, meta.Path, record.Key); err != nil {
+				if err := i.markDeletedKeyChangeBatch(batch, meta, record.Key, i.mutationIsLocalOnly(prepared)); err != nil {
 					return nil, nil, err
 				}
 			} else {

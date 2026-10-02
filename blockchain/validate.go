@@ -300,6 +300,9 @@ func CheckTransactionSanity(tx *btcutil.Tx) error {
 	// SatoshiPerBitcoin constant.
 	var totalSatoshi int64
 	for _, txOut := range msgTx.TxOut {
+		if err := checkAssetOutput(txOut); err != nil {
+			return err
+		}
 		satoshi := txOut.Value
 		if satoshi < 0 {
 			str := fmt.Sprintf("transaction output has negative "+
@@ -1062,6 +1065,10 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 		return 0, nil, nil
 	}
 
+	if err := checkTransactionAssetBindings(msgTx, utxoView); err != nil {
+		return 0, nil, err
+	}
+
 	var totalSatoshiIn int64
 	var totalInTxAssets wire.TxAssets
 	for txInIndex, txIn := range msgTx.TxIn {
@@ -1120,7 +1127,9 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 		totalSatoshiIn += originTxSatoshi
 		//totalInSatsRange = append(totalInSatsRange, utxoSatsRanges...)
 		//totalInSatsRange = wire.TxRangesAppend(totalInSatsRange, utxoSatsRanges)
-		totalInTxAssets.Merge(utxoTxAssets)
+		if err := totalInTxAssets.Merge(utxoTxAssets); err != nil {
+			return 0, nil, ruleError(ErrBadTxOutValue, fmt.Sprintf("invalid input asset aggregation: %v", err))
+		}
 		if totalSatoshiIn < lastSatoshiIn ||
 			totalSatoshiIn > btcutil.MaxSatoshi {
 			str := fmt.Sprintf("total value of all transaction "+
@@ -1354,6 +1363,9 @@ func checkCoinbaseFees(coinbaseTx *wire.MsgTx, expectedSatoshiOut int64,
 	var totalSatoshiOut int64
 	totalAssetOut := wire.TxAssets{}
 	for _, txOut := range coinbaseTx.TxOut {
+		if err := checkCoinbaseAssetBindings(txOut.Assets, expectedFeeAssets); err != nil {
+			return err
+		}
 		totalSatoshiOut += txOut.Value
 		if err := totalAssetOut.Merge(txOut.Assets); err != nil {
 			str := fmt.Sprintf("coinbase transaction has invalid asset outputs: %v",
@@ -1468,8 +1480,8 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 	enforceBIP0016 := node.timestamp >= txscript.Bip16Activation.Unix()
 
 	// Query for the Version Bits state for the segwit soft-fork
-	// deployment. If segwit is active, we'll switch over to enforcing all
-	// the new rules.
+	// deployment. If segwit is active, we'll switch over to
+	// enforcing all the new rules.
 	segwitState, err := b.deploymentState(node.parent, chaincfg.DeploymentSegwit)
 	if err != nil {
 		return err
@@ -1529,7 +1541,9 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 		// accumulator.
 		lastTotalFees := totalFees
 		totalFees += txFee
-		totalFeeAssets.Merge(feeAssets)
+		if err := totalFeeAssets.Merge(feeAssets); err != nil {
+			return ruleError(ErrBadFees, fmt.Sprintf("invalid block fee asset aggregation: %v", err))
+		}
 		if totalFees < lastTotalFees {
 			return ruleError(ErrBadFees, "total fees for block "+
 				"overflows accumulator")

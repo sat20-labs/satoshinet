@@ -122,6 +122,14 @@ func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
 		if err := putDeleteStateBatch(batch, floor.Key, state); err != nil {
 			return 0, err
 		}
+		// A deletion learned through node repair must reach terminal deltas too.
+		// Its canonical generation is not the terminal's endpoint cursor.
+		old := currentFloors[floor.Key]
+		if old == nil || old.effectiveHash(floor.Key) != state.effectiveHash(floor.Key) {
+			if err := i.markDeletedKeyChangeBatch(batch, validated.meta, floor.Key, false); err != nil {
+				return 0, err
+			}
+		}
 	}
 	if err := putPathMetaBatch(batch, validated.meta); err != nil {
 		return 0, err

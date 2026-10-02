@@ -269,10 +269,8 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, deleteRecord *wir
 	if err := batch.Delete(hashDBKey(oldHash)); err != nil {
 		return chainhash.Hash{}, err
 	}
-	if meta != nil {
-		if err := i.clearChangedRecordBatch(batch, meta.Path, record.Key); err != nil {
-			return chainhash.Hash{}, err
-		}
+	if err := i.markDeletedKeyChangeBatch(batch, meta, record.Key, localOnly); err != nil {
+		return chainhash.Hash{}, err
 	}
 	if localOnly {
 		// Endpoint-local cache data has no durable delete history. The endpoint
@@ -353,6 +351,9 @@ func (i *Indexer) retainDeleteCommandLocked(record *wire.DKVSRecord, now uint64,
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
 	if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
+		return chainhash.Hash{}, err
+	}
+	if err := i.markDeletedKeyChangeBatch(batch, meta, record.Key, localOnly); err != nil {
 		return chainhash.Hash{}, err
 	}
 	if err := putPathMetaBatch(batch, meta); err != nil {

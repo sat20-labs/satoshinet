@@ -594,7 +594,9 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, call contract
 		return err
 	}
 	if !ready {
-		return fmt.Errorf("%w: EVM deployment has insufficient Result gas", contractframework.ErrCallAdmission)
+		// Insufficient escrow is a failed deployment, not a broken block.
+		// Refund only this deployment's funding before creating any runtime.
+		return reject(ResultStatusInvalid, cfg.DeployBaseGas)
 	}
 	start := len(e.Runtime.AssetIntents)
 	result := e.Runtime.Deploy(DeployRequest{

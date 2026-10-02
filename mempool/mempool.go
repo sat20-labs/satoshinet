@@ -1406,6 +1406,12 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 		return nil, err
 	}
 
+	// Cheap semantic admission must also apply when AcceptNonStd is true,
+	// before either the anchor or orphan paths can return successfully.
+	if err := checkMempoolContractAndAssetEnvelope(tx.MsgTx()); err != nil {
+		return nil, err
+	}
+
 	// A standalone transaction must not be a coinbase transaction.
 	if blockchain.IsCoinBase(tx) {
 		str := fmt.Sprintf("transaction is an individual coinbase %v",
@@ -1537,6 +1543,10 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 		return &MempoolAcceptResult{
 			MissingParents: missingParents,
 		}, nil
+	}
+
+	if err := checkMempoolBindingMetadata(tx.MsgTx(), utxoView); err != nil {
+		return nil, err
 	}
 
 	// Perform several checks on the transaction inputs using the invariant

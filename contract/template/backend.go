@@ -475,9 +475,6 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 	if err != nil {
 		return err
 	}
-	if !hasResultGas {
-		return fmt.Errorf("%w: template deployment has insufficient Result gas", contractframework.ErrCallAdmission)
-	}
 	reject := func() error {
 		_, err := e.appendFundingFailure(contractframework.FundingFailureRequest{
 			Height: e.BlockHeight, TxID: tx.TxID(), Kind: ExecutionKindDeploy,
@@ -487,7 +484,9 @@ func (e *Backend) executeDeployTx(tx *wire.MsgTx, parsed ParsedTx, contractTx co
 		})
 		return err
 	}
-	if runtimeErr != nil || e.Store.Exists(addr) || e.Store.ActiveNetworkExclusiveExists(runtime) {
+	// A deployment without Result escrow uses the same isolated refund path
+	// as other rejected deployments; it must not abort block construction.
+	if !hasResultGas || runtimeErr != nil || e.Store.Exists(addr) || e.Store.ActiveNetworkExclusiveExists(runtime) {
 		return reject()
 	}
 	if err := checkTemplateFundingAssets(runtime.Contract(), fundingOutput, gasConfig.GasAssetName); err != nil {

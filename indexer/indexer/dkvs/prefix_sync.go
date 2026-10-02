@@ -10,8 +10,8 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-// PrefixDelta reads only the current records indexed after the caller's
-// endpoint-local generation. It is sampled under the same lock as PathMeta.
+// PrefixDelta reads current values and explicit deleted key states indexed
+// after the caller's endpoint-local generation. Both share the PathMeta lock.
 func (i *Indexer) PrefixDelta(prefix, endpointID string, after uint64) (*PrefixDeltaResult, error) {
 	if i == nil {
 		return nil, ErrInvalidRecord
@@ -87,24 +87,30 @@ func (i *Indexer) PrefixDelta(prefix, endpointID string, after uint64) (*PrefixD
 		if !found || current != generation {
 			return nil
 		}
-		record, readErr := i.getRaw(key)
-		if errors.Is(readErr, ErrRecordNotFound) {
+		// A tombstone is stored as a delete floor, not a live record. Looking
+		// up getRaw first would silently skip it while advancing the cursor.
+		state, stateErr := i.keyStateLocked(key, false, height, now)
+		if stateErr != nil {
+			return stateErr
+		}
+		if state.Status == KeyStateNeverSeen {
 			return nil
 		}
+		if state.Status == KeyStateDeleted {
+			return appendPrefixKeyState(&result.KeyStates, &totalBytes, state)
+		}
+		record, readErr := i.getRaw(key)
 		if readErr != nil {
 			return readErr
-		}
-		if i.activeError(record, height, now) != nil {
-			return nil
-		}
-		if len(result.Records) >= MaxPrefixReadRecords {
-			return ErrBatchTooLarge
 		}
 		size := RecordSize(record)
 		if size > MaxPrefixReadBytes-totalBytes {
 			return ErrBatchTooLarge
 		}
 		totalBytes += size
+		if err := appendPrefixKeyState(&result.KeyStates, &totalBytes, state); err != nil {
+			return err
+		}
 		result.Records = append(result.Records, cloneRecord(record))
 		return nil
 	})
@@ -115,13 +121,7 @@ func (i *Indexer) PrefixDelta(prefix, endpointID string, after uint64) (*PrefixD
 		return nil, err
 	}
 	sort.Slice(result.Records, func(a, b int) bool { return result.Records[a].Key < result.Records[b].Key })
-	for _, record := range result.Records {
-		state, stateErr := i.keyStateLocked(record.Key, false, height, now)
-		if stateErr != nil {
-			return nil, stateErr
-		}
-		result.KeyStates = append(result.KeyStates, state)
-	}
+	sort.Slice(result.KeyStates, func(a, b int) bool { return result.KeyStates[a].Key < result.KeyStates[b].Key })
 	return result, nil
 }
 
@@ -190,9 +190,8 @@ func (i *Indexer) PrefixStatus(endpointID string, known []PrefixGeneration) (*Pr
 	return result, nil
 }
 
-// PrefixSnapshot returns every current record for exactly one collection path
-// on this endpoint, including FREE_LOCAL, together with the existing
-// PathMeta.EndpointGeneration sampled under the same DKVS lock.
+// PrefixSnapshot returns current values (including FREE_LOCAL) and retained
+// deletion floors for one collection under the same endpoint-generation lock.
 func (i *Indexer) PrefixSnapshot(prefix string) (*PrefixSnapshot, error) {
 	if i == nil {
 		return nil, ErrInvalidRecord
@@ -218,30 +217,31 @@ func (i *Indexer) PrefixSnapshot(prefix string) (*PrefixSnapshot, error) {
 		return nil, err
 	}
 	active := make([]*wire.DKVSRecord, 0, len(records))
+	states := make([]DKVSKeyState, 0, len(records))
 	totalBytes := 0
 	for _, record := range records {
 		if record == nil {
 			continue
-		}
-		if len(active) >= MaxPrefixReadRecords {
-			return nil, ErrBatchTooLarge
 		}
 		size := RecordSize(record)
 		if size > MaxPrefixReadBytes-totalBytes {
 			return nil, ErrBatchTooLarge
 		}
 		totalBytes += size
-		active = append(active, cloneRecord(record))
-	}
-	sort.Slice(active, func(a, b int) bool { return active[a].Key < active[b].Key })
-	states := make([]DKVSKeyState, 0, len(active))
-	for _, record := range active {
 		state, stateErr := i.keyStateLocked(record.Key, false, height, now)
 		if stateErr != nil {
 			return nil, stateErr
 		}
-		states = append(states, state)
+		if err := appendPrefixKeyState(&states, &totalBytes, state); err != nil {
+			return nil, err
+		}
+		active = append(active, cloneRecord(record))
 	}
+	if err := i.appendPrefixDeleteStatesLocked(prefix, height, now, &states, &totalBytes); err != nil {
+		return nil, err
+	}
+	sort.Slice(active, func(a, b int) bool { return active[a].Key < active[b].Key })
+	sort.Slice(states, func(a, b int) bool { return states[a].Key < states[b].Key })
 	if _, err := i.ensurePrefixChangeBaselineLocked(prefix, meta.EndpointGeneration); err != nil {
 		return nil, err
 	}
