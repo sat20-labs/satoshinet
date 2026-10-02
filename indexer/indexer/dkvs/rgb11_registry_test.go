@@ -12,7 +12,7 @@ func rgb11TestContractID(n int) string { return fmt.Sprintf("%064x", n) }
 
 func rgb11RegistryTestConfig(coreKey *btcec.PrivateKey) Config {
 	return Config{
-		CurrentHeight:  func() uint64 { return 100 },
+		CurrentHeight: func() uint64 { return 100 },
 		SystemVerifier: StaticSystemVerifier{Keys: [][]byte{
 			coreKey.PubKey().SerializeCompressed(),
 		}},
