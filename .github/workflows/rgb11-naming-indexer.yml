@@ -52,18 +52,18 @@ jobs:
             fi
           fi
           git diff --check origin/main...HEAD
-      - name: Race-test naming registry and persistence
+      - name: Race-test RGB11 DKVS registry
         working-directory: satoshinet
-        run: go test -race ./indexer/indexer/rgb11names -count=1 -timeout=10m -v
-      - name: Test real base-index lifecycle and RPC integration
+        run: go test -race ./indexer/indexer/dkvs -run '^(TestPrimaryDID|TestRGB11Registry)' -count=1 -timeout=10m -v
+      - name: Test RGB11 DKVS RPC
         working-directory: satoshinet
-        run: go test ./indexer/indexer/base ./indexer/rpcserver/indexer -run '^TestRGB11Naming' -count=1 -timeout=10m -v
+        run: go test ./indexer/rpcserver/indexer -run '^TestRGB11Naming' -count=1 -timeout=10m -v
       - name: Test complete indexer suite
         working-directory: satoshinet
         run: go test ./indexer/... -count=1 -timeout=15m
-      - name: Vet naming registry
+      - name: Vet DKVS registry
         working-directory: satoshinet
-        run: go vet ./indexer/indexer/rgb11names
+        run: go vet ./indexer/indexer/dkvs ./indexer/rpcserver/indexer
       - name: Compile all node packages
         working-directory: satoshinet
         run: go test ./... -run '^$' -count=1 -timeout=15m
