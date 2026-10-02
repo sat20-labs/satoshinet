@@ -133,11 +133,7 @@ func validateNamespaceShape(parsed ParsedKey) error {
 			return ErrInvalidKey
 		}
 	case "rgb11":
-		if len(parsed.Segments) != 2 || ValidatePrimaryDIDName(parsed.Segments[0]) != nil {
-			return ErrInvalidKey
-		}
-		base, err := NormalizeRGB11Ticker(parsed.Segments[1])
-		if err != nil || base != parsed.Segments[1] {
+		if _, _, _, err := parseRGB11RegistryKey(parsed); err != nil {
 			return ErrInvalidKey
 		}
 	case "svc":
