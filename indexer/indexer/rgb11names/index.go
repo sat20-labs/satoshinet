@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -169,6 +170,13 @@ func (s *Index) ApplyBlock(block *common.Block, events []Event) error {
 			err = s.applyRegistration(txn, *event.Register, position)
 		}
 		if err != nil {
+			if event.Optional && event.Register != nil &&
+				(errors.Is(err, ErrNotFound) || errors.Is(err, ErrOwner) ||
+					errors.Is(err, ErrConflict) || errors.Is(err, ErrInvalid)) {
+				// Contract deployment remains valid even when it cannot acquire a
+				// canonical RGB11 name (for example, no valid Primary DID bind).
+				continue
+			}
 			return fmt.Errorf("RGB11 naming event %d/%d: %w", event.TxIndex, event.EventIndex, err)
 		}
 	}
