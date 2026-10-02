@@ -175,6 +175,21 @@ func isRGB11RegistryRecord(record *wire.DKVSRecord, parsed ParsedKey) bool {
 	return record != nil && parsed.Namespace == RGB11RegistryNamespace && len(parsed.Segments) == 2
 }
 
+func validateRGB11RegistryStored(record *wire.DKVSRecord, parsed ParsedKey) error {
+	if !isRGB11RegistryRecord(record, parsed) || IsTombstone(record.Flags) || record.TTL != 0 {
+		return ErrInvalidRecord
+	}
+	if err := ValidatePrimaryDIDName(parsed.Segments[0]); err != nil {
+		return err
+	}
+	base, err := NormalizeRGB11Ticker(parsed.Segments[1])
+	if err != nil || base != parsed.Segments[1] {
+		return ErrInvalidRecord
+	}
+	_, err = DecodeRGB11RegistryContracts(record.Value)
+	return err
+}
+
 func validateRGB11RegistryPermissionWith(record *wire.DKVSRecord, parsed ParsedKey, resolver DIDResolver) error {
 	if !isRGB11RegistryRecord(record, parsed) || IsTombstone(record.Flags) || record.TTL != 0 {
 		return ErrInvalidRecord
