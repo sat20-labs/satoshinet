@@ -1,11 +1,13 @@
 package indexer
 
 import (
+	"encoding/hex"
 	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 type rgb11DKVSReader interface {
@@ -14,7 +16,19 @@ type rgb11DKVSReader interface {
 	GetRGB11RegistryCount(providerDID, ticker string) (uint64, error)
 }
 
+type rgb11DKVSWriter interface {
+	PutDKVSInternalRGB11Registry(record *wire.DKVSRecord) (bool, error)
+	IsCoreNode(pubkey string) bool
+}
+
+type rgb11RegisterRequest struct {
+	Record *wire.DKVSRecord `json:"record"`
+}
+
 func (s *Service) initRGB11NamingRoutes(r *gin.Engine, proxy string) {
+	r.POST(proxy+"/v3/rgb11/register", dkvsLocalOnly, func(c *gin.Context) {
+		s.handleRGB11InternalRegister(c)
+	})
 	r.GET(proxy+"/v3/rgb11/naming/status", func(c *gin.Context) {
 		if s == nil || s.handle == nil || s.handle.model == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"code": -1, "msg": "RGB11 DKVS registry unavailable"})
@@ -68,6 +82,38 @@ func (s *Service) initRGB11NamingRoutes(r *gin.Engine, proxy string) {
 			"data": gin.H{"provider_did": c.Query("provider"), "base_ticker": c.Query("ticker"), "max_ordinal": count},
 		})
 	})
+}
+
+func (s *Service) handleRGB11InternalRegister(c *gin.Context) {
+	if s == nil || s.handle == nil || s.handle.model == nil || s.handle.model.indexer == nil {
+		rgb11RegistryError(c, dkvsindexer.ErrRecordNotFound, true)
+		return
+	}
+	writer, ok := s.handle.model.indexer.(rgb11DKVSWriter)
+	if !ok {
+		rgb11RegistryError(c, dkvsindexer.ErrRecordNotFound, true)
+		return
+	}
+	var req rgb11RegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Record == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "invalid RGB11 registry request"})
+		return
+	}
+	parsed, err := dkvsindexer.ParseKey(req.Record.Key)
+	if err != nil || parsed.Namespace != dkvsindexer.RGB11RegistryNamespace {
+		rgb11RegistryError(c, dkvsindexer.ErrInvalidKey, false)
+		return
+	}
+	if len(req.Record.PubKey) == 0 || !writer.IsCoreNode(hex.EncodeToString(req.Record.PubKey)) {
+		c.JSON(http.StatusForbidden, gin.H{"code": -1, "msg": "RGB11 registry writer is not a CoreNode"})
+		return
+	}
+	updated, err := writer.PutDKVSInternalRGB11Registry(req.Record)
+	if err != nil {
+		rgb11RegistryError(c, err, false)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{"updated": updated}})
 }
 
 func (s *Service) rgb11DKVSReader() (rgb11DKVSReader, bool) {
