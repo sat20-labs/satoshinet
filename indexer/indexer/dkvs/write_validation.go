@@ -274,11 +274,14 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 	if isInternalMailboxRecord(record) || isInternalTopicRecord(record) {
 		return false, ErrPermissionDenied
 	}
+	if isPrimaryDIDRecord(record, parsed) {
+		if err := ValidateRecordIdentity(record, parsed); err != nil {
+			return false, err
+		}
+		return false, validatePrimaryDIDRecordWith(record, parsed, validators.resolver)
+	}
 	if len(record.PubKey) == 0 {
 		return false, ValidateRecordIdentity(record, parsed)
-	}
-	if isPrimaryDIDRecord(record, parsed) {
-		return false, validatePrimaryDIDRecordWith(record, parsed, validators.resolver)
 	}
 	if isRGB11RegistryRecord(record, parsed) {
 		return false, validateRGB11RegistryPermissionWith(record, parsed, validators.resolver)
