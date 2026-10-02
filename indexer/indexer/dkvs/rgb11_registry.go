@@ -177,8 +177,12 @@ func isRGB11RegistryRecord(record *wire.DKVSRecord, parsed ParsedKey) bool {
 }
 
 func validateRGB11RegistryStored(record *wire.DKVSRecord, parsed ParsedKey) error {
-	if !isRGB11RegistryRecord(record, parsed) || IsTombstone(record.Flags) || record.TTL != 0 {
+	if !isRGB11RegistryRecord(record, parsed) || IsTombstone(record.Flags) ||
+		record.TTL != 0 || len(record.FeeProof) != 0 || len(record.PubKey) == 0 {
 		return ErrInvalidRecord
+	}
+	if err := VerifySignature(record); err != nil {
+		return err
 	}
 	if err := ValidatePrimaryDIDName(parsed.Segments[0]); err != nil {
 		return err
@@ -189,26 +193,6 @@ func validateRGB11RegistryStored(record *wire.DKVSRecord, parsed ParsedKey) erro
 	}
 	_, err = DecodeRGB11RegistryContracts(record.Value)
 	return err
-}
-
-func validateRGB11RegistryPermissionWith(record *wire.DKVSRecord, parsed ParsedKey, system SystemVerifier) error {
-	if !isRGB11RegistryRecord(record, parsed) || IsTombstone(record.Flags) || record.TTL != 0 {
-		return ErrInvalidRecord
-	}
-	if err := ValidatePrimaryDIDName(parsed.Segments[0]); err != nil {
-		return err
-	}
-	base, err := NormalizeRGB11Ticker(parsed.Segments[1])
-	if err != nil || base != parsed.Segments[1] {
-		return ErrInvalidRecord
-	}
-	if _, err := DecodeRGB11RegistryContracts(record.Value); err != nil {
-		return err
-	}
-	if system == nil {
-		return ErrPermissionDenied
-	}
-	return system.CanWriteSystem(record.Key, record.PubKey)
 }
 
 func validateRGB11RegistryMutation(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord) error {
