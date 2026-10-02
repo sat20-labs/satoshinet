@@ -189,6 +189,16 @@ func validateRGB11RegistryStored(record *wire.DKVSRecord, parsed ParsedKey) erro
 	return err
 }
 
+func validateRGB11RegistryPermissionWith(record *wire.DKVSRecord, parsed ParsedKey, system SystemVerifier) error {
+	if err := validateRGB11RegistryStored(record, parsed); err != nil {
+		return err
+	}
+	if system == nil {
+		return ErrPermissionDenied
+	}
+	return system.CanWriteSystem(record.Key, record.PubKey)
+}
+
 func (i *Indexer) validateRGB11RegistryInsertLocked(record *wire.DKVSRecord, parsed ParsedKey,
 	height, now uint64) error {
 
