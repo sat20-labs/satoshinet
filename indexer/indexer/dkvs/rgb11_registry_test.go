@@ -190,41 +190,20 @@ func TestRGB11RegistrySnapshotRejectsUnknownSigner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	maliciousSource := testIndexerWithConfig(t, rgb11RegistryTestConfig(attacker))
 	record := rgb11SignedRegistryRecord(
-		t, coreKey, "alice", "USD", 1, rgb11TestContractID(200), 100,
+		t, attacker, "alice", "USD", 1, rgb11TestContractID(200), 100,
 	)
-	if _, err := source.PutInternalRGB11Registry(record); err != nil {
+	if _, err := maliciousSource.PutInternalRGB11Registry(record); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := source.GetPathSnapshot("/rgb11/alice/usd")
-	if err != nil {
-		t.Fatal(err)
-	}
-	forged := clonePathSnapshot(snapshot)
-	forgedRecord := forged.Records[0]
-	forgedRecord.PubKey = attacker.PubKey().SerializeCompressed()
-	forgedRecord.Signature = nil
-	if err := SignRecordForTest(attacker, forgedRecord); err != nil {
-		t.Fatal(err)
-	}
-	forged.PathMeta.StateRoot = chainhash.Hash{}
-	// Rebuild the snapshot root so rejection is specifically signer authority,
-	// not a stale root mismatch.
-	tmp := testIndexerWithConfig(t, Config{
-		CurrentHeight:  func() uint64 { return 100 },
-		SystemVerifier: StaticSystemVerifier{Keys: [][]byte{attacker.PubKey().SerializeCompressed()}},
-	})
-	if _, err := tmp.PutInternalRGB11Registry(forgedRecord); err != nil {
-		t.Fatal(err)
-	}
-	forged, err = tmp.GetPathSnapshot("/rgb11/alice/usd")
+	snapshot, err := maliciousSource.GetPathSnapshot("/rgb11/alice/usd")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
-	if _, err := target.ApplyPathSnapshot(forged); !errors.Is(err, ErrPermissionDenied) {
+	if _, err := target.ApplyPathSnapshot(snapshot); !errors.Is(err, ErrPermissionDenied) {
 		t.Fatalf("unknown signer snapshot accepted: %v", err)
 	}
 }
