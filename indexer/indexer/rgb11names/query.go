@@ -97,7 +97,8 @@ func (s *Index) CheckSelf() error {
 			}
 		case strings.HasPrefix(key, "owner/"):
 			var owner Ownership
-			if t.get(key, &owner) != nil || key != "owner/"+owner.DID || ValidateDID(owner.DID) != nil || owner.Revision == 0 || !validHash(owner.L1Hash) {
+			if t.get(key, &owner) != nil || key != "owner/"+owner.DID || ValidateDID(owner.DID) != nil ||
+				owner.OwnerUtxo == "" || !validOutpoint(owner.OwnerUtxo) || owner.OwnerSat < 0 {
 				return ErrCorrupt
 			}
 			if owner.Address != "" {
@@ -115,10 +116,15 @@ func (s *Index) CheckSelf() error {
 			if err != nil || address != binding.Address {
 				return ErrCorrupt
 			}
-			var owner Ownership
-			if t.get("owner/"+binding.DID, &owner) != nil || binding.Sat != owner.Sat || binding.Revision == 0 || binding.Revision > owner.Revision {
+			if ValidateDID(binding.DID) != nil || binding.OwnerUtxo == "" || !validOutpoint(binding.OwnerUtxo) || binding.OwnerSat < 0 {
 				return ErrCorrupt
 			}
+			var owner Ownership
+			if t.get("owner/"+binding.DID, &owner) != nil {
+				return ErrCorrupt
+			}
+			// A stale binding after DID transfer is valid historical state. Its
+			// owner UTXO may differ from the DID's current ownership snapshot.
 		case strings.HasPrefix(key, "contract/"):
 			var record Registration
 			if t.get(key, &record) != nil || key != "contract/"+record.ContractID || !validContractID(record.ContractID) || !validOutpoint(record.GenesisOutpoint) || !validPosition(record.RegisteredAt, s.tip.Cursor) {
@@ -141,7 +147,10 @@ func (s *Index) CheckSelf() error {
 				return ErrCorrupt
 			}
 			var owner Ownership
-			if t.get("owner/"+record.ProviderDID, &owner) != nil || owner.Sat != record.ProviderSat {
+			if t.get("owner/"+record.ProviderDID, &owner) != nil {
+				return ErrCorrupt
+			}
+			if record.ProviderSat != 0 && owner.OwnerSat != 0 && uint64(owner.OwnerSat) != record.ProviderSat {
 				return ErrCorrupt
 			}
 			ns := "counter/" + record.ProviderDID + "/" + base
