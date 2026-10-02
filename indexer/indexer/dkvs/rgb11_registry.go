@@ -1,8 +1,8 @@
 package dkvs
 
 import (
-	"errors"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -243,7 +243,6 @@ func validateRGB11RegistryMutation(record *wire.DKVSRecord, parsed ParsedKey, ex
 	}
 	return nil
 }
-
 
 func (i *Indexer) LookupRGB11Contract(contractID string) (*RGB11Registration, error) {
 	if i == nil || len(contractID) != 64 || contractID != strings.ToLower(contractID) {
