@@ -5,53 +5,88 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/sat20-labs/satoshinet/indexer/indexer/rgb11names"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
-// Optional capability: existing Indexer implementations and unrelated RPC
-// mocks are not forced to pretend they support the RGB11 naming registry.
-type rgb11NamingReader interface {
-	GetRGB11Naming(rgb11names.Query) (*rgb11names.Result, error)
+type rgb11DKVSReader interface {
+	GetRGB11RegistrationByContract(contractID string) (*dkvsindexer.RGB11Registration, error)
+	GetRGB11RegistrationByName(assetName string) (*dkvsindexer.RGB11Registration, error)
+	GetRGB11RegistryCount(providerDID, ticker string) (uint64, error)
 }
 
 func (s *Service) initRGB11NamingRoutes(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/rgb11/naming/status", func(c *gin.Context) {
-		s.handle.queryRGB11Naming(c, rgb11names.Query{Kind: "status"})
+		if s == nil || s.handle == nil || s.handle.model == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": -1, "msg": "RGB11 DKVS registry unavailable"})
+			return
+		}
+		if _, ok := s.handle.model.indexer.(rgb11DKVSReader); !ok {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": -1, "msg": "RGB11 DKVS registry unavailable"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": gin.H{"source": "dkvs"}})
 	})
 	r.GET(proxy+"/v3/rgb11/contract/:contractid", func(c *gin.Context) {
-		s.handle.queryRGB11Naming(c, rgb11names.Query{Kind: "contract", Value: c.Param("contractid")})
+		reader, ok := s.rgb11DKVSReader()
+		if !ok {
+			rgb11RegistryError(c, dkvsindexer.ErrRecordNotFound, true)
+			return
+		}
+		registration, err := reader.GetRGB11RegistrationByContract(c.Param("contractid"))
+		if err != nil {
+			rgb11RegistryError(c, err, false)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": registration})
 	})
 	r.GET(proxy+"/v3/rgb11/name/:assetname", func(c *gin.Context) {
-		s.handle.queryRGB11Naming(c, rgb11names.Query{Kind: "name", Value: c.Param("assetname")})
+		reader, ok := s.rgb11DKVSReader()
+		if !ok {
+			rgb11RegistryError(c, dkvsindexer.ErrRecordNotFound, true)
+			return
+		}
+		registration, err := reader.GetRGB11RegistrationByName(c.Param("assetname"))
+		if err != nil {
+			rgb11RegistryError(c, err, false)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": registration})
 	})
 	r.GET(proxy+"/v3/rgb11/ordinal", func(c *gin.Context) {
-		s.handle.queryRGB11Naming(c, rgb11names.Query{Kind: "counter", Provider: c.Query("provider"), Ticker: c.Query("ticker")})
+		reader, ok := s.rgb11DKVSReader()
+		if !ok {
+			rgb11RegistryError(c, dkvsindexer.ErrRecordNotFound, true)
+			return
+		}
+		count, err := reader.GetRGB11RegistryCount(c.Query("provider"), c.Query("ticker"))
+		if err != nil {
+			rgb11RegistryError(c, err, false)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"code": 0, "msg": "ok",
+			"data": gin.H{"provider_did": c.Query("provider"), "base_ticker": c.Query("ticker"), "max_ordinal": count},
+		})
 	})
-	// Deliberately no POST, PUT, DELETE or ordinal-reservation endpoint.
 }
 
-func (h *Handle) queryRGB11Naming(c *gin.Context, query rgb11names.Query) {
-	var data *rgb11names.Result
-	err := rgb11names.ErrUnavailable
-	if h != nil && h.model != nil {
-		if reader, ok := h.model.indexer.(rgb11NamingReader); ok {
-			data, err = reader.GetRGB11Naming(query)
-		}
+func (s *Service) rgb11DKVSReader() (rgb11DKVSReader, bool) {
+	if s == nil || s.handle == nil || s.handle.model == nil {
+		return nil, false
 	}
-	if err != nil {
-		status := http.StatusServiceUnavailable
-		switch {
-		case errors.Is(err, rgb11names.ErrInvalid):
-			status = http.StatusBadRequest
-		case errors.Is(err, rgb11names.ErrNotFound):
-			status = http.StatusNotFound
-		}
-		c.JSON(status, gin.H{"code": -1, "msg": err.Error()})
-		return
+	reader, ok := s.handle.model.indexer.(rgb11DKVSReader)
+	return reader, ok
+}
+
+func rgb11RegistryError(c *gin.Context, err error, unavailable bool) {
+	status := http.StatusInternalServerError
+	switch {
+	case unavailable:
+		status = http.StatusServiceUnavailable
+	case errors.Is(err, dkvsindexer.ErrRecordNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, dkvsindexer.ErrInvalidRecord), errors.Is(err, dkvsindexer.ErrInvalidKey):
+		status = http.StatusBadRequest
 	}
-	if data == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": -1, "msg": rgb11names.ErrUnavailable.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": data})
+	c.JSON(status, gin.H{"code": -1, "msg": err.Error()})
 }
