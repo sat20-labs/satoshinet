@@ -160,6 +160,15 @@ type DIDIdentity struct {
 	OwnerAddresses []string
 	AddressParams  *chaincfg.Params
 	Active         bool
+
+	// L1 ownership snapshot metadata. These fields are optional for generic
+	// resolvers but are populated by L1NSResolver when the L1 indexer exposes
+	// them. OwnerUtxo is the revision token used by SatoshiNet Primary DID Bind:
+	// a transfer away and back necessarily produces a different owner UTXO and
+	// therefore requires a new bind.
+	OwnerUtxo      string
+	OwnerSat       int64
+	InscriptionID  string
 }
 
 func (id DIDIdentity) CanSign(pubKey []byte) error {
