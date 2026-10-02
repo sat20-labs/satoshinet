@@ -120,7 +120,7 @@ func TestRGB11NamingBaseBindTranscendAutoRegisterFlushAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	suffix, err := rgb11names.EncodeTranscendRegistrationSuffix(contractID, "USDT", genesisOutpoint, providerAddress)
+	suffix, err := rgb11names.EncodeTranscendRegistrationSuffix("USDT", genesisOutpoint, providerAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
