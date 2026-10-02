@@ -368,3 +368,40 @@ func (p *IndexerMgr) ApplyDKVSMirror(filters []dkvs.Subscription, records []*wir
 	}
 	return p.dkvsIndexer.ApplyMirror(filters, records, root)
 }
+
+
+func (p *IndexerMgr) GetRGB11RegistrationByContract(contractID string) (*dkvs.RGB11Registration, error) {
+	if p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.LookupRGB11Contract(contractID)
+}
+
+func (p *IndexerMgr) GetRGB11RegistrationByName(assetName string) (*dkvs.RGB11Registration, error) {
+	if p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.LookupRGB11AssetName(assetName)
+}
+
+func (p *IndexerMgr) GetRGB11RegistryCount(providerDID, ticker string) (uint64, error) {
+	if p.dkvsIndexer == nil {
+		return 0, errDKVSNotInitialized
+	}
+	key, err := dkvs.RGB11RegistryKey(providerDID, ticker)
+	if err != nil {
+		return 0, err
+	}
+	record, err := p.dkvsIndexer.Get(key)
+	if err != nil {
+		if errors.Is(err, dkvs.ErrRecordNotFound) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	ids, err := dkvs.DecodeRGB11RegistryContracts(record.Value)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(len(ids)), nil
+}
