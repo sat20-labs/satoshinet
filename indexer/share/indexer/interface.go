@@ -67,6 +67,7 @@ type Indexer interface {
 	SetDKVSSystemVerifier(verifier dkvs_indexer.SystemVerifier)
 	SetDKVSEndpointID(endpointID string) error
 	PutDKVSRecord(record *wire.DKVSRecord) (bool, error)
+	PutDKVSInternalRGB11Registry(record *wire.DKVSRecord) (bool, error)
 	PutDKVSRecordWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error)
 	PutDKVSRecordCAS(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition) (bool, error)
 	PutDKVSRecordCASResult(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition,
