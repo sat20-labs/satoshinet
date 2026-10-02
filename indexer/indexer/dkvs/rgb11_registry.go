@@ -1,6 +1,7 @@
 package dkvs
 
 import (
+	"errors"
 	"encoding/hex"
 	"strconv"
 	"strings"
@@ -241,4 +242,71 @@ func validateRGB11RegistryMutation(record *wire.DKVSRecord, parsed ParsedKey, ex
 		}
 	}
 	return nil
+}
+
+
+func (i *Indexer) LookupRGB11Contract(contractID string) (*RGB11Registration, error) {
+	if i == nil || len(contractID) != 64 || contractID != strings.ToLower(contractID) {
+		return nil, ErrInvalidRecord
+	}
+	if _, err := hex.DecodeString(contractID); err != nil || strings.Trim(contractID, "0") == "" {
+		return nil, ErrInvalidRecord
+	}
+	records, _, _, err := i.scan("/rgb11", nil, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	var found *RGB11Registration
+	for _, record := range records {
+		reg, err := RGB11RegistrationFromRecord(record, contractID)
+		if errors.Is(err, ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if found != nil && found.AssetName != reg.AssetName {
+			return nil, ErrInvalidRecord
+		}
+		copyReg := *reg
+		found = &copyReg
+	}
+	if found == nil {
+		return nil, ErrRecordNotFound
+	}
+	return found, nil
+}
+
+func (i *Indexer) LookupRGB11AssetName(assetName string) (*RGB11Registration, error) {
+	if i == nil || !strings.HasPrefix(assetName, "rgb11:f:") {
+		return nil, ErrInvalidRecord
+	}
+	records, _, _, err := i.scan("/rgb11", nil, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		parsed, err := ParseKey(record.Key)
+		if err != nil || parsed.Namespace != RGB11RegistryNamespace || len(parsed.Segments) != 2 {
+			continue
+		}
+		ids, err := DecodeRGB11RegistryContracts(record.Value)
+		if err != nil {
+			return nil, err
+		}
+		for index, id := range ids {
+			ordinal := uint64(index + 1)
+			name, err := BuildRGB11AssetName(parsed.Segments[0], parsed.Segments[1], ordinal)
+			if err != nil {
+				return nil, err
+			}
+			if name == assetName {
+				return &RGB11Registration{
+					ContractID: id, AssetName: name, ProviderDID: parsed.Segments[0],
+					BaseTicker: parsed.Segments[1], Ordinal: ordinal,
+				}, nil
+			}
+		}
+	}
+	return nil, ErrRecordNotFound
 }
