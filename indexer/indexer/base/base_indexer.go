@@ -62,7 +62,6 @@ type BaseIndexer struct {
 	blockprocCB BlockProcCallback
 	updateDBCB  UpdateDBCallback
 
-
 	mutex sync.RWMutex // 仅对需要提供给节点实时访问的数据加锁
 }
 
