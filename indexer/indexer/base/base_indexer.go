@@ -8,6 +8,7 @@ import (
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/indexer/indexer/rgb11names"
 	"github.com/sat20-labs/satoshinet/indexer/indexer/stp"
 	"github.com/sat20-labs/satoshinet/txscript"
@@ -63,7 +64,8 @@ type BaseIndexer struct {
 	blockprocCB BlockProcCallback
 	updateDBCB  UpdateDBCallback
 
-	rgb11Names *rgb11names.Index
+	rgb11Names       *rgb11names.Index
+	rgb11DIDResolver dkvsindexer.DIDResolver
 
 	mutex sync.RWMutex // 仅对需要提供给节点实时访问的数据加锁
 }
