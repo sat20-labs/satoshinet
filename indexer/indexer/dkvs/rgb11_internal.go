@@ -1,16 +1,18 @@
 package dkvs
 
 import (
+	"bytes"
 	"errors"
 	"sync/atomic"
 
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-// PutInternalRGB11Registry persists one CoreNode-authenticated RGB11 registry
-// record. It is deliberately unreachable through ordinary DKVS Put/CAS APIs.
-// The caller must be the CoreNode that has accepted the corresponding
-// transcend.tc deployment and must sign the DKVS record with its node wallet.
+// PutInternalRGB11Registry persists one CoreNode-authenticated immutable RGB11
+// registration. Ordinary DKVS Put/CAS APIs cannot create /rgb11 records.
+//
+// The caller is the CoreNode processing the corresponding transcend.tc deploy.
+// The record is signed by that CoreNode wallet before reaching this method.
 func (i *Indexer) PutInternalRGB11Registry(record *wire.DKVSRecord) (bool, error) {
 	record = cloneRecord(record)
 	if i == nil || record == nil {
@@ -32,33 +34,28 @@ func (i *Indexer) PutInternalRGB11Registry(record *wire.DKVSRecord) (bool, error
 	i.mutex.Lock()
 	existing, err := i.getRaw(record.Key)
 	if err == nil {
-		if RecordHash(existing) == RecordHash(record) {
-			i.mutex.Unlock()
-			return false, nil
-		}
 		if !isRGB11RegistryRecord(existing, parsed) {
 			i.mutex.Unlock()
 			return false, ErrWriteConflict
 		}
-		if existing.Seq == ^uint64(0) || record.Seq != existing.Seq+1 {
+		// A registration key is immutable. The same ContractID is an idempotent
+		// retry even if a second authorized CoreNode signs the same business fact.
+		if bytes.Equal(existing.Value, record.Value) {
 			i.mutex.Unlock()
-			return false, ErrInvalidSequence
+			return false, nil
 		}
-	} else if errors.Is(err, ErrRecordNotFound) {
-		existing = nil
-		if record.Seq != 1 {
-			i.mutex.Unlock()
-			return false, ErrInvalidSequence
-		}
-	} else {
+		i.mutex.Unlock()
+		return false, ErrWriteConflict
+	}
+	if !errors.Is(err, ErrRecordNotFound) {
+		i.mutex.Unlock()
+		return false, err
+	}
+	if err := i.validateRGB11RegistryInsertLocked(record, parsed, height, now); err != nil {
 		i.mutex.Unlock()
 		return false, err
 	}
 
-	if err := i.validateRGB11RegistryMutationLocked(record, parsed, existing, height, now); err != nil {
-		i.mutex.Unlock()
-		return false, err
-	}
 	encoded, err := MarshalRecord(record)
 	if err != nil {
 		i.mutex.Unlock()
@@ -67,17 +64,6 @@ func (i *Indexer) PutInternalRGB11Registry(record *wire.DKVSRecord) (bool, error
 	hash := RecordHash(record)
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
-	touched := []*wire.DKVSRecord{record}
-	if existing != nil {
-		touched = append(touched, existing)
-		oldHash := RecordHash(existing)
-		if oldHash != hash {
-			if err := batch.Delete(hashDBKey(oldHash)); err != nil {
-				i.mutex.Unlock()
-				return false, err
-			}
-		}
-	}
 	if err := batch.Put(recordDBKey(record.Key), encoded); err != nil {
 		i.mutex.Unlock()
 		return false, err
@@ -86,7 +72,7 @@ func (i *Indexer) PutInternalRGB11Registry(record *wire.DKVSRecord) (bool, error
 		i.mutex.Unlock()
 		return false, err
 	}
-	if err := i.markPathMetaDirtyLocked(batch, touched, height, now); err != nil {
+	if err := i.markPathMetaDirtyLocked(batch, []*wire.DKVSRecord{record}, height, now); err != nil {
 		i.mutex.Unlock()
 		return false, err
 	}
