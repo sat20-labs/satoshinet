@@ -10,6 +10,15 @@ import (
 
 func rgb11TestContractID(n int) string { return fmt.Sprintf("%064x", n) }
 
+func rgb11RegistryTestConfig(coreKey *btcec.PrivateKey) Config {
+	return Config{
+		CurrentHeight: func() uint64 { return 100 },
+		SystemVerifier: StaticSystemVerifier{Keys: [][]byte{
+			coreKey.PubKey().SerializeCompressed(),
+		}},
+	}
+}
+
 func rgb11SignedRegistryRecord(t *testing.T, signer *btcec.PrivateKey, provider, ticker string,
 	ordinal uint64, contractID string, height uint64) *Record {
 
@@ -34,7 +43,7 @@ func TestRGB11RegistryCoreNodeInternalWriteAndDKVSSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
+	source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
 
 	first := rgb11SignedRegistryRecord(
 		t, coreKey, "alice", "USDT", 1, rgb11TestContractID(1), 100,
@@ -70,7 +79,7 @@ func TestRGB11RegistryCoreNodeInternalWriteAndDKVSSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
+	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
 	if applied, err := target.ApplyPathSnapshot(snapshot); err != nil || applied != 2 {
 		t.Fatalf("apply RGB11 DKVS snapshot applied=%d err=%v", applied, err)
 	}
@@ -82,7 +91,7 @@ func TestRGB11RegistryCoreNodeInternalWriteAndDKVSSync(t *testing.T) {
 
 func TestRGB11RegistryRejectsMutationContractReuseAndOrdinalGaps(t *testing.T) {
 	coreKey, _ := btcec.NewPrivateKey()
-	idx := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
+	idx := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
 
 	first := rgb11SignedRegistryRecord(
 		t, coreKey, "alice", "USD", 1, rgb11TestContractID(10), 100,
@@ -147,7 +156,7 @@ func TestRGB11RegistrySnapshotSupportsDoubleDigitOrdinals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
+	source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
 	for ordinal := uint64(1); ordinal <= 12; ordinal++ {
 		record := rgb11SignedRegistryRecord(
 			t, coreKey, "alice", "USD", ordinal, rgb11TestContractID(int(100+ordinal)), 100,
@@ -160,12 +169,62 @@ func TestRGB11RegistrySnapshotSupportsDoubleDigitOrdinals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := testIndexerWithConfig(t, Config{CurrentHeight: func() uint64 { return 100 }})
+	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
 	if applied, err := target.ApplyPathSnapshot(snapshot); err != nil || applied != 12 {
 		t.Fatalf("apply double-digit snapshot applied=%d err=%v", applied, err)
 	}
 	reg, err := target.LookupRGB11Contract(rgb11TestContractID(112))
 	if err != nil || reg.Ordinal != 12 || reg.AssetName != "rgb11:f:usd_12@alice" {
 		t.Fatalf("registration=%+v err=%v", reg, err)
+	}
+}
+
+
+func TestRGB11RegistrySnapshotRejectsUnknownSigner(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	attacker, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	record := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USD", 1, rgb11TestContractID(200), 100,
+	)
+	if _, err := source.PutInternalRGB11Registry(record); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.GetPathSnapshot("/rgb11/alice/usd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := clonePathSnapshot(snapshot)
+	forgedRecord := forged.Records[0]
+	forgedRecord.PubKey = attacker.PubKey().SerializeCompressed()
+	forgedRecord.Signature = nil
+	if err := SignRecordForTest(attacker, forgedRecord); err != nil {
+		t.Fatal(err)
+	}
+	forged.PathMeta.StateRoot = chainhash.Hash{}
+	// Rebuild the snapshot root so rejection is specifically signer authority,
+	// not a stale root mismatch.
+	tmp := testIndexerWithConfig(t, Config{
+		CurrentHeight:  func() uint64 { return 100 },
+		SystemVerifier: StaticSystemVerifier{Keys: [][]byte{attacker.PubKey().SerializeCompressed()}},
+	})
+	if _, err := tmp.PutInternalRGB11Registry(forgedRecord); err != nil {
+		t.Fatal(err)
+	}
+	forged, err = tmp.GetPathSnapshot("/rgb11/alice/usd")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	if _, err := target.ApplyPathSnapshot(forged); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("unknown signer snapshot accepted: %v", err)
 	}
 }
