@@ -227,6 +227,42 @@ func (i *Indexer) validateRGB11RegistryInsertLocked(record *wire.DKVSRecord, par
 	return nil
 }
 
+func validateRGB11PathRecords(path string, records []*wire.DKVSRecord) error {
+	prefix, err := ParsePrefix(path)
+	if err != nil || prefix.Namespace != RGB11RegistryNamespace || len(prefix.Segments) != 2 {
+		return ErrInvalidSnapshot
+	}
+	provider := prefix.Segments[0]
+	ticker, err := NormalizeRGB11Ticker(prefix.Segments[1])
+	if err != nil || ticker != prefix.Segments[1] {
+		return ErrInvalidSnapshot
+	}
+	seenContracts := make(map[string]struct{}, len(records))
+	for index, record := range records {
+		if record == nil {
+			return ErrInvalidSnapshot
+		}
+		parsed, err := ParseKey(record.Key)
+		if err != nil {
+			return ErrInvalidSnapshot
+		}
+		gotProvider, gotTicker, ordinal, err := parseRGB11RegistryKey(parsed)
+		if err != nil || gotProvider != provider || gotTicker != ticker ||
+			ordinal != uint64(index+1) {
+			return ErrInvalidSnapshot
+		}
+		contractID, err := DecodeRGB11ContractID(record.Value)
+		if err != nil {
+			return ErrInvalidSnapshot
+		}
+		if _, duplicate := seenContracts[contractID]; duplicate {
+			return ErrInvalidSnapshot
+		}
+		seenContracts[contractID] = struct{}{}
+	}
+	return nil
+}
+
 func (i *Indexer) LookupRGB11Contract(contractID string) (*RGB11Registration, error) {
 	if i == nil {
 		return nil, ErrInvalidRecord
