@@ -238,7 +238,8 @@ func validateRGB11PathRecords(path string, records []*wire.DKVSRecord) error {
 		return ErrInvalidSnapshot
 	}
 	seenContracts := make(map[string]struct{}, len(records))
-	for index, record := range records {
+	seenOrdinals := make(map[uint64]struct{}, len(records))
+	for _, record := range records {
 		if record == nil {
 			return ErrInvalidSnapshot
 		}
@@ -247,10 +248,13 @@ func validateRGB11PathRecords(path string, records []*wire.DKVSRecord) error {
 			return ErrInvalidSnapshot
 		}
 		gotProvider, gotTicker, ordinal, err := parseRGB11RegistryKey(parsed)
-		if err != nil || gotProvider != provider || gotTicker != ticker ||
-			ordinal != uint64(index+1) {
+		if err != nil || gotProvider != provider || gotTicker != ticker {
 			return ErrInvalidSnapshot
 		}
+		if _, duplicate := seenOrdinals[ordinal]; duplicate {
+			return ErrInvalidSnapshot
+		}
+		seenOrdinals[ordinal] = struct{}{}
 		contractID, err := DecodeRGB11ContractID(record.Value)
 		if err != nil {
 			return ErrInvalidSnapshot
@@ -259,6 +263,11 @@ func validateRGB11PathRecords(path string, records []*wire.DKVSRecord) error {
 			return ErrInvalidSnapshot
 		}
 		seenContracts[contractID] = struct{}{}
+	}
+	for ordinal := uint64(1); ordinal <= uint64(len(records)); ordinal++ {
+		if _, ok := seenOrdinals[ordinal]; !ok {
+			return ErrInvalidSnapshot
+		}
 	}
 	return nil
 }
