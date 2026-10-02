@@ -292,3 +292,57 @@ func TestRGB11RegistryFullSnapshotRejectsContractIDInAnotherPath(t *testing.T) {
 		t.Fatalf("full snapshot cross-path ContractID collision accepted: %v", err)
 	}
 }
+
+
+func TestRGB11RegistryPathSnapshotCannotRemoveExistingOrdinal(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	first := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD", 1, rgb11TestContractID(600), 100)
+	second := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD", 2, rgb11TestContractID(601), 100)
+	if _, err := target.PutInternalRGB11Registry(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.PutInternalRGB11Registry(second); err != nil {
+		t.Fatal(err)
+	}
+
+	source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	if _, err := source.PutInternalRGB11Registry(first); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.GetPathSnapshot("/rgb11/alice/usd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.ApplyPathSnapshot(snapshot); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("snapshot removed existing ordinal: %v", err)
+	}
+}
+
+func TestRGB11RegistryPathSnapshotCannotReplaceExistingContract(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	first := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD", 1, rgb11TestContractID(610), 100)
+	if _, err := target.PutInternalRGB11Registry(first); err != nil {
+		t.Fatal(err)
+	}
+
+	source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	replacement := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD", 1, rgb11TestContractID(611), 100)
+	if _, err := source.PutInternalRGB11Registry(replacement); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.GetPathSnapshot("/rgb11/alice/usd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.ApplyPathSnapshot(snapshot); !errors.Is(err, ErrWriteConflict) {
+		t.Fatalf("snapshot replaced immutable ContractID: %v", err)
+	}
+}
