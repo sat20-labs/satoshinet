@@ -195,6 +195,17 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 		for _, record := range current {
 			currentByKey[record.Key] = record
 		}
+		replacedKeys := make(map[string]struct{})
+		if replace != nil {
+			replacedKeys = make(map[string]struct{}, len(currentByKey))
+			for key := range currentByKey {
+				replacedKeys[key] = struct{}{}
+			}
+		}
+		if err := i.validateRGB11IncomingGlobalLocked(ordered, replacedKeys, height, now); err != nil {
+			i.mutex.Unlock()
+			return 0, err
+		}
 		batch := i.db.NewWriteBatch()
 		touched := make([]*wire.DKVSRecord, 0, len(current)+len(ordered))
 		retentionRemovals := make([]string, 0, len(current)+len(ordered))
