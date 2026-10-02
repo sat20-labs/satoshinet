@@ -56,10 +56,6 @@ const (
 	CONTENT_TYPE_FREEZE       = txscript.OP_DATA_43
 	CONTENT_TYPE_UNFREEZE     = txscript.OP_DATA_44
 
-	// SatoshiNet generic identity operation: select an Ordinals DID as the
-	// primary human-readable name of the signing address.
-	CONTENT_TYPE_PRIMARYDIDBIND = txscript.OP_DATA_45
-
 	CONTENT_TYPE_MEMO = txscript.OP_DATA_75
 	CONTENT_TYPE_MAX  = txscript.OP_DATA_75
 	// -> OP_DATA_75
