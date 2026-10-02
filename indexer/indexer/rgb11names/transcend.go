@@ -2,22 +2,20 @@ package rgb11names
 
 import (
 	"fmt"
-	"strings"
 
-	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
-	TranscendTemplateName       = "transcend.tc"
+	TranscendTemplateName        = "transcend.tc"
 	RGB11RegistrationDescriptor = "rgb11-reg-v1"
 )
 
-// ParseTranscendRegistration extracts the optional RGB11 descriptor appended
-// to a legacy transcend.tc contract payload. The descriptor never contains the
-// final SatoshiNet name or ordinal; those are assigned by the naming registry.
-func ParseTranscendRegistration(contractPath string, content []byte, params *chaincfg.Params) (*Register, error) {
+// ParseTranscendRegistration extracts the minimal RGB11 descriptor appended to
+// transcend.tc content. ContractID and asset type are already encoded in the
+// contract asset name and are never duplicated in the descriptor.
+func ParseTranscendRegistration(contractPath string, content []byte) (*Register, error) {
 	tokenizer := txscript.MakeScriptTokenizer(0, content)
 	nextData := func(label string) ([]byte, error) {
 		if !tokenizer.Next() || tokenizer.Err() != nil || tokenizer.Data() == nil {
@@ -37,10 +35,10 @@ func ParseTranscendRegistration(contractPath string, content []byte, params *cha
 		return nil, err
 	}
 	asset := wire.NewAssetNameFromString(string(assetRaw))
-	if asset == nil || asset.Protocol != "rgb11" || (asset.Type != "f" && asset.Type != "n") {
+	if asset == nil || asset.Protocol != "rgb11" || (asset.Type != "f" && asset.Type != "n") ||
+		!validContractID(asset.Ticker) {
 		return nil, ErrNotFound
 	}
-	// start/end block are part of ContractBase but not naming identity.
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("%w: missing start block", ErrInvalid)
 	}
@@ -65,16 +63,12 @@ func ParseTranscendRegistration(contractPath string, content []byte, params *cha
 	if err != nil {
 		return nil, err
 	}
-	addressRaw, err := nextData("genesis address")
+	providerRaw, err := nextData("provider DID")
 	if err != nil {
 		return nil, err
 	}
 	if tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("%w: trailing RGB11 registration fields", ErrInvalid)
-	}
-	contractID := asset.Ticker
-	if !validContractID(contractID) {
-		return nil, ErrInvalid
 	}
 	if asset.String()+"_"+TranscendTemplateName != contractPath {
 		return nil, ErrInvalid
@@ -84,27 +78,25 @@ func ParseTranscendRegistration(contractPath string, content []byte, params *cha
 		return nil, err
 	}
 	outpoint := string(outpointRaw)
-	if !validOutpoint(outpoint) {
+	if !validOutpoint(outpoint) || ValidateDID(string(providerRaw)) != nil {
 		return nil, ErrInvalid
 	}
-	address, err := canonicalAddress(string(addressRaw), params)
-	if err != nil {
-		return nil, err
-	}
 	return &Register{
-		ContractID: contractID, BaseTicker: base, AssetType: asset.Type,
-		GenesisOutpoint: outpoint, GenesisAddress: address,
+		ContractID: asset.Ticker, BaseTicker: base, AssetType: asset.Type,
+		GenesisOutpoint: outpoint, ProviderDID: string(providerRaw),
 	}, nil
 }
 
-// EncodeTranscendRegistrationSuffix is kept in the indexer package as the
-// canonical wire fixture for tests and SDK cross-checks. Production contract
+// EncodeTranscendRegistrationSuffix is the canonical test fixture. Production
 // construction lives in sat20wallet.
-func EncodeTranscendRegistrationSuffix(ticker, outpoint, address string) ([]byte, error) {
+func EncodeTranscendRegistrationSuffix(ticker, outpoint, providerDID string) ([]byte, error) {
+	if _, err := NormalizeTicker(ticker); err != nil || !validOutpoint(outpoint) || ValidateDID(providerDID) != nil {
+		return nil, ErrInvalid
+	}
 	return txscript.NewScriptBuilder().
 		AddData([]byte(RGB11RegistrationDescriptor)).
 		AddData([]byte(ticker)).
 		AddData([]byte(outpoint)).
-		AddData([]byte(strings.TrimSpace(address))).
+		AddData([]byte(providerDID)).
 		Script()
 }
