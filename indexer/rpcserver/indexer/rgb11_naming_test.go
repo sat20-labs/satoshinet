@@ -98,8 +98,8 @@ func TestRGB11NamingHTTPUsesDKVSRegistry(t *testing.T) {
 	fixture.corePubKey = "020304"
 	record := &wire.DKVSRecord{
 		Version: dkvsindexer.Version,
-		Key:     "/rgb11/alice/usd",
-		Value:   []byte{dkvsindexer.RGB11RegistryVersion, 1},
+		Key:     "/rgb11/alice/usd/1",
+		Value:   make([]byte, dkvsindexer.RGB11RegistryContractBytes),
 		PubKey:  corePubKey,
 		Seq:     1,
 	}
