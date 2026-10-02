@@ -77,6 +77,9 @@ type Indexer interface {
 		options dkvs_indexer.BatchCASOptions) (*dkvs_indexer.WriteResult, error)
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	NotifyDKVSNameTransfers(names []string) error
+	GetRGB11RegistrationByContract(contractID string) (*dkvs_indexer.RGB11Registration, error)
+	GetRGB11RegistrationByName(assetName string) (*dkvs_indexer.RGB11Registration, error)
+	GetRGB11RegistryCount(providerDID, ticker string) (uint64, error)
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error)
