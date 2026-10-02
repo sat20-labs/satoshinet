@@ -129,6 +129,9 @@ func validateSnapshotPermission(record *wire.DKVSRecord, parsed ParsedKey, valid
 	if record == nil {
 		return ErrInvalidRecord
 	}
+	if parsed.Namespace == RGB11RegistryNamespace {
+		return validateRGB11RegistryStored(record, parsed)
+	}
 	if len(record.PubKey) == 0 {
 		return ValidateRecordIdentity(record, parsed)
 	}
