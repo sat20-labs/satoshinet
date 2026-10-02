@@ -114,7 +114,7 @@ The RGB11 registry is not directly writable by ordinary wallets.
 
 A future Transcend/STP registration flow calls the node-internal RGB11 registry write after it has validated the bridge/channel operation and the relevant RGB11 facts.
 
-The node-internal path requires a signed DKVS record and is exposed only through the local CoreNode administration boundary. The HTTP route is loopback-only and additionally checks that the record signer is a known CoreNode.
+The node-internal path requires a signed DKVS record and is exposed only through the local CoreNode administration boundary. Registry records are signed by the network-stable registry authority (bootstrap/default CoreNode keys), so a fresh node can authenticate DKVS naming state before replaying dynamic CoreNode history.
 
 This PR deliberately does not implement the Transcend deposit/withdraw flow itself.
 
@@ -196,6 +196,7 @@ The SatoshiNet tests cover:
 - duplicate ContractID rejection;
 - ordinary DKVS write rejection;
 - node-internal registration and idempotent retry;
+- static registry-authority signature enforcement for local, relay and snapshot paths;
 - DKVS PathSnapshot synchronization of RGB11 registry state;
 - ContractID -> AssetName and AssetName -> ContractID queries;
 - local-only CoreNode registration endpoint authorization;
