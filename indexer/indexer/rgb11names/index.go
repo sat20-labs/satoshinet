@@ -185,7 +185,7 @@ func (s *Index) ApplyBlock(block *common.Block, events []Event) error {
 }
 
 func (s *Index) applyOwnership(t *transaction, fact Ownership) error {
-	if ValidateDID(fact.DID) != nil || fact.Revision == 0 || !validHash(fact.L1Hash) {
+	if ValidateDID(fact.DID) != nil || fact.OwnerUtxo == "" || !validOutpoint(fact.OwnerUtxo) || fact.OwnerSat < 0 {
 		return ErrInvalid
 	}
 	if fact.Address != "" {
@@ -197,9 +197,15 @@ func (s *Index) applyOwnership(t *transaction, fact Ownership) error {
 	}
 	var old Ownership
 	if err := t.get("owner/"+fact.DID, &old); err == nil {
-		if fact.Sat != old.Sat || fact.Revision < old.Revision || fact.L1Height < old.L1Height ||
-			(fact.L1Height == old.L1Height && fact.L1Hash != old.L1Hash) ||
-			(fact.Revision == old.Revision && fact.Address != old.Address) {
+		// The DID identity itself is immutable. A transfer changes OwnerUtxo,
+		// while inscription ID and sat (when supplied) remain stable.
+		if old.InscriptionID != "" && fact.InscriptionID != "" && old.InscriptionID != fact.InscriptionID {
+			return ErrOwner
+		}
+		if old.OwnerSat != 0 && fact.OwnerSat != 0 && old.OwnerSat != fact.OwnerSat {
+			return ErrOwner
+		}
+		if old.OwnerUtxo == fact.OwnerUtxo && old.Address != fact.Address {
 			return ErrOwner
 		}
 	} else if err != ErrNotFound {
@@ -220,18 +226,21 @@ func (s *Index) applyBind(t *transaction, request Bind, at Position) error {
 	if err := t.get("owner/"+request.DID, &owner); err != nil {
 		return err
 	}
-	if owner.Address != address {
+	if owner.Address != address || owner.OwnerUtxo == "" {
 		return ErrOwner
 	}
 	var old Binding
 	if err := t.get("bind/"+address, &old); err == nil {
-		if old.DID == owner.DID && old.Sat == owner.Sat && old.Revision == owner.Revision {
+		if old.DID == owner.DID && old.OwnerUtxo == owner.OwnerUtxo {
 			return nil
 		}
 	} else if err != ErrNotFound {
 		return err
 	}
-	return t.put("bind/"+address, Binding{DID: owner.DID, Address: address, Sat: owner.Sat, Revision: owner.Revision, BoundAt: at})
+	return t.put("bind/"+address, Binding{
+		DID: owner.DID, Address: address, OwnerUtxo: owner.OwnerUtxo,
+		OwnerSat: owner.OwnerSat, InscriptionID: owner.InscriptionID, BoundAt: at,
+	})
 }
 
 func activeBinding(t *transaction, address string) (Binding, Ownership, error) {
@@ -243,7 +252,7 @@ func activeBinding(t *transaction, address string) (Binding, Ownership, error) {
 	if err := t.get("owner/"+binding.DID, &owner); err != nil {
 		return binding, owner, err
 	}
-	if owner.Address != address || owner.Sat != binding.Sat || owner.Revision != binding.Revision {
+	if owner.Address != address || owner.OwnerUtxo == "" || owner.OwnerUtxo != binding.OwnerUtxo {
 		return binding, owner, ErrNotFound
 	}
 	return binding, owner, nil
@@ -263,16 +272,12 @@ func (s *Index) applyRegistration(t *transaction, request Register, at Position)
 		if old.BaseTicker != base || old.AssetType != request.AssetType || old.GenesisOutpoint != request.GenesisOutpoint || old.GenesisAddress != address {
 			return ErrConflict
 		}
-		// Repeated deposits reuse the original name, even after DID transfer.
+		// A second transcend deployment/deposit reuses the immutable name.
 		return nil
 	} else if err != ErrNotFound {
 		return err
 	}
-	author, err := canonicalAddress(request.AuthorizedBy, s.params)
-	if err != nil || author != address {
-		return ErrOwner
-	}
-	binding, _, err := activeBinding(t, address)
+	binding, owner, err := activeBinding(t, address)
 	if err != nil {
 		return err
 	}
@@ -295,7 +300,16 @@ func (s *Index) applyRegistration(t *transaction, request Register, at Position)
 	} else if err != ErrNotFound {
 		return err
 	}
-	registration := Registration{ContractID: request.ContractID, AssetName: name, BaseTicker: base, AssetType: request.AssetType, ProviderDID: binding.DID, ProviderSat: binding.Sat, Ordinal: ordinal, GenesisOutpoint: request.GenesisOutpoint, GenesisAddress: address, RegisteredAt: at}
+	providerSat := uint64(0)
+	if owner.OwnerSat > 0 {
+		providerSat = uint64(owner.OwnerSat)
+	}
+	registration := Registration{
+		ContractID: request.ContractID, AssetName: name, BaseTicker: base,
+		AssetType: request.AssetType, ProviderDID: binding.DID, ProviderSat: providerSat,
+		Ordinal: ordinal, GenesisOutpoint: request.GenesisOutpoint,
+		GenesisAddress: address, RegisteredAt: at,
+	}
 	if err := t.put("contract/"+request.ContractID, registration); err != nil {
 		return err
 	}
