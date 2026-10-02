@@ -17,6 +17,7 @@ var allowedNamespaces = map[string]struct{}{
 	"svc":      {},
 	"account":  {},
 	"personal": {},
+	"rgb11":    {},
 	"mail":     {},
 	"topic":    {},
 	"blob":     {},
@@ -129,6 +130,14 @@ func validateNamespaceShape(parsed ParsedKey) error {
 		}
 	case "name":
 		if len(parsed.Segments) != 1 {
+			return ErrInvalidKey
+		}
+	case "rgb11":
+		if len(parsed.Segments) != 2 || ValidatePrimaryDIDName(parsed.Segments[0]) != nil {
+			return ErrInvalidKey
+		}
+		base, err := NormalizeRGB11Ticker(parsed.Segments[1])
+		if err != nil || base != parsed.Segments[1] {
 			return ErrInvalidKey
 		}
 	case "svc":
