@@ -237,3 +237,58 @@ func TestRGB11RegistryRemoteRelayRequiresCoreSigner(t *testing.T) {
 		t.Fatalf("unknown signer relay accepted: %v", err)
 	}
 }
+
+
+func TestRGB11RegistrySnapshotRejectsContractIDInAnotherPath(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractID := rgb11TestContractID(500)
+
+	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	existing := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD", 1, contractID, 100)
+	if _, err := target.PutInternalRGB11Registry(existing); err != nil {
+		t.Fatal(err)
+	}
+
+	source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	conflict := rgb11SignedRegistryRecord(t, coreKey, "company", "USD", 1, contractID, 100)
+	if _, err := source.PutInternalRGB11Registry(conflict); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.GetPathSnapshot("/rgb11/company/usd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.ApplyPathSnapshot(snapshot); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("cross-path ContractID collision accepted: %v", err)
+	}
+}
+
+func TestRGB11RegistryFullSnapshotRejectsContractIDInAnotherPath(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractID := rgb11TestContractID(501)
+
+	target := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	existing := rgb11SignedRegistryRecord(t, coreKey, "alice", "USD", 1, contractID, 100)
+	if _, err := target.PutInternalRGB11Registry(existing); err != nil {
+		t.Fatal(err)
+	}
+
+	source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	conflict := rgb11SignedRegistryRecord(t, coreKey, "company", "USD", 1, contractID, 100)
+	if _, err := source.PutInternalRGB11Registry(conflict); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.ApplySnapshot(snapshot); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("full snapshot cross-path ContractID collision accepted: %v", err)
+	}
+}
