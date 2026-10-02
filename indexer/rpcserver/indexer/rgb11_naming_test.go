@@ -51,8 +51,8 @@ func TestRGB11NamingHTTPUsesDKVSRegistry(t *testing.T) {
 	}
 	fixture := &namingHTTPIndexer{
 		byContract: map[string]*dkvsindexer.RGB11Registration{id: reg},
-		byName: map[string]*dkvsindexer.RGB11Registration{reg.AssetName: reg},
-		count: 1,
+		byName:     map[string]*dkvsindexer.RGB11Registration{reg.AssetName: reg},
+		count:      1,
 	}
 	router := gin.New()
 	NewService(fixture).InitRouter(router, "/testnet")
