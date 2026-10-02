@@ -25,7 +25,7 @@ func TestParseTranscendRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	suffix, err := EncodeTranscendRegistrationSuffix(id, "USDT", outpoint, addr.EncodeAddress())
+	suffix, err := EncodeTranscendRegistrationSuffix("USDT", outpoint, addr.EncodeAddress())
 	if err != nil {
 		t.Fatal(err)
 	}
