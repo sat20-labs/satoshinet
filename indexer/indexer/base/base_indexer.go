@@ -63,9 +63,7 @@ type BaseIndexer struct {
 	blockprocCB BlockProcCallback
 	updateDBCB  UpdateDBCallback
 
-	rgb11Names         *rgb11names.Index
-	rgb11NamingSource  rgb11names.EventSource
-	rgb11NamingStarted bool
+	rgb11Names *rgb11names.Index
 
 	mutex sync.RWMutex // 仅对需要提供给节点实时访问的数据加锁
 }
@@ -232,8 +230,6 @@ func (b *BaseIndexer) Clone(setStoredFlag bool) *BaseIndexer {
 
 	newInst.stats = b.stats.Clone()
 	newInst.rgb11Names = b.rgb11Names.Clone()
-	newInst.rgb11NamingSource = b.rgb11NamingSource
-	newInst.rgb11NamingStarted = b.rgb11NamingStarted
 	newInst.blockprocCB = b.blockprocCB
 	newInst.updateDBCB = b.updateDBCB
 
