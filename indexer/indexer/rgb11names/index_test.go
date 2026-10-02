@@ -58,13 +58,16 @@ func apply(t *testing.T, s *Index, height int, effects ...Event) {
 }
 
 func own(did, owner string, revision uint64) Event {
-	return Event{Ownership: &Ownership{DID: did, Sat: 42, Address: owner, Revision: revision, L1Height: 900000 + revision, L1Hash: id(4000 + int(revision))}}
+	return Event{Ownership: &Ownership{
+		DID: did, Address: owner, OwnerUtxo: id(4000+int(revision)) + ":0",
+		OwnerSat: 42, InscriptionID: "inscription-" + did,
+	}}
 }
 
 func bind(did, owner string) Event { return Event{Bind: &Bind{DID: did, Address: owner}} }
 
 func register(n int, owner, ticker string) Event {
-	return Event{Register: &Register{ContractID: id(n), BaseTicker: ticker, AssetType: "f", GenesisOutpoint: id(900+n) + ":0", GenesisAddress: owner, AuthorizedBy: owner}}
+	return Event{Register: &Register{ContractID: id(n), BaseTicker: ticker, AssetType: "f", GenesisOutpoint: id(900+n) + ":0", GenesisAddress: owner}}
 }
 
 func lookup(t *testing.T, s *Index, n int) Registration {
@@ -127,10 +130,8 @@ func TestOwnershipTransferRequiresExplicitRebindAndPreservesHistory(t *testing.T
 	if lookup(t, s, 1) != first || lookup(t, s, 3).Ordinal != 3 {
 		t.Fatal("history or counter changed")
 	}
-	// A refreshed proof for the same ownership revision must not revoke a bind.
+	// Replaying the same owner-UTXO snapshot must not revoke a bind.
 	refresh := *own("alice", a, 3).Ownership
-	refresh.L1Height++
-	refresh.L1Hash = id(4999)
 	apply(t, s, 5, Event{Ownership: &refresh})
 	if _, err := s.Lookup(Query{Kind: "primary", Value: a}); err != nil {
 		t.Fatal(err)
@@ -140,11 +141,11 @@ func TestOwnershipTransferRequiresExplicitRebindAndPreservesHistory(t *testing.T
 func TestBlockFailureDoesNotConsumeNamesOrOrdinals(t *testing.T) {
 	s, _ := newIndex(t)
 	a, b := address(t, 1), address(t, 2)
-	bad := register(2, a, "USD")
-	bad.Register.AuthorizedBy = b
+	_ = b
+	bad := register(2, a, "USD_2")
 	bk, events := block(0, "", own("alice", a, 1), bind("alice", a), register(1, a, "USD"), bad)
-	if err := s.ApplyBlock(bk, events); !errors.Is(err, ErrOwner) {
-		t.Fatalf("unauthorized registration: %v", err)
+	if err := s.ApplyBlock(bk, events); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid registration: %v", err)
 	}
 	if s.tip.Height != -1 || len(s.dirty) != 0 {
 		t.Fatal("failed block advanced state")
@@ -225,7 +226,7 @@ func TestEventOrderingAndReplay(t *testing.T) {
 }
 
 func TestOwnerFactsCannotChangeDIDLineageOrRegress(t *testing.T) {
-	for _, mode := range []string{"sat", "revision", "height", "hash", "same-revision-owner"} {
+	for _, mode := range []string{"sat", "inscription", "same-utxo-owner", "invalid-utxo"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _ := newIndex(t)
 			a := address(t, 1)
@@ -233,18 +234,21 @@ func TestOwnerFactsCannotChangeDIDLineageOrRegress(t *testing.T) {
 			fact := *own("alice", a, 2).Ownership
 			switch mode {
 			case "sat":
-				fact.Sat++
-			case "revision":
-				fact.Revision--
-			case "height":
-				fact.L1Height--
-			case "hash":
-				fact.L1Hash = id(999)
-			case "same-revision-owner":
+				fact.OwnerSat++
+			case "inscription":
+				fact.InscriptionID = "different-inscription"
+			case "same-utxo-owner":
 				fact.Address = address(t, 2)
+			case "invalid-utxo":
+				fact.OwnerUtxo = "not-an-outpoint"
 			}
 			bk, events := block(1, s.tip.Hash, Event{Ownership: &fact})
-			if err := s.ApplyBlock(bk, events); !errors.Is(err, ErrOwner) {
+			err := s.ApplyBlock(bk, events)
+			if mode == "invalid-utxo" {
+				if !errors.Is(err, ErrInvalid) {
+					t.Fatalf("accepted %s: %v", mode, err)
+				}
+			} else if !errors.Is(err, ErrOwner) {
 				t.Fatalf("accepted %s: %v", mode, err)
 			}
 		})
