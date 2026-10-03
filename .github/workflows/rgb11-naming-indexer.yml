@@ -48,6 +48,7 @@ jobs:
             unformatted=$(gofmt -l "${files[@]}")
             if [[ -n "$unformatted" ]]; then
               printf 'Unformatted files:\n%s\n' "$unformatted"
+              gofmt -d "${files[@]}"
               exit 1
             fi
           fi
