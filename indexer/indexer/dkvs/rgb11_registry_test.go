@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/btcec"
 )
 
@@ -155,6 +156,9 @@ func TestRGB11RegistryKeyAndValueBoundaries(t *testing.T) {
 	}
 	if _, err := EncodeRGB11RegistryValue("x", rgb11TestContractID(1)); err == nil {
 		t.Fatal("invalid asset type accepted")
+	}
+	if _, err := EncodeRGB11RegistryValue(indexercommon.ASSET_TYPE_NS, rgb11TestContractID(1)); err == nil {
+		t.Fatal("name-service type accepted as an RGB11 NFT")
 	}
 }
 
@@ -383,10 +387,10 @@ func TestRGB11RegistryPreservesAssetTypeWithoutSplittingOrdinalNamespace(t *test
 	}
 	idx := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
 	first := rgb11SignedRegistryRecordType(
-		t, coreKey, "alice", "ART", "n", 1, rgb11TestContractID(800), 100,
+		t, coreKey, "alice", "ART", indexercommon.ASSET_TYPE_NFT, 1, rgb11TestContractID(800), 100,
 	)
 	second := rgb11SignedRegistryRecordType(
-		t, coreKey, "alice", "ART", "f", 2, rgb11TestContractID(801), 100,
+		t, coreKey, "alice", "ART", indexercommon.ASSET_TYPE_FT, 2, rgb11TestContractID(801), 100,
 	)
 	if _, err := idx.PutInternalRGB11Registry(first); err != nil {
 		t.Fatal(err)
@@ -395,11 +399,15 @@ func TestRGB11RegistryPreservesAssetTypeWithoutSplittingOrdinalNamespace(t *test
 		t.Fatal(err)
 	}
 	nft, err := idx.LookupRGB11Contract(rgb11TestContractID(800))
-	if err != nil || nft.AssetType != "n" || nft.AssetName != "rgb11:n:art@alice" || nft.Ordinal != 1 {
+	if err != nil || nft == nil || nft.AssetType != indexercommon.ASSET_TYPE_NFT || nft.AssetName != "rgb11:o:art@alice" || nft.Ordinal != 1 {
 		t.Fatalf("nft registration=%+v err=%v", nft, err)
 	}
+	byName, err := idx.LookupRGB11AssetName(nft.AssetName)
+	if err != nil || byName == nil || byName.ContractID != nft.ContractID {
+		t.Fatalf("NFT reverse lookup=%+v err=%v", byName, err)
+	}
 	ft, err := idx.LookupRGB11Contract(rgb11TestContractID(801))
-	if err != nil || ft.AssetType != "f" || ft.AssetName != "rgb11:f:art_2@alice" || ft.Ordinal != 2 {
+	if err != nil || ft == nil || ft.AssetType != indexercommon.ASSET_TYPE_FT || ft.AssetName != "rgb11:f:art_2@alice" || ft.Ordinal != 2 {
 		t.Fatalf("ft registration=%+v err=%v", ft, err)
 	}
 }
