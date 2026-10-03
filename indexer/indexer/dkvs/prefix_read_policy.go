@@ -26,6 +26,13 @@ func validateReadablePrefix(prefix string) error {
 		if (len(segments) == 1 || len(segments) == 2) && validAccountID(segments[0]) {
 			return nil
 		}
+	case RGB11RegistryNamespace:
+		if len(segments) == 2 && ValidatePrimaryDIDName(segments[0]) == nil {
+			base, err := NormalizeRGB11Ticker(segments[1])
+			if err == nil && base == segments[1] {
+				return nil
+			}
+		}
 	case "svc", "sys":
 		if len(segments) >= 1 {
 			return nil
