@@ -23,19 +23,19 @@ Examples:
 ```text
 rgb11:f:usdt@tether
 rgb11:f:usdt_2@tether
-rgb11:n:art@artist
+rgb11:o:art@artist
 ```
 
 Rules:
 
-- existing asset type (`f` or `n`) is preserved and is not used for uniqueness;
+- existing asset type (FT `f` or NFT `o`) uses the shared Indexer `ASSET_TYPE_FT` / `ASSET_TYPE_NFT` constants and does not split ordinal allocation; `n` is the name-service type and is not accepted as an RGB11 NFT;
 - provider is an Ordinals DID;
 - a bindable DID is 1-10 lowercase ASCII characters from `a-z0-9._-`; this is a stricter DKVS-safe subset of Ordinals names;
 - the first ordinal is 1 and is omitted from the displayed name;
 - later assets use `_2`, `_3`, ...;
 - the ordinal namespace is `(providerDID, normalized baseTicker)`;
 - ContractID is never shortened to a fingerprint;
-- once a ContractID is registered, its canonical AssetName is immutable.
+- once a ContractID is registered, its complete canonical AssetName, including asset type, is immutable.
 
 ## Primary DID
 
@@ -58,7 +58,7 @@ A write is accepted only when:
 
 Deleting the personal parameter is allowed by the account owner.
 
-Primary DID remains mutable. Changing it does not rename any already registered RGB11 asset.
+Primary DID remains mutable. Changing or deleting it does not rename any already registered RGB11 asset. Transferring a DID prevents its former owner from binding it again, but does not reconstruct existing RGB11 names.
 
 ## RGB11 registry storage
 
@@ -75,7 +75,7 @@ Example:
 /rgb11/tether/usdt/2
 ```
 
-The value is exactly 33 bytes: one existing asset-type byte (`f` or `n`) followed by the raw 32-byte ContractID.
+The value is exactly 33 bytes: one existing asset-type byte (FT `f` or NFT `o`) followed by the raw 32-byte ContractID.
 
 Nothing else is repeated in the value:
 
@@ -95,10 +95,14 @@ For each `(providerDID, baseTicker)` namespace:
 - ordinal starts at 1;
 - there are no gaps;
 - an ordinal cannot be reused;
-- an existing key cannot be changed to another ContractID;
+- an existing key cannot change its complete value: neither asset type nor ContractID may change;
 - the same ContractID cannot appear in another RGB11 registry key;
-- registry records are permanent (`TTL=0`) and cannot be tombstoned;
+- registry records are permanent (`TTL=0`, `Seq=1`, no FeeProof) and cannot be tombstoned;
 - ordinary wallet DKVS writes cannot create registry entries.
+
+Path snapshots, full snapshots and authoritative mirrors enforce the same business invariants before committing. A conflicting record rejects the entire batch, including otherwise valid trailing records. Older conflicting records are not silently discarded by generic DKVS merge ordering.
+
+Ordinal continuity is checked over the final existing-plus-incoming view, not the incoming batch alone. An existing ordinal 1 plus a partial merge containing ordinal 2 is valid. A signed, internally consistent snapshot/checkpoint containing 1 and 3 is not. Authoritative snapshots cannot omit existing immutable registry records. Signature/envelope differences between trusted authorities do not themselves change the business identity when the complete 33-byte value is unchanged.
 
 The derived name is:
 
@@ -117,6 +121,8 @@ The RGB11 registry is not directly writable by ordinary wallets.
 A future Transcend/STP registration flow calls the node-internal RGB11 registry write after it has validated the bridge/channel operation and the relevant RGB11 facts.
 
 The node-internal path requires a signed DKVS record and is exposed only through the local CoreNode administration boundary. Registry records are signed by the network-stable registry authority (bootstrap/default CoreNode keys), so a fresh node can authenticate DKVS naming state before replaying dynamic CoreNode history.
+
+The SDK independently verifies signatures, the locally configured registry authority, record constraints and the requested provider/ticker scope. The serving endpoint cannot supply its own trust root. Authentication of returned records is not a proof that the endpoint returned every registry record.
 
 This PR deliberately does not implement the Transcend deposit/withdraw flow itself.
 
@@ -189,14 +195,15 @@ Changing a local label or Primary DID before SatoshiNet registration does not al
 
 The SatoshiNet tests cover:
 
-- Primary DID 10/11-character boundary;
-- account-owned `/personal/.../primary_did` write;
+- Primary DID 10/11-character boundary and account-owned writes;
 - rejection when the DID belongs to another address;
-- RGB11 registry key/value canonicalization;
-- immutable ordinal records;
-- gap rejection;
-- duplicate ContractID rejection;
-- ordinary DKVS write rejection;
+- primary selection changes, DID transfer and deletion without renaming registered assets;
+- RGB11 registry key/value canonicalization and shared FT/NFT type encoding;
+- immutable ordinal records, including type substitution in newer and older snapshots;
+- gap rejection in full snapshots and mirrors, both on empty and initialized nodes;
+- positive controls for contiguous partial merges and idempotent recovery;
+- concurrent writers competing for the same ordinal;
+- duplicate ContractID and ordinary DKVS write rejection;
 - node-internal registration and idempotent retry;
 - static registry-authority signature enforcement for local, relay and snapshot paths;
 - DKVS PathSnapshot synchronization of RGB11 registry state;
@@ -204,7 +211,7 @@ The SatoshiNet tests cover:
 - local-only CoreNode registration endpoint authorization;
 - full indexer package regression.
 
-The wallet tests cover local RGB11 naming and Primary DID SDK behavior. STP/Transcend RGB deposit/withdraw e2e remains deferred until that feature is implemented.
+The wallet tests cover local naming, Primary DID SDK behavior, actual loopback HTTP registry reads, authenticated responses, full snapshot recovery and reconstruction of an Indexer over the same memory database. Test adapters do not claim full production RPC, disk-crash recovery or live STP validation. Execution status is recorded per tested commit in CI.
 
 ## Deferred work
 
