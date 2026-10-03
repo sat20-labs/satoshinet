@@ -12,7 +12,7 @@ func rgb11TestContractID(n int) string { return fmt.Sprintf("%064x", n) }
 
 func rgb11RegistryTestConfig(coreKey *btcec.PrivateKey) Config {
 	return Config{
-		CurrentHeight: func() uint64 { return 100 },
+		CurrentHeight:  func() uint64 { return 100 },
 		SystemVerifier: StaticSystemVerifier{Keys: [][]byte{
 			coreKey.PubKey().SerializeCompressed(),
 		}},
@@ -238,7 +238,6 @@ func TestRGB11RegistryRemoteRelayRequiresCoreSigner(t *testing.T) {
 	}
 }
 
-
 func TestRGB11RegistrySnapshotRejectsContractIDInAnotherPath(t *testing.T) {
 	coreKey, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -292,7 +291,6 @@ func TestRGB11RegistryFullSnapshotRejectsContractIDInAnotherPath(t *testing.T) {
 		t.Fatalf("full snapshot cross-path ContractID collision accepted: %v", err)
 	}
 }
-
 
 func TestRGB11RegistryPathSnapshotCannotRemoveExistingOrdinal(t *testing.T) {
 	coreKey, err := btcec.NewPrivateKey()
