@@ -41,6 +41,11 @@ func TestPrimaryDIDPersonalRecordValidation(t *testing.T) {
 		t.Fatalf("11-character DID accepted: %v", err)
 	}
 
+	record.Value = []byte("聪")
+	if err := validatePrimaryDIDRecordWith(record, parsed, resolver); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("non-DKVS-safe DID accepted: %v", err)
+	}
+
 	record.Value = []byte("alice")
 	wrongPriv, err := btcec.NewPrivateKey()
 	if err != nil {
