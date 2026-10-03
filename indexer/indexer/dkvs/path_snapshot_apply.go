@@ -2,6 +2,7 @@ package dkvs
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
@@ -56,6 +57,17 @@ func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
 	currentFloors, err := i.scanPathDeleteStatesLocked(validated.path)
 	if err != nil {
 		return 0, err
+	}
+	if strings.HasPrefix(validated.path, "/rgb11/") {
+		replacedKeys := make(map[string]struct{}, len(current))
+		for _, record := range current {
+			if record != nil {
+				replacedKeys[record.Key] = struct{}{}
+			}
+		}
+		if err := i.validateRGB11IncomingGlobalLocked(validated.active, replacedKeys, height, now); err != nil {
+			return 0, err
+		}
 	}
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()

@@ -131,6 +131,12 @@ func (i *Indexer) writeStateStillCurrentLocked(key string, parsed ParsedKey, sna
 }
 
 func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed ParsedKey) error {
+	if parsed.Namespace == RGB11RegistryNamespace {
+		if record == nil || record.TTL != 0 || len(record.FeeProof) != 0 {
+			return ErrInvalidFeeProof
+		}
+		return nil
+	}
 	if isAccountMappingBindingControlRecord(record, parsed) {
 		return nil
 	}
@@ -268,8 +274,17 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 	if isInternalMailboxRecord(record) || isInternalTopicRecord(record) {
 		return false, ErrPermissionDenied
 	}
+	if isPrimaryDIDRecord(record, parsed) {
+		if err := ValidateRecordIdentity(record, parsed); err != nil {
+			return false, err
+		}
+		return false, validatePrimaryDIDRecordWith(record, parsed, validators.resolver)
+	}
 	if len(record.PubKey) == 0 {
 		return false, ValidateRecordIdentity(record, parsed)
+	}
+	if isRGB11RegistryRecord(record, parsed) {
+		return false, validateRGB11RegistryPermissionWith(record, parsed, validators.system)
 	}
 	switch parsed.Namespace {
 	case "name", "svc":

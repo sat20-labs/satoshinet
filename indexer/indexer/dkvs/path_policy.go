@@ -19,6 +19,10 @@ func collectionPath(parsed ParsedKey) string {
 		if len(parsed.Segments) == 1 {
 			return "/name/" + parsed.Segments[0]
 		}
+	case "rgb11":
+		if len(parsed.Segments) == 3 {
+			return "/rgb11/" + parsed.Segments[0] + "/" + parsed.Segments[1]
+		}
 	case "svc":
 		if len(parsed.Segments) >= 1 {
 			return "/svc/" + parsed.Segments[0]
@@ -61,7 +65,7 @@ func pathMode(parsed ParsedKey) PathMode {
 		return PathAuthorityExclusive
 	case "tmp":
 		return PathLocalOnly
-	case "account", "name", "svc", "sys", "topic":
+	case "account", "name", "rgb11", "svc", "sys", "topic":
 		return PathAuthorityExclusive
 	default:
 		return PathAuthorityExclusive
@@ -88,6 +92,14 @@ func collectionPathForPrefix(prefix string) string {
 	case "name":
 		if len(parsed.Segments) == 1 {
 			return prefix
+		}
+	case "rgb11":
+		if len(parsed.Segments) == 2 &&
+			ValidatePrimaryDIDName(parsed.Segments[0]) == nil {
+			base, err := NormalizeRGB11Ticker(parsed.Segments[1])
+			if err == nil && base == parsed.Segments[1] {
+				return prefix
+			}
 		}
 	case "svc":
 		if len(parsed.Segments) == 1 {

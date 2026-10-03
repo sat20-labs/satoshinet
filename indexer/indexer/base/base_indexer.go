@@ -114,7 +114,6 @@ func (b *BaseIndexer) SetBlockCallback(cb1 BlockProcCallback) {
 
 func (b *BaseIndexer) reset() {
 	b.loadSyncStatsFromDB()
-
 	b.blocksChan = make(chan *common.Block, BLOCK_PREFETCH)
 
 	b.blockVector = make([]*common.BlockValueInDB, 0)
@@ -701,7 +700,6 @@ func (b *BaseIndexer) UpdateDB() {
 		common.Log.Panicf("BaseIndexer.updateBasicDB-> Error setting in db %v", err)
 	}
 
-	//startTime = time.Now()
 	err = wb.Flush()
 	if err != nil {
 		common.Log.Panicf("BaseIndexer.updateBasicDB-> Error satwb flushing writes to db %v", err)
@@ -778,28 +776,23 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 		return b.handleReorg(block)
 	}
 
-	func() {
-		b.mutex.Lock()
-		defer b.mutex.Unlock()
+	b.mutex.Lock()
+	// RGB11 naming is DKVS state and is deliberately not rebuilt while
+	// replaying SatoshiNet blocks. DKVS synchronization happens independently.
+	b.prefetchIndexesFromDB(block)
+	b.processBlock(block)
 
-		// localStartTime := time.Now()
-		b.prefetchIndexesFromDB(block)
-		// common.Log.Infof("BaseIndexer.syncBlock-> prefetchIndexesFromDB: cost: %v", time.Since(localStartTime))
-		// localStartTime = time.Now()
-		b.processBlock(block)
-		// common.Log.Infof("BaseIndexer.syncBlock-> assignOrdinals: cost: %v", time.Since(localStartTime))
-
-		// Update the sync stats
-		b.stats.ChainTip = tip
-		b.miningAddress = b.seqMgr.GetCurrentMiningAddr() //getMiningAddress(block)
-		b.seqMgr.MoveMiningAddr(block.Height, b.miningAddress)
-		b.lastHeight = block.Height
-		b.lastHash = block.Hash
-		b.prevBlockHashMap[b.lastHeight] = b.lastHash
-		if len(b.prevBlockHashMap) > b.keepBlockHistory {
-			delete(b.prevBlockHashMap, b.lastHeight-b.keepBlockHistory)
-		}
-	}()
+	// Update the sync stats.
+	b.stats.ChainTip = tip
+	b.miningAddress = b.seqMgr.GetCurrentMiningAddr() //getMiningAddress(block)
+	b.seqMgr.MoveMiningAddr(block.Height, b.miningAddress)
+	b.lastHeight = block.Height
+	b.lastHash = block.Hash
+	b.prevBlockHashMap[b.lastHeight] = b.lastHash
+	if len(b.prevBlockHashMap) > b.keepBlockHistory {
+		delete(b.prevBlockHashMap, b.lastHeight-b.keepBlockHistory)
+	}
+	b.mutex.Unlock()
 
 	// localStartTime = time.Now()
 	b.blockprocCB(block)

@@ -55,9 +55,16 @@ func (p *IndexerMgr) PutDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return p.dkvsIndexer.PutLocal(record)
 }
 
-// PutDKVSInternalMailbox is reserved for MessageManager after it has completed
-// binding, signature, sequence and billing admission. Generic DKVS RPCs must
-// never expose this method directly.
+// PutDKVSInternalRGB11Registry is reserved for the trusted RGB11 registration
+// path after provider/Genesis validation. Generic wallet DKVS APIs do not expose
+// this mutation directly.
+func (p *IndexerMgr) PutDKVSInternalRGB11Registry(record *wire.DKVSRecord) (bool, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return false, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.PutInternalRGB11Registry(record)
+}
+
 func (p *IndexerMgr) PutDKVSInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 	if p.dkvsIndexer == nil {
 		return false, errDKVSNotInitialized
@@ -129,6 +136,27 @@ func (p *IndexerMgr) NotifyDKVSNameTransfers(names []string) error {
 		return errDKVSNotInitialized
 	}
 	return p.dkvsIndexer.NotifyNameTransfers(names)
+}
+
+func (p *IndexerMgr) GetRGB11RegistrationByContract(contractID string) (*dkvs.RGB11Registration, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.LookupRGB11Contract(contractID)
+}
+
+func (p *IndexerMgr) GetRGB11RegistrationByName(assetName string) (*dkvs.RGB11Registration, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return nil, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.LookupRGB11AssetName(assetName)
+}
+
+func (p *IndexerMgr) GetRGB11RegistryCount(providerDID, ticker string) (uint64, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return 0, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.RGB11RegistryCount(providerDID, ticker)
 }
 
 func (p *IndexerMgr) GetDKVSRecord(key string) (*wire.DKVSRecord, error) {

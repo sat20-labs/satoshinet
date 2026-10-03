@@ -932,6 +932,8 @@ func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRe
 	switch parsed.Namespace {
 	case "name", "svc", "sys", "tmp":
 		return nil
+	case RGB11RegistryNamespace:
+		return validateRGB11RegistryStored(record, parsed)
 	case "personal":
 		if len(parsed.Segments) < 2 || parsed.Segments[0] != AccountID(record.PubKey) {
 			return ErrPermissionDenied
@@ -968,6 +970,14 @@ func (i *Indexer) validateStatefulLocked(record *wire.DKVSRecord, parsed ParsedK
 		return i.validateBlobLocked(record, parsed, height, now)
 	case "tmp":
 		return i.validateTmp(record)
+	case RGB11RegistryNamespace:
+		if existing != nil {
+			if bytes.Equal(existing.Value, record.Value) {
+				return nil
+			}
+			return ErrWriteConflict
+		}
+		return i.validateRGB11RegistryInsertLocked(record, parsed, height, now)
 	default:
 		return nil
 	}

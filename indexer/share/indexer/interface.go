@@ -67,6 +67,7 @@ type Indexer interface {
 	SetDKVSSystemVerifier(verifier dkvs_indexer.SystemVerifier)
 	SetDKVSEndpointID(endpointID string) error
 	PutDKVSRecord(record *wire.DKVSRecord) (bool, error)
+	PutDKVSInternalRGB11Registry(record *wire.DKVSRecord) (bool, error)
 	PutDKVSRecordWithHash(record *wire.DKVSRecord) (bool, chainhash.Hash, error)
 	PutDKVSRecordCAS(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition) (bool, error)
 	PutDKVSRecordCASResult(record *wire.DKVSRecord, precondition dkvs_indexer.WritePrecondition,
@@ -77,6 +78,9 @@ type Indexer interface {
 		options dkvs_indexer.BatchCASOptions) (*dkvs_indexer.WriteResult, error)
 	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
 	NotifyDKVSNameTransfers(names []string) error
+	GetRGB11RegistrationByContract(contractID string) (*dkvs_indexer.RGB11Registration, error)
+	GetRGB11RegistrationByName(assetName string) (*dkvs_indexer.RGB11Registration, error)
+	GetRGB11RegistryCount(providerDID, ticker string) (uint64, error)
 	GetDKVSRecord(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordByHash(hash chainhash.Hash) (*wire.DKVSRecord, error)

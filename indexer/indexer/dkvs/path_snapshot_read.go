@@ -129,6 +129,15 @@ func validateSnapshotPermission(record *wire.DKVSRecord, parsed ParsedKey, valid
 	if record == nil {
 		return ErrInvalidRecord
 	}
+	if parsed.Namespace == RGB11RegistryNamespace {
+		if err := validateRGB11RegistryStored(record, parsed); err != nil {
+			return err
+		}
+		if validators.system == nil {
+			return ErrPermissionDenied
+		}
+		return validators.system.CanWriteSystem(record.Key, record.PubKey)
+	}
 	if len(record.PubKey) == 0 {
 		return ValidateRecordIdentity(record, parsed)
 	}
@@ -218,6 +227,11 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		}
 	}
 	sort.Slice(active, func(a, b int) bool { return active[a].Key < active[b].Key })
+	if prefix.Namespace == RGB11RegistryNamespace {
+		if err := validateRGB11PathRecords(path, active); err != nil {
+			return validatedPathSnapshot{}, err
+		}
+	}
 	orderedFloors := make([]DeleteFloor, 0, len(floors))
 	for _, floor := range floors {
 		orderedFloors = append(orderedFloors, floor)

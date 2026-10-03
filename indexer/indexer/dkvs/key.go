@@ -17,6 +17,7 @@ var allowedNamespaces = map[string]struct{}{
 	"svc":      {},
 	"account":  {},
 	"personal": {},
+	"rgb11":    {},
 	"mail":     {},
 	"topic":    {},
 	"blob":     {},
@@ -129,6 +130,10 @@ func validateNamespaceShape(parsed ParsedKey) error {
 		}
 	case "name":
 		if len(parsed.Segments) != 1 {
+			return ErrInvalidKey
+		}
+	case "rgb11":
+		if _, _, _, err := parseRGB11RegistryKey(parsed); err != nil {
 			return ErrInvalidKey
 		}
 	case "svc":

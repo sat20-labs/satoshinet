@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,24 @@ type Config struct {
 	DataPath string
 	RPCCfg   *RPCConfig
 	DKVS     *DKVSIntegrationConfig
+}
+
+type coreNodeDKVSSystemVerifier struct {
+	fallback dkvs_indexer.SystemVerifier
+}
+
+func (v coreNodeDKVSSystemVerifier) CanWriteSystem(key string, pubKey []byte) error {
+	if strings.HasPrefix(key, "/rgb11/") {
+		signer := fmt.Sprintf("%x", pubKey)
+		if signer != indexer.GetBootstrapPubKey() && signer != indexer.GetCoreNodePubKey() {
+			return dkvs_indexer.ErrPermissionDenied
+		}
+		return nil
+	}
+	if v.fallback == nil {
+		return dkvs_indexer.ErrPermissionDenied
+	}
+	return v.fallback.CanWriteSystem(key, pubKey)
 }
 
 type DKVSIntegrationConfig struct {
@@ -154,7 +173,8 @@ func (b *IndexerMgr) initLocked() {
 	b.compiling = base_indexer.NewBaseIndexer(b.baseDB, b.chaincfgParam, b.maxIndexHeight, b.periodFlushToDB)
 	b.compiling.Init()
 	b.contractIndexer = contract_indexer.NewIndexer(b.baseDB, b.chaincfgParam)
-	b.dkvsIndexer = dkvs_indexer.New(b.dkvsDB, b.dkvsConfig())
+	dkvsCfg := b.dkvsConfig()
+	b.dkvsIndexer = dkvs_indexer.New(b.dkvsDB, dkvsCfg)
 	b.compiling.SetUpdateDBCallback(b.forceUpdateDB)
 	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
@@ -276,10 +296,11 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 	if cfg.FeeVerifier == nil && ext.FeeVerifierHTTPEndpoint != "" {
 		cfg.FeeVerifier = dkvs_indexer.HTTPFeeVerifier{Endpoint: ext.FeeVerifierHTTPEndpoint}
 	}
-	cfg.SystemVerifier = ext.SystemVerifier
-	if cfg.SystemVerifier == nil && ext.SystemVerifierHTTPEndpoint != "" {
-		cfg.SystemVerifier = dkvs_indexer.HTTPSystemVerifier{Endpoint: ext.SystemVerifierHTTPEndpoint}
+	systemVerifier := ext.SystemVerifier
+	if systemVerifier == nil && ext.SystemVerifierHTTPEndpoint != "" {
+		systemVerifier = dkvs_indexer.HTTPSystemVerifier{Endpoint: ext.SystemVerifierHTTPEndpoint}
 	}
+	cfg.SystemVerifier = coreNodeDKVSSystemVerifier{fallback: systemVerifier}
 	cfg.MailboxPolicy = ext.MailboxPolicy
 	cfg.BlobPolicy = ext.BlobPolicy
 	cfg.TmpPolicy = ext.TmpPolicy
