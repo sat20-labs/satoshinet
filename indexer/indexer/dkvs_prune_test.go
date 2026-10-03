@@ -155,8 +155,12 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 	if _, ok := cfg.FeeVerifier.(dkvs.JSONFeeVerifier); !ok {
 		t.Fatalf("fee verifier not merged: %T", cfg.FeeVerifier)
 	}
-	if _, ok := cfg.SystemVerifier.(dkvs.StaticSystemVerifier); !ok {
-		t.Fatalf("system verifier not merged: %T", cfg.SystemVerifier)
+	systemVerifier, ok := cfg.SystemVerifier.(coreNodeDKVSSystemVerifier)
+	if !ok {
+		t.Fatalf("system verifier wrapper not configured: %T", cfg.SystemVerifier)
+	}
+	if _, ok := systemVerifier.fallback.(dkvs.StaticSystemVerifier); !ok {
+		t.Fatalf("system verifier fallback not merged: %T", systemVerifier.fallback)
 	}
 	if cfg.MailboxPolicy.MaxMessages != 7 || cfg.BlobPolicy.MaxValueSize != 999 || cfg.BlobPolicy.MaxFreeLocalKeysPerSigner != 9 || cfg.TmpPolicy.MaxTTL != 11 {
 		t.Fatalf("policies not merged: mailbox=%+v blob=%+v tmp=%+v", cfg.MailboxPolicy, cfg.BlobPolicy, cfg.TmpPolicy)
@@ -191,12 +195,16 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 	if feeVerifier.Endpoint != "http://127.0.0.1:18081/fee/verify" {
 		t.Fatalf("http fee endpoint=%s", feeVerifier.Endpoint)
 	}
-	systemVerifier, ok := httpCfg.SystemVerifier.(dkvs.HTTPSystemVerifier)
+	httpSystemWrapper, ok := httpCfg.SystemVerifier.(coreNodeDKVSSystemVerifier)
 	if !ok {
-		t.Fatalf("http system verifier not configured: %T", httpCfg.SystemVerifier)
+		t.Fatalf("http system verifier wrapper not configured: %T", httpCfg.SystemVerifier)
 	}
-	if systemVerifier.Endpoint != "http://127.0.0.1:18082/system/verify" {
-		t.Fatalf("http system endpoint=%s", systemVerifier.Endpoint)
+	httpSystemVerifier, ok := httpSystemWrapper.fallback.(dkvs.HTTPSystemVerifier)
+	if !ok {
+		t.Fatalf("http system verifier fallback not configured: %T", httpSystemWrapper.fallback)
+	}
+	if httpSystemVerifier.Endpoint != "http://127.0.0.1:18082/system/verify" {
+		t.Fatalf("http system endpoint=%s", httpSystemVerifier.Endpoint)
 	}
 
 	l1Mgr := &IndexerMgr{
