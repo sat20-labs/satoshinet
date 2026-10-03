@@ -23,13 +23,14 @@ Examples:
 ```text
 rgb11:f:usdt@tether
 rgb11:f:usdt_2@tether
+rgb11:n:art@artist
 ```
 
 Rules:
 
 - `f` keeps its existing asset-type meaning;
 - provider is an Ordinals DID;
-- a DID must be at most 10 Unicode code points to be selected as Primary DID;
+- a bindable DID is 1-10 lowercase ASCII characters from `a-z0-9._-`; this is a stricter DKVS-safe subset of Ordinals names;
 - the first ordinal is 1 and is omitted from the displayed name;
 - later assets use `_2`, `_3`, ...;
 - the ordinal namespace is `(providerDID, normalized baseTicker)`;
@@ -51,7 +52,7 @@ No inscription ID, owner address, owner UTXO or duplicate DID metadata is stored
 A write is accepted only when:
 
 1. the DKVS record is signed by the account itself;
-2. the DID is canonical lowercase and no longer than 10 Unicode code points;
+2. the DID is 1-10 lowercase ASCII characters from `a-z0-9._-`;
 3. the configured L1 DID resolver reports the DID active;
 4. that DID is currently owned by the P2TR address derived from the signing account key.
 
@@ -74,7 +75,7 @@ Example:
 /rgb11/tether/usdt/2
 ```
 
-The value is exactly the raw 32-byte ContractID.
+The value is exactly 33 bytes: one existing asset-type byte (`f` or `n`) followed by the raw 32-byte ContractID.
 
 Nothing else is repeated in the value:
 
@@ -82,7 +83,8 @@ Nothing else is repeated in the value:
 - base ticker is already in the key;
 - ordinal is already in the key;
 - AssetName is deterministically derived from the key;
-- ContractID is stored as the only value because it cannot be derived from the other fields.
+- the one-byte asset type is retained only so the complete existing SatoshiNet AssetName can be reconstructed after DKVS sync; it does not participate in ordinal allocation;
+- ContractID is stored because it cannot be derived from the other fields.
 
 This representation keeps the registry compact and makes each successful ordinal an immutable DKVS fact.
 
