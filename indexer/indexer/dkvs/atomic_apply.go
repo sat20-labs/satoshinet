@@ -202,7 +202,10 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 				replacedKeys[key] = struct{}{}
 			}
 		}
-		if err := i.validateRGB11IncomingGlobalLocked(ordered, replacedKeys, height, now); err != nil {
+		// Check every supplied registry record, including older merge losers.
+		// A conflicting immutable identity invalidates the entire batch; it
+		// must not be silently filtered while other records are committed.
+		if err := i.validateRGB11IncomingGlobalLocked(prepared.ordered, replacedKeys, height, now); err != nil {
 			i.mutex.Unlock()
 			return 0, err
 		}
