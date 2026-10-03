@@ -344,3 +344,26 @@ func TestRGB11RegistryPathSnapshotCannotReplaceExistingContract(t *testing.T) {
 		t.Fatalf("snapshot replaced immutable ContractID: %v", err)
 	}
 }
+
+
+func TestRGB11InternalRegistrationEmitsRelayNotify(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notified *NotifyEvent
+	cfg := rgb11RegistryTestConfig(coreKey)
+	cfg.Notify = func(event *NotifyEvent) {
+		notified = event
+	}
+	idx := testIndexerWithConfig(t, cfg)
+	record := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USD", 1, rgb11TestContractID(700), 100,
+	)
+	if updated, err := idx.PutInternalRGB11Registry(record); err != nil || !updated {
+		t.Fatalf("internal registry write updated=%v err=%v", updated, err)
+	}
+	if notified == nil || notified.EventType != EventRecordPut || !notified.Relay {
+		t.Fatalf("notify=%+v", notified)
+	}
+}
