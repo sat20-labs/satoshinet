@@ -1,12 +1,14 @@
 package dkvs
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -109,7 +111,7 @@ func parseRGB11RegistryKey(parsed ParsedKey) (provider, ticker string, ordinal u
 }
 
 func validRGB11AssetType(assetType string) bool {
-	return assetType == "f" || assetType == "n"
+	return assetType == indexercommon.ASSET_TYPE_FT || assetType == indexercommon.ASSET_TYPE_NFT
 }
 
 func EncodeRGB11RegistryValue(assetType, contractID string) ([]byte, error) {
@@ -216,7 +218,7 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 	replacedKeys map[string]struct{}, height, now uint64) error {
 
 	incomingByContract := make(map[string]string)
-	incomingByKey := make(map[string]string)
+	incomingByKey := make(map[string]*wire.DKVSRecord)
 	for _, record := range records {
 		if record == nil {
 			continue
@@ -232,11 +234,11 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 		if key, duplicate := incomingByContract[contractID]; duplicate && key != record.Key {
 			return ErrInvalidRecord
 		}
-		if old, duplicate := incomingByKey[record.Key]; duplicate && old != contractID {
+		if old, duplicate := incomingByKey[record.Key]; duplicate && !bytes.Equal(old.Value, record.Value) {
 			return ErrWriteConflict
 		}
 		incomingByContract[contractID] = record.Key
-		incomingByKey[record.Key] = contractID
+		incomingByKey[record.Key] = record
 	}
 	if len(incomingByContract) == 0 && len(replacedKeys) == 0 {
 		return nil
@@ -245,6 +247,10 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 	existing, _, _, err := i.scanLocked("/rgb11", nil, 0, true, height, now)
 	if err != nil {
 		return err
+	}
+	finalByKey := make(map[string]*wire.DKVSRecord, len(existing)+len(incomingByKey))
+	for key, record := range incomingByKey {
+		finalByKey[key] = record
 	}
 	for _, record := range existing {
 		if record == nil {
@@ -258,8 +264,10 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 		if err != nil {
 			return ErrInvalidRecord
 		}
-		if incomingID, present := incomingByKey[record.Key]; present {
-			if incomingID != contractID {
+		if incoming, present := incomingByKey[record.Key]; present {
+			// The complete business identity is type + ContractID. A valid
+			// replacement signature or newer issue height cannot rename it.
+			if !bytes.Equal(incoming.Value, record.Value) {
 				return ErrWriteConflict
 			}
 		} else if _, replaced := replacedKeys[record.Key]; replaced {
@@ -267,6 +275,29 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 		}
 		if incomingKey, duplicate := incomingByContract[contractID]; duplicate && incomingKey != record.Key {
 			return ErrInvalidRecord
+		}
+		finalByKey[record.Key] = record
+	}
+
+	// Validate the post-commit view, not merely the incoming batch. A partial
+	// merge containing ordinal 2 is valid when ordinal 1 already exists. A
+	// self-consistent snapshot/root must not authorize an ordinal gap.
+	paths := make(map[string][]*wire.DKVSRecord)
+	for _, record := range finalByKey {
+		parsed, err := ParseKey(record.Key)
+		if err != nil {
+			return err
+		}
+		provider, ticker, _, err := parseRGB11RegistryKey(parsed)
+		if err != nil {
+			return err
+		}
+		path := "/rgb11/" + provider + "/" + ticker
+		paths[path] = append(paths[path], record)
+	}
+	for path, pathRecords := range paths {
+		if err := validateRGB11PathRecords(path, pathRecords); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -390,7 +421,8 @@ func (i *Indexer) LookupRGB11Contract(contractID string) (*RGB11Registration, er
 }
 
 func (i *Indexer) LookupRGB11AssetName(assetName string) (*RGB11Registration, error) {
-	if i == nil || (!strings.HasPrefix(assetName, "rgb11:f:") && !strings.HasPrefix(assetName, "rgb11:n:")) {
+	if i == nil || (!strings.HasPrefix(assetName, "rgb11:"+indexercommon.ASSET_TYPE_FT+":") &&
+		!strings.HasPrefix(assetName, "rgb11:"+indexercommon.ASSET_TYPE_NFT+":")) {
 		return nil, ErrInvalidRecord
 	}
 	records, _, _, err := i.scan("/rgb11", nil, 0, true)
