@@ -13,11 +13,13 @@ import (
 const (
 	RGB11RegistryNamespace     = "rgb11"
 	RGB11RegistryContractBytes = 32
+	RGB11RegistryValueBytes    = 1 + RGB11RegistryContractBytes
 )
 
 type RGB11Registration struct {
 	ContractID  string `json:"contract_id"`
 	AssetName   string `json:"asset_name"`
+	AssetType   string `json:"asset_type"`
 	ProviderDID string `json:"provider_did"`
 	BaseTicker  string `json:"base_ticker"`
 	Ordinal     uint64 `json:"ordinal"`
@@ -65,7 +67,7 @@ func NormalizeRGB11Ticker(raw string) (string, error) {
 }
 
 func RGB11RegistryKey(providerDID, ticker string, ordinal uint64) (string, error) {
-	if err := ValidatePrimaryDIDName(providerDID); err != nil || !validSegment(providerDID) || ordinal == 0 {
+	if err := ValidatePrimaryDIDName(providerDID); err != nil || ordinal == 0 {
 		return "", ErrInvalidRecord
 	}
 	base, err := NormalizeRGB11Ticker(ticker)
@@ -80,7 +82,7 @@ func RGB11RegistryKey(providerDID, ticker string, ordinal uint64) (string, error
 }
 
 func RGB11RegistryPrefix(providerDID, ticker string) (string, error) {
-	if err := ValidatePrimaryDIDName(providerDID); err != nil || !validSegment(providerDID) {
+	if err := ValidatePrimaryDIDName(providerDID); err != nil {
 		return "", ErrInvalidRecord
 	}
 	base, err := NormalizeRGB11Ticker(ticker)
@@ -92,7 +94,7 @@ func RGB11RegistryPrefix(providerDID, ticker string) (string, error) {
 
 func parseRGB11RegistryKey(parsed ParsedKey) (provider, ticker string, ordinal uint64, err error) {
 	if parsed.Namespace != RGB11RegistryNamespace || len(parsed.Segments) != 3 ||
-		ValidatePrimaryDIDName(parsed.Segments[0]) != nil || !validSegment(parsed.Segments[0]) {
+		ValidatePrimaryDIDName(parsed.Segments[0]) != nil {
 		return "", "", 0, ErrInvalidKey
 	}
 	ticker, err = NormalizeRGB11Ticker(parsed.Segments[1])
@@ -106,8 +108,12 @@ func parseRGB11RegistryKey(parsed ParsedKey) (provider, ticker string, ordinal u
 	return parsed.Segments[0], ticker, ordinal, nil
 }
 
-func EncodeRGB11ContractID(contractID string) ([]byte, error) {
-	if len(contractID) != RGB11RegistryContractBytes*2 ||
+func validRGB11AssetType(assetType string) bool {
+	return assetType == "f" || assetType == "n"
+}
+
+func EncodeRGB11RegistryValue(assetType, contractID string) ([]byte, error) {
+	if !validRGB11AssetType(assetType) || len(contractID) != RGB11RegistryContractBytes*2 ||
 		contractID != strings.ToLower(contractID) || strings.Trim(contractID, "0") == "" {
 		return nil, ErrInvalidRecord
 	}
@@ -115,22 +121,29 @@ func EncodeRGB11ContractID(contractID string) ([]byte, error) {
 	if err != nil || len(raw) != RGB11RegistryContractBytes {
 		return nil, ErrInvalidRecord
 	}
-	return raw, nil
+	value := make([]byte, RGB11RegistryValueBytes)
+	value[0] = assetType[0]
+	copy(value[1:], raw)
+	return value, nil
 }
 
-func DecodeRGB11ContractID(value []byte) (string, error) {
-	if len(value) != RGB11RegistryContractBytes {
-		return "", ErrInvalidRecord
+func DecodeRGB11RegistryValue(value []byte) (assetType, contractID string, err error) {
+	if len(value) != RGB11RegistryValueBytes {
+		return "", "", ErrInvalidRecord
 	}
-	id := hex.EncodeToString(value)
-	if strings.Trim(id, "0") == "" {
-		return "", ErrInvalidRecord
+	assetType = string(value[:1])
+	if !validRGB11AssetType(assetType) {
+		return "", "", ErrInvalidRecord
 	}
-	return id, nil
+	contractID = hex.EncodeToString(value[1:])
+	if strings.Trim(contractID, "0") == "" {
+		return "", "", ErrInvalidRecord
+	}
+	return assetType, contractID, nil
 }
 
-func BuildRGB11AssetName(providerDID, ticker string, ordinal uint64) (string, error) {
-	if ordinal == 0 || ValidatePrimaryDIDName(providerDID) != nil {
+func BuildRGB11AssetName(providerDID, ticker, assetType string, ordinal uint64) (string, error) {
+	if ordinal == 0 || ValidatePrimaryDIDName(providerDID) != nil || !validRGB11AssetType(assetType) {
 		return "", ErrInvalidRecord
 	}
 	base, err := NormalizeRGB11Ticker(ticker)
@@ -140,7 +153,7 @@ func BuildRGB11AssetName(providerDID, ticker string, ordinal uint64) (string, er
 	if ordinal > 1 {
 		base += "_" + strconv.FormatUint(ordinal, 10)
 	}
-	return "rgb11:f:" + base + "@" + providerDID, nil
+	return "rgb11:" + assetType + ":" + base + "@" + providerDID, nil
 }
 
 func RGB11RegistrationFromRecord(record *wire.DKVSRecord) (*RGB11Registration, error) {
@@ -155,17 +168,17 @@ func RGB11RegistrationFromRecord(record *wire.DKVSRecord) (*RGB11Registration, e
 	if err != nil {
 		return nil, err
 	}
-	contractID, err := DecodeRGB11ContractID(record.Value)
+	assetType, contractID, err := DecodeRGB11RegistryValue(record.Value)
 	if err != nil {
 		return nil, err
 	}
-	name, err := BuildRGB11AssetName(provider, ticker, ordinal)
+	name, err := BuildRGB11AssetName(provider, ticker, assetType, ordinal)
 	if err != nil {
 		return nil, err
 	}
 	return &RGB11Registration{
-		ContractID: contractID, AssetName: name, ProviderDID: provider,
-		BaseTicker: ticker, Ordinal: ordinal,
+		ContractID: contractID, AssetName: name, AssetType: assetType,
+		ProviderDID: provider, BaseTicker: ticker, Ordinal: ordinal,
 	}, nil
 }
 
@@ -185,7 +198,7 @@ func validateRGB11RegistryStored(record *wire.DKVSRecord, parsed ParsedKey) erro
 	if err := VerifySignature(record); err != nil {
 		return err
 	}
-	_, err := DecodeRGB11ContractID(record.Value)
+	_, _, err := DecodeRGB11RegistryValue(record.Value)
 	return err
 }
 
@@ -212,7 +225,7 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 		if err != nil || parsed.Namespace != RGB11RegistryNamespace {
 			continue
 		}
-		contractID, err := DecodeRGB11ContractID(record.Value)
+		_, contractID, err := DecodeRGB11RegistryValue(record.Value)
 		if err != nil {
 			return ErrInvalidRecord
 		}
@@ -241,7 +254,7 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 		if err != nil || parsed.Namespace != RGB11RegistryNamespace {
 			continue
 		}
-		contractID, err := DecodeRGB11ContractID(record.Value)
+		_, contractID, err := DecodeRGB11RegistryValue(record.Value)
 		if err != nil {
 			return ErrInvalidRecord
 		}
@@ -250,8 +263,6 @@ func (i *Indexer) validateRGB11IncomingGlobalLocked(records []*wire.DKVSRecord,
 				return ErrWriteConflict
 			}
 		} else if _, replaced := replacedKeys[record.Key]; replaced {
-			// RGB11 registry paths are append-only. An authoritative path
-			// snapshot may add later ordinals but may never erase history.
 			return ErrInvalidRecord
 		}
 		if incomingKey, duplicate := incomingByContract[contractID]; duplicate && incomingKey != record.Key {
@@ -268,7 +279,7 @@ func (i *Indexer) validateRGB11RegistryInsertLocked(record *wire.DKVSRecord, par
 	if err != nil {
 		return err
 	}
-	if _, err := DecodeRGB11ContractID(record.Value); err != nil {
+	if _, _, err := DecodeRGB11RegistryValue(record.Value); err != nil {
 		return err
 	}
 	prefix, _ := RGB11RegistryPrefix(provider, ticker)
@@ -279,7 +290,7 @@ func (i *Indexer) validateRGB11RegistryInsertLocked(record *wire.DKVSRecord, par
 	if uint64(len(records))+1 != ordinal {
 		return ErrInvalidSequence
 	}
-	added, _ := DecodeRGB11ContractID(record.Value)
+	_, added, _ := DecodeRGB11RegistryValue(record.Value)
 	all, _, _, err := i.scanLocked("/rgb11", nil, 0, true, height, now)
 	if err != nil {
 		return err
@@ -288,7 +299,7 @@ func (i *Indexer) validateRGB11RegistryInsertLocked(record *wire.DKVSRecord, par
 		if candidate == nil || candidate.Key == record.Key {
 			continue
 		}
-		id, err := DecodeRGB11ContractID(candidate.Value)
+		_, id, err := DecodeRGB11RegistryValue(candidate.Value)
 		if err != nil {
 			return err
 		}
@@ -327,7 +338,7 @@ func validateRGB11PathRecords(path string, records []*wire.DKVSRecord) error {
 			return ErrInvalidSnapshot
 		}
 		seenOrdinals[ordinal] = struct{}{}
-		contractID, err := DecodeRGB11ContractID(record.Value)
+		_, contractID, err := DecodeRGB11RegistryValue(record.Value)
 		if err != nil {
 			return ErrInvalidSnapshot
 		}
@@ -345,11 +356,13 @@ func validateRGB11PathRecords(path string, records []*wire.DKVSRecord) error {
 }
 
 func (i *Indexer) LookupRGB11Contract(contractID string) (*RGB11Registration, error) {
-	if i == nil {
+	if i == nil || len(contractID) != RGB11RegistryContractBytes*2 ||
+		contractID != strings.ToLower(contractID) {
 		return nil, ErrInvalidRecord
 	}
-	if _, err := EncodeRGB11ContractID(contractID); err != nil {
-		return nil, err
+	if raw, err := hex.DecodeString(contractID); err != nil || len(raw) != RGB11RegistryContractBytes ||
+		strings.Trim(contractID, "0") == "" {
+		return nil, ErrInvalidRecord
 	}
 	records, _, _, err := i.scan("/rgb11", nil, 0, true)
 	if err != nil {
@@ -377,7 +390,7 @@ func (i *Indexer) LookupRGB11Contract(contractID string) (*RGB11Registration, er
 }
 
 func (i *Indexer) LookupRGB11AssetName(assetName string) (*RGB11Registration, error) {
-	if i == nil || !strings.HasPrefix(assetName, "rgb11:f:") {
+	if i == nil || (!strings.HasPrefix(assetName, "rgb11:f:") && !strings.HasPrefix(assetName, "rgb11:n:")) {
 		return nil, ErrInvalidRecord
 	}
 	records, _, _, err := i.scan("/rgb11", nil, 0, true)
