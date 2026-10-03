@@ -403,3 +403,28 @@ func TestRGB11RegistryPreservesAssetTypeWithoutSplittingOrdinalNamespace(t *test
 		t.Fatalf("ft registration=%+v err=%v", ft, err)
 	}
 }
+
+
+func TestRGB11RegistryStatelessPrefixRead(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	record := rgb11SignedRegistryRecord(
+		t, coreKey, "alice", "USD", 1, rgb11TestContractID(900), 100,
+	)
+	if _, err := idx.PutInternalRGB11Registry(record); err != nil {
+		t.Fatal(err)
+	}
+	result, err := idx.ReadPrefix("/rgb11/alice/usd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Records) != 1 || result.Records[0].Key != record.Key {
+		t.Fatalf("records=%+v", result.Records)
+	}
+	if _, err := idx.ReadPrefix("/rgb11/alice"); !errors.Is(err, ErrInvalidKey) {
+		t.Fatalf("over-broad RGB11 prefix accepted: %v", err)
+	}
+}
