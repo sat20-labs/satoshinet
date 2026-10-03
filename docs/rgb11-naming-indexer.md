@@ -15,7 +15,7 @@ Strict RGB identity remains the complete ContractID.
 The canonical SatoshiNet asset name is:
 
 ```text
-rgb11:f:<baseTicker>[_ordinal]@<providerDID>
+rgb11:<existing type>:<baseTicker>[_ordinal]@<providerDID>
 ```
 
 Examples:
@@ -28,7 +28,7 @@ rgb11:n:art@artist
 
 Rules:
 
-- `f` keeps its existing asset-type meaning;
+- existing asset type (`f` or `n`) is preserved and is not used for uniqueness;
 - provider is an Ordinals DID;
 - a bindable DID is 1-10 lowercase ASCII characters from `a-z0-9._-`; this is a stricter DKVS-safe subset of Ordinals names;
 - the first ordinal is 1 and is omitted from the displayed name;
@@ -104,10 +104,10 @@ The derived name is:
 
 ```text
 ordinal == 1:
-  rgb11:f:<ticker>@<provider>
+  rgb11:<type>:<ticker>@<provider>
 
 ordinal > 1:
-  rgb11:f:<ticker>_<ordinal>@<provider>
+  rgb11:<type>:<ticker>_<ordinal>@<provider>
 ```
 
 ## Registration authority
