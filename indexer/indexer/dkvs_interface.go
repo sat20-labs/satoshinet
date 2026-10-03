@@ -55,9 +55,9 @@ func (p *IndexerMgr) PutDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return p.dkvsIndexer.PutLocal(record)
 }
 
-// PutDKVSInternalMailbox is reserved for MessageManager after it has completed
-// binding, signature, sequence and billing admission. Generic DKVS RPCs must
-// never expose this method directly.
+// PutDKVSInternalRGB11Registry is reserved for the trusted RGB11 registration
+// path after provider/Genesis validation. Generic wallet DKVS APIs do not expose
+// this mutation directly.
 func (p *IndexerMgr) PutDKVSInternalRGB11Registry(record *wire.DKVSRecord) (bool, error) {
 	if p == nil || p.dkvsIndexer == nil {
 		return false, errDKVSNotInitialized
