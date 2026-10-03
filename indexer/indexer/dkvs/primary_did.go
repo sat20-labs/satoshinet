@@ -2,8 +2,6 @@ package dkvs
 
 import (
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -18,16 +16,9 @@ func AccountPrimaryDIDKey(accountID string) (string, error) {
 }
 
 func ValidatePrimaryDIDName(did string) error {
-	if len(did) == 0 || len(did) > MaxPrimaryDIDCharacters*utf8.UTFMax ||
-		!utf8.ValidString(did) || utf8.RuneCountInString(did) > MaxPrimaryDIDCharacters ||
+	if did == "" || len(did) > MaxPrimaryDIDCharacters ||
 		did != strings.ToLower(did) || did != strings.TrimSpace(did) || !validSegment(did) {
 		return ErrInvalidRecord
-	}
-	for _, r := range did {
-		if unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) ||
-			strings.ContainsRune("@:/\\", r) {
-			return ErrInvalidRecord
-		}
 	}
 	return nil
 }
