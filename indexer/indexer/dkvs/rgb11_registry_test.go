@@ -22,12 +22,18 @@ func rgb11RegistryTestConfig(coreKey *btcec.PrivateKey) Config {
 func rgb11SignedRegistryRecord(t *testing.T, signer *btcec.PrivateKey, provider, ticker string,
 	ordinal uint64, contractID string, height uint64) *Record {
 
+	return rgb11SignedRegistryRecordType(t, signer, provider, ticker, "f", ordinal, contractID, height)
+}
+
+func rgb11SignedRegistryRecordType(t *testing.T, signer *btcec.PrivateKey, provider, ticker, assetType string,
+	ordinal uint64, contractID string, height uint64) *Record {
+
 	t.Helper()
 	key, err := RGB11RegistryKey(provider, ticker, ordinal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := EncodeRGB11ContractID(contractID)
+	value, err := EncodeRGB11RegistryValue(assetType, contractID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,8 +150,11 @@ func TestRGB11RegistryKeyAndValueBoundaries(t *testing.T) {
 	if _, err := RGB11RegistryKey("alice", "USD", 0); err == nil {
 		t.Fatal("zero ordinal accepted")
 	}
-	if _, err := EncodeRGB11ContractID(strings64("0")); err == nil {
+	if _, err := EncodeRGB11RegistryValue("f", strings64("0")); err == nil {
 		t.Fatal("zero ContractID accepted")
+	}
+	if _, err := EncodeRGB11RegistryValue("x", rgb11TestContractID(1)); err == nil {
+		t.Fatal("invalid asset type accepted")
 	}
 }
 
@@ -364,5 +373,34 @@ func TestRGB11InternalRegistrationEmitsRelayNotify(t *testing.T) {
 	}
 	if notified == nil || notified.EventType != EventRecordPut || !notified.Relay {
 		t.Fatalf("notify=%+v", notified)
+	}
+}
+
+
+func TestRGB11RegistryPreservesAssetTypeWithoutSplittingOrdinalNamespace(t *testing.T) {
+	coreKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
+	first := rgb11SignedRegistryRecordType(
+		t, coreKey, "alice", "ART", "n", 1, rgb11TestContractID(800), 100,
+	)
+	second := rgb11SignedRegistryRecordType(
+		t, coreKey, "alice", "ART", "f", 2, rgb11TestContractID(801), 100,
+	)
+	if _, err := idx.PutInternalRGB11Registry(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.PutInternalRGB11Registry(second); err != nil {
+		t.Fatal(err)
+	}
+	nft, err := idx.LookupRGB11Contract(rgb11TestContractID(800))
+	if err != nil || nft.AssetType != "n" || nft.AssetName != "rgb11:n:art@alice" || nft.Ordinal != 1 {
+		t.Fatalf("nft registration=%+v err=%v", nft, err)
+	}
+	ft, err := idx.LookupRGB11Contract(rgb11TestContractID(801))
+	if err != nil || ft.AssetType != "f" || ft.AssetName != "rgb11:f:art_2@alice" || ft.Ordinal != 2 {
+		t.Fatalf("ft registration=%+v err=%v", ft, err)
 	}
 }
