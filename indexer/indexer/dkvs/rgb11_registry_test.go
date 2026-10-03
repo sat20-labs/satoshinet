@@ -376,7 +376,6 @@ func TestRGB11InternalRegistrationEmitsRelayNotify(t *testing.T) {
 	}
 }
 
-
 func TestRGB11RegistryPreservesAssetTypeWithoutSplittingOrdinalNamespace(t *testing.T) {
 	coreKey, err := btcec.NewPrivateKey()
 	if err != nil {
