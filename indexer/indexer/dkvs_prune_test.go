@@ -271,8 +271,12 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 	if _, ok := explicitCfg.FeeVerifier.(dkvs.JSONFeeVerifier); !ok {
 		t.Fatalf("explicit fee verifier not preferred: %T", explicitCfg.FeeVerifier)
 	}
-	if _, ok := explicitCfg.SystemVerifier.(dkvs.StaticSystemVerifier); !ok {
-		t.Fatalf("explicit system verifier not preferred: %T", explicitCfg.SystemVerifier)
+	explicitSystemWrapper, ok := explicitCfg.SystemVerifier.(coreNodeDKVSSystemVerifier)
+	if !ok {
+		t.Fatalf("explicit system verifier wrapper not configured: %T", explicitCfg.SystemVerifier)
+	}
+	if _, ok := explicitSystemWrapper.fallback.(dkvs.StaticSystemVerifier); !ok {
+		t.Fatalf("explicit system verifier not preferred: %T", explicitSystemWrapper.fallback)
 	}
 }
 
