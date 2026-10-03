@@ -59,7 +59,7 @@ func NormalizeRGB11Ticker(raw string) (string, error) {
 	}
 	ticker := strings.Trim(out.String(), "-")
 	if ticker == "" {
-		return "", ErrInvalidRecord
+		return "asset", nil
 	}
 	return ticker, nil
 }
