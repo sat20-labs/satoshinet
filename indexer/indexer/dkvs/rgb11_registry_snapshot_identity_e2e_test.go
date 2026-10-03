@@ -21,12 +21,18 @@ func TestRGB11RegistrySnapshotPreservesCompleteAssetIdentityE2E(t *testing.T) {
 			source := testIndexerWithConfig(t, rgb11RegistryTestConfig(coreKey))
 			contractID := rgb11TestContractID(9101)
 			nextID := rgb11TestContractID(9102)
-			original := rgb11SignedRegistryRecordType(t, coreKey, "alice", "USD", "f", 1, contractID, 100)
+			original := rgb11SignedRegistryRecordType(t, coreKey, "alice", "USD", "f", 1, contractID, 99)
 			if updated, err := target.PutInternalRGB11Registry(original); err != nil || !updated {
 				t.Fatalf("seed original: updated=%v err=%v", updated, err)
 			}
 			beforeHash := RecordHash(original)
 			replacement := rgb11SignedRegistryRecordType(t, coreKey, "alice", "USD", "n", 1, contractID, 100)
+			// Force the incoming record to win ordinary DKVS merge ordering.
+			// Registry immutability must override that order, independently of
+			// random signer/hash ordering at an otherwise identical height.
+			if CompareRecords(original, replacement) >= 0 {
+				t.Fatal("fixture must exercise the incoming merge winner")
+			}
 			if _, err := target.PutInternalRGB11Registry(replacement); !errors.Is(err, ErrWriteConflict) {
 				t.Fatalf("control: local type replacement must be rejected, got %v", err)
 			}
