@@ -65,7 +65,7 @@ func TestRGB11NamingHTTPUsesDKVSRegistry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	id := "0000000000000000000000000000000000000000000000000000000000000001"
 	reg := &dkvsindexer.RGB11Registration{
-		ContractID: id, AssetName: "rgb11:f:usd@alice",
+		ContractID: id, AssetName: "rgb11:f:usd@alice", AssetType: "f",
 		ProviderDID: "alice", BaseTicker: "usd", Ordinal: 1,
 	}
 	fixture := &namingHTTPIndexer{
@@ -98,7 +98,7 @@ func TestRGB11NamingHTTPUsesDKVSRegistry(t *testing.T) {
 	record := &wire.DKVSRecord{
 		Version: dkvsindexer.Version,
 		Key:     "/rgb11/alice/usd/1",
-		Value:   make([]byte, dkvsindexer.RGB11RegistryContractBytes),
+		Value:   append([]byte{'f'}, make([]byte, dkvsindexer.RGB11RegistryContractBytes)...),
 		PubKey:  corePubKey,
 		Seq:     1,
 	}
