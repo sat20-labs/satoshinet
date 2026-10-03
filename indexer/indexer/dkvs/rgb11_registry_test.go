@@ -345,7 +345,6 @@ func TestRGB11RegistryPathSnapshotCannotReplaceExistingContract(t *testing.T) {
 	}
 }
 
-
 func TestRGB11InternalRegistrationEmitsRelayNotify(t *testing.T) {
 	coreKey, err := btcec.NewPrivateKey()
 	if err != nil {
