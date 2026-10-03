@@ -2,6 +2,7 @@ package dkvs
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
