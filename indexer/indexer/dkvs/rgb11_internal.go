@@ -93,6 +93,6 @@ func (i *Indexer) PutInternalRGB11Registry(record *wire.DKVSRecord) (bool, error
 	}
 	atomic.AddUint64(&i.generation, 1)
 	i.mutex.Unlock()
-	i.notifyPathMutation(record)
+	i.emit(EventRecordPut, record, true)
 	return true, nil
 }
