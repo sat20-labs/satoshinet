@@ -404,7 +404,6 @@ func TestRGB11RegistryPreservesAssetTypeWithoutSplittingOrdinalNamespace(t *test
 	}
 }
 
-
 func TestRGB11RegistryStatelessPrefixRead(t *testing.T) {
 	coreKey, err := btcec.NewPrivateKey()
 	if err != nil {
