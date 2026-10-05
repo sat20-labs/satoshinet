@@ -95,7 +95,7 @@ func pkScriptToAddr(pkScript []byte) (string, error) {
 	}
 
 	var NetParams = chaincfg.MainNetParams
-	if anchorManager.anchorConfig.ChainParams.Name != "satsnet" {
+	if anchorManager.anchorConfig.ChainParams.Name != chaincfg.MainNetParams.Name {
 		NetParams = chaincfg.TestNet4Params
 	}
 	_, addrs, _, err := txscript.ExtractPkScriptAddrs(pkScript, &NetParams)
