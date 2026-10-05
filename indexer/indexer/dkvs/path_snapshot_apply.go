@@ -39,7 +39,7 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 		}
 	}()
 
-	if atomic.LoadUint64(&i.policyGeneration) != validated.policyVersion {
+	if atomic.LoadUint64(&i.policyGeneration) != validated.policyVersion || i.currentHeight() != validated.height {
 		return 0, ErrConcurrentUpdate
 	}
 	height, now := validated.meta.ViewHeight, currentUnixMilli()
@@ -79,8 +79,8 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 	// Snapshot omissions replace only the network view. Placement-bound data
 	// and unpaid AUTOPAY retention stay local until their existing prune path
 	// removes them. An incoming record for the same key can still replace them.
-	// Capture the visibility decision once: retention refresh can run while
-	// this installation holds the indexer lock.
+	// Record and retention changes share this indexer commit lock, keeping
+	// the visibility decision stable while the snapshot is installed.
 	replaceable := current[:0]
 	for _, record := range current {
 		if incoming[record.Key] != nil || !i.isLocalOnlyRecord(record) {

@@ -16,6 +16,7 @@ type preparedRecordSet struct {
 	forceReplace map[string]bool
 	generation uint64
 	policyGeneration uint64
+	height uint64
 }
 
 func cloneRecordSet(records []*wire.DKVSRecord) ([]*wire.DKVSRecord, error) {
@@ -58,7 +59,7 @@ func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord, rejectFreeLoc
 		capacities[record.Key] = capacity
 	}
 	return preparedRecordSet{ordered: ordered, capacities: capacities, retentions: retentions,
-		forceReplace: forceReplace, generation: generation, policyGeneration: validators.policyGeneration}, nil
+		forceReplace: forceReplace, generation: generation, policyGeneration: validators.policyGeneration, height: height}, nil
 }
 
 func (i *Indexer) validatePreparedFeeSetLocked(records []*wire.DKVSRecord, capacities map[string]preparedFeeCapacity, height, now uint64) error {
@@ -98,11 +99,11 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 		prepared, err := i.prevalidateRecordSet(records, rejectFreeLocal)
 		if err != nil { return 0, err }
 		if expectedRoot != nil {
-			root, err := recordsRoot(prepared.ordered, i.currentHeight())
+			root, err := recordsRoot(prepared.ordered, prepared.height)
 			if err != nil || root != *expectedRoot { return 0, ErrInvalidSnapshot }
 		}
 		i.mutex.Lock()
-		if atomic.LoadUint64(&i.generation) != prepared.generation || atomic.LoadUint64(&i.policyGeneration) != prepared.policyGeneration {
+		if atomic.LoadUint64(&i.generation) != prepared.generation || atomic.LoadUint64(&i.policyGeneration) != prepared.policyGeneration || i.currentHeight() != prepared.height {
 			i.mutex.Unlock()
 			continue
 		}

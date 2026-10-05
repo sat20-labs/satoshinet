@@ -152,19 +152,6 @@ func verifiedPaidRetentionAfterFeeVerification(record *wire.DKVSRecord, parsed P
 	return &retention, nil
 }
 
-// primePaidRetentionAfterFeeVerification is retained for callers that commit
-// immediately. Transactional paths should verify first and update this cache
-// only after the database batch commits.
-func (i *Indexer) primePaidRetentionAfterFeeVerification(record *wire.DKVSRecord, parsed ParsedKey,
-	verifier FeeVerifier) error {
-	retention, err := verifiedPaidRetentionAfterFeeVerification(record, parsed, verifier, i.currentHeight())
-	if err != nil || retention == nil {
-		return err
-	}
-	paidRetentionCacheFor(i).set(record.Key, *retention)
-	return nil
-}
-
 func isAutopayRecord(record *wire.DKVSRecord) bool {
 	if record == nil || len(record.FeeProof) == 0 {
 		return false
@@ -208,8 +195,8 @@ func paidRetentionCurrent(retention PaidRecordRetention, height uint64) bool {
 // paidRecordRelayable is intentionally cache-only. Contract state is refreshed
 // outside the indexer lock once per block and by the periodic maintenance loop.
 // A missing entry fails closed so records loaded after restart cannot relay until
-// the current-block payment has been verified. Newly accepted records become
-// relayable after the same refresh; local readability is unaffected.
+// the current-block payment has been verified. Newly accepted records publish
+// that verification with their successful commit; local readability is unaffected.
 func (i *Indexer) paidRecordRelayable(record *wire.DKVSRecord) bool {
 	if !isAutopayRecord(record) {
 		return true
@@ -230,19 +217,30 @@ func (i *Indexer) RefreshPaidRetentionAt(height uint64) error {
 	validators := i.snapshotValidators()
 	verifier, ok := validators.feeVerifier.(PaidRecordRetentionVerifier)
 	if !ok {
+		i.mutex.Lock()
+		defer i.mutex.Unlock()
+		if atomic.LoadUint64(&i.policyGeneration) != validators.policyGeneration {
+			return ErrConcurrentUpdate
+		}
 		paidRetentionCacheFor(i).replace(make(map[string]PaidRecordRetention))
+		i.resetFreeLocalUsageLocked()
 		return nil
 	}
-	records, _, _, err := i.scan("", nil, 0, false)
+	i.mutex.RLock()
+	validationHeight := i.currentHeight()
+	records, _, _, err := i.scanLocked("", nil, 0, false, height, currentUnixMilli())
+	i.mutex.RUnlock()
 	if err != nil {
 		return err
 	}
 	entries := make(map[string]PaidRecordRetention)
+	hashes := make(map[string]chainhash.Hash)
 	var firstErr error
 	for _, record := range records {
 		if !isAutopayRecord(record) || IsTombstone(record.Flags) {
 			continue
 		}
+		hashes[record.Key] = RecordHash(record)
 		parsed, err := ParseKey(record.Key)
 		if err != nil {
 			if firstErr == nil {
@@ -261,12 +259,33 @@ func (i *Indexer) RefreshPaidRetentionAt(height uint64) error {
 		}
 		entries[record.Key] = retention
 	}
-	paidRetentionCacheFor(i).replace(entries)
+	i.mutex.Lock()
+	defer i.mutex.Unlock()
+	if i.currentHeight() != validationHeight || atomic.LoadUint64(&i.policyGeneration) != validators.policyGeneration {
+		return ErrConcurrentUpdate
+	}
+	current, _, _, err := i.scanLocked("", nil, 0, false, height, currentUnixMilli())
+	if err != nil {
+		return err
+	}
+	cache := paidRetentionCacheFor(i)
+	merged := make(map[string]PaidRecordRetention, len(current))
+	for _, record := range current {
+		if !isAutopayRecord(record) || IsTombstone(record.Flags) {
+			continue
+		}
+		if hash, scanned := hashes[record.Key]; scanned && hash == RecordHash(record) {
+			merged[record.Key] = entries[record.Key]
+		} else if retention, ok := cache.get(record.Key); ok {
+			// A concurrent write committed this current record and its cache
+			// together. Old scan results cannot replace that verification.
+			merged[record.Key] = retention
+		}
+	}
+	cache.replace(merged)
 	// AUTOPAY records that stop paying become local cache entries. Rebuild free
 	// cache accounting lazily on the next FREE_LOCAL capacity check.
-	i.mutex.Lock()
 	i.resetFreeLocalUsageLocked()
-	i.mutex.Unlock()
 	return firstErr
 }
 
@@ -293,9 +312,10 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 	}
 	i.mutex.RLock()
 	policy := i.freeLocal
+	validationHeight := i.currentHeight()
+	records, _, _, err := i.scanLocked("", nil, 0, false, height, currentUnixMilli())
 	i.mutex.RUnlock()
 	graceBlocks := paidRetentionGraceBlocks(policy)
-	records, _, _, err := i.scan("", nil, 0, false)
 	if err != nil {
 		return 0, err
 	}
@@ -323,6 +343,10 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 	}
 
 	i.mutex.Lock()
+	if i.currentHeight() != validationHeight || atomic.LoadUint64(&i.policyGeneration) != validators.policyGeneration {
+		i.mutex.Unlock()
+		return 0, ErrConcurrentUpdate
+	}
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
 	removed := make([]*wire.DKVSRecord, 0, len(candidates))
@@ -367,9 +391,9 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 			delete(i.recordExpiryEntries, record.Key)
 		}
 	}
+	paidRetentionCacheFor(i).remove(removedKeys)
 	atomic.AddUint64(&i.generation, 1)
 	i.mutex.Unlock()
 	i.notifyExpiryCommit(expiryResult)
-	paidRetentionCacheFor(i).remove(removedKeys)
 	return len(removed), nil
 }

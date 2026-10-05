@@ -284,7 +284,7 @@ record 自身签名证明 record author；request signature 证明钱包**本次
 
 ### 5.3 服务端提交检查
 
-服务端在实际 commit 锁内重新验证：
+服务端在锁外完成可能涉及外部 I/O 的 fee、DID/resolver 校验；实际 commit 锁内重新确认校验所属的本地高度、策略与 record 身份仍然适用，并验证：
 
 1. 请求 signer；
 2. 当前 /account binding 指向本 CoreNode；
@@ -294,6 +294,8 @@ record 自身签名证明 record author；request signature 证明钱包**本次
 6. IssueHeight 短窗口；
 7. namespace / DID / fee / quota；
 8. batch 全部通过后原子提交。
+
+准备后高度或策略变化时，沿用已有有界流程重新验证原始请求，不更改 generation、IssueHeight、RequestID、CAS 或签名。数据库成功提交后，在同一提交锁内更新相关派生缓存；通知在锁外发送。内部单记录、P2P 当前记录和集合安装遵守相同边界；path snapshot 的失效安装返回现有并发错误，交回已有同步调度。
 
 generation 不一致返回 STALE_GENERATION。
 
@@ -389,7 +391,7 @@ managed replica 统一使用 Active sync/watch；不保留旧 status/snapshot/de
 
 SDK 未订阅的 key / prefix 按需在线读取，超时 5 秒，不保留 unmanaged 短期缓存。managed confirmed replica 与 Watch 保留，已订阅数据的离线副本不受该缓存清理影响。待充值 outbox 保留原授权与提示，但不阻断订阅接收；现有 wake 后只能重放原请求，不新增充值轮询任务。
 
-按需单记录与显式权威读取沿用一次 5 秒 deadline，覆盖 key-state、record 和 best-height 查询。选定恢复来源或其他按需来源的高度仅用于校验本次读取，不写入 Manager 的共享校验高度。刷新共享高度前复用 EndpointID 与持久副本来源检查，来源不一致返回 endpoint mismatch；存储策略/容量估算不混用另一来源策略与本地高度。来源检查先于网络刷新和高度回退；同来源临时失败仍可使用已有可信高度，不能借网络失败忽略已知来源不匹配。零高度属于已知高度，签名与 TTL 校验保持。
+按需读取与显式权威读取沿用一次 5 秒 deadline，覆盖本次需要的配置、key-state、record、目录分页和 best-height 查询；各步骤不重新计时。Active sync 的配置和分页沿用调用方 context，取消后不发布配置或安装结果。选定恢复来源或其他按需来源的高度仅用于校验本次读取，不写入 Manager 的共享校验高度。刷新共享高度前复用 EndpointID 与持久副本来源检查，来源不一致返回 endpoint mismatch；存储策略/容量估算不混用另一来源策略与本地高度。来源检查先于网络刷新和高度回退；同来源临时失败仍可使用已有可信高度，不能借网络失败忽略已知来源不匹配。零高度属于已知高度，签名与 TTL 校验保持。
 
 同 endpoint、同一完整目录组的刷新保留最后确认副本的读取资格，网络失败标记 OFFLINE_READY，成功恢复 READY。首次同步、不完整目录组、新增 prefix 和来源切换不能提升为离线可读。collection Sync/Watch 的 ViewHeight 只能推进已知 endpoint 过期校验高度；主动 best-height 查询保留确认真实链回退的职责。
 
@@ -466,7 +468,7 @@ source 在 session 的首个请求取得一次独立 snapshot，所有分页只�
 
 同一活动 session、相同 filters 的首个请求重发复用该 snapshot；同 session 不允许改变 filters。接收端仅保留前一已验签响应的摘要，忽略内容和签名完全一致的重复页，不重复安装或取消下一页计时器。消息在连接内顺序处理和发送，不保存响应页历史；结束、取消或新 session 清除摘要。其他 session、错误签名和不同内容仍走原校验。
 
-`ViewHeight` 保留为 snapshot 创建时的固定校验高度，用于 TTL、IssueHeight 等记录有效性验证；它不是分页游标，也不与 source 当前链高度逐页比较。root/source/signature、scope、权限、fee 和目的节点本地并发安装保护仍需验证。
+`ViewHeight` 保留为 snapshot 创建时的固定校验高度，用于 TTL、IssueHeight 等记录有效性验证；它不是分页游标，也不与 source 当前链高度逐页比较。接收方按本地当前高度验证付款资格，安装前复核该本地高度和策略；这与 source 的固定快照高度分别使用。root/source/signature、scope、权限、fee 和目的节点本地并发安装保护仍需验证。
 
 每个 source 连接至多保留一个 snapshot，沿用当前目录 snapshot 的 64 MiB records 上限；完成、取消、断连或闲置超时（当前 2 分钟）释放。分页直接读取已捕获 records 的对应区间，不为每页重新构造整个目录。
 
@@ -602,7 +604,9 @@ Receiving Wallet 执行显式 ResignDIDRecords：
 - 网络可见记录参与 P2P current state；
 - 停付后的 grace 是本地 retention 行为，不应制造删除历史。
 
-network snapshot 缺项只替换当前网络视图，保留本地未到期的 AUTOPAY grace 数据；保留项不参与 network root 或 relay。incoming 同 key 的合法当前记录仍可替换该缓存，grace 到期由原有 retention prune 删除。安装过程中对本地可见性的判断只捕获一次，不因并发 retention refresh 在计数与清理之间改变决定。
+network snapshot 缺项只替换当前网络视图，保留本地未到期的 AUTOPAY grace 数据；保留项不参与 network root 或 relay。incoming 同 key 的合法当前记录仍可替换该缓存，grace 到期由原有 retention prune 删除。安装与 retention 发布共用现有提交锁，安装期间的本地可见性保持稳定。
+
+付款查询在提交锁外执行。维护发布前复核本地校验高度与策略，过期删除还复核当前 RecordHash；旧判断失效时返回现有并发错误，不删除恢复付款的记录。刷新仅合并仍匹配当前 record 的结果，保留并发新建或改写记录已提交的付款校验，不保留已删除 key 的缓存。AUTOPAY 与普通 TTL 清理都在 DB flush 成功后、同一提交锁内移除旧付款缓存，再解锁通知，同名重建的缓存不受旧清理影响.
 
 ### 10.3 AccountBound mailbox
 

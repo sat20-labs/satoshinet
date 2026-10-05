@@ -16,6 +16,7 @@ type validatedPathSnapshot struct {
 	retentions map[string]*PaidRecordRetention
 	serverTimeMS uint64
 	policyVersion uint64
+	height uint64
 }
 
 func clonePathSnapshot(snapshot *PathSnapshot) *PathSnapshot {
@@ -87,7 +88,8 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		return validatedPathSnapshot{}, ErrInvalidSnapshot
 	}
 	viewHeight := snapshot.PathMeta.ViewHeight
-	if viewHeight > i.currentHeight() { return validatedPathSnapshot{}, ErrStaleEndpoint }
+	height := i.currentHeight()
+	if viewHeight > height { return validatedPathSnapshot{}, ErrStaleEndpoint }
 	validators := i.snapshotValidators()
 	computed := &PathMeta{Version: pathMetaVersion, Path: path, Generation: snapshot.PathMeta.Generation, ViewHeight: viewHeight}
 	selected := make(map[string]struct{}, len(snapshot.Records))
@@ -104,7 +106,7 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		if _, err := validateParsedCoreWithVerifier(record, viewHeight, false, false, nil); err != nil { return validatedPathSnapshot{}, err }
 		if err := validateSnapshotPermission(record, parsed, validators); err != nil { return validatedPathSnapshot{}, err }
 		if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil { return validatedPathSnapshot{}, err }
-		retention, err := verifiedPaidRetentionAfterFeeVerification(record, parsed, validators.feeVerifier, viewHeight)
+		retention, err := verifiedPaidRetentionAfterFeeVerification(record, parsed, validators.feeVerifier, height)
 		if err != nil { return validatedPathSnapshot{}, err }
 		retentions[record.Key] = retention
 		computed.ActiveRecords++
@@ -120,5 +122,5 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 	sort.Slice(active, func(a, b int) bool { return active[a].Key < active[b].Key })
 	normalizePathMetaAliases(computed)
 	return validatedPathSnapshot{path: path, meta: computed, active: active, retentions: retentions,
-		serverTimeMS: snapshot.ServerTimeMS, policyVersion: validators.policyGeneration}, nil
+		serverTimeMS: snapshot.ServerTimeMS, policyVersion: validators.policyGeneration, height: height}, nil
 }

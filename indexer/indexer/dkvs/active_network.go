@@ -104,6 +104,10 @@ func (i *Indexer) AcceptCurrentRecord(record *wire.DKVSRecord) (bool, error) {
 			i.mutex.Unlock()
 			return false, nil
 		}
+		if i.currentHeight() != height && (!IsTombstone(record.Flags) || existing != nil) {
+			i.mutex.Unlock()
+			continue
+		}
 
 		if IsTombstone(record.Flags) {
 			if existing == nil {

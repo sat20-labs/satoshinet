@@ -197,6 +197,7 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 		if already == len(prep.mutations) { return nil, nil }
 		return nil, ErrWriteConflict
 	}
+	if height != prep.height { return nil, ErrConcurrentUpdate }
 	ready := make([]preparedCASMutation, 0, len(prep.mutations))
 	for _, item := range prep.mutations {
 		record, existing := item.mutation.Record, item.snapshot.existing

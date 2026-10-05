@@ -1,9 +1,12 @@
 # SatoshiNet btcd 差异功能审查整改与 PoS V2 实施计划
 
-更新时间：2026-08-23  
+更新时间：2026-10-05
+
 适用仓库：`sat20-labs/satoshinet`，以及需要联动的 `sat20-labs/indexer`、`sat20-labs/sat20wallet`  
 文档状态：**设计已对齐，等待当前测试轮次结束后实施**  
 文档用途：供下一次开发 session 直接读取并继续实施；与此前聊天中的阶段性总结冲突时，以本文为准。
+
+2026-10-05 补充确认：替补出块的奖励地址规则与 PoS V2 使用同一激活高度，保留激活前历史验证规则，后续统一实施。本次只更新计划，不实施代码或部署。
 
 ---
 
@@ -35,6 +38,7 @@ PoS V2 采用未来激活高度，整体启用以下规则：
 - producer signature；
 - Bootstrap finality certificate；
 - Miner → Core → Bootstrap 替补出块；
+- 奖励地址与实际出块者分开验证，按第 3.4.1 节确定费用接收通道；
 - Bootstrap 一高度一签名的持久化锁；
 - direct-tip only；
 - 禁止 side chain、PoS V2 orphan 延伸和 automatic reorg；
@@ -104,6 +108,8 @@ height >= H  -> PoS V2
 ```
 
 区块 `H` 是第一个 PoS V2 区块，`H-1` 是最后一个 PoS V1 区块。
+
+第 3.4.1 节的奖励地址规则也从 `H` 开始执行，不设置独立奖励激活高度。`height < H` 保留原 coinbase 格式、签名及奖励地址验证，不回溯要求历史替补区块支付到新通道。应用版本号（例如 `1.0.0`）不能代替共识激活高度。
 
 ### 主网
 
@@ -242,6 +248,35 @@ peer connection state
 
 继续作为 Bootstrap 是否签发替补 proposal 的本地策略。普通节点最终只验证 Bootstrap finality certificate，不独立推断墙钟超时。
 
+### 3.4.1 替补出块的奖励地址（2026-10-05 确认）
+
+不改变 Miner、Core、Bootstrap 的出块时隙和替补顺序。仅在 PoS V2 激活后，按原定时隙和实际出块者确定 coinbase 的经济输出地址：
+
+| 原定时隙 | 实际出块者 | 奖励地址 |
+| --- | --- | --- |
+| Miner | 原定 Miner | 原定 Miner 与其所属 Core 的通道地址 |
+| Miner | 所属 Core 替补 | 同一个 Miner–Core 通道地址，与 Miner 是否在线无关 |
+| Miner | 所属 Bootstrap 替补 | 该 Miner 所属 Core 与 Bootstrap 的通道地址 |
+| Core | 原定 Core | 原定 Core 与其所属 Bootstrap 的通道地址 |
+| Core | 所属 Bootstrap 替补 | 同一个 Core–Bootstrap 通道地址 |
+| Bootstrap | 原定 Bootstrap | 保持该 Bootstrap 自身的奖励地址 |
+
+Miner 和 Core 失联或未按时出块时，Bootstrap 按现有替补策略接管，收益进入该组 Core–Bootstrap 通道。这里的“都不在”是出块协调条件，不是 replay 时需要证明的历史在线状态。普通验证节点不查询当前 peer 连接状态，不根据当前墙钟推断历史节点是否离线。
+
+本规则适用于 coinbase 归集的 BTC fees 和资产 fee/gas；不增加区块补贴，也不改变费用金额计算或通道内部收益分配规则。Core 自己的时隙仍奖励 Core–Bootstrap 通道，不得任意选择一个子 Miner 作为接收者。
+
+实现必须分别确定和验证：
+
+- `expectedProducer`：从 candidate 的 direct-parent 排序机状态确定原定时隙；
+- `actualProducer`：验证真实签名者属于该时隙允许的替补层级；
+- 奖励地址：用该时隙的节点公钥关系和实际出块者层级，按上表推导。
+
+复用已有排序机和通道地址推导能力，不新增奖励地址持久字段、离线证明或独立补偿机制。不能再根据奖励地址反查节点公钥并将其视为实际出块者。例如 Core 替补 Miner 时，奖励地址归属 Miner–Core 通道，但 producer signature 必须由 Core 公钥验证。
+
+出块模板必须在执行合约、归集费用和生成 proposal digest 之前选定奖励地址。完整 proposal digest 绑定该经济输出；Bootstrap 审核、普通 block 验证、`BFFastAdd` 路径均执行同一奖励规则。在线 proposal 的签名校验、替补超时判断、审核转发及下一时隙通知，也必须使用实际出块者和原定时隙各自的身份，不从收款地址推断身份。
+
+历史 replay 按候选区块高度选择规则：`height < H` 接受原规则下合法的 Core/Bootstrap 替补区块及原奖励地址；`height >= H` 严格执行新证书和上表地址规则。不得修改历史 coinbase、txid、block hash、合约 Result 或 state root。排序机继续按原定时隙推进和恢复，不根据替补收款地址改变顺序；无需转换历史数据库。
+
 ## 3.5 Bootstrap finality certificate
 
 现有 `MsgMineBlock` 审核链路继续复用：
@@ -257,7 +292,7 @@ Bootstrap -> Core review
 1. actual producer 构造完整 proposal；
 2. actual producer 签 `PosProposalDigestV1`；
 3. proposal 通过现有 `MsgMineBlock` 发给上级；
-4. Bootstrap 验证 direct-tip、排序、替补层级、交易、资产、Anchor、合约和 state root；
+4. Bootstrap 验证 direct-tip、排序、替补层级、第 3.4.1 节奖励地址、交易、资产、Anchor、合约和 state root；
 5. Bootstrap 签同一个 `PosProposalDigestV1`；
 6. `MsgMineAck` 返回 `FinalizerSignature`；
 7. producer 将两个签名写入最终 coinbase，重新计算 Merkle root；
@@ -347,6 +382,7 @@ Bitcoin difficulty retarget 只保留给历史 V1 区块或旧测试，不再作
 - finalizer signature；
 - expected producer；
 - actual producer 替补层级；
+- 与原定时隙及实际出块者层级对应的奖励地址；
 - finalizer 身份；
 - direct-tip；
 - 固定 Bits；
@@ -1053,6 +1089,13 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 - 激活高度无 certificate 拒绝；
 - 正确 producer/finalizer 接受；
 - Miner、Core、Bootstrap 替补；
+- 第 3.4.1 节全部时隙/实际出块者组合的奖励地址；
+- Core 替补 Miner：Core producer signature 配合 Miner–Core 收款地址接受，用 Miner 公钥验证该 Core 签名不得通过；
+- Miner 时隙中，Core 替补却支付到 Core–Bootstrap 通道，在 `height >= H` 拒绝；对应历史合法区块在 `height < H` 仍接受；
+- Bootstrap 替补 Miner/Core 时支付对应 Core–Bootstrap 通道，不能支付 Bootstrap 自身地址或其他组通道；Bootstrap 自己时隙的地址保持有效；
+- 完整 proposal 签名后改动奖励地址，producer/finalizer 签名验证失败；
+- 激活前真实历史区块 replay（含 Core/Bootstrap 替补），不改历史 txid、block hash、合约 Result 和 state root；
+- `H-1`/`H` 边界同步、重启恢复和排序机推进一致；replay 的地址验证不依赖当前 peer 状态或墙钟；
 - 非法替补层级拒绝；
 - Bootstrap 同高度第二个 digest 拒绝；
 - approval lock 重启恢复；
@@ -1158,7 +1201,8 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 7. 固定 Bits；
 8. 零补贴；
 9. direct-parent indexer readiness；
-10. 多节点 E2E。
+10. 第 3.4.1 节奖励地址推导、模板支付和实际出块者验证分离；
+11. 激活前历史 replay、激活边界及多节点 E2E。
 
 主网高度保持未激活。
 

@@ -336,8 +336,9 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 		if i.feeUsageInitialized { i.removeFeeUsageLocked(record.Key) }
 		if i.recordExpiryInitialized { delete(i.recordExpiryEntries, record.Key) }
 	}
+	paidRetentionCacheFor(i).remove(removed)
 	i.mutex.Unlock()
-	if len(expiredRecords) != 0 { i.notifyExpiryCommit(result); paidRetentionCacheFor(i).remove(removed) }
+	if len(expiredRecords) != 0 { i.notifyExpiryCommit(result) }
 	return len(expiredRecords), nil
 }
 
@@ -397,7 +398,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		i.mutex.Lock()
 		current, err := i.writeStateStillCurrentLocked(record.Key, parsed, snapshot)
 		if err != nil { i.mutex.Unlock(); return false, 0, chainhash.Hash{}, false, err }
-		if !current { i.mutex.Unlock(); continue }
+		if !current || i.currentHeight() != height { i.mutex.Unlock(); continue }
 		existing := snapshot.existing
 		clearNameTransfer := snapshot.requiresResolve && parsed.Namespace == "name"
 		if remote && IsTombstone(record.Flags) &&

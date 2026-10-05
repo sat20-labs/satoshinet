@@ -22,6 +22,7 @@ type retentionRefreshGate struct {
 	armed   atomic.Bool
 	started chan struct{}
 	release chan struct{}
+	failure error
 }
 
 type retentionCapacityGate struct {
@@ -115,7 +116,9 @@ func TestPaidWalletAdmissionRechecksPaymentAfterHeightAdvance(t *testing.T) {
 	select {
 	case err := <-finished:
 		if !errors.Is(err, ErrInvalidFeeProof) && !errors.Is(err, ErrConcurrentUpdate) {
-			t.Fatalf("wallet admission committed using the previous block's payment: %v", err)
+			got, getErr := idx.Get(record.Key)
+			t.Fatalf("wallet admission committed using the previous block's payment: admitted=%v stored=%v get_err=%v",
+				err, got != nil && RecordHash(got) == RecordHash(record), getErr)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("authorized admission did not finish")
@@ -130,6 +133,9 @@ func (g *retentionRefreshGate) PaidRecordRetention(record *wire.DKVSRecord, pars
 	if record.Key == g.key && g.armed.CompareAndSwap(true, false) {
 		close(g.started)
 		<-g.release
+		if g.failure != nil {
+			return retention, g.failure
+		}
 	}
 	return retention, err
 }
@@ -182,7 +188,7 @@ func TestPaidRetentionRefreshPreservesConcurrentNewRecord(t *testing.T) {
 	release()
 	select {
 	case err := <-finished:
-		if err != nil {
+		if err != nil && !errors.Is(err, ErrConcurrentUpdate) {
 			t.Fatal(err)
 		}
 	case <-time.After(3 * time.Second):
@@ -351,9 +357,434 @@ func TestPaidRetentionPruneRechecksPaymentAfterHeightAdvance(t *testing.T) {
 		t.Fatal("old prune did not finish")
 	}
 	if result.count != 0 || (result.err != nil && !errors.Is(result.err, ErrConcurrentUpdate)) {
-		t.Fatalf("old unpaid view deleted a currently paid record: pruned=%d err=%v", result.count, result.err)
+		_, getErr := idx.Get(record.Key)
+		t.Fatalf("old unpaid view deleted a currently paid record: pruned=%d err=%v get_err=%v", result.count, result.err, getErr)
 	}
 	if got, err := idx.Get(record.Key); err != nil || RecordHash(got) != RecordHash(record) {
 		t.Fatalf("currently paid record was physically removed: record=%v err=%v", got, err)
 	}
+}
+
+func TestPaidAdmissionRechecksPaymentAfterHeightAdvance(t *testing.T) {
+	for _, operation := range []string{"local", "cas", "p2p", "mirror"} {
+		for _, paid := range []bool{false, true} {
+			name := "unpaid"
+			if paid {
+				name = "still-paid"
+			}
+			t.Run(operation+"/"+name, func(t *testing.T) {
+				idx, priv, height := newAutopayMirrorIndexer(t, 10)
+				var currentHeight atomic.Uint64
+				currentHeight.Store(height)
+				idx.height = currentHeight.Load
+				verifier := idx.snapshotValidators().feeVerifier.(LocalCacheAutopayFeeVerifier)
+				cached := verifier.StateProvider.(*HeightCachedAutopayStateProvider)
+				cached.CurrentHeight = currentHeight.Load
+				provider := cached.Provider.(*mutableAutopayStateProvider)
+				gate := &retentionCapacityGate{LocalCacheAutopayFeeVerifier: verifier,
+					started: make(chan struct{}), release: make(chan struct{})}
+				idx.SetFeeVerifier(gate)
+				record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
+				record.IssueHeight = height
+				SignRecord(priv, record)
+				path, err := CollectionPathForKey(record.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				root, err := recordsRoot([]*wire.DKVSRecord{record}, height)
+				if err != nil {
+					t.Fatal(err)
+				}
+				gate.armed.Store(true)
+				var once sync.Once
+				release := func() { once.Do(func() { close(gate.release) }) }
+				defer release()
+				finished := make(chan error, 1)
+				go func() {
+					var err error
+					switch operation {
+					case "local":
+						_, err = idx.PutLocal(record)
+					case "cas":
+						_, err = idx.PutLocalCAS(record, WritePrecondition{ExpectAbsent: true})
+					case "p2p":
+						_, err = idx.AcceptCurrentRecord(record)
+					case "mirror":
+						_, err = idx.ApplyMirror([]Subscription{{Type: SubscriptionPrefix, Target: path}}, []*wire.DKVSRecord{record}, root)
+					}
+					finished <- err
+				}()
+				select {
+				case <-gate.started:
+				case <-time.After(3 * time.Second):
+					t.Fatal("admission did not reach its last capacity read")
+				}
+				height++
+				currentHeight.Store(height)
+				provider.state.CurrentBlock = int64(height)
+				if paid {
+					for payer, delegate := range provider.state.Delegates {
+						delegate.LastPayHeight = int64(height)
+						provider.state.Delegates[payer] = delegate
+					}
+				}
+				release()
+				select {
+				case err = <-finished:
+				case <-time.After(3 * time.Second):
+					t.Fatal("admission did not finish")
+				}
+				if !paid {
+					if !errors.Is(err, ErrInvalidFeeProof) && !errors.Is(err, ErrConcurrentUpdate) {
+						t.Fatalf("unpaid current block was admitted with old validation: %v", err)
+					}
+					if _, err := idx.Get(record.Key); !errors.Is(err, ErrRecordNotFound) {
+						t.Fatalf("unpaid record was persisted: %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("current payment should pass revalidation: %v", err)
+				}
+				if got, err := idx.GetForRelay(record.Key); err != nil || RecordHash(got) != RecordHash(record) {
+					t.Fatalf("currently paid record lost its identity or relay qualification: record=%v err=%v", got, err)
+				}
+				retention, ok := paidRetentionCacheFor(idx).get(record.Key)
+				if !ok || retention.CurrentBlock != height {
+					t.Fatalf("committed payment cache is from the old block: %+v", retention)
+				}
+			})
+		}
+	}
+}
+
+func TestPaidPathSnapshotRechecksPaymentAfterHeightAdvance(t *testing.T) {
+	for _, paid := range []bool{false, true} {
+		name := "unpaid"
+		if paid {
+			name = "still-paid"
+		}
+		t.Run(name, func(t *testing.T) {
+			source, priv, height := newAutopayMirrorIndexer(t, 10)
+			record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
+			if _, err := source.PutLocal(record); err != nil {
+				t.Fatal(err)
+			}
+			path, err := CollectionPathForKey(record.Key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := source.GetPathSnapshot(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			idx, _, _ := newAutopayMirrorIndexerForPrivateKey(t, priv, 10)
+			var currentHeight atomic.Uint64
+			currentHeight.Store(height)
+			idx.height = currentHeight.Load
+			verifier := idx.snapshotValidators().feeVerifier.(LocalCacheAutopayFeeVerifier)
+			cached := verifier.StateProvider.(*HeightCachedAutopayStateProvider)
+			cached.CurrentHeight = currentHeight.Load
+			provider := cached.Provider.(*mutableAutopayStateProvider)
+			gate := &retentionRefreshGate{LocalCacheAutopayFeeVerifier: verifier, key: record.Key,
+				started: make(chan struct{}), release: make(chan struct{})}
+			idx.SetFeeVerifier(gate)
+			baseline, err := idx.NetworkSyncBaseline(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gate.armed.Store(true)
+			var once sync.Once
+			release := func() { once.Do(func() { close(gate.release) }) }
+			defer release()
+			finished := make(chan error, 1)
+			go func() { _, err := idx.ApplyPathSnapshotFrom(snapshot, baseline); finished <- err }()
+			select {
+			case <-gate.started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("snapshot validation did not reach the retention read")
+			}
+			height++
+			currentHeight.Store(height)
+			provider.state.CurrentBlock = int64(height)
+			if paid {
+				for payer, delegate := range provider.state.Delegates {
+					delegate.LastPayHeight = int64(height)
+					provider.state.Delegates[payer] = delegate
+				}
+			}
+			release()
+			select {
+			case err = <-finished:
+			case <-time.After(3 * time.Second):
+				t.Fatal("snapshot installation did not finish")
+			}
+			if !errors.Is(err, ErrConcurrentUpdate) {
+				t.Fatalf("snapshot installed stale local payment validation: %v", err)
+			}
+			if _, err := idx.Get(record.Key); !errors.Is(err, ErrRecordNotFound) {
+				t.Fatalf("rejected installation changed current KV: %v", err)
+			}
+			_, err = idx.ApplyPathSnapshotFrom(snapshot, baseline)
+			if !paid {
+				if !errors.Is(err, ErrInvalidFeeProof) {
+					t.Fatalf("fresh local verification must reject the unpaid snapshot: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("fixed source snapshot must survive current paid local height: %v", err)
+			}
+			if snapshot.PathMeta.ViewHeight != height-1 {
+				t.Fatal("installation changed the captured source view")
+			}
+			if _, err := idx.GetForRelay(record.Key); err != nil {
+				t.Fatalf("revalidated snapshot is not relayable: %v", err)
+			}
+		})
+	}
+}
+
+func TestPaidRetentionMaintenanceRejectsChangedValidation(t *testing.T) {
+	for _, operation := range []string{"refresh-height", "refresh-policy", "prune-policy"} {
+		t.Run(operation, func(t *testing.T) {
+			idx, priv, height := newAutopayMirrorIndexer(t, 10)
+			var currentHeight atomic.Uint64
+			currentHeight.Store(height)
+			idx.height = currentHeight.Load
+			verifier := idx.snapshotValidators().feeVerifier.(LocalCacheAutopayFeeVerifier)
+			cached := verifier.StateProvider.(*HeightCachedAutopayStateProvider)
+			cached.CurrentHeight = currentHeight.Load
+			provider := cached.Provider.(*mutableAutopayStateProvider)
+			record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
+			gate := &retentionRefreshGate{LocalCacheAutopayFeeVerifier: verifier, key: record.Key,
+				started: make(chan struct{}), release: make(chan struct{})}
+			idx.SetFeeVerifier(gate)
+			if _, err := idx.PutLocal(record); err != nil {
+				t.Fatal(err)
+			}
+			if operation == "prune-policy" {
+				height += paidRetentionGraceBlocks(idx.freeLocal) + 1
+				currentHeight.Store(height)
+				provider.state.CurrentBlock = int64(height)
+			}
+			gate.armed.Store(true)
+			var once sync.Once
+			release := func() { once.Do(func() { close(gate.release) }) }
+			defer release()
+			finished := make(chan error, 1)
+			validationHeight := height
+			go func() {
+				if operation == "prune-policy" {
+					_, err := idx.PruneExpiredAutopayAt(validationHeight)
+					finished <- err
+					return
+				}
+				finished <- idx.RefreshPaidRetentionAt(validationHeight)
+			}()
+			select {
+			case <-gate.started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("maintenance did not reach the retention read")
+			}
+			if operation == "refresh-height" {
+				height++
+				currentHeight.Store(height)
+				provider.state.CurrentBlock = int64(height)
+				if err := idx.RefreshPaidRetentionAt(height); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				idx.SetFeeVerifier(verifier)
+			}
+			release()
+			select {
+			case err := <-finished:
+				if !errors.Is(err, ErrConcurrentUpdate) {
+					t.Fatalf("maintenance committed results after validation conditions changed: %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("maintenance did not finish")
+			}
+			if _, err := idx.Get(record.Key); err != nil {
+				t.Fatalf("stale maintenance removed current KV: %v", err)
+			}
+			if operation == "refresh-height" {
+				retention, ok := paidRetentionCacheFor(idx).get(record.Key)
+				if !ok || retention.CurrentBlock != height {
+					t.Fatalf("stale refresh replaced the newer payment view: %+v", retention)
+				}
+			}
+		})
+	}
+}
+
+func TestPaidRetentionRefreshPreservesConcurrentMutation(t *testing.T) {
+	for _, operation := range []string{"rewrite", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			idx, priv, height := newAutopayMirrorIndexer(t, 10)
+			verifier := idx.snapshotValidators().feeVerifier.(LocalCacheAutopayFeeVerifier)
+			record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
+			gate := &retentionRefreshGate{LocalCacheAutopayFeeVerifier: verifier, key: record.Key,
+				started: make(chan struct{}), release: make(chan struct{})}
+			idx.SetFeeVerifier(gate)
+			if _, err := idx.PutLocal(record); err != nil {
+				t.Fatal(err)
+			}
+			if operation == "rewrite" {
+				gate.failure = ErrInvalidFeeProof
+			}
+			gate.armed.Store(true)
+			var once sync.Once
+			release := func() { once.Do(func() { close(gate.release) }) }
+			defer release()
+			finished := make(chan error, 1)
+			go func() { finished <- idx.RefreshPaidRetentionAt(height) }()
+			select {
+			case <-gate.started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("refresh did not reach the old version")
+			}
+			if operation == "rewrite" {
+				record = signedAutopayPersonalRecord(t, priv, "autopay", 2)
+				if _, err := idx.PutLocal(record); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				command := signedCurrentDelete(t, priv, record, height)
+				hash := RecordHash(record)
+				if _, err := idx.PutLocalCAS(command, WritePrecondition{ExpectedHash: &hash}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			release()
+			select {
+			case err := <-finished:
+				if err != nil && !errors.Is(err, ErrInvalidFeeProof) {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("refresh did not finish")
+			}
+			if operation == "rewrite" {
+				if got, err := idx.GetForRelay(record.Key); err != nil || RecordHash(got) != RecordHash(record) {
+					t.Fatalf("old failed read removed the new version's payment: record=%v err=%v", got, err)
+				}
+			} else if _, ok := paidRetentionCacheFor(idx).get(record.Key); ok {
+				t.Fatal("old refresh restored retention for a deleted key")
+			}
+		})
+	}
+}
+
+func TestTTLPrunePreservesRecreatedPaidKey(t *testing.T) {
+	idx, priv, height := newAutopayMirrorIndexer(t, 10)
+	var currentHeight atomic.Uint64
+	currentHeight.Store(height)
+	idx.height = currentHeight.Load
+	verifier := idx.snapshotValidators().feeVerifier.(LocalCacheAutopayFeeVerifier)
+	cached := verifier.StateProvider.(*HeightCachedAutopayStateProvider)
+	cached.CurrentHeight = currentHeight.Load
+	provider := cached.Provider.(*mutableAutopayStateProvider)
+	old := signedFreeTTLPersonalRecord(t, priv, "paid-retention", 1, height, 1, "old local lifetime")
+	if _, err := idx.PutLocal(old); err != nil {
+		t.Fatal(err)
+	}
+	height++
+	currentHeight.Store(height)
+	provider.state.CurrentBlock = int64(height)
+	for payer, delegate := range provider.state.Delegates {
+		delegate.LastPayHeight = int64(height)
+		provider.state.Delegates[payer] = delegate
+	}
+	idx.watchMutex.Lock()
+	var once sync.Once
+	release := func() { once.Do(idx.watchMutex.Unlock) }
+	defer release()
+	pruned := make(chan error, 1)
+	go func() { _, err := idx.PruneExpiredAt(height); pruned <- err }()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		idx.mutex.RLock()
+		_, err := idx.getRaw(old.Key)
+		idx.mutex.RUnlock()
+		if errors.Is(err, ErrRecordNotFound) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("TTL prune did not commit before its notification")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	created := signedAutopayPersonalRecord(t, priv, "autopay", 1)
+	created.IssueHeight = height
+	SignRecord(priv, created)
+	written := make(chan error, 1)
+	go func() { _, err := idx.PutLocal(created); written <- err }()
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		if got, err := idx.GetForRelay(created.Key); err == nil && RecordHash(got) == RecordHash(created) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recreated AUTOPAY key did not commit")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	release()
+	for _, finished := range []<-chan error{pruned, written} {
+		select {
+		case err := <-finished:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("operation did not finish")
+		}
+	}
+	if _, err := idx.GetForRelay(created.Key); err != nil {
+		t.Fatalf("old TTL cleanup removed the new AUTOPAY lifetime's payment: %v", err)
+	}
+}
+
+func TestPaidRetentionPruneFlushFailurePreservesCache(t *testing.T) {
+	idx, priv, height := newAutopayMirrorIndexer(t, 10)
+	var currentHeight atomic.Uint64
+	currentHeight.Store(height)
+	idx.height = currentHeight.Load
+	verifier := idx.snapshotValidators().feeVerifier.(LocalCacheAutopayFeeVerifier)
+	cached := verifier.StateProvider.(*HeightCachedAutopayStateProvider)
+	cached.CurrentHeight = currentHeight.Load
+	provider := cached.Provider.(*mutableAutopayStateProvider)
+	record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
+	if _, err := idx.PutLocal(record); err != nil {
+		t.Fatal(err)
+	}
+	before, ok := paidRetentionCacheFor(idx).get(record.Key)
+	if !ok {
+		t.Fatal("initial write did not commit retention")
+	}
+	path, err := CollectionPathForKey(record.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watch := idx.subscribePath(path)
+	defer idx.unsubscribePath(path, watch)
+	signal := idx.pathSignal(watch)
+	height += paidRetentionGraceBlocks(idx.freeLocal) + 1
+	currentHeight.Store(height)
+	provider.state.CurrentBlock = int64(height)
+	db := &watchTestDB{KVDB: idx.db}
+	idx.db = db
+	db.failFlush.Store(true)
+	if count, err := idx.PruneExpiredAutopayAt(height); count != 0 || !errors.Is(err, errWatchTestFlush) {
+		t.Fatalf("failed DB batch was reported as committed: count=%d err=%v", count, err)
+	}
+	if got, err := idx.Get(record.Key); err != nil || RecordHash(got) != RecordHash(record) {
+		t.Fatalf("failed DB batch removed current KV: record=%v err=%v", got, err)
+	}
+	if after, ok := paidRetentionCacheFor(idx).get(record.Key); !ok || after != before {
+		t.Fatalf("failed DB batch cleared retention: before=%+v after=%+v", before, after)
+	}
+	assertPathSignal(t, signal, false)
 }
