@@ -47,6 +47,12 @@ Documentation is a work-in-progress. It is available at [btcd.readthedocs.io](ht
 * [Mining](mining.md)
 * [Wallet](wallet.md)
 * [Developer resources](developer_resources.md)
+* [DKVS final design](dkvs-design.md)
+* [DKVS acceptance review and approved repairs (2026-10-05)](dkvs-review-acceptance-2026-10-05.md)
+* [DKVS repeat review: unresolved failure branches (2026-10-05)](dkvs-repeat-review-2026-10-05.md)
+* [DKVS external integration contracts](dkvs-external-integration-contracts.md)
+* [DKVS Wallet / PWA API](dkvs-pwa-api-examples.md)
+* [Message management design](message-management-design.md)
 * [JSON RPC API](json_rpc_api.md)
 * [Code contribution guidelines](code_contribution_guidelines.md)
 * [Contact](contact.md)
@@ -54,4 +60,3 @@ Documentation is a work-in-progress. It is available at [btcd.readthedocs.io](ht
 ## License
 
 btcd is licensed under the [copyfree](http://copyfree.org) ISC License.
-

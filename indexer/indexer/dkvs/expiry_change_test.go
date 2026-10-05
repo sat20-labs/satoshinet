@@ -1,6 +1,7 @@
 package dkvs
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 
@@ -65,7 +66,7 @@ func TestFreeLocalExpiryPhysicallyDeletesWithoutSequenceFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := idx.PrefixSnapshot(prefix)
+	snapshot, err := idx.ActiveSyncPage(context.Background(), ActiveSyncRequest{Scope: ActiveScope{Prefix: prefix}, EndpointID: idx.EndpointID(), Full: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,16 +89,16 @@ func TestFreeLocalExpiryPhysicallyDeletesWithoutSequenceFloor(t *testing.T) {
 	if state.Status != KeyStateNeverSeen || state.Seq != 0 || state.ETag != "" {
 		t.Fatalf("expired key state=%+v", state)
 	}
-	after, err := idx.PrefixSnapshot(prefix)
+	after, err := idx.ActiveSyncPage(context.Background(), ActiveSyncRequest{Scope: ActiveScope{Prefix: prefix}, EndpointID: idx.EndpointID(), Full: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(after.Records) != 0 {
 		t.Fatalf("expired record remained in direct read: %+v", after)
 	}
-	if after.Generation == snapshot.Generation {
+	if after.Meta.Generation == snapshot.Meta.Generation {
 		t.Fatalf("FREE_LOCAL expiry did not advance endpoint generation: before=%d after=%d",
-			snapshot.Generation, after.Generation)
+			snapshot.Meta.Generation, after.Meta.Generation)
 	}
 	afterMeta, err := idx.GetPathMeta(prefix)
 	if err != nil {

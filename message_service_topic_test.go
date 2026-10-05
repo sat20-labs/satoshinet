@@ -185,3 +185,23 @@ func TestDKVSMessageServiceTopicActionsViaBootstrap(t *testing.T) {
 		t.Fatal("topic create was accepted on the wrong service CoreNode")
 	}
 }
+
+// A removed control-write entry must stay unreachable even when a resolver
+// happens to expose an old acceptance method.
+type legacyMessageBindingProbe struct {
+	*testMessageBindings
+	calls int
+}
+
+func (b *legacyMessageBindingProbe) AcceptLocalBinding(*wire.DKVSRecord) error { b.calls++; return nil }
+func TestDKVSMessageServiceRejectsLegacyBindingWrite(t *testing.T) {
+	bindings := &legacyMessageBindingProbe{testMessageBindings: &testMessageBindings{bindings: map[string]string{}}}
+	s := &server{miningPubKey: "core", messageBindingResolver: bindings}
+	manager := NewMessageManager("core", bindings, nil, nil, nil, nil)
+	serverMessageManagers.Store(s, manager)
+	t.Cleanup(func() { serverMessageManagers.Delete(s) })
+	response := s.messageServiceResponse(&wire.MessageServiceRequest{Action: wire.MessageServiceActionBindAccount, Record: &wire.DKVSRecord{}})
+	if response.Code == 0 || bindings.calls != 0 {
+		t.Fatalf("legacy binding entry remains writable: response=%+v calls=%d", response, bindings.calls)
+	}
+}

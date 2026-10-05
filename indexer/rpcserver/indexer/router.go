@@ -27,13 +27,9 @@ func dkvsLocalOnly(c *gin.Context) {
 	c.Next()
 }
 
-type Service struct {
-	handle *Handle
-}
+type Service struct{ handle *Handle }
 
-func NewService(indexer shareIndexer.Indexer) *Service {
-	return &Service{handle: NewHandle(indexer)}
-}
+func NewService(indexer shareIndexer.Indexer) *Service { return &Service{handle: NewHandle(indexer)} }
 
 func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/health", s.handle.getHealth)
@@ -41,11 +37,9 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/allutxos/address/:address", s.handle.getAllUtxos)
 	r.GET(proxy+"/bestheight", s.handle.getBestHeight)
 	r.GET(proxy+"/height/:height", s.handle.getBlockInfo)
-
 	r.GET(proxy+"/v3/tick/all/:protocol", s.handle.getTickerList)
 	r.GET(proxy+"/v3/tick/info/:ticker", s.handle.getTickerInfo)
 	r.GET(proxy+"/v3/tick/holders/:ticker", s.handle.getHolderListV3)
-
 	r.POST(proxy+"/v3/utxos/existing", s.handle.getExistingUtxos)
 	r.GET(proxy+"/v3/ascend/:utxo", s.handle.getAscendData)
 	r.GET(proxy+"/v3/descend/:utxo", s.handle.getDescendData)
@@ -60,23 +54,17 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/miner/check/:pubkey", s.handle.checkMiner)
 	r.GET(proxy+"/v3/miner/info/:pubkey", s.handle.getMinerInfo)
 
-	// DKVS wallet/application protocol. These are the only externally routed
-	// DKVS CRUD/synchronization endpoints; canonical PathMeta/PathSnapshot state
-	// remains node-internal.
+	// All wallet KV writes pass through bound-CoreNode admission. Node repair
+	// installation is P2P-only; loopback cannot bypass wallet write admission.
 	r.GET(proxy+"/v3/dkvs/config", s.handle.getDKVSConfig)
 	r.GET(proxy+"/v3/dkvs/record", s.handle.getDKVSApplicationRecord)
 	r.GET(proxy+"/v3/dkvs/key-state", s.handle.getDKVSKeyState)
 	r.POST(proxy+"/v3/dkvs/records/batch-cas", s.handle.putDKVSRecordBatchCAS)
-	r.POST(proxy+"/v3/dkvs/prefixes/status", s.handle.getDKVSPrefixStatus)
-	r.POST(proxy+"/v3/dkvs/prefixes/snapshot", s.handle.getDKVSPrefixSnapshot)
-	r.POST(proxy+"/v3/dkvs/prefixes/delta", s.handle.getDKVSPrefixDelta)
+	r.POST(proxy+"/v3/dkvs/active/sync", s.handle.getDKVSActivePage)
+	r.POST(proxy+"/v3/dkvs/active/watch", s.handle.watchDKVSActive)
 	r.POST(proxy+"/v3/dkvs/prefixes/read", s.handle.readDKVSPrefix)
-
-	// Node-local administration is deliberately separate from the wallet API.
 	r.GET(proxy+"/v3/dkvs/checkpoint", dkvsLocalOnly, s.handle.getDKVSCheckpoint)
 	r.GET(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.getDKVSSnapshot)
-	r.POST(proxy+"/v3/dkvs/snapshot", dkvsLocalOnly, s.handle.applyDKVSSnapshot)
-	r.POST(proxy+"/v3/dkvs/prune", dkvsLocalOnly, s.handle.pruneDKVS)
 	r.POST(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.subscribeDKVS)
 	r.DELETE(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.unsubscribeDKVS)
 	r.GET(proxy+"/v3/dkvs/subscriptions", dkvsLocalOnly, s.handle.listDKVSSubscriptions)
@@ -86,7 +74,6 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/address/asset/:address/:ticker", s.handle.getUtxosWithTickerV3)
 	r.GET(proxy+"/v3/utxo/info/:utxo", s.handle.getUtxoInfoV3)
 	r.POST(proxy+"/v3/utxos/info", s.handle.getUtxoInfoListV3)
-
 	r.GET(proxy+"/v3/contracts", s.handle.getContracts)
 	r.GET(proxy+"/v3/contracts/evm/compiler-config", s.handle.getEVMCompilerConfig)
 	r.POST(proxy+"/v3/contracts/evm/estimate-deploy", s.handle.estimateEVMDeploy)

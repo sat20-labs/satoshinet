@@ -1,7 +1,6 @@
 package indexer
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
@@ -14,14 +13,15 @@ import (
 
 type dkvsCASMutationReq struct {
 	Record       *swire.DKVSRecord `json:"record"`
-	ExpectedETag string             `json:"expected_etag,omitempty"`
-	ExpectAbsent bool               `json:"expect_absent,omitempty"`
+	ExpectedETag string            `json:"expected_etag,omitempty"`
+	ExpectAbsent bool              `json:"expect_absent,omitempty"`
 }
 
 type dkvsBatchCASReq struct {
-	Mutations []dkvsCASMutationReq `json:"mutations"`
-	EndpointID string               `json:"endpoint_id,omitempty"`
-	RequestID  string               `json:"request_id,omitempty"`
+	Mutations     []dkvsCASMutationReq                  `json:"mutations"`
+	EndpointID    string                                `json:"endpoint_id,omitempty"`
+	RequestID     string                                `json:"request_id,omitempty"`
+	Authorization *dkvsindexer.WalletWriteAuthorization `json:"authorization,omitempty"`
 }
 
 type dkvsBatchCASResp struct {
@@ -43,17 +43,8 @@ type dkvsKeyStateResp struct {
 	Data      *dkvsindexer.DKVSKeyState `json:"data,omitempty"`
 }
 
-type dkvsApplicationBackend interface {
-	PutDKVSRecordBatchCASResultWithOptions([]dkvsindexer.CASMutation, dkvsindexer.BatchCASOptions) (*dkvsindexer.WriteResult, error)
-	GetDKVSKeyState(string) (dkvsindexer.DKVSKeyState, error)
-}
-
-func (s *Handle) dkvsApplicationBackend() (dkvsApplicationBackend, error) {
-	backend, ok := s.model.indexer.(dkvsApplicationBackend)
-	if !ok {
-		return nil, errors.New("dkvs application backend is not available")
-	}
-	return backend, nil
+type dkvsAuthorizedWalletBackend interface {
+	PutDKVSRecordBatchCASAuthorized([]dkvsindexer.CASMutation, dkvsindexer.BatchCASOptions, *dkvsindexer.WalletWriteAuthorization) (*dkvsindexer.WriteResult, error)
 }
 
 func parseDKVSPrecondition(expectedETag string, absent bool) (dkvsindexer.WritePrecondition, error) {
@@ -91,8 +82,7 @@ func dkvsHTTPStatus(err error) int {
 }
 
 func setDKVSError(base *indexerwire.BaseResp, code *string, err error) {
-	base.Code = -1
-	base.Msg = err.Error()
+	base.Code, base.Msg = -1, err.Error()
 	*code = string(dkvsindexer.ErrorCodeOf(err))
 }
 
@@ -105,8 +95,7 @@ func (s *Handle) putDKVSRecordBatchCAS(c *gin.Context) {
 		return
 	}
 	if len(req.Mutations) == 0 || len(req.Mutations) > dkvsindexer.MaxBatchCASMutations {
-		err := dkvsindexer.ErrBatchTooLarge
-		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
+		setDKVSError(&resp.BaseResp, &resp.ErrorCode, dkvsindexer.ErrBatchTooLarge)
 		c.JSON(http.StatusBadRequest, resp)
 		return
 	}
@@ -123,12 +112,13 @@ func (s *Handle) putDKVSRecordBatchCAS(c *gin.Context) {
 		}
 		mutations = append(mutations, dkvsindexer.CASMutation{Record: mutation.Record, Precondition: condition})
 	}
-	backend, err := s.dkvsApplicationBackend()
-	if err == nil {
-		resp.Data, err = backend.PutDKVSRecordBatchCASResultWithOptions(mutations, dkvsindexer.BatchCASOptions{
-			EndpointID: strings.TrimSpace(req.EndpointID),
-			RequestID:  strings.TrimSpace(req.RequestID),
-		})
+	options := dkvsindexer.BatchCASOptions{EndpointID: strings.TrimSpace(req.EndpointID), RequestID: strings.TrimSpace(req.RequestID)}
+	var err error
+	backend, ok := s.model.indexer.(dkvsAuthorizedWalletBackend)
+	if !ok {
+		err = dkvsindexer.ErrPermissionDenied
+	} else {
+		resp.Data, err = backend.PutDKVSRecordBatchCASAuthorized(mutations, options, req.Authorization)
 	}
 	if err != nil {
 		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
@@ -142,8 +132,7 @@ func (s *Handle) getDKVSApplicationRecord(c *gin.Context) {
 	resp := &dkvsApplicationRecordResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	key := strings.TrimSpace(c.Query("key"))
 	if key == "" {
-		err := dkvsindexer.ErrInvalidKey
-		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
+		setDKVSError(&resp.BaseResp, &resp.ErrorCode, dkvsindexer.ErrInvalidKey)
 		c.JSON(http.StatusBadRequest, resp)
 		return
 	}
@@ -153,8 +142,7 @@ func (s *Handle) getDKVSApplicationRecord(c *gin.Context) {
 		c.JSON(dkvsHTTPStatus(err), resp)
 		return
 	}
-	resp.Data = record
-	resp.ETag = dkvsindexer.RecordHash(record).String()
+	resp.Data, resp.ETag = record, dkvsindexer.RecordHash(record).String()
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -162,18 +150,11 @@ func (s *Handle) getDKVSKeyState(c *gin.Context) {
 	resp := &dkvsKeyStateResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
 	key := strings.TrimSpace(c.Query("key"))
 	if key == "" {
-		err := dkvsindexer.ErrInvalidKey
-		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
+		setDKVSError(&resp.BaseResp, &resp.ErrorCode, dkvsindexer.ErrInvalidKey)
 		c.JSON(http.StatusBadRequest, resp)
 		return
 	}
-	backend, err := s.dkvsApplicationBackend()
-	if err != nil {
-		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
-		c.JSON(http.StatusInternalServerError, resp)
-		return
-	}
-	state, err := backend.GetDKVSKeyState(key)
+	state, err := s.model.indexer.GetDKVSKeyState(key)
 	if err != nil {
 		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
 		c.JSON(dkvsHTTPStatus(err), resp)

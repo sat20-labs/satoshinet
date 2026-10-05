@@ -21,8 +21,8 @@ func IsAccountMappingBindingKey(key string) bool {
 }
 
 // ValidateAccountMappingBindingRecord verifies the root-owned mapping/binding
-// record. CoreNode acceptance remains a separate local fact: publishing a
-// signed KV cannot force a CoreNode to serve the account.
+// record. Wallet RPC admission checks that the signed descriptor targets the
+// serving CoreNode; the committed record is the account's binding authority.
 func ValidateAccountMappingBindingRecord(record *wire.DKVSRecord) (network, address string,
 	descriptor *AccountServiceDescriptor, err error) {
 	if record == nil {

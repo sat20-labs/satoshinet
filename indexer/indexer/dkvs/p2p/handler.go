@@ -11,16 +11,15 @@ import (
 
 const AntiEntropyInterval = 15 * time.Minute
 
-// Store is the complete DKVS v1 P2P surface. Full path snapshot support is a
-// required part of the v1 protocol rather than an optional compatibility path.
 type Store interface {
-	PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error)
+	AcceptDKVSCurrentRecord(record *wire.DKVSRecord) (bool, error)
+	DKVSNetworkSyncBaseline(path string) (dkvs.ActiveMeta, error)
+	ApplyDKVSPathSnapshotFrom(snapshot *dkvs.PathSnapshot, baseline dkvs.ActiveMeta) (int, error)
+	DKVSNetworkPaths() ([]string, error)
 	GetDKVSRecordForRelay(key string) (*wire.DKVSRecord, error)
 	GetDKVSRecordByHashForRelay(hash chainhash.Hash) (*wire.DKVSRecord, error)
 	SyncFilteredDKVSRecords(cursor []byte, limit uint32, filters []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error)
-	ApplyDKVSMirror(filters []dkvs.Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error)
 	GetDKVSPathSnapshot(path string) (*dkvs.PathSnapshot, error)
-	ApplyDKVSPathSnapshot(snapshot *dkvs.PathSnapshot) (int, error)
 	ListDKVSSubscriptions() []dkvs.Subscription
 	IsDKVSSubscribed(key string) bool
 }
@@ -30,7 +29,6 @@ type Peer interface {
 	Services() wire.ServiceFlag
 	ValidatorId() string
 }
-
 type SignFunc func(payload []byte) ([]byte, error)
 
 type Handler struct {
@@ -46,13 +44,11 @@ type Handler struct {
 	TrustedSource     bool
 	MirrorAuthority   bool
 	ValidatorID       string
-	// PeerValidatorID remains only as a source-compatible test fixture field.
-	// New callers must set ValidatorID.
-	PeerValidatorID string
-	Net             wire.BitcoinNet
-	Sign            SignFunc
-	Debugf          func(format string, args ...interface{})
-	Warnf           func(format string, args ...interface{})
+	PeerValidatorID   string
+	Net               wire.BitcoinNet
+	Sign              SignFunc
+	Debugf            func(format string, args ...interface{})
+	Warnf             func(format string, args ...interface{})
 }
 
 func NewHandler(store Store, state *PeerState, node *NodeState, send func(wire.Message)) Handler {
@@ -64,68 +60,48 @@ func NewHandler(store Store, state *PeerState, node *NodeState, send func(wire.M
 	}
 	return Handler{Store: store, Peer: state, Node: node, Send: send}
 }
-
-func (h Handler) valid() bool {
-	return h.Store != nil && h.Peer != nil && h.Node != nil
-}
-
-func (h Handler) localMiner() bool {
-	return h.LocalServices&wire.SFNodeMiner != 0
-}
-
-func (h Handler) remoteMiner() bool {
-	return h.RemoteServices&wire.SFNodeMiner != 0
-}
-
-func (h Handler) allowedPathSnapshotSource() bool {
-	// ValidatorID selects the signature key, but it is not authority by itself.
-	// The server sets TrustedSource only after resolving the peer against the
-	// on-chain Core/Bootstrap registry (or a future explicit mirror authority).
-	return h.TrustedSource && h.validatorID() != ""
-}
-
-func (h Handler) allowedIncrementalSource() bool {
-	return h.localMiner() || h.TrustedSource
-}
-
+func (h Handler) valid() bool                     { return h.Store != nil && h.Peer != nil && h.Node != nil }
+func (h Handler) localMiner() bool                { return h.LocalServices&wire.SFNodeMiner != 0 }
+func (h Handler) remoteMiner() bool               { return h.RemoteServices&wire.SFNodeMiner != 0 }
+func (h Handler) allowedPathSnapshotSource() bool { return h.TrustedSource && h.validatorID() != "" }
+func (h Handler) allowedIncrementalSource() bool  { return h.TrustedSource }
 func (h Handler) shouldStoreKey(key string) bool {
-	return h.localMiner() || h.Store.IsDKVSSubscribed(key)
+	return dkvs.IsAccountMappingBindingKey(key) || h.localMiner() || h.Store.IsDKVSSubscribed(key)
 }
-
 func (h Handler) validatorID() string {
 	if h.ValidatorID != "" {
 		return h.ValidatorID
 	}
 	return h.PeerValidatorID
 }
-
 func (h Handler) send(msg wire.Message) {
-	if msg != nil && h.Send != nil {
-		h.Send(msg)
+	if msg == nil || h.Send == nil {
+		return
 	}
+	if request, ok := msg.(*wire.MsgDKVSSyncRequest); ok && !h.prepareCurrentRequest(request) {
+		return
+	}
+	h.Send(msg)
 }
-
 func (h Handler) broadcast(record *wire.DKVSRecord) {
 	if record == nil || h.Broadcast == nil {
 		return
 	}
+	// Full-view/discovery content is a hint, not a newly authored commit.
 	if msg := NotifyForRecord(record); msg != nil {
 		h.Broadcast(msg)
 	}
 }
-
 func (h Handler) penalize(persistent, transient uint32, reason string) {
 	if h.Penalize != nil {
 		h.Penalize(persistent, transient, reason)
 	}
 }
-
 func (h Handler) debugf(format string, args ...interface{}) {
 	if h.Debugf != nil {
 		h.Debugf(format, args...)
 	}
 }
-
 func (h Handler) warnf(format string, args ...interface{}) {
 	if h.Warnf != nil {
 		h.Warnf(format, args...)
@@ -133,23 +109,16 @@ func (h Handler) warnf(format string, args ...interface{}) {
 }
 
 func (h Handler) ShouldRequestSync() bool {
-	if !h.valid() || !h.remoteMiner() {
+	if !h.valid() {
 		return false
 	}
-	if !h.localMiner() && !h.TrustedSource {
-		return false
-	}
-	return ShouldRequestSync(h.LocalServices, h.RemoteServices, len(h.Store.ListDKVSSubscriptions()))
+	return h.allowedPathSnapshotSource()
 }
 
 func (h Handler) OnNotify(msg *wire.MsgDKVSNotify) {
 	if !h.valid() || msg == nil {
 		return
 	}
-	// Targeted Notify is an application message transport, never a DKVS
-	// record replication hint. It must be authenticated as coming from a
-	// trusted Core/Bootstrap peer and dispatched before BufferNotify/record
-	// decoding, both of which deliberately understand only Target="" records.
 	if msg.Target != "" {
 		if msg.EventType != wire.DKVSNotifyEventMessage {
 			h.penalize(0, 10, "invalid directed DKVS notify event")
@@ -160,15 +129,9 @@ func (h Handler) OnNotify(msg *wire.MsgDKVSNotify) {
 			h.warnf("reject directed DKVS notify from untrusted source")
 			return
 		}
-		if handled, err := handleDirectedNotify(h.Store, msg); handled {
-			if err != nil {
-				h.warnf("directed DKVS notify failed: %v", err)
-			}
-			return
+		if handled, err := handleDirectedNotify(h.Store, msg); handled && err != nil {
+			h.warnf("directed DKVS notify failed: %v", err)
 		}
-		return
-	}
-	if h.Peer.BufferNotify(msg) {
 		return
 	}
 	if !h.allowedIncrementalSource() {
@@ -181,13 +144,24 @@ func (h Handler) OnNotify(msg *wire.MsgDKVSNotify) {
 		h.warnf("invalid DKVS notify: %v", err)
 		return
 	}
-	if !h.shouldStoreKey(record.Key) || !h.Peer.AcceptNotify(record, time.Now()) {
+	if !h.shouldStoreKey(record.Key) {
 		return
 	}
-	updated, err := h.Store.PutRemoteDKVSRecord(record)
+	if !h.allowedPathSnapshotSource() {
+		h.warnf("reject DKVS notify without an authenticated source identity")
+		return
+	}
+	if h.Node.bufferPendingNotify(msg) {
+		return
+	}
+	h.applyNotifyRecord(record)
+}
+
+func (h Handler) applyNotifyRecord(record *wire.DKVSRecord) {
+	updated, err := h.applyCurrentNotification(record)
 	if err != nil {
 		if h.queuePathRepair(record, err) {
-			h.warnf("DKVS path %s requires full synchronization: %v", record.Key, err)
+			h.warnf("DKVS path %s requires current-state reconciliation: %v", record.Key, err)
 			return
 		}
 		h.warnf("apply DKVS notify failed: %v", err)
@@ -198,7 +172,6 @@ func (h Handler) OnNotify(msg *wire.MsgDKVSNotify) {
 		h.broadcast(record)
 	}
 }
-
 func (h Handler) OnInv(msg *wire.MsgDKVSInv) {
 	if !h.valid() || msg == nil || !h.allowedIncrementalSource() {
 		return
@@ -269,10 +242,9 @@ func (h Handler) OnData(msg *wire.MsgDKVSData) {
 		if record == nil || !h.Peer.ConsumeRequest(record, now) || !h.shouldStoreKey(record.Key) {
 			continue
 		}
-		updated, err := h.Store.PutRemoteDKVSRecord(record)
+		updated, err := h.applyCurrentRecord(record)
 		if err != nil {
 			if h.queuePathRepair(record, err) {
-				h.warnf("DKVS path %s requires full synchronization: %v", record.Key, err)
 				continue
 			}
 			h.warnf("apply DKVS data failed: %v", err)
@@ -289,11 +261,10 @@ func (h Handler) OnSyncRequest(msg *wire.MsgDKVSSyncRequest) {
 	if !h.valid() || msg == nil || msg.SessionID == 0 {
 		return
 	}
-	if len(msg.Filters) == 0 {
-		if !h.localMiner() || !h.remoteMiner() {
-			return
-		}
-	} else if !h.MirrorAuthority {
+	// Network DKVS contains only globally relayable current state. Any peer may
+	// bootstrap that public view, but only a Core/Bootstrap mirror authority
+	// may serve the signed sync session.
+	if !h.MirrorAuthority {
 		return
 	}
 	if !h.Peer.BeginServe(msg) {
@@ -309,10 +280,7 @@ func (h Handler) OnSyncRequest(msg *wire.MsgDKVSSyncRequest) {
 		h.warnf("serve DKVS sync failed: %v", err)
 		return
 	}
-	response := &wire.MsgDKVSSyncResponse{
-		SessionID: msg.SessionID, Records: records, NextCursor: next,
-		Done: done, CheckpointRoot: root,
-	}
+	response := &wire.MsgDKVSSyncResponse{SessionID: msg.SessionID, Records: records, NextCursor: next, Done: done, CheckpointRoot: root}
 	if h.MirrorAuthority {
 		if h.Sign == nil {
 			h.Peer.CancelServe()
@@ -327,37 +295,42 @@ func (h Handler) OnSyncRequest(msg *wire.MsgDKVSSyncRequest) {
 	}
 	h.send(response)
 	if done {
-		for _, pending := range h.Peer.FinishServe(msg.SessionID) {
-			h.send(pending)
-		}
+		h.Peer.FinishServe(msg.SessionID)
 	}
 }
 
 func (h Handler) QueueSync(cursor []byte) {
-	if !h.ShouldRequestSync() {
+	if !h.ShouldRequestSync() || h.Peer.Closed() {
 		return
 	}
-	mirror := !h.localMiner() || !h.Node.Ready()
-	start, err := h.Peer.StartSync(cursor, mirror, h.localMiner(),
-		FiltersFromSubscriptions(h.Store.ListDKVSSubscriptions()), time.Now())
-	if err != nil || start.Request == nil {
+	if len(cursor) != 0 {
+		if !h.Node.ownsSync(h.Peer) {
+			return
+		}
+		start, err := h.Peer.StartSync(cursor, h.localMiner(), nil, time.Now())
+		if err == nil && start.Request != nil {
+			h.sendPathSyncRequest(start.Request)
+		}
 		return
 	}
-	if start.Started && start.Mirror {
-		h.Node.SetReady(false)
+	h.Node.pendingMtx.Lock()
+	// Other connections join this synchronization round. Do not enqueue a
+	// duplicate discovery behind its directory snapshots.
+	if h.Node.syncPeer == nil && len(h.Node.pendingPathSyncSet) == 0 {
+		h.Node.enqueuePathSyncLocked("")
 	}
-	h.send(start.Request)
+	h.Node.pendingMtx.Unlock()
+	h.queueNextPathSync()
 }
 
 func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
-	if !h.valid() || msg == nil {
+	if !h.valid() || msg == nil || !h.Node.ownsSync(h.Peer) {
 		return
 	}
 	activePath, pathSync := h.Peer.ActivePathSync()
 	verify := func(cursor []byte, filters []wire.DKVSSyncFilter, response *wire.MsgDKVSSyncResponse) bool {
 		if pathSync {
-			return h.allowedPathSnapshotSource() &&
-				VerifySyncSignature(h.Net, h.validatorID(), cursor, filters, response)
+			return h.allowedPathSnapshotSource() && VerifySyncSignature(h.Net, h.validatorID(), cursor, filters, response)
 		}
 		return h.TrustedSource && VerifySyncSignature(h.Net, h.validatorID(), cursor, filters, response)
 	}
@@ -365,34 +338,26 @@ func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
 	if pathSync {
 		shouldStore = func(string) bool { return true }
 	}
-	action, err := h.Peer.AcceptSyncResponse(msg, verify, shouldStore, time.Now())
+	action, err := h.Peer.AcceptSyncResponse(msg, verify, shouldStore, time.Now(), !pathSync)
+	if action.Duplicate {
+		return
+	}
+	if !errors.Is(err, ErrUnsolicitedSync) {
+		h.Peer.cancelSync("request")
+	}
 	if err != nil {
 		h.warnf("reject DKVS sync response: %v", err)
 		if errors.Is(err, ErrUnauthenticatedSync) {
 			h.penalize(0, 20, "unauthenticated DKVS sync response")
 		}
 		if pathSync && !errors.Is(err, ErrUnsolicitedSync) {
-			retry := !errors.Is(err, ErrUnauthenticatedSync)
-			h.finishFailedPathSync(activePath, retry)
+			h.finishFailedPathSync(activePath, !errors.Is(err, ErrUnauthenticatedSync))
 			return
 		}
-		if errors.Is(err, ErrSyncRootChanged) {
-			h.QueueSync(nil)
+		if !errors.Is(err, ErrUnsolicitedSync) {
+			h.finishFailedPathSync("", !errors.Is(err, ErrUnauthenticatedSync))
 		}
 		return
-	}
-	for _, record := range action.MergeRecords {
-		updated, applyErr := h.Store.PutRemoteDKVSRecord(record)
-		if applyErr != nil {
-			if h.queuePathRepair(record, applyErr) {
-				continue
-			}
-			h.warnf("merge DKVS sync record failed: %v", applyErr)
-			continue
-		}
-		if updated {
-			h.broadcast(record)
-		}
 	}
 	if !action.Done {
 		if pathSync {
@@ -402,54 +367,39 @@ func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
 		}
 		return
 	}
-	if !action.Mirror {
-		return
-	}
 	if snapshot, isPath, snapshotErr := pathActionSnapshot(action); isPath {
 		if snapshotErr != nil {
 			h.warnf("decode DKVS path snapshot failed: %v", snapshotErr)
 			h.finishFailedPathSync(activePath, true)
 			return
 		}
-		if _, applyErr := h.Store.ApplyDKVSPathSnapshot(snapshot); applyErr != nil {
+		applyErr := h.applyCurrentPathSnapshot(snapshot, action)
+		if applyErr != nil {
 			h.warnf("apply DKVS path snapshot failed: %v", applyErr)
-			h.finishFailedPathSync(snapshot.Path, true)
+			h.finishFailedPathSync(snapshot.Path, !errors.Is(applyErr, dkvs.ErrPermissionDenied))
 			return
 		}
-		// The incremental notify that triggered this repair was not committed.
-		// Re-announce the authenticated active records after the atomic snapshot
-		// commit so downstream subscribed peers can repair the same path.
 		for _, record := range snapshot.Records {
 			if record != nil && !dkvs.IsTombstone(record.Flags) {
 				h.broadcast(record)
 			}
 		}
-		h.Node.MarkTrusted(time.Now())
-		h.Node.SetReady(true)
-		h.queueNextPathSync()
+		h.Node.finishSync(h.Peer, true)
+		if !h.queueNextPathSync() {
+			h.markReadyAndDrain()
+		}
 		return
 	}
-	filters := SubscriptionsFromFilters(action.Filters)
-	records := append(action.MirrorRecords, action.MirrorDeletes...)
-	if _, err := h.Store.ApplyDKVSMirror(filters, records, action.Root); err != nil {
-		h.warnf("apply DKVS mirror failed: %v", err)
-		h.QueueSync(nil)
-		return
-	}
-	h.Node.MarkTrusted(time.Now())
-	h.Node.SetReady(true)
+	h.reconcileDiscoveredPaths(action)
 }
 
 func (h Handler) OnTrustedConnected() {
 	if !h.valid() {
 		return
 	}
-	forceMirror := h.Node.ObserveTrusted(time.Now(), h.localMiner())
-	if forceMirror || !h.Node.Ready() || !h.localMiner() {
-		h.QueueSync(nil)
-	}
+	h.Node.ObserveTrusted(time.Now(), h.localMiner())
+	h.QueueSync(nil)
 }
-
 func (h Handler) RunAntiEntropy(stop <-chan struct{}) {
 	if !h.valid() || !ShouldRunAntiEntropy(h.LocalServices, len(h.Store.ListDKVSSubscriptions())) {
 		return

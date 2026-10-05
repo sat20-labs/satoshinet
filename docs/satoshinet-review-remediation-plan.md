@@ -952,56 +952,23 @@ POST /v3/contracts/:contract/evm/source
 
 ---
 
-## 7. DKVS path snapshot 安全
+## 7. DKVS 当前状态同步安全
 
-## 7.1 Snapshot authority
+> 本节原始方案已被 2026-10-04 的最终 DKVS 设计替代。规范以
+> [dkvs-design.md](./dkvs-design.md) 为准，本节只保留 review 结论。
 
-当前 snapshot 已有 response signature，但不能仅以“peer 声明了非空 ValidatorId”作为 destructive snapshot authority。
+当前约束：
 
-完整 path snapshot 只允许来自：
+- P2P 不传播 generation；
+- 一次 current-set sync session 固定同一个已认证 Core/Bootstrap source；
+- P2P snapshot 只包含当前 records、root、view height 和分页 cursor；
+- 不包含 tombstone、delete floor、mutation history 或永久 source state；
+- 节点同步完成前把 Notify 缓存在内存，完成后再按到达顺序处理；
+- Notify 只要求来源是有效 Core/Bootstrap，不要求等于上一次同步 source；
+- destructive current-set install 必须验证 session/source signature、scope/root 和本地安装 baseline；
+- FREE_LOCAL 不进入 P2P。
 
-- 链上已登记的 Core/Bootstrap；
-- 或显式配置的 DKVS mirror authority。
-
-## 7.2 不增加通用握手认证
-
-`ValidatorId` 继续用于：
-
-- peer 路由；
-- 选择待验证公钥；
-- 日志。
-
-Snapshot 验证顺序：
-
-1. 从 `ValidatorId` 得到公钥；
-2. 验证 snapshot response signature；
-3. 验证该公钥属于授权 Core/Bootstrap/mirror authority；
-4. 重算 records、delete floors、StateRoot、count、size；
-5. 原子替换 path。
-
-## 7.3 普通 peer 只能触发 hint
-
-普通 peer 的合法 DKVS record 可以触发：
-
-```text
-path diverged / repair required
-```
-
-但不能成为 destructive snapshot source。节点必须改为向授权 authority 请求完整 path snapshot。
-
-## 7.4 FREE_LOCAL 注释
-
-保留：
-
-```text
-7200 blocks
-```
-
-注释改为：
-
-```text
-7200 个区块；实际墙钟时长取决于真实出块速度，不保证等于一天。
-```
+普通 Data/Inv 内容不能因为“曾经被请求且签名有效”就恢复已删除值；无法确认 current state 时转 current-set sync。
 
 ---
 
@@ -1132,7 +1099,7 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 - 未授权 snapshot source 拒绝；
 - 授权 Core/Bootstrap 接受；
 - 自声明 ValidatorId 但不在 authority 集合中拒绝；
-- hint peer 与 snapshot authority 分离；
+- sync session source 验证与 realtime Notify source 验证分离；
 - EVM source 特殊 path、fee、compile、runtime replay 和 write-once 测试。
 
 ## 10.5 长测试基础设施

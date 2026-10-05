@@ -16,14 +16,18 @@ import (
 type watchTestDB struct {
 	indexercommon.KVDB
 	scans             atomic.Int64
-	globalDeleteScans atomic.Int64
+	deleteScans       atomic.Int64
+	globalRecordScans atomic.Int64
 	failFlush         atomic.Bool
 }
 
 func (db *watchTestDB) BatchReadV2(prefix, seek []byte, reverse bool, visit func([]byte, []byte) error) error {
 	db.scans.Add(1)
-	if bytes.Equal(prefix, deleteKeyPrefix) {
-		db.globalDeleteScans.Add(1)
+	if bytes.HasPrefix(prefix, []byte("dkvs:delete:")) {
+		db.deleteScans.Add(1)
+	}
+	if bytes.Equal(prefix, recordKeyPrefix) {
+		db.globalRecordScans.Add(1)
 	}
 	return db.KVDB.BatchReadV2(prefix, seek, reverse, visit)
 }
@@ -93,10 +97,10 @@ func waitPathSubscribers(t *testing.T, idx *Indexer, path string, want int) {
 }
 
 func TestWaitPathIdleDoesNotPollHeight(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
+	for _, missing := range []bool{false, true} {
 		name := "dirty"
-		if legacy {
-			name = "legacy"
+		if missing {
+			name = "missing-metadata"
 		}
 		t.Run(name, func(t *testing.T) {
 			var height atomic.Uint64
@@ -107,7 +111,7 @@ func TestWaitPathIdleDoesNotPollHeight(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if legacy {
+			if missing {
 				err = idx.db.Delete(pathMetaDBKey(path))
 				meta.Generation = 0
 			} else {
@@ -128,10 +132,12 @@ func TestWaitPathIdleDoesNotPollHeight(t *testing.T) {
 			if changed || !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("changed=%v err=%v", changed, err)
 			}
-			// One record/floor scan at entry and one final recheck at timeout.
-			// There is no periodic height ticker and therefore no intermediate scan.
-			if got := db.scans.Load(); got != 4 {
-				t.Fatalf("DB scans=%d, want 4", got)
+			// One active scan on entry and one final read, no delete scan/ticker.
+			if got := db.scans.Load(); got != 2 {
+				t.Fatalf("DB scans=%d, want 2", got)
+			}
+			if db.deleteScans.Load() != 0 {
+				t.Fatal("watch read consulted deletion history")
 			}
 			assertNoPathSubscriptions(t, idx)
 		})
@@ -169,6 +175,7 @@ func TestWaitPathHeightAdvanceAloneDoesNotWake(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	type result struct {
 		meta    *PathMeta
 		changed bool
@@ -176,20 +183,18 @@ func TestWaitPathHeightAdvanceAloneDoesNotWake(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		got, changed, waitErr := idx.WaitPath(ctx, path, meta.Generation, meta.StateRoot, 0)
-		done <- result{meta: got, changed: changed, err: waitErr}
+		got, changed, err := idx.WaitPath(ctx, path, meta.Generation, meta.StateRoot, 0)
+		done <- result{got, changed, err}
 	}()
 	waitPathSubscribers(t, idx, path, 1)
 	height.Store(2)
 	select {
 	case got := <-done:
-		t.Fatalf("height-only change woke waiter: %+v", got)
+		t.Fatalf("height alone woke waiter: %+v", got)
 	case <-time.After(350 * time.Millisecond):
 	}
 	cancel()
 	got := <-done
-	// The final read can observe the expired logical view, but only after the
-	// caller ends the wait; height advancement itself is not a wake source.
 	if got.meta == nil || !got.changed || got.err != nil || got.meta.ActiveRecords != 0 {
 		t.Fatalf("final expiry view=%+v changed=%v err=%v", got.meta, got.changed, got.err)
 	}
@@ -210,14 +215,11 @@ func TestWaitPathCancelPreservesOtherSubscriber(t *testing.T) {
 	second, cancelSecond := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancelSecond()
 	doneFirst, doneSecond := make(chan error, 1), make(chan error, 1)
-	go func() {
-		_, _, err := idx.WaitPath(first, path, meta.Generation, meta.StateRoot, 0)
-		doneFirst <- err
-	}()
+	go func() { _, _, err := idx.WaitPath(first, path, meta.Generation, meta.StateRoot, 0); doneFirst <- err }()
 	go func() {
 		_, changed, err := idx.WaitPath(second, path, meta.Generation, meta.StateRoot, 0)
 		if err == nil && !changed {
-			err = errors.New("second watcher did not observe mutation")
+			err = errors.New("second watcher missed mutation")
 		}
 		doneSecond <- err
 	}()
@@ -276,52 +278,99 @@ func TestPathMutationSignalsFollowCommittedChanges(t *testing.T) {
 	}
 	assertPathSignal(t, signal, true)
 	signal = idx.pathSignal(watch)
-	if _, err := idx.ApplyPathSnapshot(snapshot); err != nil {
+	// A stale originless snapshot must not resurrect a removed local value.
+	if _, err := idx.ApplyPathSnapshot(snapshot); !errors.Is(err, ErrStaleEndpoint) {
+		t.Fatalf("stale snapshot err=%v", err)
+	}
+	assertPathSignal(t, signal, false)
+	fresh := signedPersonalRecordWithPath(t, priv, "watch/item", 1, "new-life", 0)
+	if _, err := idx.PutLocalCAS(fresh, WritePrecondition{ExpectAbsent: true}); err != nil {
 		t.Fatal(err)
 	}
 	assertPathSignal(t, signal, true)
-
-	tombstone := signedPersonalRecordWithPath(t, priv, "watch/item", 2, "", FlagTombstone)
-	if _, err := idx.PutLocal(tombstone); err != nil {
-		t.Fatal(err)
-	}
-	deleted, err := idx.GetPathSnapshot(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deleted.Records) != 0 || len(deleted.DeleteFloors) != 1 {
-		t.Fatalf("invalid deletion fixture: %+v", deleted)
-	}
-	if _, err := idx.ApplyPathSnapshot(snapshot); err != nil {
-		t.Fatal(err)
-	}
 	signal = idx.pathSignal(watch)
+	command := signedCurrentDelete(t, priv, fresh, 1)
+	hash := RecordHash(fresh)
 	db.failFlush.Store(true)
-	if _, err := idx.ApplyPathSnapshot(deleted); !errors.Is(err, errWatchTestFlush) {
+	if _, err := idx.PutLocalCAS(command, WritePrecondition{ExpectedHash: &hash}); !errors.Is(err, errWatchTestFlush) {
 		t.Fatal(err)
 	}
 	assertPathSignal(t, signal, false)
 	db.failFlush.Store(false)
-	if applied, err := idx.ApplyPathSnapshot(deleted); err != nil || applied != 0 {
-		t.Fatalf("deletion-only path snapshot applied=%d err=%v", applied, err)
+	if _, err := idx.PutLocalCAS(command, WritePrecondition{ExpectedHash: &hash}); err != nil {
+		t.Fatal(err)
 	}
 	assertPathSignal(t, signal, true)
 	signal = idx.pathSignal(watch)
-	if _, err := idx.ApplyPathSnapshot(deleted); err != nil {
+	if updated, err := idx.PutLocalCAS(command, WritePrecondition{ExpectedHash: &hash}); err != nil || updated {
+		t.Fatalf("repeat delete updated=%v err=%v", updated, err)
+	}
+	assertPathSignal(t, signal, false)
+}
+
+func TestSourceBoundPathSnapshotSignalsOnlyCommittedChanges(t *testing.T) {
+	var height atomic.Uint64
+	height.Store(1)
+	source, priv, path := pathWatchFixture(t, &height)
+	putPathWatchRecord(t, source, priv, 1, 1, 100)
+	target := testIndexerWithConfig(t, Config{EndpointID: "watch-target", FeeVerifier: testFeeVerifier{}, CurrentHeight: height.Load})
+	baseline, err := target.NetworkSyncBaseline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := source.GetPathSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.ApplyPathSnapshotFrom(initial, baseline); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.PutLocal(signedCurrentDelete(t, priv, initial.Records[0], 1)); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := source.GetPathSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted.Records) != 0 {
+		t.Fatal("source deletion not reflected in current set")
+	}
+	baseline, err = target.NetworkSyncBaseline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watch := target.subscribePath(path)
+	defer target.unsubscribePath(path, watch)
+	signal := target.pathSignal(watch)
+	db := &watchTestDB{KVDB: target.db}
+	target.db = db
+	db.failFlush.Store(true)
+	if _, err := target.ApplyPathSnapshotFrom(deleted, baseline); !errors.Is(err, errWatchTestFlush) {
+		t.Fatal(err)
+	}
+	assertPathSignal(t, signal, false)
+	db.failFlush.Store(false)
+	if _, err := target.ApplyPathSnapshotFrom(deleted, baseline); err != nil {
+		t.Fatal(err)
+	}
+	assertPathSignal(t, signal, true)
+	baseline, err = target.NetworkSyncBaseline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signal = target.pathSignal(watch)
+	if _, err := target.ApplyPathSnapshotFrom(deleted, baseline); err != nil {
 		t.Fatal(err)
 	}
 	assertPathSignal(t, signal, false)
 }
 
-func TestPathSnapshotSignalsMetadataChanges(t *testing.T) {
+func TestPathSnapshotDoesNotImportRemoteGeneration(t *testing.T) {
 	var height atomic.Uint64
 	height.Store(1)
 	idx, _, path := pathWatchFixture(t, &height)
 	empty, err := idx.GetPathSnapshot(path)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := idx.db.Delete(pathMetaDBKey(path)); err != nil {
 		t.Fatal(err)
 	}
 	watch := idx.subscribePath(path)
@@ -331,48 +380,55 @@ func TestPathSnapshotSignalsMetadataChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPathSignal(t, signal, false)
-	for _, field := range []*uint64{&empty.PathMeta.Generation, &empty.PathMeta.ViewHeight} {
-		*field++
-		signal = idx.pathSignal(watch)
-		if applied, err := idx.ApplyPathSnapshot(empty); err != nil || applied != 0 {
-			t.Fatalf("metadata-only snapshot applied=%d err=%v", applied, err)
-		}
-		assertPathSignal(t, signal, true)
+	empty.PathMeta.Generation += 100
+	if _, err := idx.ApplyPathSnapshot(empty); err != nil {
+		t.Fatal(err)
 	}
+	local, err := idx.GetPathMeta(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if local.Generation != 0 {
+		t.Fatalf("remote generation copied locally: %d", local.Generation)
+	}
+	assertPathSignal(t, signal, false)
+	empty.PathMeta.ViewHeight++
+	if _, err := idx.ApplyPathSnapshot(empty); !errors.Is(err, ErrStaleEndpoint) {
+		t.Fatalf("future snapshot height err=%v", err)
+	}
+	assertPathSignal(t, signal, false)
 }
 
-func TestPathDeleteScansStayWithinPrefix(t *testing.T) {
+func TestPathReadsNeverScanDeletedKeyspace(t *testing.T) {
 	var height atomic.Uint64
 	height.Store(1)
 	idx, priv, path := pathWatchFixture(t, &height)
-	exactPath := "/blob/" + AccountID(priv.PubKey().SerializeCompressed()) + "/" + strings.Repeat("a", 64)
-	for key, local := range map[string]bool{
-		path + "/local": true, path + "/network": false,
-		path + "-other/local": true, exactPath: true,
-	} {
-		encoded, err := marshalDeleteState(&deleteState{FloorSeq: 1, LocalOnly: local})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := idx.db.Write(deleteDBKey(key), encoded); err != nil {
-			t.Fatal(err)
-		}
+	putPathWatchRecord(t, idx, priv, 1, 1, 100)
+	outside := signedPersonalRecordWithPath(t, priv, "watch-other/value", 1, "outside", 0)
+	if _, err := idx.PutLocal(outside); err != nil {
+		t.Fatal(err)
+	}
+	record, err := idx.Get(path + "/item")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idx.PutLocal(signedCurrentDelete(t, priv, record, 1)); err != nil {
+		t.Fatal(err)
 	}
 	db := &watchTestDB{KVDB: idx.db}
 	idx.db = db
-	local, err := idx.scanEndpointDeleteStatesLocked(path)
-	if err != nil || len(local) != 1 || local[path+"/local"] == nil {
-		t.Fatalf("local floors=%v err=%v", local, err)
+	meta, err := idx.GetPathMeta(path)
+	if err != nil || meta.ActiveRecords != 0 {
+		t.Fatalf("deleted prefix meta=%+v err=%v", meta, err)
 	}
-	network, err := idx.scanPathDeleteStatesLocked(path)
-	if err != nil || len(network) != 1 || network[path+"/network"] == nil {
-		t.Fatalf("network floors=%v err=%v", network, err)
+	snapshot, err := idx.ActiveSyncPage(context.Background(), ActiveSyncRequest{Scope: ActiveScope{Prefix: path}, EndpointID: idx.EndpointID(), Full: true})
+	if err != nil || len(snapshot.Records) != 0 {
+		t.Fatalf("prefix snapshot=%+v err=%v", snapshot, err)
 	}
-	exact, err := idx.scanEndpointDeleteStatesLocked(exactPath)
-	if err != nil || len(exact) != 1 || exact[exactPath] == nil {
-		t.Fatalf("exact-key floors=%v err=%v", exact, err)
+	if db.deleteScans.Load() != 0 || db.globalRecordScans.Load() != 0 {
+		t.Fatal("path read performed historical or global scans")
 	}
-	if db.globalDeleteScans.Load() != 0 {
-		t.Fatal("path query scanned the global delete keyspace")
+	if got, err := idx.Get(outside.Key); err != nil || RecordHash(got) != RecordHash(outside) {
+		t.Fatalf("unrelated prefix affected: %v", err)
 	}
 }

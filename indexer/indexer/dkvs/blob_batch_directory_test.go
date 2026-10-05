@@ -189,7 +189,7 @@ func TestBatchCASRequiresExactNextSequence(t *testing.T) {
 	}
 }
 
-func TestRemoteRecordRequiresPathSnapshot(t *testing.T) {
+func TestRemoteRecordHintRequiresCurrentStateReconciliation(t *testing.T) {
 	idx := testIndexerWithConfig(t, Config{FeeVerifier: testFeeVerifier{}})
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
@@ -242,33 +242,29 @@ func TestKeyCASDoesNotConflictOnUnrelatedPathMutation(t *testing.T) {
 	}
 }
 
-func TestBatchCASPathMetaGenerationStillAdvancesInternally(t *testing.T) {
+func TestBatchCASAssignsOneGenerationToCommittedPrefix(t *testing.T) {
 	idx := testIndexer(t)
 	priv, err := btcec.NewPrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
+	if err != nil { t.Fatal(err) }
 	first := signedPathRecord(t, priv, "generation/a", 1, "a1")
 	second := signedPathRecord(t, priv, "generation/b", 1, "b1")
 	path, err := CollectionPathForKey(first.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	if err != nil { t.Fatal(err) }
 	before, err := idx.GetPathMeta(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	if err != nil { t.Fatal(err) }
 	if result, err := idx.PutLocalBatchCASResultWithOptions([]CASMutation{
 		{Record: first, Precondition: WritePrecondition{ExpectAbsent: true}},
 		{Record: second, Precondition: WritePrecondition{ExpectAbsent: true}},
-	}, BatchCASOptions{}); err != nil || result.Applied != 2 {
-		t.Fatalf("create result=%#v err=%v", result, err)
-	}
+	}, BatchCASOptions{}); err != nil || result.Applied != 2 { t.Fatalf("create result=%#v err=%v", result, err) }
 	after, err := idx.GetPathMeta(path)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil { t.Fatal(err) }
+	if after.Generation != before.Generation+1 || after.EndpointGeneration != before.EndpointGeneration+1 {
+		t.Fatalf("batch is one prefix commit: before=%+v after=%+v", before, after)
 	}
-	if after.Generation != before.Generation+2 {
-		t.Fatalf("path generation=%d want=%d", after.Generation, before.Generation+2)
+	for _, key := range []string{first.Key, second.Key} {
+		generation, found, err := idx.changedGenerationLocked(key)
+		if err != nil || !found || generation != after.EndpointGeneration {
+			t.Fatalf("key %s generation=%d found=%v want=%d err=%v", key, generation, found, after.EndpointGeneration, err)
+		}
 	}
 }

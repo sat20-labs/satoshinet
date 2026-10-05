@@ -89,8 +89,6 @@ type Indexer interface {
 	// Wallet-facing state/synchronization API: key ETags plus PathMeta
 	// generations. The server keeps no wallet subscription/cursor state.
 	GetDKVSKeyState(key string) (dkvs_indexer.DKVSKeyState, error)
-	GetDKVSPrefixStatus(endpointID string, known []dkvs_indexer.PrefixGeneration) (*dkvs_indexer.PrefixStatusResult, error)
-	GetDKVSPrefixSnapshot(prefix string) (*dkvs_indexer.PrefixSnapshot, error)
 	ReadDKVSPrefix(prefix string) (*dkvs_indexer.PrefixReadResult, error)
 
 	// Node-internal canonical reconciliation state. These are not wallet CAS or

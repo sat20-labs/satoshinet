@@ -129,10 +129,8 @@ func (i *Indexer) validateInternalMailboxQuotaLocked(record *wire.DKVSRecord, pa
 }
 
 // PutInternalMailbox stores a MessageManager-authenticated mailbox delivery.
-// It is intentionally not reachable through ordinary DKVS Put/CAS APIs. The
-// stable mailbox key plus immutable signed inner payload define idempotence;
-// retry metadata such as IssueHeight must not turn the same business message
-// into a second delivery or extend the first delivery's retention window.
+// It is not reachable through ordinary DKVS Put/CAS APIs. Immutable signed
+// inner payloads define idempotence; a retry cannot extend their original lease.
 func (i *Indexer) PutInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 	record = cloneRecord(record)
 	if record == nil {
@@ -147,7 +145,6 @@ func (i *Indexer) PutInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 	if err := i.validateInternalMailboxRecord(record, parsed, height); err != nil {
 		return false, err
 	}
-
 	i.mutex.Lock()
 	existing, err := i.getRaw(record.Key)
 	if err == nil {
@@ -182,12 +179,6 @@ func (i *Indexer) PutInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 		err = batch.Put(hashDBKey(hash), []byte(record.Key))
 	}
 	if err == nil {
-		// Mailbox data is an endpoint-local cache. Clean up any historical local
-		// delete floor while materializing the active entry; new deletions never
-		// create one.
-		err = deleteDeleteStateBatch(batch, record.Key)
-	}
-	if err == nil {
 		err = i.markPathMetaDirtyLocked(batch, []*wire.DKVSRecord{record}, height, now)
 	}
 	if err == nil {
@@ -213,17 +204,15 @@ func (i *Indexer) PutInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 	return true, nil
 }
 
-// DeleteInternalMailbox accepts only an ordinary signed account tombstone for
-// /mail. PutLocal performs the account-derived Schnorr verification, so a
-// sender cannot delete a recipient's delivery even though the original outer
-// MessageManager record itself is unsigned.
-func (i *Indexer) DeleteInternalMailbox(tombstone *wire.DKVSRecord) (bool, error) {
-	if tombstone == nil || !IsTombstone(tombstone.Flags) {
-		return false, ErrInvalidRecord
+// DeleteInternalMailbox verifies a signed operation targeting the exact
+// immutable mailbox record. Its signer is the recipient, not the sender.
+func (i *Indexer) DeleteInternalMailbox(command *wire.DKVSRecord) (bool, error) {
+	if _, err := DeleteTargetHash(command); err != nil {
+		return false, err
 	}
-	parsed, err := ParseKey(tombstone.Key)
+	parsed, err := ParseKey(command.Key)
 	if err != nil || parsed.Namespace != "mail" || len(parsed.Segments) == 0 {
 		return false, ErrInvalidKey
 	}
-	return i.PutLocal(tombstone)
+	return i.PutLocal(command)
 }

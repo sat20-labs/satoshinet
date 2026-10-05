@@ -32,19 +32,6 @@ func (s *server) messageServiceResponse(req *wire.MessageServiceRequest) *wire.M
 		return fail(ErrMessageInvalidEnvelope)
 	}
 	switch strings.ToUpper(strings.TrimSpace(req.Action)) {
-	case wire.MessageServiceActionBindAccount:
-		if req.Record == nil {
-			return fail(ErrMessageInvalidEnvelope)
-		}
-		acceptor, ok := resolver.(interface {
-			AcceptLocalBinding(*wire.DKVSRecord) error
-		})
-		if !ok {
-			return fail(ErrMessageInvalidEnvelope)
-		}
-		if err := acceptor.AcceptLocalBinding(req.Record); err != nil {
-			return fail(err)
-		}
 	case wire.MessageServiceActionNextMessage:
 		if err := manager.queryGuard.Authorize(req); err != nil {
 			return fail(err)

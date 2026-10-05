@@ -21,5 +21,12 @@ func (s *handlerTestStore) ApplyDKVSPathSnapshot(snapshot *dkvs.PathSnapshot) (i
 }
 
 var _ Store = (*handlerTestStore)(nil)
-var _ PathSnapshotStore = (*handlerTestStore)(nil)
 var _ = wire.MaxDKVSRecordsPerMsg
+
+func (s *handlerTestStore) DKVSNetworkSyncBaseline(path string) (dkvs.ActiveMeta, error) {
+	return dkvs.ActiveMeta{Scope: dkvs.ActiveScope{Prefix: path, Network: true}}, nil
+}
+func (s *handlerTestStore) ApplyDKVSPathSnapshotFrom(snapshot *dkvs.PathSnapshot, _ dkvs.ActiveMeta) (int, error) {
+	return s.ApplyDKVSPathSnapshot(snapshot)
+}
+func (s *handlerTestStore) DKVSNetworkPaths() ([]string, error) { return nil, nil }

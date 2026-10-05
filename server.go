@@ -1565,11 +1565,18 @@ func (sp *serverPeer) isTrustedDKVSMirrorSource() bool {
 	if sp == nil || sp.server == nil || sp.ValidatorId() == "" {
 		return false
 	}
+	validatorID := sp.ValidatorId()
+	// The protocol bootstrap key is trusted by configuration and must not
+	// depend on appearing in the dynamic CoreNode registry before it can serve
+	// the initial DKVS current-state sync.
+	if validatorID == common.GetBootstrapPubKey() {
+		return true
+	}
 	seqMgr := indexerShare.ShareIndexer.GetSeqMgr()
 	if seqMgr == nil {
 		return false
 	}
-	typ := seqMgr.GetNodeType(sp.ValidatorId())
+	typ := seqMgr.GetNodeType(validatorID)
 	return typ == common.NODE_TYPE_CORE || typ == common.NODE_TYPE_BOOTSTRAP
 }
 
@@ -1605,7 +1612,7 @@ func (sp *serverPeer) dkvsHandler() dkvsp2p.Handler {
 		Broadcast: func(msg *wire.MsgDKVSNotify) {
 			sp.server.BroadcastMessage(msg, sp)
 		},
-		RequestPathRepair: sp.server.requestDKVSPathRepair,
+		RequestPathRepair: func(path string) { sp.server.requestDKVSPathRepair(path, sp) },
 		Sign:              stp.SignMsg,
 		Penalize: func(persistent, transient uint32, reason string) {
 			sp.addBanScore(persistent, transient, reason)
@@ -2155,9 +2162,9 @@ func (s *server) handleBroadcastMsg(state *peerState, bmsg *broadcastMsg) {
 			if !sp.dkvsState.WantsNotify(notify, remoteMiner) {
 				return
 			}
-			if sp.dkvsState.BufferNotify(notify) {
-				return
-			}
+			// The receiving node owns the synchronization barrier and buffers
+			// notifications until its current-state sync completes. Do not add a
+			// second sender-side queue that can delay updates behind a long sync.
 		}
 		sp.QueueMessage(bmsg.message, nil)
 	})
@@ -2193,7 +2200,8 @@ type getAddedNodesMsg struct {
 type requestDKVSSyncMsg struct{}
 
 type requestDKVSPathRepairMsg struct {
-	path string
+	path   string
+	failed *serverPeer
 }
 
 type disconnectNodeMsg struct {
@@ -2282,11 +2290,28 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		}
 
 	case requestDKVSPathRepairMsg:
+		var fallback *serverPeer
 		for _, sp := range state.minerPeers {
 			if sp == nil || !sp.Connected() || !sp.isTrustedDKVSMirrorSource() {
 				continue
 			}
-			sp.dkvsHandler().QueuePathSync(msg.path)
+			if sp == msg.failed {
+				fallback = sp
+				continue
+			}
+			if msg.path == "" {
+				sp.dkvsHandler().QueueSync(nil)
+			} else {
+				sp.dkvsHandler().QueuePathSync(msg.path)
+			}
+			return
+		}
+		if fallback != nil {
+			if msg.path == "" {
+				fallback.dkvsHandler().QueueSync(nil)
+			} else {
+				fallback.dkvsHandler().QueuePathSync(msg.path)
+			}
 			return
 		}
 		peerLog.Warnf("no authorized DKVS path snapshot source is connected for %s", msg.path)
@@ -2654,13 +2679,13 @@ func (s *server) RequestDKVSSyncFromMinerPeers() {
 	}()
 }
 
-func (s *server) requestDKVSPathRepair(path string) {
-	if s == nil || path == "" {
+func (s *server) requestDKVSPathRepair(path string, failed *serverPeer) {
+	if s == nil {
 		return
 	}
 	go func() {
 		select {
-		case s.query <- requestDKVSPathRepairMsg{path: path}:
+		case s.query <- requestDKVSPathRepairMsg{path: path, failed: failed}:
 		case <-s.quit:
 		}
 	}()

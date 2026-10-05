@@ -1,6 +1,7 @@
 package indexer
 
 import (
+ "context"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -15,25 +16,18 @@ import (
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 )
 
-type prefixDeltaHTTPBackend struct {
+type activeHTTPBackend struct {
 	shareIndexer.Indexer
 	store *dkvs.Indexer
 }
 
-func (b *prefixDeltaHTTPBackend) GetDKVSPrefixStatus(endpoint string, known []dkvs.PrefixGeneration) (*dkvs.PrefixStatusResult, error) {
-	return b.store.PrefixStatus(endpoint, known)
-}
-func (b *prefixDeltaHTTPBackend) GetDKVSPrefixSnapshot(prefix string) (*dkvs.PrefixSnapshot, error) {
-	return b.store.PrefixSnapshot(prefix)
-}
-func (b *prefixDeltaHTTPBackend) GetDKVSPrefixDelta(prefix, endpoint string, after uint64) (*dkvs.PrefixDeltaResult, error) {
-	return b.store.PrefixDelta(prefix, endpoint, after)
-}
-func (b *prefixDeltaHTTPBackend) ReadDKVSPrefix(prefix string) (*dkvs.PrefixReadResult, error) {
+func (b *activeHTTPBackend) GetDKVSActivePage(ctx context.Context, req dkvs.ActiveSyncRequest) (*dkvs.ActivePage,error) {return b.store.ActiveSyncPage(ctx,req)}
+func (b *activeHTTPBackend) WatchDKVSActive(ctx context.Context, req dkvs.ActiveWatchRequest) (*dkvs.ActiveWatchResult,error) {return b.store.WatchActive(ctx,req)}
+func (b *activeHTTPBackend) ReadDKVSPrefix(prefix string) (*dkvs.PrefixReadResult, error) {
 	return b.store.ReadPrefix(prefix)
 }
 
-func TestDKVSPrefixDeltaHTTPWithLiveIndexer(t *testing.T) {
+func TestDKVSActiveIncrementalHTTPWithLiveIndexer(t *testing.T) {
 	database := dbpkg.NewKVDB(t.TempDir())
 	if database == nil {
 		t.Fatal("NewKVDB failed")
@@ -72,7 +66,7 @@ func TestDKVSPrefixDeltaHTTPWithLiveIndexer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := store.PrefixSnapshot(prefix)
+	initial, err := store.ActiveSyncPage(context.Background(), dkvs.ActiveSyncRequest{Scope: dkvs.ActiveScope{Prefix: prefix}, EndpointID: store.EndpointID(), Full: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,15 +77,15 @@ func TestDKVSPrefixDeltaHTTPWithLiveIndexer(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	NewService(&prefixDeltaHTTPBackend{store: store}).InitRouter(router, "")
+	NewService(&activeHTTPBackend{store: store}).InitRouter(router, "")
 	body, err := json.Marshal(map[string]interface{}{
-		"prefix": prefix, "endpoint_id": initial.EndpointID,
-		"after_generation": initial.Generation,
+		"scope": dkvs.ActiveScope{Prefix: prefix}, "endpoint_id": initial.Meta.EndpointID,
+		"after": initial.Meta.Generation,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v3/dkvs/prefixes/delta", bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/v3/dkvs/active/sync", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -99,7 +93,7 @@ func TestDKVSPrefixDeltaHTTPWithLiveIndexer(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	var decoded struct {
-		Data *dkvs.PrefixDeltaResult `json:"data"`
+		Data *dkvs.ActivePage `json:"data"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
 		t.Fatal(err)

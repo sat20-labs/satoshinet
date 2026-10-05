@@ -1,10 +1,12 @@
 package dkvs
 
 import (
+	"errors"
 	"testing"
 
 	dbpkg "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 func testIndexerWithHeight(t *testing.T, height uint64) *Indexer {
@@ -90,18 +92,26 @@ func TestThreeMinerNotifyAndStartupSyncConverge(t *testing.T) {
 	}
 
 	initial := signedPersonalRecordWithKey(t, priv, 1, "initial", 0)
+	path, err := CollectionPathForKey(initial.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forward := func(record *wire.DKVSRecord) {
+		t.Helper()
+		for _, miner := range []*Indexer{minerB, minerC} {
+			if updated, err := miner.AcceptCurrentRecord(record); err != nil || !updated {
+				t.Fatalf("inline replication updated=%v err=%v", updated, err)
+			}
+		}
+	}
 	if updated, err := minerA.PutLocal(initial); err != nil || !updated {
 		t.Fatalf("miner A put initial updated=%v err=%v", updated, err)
 	}
-	pullByNotify(t, minerA, minerB, initial.Key)
-	pullByNotify(t, minerA, minerC, initial.Key)
+	forward(initial)
 	for _, miner := range []*Indexer{minerB, minerC} {
 		got, err := miner.Get(initial.Key)
-		if err != nil {
-			t.Fatalf("get converged initial: %v", err)
-		}
-		if string(got.Value) != "initial" {
-			t.Fatalf("got %q", got.Value)
+		if err != nil || RecordHash(got) != RecordHash(initial) {
+			t.Fatalf("initial replication record=%+v err=%v", got, err)
 		}
 	}
 
@@ -109,43 +119,59 @@ func TestThreeMinerNotifyAndStartupSyncConverge(t *testing.T) {
 	if updated, err := minerA.PutLocal(updatedRecord); err != nil || !updated {
 		t.Fatalf("miner A put updated updated=%v err=%v", updated, err)
 	}
-	pullByNotify(t, minerA, minerB, updatedRecord.Key)
-	pullByNotify(t, minerA, minerC, updatedRecord.Key)
+	forward(updatedRecord)
 	for _, miner := range []*Indexer{minerB, minerC} {
 		got, err := miner.Get(updatedRecord.Key)
-		if err != nil {
-			t.Fatalf("get converged update: %v", err)
-		}
-		if got.Seq != 2 || string(got.Value) != "updated" {
-			t.Fatalf("bad update seq=%d value=%q", got.Seq, got.Value)
+		if err != nil || RecordHash(got) != RecordHash(updatedRecord) {
+			t.Fatalf("update replication record=%+v err=%v", got, err)
 		}
 	}
 
 	newMiner := testIndexerWithHeight(t, 1)
-	syncAllPages(t, minerA, newMiner, 1)
-	got, err := newMiner.Get(updatedRecord.Key)
-	if err != nil {
-		t.Fatalf("new miner get: %v", err)
+	reconcile := func() {
+		t.Helper()
+		baseline, err := newMiner.NetworkSyncBaseline(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := minerA.GetPathSnapshot(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := newMiner.ApplyPathSnapshotFrom(snapshot, baseline); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got.Seq != 2 || string(got.Value) != "updated" {
-		t.Fatalf("new miner bad seq=%d value=%q", got.Seq, got.Value)
+	reconcile()
+	got, err := newMiner.Get(updatedRecord.Key)
+	if err != nil || RecordHash(got) != RecordHash(updatedRecord) {
+		t.Fatalf("startup snapshot record=%+v err=%v", got, err)
 	}
 
-	tombstone := signedPersonalRecordWithKey(t, priv, 3, "", FlagTombstone)
-	if updated, err := minerA.PutLocal(tombstone); err != nil || !updated {
-		t.Fatalf("miner A put tombstone updated=%v err=%v", updated, err)
+	// Online peers get the operation itself. It cannot be fetched from a
+	// retained delete record afterward; the offline peer uses a current set.
+	command := signedCurrentDelete(t, priv, updatedRecord, 1)
+	if updated, err := minerA.PutLocal(command); err != nil || !updated {
+		t.Fatalf("miner A delete updated=%v err=%v", updated, err)
 	}
-	pullByNotify(t, minerA, minerB, tombstone.Key)
-	pullByNotify(t, minerA, minerC, tombstone.Key)
+	forward(command)
 	for _, miner := range []*Indexer{minerA, minerB, minerC} {
-		if _, err := miner.Get(tombstone.Key); err != ErrRecordNotFound {
+		if _, err := miner.Get(command.Key); !errors.Is(err, ErrRecordNotFound) {
 			t.Fatalf("deleted key should be absent: %v", err)
 		}
-		got, err := miner.GetForRelay(tombstone.Key)
-		if err != nil || !IsTombstone(got.Flags) || len(got.Value) != 0 {
-			t.Fatalf("delete relay record=%#v err=%v", got, err)
+		if _, err := miner.GetForRelay(command.Key); !errors.Is(err, ErrRecordNotFound) {
+			t.Fatalf("deletion history exposed for relay: %v", err)
 		}
+		assertNoDeleteRows(t, miner)
 	}
+	if _, err := newMiner.Get(command.Key); err != nil {
+		t.Fatalf("offline fixture unexpectedly received the online delete: %v", err)
+	}
+	reconcile()
+	if _, err := newMiner.Get(command.Key); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("reconnect did not remove omitted current key: %v", err)
+	}
+	assertNoDeleteRows(t, newMiner)
 }
 
 func TestOrdinaryNodeMailboxSubscriptionSyncAndNotify(t *testing.T) {
@@ -180,8 +206,7 @@ func TestOrdinaryNodeMailboxSubscriptionSyncAndNotify(t *testing.T) {
 		t.Fatalf("client mailbox sync records=%d done=%v err=%v", len(clientRecords), done, err)
 	}
 
-	// AccountBound mailbox data is read from the bound CoreNode only and must
-	// not enter the miner/ordinary-node P2P mirror stream.
+	// AccountBound mailbox data is read from the bound CoreNode only.
 	networkRecords, _, networkDone, _, err := bound.SyncFiltered(nil, 10,
 		[]Subscription{{Type: SubscriptionMailbox, Target: mailboxID}})
 	if err != nil || !networkDone || len(networkRecords) != 0 {

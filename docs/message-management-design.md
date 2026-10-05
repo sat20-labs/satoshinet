@@ -178,23 +178,28 @@ TLV 只允许协议定义的字段，类型必须严格递增且不能重复，�
 
 ### 5.2 绑定流程
 
-Wallet 只连接 CoreNode，因此当前 `serverNode` 就是账户选择的服务 CoreNode：
+Wallet 只连接 CoreNode，因此当前 serverNode 就是账户选择的服务 CoreNode：
 
-```text
+~~~text
 Wallet
-  -> ordinary DKVS PUT of the root-signed descriptor
-  -> receive PUT ACK and update local DKVS state
-  -> BIND_ACCOUNT to current CoreNode
+  -> standalone DKVS binding write
+     /account/<network>/<root-address>
 
 CoreNode
   -> verify root AccountID/address/signature
   -> verify descriptor CoreNodeID == this CoreNode ID
-  -> persist local account-service acceptance
-```
+  -> commit current binding
+~~~
 
-重新绑定或扩展 value 时继续更新同一个稳定 key，并使用更高 DKVS Seq。钱包只改自己
-负责的字段并保留未知扩展。PUT ACK 已经对齐本地状态，不再额外下载 snapshot；后续 PUT
-若冲突，再执行正常同步和重算。
+当前签名 /account record 本身就是唯一 binding 状态，不再执行额外 BIND_ACCOUNT，也不保存
+第二份 local acceptance registry。CoreNode 重启后直接根据当前 binding record 恢复钱包 RPC
+授权判断。
+
+重新绑定或扩展 value 时继续更新同一个稳定 key，并使用下一 DKVS Seq。钱包只修改自己负责
+的字段并保留未知扩展。
+
+PUT ACK 只确认请求结果，不直接写 Wallet confirmed replica。后续同步/Watch 安装新的已确认
+binding/current state；冲突或 STALE_GENERATION 时按正常 DKVS 流程同步、重算、重签。
 
 ### 5.3 解析
 
@@ -270,10 +275,7 @@ AccountID -> current CoreNode ID
 /mail/<account>
 ```
 
-该账户下任意 Direct、Topic、KeyPackage 或 Share 变化都会推进同一个
-`PathMeta.EndpointGeneration`。钱包定期通过 `PrefixStatus` 检查该值，只有变化时才下载
-该 endpoint 的 `PrefixSnapshot`。这里的 snapshot 是绑定 CoreNode 面向钱包提供的
-endpoint-local prefix snapshot，不是 DKVS 节点间的 P2P/global snapshot。
+该账户下任意 Direct、Topic、KeyPackage 或 Share 变化都会推进该 endpoint 的本地 generation。Wallet SDK 通过 ActiveSync/ActiveWatch 或 prefix helper 只同步自己需要的 current state。这里的 generation 只存在于 Wallet 与绑定 CoreNode 之间，不进入 P2P。
 
 对于 message entry：
 
@@ -502,17 +504,21 @@ mailbox owner 可以删除自己的 entry。
 
 流程：
 
-```text
+~~~text
 Wallet owner
-  -> sign tombstone for exact mailbox key
+  -> sign delete operation for exact mailbox key/current RecordHash
   -> DELETE_MAILBOX
   -> bound CoreNode
   -> internal mailbox delete
-```
+~~~
 
-Delete floor 必须保留。
+删除成功后 entry 物理移除，不保存 persistent tombstone 或 delete floor。
 
-因此已经删除的 immutable MessageID 即使收到延迟网络重试，也不能被重新创建。
+消息层对 immutable MessageID 的重复投递防护由 MessageManager 自己的 MessageID/SenderMsgID、
+durable acceptance 与重试语义负责，不把消息去重历史塞进 DKVS 删除状态。
+
+Wallet 收到删除 ACK 后也不直接修改 confirmed replica；下一次 mailbox current-state sync
+确认 key 已不存在后再从本地副本删除。
 
 ---
 
@@ -1018,7 +1024,6 @@ Sender 成功边界：
 支持：
 
 ```text
-BIND_ACCOUNT
 NEXT_MESSAGE_ID
 SEND_DIRECT
 DELETE_MAILBOX
@@ -1044,7 +1049,7 @@ SDK 当前提供：
 ### Direct / Offline / RGB11
 
 ```text
-BindAccountToCurrentCoreNode
+BindAccountToCurrentCoreNode   # 写 canonical /account binding，不创建第二份 MessageService binding state
 SendAccountDirectMessage
 RetryAccountDirectMessage
 ReadAccountDirectMessages
@@ -1155,7 +1160,7 @@ Direct recipient 的 AUTOPAY 只购买自己信箱中新到消息的持续保存
 2. CoreNode 不解密 Direct payload。
 3. Topic Service CoreNode 不保存 TopicKey。
 4. Topic Service CoreNode 不解密 Topic Message。
-5. `/mail` 是普通 prefix，必须提供标准 endpoint PathMeta status/snapshot；具体记录是否参与 P2P relay/checkpoint 由其存储模式决定，FREE_LOCAL 消息只保存在绑定 CoreNode。
+5. `/mail` 使用绑定 CoreNode 的 endpoint-local current-state sync；Wallet generation 不进入 P2P，FREE_LOCAL 消息只保存在绑定 CoreNode。
 6. 普通 DKVS PUT 不能创建 message entry。
 7. Message author 由 inner signature 确定，不依赖 outer DKVS signer。
 8. CoreNode 与 BootstrapNode 作为受信路由节点，不增加额外节点签名；但接收 CoreNode 必须从 inner data 解出 author，并要求其 DKVS canonical binding 等于 notify 的 SourceCoreNode。
@@ -1203,7 +1208,7 @@ Direct recipient 的 AUTOPAY 只购买自己信箱中新到消息的持续保存
 
 - canonical stable binding key；
 - binding signature；
-- current CoreNode acceptance；
+- current signed `/account` binding points to the target CoreNode；
 - rebind；
 - resolver restart。
 

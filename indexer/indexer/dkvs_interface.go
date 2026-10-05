@@ -227,28 +227,6 @@ func (p *IndexerMgr) GetDKVSKeyState(key string) (dkvs.DKVSKeyState, error) {
 	return p.dkvsIndexer.GetKeyState(key)
 }
 
-func (p *IndexerMgr) GetDKVSPrefixStatus(endpointID string,
-	known []dkvs.PrefixGeneration) (*dkvs.PrefixStatusResult, error) {
-	if p.dkvsIndexer == nil {
-		return nil, errDKVSNotInitialized
-	}
-	return p.dkvsIndexer.PrefixStatus(endpointID, known)
-}
-
-func (p *IndexerMgr) GetDKVSPrefixSnapshot(prefix string) (*dkvs.PrefixSnapshot, error) {
-	if p.dkvsIndexer == nil {
-		return nil, errDKVSNotInitialized
-	}
-	return p.dkvsIndexer.PrefixSnapshot(prefix)
-}
-
-func (p *IndexerMgr) GetDKVSPrefixDelta(prefix, endpointID string, after uint64) (*dkvs.PrefixDeltaResult, error) {
-	if p == nil || p.dkvsIndexer == nil {
-		return nil, errDKVSNotInitialized
-	}
-	return p.dkvsIndexer.PrefixDelta(prefix, endpointID, after)
-}
-
 func (p *IndexerMgr) ReadDKVSPrefix(prefix string) (*dkvs.PrefixReadResult, error) {
 	if p.dkvsIndexer == nil {
 		return nil, errDKVSNotInitialized

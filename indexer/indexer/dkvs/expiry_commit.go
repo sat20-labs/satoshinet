@@ -7,119 +7,48 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-type expiryCommitResult struct {
-	paths []string
-}
+type expiryCommitResult struct { paths []string }
 
-// stageExpiredRecordsLocked physically removes expired records and updates the
-// corresponding PathMeta in the same write batch. Canonical records retain a
-// durable sequence floor for network convergence. Endpoint-local cache data
-// does not retain a delete marker; only EndpointGeneration advances.
+// Expiry changes the current visible set, not a per-key history. Both paid
+// expiring data and endpoint-local leases are physically removed. The prefix
+// metadata and current generation index change in the same database batch.
 func (i *Indexer) stageExpiredRecordsLocked(batch indexercommon.WriteBatch,
 	records []*wire.DKVSRecord, height, now uint64) (expiryCommitResult, error) {
-
 	result := expiryCommitResult{}
-	if batch == nil || len(records) == 0 {
-		return result, nil
-	}
-
-	ordered := make([]*wire.DKVSRecord, 0, len(records))
+	if batch == nil || len(records) == 0 { return result, nil }
+	paths := make(map[string]bool)
 	for _, record := range records {
-		if record != nil {
-			ordered = append(ordered, record)
-		}
-	}
-	sort.Slice(ordered, func(a, b int) bool { return ordered[a].Key < ordered[b].Key })
-
-	pathMetas := make(map[string]*PathMeta)
-	relayPaths := make(map[string]struct{})
-
-	for _, record := range ordered {
+		if record == nil { continue }
 		parsed, err := ParseKey(record.Key)
-		if err != nil {
-			return result, err
-		}
-		if err := batch.Delete(recordDBKey(record.Key)); err != nil {
-			return result, err
-		}
-		if err := batch.Delete(hashDBKey(RecordHash(record))); err != nil {
-			return result, err
-		}
-
+		if err != nil { return result, err }
+		if err := batch.Delete(recordDBKey(record.Key)); err != nil { return result, err }
+		if err := batch.Delete(hashDBKey(RecordHash(record))); err != nil { return result, err }
 		path := collectionPath(parsed)
-		if path != "" && pathMode(parsed) != PathLocalOnly {
-			if err := i.clearChangedRecordBatch(batch, path, record.Key); err != nil {
-				return result, err
-			}
-		}
-		localOnly := isEndpointCacheRecord(record) || pathMode(parsed) == PathLocalOnly || path == ""
-		var pathGeneration uint64
-		if path != "" && pathMode(parsed) != PathLocalOnly {
-			meta := pathMetas[path]
-			if meta == nil {
-				current, metaErr := i.ensurePathMetaLocked(path, height, now)
-				if metaErr != nil {
-					return result, metaErr
-				}
-				meta = clonePathMeta(current)
-				pathMetas[path] = meta
-			}
-			if meta.EndpointGeneration == ^uint64(0) {
-				return result, ErrStaleGeneration
-			}
-			meta.EndpointGeneration++
-			pathGeneration = meta.EndpointGeneration
-			if !localOnly {
-				if meta.Generation == ^uint64(0) {
-					return result, ErrStaleGeneration
-				}
-				meta.Generation++
-				pathGeneration = meta.Generation
-				meta.ViewHeight = height
-				relayPaths[path] = struct{}{}
-			}
-		}
-
-		if localOnly {
-			if err := deleteDeleteStateBatch(batch, record.Key); err != nil {
-				return result, err
-			}
-		} else {
-			state := &deleteState{
-				FloorSeq:       record.Seq,
-				PathGeneration: pathGeneration,
-				PubKey:         append([]byte(nil), record.PubKey...),
-			}
-			state.EffectiveHash = deleteFloorEffectiveHash(
-				record.Key, state.FloorSeq, state.PathGeneration, state.PubKey,
-			)
-			if err := putDeleteStateBatch(batch, record.Key, state); err != nil {
-				return result, err
-			}
-			xorDeleteFloorRoot(&pathMetas[path].StateRoot, record.Key, state)
-		}
+		if path == "" || pathMode(parsed) == PathLocalOnly { continue }
+		if err := i.clearChangedRecordBatch(batch, path, record.Key); err != nil { return result, err }
+		paths[path] = paths[path] || !isEndpointCacheRecord(record)
 	}
-
-	paths := make([]string, 0, len(relayPaths))
-	for path, meta := range pathMetas {
+	for path, canonical := range paths {
+		// This read view already excludes records expired at height. It does
+		// not write metadata separately from the caller's atomic deletion.
+		meta, err := i.computePathMetaViewLocked(path, height, now)
+		if err != nil { return result, err }
+		if meta.EndpointGeneration == ^uint64(0) { return result, ErrStaleGeneration }
+		meta.EndpointGeneration++
+		if canonical {
+			if meta.Generation == ^uint64(0) { return result, ErrStaleGeneration }
+			meta.Generation++
+		}
 		normalizePathMetaAliases(meta)
-		if err := putPathMetaBatch(batch, meta); err != nil {
-			return result, err
-		}
-		if err := putPathStatusBatch(batch, &PathLocalStatus{Path: path, UpdatedAt: now}); err != nil {
-			return result, err
-		}
-		if _, relay := relayPaths[path]; relay {
-			paths = append(paths, path)
-		}
+		if err := putPathMetaBatch(batch, meta); err != nil { return result, err }
+		if err := putPathStatusBatch(batch, &PathLocalStatus{Path: path, UpdatedAt: now}); err != nil { return result, err }
+		result.paths = append(result.paths, path)
 	}
-	sort.Strings(paths)
-	result.paths = paths
+	sort.Strings(result.paths)
 	return result, nil
 }
 
 func (i *Indexer) notifyExpiryCommit(result expiryCommitResult) {
-	for _, path := range result.paths {
-		i.notifyPath(path)
-	}
+	// FREE_LOCAL expiry must also wake an already connected wallet.
+	for _, path := range result.paths { i.notifyPath(path) }
 }

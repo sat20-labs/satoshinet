@@ -16,7 +16,7 @@ func (s *PeerState) ContinuePathSync(cursor []byte, now time.Time) (*wire.MsgDKV
 	defer s.syncMtx.Unlock()
 	path, ok := pathSyncFilter(s.syncFilters)
 	if !s.syncActive || !ok || s.syncSession == 0 ||
-		bytes.Equal(cursor, s.syncCursor) || syncSessionExpired(s.syncUpdated, now) {
+		!bytes.Equal(cursor, s.syncCursor) || syncSessionExpired(s.syncUpdated, now) {
 		return nil, ErrSyncCursor
 	}
 	s.syncCursor = append(s.syncCursor[:0], cursor...)

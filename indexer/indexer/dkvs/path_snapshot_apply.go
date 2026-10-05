@@ -1,86 +1,130 @@
 package dkvs
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
+// Originless installation only initializes empty state or verifies equality.
+// Authenticated P2P callers bind every page to one sync session/source and
+// provide the receiver-local baseline captured before downloading the snapshot.
 func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
+	return i.applyCurrentPathSnapshot(snapshot, nil)
+}
+
+func (i *Indexer) ApplyPathSnapshotFrom(snapshot *PathSnapshot, baseline ActiveMeta) (int, error) {
+	if snapshot == nil || baseline.Scope.Prefix != snapshot.Path ||
+		!baseline.Scope.Network || len(baseline.Scope.Keys) != 0 {
+		return 0, ErrInvalidSnapshot
+	}
+	return i.applyCurrentPathSnapshot(snapshot, &baseline)
+}
+
+func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *ActiveMeta) (int, error) {
 	validated, err := i.validatePathSnapshot(clonePathSnapshot(snapshot))
 	if err != nil {
 		return 0, err
 	}
+
 	i.mutex.Lock()
-	changed := false
-	committed := false
+	committed, changed := false, false
 	defer func() {
 		i.mutex.Unlock()
 		if committed && changed {
 			i.notifyPath(validated.path)
 		}
 	}()
+
 	if atomic.LoadUint64(&i.policyGeneration) != validated.policyVersion {
 		return 0, ErrConcurrentUpdate
 	}
-	height := validated.meta.ViewHeight
-	now := currentUnixMilli()
-	previous, _ := i.readPathMetaLocked(validated.path)
-	if previous == nil {
-		previous, _ = i.computePathMetaViewLocked(validated.path, i.currentHeight(), now)
-	} else {
-		status, statusErr := i.readPathStatusLocked(validated.path)
-		if statusErr != nil || status.Dirty {
-			previous, _ = i.computePathMetaViewLocked(validated.path, previous.ViewHeight, now)
+	height, now := validated.meta.ViewHeight, currentUnixMilli()
+
+	// Only receiver-local concurrent changes matter here. Remote source
+	// generations are never compared across peers and no source ownership is
+	// persisted after the sync session completes.
+	if baseline != nil {
+		if baseline.EndpointID != i.endpointID() {
+			return 0, ErrEndpointMismatch
+		}
+		current, err := i.activeMetaLocked(context.Background(), baseline.Scope, baseline.ViewHeight)
+		if err != nil {
+			return 0, err
+		}
+		if current.Generation != baseline.Generation || current.Root != baseline.Root {
+			return 0, ErrConcurrentUpdate
 		}
 	}
-	changed = previous == nil || previous.Generation != validated.meta.Generation ||
-		previous.StateRoot != validated.meta.StateRoot || previous.ViewHeight != validated.meta.ViewHeight
-	endpointGeneration := uint64(0)
-	if previous != nil {
-		endpointGeneration = previous.EndpointGeneration
+
+	previous, err := i.ensurePathMetaLocked(validated.path, i.currentHeight(), now)
+	if err != nil {
+		return 0, err
 	}
-	if changed {
-		if endpointGeneration == ^uint64(0) {
-			return 0, ErrStaleGeneration
-		}
-		endpointGeneration++
+	if baseline == nil && previous.Generation != 0 && previous.StateRoot != validated.meta.StateRoot {
+		return 0, ErrStaleEndpoint
 	}
-	validated.meta.EndpointGeneration = endpointGeneration
+
 	current, _, _, err := i.scanLocked(validated.path, nil, 0, false, height, now)
 	if err != nil {
 		return 0, err
 	}
-	currentFloors, err := i.scanPathDeleteStatesLocked(validated.path)
-	if err != nil {
-		return 0, err
+	incoming := make(map[string]*wire.DKVSRecord, len(validated.active))
+	for _, record := range validated.active {
+		incoming[record.Key] = record
 	}
-	batch := i.db.NewWriteBatch()
-	defer batch.Close()
-	oldHashes := make(map[string]chainhash.Hash, len(current))
+	// Snapshot omissions replace only the network view. Placement-bound data
+	// and unpaid AUTOPAY retention stay local until their existing prune path
+	// removes them. An incoming record for the same key can still replace them.
+	// Capture the visibility decision once: retention refresh can run while
+	// this installation holds the indexer lock.
+	replaceable := current[:0]
 	for _, record := range current {
-		if record != nil && !isFreeLocalRecord(record) {
-			oldHashes[record.Key] = RecordHash(record)
+		if incoming[record.Key] != nil || !i.isLocalOnlyRecord(record) {
+			replaceable = append(replaceable, record)
+		}
+	}
+	current = replaceable
+	oldByKey := make(map[string]*wire.DKVSRecord, len(current))
+	for _, record := range current {
+		oldByKey[record.Key] = record
+		next := incoming[record.Key]
+		if next == nil {
+			changed = true
+		}
+		if next != nil && RecordHash(next) != RecordHash(record) {
+			changed = true
 		}
 	}
 	for _, record := range validated.active {
-		if oldHash, exists := oldHashes[record.Key]; !exists || oldHash != RecordHash(record) {
-			if err := i.markChangedRecordBatch(batch, validated.path, record.Key, endpointGeneration); err != nil {
-				return 0, err
-			}
-		}
-		delete(oldHashes, record.Key)
-	}
-	for key := range oldHashes {
-		if err := i.clearChangedRecordBatch(batch, validated.path, key); err != nil {
-			return 0, err
+		if oldByKey[record.Key] == nil {
+			changed = true
 		}
 	}
-	retentionRemovals := make([]string, 0, len(current))
+
+	// A complete, signed current view replaces the cached network view as a
+	// set. Old per-key Seq/IssueHeight values are not lifetime floors: the
+	// source may have deleted and recreated a key while this node was offline.
+	meta := clonePathMeta(validated.meta)
+	meta.Generation, meta.EndpointGeneration = previous.Generation, previous.EndpointGeneration
+	if changed {
+		if meta.Generation == ^uint64(0) || meta.EndpointGeneration == ^uint64(0) {
+			return 0, ErrStaleGeneration
+		}
+		meta.Generation++
+		meta.EndpointGeneration++
+	}
+
+	batch := i.db.NewWriteBatch()
+	defer batch.Close()
+	removed := make([]string, 0)
+
 	for _, record := range current {
-		if record == nil || isFreeLocalRecord(record) {
+		next := incoming[record.Key]
+		if next != nil && RecordHash(next) == RecordHash(record) {
 			continue
 		}
 		if err := batch.Delete(recordDBKey(record.Key)); err != nil {
@@ -89,72 +133,59 @@ func (i *Indexer) ApplyPathSnapshot(snapshot *PathSnapshot) (int, error) {
 		if err := batch.Delete(hashDBKey(RecordHash(record))); err != nil {
 			return 0, err
 		}
-		retentionRemovals = append(retentionRemovals, record.Key)
-	}
-	for key, state := range currentFloors {
-		if state != nil && state.LocalOnly {
-			continue
-		}
-		if err := deleteDeleteStateBatch(batch, key); err != nil {
+		if err := i.clearChangedRecordBatch(batch, validated.path, record.Key); err != nil {
 			return 0, err
 		}
+		removed = append(removed, record.Key)
 	}
-	applied := 0
+
 	for _, record := range validated.active {
+		old := oldByKey[record.Key]
+		if old != nil && RecordHash(old) == RecordHash(record) {
+			continue
+		}
 		encoded, err := MarshalRecord(record)
 		if err != nil {
 			return 0, err
 		}
-		hash := RecordHash(record)
 		if err := batch.Put(recordDBKey(record.Key), encoded); err != nil {
 			return 0, err
 		}
-		if err := batch.Put(hashDBKey(hash), []byte(record.Key)); err != nil {
+		if err := batch.Put(hashDBKey(RecordHash(record)), []byte(record.Key)); err != nil {
 			return 0, err
 		}
-		applied++
-	}
-	for _, floor := range validated.floors {
-		state := &deleteState{
-			FloorSeq: floor.FloorSeq, PathGeneration: floor.PathGeneration,
-			PubKey: append([]byte(nil), floor.PubKey...), EffectiveHash: floor.EffectiveHash,
-		}
-		if err := putDeleteStateBatch(batch, floor.Key, state); err != nil {
+		if err := i.markChangedRecordBatch(batch, validated.path, record.Key, meta.EndpointGeneration); err != nil {
 			return 0, err
 		}
-		// A deletion learned through node repair must reach terminal deltas too.
-		// Its canonical generation is not the terminal's endpoint cursor.
-		old := currentFloors[floor.Key]
-		if old == nil || old.effectiveHash(floor.Key) != state.effectiveHash(floor.Key) {
-			if err := i.markDeletedKeyChangeBatch(batch, validated.meta, floor.Key, false); err != nil {
-				return 0, err
-			}
-		}
 	}
-	if err := putPathMetaBatch(batch, validated.meta); err != nil {
+
+	if err := putPathMetaBatch(batch, meta); err != nil {
 		return 0, err
 	}
 	if err := putPathStatusBatch(batch, &PathLocalStatus{
-		Path: validated.path, UpdatedAt: now, LastSyncAt: now, Dirty: false, Stale: false,
+		Path: validated.path, UpdatedAt: now, LastSyncAt: now,
 	}); err != nil {
 		return 0, err
 	}
 	if err := batch.Flush(); err != nil {
 		return 0, err
 	}
+
 	committed = true
+	if changed {
+		atomic.AddUint64(&i.generation, 1)
+	}
 	i.resetFeeUsageLocked()
 	i.resetFreeLocalUsageLocked()
 	i.resetRecordExpiryLocked()
-	atomic.AddUint64(&i.generation, 1)
-	retentionCache := paidRetentionCacheFor(i)
-	retentionCache.remove(retentionRemovals)
+	cache := paidRetentionCacheFor(i)
+	cache.remove(removed)
 	for _, record := range validated.active {
 		if retention := validated.retentions[record.Key]; retention != nil {
-			retentionCache.set(record.Key, *retention)
+			cache.set(record.Key, *retention)
 		}
 	}
-	return applied, nil
+	return len(validated.active), nil
 }
 
 func (i *Indexer) markPathStale(path, peer string, retryState string) error {
@@ -164,25 +195,11 @@ func (i *Indexer) markPathStale(path, peer string, retryState string) error {
 	}
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
-	status, err := i.readPathStatusLocked(path)
-	if err != nil {
-		return err
-	}
-	status.Stale = true
-	status.LastSyncPeer = peer
-	status.LocalRetryState = retryState
-	status.UpdatedAt = currentUnixMilli()
-	encoded, err := marshalPathStatus(status)
-	if err != nil {
-		return err
-	}
-	return i.db.Write(pathStatusDBKey(path), encoded)
+	return i.setPathStaleLocked(path, peer, retryState)
 }
 
 func replacePathStatusBatch(batch indexercommon.WriteBatch, path string, now uint64) error {
 	return putPathStatusBatch(batch, &PathLocalStatus{Path: path, UpdatedAt: now, LastSyncAt: now})
 }
 
-func isNotFound(err error) bool {
-	return errors.Is(err, ErrRecordNotFound)
-}
+func isNotFound(err error) bool { return errors.Is(err, ErrRecordNotFound) }

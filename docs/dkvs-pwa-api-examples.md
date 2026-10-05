@@ -1,221 +1,501 @@
-# DKVS Wallet / PWA API Examples
+# DKVS Wallet / PWA API
 
-更新时间：2026-08-31
+更新时间：2026-10-04
 
-本文只描述 Wallet 应用协议。PWA 业务代码应优先调用 Wallet SDK/WASM 的领域接口，不应自行
-管理 DKVS record、Seq、fee proof、prefix generation 或 outbox。
+本文描述当前 Wallet 应用协议。  
+**PWA 业务代码应调用 Wallet SDK/WASM，不应自己维护 Seq、generation、CAS、request signature、fee proof 或 outbox。**
 
-节点间 P2P path sync、checkpoint、全库 snapshot 和节点本地 subscription 管理属于内部或
-管理接口，不是 Wallet 同步协议。
+下面的 HTTP shape 主要用于 SDK 开发、调试和接口验收。
 
-## 1. Wallet 应用接口
+---
 
-```text
+## 1. 当前 Wallet API
+
+~~~
 GET  /v3/dkvs/config
 GET  /v3/dkvs/record?key=...
 GET  /v3/dkvs/key-state?key=...
+
 POST /v3/dkvs/records/batch-cas
-POST /v3/dkvs/prefixes/status
-POST /v3/dkvs/prefixes/snapshot
+
+POST /v3/dkvs/active/sync
+POST /v3/dkvs/active/watch
+
 POST /v3/dkvs/prefixes/read
-```
+~~~
 
-以下旧应用接口不再使用：
+不存在：
 
-```text
-/v3/dkvs/records
-/v3/dkvs/tombstone
-/v3/dkvs/records/prefix
-/v3/dkvs/sync/directory
-/v3/dkvs/watch/directory
-/v3/dkvs/subscriptions/snapshot
-/v3/dkvs/subscriptions/watch
-```
+~~~
+/v3/dkvs/write-context
+mutation log API
+delete history API
+global generation API
+~~~
 
-## 2. Fetch wrapper
+checkpoint、node snapshot 和 node subscription 是本地管理接口，不是 PWA 协议。
 
-```js
-const dkvsBase = "http://127.0.0.1:8334";
+---
 
-async function dkvsFetch(path, options = {}) {
-  const response = await fetch(`${dkvsBase}${path}`, {
-    ...options,
-    headers: {
-      "content-type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
-  const body = await response.json();
-  if (!response.ok || body.code !== 0) {
-    const error = new Error(body.msg || `DKVS request failed: ${response.status}`);
-    error.code = body.error_code || "";
-    throw error;
-  }
-  return body.data;
-}
-```
+## 2. Config
 
-Go `[]byte` 字段在 JSON 中使用 base64，包括 `Value`、`PubKey`、`Signature` 和 `FeeProof`。
+~~~
+GET /v3/dkvs/config
+~~~
 
-## 3. 读取节点策略
+返回至少包括：
 
-FREE_LOCAL 保存期由当前服务节点决定，端上不能硬编码：
-
-```js
-async function getDKVSConfig() {
-  return dkvsFetch("/v3/dkvs/config");
-}
-
-const config = await getDKVSConfig();
-if (!config?.free_local?.enabled || !config.free_local.max_ttl_blocks) {
-  throw new Error("The connected endpoint does not provide FREE_LOCAL storage");
-}
-```
-
-Wallet SDK 在线构造 FREE_LOCAL record 时会使用当前节点策略覆盖调用方 TTL。切换 endpoint 后
-必须重新读取；不同 endpoint 不保证含有相同 FREE_LOCAL 数据。
-
-## 4. 单 key 读取
-
-```js
-async function getDKVSRecord(key) {
-  return dkvsFetch(`/v3/dkvs/record?key=${encodeURIComponent(key)}`);
-}
-
-async function getDKVSKeyState(key) {
-  return dkvsFetch(`/v3/dkvs/key-state?key=${encodeURIComponent(key)}`);
-}
-```
-
-`key-state` 返回 `never_seen`、`active` 或 `deleted`，以及用于 per-key CAS 的 `seq`、`etag`。
-Wallet SDK 对 unmanaged key 使用 5 秒请求超时和 1 分钟 endpoint-scoped 内存缓存。
-
-## 5. Batch CAS 写入
-
-写入只接受完整的、已签名 record 和 per-key precondition：
-
-```js
-async function putDKVSBatch(request) {
-  return dkvsFetch("/v3/dkvs/records/batch-cas", {
-    method: "POST",
-    body: JSON.stringify(request),
-  });
-}
-```
-
-请求示意：
-
-```json
+~~~json
 {
-  "request_id": "random-request-id",
-  "endpoint_id": "required-when-batch-contains-free-local",
-  "mutations": [
+  "endpoint_id": "core-node-id",
+  "free_local": {
+    "enabled": true,
+    "max_ttl_blocks": 120000
+  },
+  "blob": {
+    "max_value_size": 1048576
+  },
+  "max_batch_mutations": 256,
+  "max_batch_record_bytes": 4194304
+}
+~~~
+
+EndpointGeneration 只在同一个 endpoint 内有效。切换服务节点后必须重新同步。
+
+FREE_LOCAL TTL 必须使用当前节点返回的 policy；客户端不能猜测 fallback TTL。
+
+---
+
+## 3. 单 key 读取
+
+~~~
+GET /v3/dkvs/record?key=/personal/...
+GET /v3/dkvs/key-state?key=/personal/...
+~~~
+
+record response 同时返回 ETag = RecordHash。
+
+正常 current-state 模型下，key-state 主要表现为：
+
+~~~
+active
+never_seen
+~~~
+
+删除后不保留历史 deleted state；物理不存在的 key 返回 never_seen。
+
+---
+
+## 4. Managed scope full sync
+
+Wallet 第一次管理一个 prefix、恢复进程或 generation 缺失时执行完整同步：
+
+~~~http
+POST /v3/dkvs/active/sync
+content-type: application/json
+~~~
+
+~~~json
+{
+  "scope": {
+    "prefix": "/personal/<account>/wallet"
+  },
+  "endpoint_id": "core-node-id",
+  "after": 0,
+  "full": true
+}
+~~~
+
+响应：
+
+~~~json
+{
+  "code": 0,
+  "msg": "ok",
+  "data": {
+    "meta": {
+      "endpoint_id": "core-node-id",
+      "scope": {
+        "prefix": "/personal/<account>/wallet"
+      },
+      "generation": 12,
+      "root": "...",
+      "view_height": 3456
+    },
+    "records": [],
+    "complete": true
+  }
+}
+~~~
+
+分页时 next cursor 固定：
+
+~~~
+endpoint
+scope
+generation
+root
+view height
+last key
+~~~
+
+服务端状态在分页期间变化时，旧 cursor 失效，SDK 重新开始 full sync。
+
+完整同步完成后：
+
+~~~
+验证 root
+→ 原子替换 confirmed replica
+→ 保存 generation
+→ scope READY
+~~~
+
+---
+
+## 5. Incremental sync
+
+已有 confirmed generation 时：
+
+~~~json
+{
+  "scope": {
+    "prefix": "/personal/<account>/wallet"
+  },
+  "endpoint_id": "core-node-id",
+  "after": 12,
+  "full": false
+}
+~~~
+
+服务端返回 generation 12 之后**仍然当前存在**的变化 records。
+
+它不是 mutation log：
+
+- 不返回历史 tombstone；
+- 不返回已经不存在的旧 value；
+- 删除通过 current root / full reconciliation 发现；
+- 如果增量结果不能得到服务端当前 root，SDK 转 full sync。
+
+同一次服务端原子 batch 中，多个 key 可以共享同一个 generation。
+
+---
+
+## 6. Long-poll Watch
+
+在线 PWA 通过 SDK 使用：
+
+~~~
+POST /v3/dkvs/active/watch
+~~~
+
+请求：
+
+~~~json
+{
+  "endpoint_id": "core-node-id",
+  "scopes": [
     {
-      "record": {"Version": 1, "Key": "/personal/...", "Seq": 2},
-      "precondition": {"expected_hash": "..."}
+      "scope": {
+        "prefix": "/personal/<account>/wallet"
+      },
+      "generation": 12,
+      "root": "..."
     }
   ]
 }
-```
+~~~
 
-- 全 batch 原子成功或失败；
-- `expect_absent=true` 用于从未出现的 key；
-- conflict 后必须重新读取全部相关 key，重算业务 value、Seq、ETag 和签名，再用新 request ID 提交；
-- 网络失败重试完全相同的已签名请求；
-- PAID/AUTOPAY 不允许降级成 FREE_LOCAL；
-- 永久协议错误 fail-fast，旧异常 outbox 由维护工具清理。
+服务端：
 
-## 6. Managed prefix 启动同步
+- 不保存 Wallet session；
+- 不保存 offline queue；
+- 不保存 mutation log；
+- 最多返回一个变化 scope 的 current page；
+- 约 20 秒无变化时返回空结果，客户端重新 watch。
 
-Wallet 对自己管理的 canonical prefix 启动时获取完整 snapshot：
+Watch 只用于提示和传递当前变化；本地 confirmed state 仍按 ActivePage 校验/install。
 
-```js
-async function getPrefixSnapshot(prefix) {
-  return dkvsFetch("/v3/dkvs/prefixes/snapshot", {
-    method: "POST",
-    body: JSON.stringify({ prefix }),
-  });
-}
-```
+---
 
-返回示意：
+## 7. PUT / Batch CAS
 
-```json
+写入入口：
+
+~~~
+POST /v3/dkvs/records/batch-cas
+~~~
+
+普通业务请求示意：
+
+~~~json
 {
-  "endpoint_id": "core-103",
-  "prefix": "/personal/<account_id>/wallet",
-  "generation": 12,
-  "view_height": 3422,
-  "records": [],
-  "key_states": []
+  "endpoint_id": "core-node-id",
+  "request_id": "random-request-id",
+  "mutations": [
+    {
+      "record": {
+        "Version": 1,
+        "Key": "/personal/...",
+        "Seq": 2
+      },
+      "expected_etag": "current-record-hash"
+    }
+  ],
+  "authorization": {
+    "context": {
+      "endpoint_id": "core-node-id",
+      "prefixes": [
+        {
+          "prefix": "/personal/<account>/wallet",
+          "generation": 12
+        }
+      ]
+    },
+    "signature": "<base64>"
+  }
 }
-```
+~~~
 
-`generation` 是服务端直接返回的 endpoint-local freshness token。Wallet 只原样持久化和比较，
-不能自行计算。snapshot 包含当前 endpoint 可见的全部记录，包括 FREE_LOCAL。
+新 key 使用：
 
-## 7. Managed prefix 定时检查
-
-Wallet 默认每 1 分钟提交已知状态：
-
-```js
-async function getChangedPrefixes(endpointId, prefixes) {
-  return dkvsFetch("/v3/dkvs/prefixes/status", {
-    method: "POST",
-    body: JSON.stringify({
-      endpoint_id: endpointId,
-      prefixes, // [{ prefix, generation }]
-    }),
-  });
+~~~json
+{
+  "record": {
+    "Key": "...",
+    "Seq": 1
+  },
+  "expect_absent": true
 }
-```
+~~~
 
-响应的 `changed` 只包含 generation 不同的 prefix。Wallet 仅重新 snapshot 这些 prefix。
-服务端不保存 Wallet session、cursor、change log 或 watcher。
+mutation 的 expected_etag 与 expect_absent 必须二选一。
 
-FREE_LOCAL 与其他记录使用完全相同的 status/snapshot 流程；唯一差异是 FREE_LOCAL 不进入
-P2P relay，也不进入 canonical P2P generation/root。
+### Request authorization
 
-## 8. Unmanaged / aggregate prefix 直读
+authorization 由 Wallet SDK 生成，覆盖：
 
-只读、聚合或按需数据使用：
+~~~
+EndpointID
+RequestID
+prefix generations
+RecordHash
+CAS 条件
+~~~
 
-```js
-async function readPrefix(prefix) {
-  return dkvsFetch("/v3/dkvs/prefixes/read", {
-    method: "POST",
-    body: JSON.stringify({ prefix }),
-  });
+因此 PWA 不应复制历史 record 后自己添加 expect_absent。
+
+### Generation 来源
+
+**PUT 不调用 /write-context。**
+
+SDK 优先从 confirmed replica 读取本地已同步 generation。
+
+如果没有：
+
+~~~
+full sync prefix
+→ 得到 generation
+→ 再 PUT
+~~~
+
+服务端返回 STALE_GENERATION 时：
+
+~~~
+同步
+→ 根据最新 current state 重建 mutation
+→ 重签 record/request
+→ 新 RequestID 再提交
+~~~
+
+不能仅修改旧请求中的 generation。
+
+---
+
+## 8. ACK 与本地副本
+
+成功 batch response 包含：
+
+~~~
+applied
+records / etags
+prefix_states
+view_height
+endpoint_id
+request_id
+~~~
+
+ACK 的作用只有：
+
+- 验证请求结果；
+- 完成 outbox；
+- 记录必要的 request completion fence。
+
+ACK **不**：
+
+- 写入 confirmed KV；
+- 删除 confirmed KV；
+- 推进 completed sync generation。
+
+PWA 看到的新确认状态来自后续 ActiveSync/Watch。
+
+因此应用可以显示：
+
+~~~
+提交成功 / 等待同步确认
+~~~
+
+但不能把 ACK echo 当成本地 authoritative replica。
+
+---
+
+## 9. 网络未知与 Outbox
+
+请求发送后连接中断：
+
+- 保留原始 request；
+- 保留原始 request signature；
+- 保留原始 prefix generation；
+- 重连后不能重新签一个新 generation 给旧 mutation。
+
+如果服务端已经接受原请求，exact retry 返回幂等结果。
+
+如果 generation 已被其他写入推进，旧请求不能恢复已删除或被替换的状态。
+
+---
+
+## 10. Delete
+
+删除通过 Wallet SDK 根据当前 record 构造 signed delete operation。
+
+语义：
+
+~~~
+Seq = current.Seq + 1
+target = current RecordHash
+~~~
+
+服务端提交成功后物理删除 key。
+
+不存在：
+
+~~~
+persistent tombstone
+delete floor
+deleted-key history
+~~~
+
+删除后的 ACK 不直接删除 PWA confirmed replica；同步看到当前集合中已经没有该 key 后，再由 replica installer 删除。
+
+之后合法重建：
+
+~~~
+Seq = 1
+IssueHeight = current / -1 / -2
+~~~
+
+---
+
+## 11. Prefix helper APIs
+
+### Status
+
+~~~
+~~~
+
+请求：
+
+~~~json
+{
+  "endpoint_id": "core-node-id",
+  "prefixes": [
+    {
+      "prefix": "/personal/<account>/wallet",
+      "generation": 12
+    }
+  ]
 }
-```
+~~~
 
-该接口无 generation/cursor 语义，不会创建 managed replica。Wallet SDK 使用 5 秒超时和
-1 分钟 endpoint-scoped 内存缓存。
+只返回 generation 已变化的 prefix。
 
-Mailbox/message 属于按需读取：
+### Snapshot
 
-```js
-const result = await readPrefix(`/mail/${recipientAccountId}/msg`);
-```
+~~~
+~~~
 
-它不会被注册为 Wallet managed prefix。
+返回 endpoint-local 当前集合，包括 FREE_LOCAL。
 
-## 9. Blob
+### Delta
 
-Blob key 为：
+~~~
+~~~
 
-```text
-/blob/<account_id>/<blob_key>
-```
+返回当前仍存在的 changed records，不是历史事件流。
 
-Blob value 是 opaque bytes，DKVS 底层不自动压缩。账户管理等已知领域 codec 可以在加密前
-使用有边界、自描述的压缩 envelope。Blob 同样支持 AUTOPAY 或 FREE_LOCAL；FREE_LOCAL 在
-本端 status/snapshot 中可见，但不经 P2P relay。
+### Read
 
-## 10. Record 生命周期
+~~~
+POST /v3/dkvs/prefixes/read
+~~~
 
-- `IssueHeight` 是可信 SatoshiNet 区块高度；
-- 有限记录在 `IssueHeight + TTL` 到期；
-- `TTL=0` 表示无固定 record 租期，通常由 AUTOPAY 决定；
-- tombstone 使用相同 record 结构，空 Value，Flags 包含 tombstone 位；
-- PWA 不手工拼 record 签名，应调用 Wallet SDK/WASM。
+按需读取 current records，不建立 managed replica。
+
+这些 helper 与 ActiveSync 使用同一 endpoint-local generation 语义。
+
+---
+
+## 12. FREE_LOCAL
+
+FREE_LOCAL：
+
+- 使用当前服务节点 policy；
+- 只存在当前 endpoint；
+- 进入 Wallet/PWA endpoint-local generation/current snapshot；
+- 不进入 P2P；
+- TTL 到期物理清理。
+
+Endpoint 切换后，旧节点的 FREE_LOCAL 不可伪装成新节点已同步数据。
+
+---
+
+## 13. DID transfer
+
+Wallet SDK 提供 ResignDIDRecords。
+
+接收 DID 后：
+
+~~~
+读取完整 /svc/<did>
++ optional /name/<did>
+→ current owner 重签全部 current records
+→ one batch-CAS
+~~~
+
+不要基于 PWA 本地旧缓存只重签部分 records。
+
+---
+
+## 14. PWA 开发原则
+
+PWA 不自行实现：
+
+~~~
+Seq allocation
+generation management
+request authorization
+record signing
+fee proof
+outbox retry policy
+DID takeover batch
+delete operation
+CAS rebase
+~~~
+
+这些统一由 Wallet SDK/WASM 负责。
+
+PWA 只处理：
+
+- 领域 value；
+- 用户交互；
+- sync/readiness 状态；
+- 冲突/费用/绑定错误的产品提示。

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
@@ -42,13 +41,17 @@ type handlerTestStore struct {
 	appliedPathSnapshot *dkvs.PathSnapshot
 }
 
-func (s *handlerTestStore) PutRemoteDKVSRecord(record *wire.DKVSRecord) (bool, error) {
+func (s *handlerTestStore) AcceptDKVSCurrentRecord(record *wire.DKVSRecord) (bool, error) {
 	if record == nil {
 		return false, errors.New("nil record")
 	}
 	if s.records == nil {
 		s.records = make(map[string]*wire.DKVSRecord)
 	}
+	if old := s.records[record.Key]; old != nil && dkvs.RecordHash(old) == dkvs.RecordHash(record) {
+		return false, nil
+	}
+	// Capture the handler's input, not a production persistence model.
 	s.records[record.Key] = record
 	s.putCount++
 	return true, nil
@@ -71,10 +74,6 @@ func (s *handlerTestStore) GetDKVSRecordByHashForRelay(hash chainhash.Hash) (*wi
 	return nil, dkvs.ErrRecordNotFound
 }
 
-func (s *handlerTestStore) ApplyDKVSMirror([]dkvs.Subscription, []*wire.DKVSRecord, chainhash.Hash) (int, error) {
-	return 0, nil
-}
-
 func (s *handlerTestStore) SyncFilteredDKVSRecords([]byte, uint32, []dkvs.Subscription) ([]*wire.DKVSRecord, []byte, bool, chainhash.Hash, error) {
 	return s.syncRecords, nil, true, s.syncRoot, nil
 }
@@ -95,13 +94,14 @@ func (s *handlerTestStore) IsDKVSSubscribed(key string) bool {
 func TestHandlerInlineNotifyStoresAndRelaysWithoutGet(t *testing.T) {
 	store := &handlerTestStore{subscriptions: []dkvs.Subscription{{Type: dkvs.SubscriptionKey, Target: "/tmp/a"}}}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	var sent []wire.Message
 	var relayed *wire.MsgDKVSNotify
 	handler := Handler{
 		Store: store, Peer: &peer, Node: &node,
-		RemoteServices: wire.SFNodeMiner, TrustedSource: true,
+		RemoteServices: wire.SFNodeMiner, TrustedSource: true, ValidatorID: "valid-core",
 		Send:      func(msg wire.Message) { sent = append(sent, msg) },
 		Broadcast: func(msg *wire.MsgDKVSNotify) { relayed = msg },
 	}
@@ -123,12 +123,14 @@ func TestHandlerInlineNotifyStoresAndRelaysWithoutGet(t *testing.T) {
 func TestHandlerOrdinaryNodeRejectsUntrustedNotify(t *testing.T) {
 	store := &handlerTestStore{subscriptions: []dkvs.Subscription{{Type: dkvs.SubscriptionKey, Target: "/tmp/a"}}}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	sent := 0
 	handler := Handler{
 		Store: store, Peer: &peer, Node: &node,
 		RemoteServices: wire.SFNodeMiner,
+		ValidatorID:    "valid-core",
 		Send:           func(wire.Message) { sent++ },
 	}
 	handler.OnNotify(NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 1}))
@@ -148,11 +150,13 @@ func TestHandlerOrdinaryNodeRejectsUntrustedNotify(t *testing.T) {
 func TestHandlerRejectsMalformedAndMismatchedNotify(t *testing.T) {
 	store := &handlerTestStore{}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	penalties := 0
 	handler := Handler{
 		Store: store, Peer: &peer, Node: &node, LocalServices: wire.SFNodeMiner,
+		TrustedSource: true, ValidatorID: "valid-core",
 		Penalize: func(_, _ uint32, _ string) { penalties++ },
 	}
 	handler.OnNotify(&wire.MsgDKVSNotify{EventType: dkvs.EventRecordUpdate, Data: []byte("not-a-record")})
@@ -168,20 +172,44 @@ func TestHandlerRejectsMalformedAndMismatchedNotify(t *testing.T) {
 }
 
 func TestHandlerInlineDeleteRelaysSignedCommand(t *testing.T) {
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := &wire.DKVSRecord{
+		Version: dkvs.Version, Key: "/name/inline-delete", Value: []byte("value"),
+		PubKey: priv.PubKey().SerializeCompressed(), Seq: 1, IssueHeight: 1, TTL: 100,
+	}
+	currentHash := dkvs.SigningHash(current)
+	current.Signature = ecdsa.Sign(priv, currentHash[:]).Serialize()
+	command, err := dkvs.DeleteCommand(current, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandHash := dkvs.SigningHash(command)
+	command.Signature = ecdsa.Sign(priv, commandHash[:]).Serialize()
 	store := &handlerTestStore{}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	var relayed *wire.MsgDKVSNotify
 	handler := Handler{
 		Store: store, Peer: &peer, Node: &node, LocalServices: wire.SFNodeMiner,
+		TrustedSource: true, ValidatorID: "valid-core",
 		Broadcast: func(msg *wire.MsgDKVSNotify) { relayed = msg },
 	}
-	deleted := &wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 2, Flags: dkvs.FlagTombstone}
-	handler.OnNotify(NotifyForRecord(deleted))
+	handler.OnNotify(NotifyForRecord(command))
 	record, err := RecordFromNotify(relayed)
-	if err != nil || !dkvs.IsTombstone(record.Flags) || store.putCount != 1 {
+	if err != nil || store.putCount != 1 || dkvs.RecordHash(record) != dkvs.RecordHash(command) {
 		t.Fatalf("record=%#v putCount=%d err=%v", record, store.putCount, err)
+	}
+	target, err := dkvs.DeleteTargetHash(record)
+	if err != nil || target != dkvs.RecordHash(current) {
+		t.Fatalf("relayed delete lost its exact target: %s err=%v", target, err)
+	}
+	if err := dkvs.VerifySignature(record); err != nil {
+		t.Fatalf("relayed delete signature: %v", err)
 	}
 }
 
@@ -189,6 +217,7 @@ func TestHandlerServesSignedSyncResponse(t *testing.T) {
 	record := &wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 1}
 	store := &handlerTestStore{syncRecords: []*wire.DKVSRecord{record}, syncRoot: chainhash.DoubleHashH([]byte("root"))}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	var sent wire.Message
@@ -210,6 +239,7 @@ func TestHandlerServesSignedSyncResponse(t *testing.T) {
 func TestHandlerRejectsPathSnapshotFromUnclassifiedValidator(t *testing.T) {
 	store := &handlerTestStore{}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	var sent wire.Message
@@ -231,6 +261,7 @@ func TestHandlerRejectsPathSnapshotFromUnclassifiedValidator(t *testing.T) {
 func TestHandlerRoutesUntrustedPathHintToAuthorizedSource(t *testing.T) {
 	store := &handlerTestStore{}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	requested := ""
 	handler := Handler{
@@ -262,6 +293,7 @@ func TestHandlerRebroadcastsRecordsAfterPathSnapshotRepair(t *testing.T) {
 	}
 	store := &handlerTestStore{pathSnapshot: snapshot}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	var relayed []*wire.MsgDKVSNotify
 	handler := Handler{
@@ -272,9 +304,12 @@ func TestHandlerRebroadcastsRecordsAfterPathSnapshotRepair(t *testing.T) {
 		Broadcast:     func(msg *wire.MsgDKVSNotify) { relayed = append(relayed, msg) },
 	}
 	filters := []wire.DKVSSyncFilter{{Type: pathSyncFilterType, Target: snapshot.Path}}
-	start, err := peer.StartPathSync(snapshot.Path, time.Now())
-	if err != nil || start.Request == nil {
-		t.Fatalf("start path sync err=%v request=%#v", err, start.Request)
+	var request *wire.MsgDKVSSyncRequest
+	handler.Send = func(msg wire.Message) { request, _ = msg.(*wire.MsgDKVSSyncRequest) }
+	handler.QueuePathSync(snapshot.Path)
+	start := SyncStart{Request: request}
+	if start.Request == nil {
+		t.Fatal("path sync did not start")
 	}
 	wireRecords, err := pathSnapshotWireRecords(snapshot)
 	if err != nil {
@@ -299,6 +334,7 @@ func TestHandlerRebroadcastsRecordsAfterPathSnapshotRepair(t *testing.T) {
 func TestHandlerQueuesDistinctPathRepairsWithoutReplacingActiveSession(t *testing.T) {
 	store := &handlerTestStore{}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	var sent []wire.Message
@@ -319,6 +355,7 @@ func TestHandlerQueuesDistinctPathRepairsWithoutReplacingActiveSession(t *testin
 	peer.syncMtx.Lock()
 	peer.resetSyncLocked()
 	peer.syncMtx.Unlock()
+	node.finishSync(&peer, true)
 	handler.queueNextPathSync()
 	if len(sent) != 2 {
 		t.Fatalf("queued request not started: sent=%d", len(sent))
@@ -333,6 +370,7 @@ func TestHandlerQueuesDistinctPathRepairsWithoutReplacingActiveSession(t *testin
 func TestPathSyncTimeoutAdvancesQueuedPathAndRequeuesTimedOutPath(t *testing.T) {
 	store := &handlerTestStore{}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	var sent []wire.Message
@@ -355,16 +393,17 @@ func TestPathSyncTimeoutAdvancesQueuedPathAndRequeuesTimedOutPath(t *testing.T) 
 	if second.Filters[0].Target != "/mail/account/share" {
 		t.Fatalf("second path=%s", second.Filters[0].Target)
 	}
-	peer.syncMtx.Lock()
-	defer peer.syncMtx.Unlock()
-	if len(peer.pendingPathSync) != 1 || peer.pendingPathSync[0] != "/personal/account/a" {
-		t.Fatalf("timed-out path queue=%v", peer.pendingPathSync)
+	node.pendingMtx.Lock()
+	defer node.pendingMtx.Unlock()
+	if len(node.pendingPathSync) != 1 || node.pendingPathSync[0] != "/personal/account/a" {
+		t.Fatalf("timed-out path queue=%v", node.pendingPathSync)
 	}
 }
 
 func TestFailedPathSyncAdvancesNextQueuedPath(t *testing.T) {
 	store := &handlerTestStore{}
 	var peer PeerState
+	defer peer.Close()
 	var node NodeState
 	node.SetReady(true)
 	var sent []wire.Message
@@ -376,8 +415,6 @@ func TestFailedPathSyncAdvancesNextQueuedPath(t *testing.T) {
 	handler.QueuePathSync("/personal/account/a")
 	handler.QueuePathSync("/mail/account/share")
 	first := sent[0].(*wire.MsgDKVSSyncRequest)
-	// An unauthenticated response is terminal for the current source/path and
-	// must not block the independently queued path.
 	handler.OnSyncResponse(&wire.MsgDKVSSyncResponse{
 		SessionID: first.SessionID, Done: true,
 	})
@@ -387,5 +424,34 @@ func TestFailedPathSyncAdvancesNextQueuedPath(t *testing.T) {
 	second := sent[1].(*wire.MsgDKVSSyncRequest)
 	if second.Filters[0].Target != "/mail/account/share" {
 		t.Fatalf("second path=%s", second.Filters[0].Target)
+	}
+}
+
+func TestAccountBindingNotifyBypassesOrdinaryNodeSubscriptionFilter(t *testing.T) {
+	store := &handlerTestStore{}
+	var peer PeerState
+	defer peer.Close()
+	var node NodeState
+	node.SetReady(true)
+	record := &wire.DKVSRecord{
+		Version: dkvs.Version,
+		Key:     "/account/testnet4/tb1paccountbinding",
+		Value:   []byte("binding-control"),
+		Seq:     1,
+	}
+	notify := NotifyForRecord(record)
+	if notify == nil {
+		t.Fatal("account binding notify was not constructed")
+	}
+	if !peer.WantsNotify(notify, false) {
+		t.Fatal("ordinary peer filter suppressed global account binding notify")
+	}
+	handler := Handler{
+		Store: store, Peer: &peer, Node: &node,
+		TrustedSource: true, ValidatorID: "valid-core",
+	}
+	handler.OnNotify(notify)
+	if store.putCount != 1 {
+		t.Fatalf("ordinary node did not retain global account binding notify: putCount=%d", store.putCount)
 	}
 }

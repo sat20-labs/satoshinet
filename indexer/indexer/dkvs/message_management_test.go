@@ -1,6 +1,7 @@
 package dkvs
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"testing"
@@ -162,7 +163,7 @@ func TestMessageMailboxPrefixSnapshotSeesCommittedDelivery(t *testing.T) {
 	sender := testMessageAccount(t)
 	prefix := "/mail/" + recipient
 
-	initial, err := idx.PrefixSnapshot(prefix)
+	initial, err := idx.ActiveSyncPage(context.Background(), ActiveSyncRequest{Scope: ActiveScope{Prefix: prefix}, EndpointID: idx.EndpointID(), Full: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,14 +175,14 @@ func TestMessageMailboxPrefixSnapshotSeesCommittedDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	read, err := idx.PrefixSnapshot(prefix)
+	read, err := idx.ActiveSyncPage(context.Background(), ActiveSyncRequest{Scope: ActiveScope{Prefix: prefix}, EndpointID: idx.EndpointID(), Full: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(read.Records) != 1 || read.Records[0].Key != record.Key {
 		t.Fatalf("prefix snapshot did not surface committed mailbox delivery: %#v", read)
 	}
-	delta, err := idx.PrefixDelta(prefix, initial.EndpointID, initial.Generation)
+	delta, err := idx.ActiveSyncPage(context.Background(), ActiveSyncRequest{Scope: ActiveScope{Prefix: prefix}, EndpointID: initial.Meta.EndpointID, After: initial.Meta.Generation})
 	if err != nil || len(delta.Records) != 1 || delta.Records[0].Key != record.Key {
 		t.Fatalf("prefix delta did not surface committed mailbox delivery: delta=%+v err=%v", delta, err)
 	}

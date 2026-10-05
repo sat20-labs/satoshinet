@@ -11,9 +11,9 @@ import (
 
 const (
 	Version = uint32(1)
-
-	FlagTombstone = uint32(1 << 0)
-
+	// This flag identifies a transient signed delete command. Such commands
+	// are not stored as records and never occur in a current-state snapshot.
+	FlagTombstone        = uint32(1 << 0)
 	EventRecordPut       = uint8(1)
 	EventRecordUpdate    = uint8(2)
 	EventRecordTombstone = uint8(3)
@@ -24,21 +24,18 @@ const (
 	EventSnapshotReady   = uint8(8)
 	EventRenewal         = uint8(9)
 	EventExpired         = uint8(10)
-
-	MaxKeySize         = 256
-	MaxKeySegmentSize  = 64
-	MaxNamespaceSize   = 16
-	MaxRecordValueSize = wire.MaxDKVSValueSize
-	// DefaultFreeLocalMaxTTLBlocks is 7200 blocks. Its wall-clock duration
-	// depends on the actual block cadence and is not guaranteed to be one day.
+	MaxKeySize           = 256
+	MaxKeySegmentSize    = 64
+	MaxNamespaceSize     = 16
+	MaxRecordValueSize   = wire.MaxDKVSValueSize
+	// Wall-clock duration depends on actual block cadence.
 	DefaultFreeLocalMaxTTLBlocks = uint64(24 * 60 * 60 / 12)
-
-	MaxBatchCASMutations   = 64
-	MaxBatchCASTotalSize   = 8 * 1024 * 1024
-	MaxPrefixesPerTerminal = 16
-	MaxPrefixLength        = 256
-	MaxPrefixReadRecords   = 4096
-	MaxPrefixReadBytes     = 16 * 1024 * 1024
+	MaxBatchCASMutations         = 64
+	MaxBatchCASTotalSize         = 8 * 1024 * 1024
+	MaxPrefixesPerTerminal       = 16
+	MaxPrefixLength              = 256
+	MaxPrefixReadRecords         = 4096
+	MaxPrefixReadBytes           = 16 * 1024 * 1024
 )
 
 type ErrorCode string
@@ -56,6 +53,7 @@ const (
 	ErrorCodeStorageModeDowngrade      ErrorCode = "DKVS_STORAGE_MODE_DOWNGRADE"
 	ErrorCodeQuotaExceeded             ErrorCode = "DKVS_QUOTA_EXCEEDED"
 	ErrorCodeInvalidRecord             ErrorCode = "DKVS_INVALID_RECORD"
+	ErrorCodeExpiredRecord             ErrorCode = "DKVS_EXPIRED_RECORD"
 	ErrorCodeRecordNotFound            ErrorCode = "DKVS_RECORD_NOT_FOUND"
 )
 
@@ -93,8 +91,7 @@ var (
 	ErrFreeLocalNotRelayable     = errors.New("dkvs free local record is not relayable")
 )
 
-// ErrorCodeOf maps implementation errors to the stable API contract. Callers
-// must branch on this code or errors.Is/As, never on the human-readable text.
+// Callers branch on the API code or errors.Is/As, not human-readable text.
 func ErrorCodeOf(err error) ErrorCode {
 	switch {
 	case err == nil:
@@ -117,13 +114,14 @@ func ErrorCodeOf(err error) ErrorCode {
 		return ErrorCodeStorageModeDowngrade
 	case errors.Is(err, ErrPermissionDenied), errors.Is(err, ErrDIDResolverUnavailable):
 		return ErrorCodePermissionDenied
-	case errors.Is(err, ErrFeeCapacityExceeded), errors.Is(err, ErrMailboxFull),
-		errors.Is(err, ErrFreeLocalQuotaExceeded):
+	case errors.Is(err, ErrFeeCapacityExceeded), errors.Is(err, ErrMailboxFull), errors.Is(err, ErrFreeLocalQuotaExceeded):
 		return ErrorCodeQuotaExceeded
 	case errors.Is(err, ErrWriteConflict), errors.Is(err, ErrConcurrentUpdate):
 		return ErrorCodeWriteConflict
 	case errors.Is(err, ErrRecordNotFound):
 		return ErrorCodeRecordNotFound
+	case errors.Is(err, ErrExpiredRecord):
+		return ErrorCodeExpiredRecord
 	default:
 		return ErrorCodeInvalidRecord
 	}
@@ -189,37 +187,28 @@ type DIDResolver interface {
 	ResolveName(name string) (DIDIdentity, error)
 	ResolveService(serviceName string) (DIDIdentity, error)
 }
-
 type FeeVerifier interface {
 	VerifyFeeProof(recordHash, keyHash [32]byte, namespace string, recordSize int, expiryHeight uint64, feeProof []byte) error
 }
-
 type RecordFeeVerifier interface {
 	VerifyRecordFeeProof(record *wire.DKVSRecord, parsed ParsedKey) error
 }
-
 type FeeCapacityVerifier interface {
 	VerifyFeeCapacity(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, records []*wire.DKVSRecord, height, now uint64) error
 }
-
 type FeeCapacityDescriptor struct {
 	UsageKey   string
 	MaxRecords uint64
 }
-
 type IndexedFeeCapacityVerifier interface {
 	FeeCapacity(record *wire.DKVSRecord, parsed ParsedKey) (FeeCapacityDescriptor, error)
 	FeeUsageKey(record *wire.DKVSRecord) (string, error)
 }
-
 type SystemVerifier interface {
 	CanWriteSystem(key string, pubKey []byte) error
 }
-
 type NotifyFunc func(event *NotifyEvent)
-
 type SubscriptionNotifyFunc func(sub Subscription)
-
 type Record = wire.DKVSRecord
 
 type FeeProof struct {
@@ -231,17 +220,13 @@ type FeeProof struct {
 	PlanID        string `json:"plan_id,omitempty"`
 	PaidAmount    string `json:"paid_amount,omitempty"`
 }
-
 type NotifyEvent struct {
 	EventType uint8  `json:"event_type"`
 	Data      []byte `json:"data"`
-	// Relay is local delivery metadata. It is deliberately not serialized into
-	// MsgDKVSNotify: a peer must independently validate every received record.
+	// Local delivery metadata, not serialized into an untrusted peer record.
 	Relay bool `json:"-"`
 }
 
-// FreeLocalCachePolicy bounds records that have no paid fee proof. Those
-// records are admitted by one node only and are never relayed through DKVS P2P.
 type FreeLocalCachePolicy struct {
 	Enabled             bool   `json:"enabled"`
 	MaxTTL              uint64 `json:"max_ttl_blocks"`
@@ -252,14 +237,8 @@ type FreeLocalCachePolicy struct {
 }
 
 func DefaultFreeLocalCachePolicy() FreeLocalCachePolicy {
-	return FreeLocalCachePolicy{
-		Enabled:             true,
-		MaxTTL:              DefaultFreeLocalMaxTTLBlocks,
-		MaxRecordsPerSigner: 100,
-		MaxBytesPerSigner:   1 << 20,
-		MaxTotalRecords:     100000,
-		MaxTotalBytes:       1 << 30,
-	}
+	return FreeLocalCachePolicy{Enabled: true, MaxTTL: DefaultFreeLocalMaxTTLBlocks,
+		MaxRecordsPerSigner: 100, MaxBytesPerSigner: 1 << 20, MaxTotalRecords: 100000, MaxTotalBytes: 1 << 30}
 }
 
 type Config struct {
@@ -282,22 +261,16 @@ type WritePrecondition struct {
 	ExpectAbsent bool            `json:"expect_absent,omitempty"`
 }
 
-func (p WritePrecondition) Valid() bool {
-	return p.ExpectAbsent != (p.ExpectedHash != nil)
-}
+func (p WritePrecondition) Valid() bool { return p.ExpectAbsent != (p.ExpectedHash != nil) }
 
 type CASMutation struct {
 	Record       *wire.DKVSRecord  `json:"record"`
 	Precondition WritePrecondition `json:"precondition"`
 }
-
 type BatchCASOptions struct {
-	// EndpointID pins a FREE_LOCAL batch to the node that owns its local-only
-	// cache. It is ignored when the batch contains no local-only mutations.
 	EndpointID string `json:"endpoint_id,omitempty"`
 	RequestID  string `json:"request_id,omitempty"`
 }
-
 type WriteResult struct {
 	Applied      int                `json:"applied"`
 	Records      []*wire.DKVSRecord `json:"records,omitempty"`
@@ -336,48 +309,11 @@ type DKVSKeyState struct {
 	Record       *wire.DKVSRecord `json:"record,omitempty"`
 }
 
-// PrefixGeneration is the wallet-visible freshness marker for one collection
-// path on a specific endpoint. Generation is copied directly from
-// PathMeta.EndpointGeneration; clients never derive or recalculate it.
+// Positions belong to one source endpoint and scope, never to a global clock.
 type PrefixGeneration struct {
 	Prefix     string `json:"prefix"`
 	Generation uint64 `json:"generation"`
 }
-
-// PrefixStatusResult reports only paths whose current PathMeta endpoint
-// generation differs from the generation supplied by the client. The server
-// keeps no per-client subscription or cursor state.
-type PrefixStatusResult struct {
-	EndpointID string             `json:"endpoint_id"`
-	ViewHeight uint64             `json:"view_height"`
-	Changed    []PrefixGeneration `json:"changed"`
-}
-
-// PrefixSnapshot is one consistent endpoint-local materialization of a
-// collection path, including FREE_LOCAL records, and its PathMeta endpoint
-// generation.
-type PrefixSnapshot struct {
-	EndpointID string             `json:"endpoint_id"`
-	Prefix     string             `json:"prefix"`
-	Generation uint64             `json:"generation"`
-	ViewHeight uint64             `json:"view_height"`
-	Records    []*wire.DKVSRecord `json:"records"`
-	KeyStates  []DKVSKeyState     `json:"key_states,omitempty"`
-}
-
-// PrefixDelta contains current records changed after one endpoint-local
-// generation. Removed and expired records are omitted by design.
-type PrefixDeltaResult struct {
-	EndpointID string             `json:"endpoint_id"`
-	Prefix     string             `json:"prefix"`
-	Generation uint64             `json:"generation"`
-	ViewHeight uint64             `json:"view_height"`
-	Records    []*wire.DKVSRecord `json:"records"`
-	KeyStates  []DKVSKeyState     `json:"key_states,omitempty"`
-}
-
-// PrefixReadResult is a direct, uncached-by-server read for a read-only or
-// aggregate prefix. It intentionally has no generation or cursor contract.
 type PrefixReadResult struct {
 	EndpointID string             `json:"endpoint_id"`
 	Prefix     string             `json:"prefix"`
@@ -399,7 +335,6 @@ type Subscription struct {
 	Type   SubscriptionType `json:"type"`
 	Target string           `json:"target"`
 }
-
 type Checkpoint struct {
 	Height                uint64            `json:"height"`
 	ActiveRecordCount     uint64            `json:"active_record_count"`
@@ -407,37 +342,30 @@ type Checkpoint struct {
 	NamespaceRoots        map[string]string `json:"namespace_roots"`
 	ActiveRecordRoot      string            `json:"active_record_root"`
 }
-
 type Usage struct {
 	Prefix          string `json:"prefix"`
 	ActiveRecords   uint64 `json:"active_records"`
 	ActiveTotalSize uint64 `json:"active_total_size"`
 }
 
-// PathMeta keeps canonical relay state plus one endpoint-local generation.
-// Wallet prefix APIs expose only EndpointGeneration as an opaque equality
-// token; canonical StateRoot/Generation remain node-internal.
+// Both counters are local to this node. Network state excludes endpoint-local
+// records; EndpointGeneration also observes FREE_LOCAL and bound mailbox data.
 type PathMeta struct {
-	Version    uint32 `json:"version"`
-	Path       string `json:"path"`
-	Generation uint64 `json:"generation"`
-	// EndpointGeneration changes for every mutation visible on this endpoint,
-	// including FREE_LOCAL. It is the wallet prefix state token and is never
-	// relayed or compared between nodes.
+	Version            uint32         `json:"version"`
+	Path               string         `json:"path"`
+	Generation         uint64         `json:"generation"`
 	EndpointGeneration uint64         `json:"endpoint_generation"`
 	StateRoot          chainhash.Hash `json:"state_root"`
 	ActiveRecords      uint64         `json:"active_records"`
 	ActiveTotalSize    uint64         `json:"active_total_size"`
 	MinExpiryHeight    uint64         `json:"min_expiry_height,omitempty"`
 	ViewHeight         uint64         `json:"view_height"`
-
-	ActiveRoot    chainhash.Hash `json:"-"`
-	MinExpiryTime uint64         `json:"-"`
-	UpdatedHeight uint64         `json:"-"`
-	UpdatedAt     uint64         `json:"-"`
-	Dirty         bool           `json:"-"`
+	ActiveRoot         chainhash.Hash `json:"-"`
+	MinExpiryTime      uint64         `json:"-"`
+	UpdatedHeight      uint64         `json:"-"`
+	UpdatedAt          uint64         `json:"-"`
+	Dirty              bool           `json:"-"`
 }
-
 type PathLocalStatus struct {
 	Path            string `json:"path"`
 	UpdatedAt       uint64 `json:"updated_at,omitempty"`
@@ -448,22 +376,13 @@ type PathLocalStatus struct {
 	LocalRetryState string `json:"local_retry_state,omitempty"`
 }
 
+// No per-key deletion history is part of a complete current network view.
 type PathSnapshot struct {
 	Path         string             `json:"path"`
 	PathMeta     *PathMeta          `json:"pathmeta"`
 	Records      []*wire.DKVSRecord `json:"records"`
-	DeleteFloors []DeleteFloor      `json:"delete_floors,omitempty"`
 	ServerTimeMS uint64             `json:"server_time_ms"`
 }
-
-type DeleteFloor struct {
-	Key            string         `json:"key"`
-	FloorSeq       uint64         `json:"floor_seq"`
-	PathGeneration uint64         `json:"path_generation"`
-	PubKey         []byte         `json:"pub_key,omitempty"`
-	EffectiveHash  chainhash.Hash `json:"effective_hash"`
-}
-
 type Snapshot struct {
 	Checkpoint *Checkpoint        `json:"checkpoint"`
 	Records    []*wire.DKVSRecord `json:"records"`
@@ -482,12 +401,10 @@ type MailboxPolicy struct {
 	MaxShareSize         int
 	MaxShareTTL          uint64
 }
-
 type BlobPolicy struct {
 	MaxValueSize              int    `json:"max_value_size"`
 	MaxFreeLocalKeysPerSigner uint64 `json:"max_free_local_keys_per_signer"`
 }
-
 type ClientConfig struct {
 	FreeLocal              FreeLocalCachePolicy `json:"free_local"`
 	Blob                   BlobPolicy           `json:"blob"`
@@ -496,7 +413,6 @@ type ClientConfig struct {
 	MaxPrefixesPerTerminal int                  `json:"max_prefixes_per_terminal"`
 	EndpointID             string               `json:"endpoint_id,omitempty"`
 }
-
 type TmpPolicy struct {
 	MaxTTL  uint64
 	MaxSize int
@@ -507,7 +423,6 @@ type defaultResolver struct{}
 func (defaultResolver) ResolveName(string) (DIDIdentity, error) {
 	return DIDIdentity{}, ErrDIDResolverUnavailable
 }
-
 func (defaultResolver) ResolveService(string) (DIDIdentity, error) {
 	return DIDIdentity{}, ErrDIDResolverUnavailable
 }
@@ -532,6 +447,4 @@ func (v defaultFeeVerifier) VerifyFeeProof(_, _ [32]byte, _ string, _ int, _ uin
 
 type defaultSystemVerifier struct{}
 
-func (defaultSystemVerifier) CanWriteSystem(_ string, _ []byte) error {
-	return ErrPermissionDenied
-}
+func (defaultSystemVerifier) CanWriteSystem(_ string, _ []byte) error { return ErrPermissionDenied }

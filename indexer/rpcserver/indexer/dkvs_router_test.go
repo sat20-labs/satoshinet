@@ -24,9 +24,8 @@ func TestDKVSWalletRoutesExposeOnlyFinalApplicationProtocol(t *testing.T) {
 		"GET /v3/dkvs/record",
 		"GET /v3/dkvs/key-state",
 		"POST /v3/dkvs/records/batch-cas",
-		"POST /v3/dkvs/prefixes/status",
-		"POST /v3/dkvs/prefixes/snapshot",
-		"POST /v3/dkvs/prefixes/delta",
+		"POST /v3/dkvs/active/sync",
+		"POST /v3/dkvs/active/watch",
 		"POST /v3/dkvs/prefixes/read",
 	} {
 		if _, ok := got[route]; !ok {
@@ -35,6 +34,9 @@ func TestDKVSWalletRoutesExposeOnlyFinalApplicationProtocol(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
+		"/v3/dkvs/prefixes/status",
+		"/v3/dkvs/prefixes/snapshot",
+		"/v3/dkvs/prefixes/delta",
 		"/v3/dkvs/pathmeta",
 		"/v3/dkvs/path-meta",
 		"/v3/dkvs/sync/path",

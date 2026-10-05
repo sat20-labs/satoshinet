@@ -10,11 +10,11 @@ import (
 )
 
 type preparedRecordSet struct {
-	ordered          []*wire.DKVSRecord
-	capacities       map[string]preparedFeeCapacity
-	retentions       map[string]*PaidRecordRetention
-	forceReplace     map[string]bool
-	generation       uint64
+	ordered []*wire.DKVSRecord
+	capacities map[string]preparedFeeCapacity
+	retentions map[string]*PaidRecordRetention
+	forceReplace map[string]bool
+	generation uint64
 	policyGeneration uint64
 }
 
@@ -22,12 +22,8 @@ func cloneRecordSet(records []*wire.DKVSRecord) ([]*wire.DKVSRecord, error) {
 	seen := make(map[string]struct{}, len(records))
 	ordered := make([]*wire.DKVSRecord, 0, len(records))
 	for _, record := range records {
-		if record == nil || IsTombstone(record.Flags) {
-			return nil, ErrInvalidSnapshot
-		}
-		if _, exists := seen[record.Key]; exists {
-			return nil, ErrInvalidSnapshot
-		}
+		if record == nil || IsTombstone(record.Flags) { return nil, ErrInvalidSnapshot }
+		if _, exists := seen[record.Key]; exists { return nil, ErrInvalidSnapshot }
 		seen[record.Key] = struct{}{}
 		ordered = append(ordered, cloneRecord(record))
 	}
@@ -37,57 +33,32 @@ func cloneRecordSet(records []*wire.DKVSRecord) ([]*wire.DKVSRecord, error) {
 
 func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord, rejectFreeLocal bool) (preparedRecordSet, error) {
 	ordered, err := cloneRecordSet(records)
-	if err != nil {
-		return preparedRecordSet{}, err
-	}
+	if err != nil { return preparedRecordSet{}, err }
 	validators := i.snapshotValidators()
-	height := i.currentHeight()
-	now := currentUnixMilli()
+	height, now := i.currentHeight(), currentUnixMilli()
 	generation := atomic.LoadUint64(&i.generation)
 	capacities := make(map[string]preparedFeeCapacity, len(ordered))
 	retentions := make(map[string]*PaidRecordRetention, len(ordered))
 	forceReplace := make(map[string]bool, len(ordered))
 	for _, record := range ordered {
 		parsed, err := validateParsedCoreWithVerifier(record, height, false, false, nil)
-		if err != nil {
-			return preparedRecordSet{}, err
-		}
-		if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil {
-			return preparedRecordSet{}, err
-		}
-		if rejectFreeLocal && isFreeLocalRecord(record) {
-			return preparedRecordSet{}, ErrFreeLocalNotRelayable
-		}
-		retention, err := verifiedPaidRetentionAfterFeeVerification(
-			record, parsed, validators.feeVerifier, height,
-		)
-		if err != nil {
-			return preparedRecordSet{}, err
-		}
+		if err != nil { return preparedRecordSet{}, err }
+		if err := verifyFeeProofWith(validators.feeVerifier, record, parsed); err != nil { return preparedRecordSet{}, err }
+		if rejectFreeLocal && isFreeLocalRecord(record) { return preparedRecordSet{}, ErrFreeLocalNotRelayable }
+		retention, err := verifiedPaidRetentionAfterFeeVerification(record, parsed, validators.feeVerifier, height)
+		if err != nil { return preparedRecordSet{}, err }
 		retentions[record.Key] = retention
 		state, err := i.readWriteStateSnapshot(record.Key, parsed, validators)
-		if err != nil {
-			return preparedRecordSet{}, err
-		}
+		if err != nil { return preparedRecordSet{}, err }
 		force, err := validateWritePermissionWith(parsed, record, state.existing, state.requiresResolve, validators)
-		if err != nil {
-			return preparedRecordSet{}, err
-		}
+		if err != nil { return preparedRecordSet{}, err }
 		forceReplace[record.Key] = force
 		capacity, err := i.prepareFeeCapacity(record, parsed, state.existing, validators.feeVerifier, height, now)
-		if err != nil {
-			return preparedRecordSet{}, err
-		}
+		if err != nil { return preparedRecordSet{}, err }
 		capacities[record.Key] = capacity
 	}
-	return preparedRecordSet{
-		ordered:          ordered,
-		capacities:       capacities,
-		retentions:       retentions,
-		forceReplace:     forceReplace,
-		generation:       generation,
-		policyGeneration: validators.policyGeneration,
-	}, nil
+	return preparedRecordSet{ordered: ordered, capacities: capacities, retentions: retentions,
+		forceReplace: forceReplace, generation: generation, policyGeneration: validators.policyGeneration}, nil
 }
 
 func (i *Indexer) validatePreparedFeeSetLocked(records []*wire.DKVSRecord, capacities map[string]preparedFeeCapacity, height, now uint64) error {
@@ -95,29 +66,17 @@ func (i *Indexer) validatePreparedFeeSetLocked(records []*wire.DKVSRecord, capac
 	for _, record := range records {
 		prepared := capacities[record.Key]
 		if prepared.indexed == nil {
-			if prepared.fallback != nil && atomic.LoadUint64(&i.generation) != prepared.generation {
-				return ErrConcurrentUpdate
-			}
+			if prepared.fallback != nil && atomic.LoadUint64(&i.generation) != prepared.generation { return ErrConcurrentUpdate }
 			continue
 		}
-		if err := i.ensureFeeUsageLocked(prepared.indexed, height, now); err != nil {
-			return err
-		}
+		if err := i.ensureFeeUsageLocked(prepared.indexed, height, now); err != nil { return err }
 		usageKey := prepared.descriptor.UsageKey
-		if usageKey == "" {
-			continue
-		}
+		if usageKey == "" { continue }
 		count, ok := projected[usageKey]
-		if !ok {
-			count = i.feeUsageCounts[usageKey]
-		}
+		if !ok { count = i.feeUsageCounts[usageKey] }
 		entry, replacing := i.feeUsageEntries[record.Key]
-		if !replacing || entry.usageKey != usageKey {
-			count++
-		}
-		if prepared.descriptor.MaxRecords == 0 || count > prepared.descriptor.MaxRecords {
-			return ErrFeeCapacityExceeded
-		}
+		if !replacing || entry.usageKey != usageKey { count++ }
+		if prepared.descriptor.MaxRecords == 0 || count > prepared.descriptor.MaxRecords { return ErrFeeCapacityExceeded }
 		projected[usageKey] = count
 	}
 	return nil
@@ -127,13 +86,8 @@ func (i *Indexer) selectMergeRecordSetLocked(prepared preparedRecordSet, height,
 	selected := make([]*wire.DKVSRecord, 0, len(prepared.ordered))
 	for _, record := range prepared.ordered {
 		existing, err := i.getRaw(record.Key)
-		if err != nil && !errors.Is(err, ErrRecordNotFound) {
-			return nil, err
-		}
-		if err == nil && !prepared.forceReplace[record.Key] && i.activeError(existing, height, now) == nil &&
-			CompareRecords(existing, record) >= 0 {
-			continue
-		}
+		if err != nil && !errors.Is(err, ErrRecordNotFound) { return nil, err }
+		if err == nil && !prepared.forceReplace[record.Key] && i.activeError(existing, height, now) == nil && CompareRecords(existing, record) >= 0 { continue }
 		selected = append(selected, record)
 	}
 	return selected, nil
@@ -142,171 +96,103 @@ func (i *Indexer) selectMergeRecordSetLocked(prepared preparedRecordSet, height,
 func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syncRange, expectedRoot *chainhash.Hash, authoritative, rejectFreeLocal bool) (int, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		prepared, err := i.prevalidateRecordSet(records, rejectFreeLocal)
-		if err != nil {
-			return 0, err
-		}
+		if err != nil { return 0, err }
 		if expectedRoot != nil {
 			root, err := recordsRoot(prepared.ordered, i.currentHeight())
-			if err != nil || root != *expectedRoot {
-				return 0, ErrInvalidSnapshot
-			}
+			if err != nil || root != *expectedRoot { return 0, ErrInvalidSnapshot }
 		}
-
 		i.mutex.Lock()
-		if atomic.LoadUint64(&i.generation) != prepared.generation ||
-			atomic.LoadUint64(&i.policyGeneration) != prepared.policyGeneration {
+		if atomic.LoadUint64(&i.generation) != prepared.generation || atomic.LoadUint64(&i.policyGeneration) != prepared.policyGeneration {
 			i.mutex.Unlock()
 			continue
 		}
-		height := i.currentHeight()
-		now := currentUnixMilli()
+		height, now := i.currentHeight(), currentUnixMilli()
 		ordered := prepared.ordered
 		if !authoritative {
 			ordered, err = i.selectMergeRecordSetLocked(prepared, height, now)
-			if err != nil {
-				i.mutex.Unlock()
-				return 0, err
-			}
+			if err != nil { i.mutex.Unlock(); return 0, err }
 		}
 		if err := i.validatePreparedFeeSetLocked(ordered, prepared.capacities, height, now); err != nil {
 			i.mutex.Unlock()
-			if errors.Is(err, ErrConcurrentUpdate) {
-				continue
-			}
+			if errors.Is(err, ErrConcurrentUpdate) { continue }
 			return 0, err
 		}
 		incoming := make(map[string]*wire.DKVSRecord, len(ordered))
-		for _, record := range ordered {
-			incoming[record.Key] = record
-		}
+		for _, record := range ordered { incoming[record.Key] = record }
 		var current []*wire.DKVSRecord
 		if replace != nil {
-			// Mirror omission applies to the active view. Inactive paid records
-			// retain their physical-storage policy and cannot be erased merely
-			// because an active snapshot omits them.
+			// Omission applies to the active view, not to an inactive paid row
+			// retained by its separate physical storage policy.
 			current, err = i.recordsForRangesLocked(replace, authoritative, height, now)
-			if err != nil {
-				i.mutex.Unlock()
-				return 0, err
-			}
+			if err != nil { i.mutex.Unlock(); return 0, err }
 			current = i.relayableRecords(current)
 		}
 		currentByKey := make(map[string]*wire.DKVSRecord, len(current))
-		for _, record := range current {
-			currentByKey[record.Key] = record
-		}
+		for _, record := range current { currentByKey[record.Key] = record }
 		batch := i.db.NewWriteBatch()
 		touched := make([]*wire.DKVSRecord, 0, len(current)+len(ordered))
 		retentionRemovals := make([]string, 0, len(current)+len(ordered))
-		for _, record := range ordered {
-			if prepared.retentions[record.Key] == nil {
-				retentionRemovals = append(retentionRemovals, record.Key)
-			}
-		}
+		for _, record := range ordered { if prepared.retentions[record.Key] == nil { retentionRemovals = append(retentionRemovals, record.Key) } }
 		for _, record := range currentByKey {
-			if _, keep := incoming[record.Key]; keep {
-				continue
-			}
-			if err = batch.Delete(recordDBKey(record.Key)); err == nil {
-				err = batch.Delete(hashDBKey(RecordHash(record)))
-			}
-			if err == nil {
-				err = deleteDeleteStateBatch(batch, record.Key)
-			}
-			if err != nil {
-				break
-			}
+			if _, keep := incoming[record.Key]; keep { continue }
+			if err = batch.Delete(recordDBKey(record.Key)); err == nil { err = batch.Delete(hashDBKey(RecordHash(record))) }
+			if err != nil { break }
 			touched = append(touched, record)
 			retentionRemovals = append(retentionRemovals, record.Key)
 		}
 		applied := 0
 		for _, record := range ordered {
-			if err != nil {
-				break
-			}
+			if err != nil { break }
 			existing, readErr := i.getRaw(record.Key)
-			if readErr != nil && !errors.Is(readErr, ErrRecordNotFound) {
-				err = readErr
-				break
-			}
+			if readErr != nil && !errors.Is(readErr, ErrRecordNotFound) { err = readErr; break }
 			if readErr == nil {
 				existingHash := RecordHash(existing)
-				if existingHash == RecordHash(record) {
-					continue
-				}
-				if err = batch.Delete(hashDBKey(existingHash)); err != nil {
-					break
-				}
+				if existingHash == RecordHash(record) { continue }
+				if err = batch.Delete(hashDBKey(existingHash)); err != nil { break }
 				touched = append(touched, existing)
 			}
 			encoded, marshalErr := MarshalRecord(record)
-			if marshalErr != nil {
-				err = marshalErr
-				break
-			}
+			if marshalErr != nil { err = marshalErr; break }
 			hash := RecordHash(record)
-			if err = batch.Put(recordDBKey(record.Key), encoded); err == nil {
-				err = batch.Put(hashDBKey(hash), []byte(record.Key))
-			}
-			if err == nil {
-				err = deleteDeleteStateBatch(batch, record.Key)
-			}
-			if err != nil {
-				break
-			}
+			if err = batch.Put(recordDBKey(record.Key), encoded); err == nil { err = batch.Put(hashDBKey(hash), []byte(record.Key)) }
+			if err != nil { break }
 			touched = append(touched, record)
 			applied++
 		}
-		if err == nil {
-			err = i.markPathMetaDirtyLocked(batch, touched, height, now)
-		}
+		if err == nil { err = i.markPathMetaDirtyLocked(batch, touched, height, now) }
 		if err == nil {
 			seen := make(map[string]struct{}, len(touched))
 			for _, record := range touched {
-				if _, duplicate := seen[record.Key]; duplicate {
-					continue
-				}
+				if _, duplicate := seen[record.Key]; duplicate { continue }
 				seen[record.Key] = struct{}{}
 				_, present := incoming[record.Key]
-				if err = i.markDirtyChangedRecordBatch(batch, record.Key, present); err != nil {
-					break
-				}
+				if err = i.markDirtyChangedRecordBatch(batch, record.Key, present); err != nil { break }
 			}
 		}
-		if err == nil && len(touched) != 0 {
-			err = batch.Flush()
-		}
+		if err == nil && len(touched) != 0 { err = batch.Flush() }
 		batch.Close()
-		if err != nil {
-			i.mutex.Unlock()
-			return 0, err
-		}
+		if err != nil { i.mutex.Unlock(); return 0, err }
 		if len(touched) != 0 {
 			i.resetFeeUsageLocked()
 			i.resetFreeLocalUsageLocked()
 			i.resetRecordExpiryLocked()
 			atomic.AddUint64(&i.generation, 1)
 		}
-		retentionCache := paidRetentionCacheFor(i)
-		retentionCache.remove(retentionRemovals)
-		for _, record := range ordered {
-			if retention := prepared.retentions[record.Key]; retention != nil {
-				retentionCache.set(record.Key, *retention)
-			}
-		}
+		cache := paidRetentionCacheFor(i)
+		cache.remove(retentionRemovals)
+		for _, record := range ordered { if retention := prepared.retentions[record.Key]; retention != nil { cache.set(record.Key, *retention) } }
 		i.mutex.Unlock()
-		// Include removed records: a deletion-only mirror has applied == 0.
+		// Deletion-only replacement has applied == 0 but must still wake readers.
 		i.notifyPathMutations(touched)
 		return applied, nil
 	}
 	return 0, ErrConcurrentUpdate
 }
 
-// ApplyMirror atomically replaces the active records covered by filters.
+// ApplyMirror is the internal atomic active-set installer. Authenticated P2P
+// callers use ApplyPathSnapshotFrom and a source-bound installation baseline.
 func (i *Indexer) ApplyMirror(filters []Subscription, records []*wire.DKVSRecord, root chainhash.Hash) (int, error) {
 	ranges, err := syncRangesForFilters(filters)
-	if err != nil {
-		return 0, err
-	}
+	if err != nil { return 0, err }
 	return i.applyRecordSetAtomic(records, ranges, &root, true, true)
 }

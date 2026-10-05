@@ -1,6 +1,8 @@
 package dkvs
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	dbpkg "github.com/sat20-labs/indexer/indexer/db"
@@ -59,12 +61,8 @@ func TestAutopayRequiresCurrentBlockPayment(t *testing.T) {
 	}
 	height := uint64(10)
 	provider := &mutableAutopayStateProvider{state: &AutopayContractState{
-		TemplateName: autopayTemplateName,
-		CurrentBlock: int64(height),
-		ServiceName:  "dkvs",
-		Recipient:    "recipient",
-		FeeAssetName: "sgas",
-		Status:       "active",
+		TemplateName: autopayTemplateName, CurrentBlock: int64(height), ServiceName: "dkvs",
+		Recipient: "recipient", FeeAssetName: "sgas", Status: "active",
 		Delegates: map[string]AutopayDelegateState{
 			payer: {AmountPerBlock: "1", Balance: "100", LastPayHeight: int64(height - 1), Status: "active"},
 		},
@@ -80,12 +78,10 @@ func TestAutopayRequiresCurrentBlockPayment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := verifier.VerifyRecordFeeProof(record, parsed); err == nil {
-		t.Fatal("record was accepted before the current block was paid")
+		t.Fatal("record accepted before current block payment")
 	}
 	delegate := provider.state.Delegates[payer]
-	delegate.LastPayHeight = int64(height)
-	delegate.Balance = "0"
-	delegate.Status = "funding"
+	delegate.LastPayHeight, delegate.Balance, delegate.Status = int64(height), "0", "funding"
 	provider.state.Delegates[payer] = delegate
 	height++
 	provider.state.CurrentBlock = int64(height)
@@ -112,12 +108,8 @@ func TestPruneExpiredAutopayAfterNodeCacheGrace(t *testing.T) {
 	}
 	height := uint64(10)
 	provider := &mutableAutopayStateProvider{state: &AutopayContractState{
-		TemplateName: autopayTemplateName,
-		CurrentBlock: int64(height),
-		ServiceName:  "dkvs",
-		Recipient:    "recipient",
-		FeeAssetName: "sgas",
-		Status:       "active",
+		TemplateName: autopayTemplateName, CurrentBlock: int64(height), ServiceName: "dkvs",
+		Recipient: "recipient", FeeAssetName: "sgas", Status: "active",
 		Delegates: map[string]AutopayDelegateState{
 			payer: {AmountPerBlock: "1", Balance: "100", LastPayHeight: int64(height), Status: "active"},
 		},
@@ -128,12 +120,10 @@ func TestPruneExpiredAutopayAfterNodeCacheGrace(t *testing.T) {
 		FeeAssetName: "sgas", FullRecordFeePerBlock: "1", AddressParams: &chaincfg.TestNetParams,
 	}, AllowFreeLocal: true}
 	idx := New(database, Config{
-		EndpointID:     "test-core-node",
-		AllowFreeLocal: true,
+		EndpointID: "test-core-node", AllowFreeLocal: true,
 		FreeLocalCache: FreeLocalCachePolicy{Enabled: true, MaxTTL: 2, MaxRecordsPerSigner: 10,
 			MaxBytesPerSigner: 1 << 20, MaxTotalRecords: 100, MaxTotalBytes: 1 << 20},
-		FeeVerifier:   verifier,
-		CurrentHeight: func() uint64 { return height },
+		FeeVerifier: verifier, CurrentHeight: func() uint64 { return height },
 	})
 	record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
 	if _, err := idx.PutLocal(record); err != nil {
@@ -143,62 +133,58 @@ func TestPruneExpiredAutopayAfterNodeCacheGrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := idx.PrefixSnapshot(prefix)
+	snapshot, err := idx.ActiveSyncPage(context.Background(), ActiveSyncRequest{Scope: ActiveScope{Prefix: prefix}, EndpointID: idx.EndpointID(), Full: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(snapshot.Records) != 1 {
 		t.Fatalf("snapshot records=%d", len(snapshot.Records))
 	}
-
 	height = 12
 	provider.state.CurrentBlock = int64(height)
 	if pruned, err := idx.PruneExpiredAutopayAt(height); err != nil || pruned != 0 {
-		t.Fatalf("record pruned inside two-block grace: pruned=%d err=%v", pruned, err)
+		t.Fatalf("pruned inside grace: count=%d err=%v", pruned, err)
 	}
 	if _, err := idx.Get(record.Key); err != nil {
-		t.Fatalf("record missing inside grace: %v", err)
+		t.Fatalf("missing inside grace: %v", err)
 	}
-
 	height = 13
 	provider.state.CurrentBlock = int64(height)
 	if pruned, err := idx.PruneExpiredAutopayAt(height); err != nil || pruned != 1 {
-		t.Fatalf("expired paid record prune: pruned=%d err=%v", pruned, err)
+		t.Fatalf("prune count=%d err=%v", pruned, err)
 	}
-	if _, err := idx.Get(record.Key); err != ErrRecordNotFound {
-		t.Fatalf("record still present after grace: %v", err)
+	if _, err := idx.Get(record.Key); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("present after grace: %v", err)
 	}
 	state, err := idx.GetKeyState(record.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != KeyStateDeleted || state.Seq != record.Seq || state.ETag == "" {
-		t.Fatalf("autopay expired key state=%+v", state)
+	if state.Status != KeyStateNeverSeen || state.Seq != 0 || state.ETag != "" {
+		t.Fatalf("expiry retained per-key history: %+v", state)
 	}
-	status, err := idx.PrefixStatus(snapshot.EndpointID, []PrefixGeneration{{
-		Prefix: prefix, Generation: snapshot.Generation,
-	}})
+	assertNoDeleteRows(t, idx)
+	meta, err := idx.ActiveMetadata(context.Background(), ActiveScope{Prefix: prefix})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.Changed) != 1 || status.Changed[0].Prefix != prefix ||
-		status.Changed[0].Generation == snapshot.Generation {
-		t.Fatalf("autopay expiry generation status=%+v", status)
+	if meta.Generation <= snapshot.Meta.Generation {
+		t.Fatalf("expiry did not advance endpoint position: %+v", meta)
 	}
 }
 
 func TestDefaultAutopayMinimumIsOne(t *testing.T) {
 	defaults := NetworkDefaultsForParams(&chaincfg.TestNetParams)
 	if defaults.AutopayMinAmountPerBlock != "1" {
-		t.Fatalf("minimum amount per block=%s", defaults.AutopayMinAmountPerBlock)
+		t.Fatalf("minimum amount=%s", defaults.AutopayMinAmountPerBlock)
 	}
 }
 
-func TestAutopayDeleteRemainsCanonicalWhileRelayCacheIsCold(t *testing.T) {
+func TestAutopayDeletionChangesCanonicalStateWhileRelayCacheIsCold(t *testing.T) {
 	idx, priv, _ := newAutopayMirrorIndexer(t, 10)
 	record := signedAutopayPersonalRecord(t, priv, "autopay", 1)
 	if updated, err := idx.PutLocal(record); err != nil || !updated {
-		t.Fatalf("put paid record updated=%v err=%v", updated, err)
+		t.Fatalf("put updated=%v err=%v", updated, err)
 	}
 	path, err := CollectionPathForKey(record.Key)
 	if err != nil {
@@ -208,30 +194,25 @@ func TestAutopayDeleteRemainsCanonicalWhileRelayCacheIsCold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Model the fail-closed window after a node restart: AUTOPAY placement is
-	// still canonical even though relay authorization has not been refreshed.
+	// Payment relay authorization may be cold after restart, but deletion of
+	// a canonical record must still change its current path metadata.
 	paidRetentionCacheFor(idx).remove([]string{record.Key})
 	if idx.paidRecordRelayable(record) {
-		t.Fatal("AUTOPAY relay cache unexpectedly remained warm")
+		t.Fatal("relay cache remained warm")
 	}
-	tombstone := signedRecordWithValue(t, priv, record.Key, 2, nil, FlagTombstone)
-	if updated, err := idx.PutLocal(tombstone); err != nil || !updated {
-		t.Fatalf("delete paid record updated=%v err=%v", updated, err)
-	}
-	idx.mutex.RLock()
-	state, err := idx.getDeleteStateLocked(record.Key)
-	idx.mutex.RUnlock()
-	if err != nil || state == nil || state.LocalOnly {
-		t.Fatalf("canonical AUTOPAY delete state=%#v err=%v", state, err)
+	command := signedCurrentDelete(t, priv, record, 10)
+	if updated, err := idx.PutLocal(command); err != nil || !updated {
+		t.Fatalf("delete updated=%v err=%v", updated, err)
 	}
 	after, err := idx.GetPathMeta(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Generation != before.Generation+1 || after.StateRoot == before.StateRoot {
-		t.Fatalf("canonical path state before=%+v after=%+v", before, after)
+	if after.Generation != before.Generation+1 || after.StateRoot == before.StateRoot || after.ActiveRecords != 0 {
+		t.Fatalf("canonical state before=%+v after=%+v", before, after)
 	}
-	if relayed, err := idx.GetForRelay(record.Key); err != nil || !IsTombstone(relayed.Flags) {
-		t.Fatalf("canonical AUTOPAY tombstone=%#v err=%v", relayed, err)
+	if _, err := idx.GetForRelay(record.Key); !errors.Is(err, ErrRecordNotFound) {
+		t.Fatalf("deleted record retained for relay: %v", err)
 	}
+	assertNoDeleteRows(t, idx)
 }

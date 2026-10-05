@@ -160,7 +160,7 @@ func TestRequestTrackingRejectsUnsolicitedData(t *testing.T) {
 	}
 }
 
-func TestServeSyncBuffersAndCoalescesNotifications(t *testing.T) {
+func TestServeSyncRejectsChangedFilters(t *testing.T) {
 	var state PeerState
 	filters := []wire.DKVSSyncFilter{{Type: string(dkvs.SubscriptionKey), Target: "/tmp/a"}}
 	if !state.BeginServe(&wire.MsgDKVSSyncRequest{SessionID: 7, Filters: filters}) {
@@ -171,22 +171,7 @@ func TestServeSyncBuffersAndCoalescesNotifications(t *testing.T) {
 	}) {
 		t.Fatal("continuation with changed filters accepted")
 	}
-	first := NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 1})
-	second := NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/a", Seq: 2})
-	if !state.BufferNotify(first) || !state.BufferNotify(second) {
-		t.Fatal("matching notifications were not buffered")
-	}
-	if state.BufferNotify(NotifyForRecord(&wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/b", Seq: 1})) {
-		t.Fatal("unrelated notification was buffered")
-	}
-	pending := state.FinishServe(7)
-	if len(pending) != 1 {
-		t.Fatalf("pending=%#v", pending)
-	}
-	pendingRecord, err := RecordFromNotify(pending[0])
-	if err != nil || pendingRecord.Seq != 2 || pendingRecord.Key != "/tmp/a" {
-		t.Fatalf("pending=%#v", pending)
-	}
+	state.FinishServe(7)
 }
 
 func TestNotifyRoutingUsesCompletedSubscription(t *testing.T) {
@@ -210,10 +195,10 @@ func TestNotifyRoutingUsesCompletedSubscription(t *testing.T) {
 	}
 }
 
-func TestMirrorResponseStagesUntilDone(t *testing.T) {
+func TestSnapshotResponseStagesUntilDone(t *testing.T) {
 	var state PeerState
 	now := time.Unix(1000, 0)
-	start, err := state.StartSync(nil, true, true, nil, now)
+	start, err := state.StartSync(nil, true, nil, now)
 	if err != nil || start.Request == nil {
 		t.Fatalf("start=%#v err=%v", start, err)
 	}
@@ -221,8 +206,33 @@ func TestMirrorResponseStagesUntilDone(t *testing.T) {
 	deleted := &wire.DKVSRecord{Version: dkvs.Version, Key: "/tmp/b", Seq: 2, Flags: dkvs.FlagTombstone}
 	action, err := state.AcceptSyncResponse(&wire.MsgDKVSSyncResponse{
 		SessionID: start.Request.SessionID, Records: []*wire.DKVSRecord{record, deleted}, Done: true,
-	}, func([]byte, []wire.DKVSSyncFilter, *wire.MsgDKVSSyncResponse) bool { return true }, nil, now)
-	if err != nil || !action.Done || !action.Mirror || len(action.MirrorRecords) != 1 || len(action.MirrorDeletes) != 1 {
+	}, func([]byte, []wire.DKVSSyncFilter, *wire.MsgDKVSSyncResponse) bool { return true }, nil, now, false)
+	if err != nil || !action.Done || len(action.MirrorRecords) != 1 || len(action.MirrorDeletes) != 1 {
 		t.Fatalf("action=%#v err=%v", action, err)
+	}
+}
+
+func TestDiscoveryRetainsPathsWithoutRecordBodies(t *testing.T) {
+	state := &PeerState{}
+	defer state.Close()
+	now := time.Now()
+	start, err := state.StartSync(nil, true, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := func([]byte, []wire.DKVSSyncFilter, *wire.MsgDKVSSyncResponse) bool { return true }
+	first := &wire.MsgDKVSSyncResponse{SessionID: start.Request.SessionID, NextCursor: []byte("next"),
+		Records: []*wire.DKVSRecord{{Key: "/svc/a.btc/one", Value: make([]byte, 1024)}, {Key: "/svc/a.btc/two"}}}
+	if _, err := state.AcceptSyncResponse(first, verify, nil, now, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.syncRecords) != 0 || len(state.syncDeletes) != 0 || len(state.syncPaths) != 1 {
+		t.Fatal("discovery retained record bodies instead of deduplicated paths")
+	}
+	last := &wire.MsgDKVSSyncResponse{SessionID: first.SessionID, Done: true}
+	last.CheckpointRoot[0] = 1
+	action, err := state.AcceptSyncResponse(last, verify, nil, now, true)
+	if err != nil || len(action.DiscoveredPaths) != 1 || action.DiscoveredPaths[0] != "/svc/a.btc" || len(action.MirrorRecords) != 0 {
+		t.Fatalf("discovery action=%+v err=%v", action, err)
 	}
 }
