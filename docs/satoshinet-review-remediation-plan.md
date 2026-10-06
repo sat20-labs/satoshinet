@@ -1,18 +1,28 @@
 # SatoshiNet btcd 差异功能审查整改与 PoS V2 实施计划
 
-更新时间：2026-10-05
+更新时间：2026-10-06
 
 适用仓库：`sat20-labs/satoshinet`，以及需要联动的 `sat20-labs/indexer`、`sat20-labs/sat20wallet`  
-文档状态：**设计已对齐，等待当前测试轮次结束后实施**  
+文档状态：**已完成本机源码静态盘点；PoS V2 与 EVM source 等仍待实施，阶段 1 的直接修复已落地**
 文档用途：供下一次开发 session 直接读取并继续实施；与此前聊天中的阶段性总结冲突时，以本文为准。
 
 2026-10-05 补充确认：替补出块的奖励地址规则与 PoS V2 使用同一激活高度，保留激活前历史验证规则，后续统一实施。本次只更新计划，不实施代码或部署。
+
+状态口径（2026-10-06 本机源码静态核对）：
+
+- **已实现**：当前源码已包含该项实现；不代表本次运行过测试或完成远程节点验收。
+- **部分实现**：已有相关基础能力，但仍未满足本节列出的全部规则。
+- **未实现**：当前源码未找到该项所需实现。
+- **已替代**：原方案已由另一份规范文档取代，应按新文档继续维护和验收。
+- **待确认**：需要测试日志、运行状态或其他本机源码之外的证据才能判断。
+
+本次只检查源码和已有测试文件，没有运行测试，也没有检查 101/102/103 上的运行版本或部署状态。
 
 ---
 
 ## 1. 执行约束
 
-1. 当前测试轮次仍在进行，本轮只新增本文档，不修改生产代码、不替换节点二进制、不重启测试网络。
+1. 本轮状态复核只更新本文档，不修改生产代码、不替换节点二进制、不重启测试网络；后续实施须先确认当前测试轮次完整结束。
 2. 等当前测试轮次完整结束后，保存以下基线再开始实施：
    - SatoshiNet、indexer、wallet SDK 的 commit；
    - 所有节点的 tip height/hash；
@@ -32,6 +42,8 @@
 
 ### 2.1 PoS V2
 
+> 状态：**部分实现** — 当前保留 PoS V1 的生产者/替补和费用模板能力；PoS V2 激活、证书、no-reorg 等共识规则尚未实现。
+
 PoS V2 采用未来激活高度，整体启用以下规则：
 
 - 完整区块 proposal digest；
@@ -49,9 +61,13 @@ PoS V2 采用未来激活高度，整体启用以下规则：
 
 ### 2.2 No-reorg 目标
 
+> 状态：**未实现** — 区块链仍按累计 chainwork 选择主链，并保留侧链和 reorg 路径。
+
 PoS V2 激活后，聪网把已接入的区块视为最终确认区块。网络分区时，没有对应 Bootstrap finalizer 的一侧应停止出块，而不是生成可在恢复后参与链重组的侧链。
 
 ### 2.3 EVM source metadata
+
+> 状态：**未实现** — 当前 source metadata 仍由 indexer 的 contract indexer/API 管理；尚未迁入经确定性编译和链上 bytecode 验证的 DKVS 系统 Blob。
 
 EVM 合约源码不保存在 contract indexer。规范存储位置为：
 
@@ -67,6 +83,8 @@ DeployTx 已支付的 deploy fee 同时包含该合约一个永久源码 Blob �
 
 ### 2.4 明确不修改
 
+> 状态：**设计约束** — 这些是实施边界，不是独立代码重构任务。
+
 - 不增加通用 `ValidatorId` 握手认证；
 - 不修改 SegWit v0 资产 sighash；
 - 不提升 UTXO/spend-journal DB version；
@@ -81,6 +99,8 @@ DeployTx 已支付的 deploy fee 同时包含该合约一个永久源码 Blob �
 ## 3. PoS V2 与最终性
 
 ## 3.1 激活参数
+
+> 状态：**未实现** — `chaincfg.Params` 中没有 `PosV2ActivationHeight`，主网/测试网也没有本计划要求的 PoS V2 高度开关。
 
 在 `chaincfg.Params` 中增加：
 
@@ -155,6 +175,8 @@ H-1 / hash(H-1)
 
 ## 3.2 Producer proposal digest
 
+> 状态：**未实现** — 当前 PoS 签名尚未绑定规范化的完整区块 proposal digest。
+
 PoS V1 当前只签 `height-nonce`。PoS V2 必须签完整区块 proposal。
 
 为避免签名写入 coinbase 后改变 Merkle root 和 block hash 造成循环，定义：
@@ -195,6 +217,8 @@ SHA256d(
 
 ## 3.3 区块证书
 
+> 状态：**未实现** — 尚无 coinbase 中的 PoS V2 producer/finalizer 双签名结构和对应验证。
+
 PoS V2 区块至少包含：
 
 ```text
@@ -215,6 +239,8 @@ FinalizerSignature
 DER 签名可能使脚本超过当前 100 bytes 上限，PoS V2 激活后应使用明确的新上限，例如 256 bytes。PoS V1 历史区块继续沿用旧限制。
 
 ## 3.4 原定生产者与替补层级
+
+> 状态：**部分实现** — 当前有 PoS V1 的生产者选择和替补链路；PoS V2 对 expected/actual producer、替补层级及证书身份的共识验证未实现。
 
 对于高度 `H`：
 
@@ -250,6 +276,8 @@ peer connection state
 
 ### 3.4.1 替补出块的奖励地址（2026-10-05 确认）
 
+> 状态：**未实现** — 仍需按原定时隙和实际替补者推导接收通道，并将同一规则用于模板、区块验证和 replay。
+
 不改变 Miner、Core、Bootstrap 的出块时隙和替补顺序。仅在 PoS V2 激活后，按原定时隙和实际出块者确定 coinbase 的经济输出地址：
 
 | 原定时隙 | 实际出块者 | 奖励地址 |
@@ -279,6 +307,8 @@ Miner 和 Core 失联或未按时出块时，Bootstrap 按现有替补策略接�
 
 ## 3.5 Bootstrap finality certificate
 
+> 状态：**部分实现** — `MsgMineBlock`/`MsgMineAck` 审核消息链路存在，但 Bootstrap 对 proposal digest 的 finality 签名和区块内证书校验尚未实现。
+
 现有 `MsgMineBlock` 审核链路继续复用：
 
 ```text
@@ -301,6 +331,8 @@ Bootstrap -> Core review
 所有节点根据链上排序机状态确定 producer/finalizer 公钥，不把 `peer.ValidatorId` 当作共识身份依据。
 
 ## 3.6 Bootstrap 一高度一签名锁
+
+> 状态：**未实现** — 未找到先持久化 approval lock、重启恢复并拒绝同高度不同 digest 的实现。
 
 Bootstrap 返回 finalizer 签名前必须原子持久化：
 
@@ -326,6 +358,8 @@ finalizer_signature
 这是 no-reorg 的核心安全边界。
 
 ## 3.7 Direct-tip only 与禁止 reorg
+
+> 状态：**未实现** — 当前仍允许非 tip 父块进入侧链并参与后续主链选择。
 
 PoS V2 激活后：
 
@@ -358,6 +392,8 @@ block.Header.PrevBlock == bestChain.Tip().Hash
 
 ## 3.8 停止使用 chainwork fork choice
 
+> 状态：**未实现** — `connectBestChain` 仍比较累计 chainwork 并可触发 reorg。
+
 为避免数据库迁移：
 
 - 保留 `blockNode.workSum` 字段；
@@ -375,6 +411,8 @@ Bitcoin difficulty retarget 只保留给历史 V1 区块或旧测试，不再作
 
 ## 3.9 `BFFastAdd` 不得绕过 PoS V2
 
+> 状态：**部分实现** — `BFFastAdd` 前仍会执行部分现有区块顺序和挖矿信息检查；PoS V2 证书、替补身份和奖励地址校验尚不存在，KnownValid 快速路径也仍会跳过部分完整验证。
+
 以下检查必须始终执行：
 
 - PoS V2 coinbase/certificate 格式；
@@ -391,6 +429,8 @@ Bitcoin difficulty retarget 只保留给历史 V1 区块或旧测试，不再作
 
 ## 3.10 零 BTC 补贴
 
+> 状态：**部分实现** — 当前挖矿模板以零 BTC 补贴起步、只加交易费；共识验证仍允许 `CalcBlockSubsidy(height) + fees`，尚未按 PoS V2 激活高度收紧上限。
+
 PoS V2 开始后，coinbase BTC 输出上限只能是：
 
 ```text
@@ -406,6 +446,8 @@ CalcBlockSubsidy(height)
 资产 gas fee继续按现有资产 fee 规则处理。PoS V1 历史区块不回溯应用本规则。
 
 ## 3.11 排序机 direct-parent readiness
+
+> 状态：**部分实现** — 合约/AIDX 有 candidate parent readiness 检查；它不是 PoS V2 独立的排序机 tip/hash 门禁，且仍保留分支视图路径。
 
 PoS V2 不实现候选分支排序机视图。验证区块前必须保证：
 
@@ -425,6 +467,8 @@ candidate parent height/hash
 
 ## 3.12 合约激活顺序
 
+> 状态：**未实现** — 当前没有 PoS V2 激活参数，因而也没有强制 `ContractActivationHeight >= PosV2ActivationHeight` 的检查。
+
 主网要求：
 
 ```text
@@ -440,6 +484,8 @@ ContractActivationHeight >= PosV2ActivationHeight
 以下修改前必须先扫描主网历史数据。任何一项发现历史不兼容记录时，停止修改并重新讨论未来激活规则。
 
 ## 4.1 禁止负数和零数量
+
+> 状态：**部分实现** — 共识输出检查会拒绝负数和非法 Decimal，但仍接受零数量；正数量规则和相关输入、coinbase、合约输出边界尚未完整统一。
 
 所有资产项要求：
 
@@ -464,6 +510,8 @@ Amount > 0
 
 ## 4.2 BindingSat 一致性
 
+> 状态：**部分实现** — 已检查普通交易输入/输出 BindingSat 一致性、冲突输入和 carrier sats；与 ticker 注册信息的一致性及历史数据扫描报告仍未完成。
+
 要求：
 
 - 同一 AssetName 的 `BindingSat` 不得在转账中任意改变；
@@ -477,6 +525,8 @@ TxOut.Value >= required_binding_sats
 
 ## 4.3 资产列表 canonical form
 
+> 状态：**部分实现** — 普通交易输出已有排序和重复项检查；空字段、所有入口的一致校验及完整 canonical 编码约束尚未覆盖。
+
 每个 `TxOut.Assets` 必须：
 
 - AssetName 唯一；
@@ -488,6 +538,8 @@ TxOut.Value >= required_binding_sats
 - 具有唯一 canonical serialization。
 
 ## 4.4 AssetName 严格三段
+
+> 状态：**部分实现** — 字符串构造器要求三段，但不保证每段非空，二进制资产字段和其他入口也尚未统一执行完整规则。
 
 聪网只允许：
 
@@ -524,6 +576,8 @@ rgb11:f:usdt@k7m3q9x2d4
 
 ## 4.5 资源上限
 
+> 状态：**未实现** — 当前有交易/协议总大小限制，但未找到本节列出的资产项数、字段长度、单输出资产编码和 BindingSat 专项上限。
+
 增加明确上限：
 
 - 每个输出最大资产项数；
@@ -535,6 +589,8 @@ rgb11:f:usdt@k7m3q9x2d4
 - BindingSat 范围。
 
 ## 4.6 SegWit v0 sighash
+
+> 状态：**部分实现** — 当前 SegWit v0 sighash 已纳入 prevout 资产数据且算法保持不变；本节要求的专用固定向量和 SDK 可信 UTXO 来源尚未完整确认。
 
 保持当前算法，不修改历史签名摘要。
 
@@ -550,6 +606,8 @@ rgb11:f:usdt@k7m3q9x2d4
 
 ## 5.1 每个激活后区块都承诺 combined state root
 
+> 状态：**部分实现** — combined root、coinbase commitment 和多个模块的状态校验已存在；当前没有合约 activity 的区块可直接跳过验证，因此尚未满足“激活后每块都承诺”的规则。
+
 合约激活以后，无论区块是否有合约 activity，都必须有且只有一个 combined state root commitment。
 
 计算：
@@ -563,9 +621,13 @@ rgb11:f:usdt@k7m3q9x2d4
 
 ## 5.2 状态大小在 validation 阶段检查
 
+> 状态：**未实现** — 16 MiB 检查目前用于状态持久化边界，没有在 block validation 阶段对各模块 post-state 执行同一限制。
+
 当前 16 MiB 限制不能只在数据库持久化时执行。Template、EVM、Agent 的 post-state 必须在 block validation 阶段执行完全相同的确定性大小检查，避免“共识验证通过、DB 提交失败”。
 
 ## 5.3 KnownValid 与 post-state
+
+> 状态：**部分实现** — transient post-state 的缓存、提交和回收能力已存在；未找到 KnownValid 区块缺少缓存状态时强制重执行合约的完整路径。
 
 如果 block 被标记 KnownValid，但 transient post-state 已丢失：
 
@@ -574,6 +636,8 @@ rgb11:f:usdt@k7m3q9x2d4
 - 不能静默跳过状态写入。
 
 ## 5.4 状态快照清理
+
+> 状态：**部分实现** — 已有 transient post-state 回收和状态存储清理钩子；最近诊断窗口、finalized checkpoint 与生产/测试网差异化保留策略尚未形成完整方案。
 
 需要设计：
 
@@ -589,6 +653,8 @@ PoS V2 生产环境不允许 reorg，可采用较小历史快照窗口；测试�
 ## 6. EVM source metadata：规范系统 Blob
 
 ## 6.1 核心保证
+
+> 状态：**未实现** — 当前源码没有“保存即表示源码与链上 init/runtime bytecode 精确等价”的保证。
 
 规范路径：
 
@@ -612,6 +678,8 @@ PoS V2 生产环境不允许 reorg，可采用较小历史快照窗口；测试�
 
 ## 6.2 Key 规则
 
+> 状态：**未实现** — 尚无 `/blob/evm/source/<contract_address>` 规范 key 和对应 canonical address 校验。
+
 `<contract_address>` 必须是 DeployTx 成功后返回的规范 SatoshiNet EVM 合约地址：
 
 - 使用统一 contract address decoder 校验；
@@ -631,6 +699,8 @@ contract address
 一笔成功 DeployTx 只对应一个规范源码槽位。
 
 ## 6.3 DKVS path mode
+
+> 状态：**未实现** — 尚无面向 EVM source 的 verified public write-once DKVS 专用写入模式。
 
 该路径是特殊系统 Blob，不使用普通：
 
@@ -660,6 +730,8 @@ VerifiedPublicWriteOnce
 采用 write-once 是为了避免“任何人可写 + 无额外费用”形成无限覆盖、P2P 修复和编译 DoS。若未来确需更换规范源码，应单独设计治理/authority replacement 流程，不在本次协议中开放普通更新。
 
 ## 6.4 Source package
+
+> 状态：**未实现** — 当前 source metadata API/schema 不是本节定义的确定性、版本化 source package。
 
 建议使用版本化、可确定编译的 JSON envelope：
 
@@ -714,6 +786,8 @@ compilerBinaryHash
 
 ## 6.5 确定性编译环境
 
+> 状态：**未实现** — 找到的 `solc` 调用用于 E2E/开发编译，没有节点侧固定编译器白名单、sandbox 和 fail-closed 写入流程。
+
 初始版本采用严格、可重现配置：
 
 - Solidity 单文件；
@@ -733,6 +807,8 @@ compilerBinaryHash
 后续若支持多文件/import，必须先定义完整 source bundle、路径 canonicalization、依赖 hash 和 compiler input hash；不得直接开放节点文件系统或网络 import。
 
 ## 6.6 写入验证流程
+
+> 状态：**未实现** — 尚无从 DeployTx 查询、编译、精确 init code 比对、准确上下文 runtime replay 到原子写入的节点流程。
 
 一次 source write 必须按以下顺序执行：
 
@@ -863,6 +939,8 @@ compiler binary hash
 
 ## 6.7 费用语义
 
+> 状态：**未实现** — DeployTx source entitlement 与 DKVS 一次性永久 Blob 槽位尚未实现。
+
 DeployTx 的正常 deploy fee 自动授予：
 
 ```text
@@ -892,6 +970,8 @@ PoolContract = contract address
 
 ## 6.8 Writer 身份
 
+> 状态：**未实现** — 尚无基于 DeployTx entitlement 和 bytecode 验证、而非 deployer 身份的 source 写入授权。
+
 写入者可以不是：
 
 - deployer；
@@ -911,6 +991,8 @@ PoolContract = contract address
 ```
 
 ## 6.9 Contract indexer 与 API 边界
+
+> 状态：**未实现** — source metadata 仍保存在 contract indexer；API 尚未改为读写规范 DKVS 系统 Blob。
 
 从 contract indexer 删除/停用：
 
@@ -959,6 +1041,8 @@ POST /v3/contracts/:contract/evm/source
 
 ## 6.10 EVM source 测试要求
 
+> 状态：**未实现** — 当前没有覆盖本节验证、write-once、runtime replay 等要求的节点侧功能实现；现有 Solidity E2E 编译测试不等同于这些验收。
+
 至少覆盖：
 
 1. 正确源码、正确 compiler config、正确 constructor args：接受；
@@ -990,6 +1074,8 @@ POST /v3/contracts/:contract/evm/source
 
 ## 7. DKVS 当前状态同步安全
 
+> 状态：**已替代** — 原方案已由 [`dkvs-design.md`](./dkvs-design.md) 取代；当前源码可见 snapshot 来源认证、签名和安装 baseline 检查。后续按新设计文档验收，本节不再作为实现清单。
+
 > 本节原始方案已被 2026-10-04 的最终 DKVS 设计替代。规范以
 > [dkvs-design.md](./dkvs-design.md) 为准，本节只保留 review 结论。
 
@@ -1012,6 +1098,8 @@ POST /v3/contracts/:contract/evm/source
 
 ## 8.1 Stake/unstake panic
 
+> 状态：**已实现** — stake/unstake 解析错误和缺失资产信息会提前返回；对应回归测试文件已存在，未在本次运行。
+
 修复：
 
 - `handleStakeAssetV2` 中反向的 `channelMap` 判断；
@@ -1020,6 +1108,8 @@ POST /v3/contracts/:contract/evm/source
 - 合法或恶意 OP_RETURN 不得让节点永久 panic 在某高度。
 
 ## 8.2 BaseIndexer Clone
+
+> 状态：**已实现** — `Clone` 已深拷贝相关 map、UTXO/index 和可变记录；对应 Clone/DB snapshot 回归测试已存在，未在本次运行。
 
 对以下可变对象执行真正深拷贝：
 
@@ -1032,6 +1122,8 @@ POST /v3/contracts/:contract/evm/source
 `Clone(true)` 不得在持有 `RLock` 时修改 live `AddressValueV2.Op`。
 
 ## 8.3 主网判断
+
+> 状态：**已实现** — `IsMainnet()` 已按 `chaincfg.Params.Net == wire.MainNet` 判断并处理 nil；已有测试文件，未在本次运行。
 
 最小修复：
 
@@ -1046,6 +1138,8 @@ func (b *IndexerMgr) IsMainnet() bool {
 
 ## 8.4 Channel state event 并发保护
 
+> 状态：**已实现（范围内）** — `RecordChannelStateEvent` 已加互斥锁并保存独立副本；当前实现仍在 Flush 期间持有全局锁，写入失败时内存 map 不回滚，源码注释已记录这两项限制。
+
 `RecordChannelStateEvent` 修改共享 map 时增加正确 mutex。生产禁用规则依赖修复后的 `IsMainnet()`。
 
 ---
@@ -1053,6 +1147,8 @@ func (b *IndexerMgr) IsMainnet() bool {
 ## 9. 挖矿模板与提交
 
 ## 9.1 `SubmitNewBlock`
+
+> 状态：**已实现** — 提交回调返回 false 时现在返回错误；对应测试文件已存在，未在本次运行。
 
 当前不能忽略 `submitBlock()` 的 bool 结果。修改后：
 
@@ -1062,6 +1158,8 @@ func (b *IndexerMgr) IsMainnet() bool {
 - 只有区块真正接入主链才返回 hash/height success。
 
 ## 9.2 Anchor/DeAnchor 模板资源
+
+> 状态：**已实现** — Anchor/DeAnchor 已进入模板选择流程，并执行区块重量、sigops、输入/UTXO、重复 Anchor funding、费用及依赖排序检查；相关测试文件已存在，未在本次运行。
 
 Anchor 和 DeAnchor 不能直接 append 绕过：
 
@@ -1081,7 +1179,11 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ## 10. 测试与验证矩阵
 
+> 状态：**本次未运行测试** — 以下是验收要求，不代表通过；每个分组的状态只描述已有代码覆盖情况。
+
 ## 10.1 PoS V2
+
+> 状态：**未实现/未验收** — PoS V2 核心共识实现尚未落地，本组要求没有可运行的完整验收对象。
 
 至少覆盖：
 
@@ -1109,6 +1211,8 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ## 10.2 资产
 
+> 状态：**部分实现/未验收** — 已有输出 canonical 顺序、BindingSat 和负资产相关测试；零值、严格 AssetName、资源上限及历史扫描验收仍缺。
+
 至少覆盖：
 
 - `-1 A + 2 A` 负资产增发；
@@ -1125,6 +1229,8 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ## 10.3 合约
 
+> 状态：**部分实现/未验收** — 已有 state root、模块状态和 post-state 相关测试；validation 大小限制、KnownValid 恢复和快照保留策略仍缺。
+
 至少覆盖：
 
 - 无 activity 区块的父 combined root；
@@ -1137,6 +1243,8 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ## 10.4 DKVS
 
+> 状态：**已替代/未验收** — 应使用最终 `dkvs-design.md` 及对应 SDK/节点验收记录；本次未运行这些测试。
+
 至少覆盖：
 
 - 未授权 snapshot source 拒绝；
@@ -1146,6 +1254,8 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 - EVM source 特殊 path、fee、compile、runtime replay 和 write-once 测试。
 
 ## 10.5 长测试基础设施
+
+> 状态：**待确认** — 本次未检查测试 supervisor 的运行记录，也未运行长测试以验证终态与日志收集行为。
 
 修复：
 
@@ -1167,12 +1277,16 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ### 阶段 0：结束当前测试
 
+> 状态：**待确认** — 聊天记录中的主网验收已通过，但当前测试轮次是否结束、commit/tip/log 基线是否归档，不能仅凭本机源码确认。
+
 1. 冻结代码；
 2. 完成本轮测试；
 3. 保存日志、commit、tip 和 DB 备份；
 4. 修复测试 supervisor 终态记录问题。
 
 ### 阶段 1：无历史格式影响的直接修复
+
+> 状态：**已实现** — 本阶段列出的 IsMainnet、channel event mutex、stake/unstake、Clone、SubmitNewBlock、Anchor/DeAnchor，以及 DKVS TTL 注释和 snapshot authority 修复均可在当前源码中找到；本次未运行测试。
 
 1. `IsMainnet()`；
 2. channel state event mutex；
@@ -1185,12 +1299,16 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ### 阶段 2：资产历史扫描与安全规则
 
+> 状态：**部分实现** — 若干基础共识校验已落地；主网兼容扫描工具/报告和完整规则仍未完成，不能据此收紧剩余共识规则。
+
 1. 编写主网数据扫描工具；
 2. 输出资产规范兼容报告；
 3. 若全部兼容，再落地负数、零值、重复、排序、BindingSat、严格三段和资源上限；
 4. 若发现不兼容，停止并重新设计未来激活规则。
 
 ### 阶段 3：PoS V2
+
+> 状态：**未实现** — 本阶段共识规则在当前源码中尚未落地；主网 activation 保持未启用。
 
 1. 增加 activation params；
 2. proposal digest；
@@ -1208,6 +1326,8 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ### 阶段 4：合约状态与 EVM source
 
+> 状态：**部分实现** — combined state root、状态存储和 transient post-state 框架已存在；本阶段未完成的 validation/恢复/清理改造和全部 EVM source 系统 Blob 功能仍待实施。
+
 1. 每块 combined root；
 2. validation 阶段状态大小；
 3. KnownValid/post-state；
@@ -1221,6 +1341,8 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ### 阶段 5：下一轮测试网
 
+> 状态：**待执行** — 需要先确认回滚高度/hash、统一版本和激活参数；当前源码没有 PoS V2 activation 参数。
+
 1. 使用 V1 版本统一回滚；
 2. 确认相同 `R/hash(R)`；
 3. 设置 `Htest`；
@@ -1228,6 +1350,8 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 5. 开始 PoS V2/no-reorg/contract/DKVS 新一轮验收。
 
 ### 阶段 6：主网发布准备
+
+> 状态：**未开始** — PoS V2 activation、finalizer lock 和相关发布 checkpoint 尚不存在。
 
 1. 选择主网 `H`；
 2. 固化 `H-1/hash(H-1)` checkpoint；
@@ -1256,15 +1380,17 @@ PoS V2 禁止侧链后，不再额外实现候选分支 Anchor set。
 
 ## 13. 下一次 session 的直接执行入口
 
+> 状态：**已更新** — 阶段 1 已不再是待实施任务；继续工作前应先确认当前测试基线，再从资产历史扫描和未实现的 PoS V2/合约项开始。
+
 下一次继续时按以下顺序开始：
 
 1. 读取本文档；
 2. 读取仓库 `AGENTS.md`（如果存在）；
 3. 检查 `git status` 和全部未提交修改；
 4. 确认当前测试轮次已经结束；
-5. 不覆盖当前 DKVS TTL changes；
-6. 先实施“阶段 1”的最小非共识修复并增加测试；
-7. 资产规则先只做扫描，不直接改变主网共识；
-8. PoS V2 主网 activation 保持禁用；
-9. 测试网 activation 高度在完成 V1 回滚后再设置；
-10. EVM source 写入必须同时通过 exact init code 和 exact runtime replay，不能降级成仅检查 DeployTx 存在。
+5. 阶段 1 的直接修复已在当前源码中，不要重复实施；
+6. 资产规则先完成主网历史扫描和兼容报告，不直接改变主网共识；
+7. PoS V2 主网 activation 保持禁用，测试网 activation 高度只能在 V1 回滚并统一 tip 后设置；
+8. 合约状态项先补齐 validation、KnownValid 和状态保留缺口；
+9. EVM source 写入必须同时通过 exact init code 和 exact runtime replay，不能降级成仅检查 DeployTx 存在；
+10. 不 stage、commit 或 push，除非用户另行明确要求。
