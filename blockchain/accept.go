@@ -37,6 +37,14 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 	blockHeight := prevNode.height + 1
 	block.SetHeight(blockHeight)
 
+	// Ordinary peers cannot replace an approved POS suffix. Reject competing
+	// branches before storing bytes or an index node: legacy headers have no
+	// expensive PoW that would otherwise bound nonce-variant disk growth.
+	// Explicit administrator rollback still uses InvalidateBlock/ReconsiderBlock.
+	if b.chainParams.POSV2Active(b.bestChain.Tip().height) && prevNode != b.bestChain.Tip() {
+		return false, ruleError(ErrPrevBlockNotBest, "competing branch cannot replace an activated POS tip")
+	}
+
 	// The block must pass all of the validation rules which depend on the
 	// position of the block within the block chain.
 	err := b.checkBlockContext(block, prevNode, flags)
@@ -47,7 +55,8 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 	// Direct best-tip blocks on contract-enabled nodes are fully prevalidated
 	// before any raw bytes or block-index status are persisted. This makes local
 	// readiness failures retryable and keeps permanently invalid blocks out of
-	// ffldb. The resulting status and contract post-state are reused below.
+	// ffldb. Reexecute contracts even after a successful proposal: a hash does
+	// not bind the witness, and retained execution state may have been released.
 	blockHeader := &block.MsgBlock().Header
 	newNode := newBlockNode(blockHeader, prevNode)
 	prevalidated := false
@@ -55,18 +64,15 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 		if err := b.requireContractParentReadyLocked(block); err != nil {
 			return false, err
 		}
-		if b.takePreparedBlock(*block.Hash(), *prevHash) {
-			prevalidated = true
-		} else {
-			view := NewUtxoViewpoint()
-			view.SetBestHash(prevHash)
-			if err := b.checkConnectBlock(newNode, block, view, nil); err != nil {
-				b.releaseContractPostState(block.Hash())
-				b.cacheRejectedBlock(*block.Hash(), err)
-				return false, err
-			}
-			prevalidated = true
+		b.takePreparedBlock(*block.Hash(), *prevHash)
+		view := NewUtxoViewpoint()
+		view.SetBestHash(prevHash)
+		if err := b.checkConnectBlock(newNode, block, view, nil); err != nil {
+			b.releaseContractPostState(block.Hash())
+			b.cacheRejectedBlock(*block.Hash(), err)
+			return false, err
 		}
+		prevalidated = true
 		newNode.status |= statusValid
 	}
 	releasePrepared := prevalidated
@@ -89,7 +95,7 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 		return dbStoreBlock(dbTx, block)
 	})
 	if err != nil {
-		return false, err
+		return false, b.posStorageError(block.Height(), err)
 	}
 
 	// Create a new block node for the block and add it to the node index. Even
@@ -100,7 +106,7 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 	b.index.AddNode(newNode)
 	err = b.index.flushToDB()
 	if err != nil {
-		return false, err
+		return false, b.posStorageError(block.Height(), err)
 	}
 
 	// Connect the passed block to the chain while respecting proper chain
@@ -111,6 +117,22 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 		return false, err
 	}
 	releasePrepared = false
+	if err := b.finishBlockAcceptance(block); err != nil {
+		return false, err
+	}
+	return isMainChain, nil
+}
+
+// finishBlockAcceptance completes durability and relay notification for both
+// newly stored blocks and stored POS candidates recovered after a restart.
+// This function MUST be called with the chain state lock held (for writes).
+func (b *BlockChain) finishBlockAcceptance(block *btcutil.Block) error {
+	if b.chainParams.POSV2Active(block.Height()) {
+		if err := database.Sync(b.db); err != nil {
+			b.posDurabilityErr = fmt.Errorf("POS accepted-block sync failed: %w", err)
+			return b.posDurabilityErr
+		}
+	}
 
 	// Notify the caller that the new block was accepted into the block
 	// chain.  The caller would typically want to react by relaying the
@@ -121,5 +143,5 @@ func (b *BlockChain) maybeAcceptBlock(block *btcutil.Block, flags BehaviorFlags)
 		b.sendNotification(NTBlockAccepted, block)
 	}()
 
-	return isMainChain, nil
+	return nil
 }

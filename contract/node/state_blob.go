@@ -17,6 +17,25 @@ func stateChunkBucketKey(key []byte) []byte {
 	return append(append([]byte(nil), key...), []byte(":chunks")...)
 }
 
+// Replace only this module's latest snapshot, in the caller's chain transaction.
+// Module tips may lag the chain tip through any number of unchanged blocks.
+func putLatestStateBlob(parent, byBlock database.Bucket, tipKey, key, encoded []byte) error {
+	previous := append([]byte(nil), parent.Get(tipKey)...)
+	if len(previous) != 0 && len(previous) != len(key) {
+		return fmt.Errorf("corrupt contract state tip")
+	}
+	if err := putStateBlob(byBlock, key, encoded); err != nil {
+		return err
+	}
+	if err := parent.Put(tipKey, key); err != nil {
+		return err
+	}
+	if len(previous) != 0 && !bytes.Equal(previous, key) {
+		return deleteStateBlob(byBlock, previous)
+	}
+	return nil
+}
+
 func putStateBlob(bucket database.Bucket, key, encoded []byte) error {
 	if err := deleteStateBlob(bucket, key); err != nil {
 		return err

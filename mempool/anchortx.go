@@ -32,7 +32,7 @@ func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32)
 	log.Debug("CheckAnchorTxValid ...\n")
 
 	// Check the locked tx out is valid
-	txInfo, err := anchortx.CheckAnchorTxValid(tx, isNew)
+	txInfo, err := anchortx.CheckAnchorTxValid(tx, isNew, mp.cfg.ChainParams.POSV2Active(txHeight))
 	if err != nil {
 		log.Errorf("invalid Anchor tx: %s, %v", tx.TxHash().String(), err)
 		return err
@@ -64,7 +64,9 @@ func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32)
 }
 
 func anchorFundingUtxo(tx *btcutil.Tx) (string, error) {
-	txInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+	// Bookkeeping only: admission already authenticated the complete transaction.
+	// Do not reverify a removed transaction using a later activation height.
+	txInfo, err := anchortx.ParseAnchorScript(tx.MsgTx().TxIn[0].SignatureScript)
 	if err != nil {
 		return "", err
 	}

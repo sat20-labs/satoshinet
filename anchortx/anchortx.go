@@ -102,7 +102,12 @@ func Stop() {
 	}
 }
 
-func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AscendInfo, error) {
+func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool) (*AscendInfo, error) {
+	if bindOutputs {
+		if err := sindexer.CheckAnchorTxEncoding(tx); err != nil {
+			return nil, err
+		}
+	}
 
 	if len(tx.TxIn) != 1 {
 		err := fmt.Errorf("invalid Anchor tx, No Anchor info: %s", tx.TxHash().String())
@@ -111,18 +116,33 @@ func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AscendInfo, err
 	AnchorScript := tx.TxIn[0].SignatureScript
 
 	// Check the Anchor tx has completed, all the assets is locked in lnd will be mapped to sats net only one times
-	lockedInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets)
+	lockedInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets, tx.TxOut, bindOutputs)
 	//	err = fmt.Errorf("invalid Anchor tx <%s>, just for test", tx.TxHash().String()) // Just for test
 	if err != nil {
 		log.Debugf("invalid Anchor tx, invalid Anchor script: %s, err: %s", tx.TxHash().String(), err.Error())
 		return nil, err
 	}
 
-	// Check anchor amount is same with locked amount
-
+	// Activated invoices also authenticate the actual output distribution.
+	// Keep the historical signature message only below the activation height.
 	var anchorAssets wire.TxAssets
 	anchorValue := int64(0)
 	for _, out := range tx.TxOut {
+		operation, _, parseErr := sindexer.ReadDataFromNullDataScript(out.PkScript)
+		if parseErr == nil {
+			switch operation {
+			case sindexer.CONTENT_TYPE_DESCENDING, sindexer.CONTENT_TYPE_BINDREFERRER, sindexer.CONTENT_TYPE_UNSTAKE:
+				return nil, fmt.Errorf("anchor operation %d requires an ordinary input", operation)
+			}
+		}
+		// Merge sums amounts but can hide a conflicting BindingSat on an
+		// earlier output. Each UTXO must preserve the signed invoice binding.
+		for _, asset := range out.Assets {
+			signedAsset, err := lockedInfo.TxAssets.Find(&asset.Name)
+			if err != nil || signedAsset == nil || signedAsset.BindingSat != asset.BindingSat {
+				return nil, fmt.Errorf("anchor output asset %s binding does not match signed invoice", asset.Name.String())
+			}
+		}
 		anchorValue += out.Value
 		anchorAssets.Merge(out.Assets)
 	}
@@ -157,7 +177,7 @@ func checkAscendingTickerInfo(tx *wire.MsgTx, lockedInfo *AscendInfo) error {
 		if tickerInfo != nil {
 			return fmt.Errorf("anchor contains duplicate ascending markers")
 		}
-		tickerInfo, err = sindexer.GenTickerInfo(data)
+		tickerInfo, err = sindexer.ValidateAscendingTicker(data, lockedInfo.TxAssets)
 		if err != nil {
 			return fmt.Errorf("invalid ascending ticker: %w", err)
 		}
@@ -166,34 +186,18 @@ func checkAscendingTickerInfo(tx *wire.MsgTx, lockedInfo *AscendInfo) error {
 		return fmt.Errorf("anchor is missing ascending ticker")
 	}
 
-	expectedName := &common.ASSET_PLAIN_SAT
-	expectedN := uint32(1)
-	if len(lockedInfo.TxAssets) == 1 {
-		expectedName = &lockedInfo.TxAssets[0].Name
-		expectedN = lockedInfo.TxAssets[0].BindingSat
-	}
-	if !sameAnchorAssetName(&tickerInfo.AssetName, expectedName) {
-		return fmt.Errorf("ascending ticker asset %s does not match anchor asset %s",
-			tickerInfo.AssetName.String(), expectedName.String())
-	}
-	if uint32(tickerInfo.N) != expectedN {
-		return fmt.Errorf("ascending ticker binding sats %d does not match anchor %d",
-			tickerInfo.N, expectedN)
-	}
 	return nil
-}
-
-func sameAnchorAssetName(left, right *wire.AssetName) bool {
-	if common.IsPlainAsset(left) && common.IsPlainAsset(right) {
-		return true
-	}
-	return *left == *right
 }
 
 // The Anchor tx info is record in Anchor tx input script
 // return txscript.NewScriptBuilder().AddData(data).AddData(outputScript).
 // AddInt64(int64(amount)).AddInt64(int64(extraNonce)).Script()
-func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AnchorInfo, error) {
+func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool) (*AnchorInfo, error) {
+	if bindOutputs {
+		if err := sindexer.CheckAnchorTxEncoding(tx); err != nil {
+			return nil, err
+		}
+	}
 	if len(tx.TxIn) != 1 {
 		err := fmt.Errorf("invalid Anchor tx: %s", tx.TxHash().String())
 		return nil, err
@@ -207,7 +211,7 @@ func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets bool) (*AnchorInfo, error)
 
 	log.Debugf("AnchorScript: %x\n", AnchorScript)
 
-	lockedTxInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets)
+	lockedTxInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets, tx.TxOut, bindOutputs)
 	if err != nil {
 		err := fmt.Errorf("%s : anchortx[%s]", err.Error(), tx.TxHash().String())
 		return nil, err
@@ -244,6 +248,11 @@ func ParseAnchorScript(AnchorScript []byte) (*AnchorInfo, error) {
 	if !tokenizer.Next() {
 		err := fmt.Errorf("invalid Anchor tx script for amount")
 		return nil, err
+	}
+	// This parser also handles invoices below H and bookkeeping. Bound the
+	// amount here, independently of the activated canonical-encoding check.
+	if len(tokenizer.Data()) > 8 {
+		return nil, fmt.Errorf("invalid Anchor amount: number exceeds eight bytes")
 	}
 	value := tokenizer.ExtractInt64()
 
@@ -361,7 +370,23 @@ func VerifyMessage(pubKey *secp256k1.PublicKey, msg []byte, signature *ecdsa.Sig
 	return signature.Verify(msgDigest, pubKey)
 }
 
-func CheckAnchorPkScript(anchorPkScript []byte, bCheckUtxoAssets bool) (*AscendInfo, error) {
+func CheckAnchorPkScript(anchorPkScript []byte, bCheckUtxoAssets bool, outputs []*wire.TxOut, bindOutputs bool) (*AscendInfo, error) {
+	return CheckAnchorPkScriptWithCoreCheck(anchorPkScript, bCheckUtxoAssets, IsCoreNode, outputs, bindOutputs)
+}
+
+// CheckAnchorPkScriptWithCoreCheck uses the caller's Core membership state.
+// Indexing a block must use its own locked view, rather than reentering the
+// global indexer (which may also represent a different historical branch).
+func CheckAnchorPkScriptWithCoreCheck(anchorPkScript []byte, bCheckUtxoAssets bool,
+	isCoreNode func([]byte) bool, outputs []*wire.TxOut, bindOutputs bool) (*AscendInfo, error) {
+	if bindOutputs {
+		if err := sindexer.CheckAnchorScriptEncoding(anchorPkScript); err != nil {
+			return nil, err
+		}
+	}
+	if isCoreNode == nil {
+		return nil, fmt.Errorf("Core membership check is required")
+	}
 	lockedTxInfo, err := ParseAnchorScript(anchorPkScript)
 	if err != nil {
 		return nil, err
@@ -389,8 +414,8 @@ func CheckAnchorPkScript(anchorPkScript []byte, bCheckUtxoAssets bool) (*AscendI
 		return nil, fmt.Errorf("invalid addr type %d", addrType)
 	}
 
-	invoice, err := StandardAnchorScript(lockedTxInfo.Utxo, lockedTxInfo.WitnessScript,
-		lockedTxInfo.Value, lockedTxInfo.TxAssets)
+	invoice, err := sindexer.StandardAnchorInvoice(lockedTxInfo.Utxo, lockedTxInfo.WitnessScript,
+		lockedTxInfo.Value, lockedTxInfo.TxAssets, outputs, bindOutputs)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +449,7 @@ func CheckAnchorPkScript(anchorPkScript []byte, bCheckUtxoAssets bool) (*AscendI
 	}
 	// A is server node, sign this invoice
 
-	if !IsCoreNode(pubkeyBytes0) {
+	if !isCoreNode(pubkeyBytes0) {
 		return nil, fmt.Errorf("not signed by core node")
 	}
 

@@ -125,3 +125,12 @@ func (c *blockValidationCache) takePrepared(hash, parent chainhash.Hash) (bool, 
 	ready := now.Before(e.expires) && e.parent == parent
 	return ready, !ready
 }
+
+func (c *blockValidationCache) removePrepared(hash chainhash.Hash) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry := c.prepared[hash]; entry != nil {
+		delete(c.prepared, hash)
+		c.preparedOrder.Remove(entry.element)
+	}
+}

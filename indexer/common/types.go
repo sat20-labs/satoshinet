@@ -84,8 +84,13 @@ type AscendData struct {
 func (p *AscendData) ToMinerInfo() *MinerInfo {
 	var name, amt string
 	if len(p.Assets) > 0 {
-		name = p.Assets[0].Name.String()
-		amt = p.Assets[0].Amount.String()
+		stakeName := indexer.NewAssetNameFromString(indexer.GetStakeAssetNameWithHeightL2(p.Height))
+		asset, err := p.Assets.Find(stakeName)
+		if err != nil || asset == nil {
+			return nil
+		}
+		name = asset.Name.String()
+		amt = asset.Amount.String()
 	} else {
 		amt = fmt.Sprintf("%d", p.Value)
 	}
@@ -173,7 +178,7 @@ func DescendOperationName(operation uint8) string {
 
 type MinerAscendInfo struct {
 	AscendHeight int    // L2
-	AscendUtxo   string // L1
+	AscendUtxo   string // L1 funding outpoint or L2 STAKE outpoint
 }
 
 type CoreNodeInfo struct {
@@ -183,7 +188,7 @@ type CoreNodeInfo struct {
 
 type MinerInfo struct {
 	AscendHeight int    // L2
-	AscendUtxo   string // L1
+	AscendUtxo   string // L1 funding outpoint or L2 STAKE outpoint
 	AnchorTxId   string // L2
 	AssetName    string
 	AssetAmt     string

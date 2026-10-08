@@ -51,7 +51,9 @@ func (s *IndexerMgr) startDKVSPruneTimer() {
 	s.dkvsPruneStop = make(chan struct{})
 	stop := s.dkvsPruneStop
 	interrupt := s.interrupt
+	s.backgroundWG.Add(1)
 	go func() {
+		defer s.backgroundWG.Done()
 		timer := time.NewTicker(dkvsPruneInterval)
 		defer timer.Stop()
 		for {

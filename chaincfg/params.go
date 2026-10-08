@@ -162,6 +162,11 @@ const (
 // used by Bitcoin applications to differentiate networks as well as addresses
 // and keys for one network from those intended for use on another network.
 type Params struct {
+	// POSV2Height activates Bootstrap approval, substitute rewards and
+	// Anchor invoice output authorization and canonical transaction encoding together.
+	// Zero leaves the upgrade unscheduled. Set the same height on every node.
+	POSV2Height int32
+
 	// Name defines a human-readable identifier for the network.
 	Name string
 
@@ -433,7 +438,6 @@ type Params struct {
 // 	// address generation.
 // 	HDCoinType: 0,
 // }
-
 
 // RegressionNetParams defines the network parameters for the regression test
 // Bitcoin network.  Not to be confused with the test Bitcoin network (version
@@ -901,7 +905,7 @@ var MainNetParams = Params{
 	Name:        "mainnet",
 	Net:         wire.MainNet,
 	DefaultPort: "9526",
-	DNSSeeds: []DNSSeed{
+	DNSSeeds:    []DNSSeed{
 		// {"seed.sat20.org", true},
 		// {"seed.ordx.market", true},
 	},

@@ -69,6 +69,9 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 	height int, miningAddr string) error {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
+	b.nodes = make(map[string]*MiningInfo)
+	b.addressMap = make(map[string]*MiningInfo)
+	b.currMiningNode = nil
 
 	// 先加最顶级的节点
 	for bootstrap, v := range coreNodeMap {
@@ -88,8 +91,12 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 				return err
 			}
 			node.NodeType = indexer.NODE_TYPE_CORE
-
-			// 再加子节点
+		}
+	}
+	// Build every Core before its Miners so duplicate roles cannot depend on
+	// the order in which the persisted map happens to be traversed.
+	for core, v := range coreNodeMap {
+		if v.ServerNode != "" {
 			for child, info := range v.ChildMiners {
 				node, err := b.addNode(child, core, info.AscendHeight)
 				if err != nil {
@@ -101,8 +108,11 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 	}
 
 	b.rebuildSequence()
+	if len(b.sequence) == 0 {
+		return fmt.Errorf("mining sequence is empty")
+	}
 
-	if height <= int(b.chainParam.Checkpoints[0].Height) {
+	if !b.chainParam.POSV2Active(int32(height)) && height <= int(b.chainParam.Checkpoints[0].Height) {
 		b.currMiningNode = b.sequence[0]
 		b.currHeight = height + 1
 	} else {
@@ -111,7 +121,11 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 			if !ok {
 				return fmt.Errorf("can't find miner info %s", miningAddr)
 			} else {
-				b.currMiningNode = node.Next
+				var err error
+				b.currMiningNode, err = b.nextEligibleNode(node, height)
+				if err != nil {
+					return err
+				}
 			}
 			b.currHeight = height + 1
 		} else {
@@ -128,8 +142,27 @@ func (b *MiningSequenceMgr) Init(coreNodeMap map[string]*CoreNodeInfo,
 // 添加节点
 func (b *MiningSequenceMgr) addNode(pubkey, father string, height int) (*MiningInfo, error) {
 
-	if _, ok := b.nodes[pubkey]; ok {
-		return b.nodes[pubkey], nil // 已存在
+	var parent *MiningInfo
+	nodeType := indexer.NODE_TYPE_BOOTSTRAP
+	if father != "" {
+		parent = b.nodes[father]
+		if parent == nil {
+			return nil, fmt.Errorf("can't find father node %s", father)
+		}
+		switch parent.NodeType {
+		case indexer.NODE_TYPE_BOOTSTRAP:
+			nodeType = indexer.NODE_TYPE_CORE
+		case indexer.NODE_TYPE_CORE:
+			nodeType = indexer.NODE_TYPE_MINER
+		default:
+			return nil, fmt.Errorf("father node should be core node or bootstrap node")
+		}
+	}
+	if node, ok := b.nodes[pubkey]; ok {
+		if node.Father != parent || node.NodeType != nodeType {
+			return nil, fmt.Errorf("node %s already has another parent or role; exit before joining again", pubkey)
+		}
+		return node, nil // Same-parent retries retain original eligibility.
 	}
 
 	pubkeyA, err := hex.DecodeString(pubkey)
@@ -157,24 +190,18 @@ func (b *MiningSequenceMgr) addNode(pubkey, father string, height int) (*MiningI
 		PubKey:        pubkey,
 		MiningAddress: channelAddr,
 		JoinHeight:    height,
+		NodeType:      nodeType,
+		Father:        parent,
 	}
 	b.nodes[pubkey] = node
 	b.addressMap[channelAddr] = node
 
-	if father != "" {
-		if f, ok := b.nodes[father]; ok {
-			if f.NodeType < indexer.NODE_TYPE_CORE {
-				return nil, fmt.Errorf("father node should be core node or bootstrap node")
-			}
-			node.Father = f
-			f.Children = append(f.Children, node)
-			// 保持孩子按公钥排序
-			sort.Slice(f.Children, func(i, j int) bool {
-				return f.Children[i].PubKey < f.Children[j].PubKey
-			})
-		} else {
-			return nil, fmt.Errorf("can't find father node %s", father)
-		}
+	if parent != nil {
+		parent.Children = append(parent.Children, node)
+		// 保持孩子按公钥排序
+		sort.Slice(parent.Children, func(i, j int) bool {
+			return parent.Children[i].PubKey < parent.Children[j].PubKey
+		})
 	}
 
 	return node, nil
@@ -189,20 +216,6 @@ func (b *MiningSequenceMgr) AddNode(pubkey, father string, height int) (*MiningI
 	if err != nil {
 		return nil, err
 	}
-	if father == "" {
-		node.NodeType = indexer.NODE_TYPE_BOOTSTRAP
-	} else {
-		fatherNode := b.nodes[father]
-		switch fatherNode.NodeType {
-		case indexer.NODE_TYPE_BOOTSTRAP:
-			node.NodeType = indexer.NODE_TYPE_CORE
-		case indexer.NODE_TYPE_CORE:
-			node.NodeType = indexer.NODE_TYPE_MINER
-		default:
-			return nil, fmt.Errorf("")
-		}
-	}
-
 	b.rebuildSequence()
 	return node, nil
 }
@@ -218,6 +231,15 @@ func (b *MiningSequenceMgr) RemoveNode(pubkey string) error {
 	}
 	if len(n.Children) != 0 {
 		return fmt.Errorf("node %s still has child miners", pubkey)
+	}
+	if len(b.nodes) == 1 {
+		return fmt.Errorf("cannot remove the last mining node")
+	}
+	if b.currMiningNode == n {
+		// syncBlock persists this cursor before advancing it. Keeping the
+		// surviving predecessor makes both live advance and Init choose the
+		// removed member's successor, without persisting a deleted address.
+		b.currMiningNode = n.Prev
 	}
 	delete(b.nodes, pubkey)
 	delete(b.addressMap, n.MiningAddress)
@@ -263,21 +285,25 @@ func (b *MiningSequenceMgr) rebuildSequence() {
 	}
 
 	// 建立 Next/Prev 链表
-	for i := 0; i < len(seq); i++ {
-		if i > 0 {
-			seq[i].Prev = seq[i-1]
-		}
-		if i < len(seq)-1 {
-			seq[i].Next = seq[i+1]
-		}
-	}
-	// 环状
-	if len(seq) > 1 {
-		seq[0].Prev = seq[len(seq)-1]
-		seq[len(seq)-1].Next = seq[0]
+	for i := range seq {
+		seq[i].Prev = seq[(i+len(seq)-1)%len(seq)]
+		seq[i].Next = seq[(i+1)%len(seq)]
 	}
 
 	b.sequence = seq
+}
+
+// nextEligibleNode is shared by snapshot restoration and live advancement.
+// Membership changes in H become eligible only after advancing past H.
+func (b *MiningSequenceMgr) nextEligibleNode(node *MiningInfo, height int) (*MiningInfo, error) {
+	next := node.Next
+	for range b.sequence {
+		if next.JoinHeight < height {
+			return next, nil
+		}
+		next = next.Next
+	}
+	return nil, fmt.Errorf("no eligible mining node after height %d", height)
 }
 
 // 检查当前挖矿地址是否有效
@@ -330,10 +356,18 @@ func VerifyStandardCoinbaseScript(script, pubkey []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing contract path")
 	}
+	// Bound both ScriptNums before ExtractInt64: oversized negative values
+	// panic in the decoder, while oversized positive values are truncated.
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("invalid coinbase height: number exceeds eight bytes")
+	}
 	height := tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing invoke result")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("invalid coinbase nonce: number exceeds eight bytes")
 	}
 	nonce := tokenizer.ExtractInt64()
 
@@ -360,6 +394,16 @@ func VerifyStandardCoinbaseScript(script, pubkey []byte) error {
 
 // 检查某个高度下的挖矿地址是否有效
 func (b *MiningSequenceMgr) CheckMiningAddr(tx *wire.MsgTx, height int, addr string) error {
+	if b.chainParam.POSV2Active(int32(height)) {
+		_, _, reward, err := b.POSMiningInfo(tx, height)
+		if err != nil {
+			return err
+		}
+		if reward != addr {
+			return fmt.Errorf("incorrect POS reward %s, expected %s", addr, reward)
+		}
+		return nil
+	}
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 
@@ -499,15 +543,16 @@ func (b *MiningSequenceMgr) MoveMiningAddr(height int, addr string) error {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
-	if b.currHeight <= int(b.chainParam.Checkpoints[0].Height) {
+	if !b.chainParam.POSV2Active(int32(height)) && b.currHeight <= int(b.chainParam.Checkpoints[0].Height) {
 		//b.currMiningNode = b.sequence[0]
 	} else {
 		// addr 有可能是替补地址，所以只移动指针
 		// 跳过在这个高度还无效的miner
-		b.currMiningNode = b.currMiningNode.Next
-		for height <= b.currMiningNode.JoinHeight {
-			b.currMiningNode = b.currMiningNode.Next
+		next, err := b.nextEligibleNode(b.currMiningNode, height)
+		if err != nil {
+			return err
 		}
+		b.currMiningNode = next
 	}
 	b.currHeight++
 

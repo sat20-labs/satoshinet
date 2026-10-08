@@ -14,6 +14,7 @@ import (
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	shareindexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/mining"
 	"github.com/sat20-labs/satoshinet/mining/posminer/utils"
 	peerpkg "github.com/sat20-labs/satoshinet/peer"
@@ -101,25 +102,16 @@ type Config struct {
 	IsCurrent func() bool
 }
 
-// POSMiner provides facilities for solving blocks (mining) using the POS in
-// a concurrency-safe manner.  It consists of two main goroutines -- a speed
-// monitor and a controller for worker goroutines which generate and solve
-// blocks.  The number of goroutines can be set via the SetMaxGoRoutines
-// function, but the default is based on the number of processor cores in the
-// system which is typically sufficient.
+// POSMiner coordinates scheduled production through ValidatorManager.
 type POSMiner struct {
 	sync.Mutex
-	g                 *mining.BlkTmplGenerator
-	cfg               Config
-	numWorkers        uint32
-	started           bool
-	discreteMining    bool
-	submitBlockLock   sync.Mutex
-	wg                sync.WaitGroup
-	updateNumWorkers  chan struct{}
-	queryHashesPerSec chan float64
-	updateHashes      chan uint64
-	quit              chan struct{}
+	g               *mining.BlkTmplGenerator
+	cfg             Config
+	numWorkers      uint32
+	started         bool
+	discreteMining  bool
+	submitBlockLock sync.Mutex
+	workerWG        sync.WaitGroup
 
 	validatorMgr *ValidatorManager
 }
@@ -159,6 +151,10 @@ func (m *POSMiner) submitBlock(block *btcutil.Block) bool {
 	}
 	if isOrphan {
 		utils.Log.Errorf("Block submitted via POS miner is an orphan")
+		return false
+	}
+	if !m.cfg.Chain.MainChainHasBlock(block.Hash()) {
+		utils.Log.Errorf("POS block was not accepted on the canonical chain")
 		return false
 	}
 
@@ -237,7 +233,9 @@ func (m *POSMiner) solveBlock(msgBlock *wire.MsgBlock, blockHeight int32) bool {
 	// 	return false
 	// }
 
-	m.g.UpdateBlockTime(msgBlock)
+	if !m.cfg.ChainParams.POSV2Active(blockHeight) {
+		m.g.UpdateBlockTime(msgBlock)
+	}
 
 	// default:
 	// 	// Non-blocking select to fall through
@@ -264,8 +262,7 @@ func (m *POSMiner) solveBlock(msgBlock *wire.MsgBlock, blockHeight int32) bool {
 	return true
 }
 
-// Start begins the POS mining process as well as the speed monitor used to
-// track hashing metrics.  Calling this function when the POS miner has
+// Start begins scheduled POS production. Calling this function when the miner has
 // already been started will have no effect.
 //
 // This function is safe for concurrent access.
@@ -278,13 +275,6 @@ func (m *POSMiner) Start() error {
 	if m.started || m.discreteMining {
 		return nil
 	}
-
-	m.quit = make(chan struct{})
-	// if m.cfg.TimerGenerate {
-	// 	utils.Log.Infof("POS miner started with timerGenerate")
-	// 	m.wg.Add(1)
-	// 	go m.miningWorkerController()
-	// }
 
 	cfg := &ValidatorManagerConfig{
 		Config:   &m.cfg,
@@ -305,8 +295,7 @@ func (m *POSMiner) Start() error {
 	return nil
 }
 
-// Stop gracefully stops the mining process by signalling all workers, and the
-// speed monitor to quit.  Calling this function when the POS miner has not
+// Stop stops scheduled production. Calling this function when the miner has not
 // already been started will have no effect.
 //
 // This function is safe for concurrent access.
@@ -324,11 +313,14 @@ func (m *POSMiner) Stop() {
 		m.validatorMgr.Stop()
 	}
 
-	close(m.quit)
-	utils.Log.Infof("Wait wg done")
-	m.wg.Wait()
 	m.started = false
 	utils.Log.Infof("POS miner stopped")
+}
+
+// WaitForShutdown waits for scheduled workers, including a previously stopped
+// manager. The owner must stop mining and drain Start callers before waiting.
+func (m *POSMiner) WaitForShutdown() {
+	m.workerWG.Wait()
 }
 
 // IsMining returns whether or not the POS miner has been started and is
@@ -342,26 +334,15 @@ func (m *POSMiner) IsMining() bool {
 	return m.started
 }
 
-// HashesPerSecond returns the number of hashes per second the mining process
-// is performing.  0 is returned if the miner is not currently running.
+// HashesPerSecond returns zero: scheduled POS production has no hash workers.
 //
 // This function is safe for concurrent access.
 func (m *POSMiner) HashesPerSecond() float64 {
-	m.Lock()
-	defer m.Unlock()
-
-	// Nothing to do if the miner is not currently running.
-	if !m.started {
-		return 0
-	}
-
-	return <-m.queryHashesPerSec
+	return 0
 }
 
-// SetNumWorkers sets the number of workers to create which solve blocks.  Any
-// negative values will cause a default number of workers to be used which is
-// based on the number of processor cores in the system.  A value of 0 will
-// cause all POS mining to be stopped.
+// SetNumWorkers records the RPC setting; POS uses one scheduled producer.
+// Negative values use the default setting. Zero stops scheduled production.
 //
 // This function is safe for concurrent access.
 func (m *POSMiner) SetNumWorkers(numWorkers int32) {
@@ -380,15 +361,9 @@ func (m *POSMiner) SetNumWorkers(numWorkers int32) {
 	} else {
 		m.numWorkers = uint32(numWorkers)
 	}
-
-	// When the miner is already running, notify the controller about the
-	// the change.
-	if m.started {
-		m.updateNumWorkers <- struct{}{}
-	}
 }
 
-// NumWorkers returns the number of workers which are running to solve blocks.
+// NumWorkers returns the configured RPC setting.
 //
 // This function is safe for concurrent access.
 func (m *POSMiner) NumWorkers() int32 {
@@ -417,10 +392,6 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 	m.started = true
 	m.discreteMining = true
 
-	//m.speedMonitorQuit = make(chan struct{})
-	//m.wg.Add(1)
-	//go m.speedMonitor()
-
 	m.Unlock()
 	defer func() {
 		m.Lock()
@@ -434,25 +405,16 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 	i := uint32(0)
 	blockHashes := make([]*chainhash.Hash, n)
 
-	// Start a ticker which is used to signal checks for stale work and
-	// updates to the speed monitor.
-	ticker := time.NewTicker(time.Second * hashUpdateSecs)
-	defer ticker.Stop()
-
 	for {
-		// Read updateNumWorkers in case someone tries a `setgenerate` while
-		// we're generating. We can ignore it as the `generate` RPC call only
-		// uses 1 worker.
-		select {
-		case <-m.updateNumWorkers:
-		default:
-		}
-
 		// Grab the lock used for block submission, since the current block will
 		// be changing and this would otherwise end up building a new block
 		// template on a block that is in the process of becoming stale.
 		m.submitBlockLock.Lock()
 		curHeight := m.g.BestSnapshot().Height
+		if m.cfg.ChainParams.POSV2Active(curHeight + 1) {
+			m.submitBlockLock.Unlock()
+			return blockHashes[:i], fmt.Errorf("discrete generate is unsupported under POS v2; use setgenerate for scheduled production with Bootstrap approval")
+		}
 
 		// Choose a payment address at random.
 		// rand.Seed(time.Now().UnixNano())
@@ -477,7 +439,9 @@ func (m *POSMiner) GenerateNBlocks(n uint32) ([]*chainhash.Hash, error) {
 		// true a solution was found, so submit the solved block.
 		if m.solveBlock(template.Block, curHeight+1) {
 			block := btcutil.NewBlock(template.Block)
-			m.submitBlock(block)
+			if !m.submitBlock(block) {
+				return blockHashes[:i], fmt.Errorf("generated block %s was not accepted on the canonical chain", block.Hash())
+			}
 			blockHashes[i] = block.Hash()
 			i++
 			if i == n {
@@ -498,12 +462,9 @@ var (
 func New(cfg *Config) *POSMiner {
 	lastValidBlockHash = cfg.BlockTemplateGenerator.BestSnapshot().Hash // For test
 	return &POSMiner{
-		g:                 cfg.BlockTemplateGenerator,
-		cfg:               *cfg,
-		numWorkers:        defaultNumWorkers,
-		updateNumWorkers:  make(chan struct{}),
-		queryHashesPerSec: make(chan float64),
-		updateHashes:      make(chan uint64),
+		g:          cfg.BlockTemplateGenerator,
+		cfg:        *cfg,
+		numWorkers: defaultNumWorkers,
 	}
 }
 
@@ -532,9 +493,16 @@ func (m *POSMiner) OnTimeGenerateBlock() (*wire.MsgBlock, error) {
 }
 
 func (m *POSMiner) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgMineBlock) {
-	if m.started {
-		m.validatorMgr.OnBlockGenerated(peer, msg)
+	m.Lock()
+	if !m.started || m.discreteMining || m.validatorMgr == nil {
+		m.Unlock()
+		return
 	}
+	manager := m.validatorMgr
+	m.Unlock()
+	// Validation and network operations must not hold the miner lifecycle
+	// lock. Already-dispatched callbacks may finish concurrently with Stop.
+	manager.OnBlockGenerated(peer, msg)
 }
 
 func (m *POSMiner) GenerateNewTestBlock() (*chainhash.Hash, int32, error) {
@@ -602,6 +570,22 @@ func (m *POSMiner) GenerateNewBlock() (*wire.MsgBlock, error) {
 	// rand.Seed(time.Now().UnixNano())
 	// payToAddr := m.cfg.MiningAddrs[rand.Intn(len(m.cfg.MiningAddrs))]
 	payToAddr := m.cfg.MiningAddr
+	if m.cfg.ChainParams.POSV2Active(curHeight + 1) {
+		if !m.cfg.Chain.POSReady() {
+			m.submitBlockLock.Unlock()
+			return nil, fmt.Errorf("POS parent index/sorter is not ready")
+		}
+		reward, err := shareindexer.ShareIndexer.GetSeqMgr().POSReward(int(curHeight+1), m.cfg.MiningPubKey)
+		if err != nil {
+			m.submitBlockLock.Unlock()
+			return nil, err
+		}
+		payToAddr, err = btcutil.DecodeAddress(reward, m.cfg.ChainParams)
+		if err != nil {
+			m.submitBlockLock.Unlock()
+			return nil, err
+		}
+	}
 
 	// Create a new block template using the available transactions
 	// in the memory pool as a source of transactions to potentially

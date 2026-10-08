@@ -148,6 +148,9 @@ func ReadNullDataScript(script []byte) (TxType, []byte, error) {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return 0, nil, fmt.Errorf("script is missing contract content type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return 0, nil, fmt.Errorf("invalid contract content type: number exceeds eight bytes")
+	}
 	contentType := uint8(tokenizer.ExtractInt64())
 	if !tokenizer.Next() {
 		return 0, nil, fmt.Errorf("script is missing contract payload")

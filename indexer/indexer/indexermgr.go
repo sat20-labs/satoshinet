@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -14,10 +15,11 @@ import (
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/rpcclient"
 	"github.com/sat20-labs/satoshinet/wire"
 
 	indexer "github.com/sat20-labs/indexer/common"
-	"github.com/sat20-labs/indexer/indexer/db"
+	db "github.com/sat20-labs/indexer/indexer/db"
 )
 
 type RPCConfig struct {
@@ -51,6 +53,7 @@ type DKVSIntegrationConfig struct {
 	AutopayFeeAssetName          string
 	AutopayFullRecordFeePerBlock string
 	SystemVerifier               dkvs_indexer.SystemVerifier
+	EVMSourceVerifier            func(*wire.DKVSRecord) error
 	SystemVerifierHTTPEndpoint   string
 	MailboxPolicy                dkvs_indexer.MailboxPolicy
 	BlobPolicy                   dkvs_indexer.BlobPolicy
@@ -94,6 +97,10 @@ type IndexerMgr struct {
 
 	dkvsIndexer         *dkvs_indexer.Indexer
 	dkvsPruneStop       chan struct{}
+	backgroundWG        sync.WaitGroup
+	shutdownRPC         func() error
+	closeOnce           sync.Once
+	closeErr            error
 	lastDKVSPruneHeight int
 }
 
@@ -144,8 +151,7 @@ func (b *IndexerMgr) Init() {
 }
 
 // initLocked initializes the indexer while connectMutex is already held.
-// Reorg recovery calls this from DisconnectBlock, so it must not re-enter the
-// public ConnectBlock method when seeding an empty database.
+// It must not re-enter public ConnectBlock when seeding an empty database.
 func (b *IndexerMgr) initLocked() {
 	err := b.initDB()
 	if err != nil {
@@ -277,6 +283,7 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 		cfg.FeeVerifier = dkvs_indexer.HTTPFeeVerifier{Endpoint: ext.FeeVerifierHTTPEndpoint}
 	}
 	cfg.SystemVerifier = ext.SystemVerifier
+	cfg.EVMSourceVerifier = ext.EVMSourceVerifier
 	if cfg.SystemVerifier == nil && ext.SystemVerifierHTTPEndpoint != "" {
 		cfg.SystemVerifier = dkvs_indexer.HTTPSystemVerifier{Endpoint: ext.SystemVerifierHTTPEndpoint}
 	}
@@ -297,18 +304,35 @@ func (b *IndexerMgr) initRpcClient(dbPath string, cfg *RPCConfig) error {
 	tip, err := satsnet_rpc.InitSatsNetClient(
 		cfg.Host, cfg.Port, cfg.User, cfg.Password, dbPath, cfg.EnableTls,
 	)
+	if errors.Is(err, rpcclient.ErrClientShutdown) {
+		return err // Normal shutdown must not start a fresh reconnect attempt.
+	}
 	if err != nil {
+		b.backgroundWG.Add(1)
 		go func() {
+			defer b.backgroundWG.Done()
 			n := 0
 			var err error
 			for n < 30 {
+				select {
+				case <-b.interrupt:
+					return
+				default:
+				}
 				tip, err = satsnet_rpc.InitSatsNetClient(
 					cfg.Host, cfg.Port, cfg.User, cfg.Password, dbPath, cfg.EnableTls,
 				)
+				if errors.Is(err, rpcclient.ErrClientShutdown) {
+					return
+				}
 				if err == nil {
 					break
 				}
-				time.Sleep(1 * time.Second)
+				select {
+				case <-b.interrupt:
+					return
+				case <-time.After(time.Second):
+				}
 				n++
 			}
 			if err != nil {
@@ -348,23 +372,61 @@ func (b *IndexerMgr) Start() error {
 func (b *IndexerMgr) Stop() {
 	b.bRunning = false
 	b.stopDKVSPruneTimer()
+	// The local node RPC may stop before HTTP/P2P/background users drain.
+	// Cancel their futures instead of leaving them waiting for auto-reconnect.
+	satsnet_rpc.ShutdownSatsNetClient()
+}
+
+// SetRPCShutdown registers the HTTP service owned by the indexer entry point.
+// Configure it during initialization, before node shutdown can begin.
+func (b *IndexerMgr) SetRPCShutdown(shutdown func() error) { b.shutdownRPC = shutdown }
+
+// Close releases index databases after the owner has stopped mining, RPC and
+// P2P access. Stop only signals background work; it must not close live handles.
+func (b *IndexerMgr) Close() error {
+	if b == nil {
+		return nil
+	}
+	b.closeOnce.Do(func() {
+		b.Stop()
+		if b.shutdownRPC != nil {
+			if err := b.shutdownRPC(); err != nil {
+				b.closeErr = fmt.Errorf("stop indexer RPC: %w", err)
+				return // Do not close databases while readers may remain.
+			}
+		}
+		b.backgroundWG.Wait()
+		b.connectMutex.Lock()
+		defer b.connectMutex.Unlock()
+		b.closeErr = b.closeDB()
+	})
+	return b.closeErr
 }
 
 func (b *IndexerMgr) dbgc() {
-	db.RunDBGC(b.localDB)
-	db.RunDBGC(b.baseDB)
-	db.RunDBGC(b.dkvsDB)
+	for _, database := range []indexer.KVDB{b.localDB, b.baseDB, b.dkvsDB} {
+		if database == nil {
+			continue
+		}
+		if err := db.RunDBGC(database); err != nil && !errors.Is(err, db.ErrGCUnsupported) {
+			common.Log.Warningf("indexer DB GC failed: %v", err)
+		}
+	}
 	common.Log.Infof("dbgc completed")
 }
 
-func (b *IndexerMgr) closeDB() {
+// Only called by Close, never during reorg while database users are active.
+func (b *IndexerMgr) closeDB() error {
 	b.dbgc()
-
-	b.baseDB.Close()
-	b.localDB.Close()
-	if b.dkvsDB != nil {
-		b.dkvsDB.Close()
+	var errs []error
+	for _, database := range []indexer.KVDB{b.baseDB, b.localDB, b.dkvsDB} {
+		if database != nil {
+			if err := database.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func (b *IndexerMgr) checkSelf() {
@@ -380,20 +442,20 @@ func (b *IndexerMgr) checkSelf() {
 	common.Log.Infof("IndexerMgr.checkSelf takes %v", time.Since(start))
 }
 
+// Base has already committed before invoking this callback, as in L1.
+// 故障处理约定：任何索引写盘失败都 panic。修复根因后丢弃索引 DB 并从头同步，
+// 不保证部分提交后的自动恢复；不要为此改变回调职责或增加跨索引原子提交。
 func (b *IndexerMgr) forceUpdateDB() {
-	//startTime := time.Now()
-
 	if b.contractIndexer != nil {
 		b.contractIndexer.UpdateDB()
 	}
-	//common.Log.Infof("IndexerMgr.forceUpdateDB: takes: %v", time.Since(startTime))
 }
 
 func (b *IndexerMgr) handleReorg(height int) {
-	b.closeDB()
-	b.initLocked()
-	b.compiling.SetReorgHeight(height)
-	common.Log.Infof("IndexerMgr handleReorg completed.")
+	// Reorg is an operator-handled fault, including administrator rollback.
+	// Stop before closing/replacing DBs still used by DKVS P2P, RPC and timers.
+	// Fatal exit cannot be recovered by an HTTP handler like a panic can.
+	common.Log.Fatalf("indexer reorg to height %d is forbidden; stop the node and handle recovery manually", height)
 }
 
 // 为了回滚数据，我们采用这样的策略：
@@ -431,15 +493,16 @@ func (b *IndexerMgr) updateDB(height, tip int) {
 }
 
 func (b *IndexerMgr) performUpdateDBInBuffer() {
-	// The live compiling buffers must be trimmed before the backup writes to DB.
-	// Subtract keeps only post-backup deltas in memory while the backup commits
-	// the syncHeight view.
-	b.cleanDBBuffer()
-	b.compilingBackupDB.UpdateDB()
+	// Trim before committing; Base's lock also prevents stale DB cache refills.
+	// Base and Contract intentionally commit separately under the failure policy
+	// documented on forceUpdateDB. A panic requires a fresh full index replay.
+	if b.contractIndexer != nil && b.contractBackupDB != nil {
+		b.contractIndexer.Subtract(b.contractBackupDB)
+	}
+	b.compiling.CommitBackup(b.compilingBackupDB)
 	if b.contractBackupDB != nil {
 		b.contractBackupDB.UpdateDB()
 	}
-	b.compiling.SetSyncBase(b.compilingBackupDB.GetSyncBase())
 }
 
 func (b *IndexerMgr) prepareDBBuffer() {
@@ -448,13 +511,6 @@ func (b *IndexerMgr) prepareDBBuffer() {
 		b.contractBackupDB = b.contractIndexer.Clone()
 	}
 	common.Log.Infof("backup instance %d cloned", b.compilingBackupDB.GetHeight())
-}
-
-func (b *IndexerMgr) cleanDBBuffer() {
-	b.compiling.Subtract(b.compilingBackupDB)
-	if b.contractIndexer != nil && b.contractBackupDB != nil {
-		b.contractIndexer.Subtract(b.contractBackupDB)
-	}
 }
 
 func (b *IndexerMgr) updateServiceInstance() {
@@ -558,7 +614,9 @@ func (p *IndexerMgr) connectBlockOps() connectBlockOps {
 	return connectBlockOps{
 		internalTip: p.compiling.GetInternalTip,
 		syncBlockAtHeight: func(height, tip int) error {
-			return p.compiling.SyncBlockWithHeight(height, tip, true)
+			// A chain-lock holder must supply contiguous blocks. RPC here
+			// would invert chainLock -> connectMutex through getblock.
+			return fmt.Errorf("missing asset block %d; supply canonical blocks before connecting", height)
 		},
 		syncBlock: func(block *wire.MsgBlock, height, tip int) error {
 			return p.compiling.SyncBlock(block, height, tip, false)
@@ -602,8 +660,88 @@ func ensureInternalTip(ops connectBlockOps, height int, hash *chainhash.Hash, ti
 	return nil
 }
 
+// catchUpWithRPC is used by startup/standalone repair, never by a chain-lock
+// holder supplying a block. Read each block without connectMutex, then verify
+// the compiling instance and parent again before applying it.
+func (p *IndexerMgr) catchUpWithRPC(height, tip int) error {
+	for {
+		p.connectMutex.Lock()
+		compiling := p.compiling
+		lastHeight, lastHash := compiling.GetInternalTip()
+		if lastHeight >= height {
+			p.updateDB(height, tip)
+			p.connectMutex.Unlock()
+			return nil
+		}
+		p.connectMutex.Unlock()
+		if p.interrupt != nil {
+			select {
+			case <-p.interrupt:
+				return fmt.Errorf("asset RPC catch-up canceled")
+			default:
+			}
+		}
+		// Preserve the existing transient-RPC retries, also outside the lock.
+		var hash *chainhash.Hash
+		var block *wire.MsgBlock
+		var err error
+		for attempt := 0; attempt < 10; attempt++ {
+			if attempt > 0 {
+				select {
+				case <-p.interrupt:
+					return fmt.Errorf("asset RPC catch-up canceled")
+				case <-time.After(time.Duration(attempt) * time.Second):
+				}
+			}
+			hash, err = satsnet_rpc.GetBlockHash(int64(lastHeight + 1))
+			if err == nil {
+				block, err = satsnet_rpc.GetRawBlock(hash)
+			}
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if block.BlockHash() != *hash {
+			return fmt.Errorf("RPC block hash mismatch at height %d", lastHeight+1)
+		}
+		p.connectMutex.Lock()
+		if p.compiling != compiling {
+			p.connectMutex.Unlock()
+			return fmt.Errorf("asset index changed during RPC catch-up")
+		}
+		currentHeight, currentHash := compiling.GetInternalTip()
+		if currentHeight != lastHeight || currentHash != lastHash {
+			p.connectMutex.Unlock()
+			continue // A normal connection advanced the same compiling index.
+		}
+		// RPC and supplied blocks share snapshot ownership and the 20/40-block
+		// commit window. Force-writing the live index here would bypass any
+		// pending backup which already owns transferred address dirty flags.
+		err = p.connectBlockLocked(block, lastHeight+1, tip)
+		p.connectMutex.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+}
+
 // tip: 本地最长链； block，新接收到的区块，一般会比tip高1
 func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
+	if block == nil {
+		if err := p.catchUpWithRPC(height, tip); err != nil {
+			common.Log.Errorf("ConnectBlock catch-up failed: %v", err)
+			return
+		}
+		p.connectMutex.Lock()
+		defer p.connectMutex.Unlock()
+		if (height+1)%200 == 0 {
+			p.checkSelf()
+		}
+		return
+	}
 	p.connectMutex.Lock()
 	defer p.connectMutex.Unlock()
 

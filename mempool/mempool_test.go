@@ -164,7 +164,9 @@ func (p *poolHarness) CreateCoinbaseTx(blockHeight int32, numOutputs uint32) (*b
 		SignatureScript: coinbaseScript,
 		Sequence:        wire.MaxTxInSequenceNum,
 	})
-	totalInput := blockchain.CalcBlockSubsidy(blockHeight, p.chainParams)
+	// The fake chain supplies pre-funded UTXOs for mempool tests. This is
+	// test funding, independent of SatoshiNet's zero block subsidy.
+	totalInput := int64(50 * btcutil.SatoshiPerBitcoin)
 	amountPerOutput := totalInput / int64(numOutputs)
 	remainder := totalInput - amountPerOutput*int64(numOutputs)
 	for i := uint32(0); i < numOutputs; i++ {

@@ -133,7 +133,7 @@ func (v *CompositeContractBlockValidator) validateContractBlock(block *btcutil.B
 	for _, yes := range active {
 		anyActive = anyActive || yes
 	}
-	if !anyActive {
+	if !anyActive && !v.cfg.ChainParams.POSV2Active(block.Height()) {
 		return nil
 	}
 	modules := make([]contractframework.Module, 0, len(v.cfg.Modules))
@@ -175,6 +175,13 @@ func (v *CompositeContractBlockValidator) validateContractBlock(block *btcutil.B
 			if err := recorder.RecordContractBlockState(block, exec); err != nil {
 				return err
 			}
+		}
+		state, ok := moduleBlockPostState(registration.Validator, block.Hash())
+		if !ok || state == nil {
+			return fmt.Errorf("missing required %s post-state", registration.Descriptor.Name())
+		}
+		if state.Root() != exec.StateRoot {
+			return fmt.Errorf("unexpected %s post-state root", registration.Descriptor.Name())
 		}
 	}
 	return nil

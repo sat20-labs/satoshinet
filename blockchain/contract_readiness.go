@@ -29,7 +29,7 @@ func (e AssetIndexerNotReadyError) Error() string {
 func (e AssetIndexerNotReadyError) Unwrap() error { return e.Cause }
 
 func (b *BlockChain) hasAssetReadinessDependency() bool {
-	return b.contractBlockValidator != nil && b.assetIndexReadiness != nil
+	return b.assetIndexReadiness != nil
 }
 
 // directTipReadinessTargetLocked returns the AIDX state required before this
@@ -46,7 +46,8 @@ func (b *BlockChain) directTipReadinessTargetLocked(block *btcutil.Block) (int, 
 	return int(tip.height), prevHash, true
 }
 
-// waitForDirectTipReadiness waits without holding chainLock. The caller must
+// waitForDirectTipReadiness repairs production AIDX from local DB under the
+// chain lock. External readiness providers wait without it. The caller must
 // still perform a locked final check because the best tip can change meanwhile.
 func (b *BlockChain) waitForDirectTipReadiness(block *btcutil.Block) error {
 	for {
@@ -55,6 +56,21 @@ func (b *BlockChain) waitForDirectTipReadiness(block *btcutil.Block) error {
 		b.chainLock.RUnlock()
 		if !required || b.assetIndexReadiness.InternalTipReady(height, &hash) {
 			return nil
+		}
+		if b.assetIndexerMgr != nil {
+			// Production repairs from canonical DB bytes while holding the
+			// chain lock; the indexer must never call back into local RPC.
+			b.chainLock.Lock()
+			_, _, required = b.directTipReadinessTargetLocked(block)
+			var err error
+			if required {
+				err = b.restoreAssetParentLocked(b.bestChain.Tip())
+			}
+			b.chainLock.Unlock()
+			if err != nil {
+				return AssetIndexerNotReadyError{TargetHeight: height, TargetHash: hash, Cause: err}
+			}
+			continue
 		}
 		// The candidate block does not have a canonical height yet. Repair AIDX
 		// against the active-chain parent height instead of block.Height(), which
@@ -158,6 +174,12 @@ func (b *BlockChain) contractParentAssetViewLocked(block *btcutil.Block) (Contra
 }
 
 func (b *BlockChain) requireContractParentReadyLocked(block *btcutil.Block) error {
+	return b.requireContractParentReadyFor(block, false)
+}
+
+// branch=true is used only by reorg verification, where the live AIDX may be
+// rebuilding after detach. The isolated view must still match the exact parent.
+func (b *BlockChain) requireContractParentReadyFor(block *btcutil.Block, branch bool) error {
 	if !b.hasAssetReadinessDependency() || block == nil || block.Height() <= 0 {
 		return nil
 	}
@@ -171,7 +193,7 @@ func (b *BlockChain) requireContractParentReadyLocked(block *btcutil.Block) erro
 	// whose parent is off the current best tip is allowed to use an isolated
 	// branch view; otherwise a lagging live index could be silently bypassed.
 	tip := b.bestChain.Tip()
-	if tip != nil && int(tip.height) == height && tip.hash == hash {
+	if !branch && tip != nil && int(tip.height) == height && tip.hash == hash {
 		return AssetIndexerNotReadyError{TargetHeight: height, TargetHash: hash}
 	}
 
@@ -193,8 +215,15 @@ func (b *BlockChain) requireContractParentReadyLocked(block *btcutil.Block) erro
 }
 
 func (b *BlockChain) releaseContractPostState(hash *chainhash.Hash) {
+	if hash == nil {
+		return
+	}
+	// Prepared eligibility and retained execution state have one lifecycle.
+	if b.validationCache != nil {
+		b.validationCache.removePrepared(*hash)
+	}
 	releaser, ok := b.contractBlockValidator.(ContractBlockStateReleaser)
-	if !ok || hash == nil {
+	if !ok {
 		return
 	}
 	for _, module := range []contractframework.ModuleType{
@@ -242,4 +271,35 @@ func (b *BlockChain) takePreparedBlock(hash, parent chainhash.Hash) bool {
 		b.releaseContractPostState(&hash)
 	}
 	return ready
+}
+
+// restoreAssetParentLocked replays the already validated active ancestors
+// from the chain DB. It holds chainLock, so it must never call the indexer's
+// RPC-based catch-up path with a gap. No new cursor or persisted state is used.
+func (b *BlockChain) restoreAssetParentLocked(parent *blockNode) error {
+	if b.assetIndexerMgr == nil || parent == nil {
+		return nil
+	}
+	height, hash, known := b.assetIndexerMgr.GetInternalTip()
+	if height > int(parent.height) {
+		return fmt.Errorf("asset tip %d is ahead of parent %d", height, parent.height)
+	}
+	if height >= 0 {
+		ancestor := parent.Ancestor(int32(height))
+		if !known || ancestor == nil || ancestor.hash != hash {
+			return fmt.Errorf("asset baseline %d/%s is outside active parent", height, hash)
+		}
+	}
+	for h := height + 1; h <= int(parent.height); h++ {
+		node := parent.Ancestor(int32(h))
+		var block *btcutil.Block
+		if err := b.db.View(func(tx database.Tx) error { var err error; block, err = dbFetchBlockByNode(tx, node); return err }); err != nil {
+			return err
+		}
+		b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), h, b.tipHeight)
+		if !b.assetIndexerMgr.InternalTipReady(h, &node.hash) {
+			return AssetIndexerNotReadyError{TargetHeight: h, TargetHash: node.hash}
+		}
+	}
+	return nil
 }

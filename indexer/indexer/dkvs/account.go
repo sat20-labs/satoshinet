@@ -335,7 +335,7 @@ func ValidateRecordIdentity(record *wire.DKVSRecord, parsed ParsedKey) error {
 	if isInternalMailboxRecord(record) {
 		return nil
 	}
-	accountScoped := isAccountScopedNamespace(parsed.Namespace)
+	accountScoped := isAccountScopedNamespace(parsed.Namespace) && !IsEVMSourceKey(parsed)
 	if accountScoped && len(record.PubKey) != 0 {
 		return ErrInvalidRecord
 	}

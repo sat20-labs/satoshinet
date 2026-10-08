@@ -150,7 +150,7 @@ func TestEVMStateStoreDelete(t *testing.T) {
 	}
 }
 
-func TestEVMStateStoreDeleteFallsBackToExistingParentTip(t *testing.T) {
+func TestEVMStateStoreDeleteCannotRestorePrunedParentTip(t *testing.T) {
 	db := testEVMStateDB(t)
 	defer db.Close()
 
@@ -174,8 +174,8 @@ func TestEVMStateStoreDeleteFallsBackToExistingParentTip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tip == nil || *tip != parent {
-		t.Fatalf("unexpected EVM state tip: %v", tip)
+	if tip != nil {
+		t.Fatalf("deleted state restored pruned EVM state tip: %v", tip)
 	}
 }
 
@@ -195,4 +195,37 @@ func btcutilBlockWithPrev(prevHash chainhash.Hash) *btcutil.Block {
 			wire.NewMsgTx(2),
 		},
 	})
+}
+
+type missingRequiredStateProvider struct{}
+
+func (missingRequiredStateProvider) ContractBlockPostState(module contractframework.ModuleType, _ *chainhash.Hash) (contractframework.EngineState, bool) {
+	return nil, module == contractframework.ModuleEVM
+}
+
+func TestStateManagerMissingRequiredStateRollsBackTransaction(t *testing.T) {
+	db := testEVMStateDB(t)
+	defer db.Close()
+	hash := chainhash.Hash{9}
+	err := db.Update(func(tx database.Tx) error {
+		bucket, err := tx.Metadata().CreateBucketIfNotExists([]byte("test-progress"))
+		if err != nil {
+			return err
+		}
+		if err := bucket.Put([]byte("height"), []byte{1}); err != nil {
+			return err
+		}
+		return NewContractStateManager().StoreContractBlockState(tx, &hash, missingRequiredStateProvider{})
+	})
+	if err == nil {
+		t.Fatal("missing required state silently committed")
+	}
+	if err := db.View(func(tx database.Tx) error {
+		if tx.Metadata().Bucket([]byte("test-progress")) != nil {
+			t.Fatal("failed state commit advanced progress")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

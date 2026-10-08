@@ -94,7 +94,13 @@ func testGetAccordingLockedInfo(txid string) {
 
 	//btcwallet.LogMsgTx(result.MsgTx())
 
-	lockedTxInfo, err := anchortx.GetLockedTxInfo(result.MsgTx(), false)
+	// This diagnostic displays data returned by the node; it does not admit
+	// transactions. Signature validation belongs to the block-height-aware node.
+	if len(result.MsgTx().TxIn) != 1 {
+		fmt.Printf("not an Anchor transaction\n")
+		return
+	}
+	lockedTxInfo, err := anchortx.ParseAnchorScript(result.MsgTx().TxIn[0].SignatureScript)
 	if err != nil {
 		fmt.Printf("GetLockedTxInfo error: %s\n", err)
 		return

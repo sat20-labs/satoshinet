@@ -156,6 +156,52 @@ func (h *Harness) LogFile() string {
 	return filepath.Join(h.node.dataDir, "btcd.stdout.log")
 }
 
+// StopNode takes this node offline while retaining chain/wallet data and ports.
+// Restart brings it back. Like SetUp and TearDown, use from one goroutine.
+func (h *Harness) StopNode() error {
+	h.Client.Shutdown()
+	h.Client.WaitForShutdown()
+	h.BatchClient.Shutdown()
+	h.BatchClient.WaitForShutdown()
+	if err := h.node.stop(); err != nil {
+		return err
+	}
+	h.node.cmd = nil
+	return nil
+}
+
+// Restart retains the existing chain/wallet data and listeners. crash=true
+// kills only this harness process, allowing tests to verify pre-ACK durability.
+func (h *Harness) Restart(crash bool) error {
+	h.Client.Shutdown()
+	h.Client.WaitForShutdown()
+	h.BatchClient.Shutdown()
+	h.BatchClient.WaitForShutdown()
+	if crash && h.node.cmd != nil {
+		if err := h.node.cmd.Process.Kill(); err != nil {
+			return err
+		}
+		_ = h.node.cmd.Wait() // a killed process necessarily has a nonzero status
+		if h.node.logFile != nil {
+			_ = h.node.logFile.Close()
+			h.node.logFile = nil
+		}
+	} else if err := h.node.stop(); err != nil {
+		return err
+	}
+	h.node.cmd = h.node.config.command()
+	if err := h.node.start(); err != nil {
+		return err
+	}
+	if err := h.connectRPCClient(); err != nil {
+		return err
+	}
+	if err := h.Client.LoadTxFilter(true, []btcutil.Address{h.wallet.coinbaseAddr}, nil); err != nil {
+		return err
+	}
+	return h.Client.NotifyBlocks()
+}
+
 // New creates and initializes new instance of the rpc test harness.
 // Optionally, websocket handlers and a specified configuration may be passed.
 // In the case that a nil config is passed, a default configuration will be

@@ -3,6 +3,7 @@ package base
 import (
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -335,6 +336,48 @@ func cloneChannelInfo(value *common.ChannelInfo) *common.ChannelInfo {
 func (b *BaseIndexer) Subtract(another *BaseIndexer) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
+	b.subtractLocked(another)
+}
+
+// CommitBackup keeps cache refills out of the interval between trimming live
+// data and publishing its durable baseline. Other indexers commit separately.
+func (b *BaseIndexer) CommitBackup(backup *BaseIndexer) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	b.subtractLocked(backup)
+	backup.UpdateDB()
+	b.stats.SyncBase = backup.stats.SyncBase
+}
+
+func (b *BaseIndexer) subtractLocked(another *BaseIndexer) {
+	// These are incremental records, not a lifetime history. Retain changes
+	// made after the snapshot; unchanged entries are owned by the committing
+	// snapshot and can subsequently be read from DB. A failed write panics.
+	for key, value := range another.utxoIndex.AscendMap {
+		if reflect.DeepEqual(cloneAscendData(b.utxoIndex.AscendMap[key]), value) {
+			delete(b.utxoIndex.AscendMap, key)
+		}
+	}
+	for key, value := range another.utxoIndex.DescendMap {
+		if reflect.DeepEqual(cloneDescendData(b.utxoIndex.DescendMap[key]), value) {
+			delete(b.utxoIndex.DescendMap, key)
+		}
+	}
+	for key, value := range another.utxoIndex.ChannelLedgerMap {
+		if reflect.DeepEqual(cloneChannelLedgerEntry(b.utxoIndex.ChannelLedgerMap[key]), value) {
+			delete(b.utxoIndex.ChannelLedgerMap, key)
+		}
+	}
+	for key, value := range another.utxoIndex.ChannelStateEventMap {
+		if reflect.DeepEqual(cloneChannelStateEvent(b.utxoIndex.ChannelStateEventMap[key]), value) {
+			delete(b.utxoIndex.ChannelStateEventMap, key)
+		}
+	}
+	for key, value := range another.utxoIndex.ReferrerMap {
+		if reflect.DeepEqual(b.utxoIndex.ReferrerMap[key], value) {
+			delete(b.utxoIndex.ReferrerMap, key)
+		}
+	}
 
 	// 将已经备份到数据库的数据删除，防止内存中数据增长过快
 	for key := range another.utxoIndex.Index {
@@ -367,14 +410,14 @@ func (b *BaseIndexer) Repair() {
 
 }
 
-// only call in compiling data
+// Only call in historical compiling mode, without a pending delayed snapshot.
+// Keep the original L2/L1 order: save Base, then call the other indexers.
+// 写盘失败必须 panic；修复根因后丢弃损坏的索引 DB，从头同步，不恢复部分提交。
 func (b *BaseIndexer) forceUpdateDB() {
 	if b.updateDBCB != nil {
 		startTime := time.Now()
 		b.UpdateDB()
 		common.Log.Infof("BaseIndexer.updateBasicDB: cost: %v", time.Since(startTime))
-
-		// startTime = time.Now()
 		b.updateDBCB()
 		// common.Log.Infof("BaseIndexer.updateOrdxDB: cost: %v", time.Since(startTime))
 
@@ -544,11 +587,11 @@ func (b *BaseIndexer) UpdateDB() {
 		key := db.GetUTXODBKey(value.Utxo)
 		err := wb.Delete([]byte(key))
 		if err != nil {
-			common.Log.Errorf("BaseIndexer.updateBasicDB-> Error deleting db: %v\n", err)
+			common.Log.Panicf("BaseIndexer.updateBasicDB-> Error deleting db: %v", err)
 		}
 		err = db.UnBindUtxoId(value.UtxoId, wb)
 		if err != nil {
-			common.Log.Errorf("BaseIndexer.updateBasicDB-> Error deleting db: %v\n", err)
+			common.Log.Panicf("BaseIndexer.updateBasicDB-> Error deleting db: %v", err)
 		}
 
 		// for i, address := range value.Address.Addresses {
@@ -557,7 +600,7 @@ func (b *BaseIndexer) UpdateDB() {
 		// 		addrkey := db.GetAddressValueDBKey(addrvalue.AddressId, value.UtxoId, int(value.Address.Type), i)
 		// 		err := wb.Delete(addrkey)
 		// 		if err != nil {
-		// 			common.Log.Errorf("BaseIndexer.updateBasicDB-> Error deleting db: %v\n", err)
+		// 			common.Log.Panicf("BaseIndexer.updateBasicDB-> Error deleting db: %v", err)
 		// 		}
 		// 	} else {
 		// 		// 不存在
@@ -792,7 +835,9 @@ func (b *BaseIndexer) syncBlock(block *common.Block, tip int, updateDB bool) int
 		// Update the sync stats
 		b.stats.ChainTip = tip
 		b.miningAddress = b.seqMgr.GetCurrentMiningAddr() //getMiningAddress(block)
-		b.seqMgr.MoveMiningAddr(block.Height, b.miningAddress)
+		if err := b.seqMgr.MoveMiningAddr(block.Height, b.miningAddress); err != nil {
+			common.Log.Panicf("mining sequence advance at height %d failed: %v", block.Height, err)
+		}
 		b.lastHeight = block.Height
 		b.lastHash = block.Hash
 		b.prevBlockHashMap[b.lastHeight] = b.lastHash
@@ -868,7 +913,11 @@ func (b *BaseIndexer) handleStakeAsset(ascend *common.AscendData, data []byte) {
 			}
 		} else {
 			info, err := ascend.Assets.Find(indexer.NewAssetNameFromString(assetName))
-			if err != nil || info.Amount.Cmp(amt) != 0 {
+			if err != nil || info == nil {
+				common.Log.Errorf("handleStakeAsset missing staking asset %s: %v", assetName, err)
+				return
+			}
+			if info.Amount.Cmp(amt) != 0 {
 				common.Log.Errorf("handleStakeAsset invalid asset amt, %s -> %s", info.Amount.String(), amt.String())
 				return
 			}
@@ -952,15 +1001,21 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 			// 新增加一个core node
 			coreNode := common.NewCoreNodeInfo(ascend)
 			coreNodeKey = hex.EncodeToString(ascend.PubB)
-
-			b.coreNodeMap[coreNodeKey] = coreNode
 			serverNodeKey := hex.EncodeToString(ascend.PubA)
 			serverNode := b.coreNodeMap[serverNodeKey]
+			if serverNode == nil {
+				common.Log.Errorf("can't find Bootstrap %s for Core %s", serverNodeKey, coreNodeKey)
+				return
+			}
+			if _, err := b.seqMgr.AddNode(coreNodeKey, serverNodeKey, ascend.Height); err != nil {
+				common.Log.Errorf("reject Core registration %s: %v", coreNodeKey, err)
+				return
+			}
+			b.coreNodeMap[coreNodeKey] = coreNode
 			serverNode.ChildMiners[coreNodeKey] = &common.MinerAscendInfo{
 				AscendHeight: ascend.Height,
 				AscendUtxo:   coreNode.AscendUtxo,
 			}
-			b.seqMgr.AddNode(coreNodeKey, serverNodeKey, ascend.Height)
 			b.coreNodeMapUpdated = true
 
 			common.Log.Infof("add core node %s at height %d", coreNodeKey, ascend.Height)
@@ -969,13 +1024,19 @@ func (b *BaseIndexer) addMinerNode(ascend *common.AscendData) {
 			coreNode, ok := b.coreNodeMap[coreNodeKey]
 			if ok && b.HasMinerEligibility(ascend.Height, ascend.Assets) {
 				// 一个连接到corenode的普通miner
-				b.coreNodeMapUpdated = true
 				childKey := hex.EncodeToString(ascend.PubB)
+				if _, err := b.seqMgr.AddNode(childKey, coreNodeKey, ascend.Height); err != nil {
+					common.Log.Errorf("reject Miner registration %s: %v", childKey, err)
+					return
+				}
+				if _, exists := coreNode.ChildMiners[childKey]; exists {
+					return // Keep the original stake and JoinHeight on same-parent retries.
+				}
+				b.coreNodeMapUpdated = true
 				coreNode.ChildMiners[childKey] = &common.MinerAscendInfo{
 					AscendHeight: ascend.Height,
 					AscendUtxo:   ascend.FundingUtxo,
 				}
-				b.seqMgr.AddNode(childKey, coreNodeKey, ascend.Height)
 				common.Log.Infof("add miner node %s at height %d", hex.EncodeToString(ascend.PubB), ascend.Height)
 			} else {
 				// 无效的脚本
@@ -992,10 +1053,6 @@ func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) 
 		return
 	}
 
-	if name != indexer.GetStakeAssetName(descend.Height) {
-		common.Log.Errorf("removeMinerNode %s invalid staking asset name %s", descend.NullDataUtxo, name)
-		return
-	}
 	info, err := descend.Assets.Find(indexer.NewAssetNameFromString(name))
 	if err != nil || info == nil {
 		common.Log.Errorf("removeMinerNode %s missing staking asset %s", descend.NullDataUtxo, name)
@@ -1016,7 +1073,16 @@ func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) 
 	parentKey := hex.EncodeToString(channelInfo.PubA)
 
 	if coreNode, ok := b.coreNodeMap[nodeKey]; ok {
-		// 如果是core node
+		// Exit validates the original registration, not today's L1/L2 stake
+		// rule. A member registered before the asset switch can still leave.
+		if name != indexer.GetStakeAssetNameWithHeightL2(coreNode.AscendHeight) {
+			common.Log.Errorf("removeMinerNode %s invalid registered staking asset %s", descend.NullDataUtxo, name)
+			return
+		}
+		if coreNode.ServerNode != parentKey {
+			common.Log.Errorf("channel parent %s is not Core %s's registered parent", parentKey, nodeKey)
+			return
+		}
 		if len(coreNode.ChildMiners) != 0 {
 			common.Log.Errorf("core node %s still has child miners", nodeKey)
 			return
@@ -1040,8 +1106,13 @@ func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) 
 		common.Log.Errorf("can't find parent core node %s for miner %s", parentKey, nodeKey)
 		return
 	}
-	if _, ok := parent.ChildMiners[nodeKey]; !ok {
+	miner, ok := parent.ChildMiners[nodeKey]
+	if !ok {
 		common.Log.Errorf("can't find miner node %s under core node %s", nodeKey, parentKey)
+		return
+	}
+	if name != indexer.GetStakeAssetNameWithHeightL2(miner.AscendHeight) {
+		common.Log.Errorf("removeMinerNode %s invalid registered staking asset %s", descend.NullDataUtxo, name)
 		return
 	}
 	if err := b.seqMgr.RemoveNode(nodeKey); err != nil {
@@ -1056,6 +1127,26 @@ func (b *BaseIndexer) removeMinerNode(descend *common.DescendData, data []byte) 
 // satoshinet 只需要保存utxo即可
 // 所有聪都来自锚定交易，也就是闪电网络通道
 func (b *BaseIndexer) processBlock(block *common.Block) {
+	// Extract Anchors against the parent Core set, before a same-block
+	// UNSTAKE or STAKE mutates membership. The caller already holds b.mutex.
+	anchors := make(map[*common.Input]*common.AscendData)
+	for _, tx := range block.Transactions {
+		for i, input := range tx.Inputs {
+			if input.Vout != wire.AnchorTxOutIndex {
+				continue
+			}
+			outputs := make([]*wire.TxOut, len(tx.Outputs))
+			for j, output := range tx.Outputs {
+				outputs[j] = wire.NewTxOut(output.Value, output.Assets, output.Address.PkScript)
+			}
+			ascend, err := b.genAscendFromAnchorPkScript(input.SignatureScript, outputs, b.chaincfgParam.POSV2Active(int32(block.Height)))
+			if err != nil {
+				common.Log.Panicf("GenAscendFromAnchorPkScript %s input %d failed: %v", tx.Txid, i, err)
+			}
+			anchors[input] = ascend
+		}
+	}
+
 	blockValue := &common.BlockValueInDB{Height: block.Height,
 		Timestamp: block.Timestamp.Unix(),
 		TxAmount:  len(block.Transactions),
@@ -1077,17 +1168,12 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 
 		var inputAddress string
 		var ascend *common.AscendData
-		for i, input := range tx.Inputs {
+		for _, input := range tx.Inputs {
 			if uint32(input.Vout) == wire.MaxTxInSequenceNum { // coinbase
 				continue
 			}
 			if uint32(input.Vout) == wire.AnchorTxOutIndex { // transcend
-				var err error
-				ascend, err = GenAscendFromAnchorPkScript(input.SignatureScript, b.chaincfgParam)
-				if err != nil {
-					common.Log.Errorf("GenAscendFromAnchorPkScript %s input %d failed. %v", tx.Txid, i, err)
-					continue
-				}
+				ascend = anchors[input]
 				ascend.Height = block.Height
 				ascend.AnchorTxId = tx.Txid
 				b.utxoIndex.AscendMap[ascend.FundingUtxo] = ascend
@@ -1200,6 +1286,10 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 						}
 
 					case common.CONTENT_TYPE_BINDREFERRER:
+						if inputAddress == "" {
+							common.Log.Errorf("ignore referrer binding without an ordinary input: %s", tx.Txid)
+							continue
+						}
 						// tx的输入和输出都是被推荐人地址，data是推荐人名字，每个地址只能绑定一个推荐人
 						_, ok := b.utxoIndex.ReferrerMap[inputAddress]
 						if !ok {

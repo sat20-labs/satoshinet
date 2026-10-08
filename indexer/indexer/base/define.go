@@ -13,7 +13,7 @@ type SyncBase struct {
 	TotalDescendSats int64
 	AscendCount    int
 	DescendCount   int
-	MiningAddr     string // syncHeight的挖矿地址
+	MiningAddr     string // syncHeight 后推进前的排序器游标；当前成员退出时保存存活前驱地址
 }
 
 type SyncStats struct {

@@ -100,6 +100,9 @@ func (p *LimitOrderInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {

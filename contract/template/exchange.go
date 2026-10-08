@@ -82,6 +82,9 @@ func (c *ExchangeContract) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing price step count")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("price step count exceeds eight bytes")
+	}
 	count := tokenizer.ExtractInt64()
 	if count < 0 {
 		return fmt.Errorf("invalid price step count %d", count)

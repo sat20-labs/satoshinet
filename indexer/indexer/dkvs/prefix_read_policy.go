@@ -23,6 +23,7 @@ func validateReadablePrefix(prefix string) error {
 			return nil
 		}
 	case "blob":
+		if IsEVMSourceKey(parsed) { return nil }
 		if (len(segments) == 1 || len(segments) == 2) && validAccountID(segments[0]) {
 			return nil
 		}

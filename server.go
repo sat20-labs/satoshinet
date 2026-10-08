@@ -224,6 +224,9 @@ type server struct {
 	startupTime   int64
 	dkvsState     dkvsp2p.NodeState
 
+	// Peer callbacks run outside wg; share this barrier with final DB closure.
+	indexCallbackMu sync.RWMutex
+
 	chainParams            *chaincfg.Params
 	assetIndexer           *indexer.IndexerMgr
 	addrManager            *addrmgr.AddrManager
@@ -497,6 +500,14 @@ func hasServices(advertised, desired wire.ServiceFlag) bool {
 // and is used to negotiate the protocol version details as well as kick start
 // the communications.
 func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {
+	sp.server.indexCallbackMu.RLock()
+	defer sp.server.indexCallbackMu.RUnlock()
+	select {
+	case <-sp.server.quit:
+		return nil
+	default:
+	}
+
 	// Update the address manager with the advertised services for outbound
 	// connections in case they have changed.  This is not done for inbound
 	// connections to help prevent malicious behavior and is skipped when
@@ -684,6 +695,14 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 // OnPing is invoked when a peer receives a ping message.  It
 // blocks until the ping has been fully processed.
 func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
+	sp.server.indexCallbackMu.RLock()
+	defer sp.server.indexCallbackMu.RUnlock()
+	select {
+	case <-sp.server.quit:
+		return
+	default:
+	}
+
 	// 刷新
 	miningSeqMgr := indexerShare.ShareIndexer.GetSeqMgr()
 	if miningSeqMgr != nil && miningSeqMgr.GetNodeType(sp.Peer.ValidatorId()) != common.NODE_TYPE_NORMAL {
@@ -1529,6 +1548,14 @@ func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
 }
 
 func (sp *serverPeer) OnMineBlock(_ *peer.Peer, msg *wire.MsgMineBlock) {
+	sp.server.indexCallbackMu.RLock()
+	defer sp.server.indexCallbackMu.RUnlock()
+	select {
+	case <-sp.server.quit:
+		return
+	default:
+	}
+
 	if sp.Peer.HandleMineBlockResponseMsg(msg) {
 		return
 	}
@@ -1546,19 +1573,19 @@ func (sp *serverPeer) OnMineAck(_ *peer.Peer, msg *wire.MsgMineAck) {
 }
 
 func (sp *serverPeer) OnDKVSNotify(_ *peer.Peer, msg *wire.MsgDKVSNotify) {
-	sp.dkvsHandler().OnNotify(msg)
+	sp.withDKVSHandler(func(h dkvsp2p.Handler) { h.OnNotify(msg) })
 }
 
 func (sp *serverPeer) OnDKVSInv(_ *peer.Peer, msg *wire.MsgDKVSInv) {
-	sp.dkvsHandler().OnInv(msg)
+	sp.withDKVSHandler(func(h dkvsp2p.Handler) { h.OnInv(msg) })
 }
 
 func (sp *serverPeer) OnDKVSGet(_ *peer.Peer, msg *wire.MsgDKVSGet) {
-	sp.dkvsHandler().OnGet(msg)
+	sp.withDKVSHandler(func(h dkvsp2p.Handler) { h.OnGet(msg) })
 }
 
 func (sp *serverPeer) OnDKVSData(_ *peer.Peer, msg *wire.MsgDKVSData) {
-	sp.dkvsHandler().OnData(msg)
+	sp.withDKVSHandler(func(h dkvsp2p.Handler) { h.OnData(msg) })
 }
 
 func (sp *serverPeer) isTrustedDKVSMirrorSource() bool {
@@ -1590,6 +1617,22 @@ func (s *server) isDKVSMirrorAuthority() bool {
 	}
 	typ := seqMgr.GetNodeType(s.miningPubKey)
 	return typ == common.NODE_TYPE_CORE || typ == common.NODE_TYPE_BOOTSTRAP
+}
+
+// withDKVSHandler keeps in-flight peer callbacks ahead of final DB closure.
+// Peer disconnect alone does not wait for its message handler to return.
+func (sp *serverPeer) withDKVSHandler(handle func(dkvsp2p.Handler)) {
+	if sp == nil || sp.server == nil {
+		return
+	}
+	sp.server.indexCallbackMu.RLock()
+	defer sp.server.indexCallbackMu.RUnlock()
+	select {
+	case <-sp.server.quit:
+		return
+	default:
+	}
+	handle(sp.dkvsHandler())
 }
 
 func (sp *serverPeer) dkvsHandler() dkvsp2p.Handler {
@@ -1627,11 +1670,11 @@ func (sp *serverPeer) dkvsHandler() dkvsp2p.Handler {
 }
 
 func (sp *serverPeer) OnDKVSSyncRequest(_ *peer.Peer, msg *wire.MsgDKVSSyncRequest) {
-	sp.dkvsHandler().OnSyncRequest(msg)
+	sp.withDKVSHandler(func(h dkvsp2p.Handler) { h.OnSyncRequest(msg) })
 }
 
 func (sp *serverPeer) OnDKVSSyncResponse(_ *peer.Peer, msg *wire.MsgDKVSSyncResponse) {
-	sp.dkvsHandler().OnSyncResponse(msg)
+	sp.withDKVSHandler(func(h dkvsp2p.Handler) { h.OnSyncResponse(msg) })
 }
 
 func (sp *serverPeer) queueDKVSSyncRequest(cursor []byte) {
@@ -1752,6 +1795,12 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
+	if !s.chain.CanServeBlock(hash) {
+		if doneChan != nil {
+			doneChan <- struct{}{}
+		}
+		return fmt.Errorf("block %s is not ready for publication", hash)
+	}
 
 	// Fetch the raw block bytes from the database.
 	var blockBytes []byte
@@ -2052,9 +2101,28 @@ func (s *server) handleDonePeerMsg(state *peerState, sp *serverPeer) {
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
 		}
 		delete(list, sp.ID())
-		delete(state.minerPeers, sp.ValidatorId())
+		state.removeMinerRoute(sp)
 		srvrLog.Debugf("Removed peer %s", sp.String())
 		return
+	}
+}
+
+// removeMinerRoute runs in peerHandler after removing the connection from
+// its peer list. Manual and natural disconnects retain the same live route.
+func (state *peerState) removeMinerRoute(sp *serverPeer) {
+	validator := sp.ValidatorId()
+	if state.minerPeers[validator] == sp {
+		delete(state.minerPeers, validator)
+		// A newer connection may replace an older one. If the selected
+		// connection exits, retain a surviving route from existing peers.
+		state.forAllPeers(func(candidate *serverPeer) {
+			if candidate != sp && candidate.ValidatorId() == validator && candidate.Connected() {
+				selected := state.minerPeers[validator]
+				if selected == nil || candidate.ID() < selected.ID() {
+					state.minerPeers[validator] = candidate
+				}
+			}
+		})
 	}
 }
 
@@ -2257,7 +2325,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		var result *peer.Peer
 		if msg.validatorId != "" {
 			p, ok := state.minerPeers[msg.validatorId]
-			if ok {
+			if ok && p.Connected() {
 				result = p.Peer
 			}
 		} else {
@@ -2347,7 +2415,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		})
 		msg.reply <- nil
 	case removeNodeMsg:
-		found := disconnectPeer(state.persistentPeers, state.minerPeers, msg.cmp, func(sp *serverPeer) {
+		found := disconnectPeer(state, state.persistentPeers, msg.cmp, func(sp *serverPeer) {
 			// Keep group counts ok since we remove from
 			// the list now.
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
@@ -2376,14 +2444,14 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	case disconnectNodeMsg:
 		// Check inbound peers. We pass a nil callback since we don't
 		// require any additional actions on disconnect for inbound peers.
-		found := disconnectPeer(state.inboundPeers, state.minerPeers, msg.cmp, nil)
+		found := disconnectPeer(state, state.inboundPeers, msg.cmp, nil)
 		if found {
 			msg.reply <- nil
 			return
 		}
 
 		// Check outbound peers.
-		found = disconnectPeer(state.outboundPeers, state.minerPeers, msg.cmp, func(sp *serverPeer) {
+		found = disconnectPeer(state, state.outboundPeers, msg.cmp, func(sp *serverPeer) {
 			// Keep group counts ok since we remove from
 			// the list now.
 			state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
@@ -2393,7 +2461,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			// ip:port, continue disconnecting them all until no such
 			// peers are found.
 			for found {
-				found = disconnectPeer(state.outboundPeers, state.minerPeers, msg.cmp, func(sp *serverPeer) {
+				found = disconnectPeer(state, state.outboundPeers, msg.cmp, func(sp *serverPeer) {
 					state.outboundGroups[addrmgr.GroupKey(sp.NA())]--
 				})
 			}
@@ -2412,7 +2480,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 // to be located. If the peer is found, and the passed callback: `whenFound'
 // isn't nil, we call it with the peer as the argument before it is removed
 // from the peerList, and is disconnected from the server.
-func disconnectPeer(peerList map[int32]*serverPeer, allPeers map[string]*serverPeer,
+func disconnectPeer(state *peerState, peerList map[int32]*serverPeer,
 	compareFunc func(*serverPeer) bool, whenFound func(*serverPeer)) bool {
 	for addr, peer := range peerList {
 		if compareFunc(peer) {
@@ -2423,7 +2491,7 @@ func disconnectPeer(peerList map[int32]*serverPeer, allPeers map[string]*serverP
 			// This is ok because we are not continuing
 			// to iterate so won't corrupt the loop.
 			delete(peerList, addr)
-			delete(allPeers, peer.ValidatorId())
+			state.removeMinerRoute(peer)
 			srvrLog.Debugf("disconnectPeer %s", peer)
 			peer.Disconnect()
 			return true
@@ -2667,7 +2735,10 @@ func (s *server) BroadcastMessage(msg wire.Message, exclPeers ...*serverPeer) {
 	// XXX: Need to determine if this is an alert that has already been
 	// broadcast and refrain from broadcasting again.
 	bmsg := broadcastMsg{message: msg, excludePeers: exclPeers}
-	s.broadcast <- bmsg
+	select {
+	case s.broadcast <- bmsg:
+	case <-s.quit:
+	}
 }
 
 func (s *server) RequestDKVSSyncFromMinerPeers() {
@@ -2710,37 +2781,80 @@ func (s *server) dkvsAntiEntropyHandler(interval time.Duration) {
 
 // ConnectedCount returns the number of currently connected peers.
 func (s *server) ConnectedCount() int32 {
-	replyChan := make(chan int32)
-
-	s.query <- getConnCountMsg{reply: replyChan}
-
-	return <-replyChan
+	replyChan := make(chan int32, 1)
+	select {
+	case s.query <- getConnCountMsg{reply: replyChan}:
+	case <-s.quit:
+		return 0
+	}
+	select {
+	case reply := <-replyChan:
+		return reply
+	case <-s.quit:
+		return 0
+	}
 }
 
 func (s *server) GetPeerById(peerId int32) *serverPeer {
-	replyChan := make(chan *serverPeer)
-	s.query <- getPeerMsg{id: peerId, reply: replyChan}
-	return <-replyChan
+	replyChan := make(chan *serverPeer, 1)
+	select {
+	case s.query <- getPeerMsg{id: peerId, reply: replyChan}:
+	case <-s.quit:
+		return nil
+	}
+	select {
+	case reply := <-replyChan:
+		return reply
+	case <-s.quit:
+		return nil
+	}
 }
 
 func (s *server) GetPeerByValidatorId(validatorId string) *peer.Peer {
-	replyChan := make(chan *peer.Peer)
-	s.query <- getPeerByValidatorIdMsg{validatorId: validatorId, reply: replyChan}
-	return <-replyChan
+	replyChan := make(chan *peer.Peer, 1)
+	select {
+	case s.query <- getPeerByValidatorIdMsg{validatorId: validatorId, reply: replyChan}:
+	case <-s.quit:
+		return nil
+	}
+	select {
+	case reply := <-replyChan:
+		return reply
+	case <-s.quit:
+		return nil
+	}
 }
 
 func (s *server) GetRandomCorePeer() *peer.Peer {
-	replyChan := make(chan *peer.Peer)
-	s.query <- getPeerByValidatorIdMsg{validatorId: "", reply: replyChan}
-	return <-replyChan
+	replyChan := make(chan *peer.Peer, 1)
+	select {
+	case s.query <- getPeerByValidatorIdMsg{validatorId: "", reply: replyChan}:
+	case <-s.quit:
+		return nil
+	}
+	select {
+	case reply := <-replyChan:
+		return reply
+	case <-s.quit:
+		return nil
+	}
 }
 
 // OutboundGroupCount returns the number of peers connected to the given
 // outbound group key.
 func (s *server) OutboundGroupCount(key string) int {
-	replyChan := make(chan int)
-	s.query <- getOutboundGroup{key: key, reply: replyChan}
-	return <-replyChan
+	replyChan := make(chan int, 1)
+	select {
+	case s.query <- getOutboundGroup{key: key, reply: replyChan}:
+	case <-s.quit:
+		return 0
+	}
+	select {
+	case reply := <-replyChan:
+		return reply
+	case <-s.quit:
+		return 0
+	}
 }
 
 // AddBytesSent adds the passed number of bytes to the total bytes sent counter
@@ -2891,18 +3005,27 @@ func (s *server) Start() {
 		}
 
 		// 需要等待索引器启动后，并且同步到最高高度，再启动miner
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			pubkey, err := hex.DecodeString(cfg.MiningPubKey)
 			if err != nil {
 				srvrLog.Errorf("invalid miner pubker %v", err)
 				return
 			}
 			// 等二层索引器工作
-			time.Sleep(3 * time.Second)
+			select {
+			case <-s.quit:
+				return
+			case <-time.After(3 * time.Second):
+			}
 			ticker := time.NewTicker(3 * time.Second)
+			defer ticker.Stop()
 		out:
 			for {
 				select {
+				case <-s.quit:
+					return
 				case <-ticker.C:
 
 					tip1 := indexerShare.ShareIndexer.GetChainTip()
@@ -2916,8 +3039,20 @@ func (s *server) Start() {
 					}
 
 					// 先启动stp模块，可能需要自动质押并成为miner
+					s.wg.Add(1)
 					go func() {
+						defer s.wg.Done()
+						select {
+						case <-s.quit:
+							return
+						default:
+						}
 						err = stp.StartSTP()
+						select {
+						case <-s.quit:
+							return
+						default:
+						}
 						if err != nil {
 							btcdLog.Errorf("Unable to start STP, %v", err)
 							os.Exit(-1)
@@ -2926,16 +3061,31 @@ func (s *server) Start() {
 
 					// 如果失败退出，就重新启动节点，再试一次
 					for i := 0; i < 10; i++ {
+						select {
+						case <-s.quit:
+							return
+						default:
+						}
 						if anchortx.IsMinerNode(pubkey) {
 							srvrLog.Infof("Start pos miner.")
 							err := s.posMiner.Start()
+							select {
+							case <-s.quit:
+								s.posMiner.Stop()
+								return
+							default:
+							}
 							if err != nil {
 								btcdLog.Errorf("Start miner failed, exit")
 								os.Exit(-1)
 							}
 							break out
 						}
-						time.Sleep(time.Second)
+						select {
+						case <-s.quit:
+							return
+						case <-time.After(time.Second):
+						}
 					}
 
 					btcdLog.Errorf("not a miner, exit")
@@ -2948,8 +3098,14 @@ func (s *server) Start() {
 
 	// 需要等同步到最新高度再加载
 	if cfg.SaveMempool {
+		s.wg.Add(1)
 		go func() {
-			time.Sleep(5 * time.Second) // 等待peer连接并获取最新高度
+			defer s.wg.Done()
+			select {
+			case <-s.quit:
+				return
+			case <-time.After(5 * time.Second):
+			}
 			for {
 				tip1 := indexerShare.ShareIndexer.GetChainTip()
 				tip2 := s.getTipFromSyncPeer()
@@ -2957,7 +3113,11 @@ func (s *server) Start() {
 				height := indexerShare.ShareIndexer.GetInternalSyncHeight()
 				srvrLog.Infof("syncHeight %d tip %d", height, tip)
 				if height != tip {
-					time.Sleep(time.Second)
+					select {
+					case <-s.quit:
+						return
+					case <-time.After(time.Second):
+					}
 					continue
 				}
 				s.loadMempoolCache()
@@ -2967,7 +3127,9 @@ func (s *server) Start() {
 	}
 
 	if s.agentOracle != nil && s.agentOracle.Enabled() {
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			s.agentOracle.Run(s.quit)
 		}()
 	}
@@ -2985,6 +3147,10 @@ func (s *server) getTipFromSyncPeer() int {
 // Stop gracefully shuts down the server by stopping and disconnecting all
 // peers and the main listener.
 func (s *server) Stop() error {
+	// Include the first Stop caller in the drain. A scheduled shutdown may
+	// overlap main's Stop/WaitForShutdown, while RPC Stop is still running.
+	s.wg.Add(1)
+	defer s.wg.Done()
 	// Make sure this only happens once.
 	if atomic.AddInt32(&s.shutdown, 1) != 1 {
 		srvrLog.Infof("Server is already in the process of shutting down")
@@ -2997,11 +3163,9 @@ func (s *server) Stop() error {
 		s.saveMempoolCache()
 	}
 
-	// Signal background services before releasing STP. STP shutdown can wait for
-	// callbacks that depend on server-managed services observing quit.
+	// Signal background services. Final STP release and index DB closure happen
+	// after the delayed startup tasks and network callbacks have drained.
 	close(s.quit)
-
-	stp.ReleaseSTP()
 
 	if s.btcCpuMiner != nil {
 		s.btcCpuMiner.Stop()
@@ -3029,9 +3193,23 @@ func (s *server) Stop() error {
 	return nil
 }
 
-// WaitForShutdown blocks until the main listener and peer handlers are stopped.
+// WaitForShutdown drains database users before closing the index databases.
+// Stop only signals shutdown; normal writes and their callbacks stay unchanged.
 func (s *server) WaitForShutdown() {
 	s.wg.Wait()
+	if s.posMiner != nil {
+		// A delayed startup may have overlapped Stop; signal it once more.
+		s.posMiner.Stop()
+		s.posMiner.WaitForShutdown()
+	}
+	s.indexCallbackMu.Lock()
+	defer s.indexCallbackMu.Unlock()
+	stp.ReleaseSTP()
+	if s.assetIndexer != nil {
+		if err := s.assetIndexer.Close(); err != nil {
+			srvrLog.Errorf("Close index databases: %v", err)
+		}
+	}
 }
 
 func (s *server) saveMempoolCache() {
@@ -3639,12 +3817,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	contractcommon.SetNetworkParam(chainParams.Net)
 
 	// seqMgr 最早初始化
-	dkvsCfg := (*indexer.DKVSIntegrationConfig)(nil)
-	if l1IndexerBaseURL := resolveIndexerBaseURL(); l1IndexerBaseURL != "" {
-		dkvsCfg = &indexer.DKVSIntegrationConfig{
-			ResolverL1NSBaseURL: l1IndexerBaseURL,
-		}
-	}
+	dkvsCfg := nodeDKVSConfig(db, resolveIndexerBaseURL())
 	assetIndexer, err := indexerEntry.NewIndexerMgrWithDKVS(assetIndexerRPCDataPath, "",
 		assetIndexerRPCPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
 		interrupt, dkvsCfg)

@@ -39,6 +39,7 @@ type Indexer struct {
 	recordExpiryEntries map[string]recordExpiryEntry
 	recordExpiryHeights feeExpiryHeap
 	system SystemVerifier
+	evmSourceVerifier func(*wire.DKVSRecord) error
 	mailbox MailboxPolicy
 	blob BlobPolicy
 	tmp TmpPolicy
@@ -69,7 +70,7 @@ func New(db indexercommon.KVDB, cfg Config) *Indexer {
 	systemVerifier := cfg.SystemVerifier
 	if systemVerifier == nil { systemVerifier = defaultSystemVerifier{} }
 	indexer := &Indexer{
-		db: db, resolver: resolver, feeVerifier: feeVerifier, system: systemVerifier,
+		db: db, resolver: resolver, feeVerifier: feeVerifier, system: systemVerifier, evmSourceVerifier: cfg.EVMSourceVerifier,
 		mailbox: normalizeMailboxPolicy(cfg.MailboxPolicy), blob: normalizeBlobPolicy(cfg.BlobPolicy),
 		tmp: normalizeTmpPolicy(cfg.TmpPolicy), endpointIdentity: strings.TrimSpace(cfg.EndpointID),
 		freeLocal: freeLocal, subs: newSubscriptionSet(), notify: cfg.Notify,
@@ -527,6 +528,7 @@ func (i *Indexer) clearNameTransferDirty(name string) error {
 }
 func (i *Indexer) validateStoredPermission(parsed ParsedKey, record *wire.DKVSRecord) error {
 	if record == nil { return ErrInvalidRecord }
+	if IsEVMSourceKey(parsed) { return validateEVMSourceEnvelope(record) }
 	if isAccountScopedNamespace(parsed.Namespace) { return ValidateRecordIdentity(record, parsed) }
 	// Resolver/fee network I/O happens at admission, never while reading data
 	// or rebuilding metadata under the indexer lock.

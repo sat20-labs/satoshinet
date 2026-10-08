@@ -76,6 +76,7 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 	for _, record := range validated.active {
 		incoming[record.Key] = record
 	}
+	if err := protectEVMSourceReplacement(current, incoming); err != nil { return 0, err }
 	// Snapshot omissions replace only the network view. Placement-bound data
 	// and unpaid AUTOPAY retention stay local until their existing prune path
 	// removes them. An incoming record for the same key can still replace them.

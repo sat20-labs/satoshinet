@@ -17,6 +17,12 @@ func hasContractPayloadHeader(script []byte) bool {
 		!tokens.Next() || tokens.Opcode() != sat20MagicNumber || !tokens.Next() {
 		return false
 	}
+	if len(tokens.Data()) > 8 {
+		// A SAT20 type too large to decode is malformed, not an ordinary
+		// memo. Let classification return the reader's error without decoding
+		// it again or falling back to an implicit contract invocation.
+		return true
+	}
 	switch tokens.ExtractInt64() {
 	case int64(ContentTypeContractDeploy), int64(ContentTypeContractInvoke),
 		int64(ContentTypeContractResult), int64(ContentTypeContractStateRoot):

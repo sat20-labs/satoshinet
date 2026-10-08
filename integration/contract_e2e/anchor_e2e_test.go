@@ -213,14 +213,22 @@ func TestWaitForPOSBlockError(t *testing.T) {
 }
 
 func startFakeL1Indexer(t *testing.T, indexerPubKey string,
-	utxos map[string]*indexercommon.AssetsInUtxo) *httptest.Server {
+	utxos map[string]*indexercommon.AssetsInUtxo, parentByPub ...map[string]string) *httptest.Server {
 
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/testnet/kv/register" {
+			pub := indexerPubKey
+			if len(parentByPub) != 0 {
+				var req indexerwire.RegisterPubKeyReq
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+				if parent, ok := parentByPub[0][req.PubKey]; ok {
+					pub = parent
+				}
+			}
 			err := json.NewEncoder(w).Encode(indexerwire.RegisterPubKeyResp{
 				BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
-				PubKey:   indexerPubKey,
+				PubKey:   pub,
 			})
 			require.NoError(t, err)
 			return
@@ -255,7 +263,7 @@ func startSatoshiNetNetwork(t *testing.T, fakeL1 *httptest.Server) (*rpctest.Har
 	return bootstrapNode, coreNode
 }
 
-func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic string) *rpctest.Harness {
+func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic string, extraArgs ...string) *rpctest.Harness {
 	t.Helper()
 	nodeKey := keyFromMnemonic(t, mnemonic, 0)
 	nodePubKey := hex.EncodeToString(nodeKey.PubKey().SerializeCompressed())
@@ -269,14 +277,17 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 		"--generate",
 		"--miningpubkey=" + nodePubKey,
 	}
+	btcdCfg = append(btcdCfg, extraArgs...)
 	env := []string{
 		"SATOSHINET_RPCTEST_NODE_ROLE=" + role,
 		"SATOSHINET_RPCTEST_STP_MNEMONIC=" + mnemonic,
+		"SATOSHINET_RPCTEST_STP_PASSWORD=rpctest",
 	}
 	for _, name := range []string{
 		"SATOSHINET_POS_MINER_INTERVAL",
 		"SATOSHINET_POS_PREWARNING_INTERVAL",
 		"SATOSHINET_POS_CHECKING_INTERVAL",
+		"SATOSHINET_RPCTEST_POS_V2_HEIGHT",
 	} {
 		if value := os.Getenv(name); value != "" {
 			env = append(env, name+"="+value)
@@ -286,7 +297,7 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 		&chaincfg.TestNetParams, nil, btcdCfg, contractE2EExecutablePath(t), env,
 	)
 	require.NoError(t, err)
-	r.MaxConnRetries = 200
+	r.MaxConnRetries = 30
 	r.ConnectionRetryTimeout = 100 * time.Millisecond
 	require.NoError(t, r.SetUp(false, 0))
 	t.Logf("started %s node: pid=%d rpc=%s p2p=%s log=%s",

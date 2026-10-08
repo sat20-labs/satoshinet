@@ -201,7 +201,7 @@ func newNode(config *nodeConfig, dataDir string) (*node, error) {
 // test case, or panic, it is important that the process be stopped via stop(),
 // otherwise, it will persist unless explicitly killed.
 func (n *node) start() error {
-	logFile, err := os.Create(filepath.Join(n.dataDir, "btcd.stdout.log"))
+	logFile, err := os.OpenFile(filepath.Join(n.dataDir, "btcd.stdout.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return err
 	}

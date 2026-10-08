@@ -8,6 +8,7 @@
 package database
 
 import (
+	"fmt"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 )
@@ -483,4 +484,14 @@ type DB interface {
 	// block until all database transactions have been finalized (rolled
 	// back or committed).
 	Close() error
+}
+
+// Sync makes committed block files and metadata durable. Drivers without an
+// explicit durability barrier cannot be used for POS v2 publication.
+func Sync(db DB) error {
+	syncer, ok := db.(interface{ Sync() error })
+	if !ok {
+		return fmt.Errorf("database driver %s does not support synchronous publication", db.Type())
+	}
+	return syncer.Sync()
 }

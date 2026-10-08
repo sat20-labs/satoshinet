@@ -272,6 +272,20 @@ func ExtractWitnessCommitment(tx *btcutil.Tx) ([]byte, bool) {
 // ValidateWitnessCommitment validates the witness commitment (if any) found
 // within the coinbase transaction of the passed block.
 func ValidateWitnessCommitment(blk *btcutil.Block) error {
+	return validateWitnessCommitment(blk, 1, false)
+}
+
+// ValidatePOSWitnessCommitment permits the additional Bootstrap signature but
+// retains every witness-root and reserved-value check. Proposals have one item.
+func ValidatePOSWitnessCommitment(blk *btcutil.Block, proposal bool) error {
+	items := 2
+	if proposal {
+		items = 1
+	}
+	return validateWitnessCommitment(blk, items, true)
+}
+
+func validateWitnessCommitment(blk *btcutil.Block, witnessItems int, required bool) error {
 	// If the block doesn't have any transactions at all, then we won't be
 	// able to extract a commitment from the non-existent coinbase
 	// transaction. So we exit early here.
@@ -292,6 +306,9 @@ func ValidateWitnessCommitment(blk *btcutil.Block) error {
 	// outputs, then the block MUST NOT contain any transactions with
 	// witness data.
 	if !witnessFound {
+		if required {
+			return ruleError(ErrInvalidWitnessCommitment, "POS v2 requires a witness commitment")
+		}
 		for _, tx := range blk.Transactions() {
 			msgTx := tx.MsgTx()
 			if msgTx.HasWitness() {
@@ -304,14 +321,14 @@ func ValidateWitnessCommitment(blk *btcutil.Block) error {
 	}
 
 	// At this point the block contains a witness commitment, so the
-	// coinbase transaction MUST have exactly one witness element within
-	// its witness data and that element must be exactly
+	// coinbase transaction MUST have the expected witness item count.
+	// Its first item is the reserved value and must be exactly
 	// CoinbaseWitnessDataLen bytes.
 	coinbaseWitness := coinbaseTx.MsgTx().TxIn[0].Witness
-	if len(coinbaseWitness) != 1 {
+	if len(coinbaseWitness) != witnessItems {
 		str := fmt.Sprintf("the coinbase transaction has %d items in "+
-			"its witness stack when only one is allowed",
-			len(coinbaseWitness))
+			"its witness stack, expected %d",
+			len(coinbaseWitness), witnessItems)
 		return ruleError(ErrInvalidWitnessCommitment, str)
 	}
 	witnessNonce := coinbaseWitness[0]
@@ -325,7 +342,7 @@ func ValidateWitnessCommitment(blk *btcutil.Block) error {
 	// Finally, with the preliminary checks out of the way, we can check if
 	// the extracted witnessCommitment is equal to:
 	// SHA256(witnessMerkleRoot || witnessNonce). Where witnessNonce is the
-	// coinbase transaction's only witness item.
+	// coinbase transaction's first witness item.
 	witnessMerkleRoot := CalcMerkleRoot(blk.Transactions(), true)
 
 	var witnessPreimage [chainhash.HashSize * 2]byte

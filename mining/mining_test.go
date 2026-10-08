@@ -574,9 +574,25 @@ func TestAnchorTemplateSelectionAcceptsValidAndRejectsInvalidOrDuplicate(t *test
 	}
 	t.Cleanup(anchortx.Stop)
 
-	valid := miningTestAnchorTx(t, validFunding, witnessScript, value, coreKey, txscript.OP_TRUE)
-	duplicate := miningTestAnchorTx(t, validFunding, witnessScript, value, coreKey, txscript.OP_2)
-	invalid := miningTestAnchorTx(t, invalidFunding, witnessScript, value, coreKey, txscript.OP_3)
+	valid := miningTestAnchorTx(t, validFunding, witnessScript, value, coreKey, lockedPkScript)
+	// A distinct txid must not change the channel committed by the invoice.
+	// Final input sequence keeps this variant valid at the template height.
+	duplicateMsg := valid.MsgTx().Copy()
+	duplicateMsg.LockTime = 1
+	duplicateMsg.TxIn[0].Sequence = wire.MaxTxInSequenceNum
+	duplicate := btcutil.NewTx(duplicateMsg)
+	if *valid.Hash() == *duplicate.Hash() {
+		t.Fatal("duplicate funding fixture must have a distinct txid")
+	}
+	for _, tx := range []*btcutil.Tx{valid, duplicate} {
+		if !blockchain.IsFinalizedTransaction(tx, chain.BestSnapshot().Height+1, timeSource.AdjustedTime()) {
+			t.Fatalf("legal Anchor fixture %s is non-final at the next template height", tx.Hash())
+		}
+		if _, err := anchortx.CheckAnchorTxValid(tx.MsgTx(), true, false); err != nil {
+			t.Fatalf("legal Anchor fixture %s rejected: %v", tx.Hash(), err)
+		}
+	}
+	invalid := miningTestAnchorTx(t, invalidFunding, witnessScript, value, coreKey, lockedPkScript)
 	invalidAmount := valid.MsgTx().Copy()
 	invalidAmount.TxOut[0].Value--
 	invalidSignature := valid.MsgTx().Copy()
@@ -614,7 +630,7 @@ func TestAnchorTemplateSelectionAcceptsValidAndRejectsInvalidOrDuplicate(t *test
 	if includedHash == *invalid.Hash() {
 		t.Fatalf("template included invalid anchor %s", includedHash)
 	}
-	lockedInfo, err := anchortx.GetLockedTxInfo(template.Block.Transactions[1], false)
+	lockedInfo, err := anchortx.GetLockedTxInfo(template.Block.Transactions[1], false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,8 +647,7 @@ func TestAnchorTemplateSelectionAcceptsValidAndRejectsInvalidOrDuplicate(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent := miningTestAnchorTx(t, validFunding, witnessScript, value, coreKey, txscript.OP_TRUE)
-	parent.MsgTx().TxOut[0].PkScript = lockedPkScript
+	parent := miningTestAnchorTx(t, validFunding, witnessScript, value, coreKey, lockedPkScript)
 	keys := []*btcec.PrivateKey{coreKey, peerKey}
 	if bytes.Compare(coreKey.PubKey().SerializeCompressed(), peerKey.PubKey().SerializeCompressed()) > 0 {
 		keys[0], keys[1] = keys[1], keys[0]
@@ -740,7 +755,7 @@ func TestAnchorTemplateSelectionAcceptsValidAndRejectsInvalidOrDuplicate(t *test
 }
 
 func miningTestAnchorTx(t *testing.T, funding string, witnessScript []byte, value int64,
-	key *btcec.PrivateKey, outputOpcode byte) *btcutil.Tx {
+	key *btcec.PrivateKey, outputPkScript []byte) *btcutil.Tx {
 
 	t.Helper()
 	invoice, err := anchortx.StandardAnchorScript(funding, witnessScript, value, nil)
@@ -768,7 +783,7 @@ func miningTestAnchorTx(t *testing.T, funding string, witnessScript []byte, valu
 		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: wire.AnchorTxOutIndex},
 		SignatureScript:  anchorScript,
 	})
-	tx.AddTxOut(wire.NewTxOut(value, nil, []byte{outputOpcode}))
+	tx.AddTxOut(wire.NewTxOut(value, nil, outputPkScript))
 	payload := scommon.ASSET_PLAIN_SAT.String() + "-21000000000000000-" +
 		strconv.Itoa(0) + "-" + strconv.Itoa(1)
 	marker, err := satsindexer.NullDataScript(satsindexer.CONTENT_TYPE_ASCENDING, []byte(payload))

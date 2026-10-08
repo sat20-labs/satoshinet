@@ -212,6 +212,7 @@ type config struct {
 	TrickleInterval                time.Duration `long:"trickleinterval" description:"Minimum time between attempts to send new inventory to a connected peer"`
 	UtxoCacheMaxSizeMiB            uint          `long:"utxocachemaxsize" description:"The maximum size in MiB of the UTXO cache"`
 	TxIndex                        bool          `long:"txindex" description:"Maintain a full hash-based transaction index which makes all transactions available via the getrawtransaction RPC"`
+	EVMSourceSolc                  string        `long:"evmsourcesolc" description:"Path to an approved solc 0.8.30 native binary for EVM source blobs (default: solc)"`
 	UserAgentComments              []string      `long:"uacomment" description:"Comment to add to the user agent -- See BIP 14 for more information."`
 	Upnp                           bool          `long:"upnp" description:"Use UPnP to map our listening port outside of NAT"`
 	ShowVersion                    bool          `short:"V" long:"version" description:"Display version information and exit"`
@@ -695,6 +696,9 @@ func loadConfig() (*config, []string, error) {
 		err := fmt.Errorf(str, funcName)
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+	if err := configurePOSV2TestNetwork(activeNetParams.Params); err != nil {
 		return nil, nil, err
 	}
 

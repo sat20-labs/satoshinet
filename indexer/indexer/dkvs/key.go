@@ -169,6 +169,7 @@ func validateNamespaceShape(parsed ParsedKey) error {
 		}
 		return ErrInvalidKey
 	case "blob":
+		if IsEVMSourceKey(parsed) { return nil }
 		if len(parsed.Segments) != 2 || !validAccountID(parsed.Segments[0]) {
 			return ErrInvalidKey
 		}

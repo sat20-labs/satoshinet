@@ -3,9 +3,9 @@ package dkvs
 import "github.com/sat20-labs/satoshinet/wire"
 
 // IsBlobKey reports whether parsed is the canonical single-record blob layout:
-// /blob/<account_id>/<blob_key>.
+// /blob/<account_id>/<blob_key>, or the fixed EVM source slot.
 func IsBlobKey(parsed ParsedKey) bool {
-	return parsed.Namespace == "blob" && len(parsed.Segments) == 2
+	return parsed.Namespace == "blob" && (len(parsed.Segments) == 2 || IsEVMSourceKey(parsed))
 }
 
 func validateRecordSizeForParsed(record *wire.DKVSRecord, parsed ParsedKey) error {
@@ -32,6 +32,7 @@ func validateBlobRecord(record *wire.DKVSRecord, parsed ParsedKey, policy BlobPo
 	if err := validateRecordSizeForParsed(record, parsed); err != nil {
 		return err
 	}
+	if IsEVMSourceKey(parsed) { return validateEVMSourceEnvelope(record) }
 	if IsTombstone(record.Flags) {
 		return nil
 	}
@@ -66,7 +67,7 @@ func (i *Indexer) validateBlobLocked(record *wire.DKVSRecord, parsed ParsedKey, 
 
 // VerifyBlobRecordForClient validates the deterministic signed blob envelope.
 func VerifyBlobRecordForClient(record *wire.DKVSRecord, opts RecordVerificationOptions) error {
-	if record == nil || record.Version != Version || len(record.PubKey) != 0 {
+	if record == nil || record.Version != Version {
 		return ErrInvalidRecord
 	}
 	if opts.ExpectedKey != "" && record.Key != opts.ExpectedKey {

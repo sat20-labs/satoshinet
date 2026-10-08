@@ -93,7 +93,7 @@ func TestReviewParentStateNeverUsesUnrelatedTip(t *testing.T) {
 	require.Error(t, err, "template must fail closed for unknown parent")
 }
 
-func TestReviewSparseParentStateUsesItsOwnAncestor(t *testing.T) {
+func TestReviewPrunedParentStateRejectsHistoricalExecution(t *testing.T) {
 	db := testEVMStateDB(t)
 	defer db.Close()
 	ancestor := btcutilBlockWithPrev(chainhash.Hash{})
@@ -111,9 +111,8 @@ func TestReviewSparseParentStateUsesItsOwnAncestor(t *testing.T) {
 	future := evm.NewMemoryStateDB()
 	future.SetNonce(gethcommon.Address{1}, 2, 0)
 	require.NoError(t, store.StoreBlockState(&chainhash.Hash{99}, future))
-	runtime, err := store.RuntimeFactory()(btcutilBlockWithPrev(*parent.Hash()), nil)
-	require.NoError(t, err)
-	require.Equal(t, original.StateRoot(), runtime.State.StateRoot())
+	_, err := store.RuntimeFactory()(btcutilBlockWithPrev(*parent.Hash()), nil)
+	require.ErrorContains(t, err, "historical state is unavailable")
 }
 
 func TestReviewSparseParentStateUsesValidatedAncestor(t *testing.T) {

@@ -113,6 +113,23 @@ func setupReadinessChain(t *testing.T) (*BlockChain, *testAssetReadiness,
 	return chain, ready, validator, teardown
 }
 
+func TestPOSReadinessWithoutContracts(t *testing.T) {
+	chain, ready, _, teardown := setupReadinessChain(t)
+	defer teardown()
+	chain.contractBlockValidator = nil
+	block := readinessTestBlock(t, chain)
+	ready.setTip(-1, chainhash.Hash{})
+	interrupt := make(chan struct{})
+	close(interrupt)
+	ready.interrupt = interrupt
+	if _, _, err := chain.ProcessBlock(block, BFNone); err == nil {
+		t.Fatal("block accepted while asset index and sorter are behind, with contracts disabled")
+	}
+	if rawBlockStored(t, chain, block.Hash()) {
+		t.Fatal("not-ready block persisted")
+	}
+}
+
 func rawBlockStored(t *testing.T, chain *BlockChain, hash *chainhash.Hash) bool {
 	t.Helper()
 	var stored bool
@@ -294,7 +311,7 @@ func TestDirectInvalidBlockIsRejectedWithoutRawStorage(t *testing.T) {
 	}
 }
 
-func TestTemplateValidationIsReusedByBlockAcceptance(t *testing.T) {
+func TestContractAcceptanceReexecutesPreparedProposal(t *testing.T) {
 	chain, _, validator, teardown := setupReadinessChain(t)
 	defer teardown()
 	block := readinessTestBlock(t, chain)
@@ -304,8 +321,8 @@ func TestTemplateValidationIsReusedByBlockAcceptance(t *testing.T) {
 	if _, _, err := chain.ProcessBlock(block, BFNone); err != nil {
 		t.Fatal(err)
 	}
-	if got := validator.calls.Load(); got != 1 {
-		t.Fatalf("contract validator ran %d times, want one prepared validation", got)
+	if got := validator.calls.Load(); got != 2 {
+		t.Fatalf("contract validator ran %d times, want proposal and formal validation", got)
 	}
 }
 
@@ -491,5 +508,32 @@ func TestContractBlockReorgUsesBranchAlignedAssetView(t *testing.T) {
 	}
 	if !foundForkParent {
 		t.Fatalf("branch validation never reached fork parent %s: %v", forkBlock.Hash(), parents)
+	}
+}
+
+func TestContractReorgAtLiveTipUsesIsolatedAssetView(t *testing.T) {
+	chain, ready, _, teardown := setupReadinessChain(t)
+	defer teardown()
+	parent := chain.bestChain.Tip()
+	branchReady := &branchReadiness{testAssetReadiness: ready, baseHeight: int(parent.height), baseHash: parent.hash}
+	chain.assetIndexReadiness = branchReady
+	validator := &branchPreparedValidator{prepared: make(map[chainhash.Hash]ContractAssetIndexView)}
+	chain.contractBlockValidator = validator
+	ready.setTip(-1, chainhash.Hash{}) // live AIDX is rebuilding after detach
+	block := readinessTestBlock(t, chain)
+	block.SetHeight(parent.height + 1)
+	node := newBlockNode(&block.MsgBlock().Header, parent)
+	view := NewUtxoViewpoint()
+	view.SetBestHash(&parent.hash)
+	if err := chain.checkConnectBlock(node, block, view, nil); err == nil {
+		t.Fatal("ordinary tip validation bypassed lagging live AIDX")
+	}
+	view = NewUtxoViewpoint()
+	view.SetBestHash(&parent.hash)
+	if err := chain.checkConnectBlockFor(node, block, view, nil, true); err != nil {
+		t.Fatalf("reorg parent replay failed: %v", err)
+	}
+	if len(validator.parents) != 1 || validator.parents[0] != parent.hash {
+		t.Fatal("reorg did not validate exact isolated parent")
 	}
 }

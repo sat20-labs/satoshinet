@@ -151,9 +151,6 @@ func dbStoreAgentBlockState(dbTx database.Tx, hash *chainhash.Hash, store *agent
 	if err != nil {
 		return err
 	}
-	if err := validatePersistedContractStateSize("agent", encoded); err != nil {
-		return err
-	}
 	parent, err := dbTx.Metadata().CreateBucketIfNotExists(agentStateBucketName)
 	if err != nil {
 		return err
@@ -162,10 +159,7 @@ func dbStoreAgentBlockState(dbTx database.Tx, hash *chainhash.Hash, store *agent
 	if err != nil {
 		return err
 	}
-	if err := byBlock.Put(hash[:], encoded); err != nil {
-		return err
-	}
-	return parent.Put(agentStateTipKeyName, hash[:])
+	return putLatestStateBlob(parent, byBlock, agentStateTipKeyName, hash[:], encoded)
 }
 
 func dbDeleteAgentBlockState(dbTx database.Tx, hash, newTip *chainhash.Hash) error {
@@ -178,7 +172,7 @@ func dbDeleteAgentBlockState(dbTx database.Tx, hash, newTip *chainhash.Hash) err
 	}
 	byBlock := parent.Bucket(agentStateByBlockBucketName)
 	if byBlock != nil {
-		if err := byBlock.Delete(hash[:]); err != nil {
+		if err := deleteStateBlob(byBlock, hash[:]); err != nil {
 			return err
 		}
 	}
@@ -200,7 +194,10 @@ func loadAgentStateFromBucket(parent database.Bucket, hash *chainhash.Hash) (*ag
 	if byBlock == nil {
 		return nil, ErrAgentStateNotFound
 	}
-	encoded := byBlock.Get(hash[:])
+	encoded, err := getStateBlob(byBlock, hash[:])
+	if err != nil {
+		return nil, err
+	}
 	if encoded == nil {
 		return nil, ErrAgentStateNotFound
 	}

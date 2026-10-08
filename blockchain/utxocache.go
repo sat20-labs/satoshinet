@@ -453,7 +453,7 @@ func (s *utxoCache) addTxIn(txIn *wire.TxIn, stxos *[]SpentTxOut) error {
 // utxo that is being spent by the input will be marked as spent and if the utxo
 // is fresh (meaning that the database on disk never saw it), it will be removed
 // from the cache.
-func (s *utxoCache) addTxIns(tx *btcutil.Tx, stxos *[]SpentTxOut, anchorTxInfos *[]AnchorTxInfo) error {
+func (s *utxoCache) addTxIns(tx *btcutil.Tx, stxos *[]SpentTxOut, anchorTxInfos *[]AnchorTxInfo, bindOutputs bool) error {
 	// Coinbase transactions don't spend inputs, and SatoshiNet anchor
 	// inputs represent external L1 locks rather than entries in this UTXO set.
 	if !transactionConsumesSpendJournal(tx.MsgTx(), IsCoinBase(tx)) {
@@ -464,7 +464,7 @@ func (s *utxoCache) addTxIns(tx *btcutil.Tx, stxos *[]SpentTxOut, anchorTxInfos 
 		// Anchor transactions don't have any local inputs to spend.
 		if anchorTxInfos != nil {
 			// Add the anchor tx info to anchor tx cache
-			lockedTxInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+			lockedTxInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false, bindOutputs)
 			if err != nil {
 				return err
 			}
@@ -496,9 +496,9 @@ func (s *utxoCache) addTxIns(tx *btcutil.Tx, stxos *[]SpentTxOut, anchorTxInfos 
 // be updated to append an entry for each spent txout.  An error will be returned
 // if the cache and the database does not contain the required utxos.
 func (s *utxoCache) connectTransaction(
-	tx *btcutil.Tx, blockHeight int32, stxos *[]SpentTxOut, anchorTxInfos *[]AnchorTxInfo) error {
+	tx *btcutil.Tx, blockHeight int32, stxos *[]SpentTxOut, anchorTxInfos *[]AnchorTxInfo, bindOutputs bool) error {
 
-	err := s.addTxIns(tx, stxos, anchorTxInfos)
+	err := s.addTxIns(tx, stxos, anchorTxInfos, bindOutputs)
 	if err != nil {
 		return err
 	}
@@ -512,9 +512,9 @@ func (s *utxoCache) connectTransaction(
 // the transactions spend as spent, and setting the best hash for the view to
 // the passed block.  In addition, when the 'stxos' argument is not nil, it will
 // be updated to append an entry for each spent txout.
-func (s *utxoCache) connectTransactions(block *btcutil.Block, stxos *[]SpentTxOut, anchorTxInfos *[]AnchorTxInfo) error {
+func (s *utxoCache) connectTransactions(block *btcutil.Block, stxos *[]SpentTxOut, anchorTxInfos *[]AnchorTxInfo, bindOutputs bool) error {
 	for _, tx := range block.Transactions() {
-		err := s.connectTransaction(tx, block.Height(), stxos, anchorTxInfos)
+		err := s.connectTransaction(tx, block.Height(), stxos, anchorTxInfos, bindOutputs)
 		if err != nil {
 			return err
 		}
@@ -617,6 +617,12 @@ func (b *BlockChain) FlushUtxoCache(mode FlushMode) error {
 	b.chainLock.Lock()
 	defer b.chainLock.Unlock()
 
+	// A failed POS sync may leave the database ahead of BestSnapshot.
+	// Preserve the committed consistency marker for recovery on reopen.
+	if b.posDurabilityErr != nil {
+		return b.posDurabilityErr
+	}
+
 	return b.db.Update(func(dbTx database.Tx) error {
 		return b.utxoCache.flush(dbTx, mode, b.BestSnapshot())
 	})
@@ -718,7 +724,7 @@ func (b *BlockChain) InitConsistentState(tip *blockNode, interrupt <-chan struct
 			return err
 		}
 
-		err = b.utxoCache.connectTransactions(block, nil, nil)
+		err = b.utxoCache.connectTransactions(block, nil, nil, b.chainParams.POSV2Active(block.Height()))
 		if err != nil {
 			return err
 		}

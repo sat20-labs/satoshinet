@@ -20,9 +20,9 @@ var (
 	ErrEVMStateNotFound = errors.New("EVM state not found")
 )
 
-// EVMStateStore persists deterministic EVM state snapshots by SatoshiNet block
-// hash. The store is intentionally separate from validation so callers can
-// decide exactly when a validated block should commit its post-state.
+// EVMStateStore retains the latest deterministic EVM snapshot under its block
+// hash. Replacing it and pruning the previous snapshot share the chain DB
+// transaction; historical execution and rollback are not supported.
 type EVMStateStore struct {
 	db database.DB
 }
@@ -139,10 +139,7 @@ func dbStoreEVMBlockState(dbTx database.Tx, hash *chainhash.Hash, state *evm.Mem
 	if err != nil {
 		return err
 	}
-	if err := putStateBlob(byBlock, hash[:], encoded); err != nil {
-		return err
-	}
-	return parent.Put(evmStateTipKeyName, hash[:])
+	return putLatestStateBlob(parent, byBlock, evmStateTipKeyName, hash[:], encoded)
 }
 
 func dbDeleteEVMBlockState(dbTx database.Tx, hash, newTip *chainhash.Hash) error {

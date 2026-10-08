@@ -136,6 +136,8 @@ type EVMCompilerConfig struct {
 }
 
 type EVMSourceMetadata struct {
+	Version         uint32            `json:"version"`
+	Language        string            `json:"language"`
 	ContractAddress string            `json:"contractAddress"`
 	DeployTxID      string            `json:"deployTxid,omitempty"`
 	ContractName    string            `json:"contractName"`

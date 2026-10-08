@@ -531,6 +531,10 @@ func userImportWallet(scanner *bufio.Scanner, interrupt <-chan struct{}) error {
 // 启动交互模式
 func walletInterAction(interrupt <-chan struct{}) error {
 
+	if handled, err := unlockRPCTestWallet(); handled {
+		return err
+	}
+
 	scanner := bufio.NewScanner(os.Stdin)
 	if stp.IsWalletExists() {
 		for {

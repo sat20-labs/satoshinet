@@ -627,7 +627,7 @@ mempoolLoop:
 		}
 		anchorFundingUtxo := ""
 		if blockchain.IsAnchorTx(tx.MsgTx()) {
-			lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+			lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false, g.chainParams.POSV2Active(nextBlockHeight))
 			if err != nil {
 				log.Warnf("Skipping invalid anchor tx %s: %v", tx.Hash(), err)
 				continue
@@ -724,6 +724,11 @@ mempoolLoop:
 	// transaction.
 	blockWeight := uint32((blockHeaderOverhead * blockchain.WitnessScaleFactor) +
 		blockchain.GetTransactionWeight(coinbaseTx))
+	if g.chainParams.POSV2Active(nextBlockHeight) {
+		// Commitment output + marker/flag + reserved nonce + approval item.
+		blockWeight += uint32((8+1+blockchain.CoinbaseWitnessPkScriptLength)*blockchain.WitnessScaleFactor +
+			2 + 1 + 1 + blockchain.CoinbaseWitnessDataLen + 1 + common.MaxPOSApprovalSignatureSize)
+	}
 	blockSigOpCost := coinbaseSigOpCost
 	totalFees := int64(0)
 	totalFeeAssets := wire.TxAssets{}
@@ -1171,6 +1176,9 @@ func mergeMissingContractResultUtxos(blockUtxos *blockchain.UtxoViewpoint, tx *b
 // within the coinbase tx.  The raw commitment is returned.
 func AddWitnessCommitment(coinbaseTx *btcutil.Tx,
 	blockTxns []*btcutil.Tx) []byte {
+	if len(coinbaseTx.MsgTx().TxIn[0].Witness) > 1 {
+		panic("cannot rebuild commitment after Bootstrap approval")
+	}
 
 	// The witness of the coinbase transaction MUST be exactly 32-bytes
 	// of all zeroes.

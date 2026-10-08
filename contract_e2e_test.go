@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEVMEndToEndDeployInvokeReplayAndReorg(t *testing.T) {
+func TestEVMEndToEndDeployInvokeReplayAndLatestState(t *testing.T) {
 	const (
 		deployNonce = 7
 		gasAsset    = "ordx:ft:gas"
@@ -80,12 +80,14 @@ func TestEVMEndToEndDeployInvokeReplayAndReorg(t *testing.T) {
 	parentHash := chainhash.Hash{0x01}
 	parentState := evm.NewMemoryStateDB()
 	require.NoError(t, store.StoreBlockState(&parentHash, parentState))
-	mainHash := chainhash.Hash{0x02}
-	require.NoError(t, store.StoreBlockState(&mainHash, replayRuntime.State))
 	altBlock := btcutil.NewBlock(&wire.MsgBlock{Header: wire.BlockHeader{PrevBlock: parentHash}, Transactions: []*wire.MsgTx{e2ECoinbaseTx()}})
 	altRuntime, err := store.RuntimeFactory()(altBlock, nil)
 	require.NoError(t, err)
 	require.Equal(t, parentState.StateRoot(), altRuntime.State.StateRoot())
+	mainHash := chainhash.Hash{0x02}
+	require.NoError(t, store.StoreBlockState(&mainHash, replayRuntime.State))
+	_, err = store.LoadBlockState(&parentHash)
+	require.ErrorIs(t, err, contractnode.ErrEVMStateNotFound)
 	loadedMain, err := store.LoadBlockState(&mainHash)
 	require.NoError(t, err)
 	require.Equal(t, replayed.StateRoot, loadedMain.StateRoot())

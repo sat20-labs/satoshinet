@@ -165,7 +165,7 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 
 	anchorTx := buildNetworkAnchorTx(t, lockedUtxo, lockedValue,
 		testWireAsset(gasAsset, 320000), gasAsset+"-320000-0-0",
-		witnessScript, bootstrapKey, spendScript)
+		witnessScript, bootstrapKey, spendScript, 2)
 	sendTx(t, bootstrapNode, anchorTx)
 	waitForPOSTx(t, bootstrapNode, nodes, anchorTx)
 

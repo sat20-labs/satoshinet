@@ -20,6 +20,11 @@ type ValidationAssetView struct {
 	compiling *base_indexer.BaseIndexer
 }
 
+// GetSeqMgr exposes only this isolated parent-branch sorter for POS validation.
+func (v *ValidationAssetView) GetSeqMgr() *common.MiningSequenceMgr {
+	return v.compiling.GetSequenceMgr()
+}
+
 // NewValidationAssetView starts from the durable base snapshot. The caller is
 // responsible for replaying the exact ancestor path required by validation.
 func (b *IndexerMgr) NewValidationAssetView() (*ValidationAssetView, error) {
@@ -162,6 +167,7 @@ func (b *IndexerMgr) InternalTipReady(height int, hash *chainhash.Hash) bool {
 // EnsureInternalTip actively repairs the compiling index to the requested
 // canonical tip. It serializes with block connect/disconnect so a failed block
 // notification cannot strand consensus readiness behind a passive wait.
+// RPC reads occur outside connectMutex; application checks its parent again.
 func (b *IndexerMgr) EnsureInternalTip(height int, hash *chainhash.Hash, tip int) error {
 	if b == nil || b.compiling == nil || hash == nil {
 		return fmt.Errorf("invalid internal tip target")
@@ -172,6 +178,9 @@ func (b *IndexerMgr) EnsureInternalTip(height int, hash *chainhash.Hash, tip int
 			return fmt.Errorf("internal tip repair canceled")
 		default:
 		}
+	}
+	if err := b.catchUpWithRPC(height, tip); err != nil {
+		return err
 	}
 	b.connectMutex.Lock()
 	defer b.connectMutex.Unlock()

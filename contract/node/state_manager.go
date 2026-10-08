@@ -27,14 +27,8 @@ type ContractStateManager struct {
 	codecs map[contractframework.ModuleType]ModuleStateCodec
 }
 
+// Maximum size of one stored value/chunk, not the whole module snapshot.
 const MaxPersistedContractStateBytes = 16 << 20
-
-func validatePersistedContractStateSize(module string, encoded []byte) error {
-	if len(encoded) > MaxPersistedContractStateBytes {
-		return fmt.Errorf("%s contract state exceeds %d bytes", module, MaxPersistedContractStateBytes)
-	}
-	return nil
-}
 
 func NewContractStateManager() *ContractStateManager {
 	return &ContractStateManager{codecs: defaultModuleStateCodecs()}
@@ -84,8 +78,11 @@ func (m *ContractStateManager) StoreContractBlockState(dbTx database.Tx,
 	}
 	for _, codec := range m.registeredCodecs() {
 		state, ok := provider.ContractBlockPostState(codec.Module, hash)
-		if !ok || state == nil {
+		if !ok {
 			continue
+		}
+		if state == nil {
+			return fmt.Errorf("missing required %s contract state", codec.Name)
 		}
 		if err := codec.Store(dbTx, hash, state.Snapshot()); err != nil {
 			return fmt.Errorf("persist %s contract state: %w", codec.Name, err)

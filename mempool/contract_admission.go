@@ -2,6 +2,7 @@ package mempool
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sat20-labs/satoshinet/blockchain"
 	contract "github.com/sat20-labs/satoshinet/contract"
@@ -19,6 +20,16 @@ func checkMempoolContractAndAssetEnvelope(tx *wire.MsgTx) error {
 		for _, asset := range output.Assets {
 			if asset.Name == (wire.AssetName{}) {
 				return txRuleError(wire.RejectInvalid, fmt.Sprintf("output %d: satoshi (::) must use value, not TxAssets", i))
+			}
+			if asset.Name.Protocol == "" || asset.Name.Type == "" || asset.Name.Ticker == "" ||
+				strings.ContainsAny(asset.Name.Protocol+asset.Name.Type+asset.Name.Ticker, ":") {
+				return txRuleError(wire.RejectInvalid, fmt.Sprintf("output %d: invalid asset name %q", i, asset.Name.String()))
+			}
+			if err := asset.Amount.Validate(); err != nil {
+				return txRuleError(wire.RejectInvalid, fmt.Sprintf("output %d: invalid asset amount: %v", i, err))
+			}
+			if asset.Amount.Sign() <= 0 {
+				return txRuleError(wire.RejectInvalid, fmt.Sprintf("output %d: asset amount must be positive", i))
 			}
 		}
 		carrier, err := contract.RequiredBindingSats(output.Assets)

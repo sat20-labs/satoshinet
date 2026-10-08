@@ -1,12 +1,16 @@
 package rpcserver
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -40,6 +44,11 @@ const (
 )
 
 type Rpc struct {
+	server            *http.Server
+	cancelRequests    context.CancelFunc
+	handlerMu         sync.Mutex
+	handlerWG         sync.WaitGroup
+	stopping          bool
 	indexerService    *sindexer.Service
 	satoshinetService *satoshinet.Service
 }
@@ -54,6 +63,20 @@ func NewRpc(baseIndexer *indexer.IndexerMgr) *Rpc {
 func (s *Rpc) Start(rpcUrl, rpcProxy, rpcLogFile string) error {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
+	r.Use(func(c *gin.Context) {
+		// Serialize admission with Stop so no database user can enter after
+		// the drain starts, even if net/http had already accepted a request.
+		s.handlerMu.Lock()
+		if s.stopping {
+			s.handlerMu.Unlock()
+			c.AbortWithStatus(http.StatusServiceUnavailable)
+			return
+		}
+		s.handlerWG.Add(1)
+		s.handlerMu.Unlock()
+		defer s.handlerWG.Done()
+		c.Next()
+	})
 	var writers []io.Writer
 	if rpcLogFile != "" {
 		exePath, _ := os.Executable()
@@ -147,29 +170,37 @@ func (s *Rpc) Start(rpcUrl, rpcProxy, rpcLogFile string) error {
 	s.indexerService.InitRouter(r, rpcProxy)
 	s.satoshinetService.InitRouter(r, rpcProxy)
 
-	parts := strings.Split(rpcUrl, ":")
-	var port string
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid url")
-	}
-	port = parts[1]
-	
-	// 先检查端口
-	if err := checkPort(port); err != nil {
+	listener, err := net.Listen("tcp", rpcUrl)
+	if err != nil {
 		return err
 	}
-
-	go r.Run(rpcUrl)
+	s.handlerMu.Lock()
+	s.stopping = false
+	s.handlerMu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancelRequests = cancel
+	s.server = &http.Server{Addr: listener.Addr().String(), Handler: r,
+		BaseContext: func(net.Listener) context.Context { return ctx }}
+	go func() {
+		if err := s.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintf(os.Stderr, "indexer RPC serve failed: %v\n", err)
+		}
+	}()
 	return nil
 }
 
-func checkPort(port string) error {
-	// 方法1: 尝试监听该端口
-	addr := fmt.Sprintf(":%s", port)
-	l, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("port %s is in use: %v", port, err)
+// Stop cancels requests and forcibly closes their network connections, then
+// waits for database users. Server.Close alone does not wait for handlers;
+// canceling a context alone does not interrupt a blocked request-body read.
+func (s *Rpc) Stop() error {
+	if s == nil || s.server == nil {
+		return nil
 	}
-	l.Close()
-	return nil
+	s.handlerMu.Lock()
+	s.stopping = true
+	s.handlerMu.Unlock()
+	s.cancelRequests()
+	err := s.server.Close()
+	s.handlerWG.Wait()
+	return err
 }

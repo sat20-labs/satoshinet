@@ -9,10 +9,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -94,10 +96,10 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 
 	gasAnchor := buildNetworkAnchorTx(t, gasLockedUtxo, lockedValue,
 		testWireAsset(gasAsset, 100000000), gasAsset+"-100000000-0-0",
-		witnessScript, bootstrapKey, caller0Script)
+		witnessScript, bootstrapKey, caller0Script, 2)
 	assetAnchor := buildNetworkAnchorTx(t, assetLockedUtxo, lockedValue,
 		testWireDecimalAsset(t, vaultAsset, "10.00", 2), vaultAsset+"-10.00-2-0",
-		witnessScript, bootstrapKey, caller0Script)
+		witnessScript, bootstrapKey, caller0Script, 2)
 	sendTx(t, bootstrapNode, gasAnchor)
 	sendTx(t, bootstrapNode, assetAnchor)
 	generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 1)
@@ -354,13 +356,14 @@ func packNetworkSolidityMethod(t *testing.T, abiValue gethabi.ABI, method string
 }
 
 func buildNetworkAnchorTx(t *testing.T, lockedUtxo string, lockedValue int64, assets wire.TxAssets,
-	ascending string, witnessScript []byte, signer *btcec.PrivateKey, spendScript []byte) *wire.MsgTx {
+	ascending string, witnessScript []byte, signer *btcec.PrivateKey, spendScript []byte, targetHeight int32) *wire.MsgTx {
 
 	t.Helper()
-	tx := wire.NewMsgTx(2)
+	tx := wire.NewMsgTx(wire.TxVersion)
 	tx.AddTxIn(&wire.TxIn{
 		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: wire.AnchorTxOutIndex},
 		SignatureScript:  signedAnchorScript(t, lockedUtxo, witnessScript, lockedValue, assets, signer),
+		Sequence:         wire.AnchorTxOutIndex,
 	})
 	tx.AddTxOut(wire.NewTxOut(lockedValue, assets, spendScript))
 	ascendingScript, err := sindexercommon.NullDataScript(
@@ -369,6 +372,18 @@ func buildNetworkAnchorTx(t *testing.T, lockedUtxo string, lockedValue int64, as
 	)
 	require.NoError(t, err)
 	tx.AddTxOut(wire.NewTxOut(0, nil, ascendingScript))
+	raw := os.Getenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT")
+	if raw != "" {
+		activationHeight, err := strconv.ParseInt(raw, 10, 32)
+		require.NoError(t, err)
+		if activationHeight > 0 && int64(targetHeight) >= activationHeight {
+			invoice, err := sindexercommon.AnchorInvoice(tx, true)
+			require.NoError(t, err)
+			tx.TxIn[0].SignatureScript, err = sindexercommon.StandardAnchorScriptWithSig(lockedUtxo, witnessScript, lockedValue, assets,
+				ecdsa.Sign(signer, chainhash.HashB(invoice)).Serialize())
+			require.NoError(t, err)
+		}
+	}
 	return tx
 }
 

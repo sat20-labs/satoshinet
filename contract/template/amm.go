@@ -78,6 +78,9 @@ func (c *AMMContract) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing sat value")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("sat value exceeds eight bytes")
+	}
 	c.SatValue = tokenizer.ExtractInt64()
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -190,6 +193,9 @@ func (p *AddLiquidityInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -204,6 +210,9 @@ func (p *AddLiquidityInvokeParam) Decode(data []byte) error {
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing sat value")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("sat value exceeds eight bytes")
 	}
 	p.Value = tokenizer.ExtractInt64()
 	if tokenizer.Next() {
@@ -249,6 +258,9 @@ func (p *RemoveLiquidityInvokeParam) Decode(data []byte) error {
 
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
 	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 

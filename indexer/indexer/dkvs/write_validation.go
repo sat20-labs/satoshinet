@@ -13,6 +13,7 @@ type runtimeValidators struct {
 	resolver DIDResolver
 	feeVerifier FeeVerifier
 	system SystemVerifier
+	evmSourceVerifier func(*wire.DKVSRecord) error
 	policyGeneration uint64
 }
 
@@ -38,6 +39,7 @@ func (i *Indexer) snapshotValidators() runtimeValidators {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
 	return runtimeValidators{resolver: i.resolver, feeVerifier: i.feeVerifier, system: i.system,
+		evmSourceVerifier: i.evmSourceVerifier,
 		policyGeneration: atomic.LoadUint64(&i.policyGeneration)}
 }
 
@@ -84,6 +86,7 @@ func (i *Indexer) writeStateStillCurrentLocked(key string, parsed ParsedKey, sna
 }
 
 func verifyFeeProofWith(verifier FeeVerifier, record *wire.DKVSRecord, parsed ParsedKey) error {
+	if IsEVMSourceKey(parsed) { return validateEVMSourceEnvelope(record) }
 	if isAccountMappingBindingControlRecord(record, parsed) { return nil }
 	if record != nil && isAutopayRecord(record) && record.TTL != 0 { return ErrInvalidFeeProof }
 	if verifier == nil { return ErrFeeProofRequired }
@@ -153,6 +156,7 @@ func validateMailWritePermissionWith(parsed ParsedKey, record, existing *wire.DK
 
 func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRecord, requiresResolve bool, validators runtimeValidators) (bool, error) {
 	if record == nil { return false, ErrInvalidRecord }
+	if IsEVMSourceKey(parsed) { return false, validateEVMSourceWrite(record, existing, validators.evmSourceVerifier) }
 	if parsed.Namespace == "mail" { return false, validateMailWritePermissionWith(parsed, record, existing, validators.resolver, validators.system) }
 	if isInternalMailboxRecord(record) || isInternalTopicRecord(record) { return false, ErrPermissionDenied }
 	if len(record.PubKey) == 0 { return false, ValidateRecordIdentity(record, parsed) }
@@ -171,6 +175,7 @@ func validateWritePermissionWith(parsed ParsedKey, record, existing *wire.DKVSRe
 
 func (i *Indexer) prepareFeeCapacity(record *wire.DKVSRecord, parsed ParsedKey, existing *wire.DKVSRecord, verifier FeeVerifier, height, now uint64) (preparedFeeCapacity, error) {
 	prepared := preparedFeeCapacity{}
+	if IsEVMSourceKey(parsed) { return prepared, nil }
 	if isAccountMappingBindingControlRecord(record, parsed) { return prepared, nil }
 	if indexed, ok := verifier.(IndexedFeeCapacityVerifier); ok {
 		descriptor, err := indexed.FeeCapacity(record, parsed)
@@ -213,6 +218,7 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height uint64, allo
 	var err error
 	parsed, err = ParseKey(record.Key)
 	if err != nil { return parsed, err }
+	if IsEVMSourceKey(parsed) { if err := validateEVMSourceEnvelope(record); err != nil { return parsed, err } }
 	if err := validateRecordSizeForParsed(record, parsed); err != nil { return parsed, err }
 	if record.Flags&^FlagTombstone != 0 || (height != 0 && record.IssueHeight > height) || (record.TTL != 0 && RecordExpiryHeight(record) == 0) { return parsed, ErrInvalidRecord }
 	if verifyFee && !IsTombstone(record.Flags) && isAutopayRecord(record) && record.TTL != 0 { return parsed, ErrInvalidFeeProof }

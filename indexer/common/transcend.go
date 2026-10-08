@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -175,6 +176,10 @@ func ParseStandardAnchorScript(script []byte) (utxo string, pkScript []byte,
 		err = fmt.Errorf("script too short: missing value")
 		return
 	}
+	if len(tokenizer.Data()) > 8 {
+		err = fmt.Errorf("invalid Anchor amount: number exceeds eight bytes")
+		return
+	}
 	value = tokenizer.ExtractInt64()
 
 	// 读取assets
@@ -212,6 +217,102 @@ func StandardAnchorScript(fundingUtxo string, witnessScript []byte, value int64,
 		AddData(witnessScript).
 		AddInt64(int64(value)).
 		AddData(assetsBuf).Script()
+}
+
+// StandardAnchorInvoice retains the historical invoice before activation. After
+// activation it binds every output in wire order, including values, assets and
+// metadata scripts. These bytes are signed, not added to the Anchor script.
+func StandardAnchorInvoice(fundingUtxo string, witnessScript []byte, value int64,
+	assets wire.TxAssets, outputs []*wire.TxOut, bindOutputs bool) ([]byte, error) {
+	invoice, err := StandardAnchorScript(fundingUtxo, witnessScript, value, assets)
+	if err != nil || !bindOutputs {
+		return invoice, err
+	}
+	if len(outputs) == 0 {
+		return nil, fmt.Errorf("anchor invoice requires outputs")
+	}
+	buf := bytes.NewBuffer(invoice)
+	if err := wire.WriteVarInt(buf, 0, uint64(len(outputs))); err != nil {
+		return nil, err
+	}
+	for _, output := range outputs {
+		if output == nil {
+			return nil, fmt.Errorf("anchor invoice contains nil output")
+		}
+		if err := wire.WriteTxOut(buf, 0, wire.TxVersion, output); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+// CheckAnchorTxEncoding fixes the unsigned envelope to the existing builders'
+// format. After POS v2 activation these fields must not provide another txid
+// for the same invoice. It also accepts unsigned candidates used by signers.
+func CheckAnchorTxEncoding(tx *wire.MsgTx) error {
+	if tx == nil || len(tx.TxIn) != 1 || tx.TxIn[0] == nil {
+		return fmt.Errorf("anchor requires one input")
+	}
+	input := tx.TxIn[0]
+	if tx.Version != wire.TxVersion || tx.LockTime != 0 ||
+		input.PreviousOutPoint.Hash != (chainhash.Hash{}) ||
+		input.PreviousOutPoint.Index != wire.AnchorTxOutIndex || input.Sequence != wire.AnchorTxOutIndex {
+		return fmt.Errorf("noncanonical anchor transaction fields")
+	}
+	return nil
+}
+
+// CheckAnchorScriptEncoding requires the exact builder encoding and a low-S
+// DER signature. Rebuilding catches nonminimal pushes, alternate asset/amount
+// encodings, trailing opcodes and signature suffixes without changing the
+// historical parser. Call only for activated invoices, after signing.
+func CheckAnchorScriptEncoding(script []byte) error {
+	// Validate framing before the legacy int64 decoder, which assumes at most
+	// eight bytes. Oversized negative script numbers must fail rather than panic.
+	tokenizer := txscript.MakeScriptTokenizer(0, script)
+	for field := 0; field < 5; field++ {
+		if !tokenizer.Next() || (field == 2 && len(tokenizer.Data()) > 8) {
+			return fmt.Errorf("invalid canonical anchor field %d", field)
+		}
+	}
+	if tokenizer.Next() || tokenizer.Err() != nil {
+		return fmt.Errorf("trailing data in anchor script")
+	}
+
+	funding, witness, value, assets, sigBytes, err := ParseStandardAnchorScript(script)
+	if err != nil {
+		return err
+	}
+	sig, err := ecdsa.ParseDERSignature(sigBytes)
+	if err != nil {
+		return err
+	}
+	canonical, err := StandardAnchorScriptWithSig(funding, witness, value, assets, sig.Serialize())
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(script, canonical) {
+		return fmt.Errorf("noncanonical anchor script or signature")
+	}
+	return nil
+}
+
+// AnchorInvoice reconstructs the signature message from the actual transaction.
+// Parsing an invoice never authenticates it; callers must verify its signature.
+func AnchorInvoice(tx *wire.MsgTx, bindOutputs bool) ([]byte, error) {
+	if bindOutputs {
+		if err := CheckAnchorTxEncoding(tx); err != nil {
+			return nil, err
+		}
+	}
+	if tx == nil || len(tx.TxIn) != 1 || tx.TxIn[0] == nil {
+		return nil, fmt.Errorf("anchor invoice requires one input")
+	}
+	funding, witness, value, assets, _, err := ParseStandardAnchorScript(tx.TxIn[0].SignatureScript)
+	if err != nil {
+		return nil, err
+	}
+	return StandardAnchorInvoice(funding, witness, value, assets, tx.TxOut, bindOutputs)
 }
 
 func StandardAnchorScriptWithSig(fundingUtxo string, witnessScript []byte, value int64,
@@ -313,7 +414,7 @@ func IsSTPNullDataScript(script []byte) bool {
 	}
 
 	// content type
-	if !tokenizer.Next() || tokenizer.Err() != nil {
+	if !tokenizer.Next() || tokenizer.Err() != nil || len(tokenizer.Data()) > 8 {
 		return false
 	}
 	ctype := tokenizer.ExtractInt64()
@@ -340,6 +441,9 @@ func ReadDataFromNullDataScript(script []byte) (uint8, []byte, error) {
 	// content type
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return 0, nil, fmt.Errorf("script is not STP script")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return 0, nil, fmt.Errorf("invalid STP content type: number exceeds eight bytes")
 	}
 	ctype := uint8(tokenizer.ExtractInt64())
 	if ctype > CONTENT_TYPE_MAX || ctype < CONTENT_TYPE_MIN {
@@ -369,7 +473,14 @@ func GenTickerInfo(data []byte) (*TickerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	result.AssetName = *wire.NewAssetNameFromString(parts[0])
+	name := wire.NewAssetNameFromString(parts[0])
+	if name == nil {
+		return nil, fmt.Errorf("invalid ascending asset name %s", parts[0])
+	}
+	if n < 0 || uint64(n) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("ascending binding sats out of range: %d", n)
+	}
+	result.AssetName = *name
 	result.MaxSupply, err = indexer.NewDecimalFromString(parts[1], divisibility)
 	if err != nil {
 		return nil, err
@@ -378,6 +489,32 @@ func GenTickerInfo(data []byte) (*TickerInfo, error) {
 	result.N = n
 
 	return &result, nil
+}
+
+// ValidateAscendingTicker derives metadata from the signed Anchor assets.
+// Admission and indexing must agree before a block is durably accepted.
+func ValidateAscendingTicker(data []byte, assets wire.TxAssets) (*TickerInfo, error) {
+	if len(assets) > 1 {
+		return nil, fmt.Errorf("anchor contains %d assets", len(assets))
+	}
+	ticker, err := GenTickerInfo(data)
+	if err != nil {
+		return nil, err
+	}
+	expectedName, expectedN, precision := indexer.ASSET_PLAIN_SAT, uint32(1), 0
+	if len(assets) == 1 {
+		expectedName, expectedN, precision = assets[0].Name, assets[0].BindingSat, assets[0].Amount.Precision
+	}
+	if ticker.AssetName != expectedName && !(indexer.IsPlainAsset(&ticker.AssetName) && indexer.IsPlainAsset(&expectedName)) {
+		return nil, fmt.Errorf("ascending ticker asset %s does not match anchor asset %s", ticker.AssetName.String(), expectedName.String())
+	}
+	if uint64(ticker.N) != uint64(expectedN) {
+		return nil, fmt.Errorf("ascending ticker binding sats %d does not match anchor %d", ticker.N, expectedN)
+	}
+	if ticker.Divisibility != precision {
+		return nil, fmt.Errorf("ascending ticker precision %d does not match anchor %d", ticker.Divisibility, precision)
+	}
+	return ticker, nil
 }
 
 func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error) {
@@ -398,6 +535,9 @@ func ParseSignedDeployContractInvoice(script []byte) (*ContractDeployData, error
 	// deployTime
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return nil, fmt.Errorf("script is missing deploy time")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return nil, fmt.Errorf("deploy time exceeds eight bytes")
 	}
 	result.DeployTime = tokenizer.ExtractInt64()
 

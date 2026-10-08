@@ -36,6 +36,7 @@ func collectionPath(parsed ParsedKey) string {
 			return "/topic/" + parsed.Segments[0]
 		}
 	case "blob":
+		if IsEVMSourceKey(parsed) { return "/blob/evm/source/" + parsed.Segments[2] }
 		if len(parsed.Segments) == 2 {
 			return "/blob/" + parsed.Segments[0] + "/" + parsed.Segments[1]
 		}
@@ -52,6 +53,7 @@ func collectionPath(parsed ParsedKey) string {
 }
 
 func pathMode(parsed ParsedKey) PathMode {
+	if IsEVMSourceKey(parsed) { return PathAuthorityExclusive }
 	switch parsed.Namespace {
 	case "personal", "blob":
 		return PathOwnerExclusive
@@ -102,6 +104,7 @@ func collectionPathForPrefix(prefix string) string {
 			return prefix
 		}
 	case "blob":
+		if IsEVMSourceKey(parsed) { return prefix }
 		if len(parsed.Segments) == 2 && validAccountID(parsed.Segments[0]) {
 			return prefix
 		}

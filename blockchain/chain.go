@@ -113,6 +113,7 @@ type BlockChain struct {
 	hashCache              *txscript.HashCache
 	interrupt              <-chan struct{}
 	validationCache        *blockValidationCache
+	posDurabilityErr       error // chainLock; failed durable commit requires restart/repair
 
 	// The following fields are calculated based upon the provided chain
 	// parameters.  They are also set when the instance is created and
@@ -211,6 +212,14 @@ type BlockChain struct {
 //
 // This function is safe for concurrent access.
 func (b *BlockChain) HaveBlock(hash *chainhash.Hash) (bool, error) {
+	// An interrupted POS canonical commit is stored, but ordinary inventory
+	// must request it again so ProcessBlock can complete its recovery.
+	b.chainLock.RLock()
+	recoverable := b.recoverablePOSNodeLocked(b.index.LookupNode(hash))
+	b.chainLock.RUnlock()
+	if recoverable {
+		return false, nil
+	}
 	if hash != nil {
 		if _, rejected := b.rejectedBlockError(*hash); rejected {
 			return true, nil
@@ -615,7 +624,7 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 	// Write any block status changes to DB before updating best state.
 	err := b.index.flushToDB()
 	if err != nil {
-		return err
+		return b.posStorageError(node.height, err)
 	}
 
 	// Generate a new best state snapshot that will be used to update the
@@ -671,6 +680,11 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 		}
 
 		// Update best block state.
+		if b.chainParams.POSV2Active(node.height) {
+			if err := b.utxoCache.flush(dbTx, FlushRequired, state); err != nil {
+				return err
+			}
+		}
 		err := dbPutBestState(dbTx, state, node.workSum)
 		if err != nil {
 			return err
@@ -722,7 +736,13 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 		return nil
 	})
 	if err != nil {
-		return err
+		return b.posStorageError(node.height, err)
+	}
+	if b.chainParams.POSV2Active(node.height) {
+		if err := database.Sync(b.db); err != nil {
+			b.posDurabilityErr = fmt.Errorf("POS durable commit failed; restart after repair: %w", err)
+			return b.posDurabilityErr
+		}
 	}
 	if releaser, ok := b.contractBlockValidator.(ContractBlockStateReleaser); ok {
 		for _, module := range []contractframework.ModuleType{
@@ -749,17 +769,14 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 	b.stateSnapshot = state
 	b.stateLock.Unlock()
 
-	// Notify the caller that the block was connected to the main chain.
-	// The caller would typically want to react with actions such as
-	// updating wallets.
-	func() {
-		b.chainLock.Unlock()
-		defer b.chainLock.Lock()
-		b.sendNotification(NTBlockConnected, block)
-	}()
-
+	// Complete the asset index before exposing the new tip to notification
+	// callbacks or concurrent proposals. Supplied blocks need no RPC fetch;
+	// the node DKVS provider also reads committed contract state locally.
 	if b.assetIndexerMgr != nil {
 		b.assetIndexerMgr.ConnectBlock(block.MsgBlock(), int(block.Height()), b.tipHeight)
+		if !b.assetIndexerMgr.InternalTipReady(int(node.height), &node.hash) {
+			return AssetIndexerNotReadyError{TargetHeight: int(node.height), TargetHash: node.hash}
+		}
 	}
 
 	// Since we may have changed the UTXO cache, we make sure it didn't exceed its
@@ -774,6 +791,16 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 	if b.onBlockConnected != nil {
 		b.onBlockConnected(block.Height())
 	}
+
+	// Finish this block's cache flush and hook before releasing chainLock.
+	// Another block can connect during notification; flushing this block's
+	// old snapshot afterwards would rewind the durable UTXO consistency hash.
+	// Notification callbacks still run unlocked and are not serialized here.
+	func() {
+		b.chainLock.Unlock()
+		defer b.chainLock.Lock()
+		b.sendNotification(NTBlockConnected, block)
+	}()
 	return nil
 }
 
@@ -883,7 +910,7 @@ func (b *BlockChain) disconnectBlock(node *blockNode, block *btcutil.Block, view
 			if !IsAnchorTx(tx.MsgTx()) {
 				continue
 			}
-			lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+			lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false, b.chainParams.POSV2Active(block.Height()))
 			if err != nil {
 				return err
 			}
@@ -1022,6 +1049,15 @@ func (b *BlockChain) reorganizeChain(detachNodes, attachNodes *list.List) error 
 		}
 	}
 
+	// Reorg resets the live AIDX to its persisted baseline. Feed missing
+	// canonical parents from the local DB before connecting a later child;
+	// its ordinary gap-fill RPC would recurse into chainLock here.
+	if attachNodes.Len() > 0 {
+		if err := b.restoreAssetParentLocked(newBest); err != nil {
+			return err
+		}
+	}
+
 	// Connect the new best chain blocks using the utxocache directly.  It's more
 	// efficient and since we already checked that the blocks are correct and that
 	// the transactions connect properly, it's ok to access the cache.  If we suddenly
@@ -1036,7 +1072,7 @@ func (b *BlockChain) reorganizeChain(detachNodes, attachNodes *list.List) error 
 		// details are generated.
 		stxos := make([]SpentTxOut, 0, countSpentOutputs(block))
 		anchorTxInfos := make([]AnchorTxInfo, 0, countSpentOutputs(block))
-		err = b.utxoCache.connectTransactions(block, &stxos, &anchorTxInfos)
+		err = b.utxoCache.connectTransactions(block, &stxos, &anchorTxInfos, b.chainParams.POSV2Active(block.Height()))
 		if err != nil {
 			return err
 		}
@@ -1192,6 +1228,9 @@ func (b *BlockChain) verifyReorganizationValidity(detachNodes, attachNodes *list
 
 		// Store the loaded block for later.
 		attachBlocks = append(attachBlocks, block)
+		if err := b.checkPOSBlockLocked(block, false); err != nil {
+			return nil, nil, nil, err
+		}
 
 		// Skip checks if node has already been fully validated. Although
 		// checkConnectBlock gets skipped, we still need to update the UTXO
@@ -1217,7 +1256,7 @@ func (b *BlockChain) verifyReorganizationValidity(detachNodes, attachNodes *list
 		// In the case the block is determined to be invalid due to a
 		// rule violation, mark it as invalid and mark all of its
 		// descendants as having an invalid ancestor.
-		err = b.checkConnectBlock(n, block, view, nil)
+		err = b.checkConnectBlockFor(n, block, view, nil, true)
 		if err != nil {
 			if _, ok := err.(RuleError); ok {
 				b.index.SetStatusFlags(n, statusValidateFailed)
@@ -1313,7 +1352,7 @@ func (b *BlockChain) connectBestChain(node *blockNode, block *btcutil.Block, fla
 		stxos := make([]SpentTxOut, 0, countSpentOutputs(block))
 		anchorTxInfos := make([]AnchorTxInfo, 0, countSpentOutputs(block))
 
-		err := b.utxoCache.connectTransactions(block, &stxos, &anchorTxInfos)
+		err := b.utxoCache.connectTransactions(block, &stxos, &anchorTxInfos, b.chainParams.POSV2Active(block.Height()))
 		if err != nil {
 			return false, err
 		}
@@ -1348,6 +1387,13 @@ func (b *BlockChain) connectBestChain(node *blockNode, block *btcutil.Block, fla
 	if fastAdd {
 		log.Warnf("fastAdd set in the side chain case? %v\n",
 			block.Hash())
+	}
+
+	// Ordinary branch selection cannot revoke a durably approved POS tip,
+	// including via a higher-work fork below the activation height. Explicit
+	// administrator recovery still uses reorganizeChain directly.
+	if b.chainParams.POSV2Active(b.bestChain.Tip().height) {
+		return false, nil
 	}
 
 	// We're extending (or creating) a side chain, but the cumulative

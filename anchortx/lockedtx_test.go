@@ -88,10 +88,10 @@ func TestCheckAnchorTxValidChecksFakeL1IndexerLockedUTXO(t *testing.T) {
 		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: 0},
 		SignatureScript:  anchorScript,
 	})
-	tx.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_TRUE}))
+	tx.AddTxOut(wire.NewTxOut(value, nil, lockedPkScript))
 	addAscendingTicker(t, tx, nil)
 
-	ascend, err := CheckAnchorTxValid(tx, true)
+	ascend, err := CheckAnchorTxValid(tx, true, false)
 	require.NoError(t, err)
 	require.Equal(t, utxo, ascend.Utxo)
 	require.Equal(t, value, ascend.Value)
@@ -127,9 +127,9 @@ func TestCheckAnchorTxValidRejectsFakeL1IndexerMismatch(t *testing.T) {
 		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: 0},
 		SignatureScript:  anchorScript,
 	})
-	tx.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_TRUE}))
+	tx.AddTxOut(wire.NewTxOut(value, nil, lockedPkScript))
 
-	_, err = CheckAnchorTxValid(tx, true)
+	_, err = CheckAnchorTxValid(tx, true, false)
 	require.ErrorContains(t, err, "invalid value")
 }
 
@@ -160,7 +160,7 @@ func TestSameFundingUTXOCanProduceDifferentAnchorTxIDs(t *testing.T) {
 		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: wire.AnchorTxOutIndex},
 		SignatureScript:  anchorScript,
 	})
-	tx1.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_TRUE}))
+	tx1.AddTxOut(wire.NewTxOut(value, nil, lockedPkScript))
 	addAscendingTicker(t, tx1, nil)
 
 	tx2 := wire.NewMsgTx(2)
@@ -168,13 +168,14 @@ func TestSameFundingUTXOCanProduceDifferentAnchorTxIDs(t *testing.T) {
 		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{}, Index: wire.AnchorTxOutIndex},
 		SignatureScript:  anchorScript,
 	})
-	tx2.AddTxOut(wire.NewTxOut(value, nil, []byte{txscript.OP_2}))
+	tx2.AddTxOut(wire.NewTxOut(value, nil, lockedPkScript))
 	addAscendingTicker(t, tx2, nil)
 
+	tx2.LockTime = 1
 	require.NotEqual(t, tx1.TxID(), tx2.TxID())
-	ascend1, err := CheckAnchorTxValid(tx1, true)
+	ascend1, err := CheckAnchorTxValid(tx1, true, false)
 	require.NoError(t, err)
-	ascend2, err := CheckAnchorTxValid(tx2, true)
+	ascend2, err := CheckAnchorTxValid(tx2, true, false)
 	require.NoError(t, err)
 	require.Equal(t, ascend1.Utxo, ascend2.Utxo)
 }

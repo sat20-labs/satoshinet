@@ -18,7 +18,7 @@ func NewSignedRecord(priv *btcec.PrivateKey, key string, value []byte, opts Reco
 		return nil, err
 	}
 	var record *wire.DKVSRecord
-	if isAccountScopedNamespace(parsed.Namespace) {
+	if isAccountScopedNamespace(parsed.Namespace) && !IsEVMSourceKey(parsed) {
 		record, err = NewAccountRecord(key, value, opts)
 	} else {
 		record, err = NewRecord(key, value, priv.PubKey().SerializeCompressed(), opts)
@@ -47,7 +47,7 @@ func NewSignedRenewalRecord(priv *btcec.PrivateKey, existing *wire.DKVSRecord, o
 		return nil, err
 	}
 	pubKey := priv.PubKey().SerializeCompressed()
-	if isAccountScopedNamespace(parsed.Namespace) {
+	if isAccountScopedNamespace(parsed.Namespace) && !IsEVMSourceKey(parsed) {
 		want, err := RecordSignerAccountID(existing, parsed)
 		if err != nil {
 			return nil, err
@@ -89,7 +89,7 @@ func SignRecord(priv *btcec.PrivateKey, record *wire.DKVSRecord) {
 		return
 	}
 	hash := SigningHash(record)
-	if isAccountScopedNamespace(parsed.Namespace) {
+	if isAccountScopedNamespace(parsed.Namespace) && !IsEVMSourceKey(parsed) {
 		record.PubKey = nil
 		hash = SigningHash(record)
 		sig, err := schnorr.Sign(priv, hash[:])

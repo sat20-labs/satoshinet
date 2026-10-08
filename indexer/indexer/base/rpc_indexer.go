@@ -1,11 +1,15 @@
 package base
 
 import (
+	"bytes"
+	"encoding/hex"
 	"fmt"
 	"sync"
 
+	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/indexer/stp"
+	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 
@@ -587,20 +591,84 @@ func (b *RpcIndexer) IsMinerNode(pubkey string) bool {
 
 func (b *RpcIndexer) GetMinerInfo(pubkey string) *common.MinerInfo {
 	b.mutex.RLock()
-	defer b.mutex.RUnlock()
 	info, ok := b.coreNodeMap[pubkey]
-	if ok {
-		return &info.MinerInfo
+	if ok && info != nil {
+		result := info.MinerInfo
+		b.mutex.RUnlock()
+		return &result
 	}
 
-	for _, v := range b.coreNodeMap {
+	var stake *common.MinerAscendInfo
+	var parent string
+	for corePub, v := range b.coreNodeMap {
+		if v == nil {
+			continue
+		}
 		ascendUtxo, ok := v.ChildMiners[pubkey]
-		if ok {
+		if ok && ascendUtxo != nil {
 			data := b.getAscendData(ascendUtxo.AscendUtxo)
-			return data.ToMinerInfo()
+			if data != nil {
+				result := data.ToMinerInfo()
+				b.mutex.RUnlock()
+				return result
+			}
+			copy := *ascendUtxo
+			stake, parent = &copy, corePub
+			break
 		}
 	}
-
+	b.mutex.RUnlock()
+	if stake == nil || !satsnet_rpc.RpcClientReady() {
+		return nil
+	}
+	// L2 STAKE outpoints have no L1 ascending record. The persisted height
+	// and outpoint identify the original output even after it has been spent.
+	// Release the RPC view lock before reading the canonical block via RPC.
+	txid, vout, err := indexer.ParseUtxo(stake.AscendUtxo)
+	if err != nil {
+		return nil
+	}
+	hash, err := satsnet_rpc.GetBlockHash(int64(stake.AscendHeight))
+	if err != nil {
+		common.Log.Errorf("miner stake block: %v", err)
+		return nil
+	}
+	block, err := satsnet_rpc.GetRawBlock(hash)
+	if err != nil {
+		common.Log.Errorf("miner stake data: %v", err)
+		return nil
+	}
+	a, err := hex.DecodeString(parent)
+	if err != nil {
+		return nil
+	}
+	c, err := hex.DecodeString(pubkey)
+	if err != nil {
+		return nil
+	}
+	_, expectedScript, err := anchortx.GetP2WSHscript(a, c)
+	if err != nil {
+		return nil
+	}
+	for _, tx := range block.Transactions {
+		if tx.TxID() != txid {
+			continue
+		}
+		if vout < 0 || vout >= len(tx.TxOut) {
+			return nil
+		}
+		out := tx.TxOut[vout]
+		if !bytes.Equal(out.PkScript, expectedScript) {
+			return nil
+		}
+		_, addresses, _, err := txscript.ExtractPkScriptAddrs(out.PkScript, b.chaincfgParam)
+		if err != nil || len(addresses) != 1 {
+			return nil
+		}
+		data := &common.AscendData{Height: stake.AscendHeight, FundingUtxo: stake.AscendUtxo,
+			Value: out.Value, Assets: out.Assets, Address: addresses[0].EncodeAddress(), PubA: a, PubB: c}
+		return data.ToMinerInfo()
+	}
 	return nil
 }
 

@@ -22,6 +22,7 @@ func (i *Indexer) GetForRelay(key string) (*wire.DKVSRecord, error) {
 // one transaction. Commands are not stored as records or deletion history.
 func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, command *wire.DKVSRecord,
 	clearNameTransfer bool, height, now uint64) (chainhash.Hash, error) {
+	if IsEVMSourceKey(parsed) { return chainhash.Hash{}, ErrPermissionDenied }
 	if record == nil { return chainhash.Hash{}, ErrRecordNotFound }
 	if command != nil && !deleteTargetsRecord(command, record) { return chainhash.Hash{}, ErrWriteConflict }
 	oldHash := RecordHash(record)

@@ -129,6 +129,7 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 			current = i.relayableRecords(current)
 		}
 		currentByKey := make(map[string]*wire.DKVSRecord, len(current))
+		if err := protectEVMSourceReplacement(current, incoming); err != nil { i.mutex.Unlock(); return 0, err }
 		for _, record := range current { currentByKey[record.Key] = record }
 		batch := i.db.NewWriteBatch()
 		touched := make([]*wire.DKVSRecord, 0, len(current)+len(ordered))

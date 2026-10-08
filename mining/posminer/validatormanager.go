@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -53,11 +54,11 @@ type ValidatorManager struct {
 	cfg               *ValidatorManagerConfig
 	localValidatorId  string
 	serverValidatorId string
-	miningSeqMgr      *common.MiningSequenceMgr
-	myself            *common.MiningInfo
 	lastBlockTime     int64
 	lastBlock         int
 	quit              chan struct{}
+	posCandidateMutex sync.Mutex
+	posCandidate      *wire.MsgBlock // retry unchanged until parent advances
 
 	generatorTicker *time.Ticker
 	pingTicker      *time.Ticker
@@ -72,26 +73,21 @@ func NewValidatorManager(cfg *ValidatorManagerConfig) *ValidatorManager {
 		quit:              make(chan struct{}),
 	}
 
-	validatorMgr.miningSeqMgr = shareindexer.ShareIndexer.GetSeqMgr()
-	if validatorMgr.miningSeqMgr == nil {
-		utils.Log.Errorf("miningSeqMgr is nil")
-		return nil
-	}
-	validatorMgr.myself = validatorMgr.miningSeqMgr.GetMiningInfo(validatorMgr.localValidatorId)
-	if validatorMgr.myself == nil {
-		utils.Log.Errorf("GetMiningInfo %s failed", validatorMgr.localValidatorId)
+	_, myself, err := validatorMgr.currentMiningState()
+	if err != nil {
+		utils.Log.Errorf("%v", err)
 		return nil
 	}
 
 	if validatorMgr.serverValidatorId == "" {
-		if validatorMgr.myself.NodeType != indexer.NODE_TYPE_BOOTSTRAP {
+		if myself.NodeType != indexer.NODE_TYPE_BOOTSTRAP {
 			validatorMgr.serverValidatorId = indexer.GetBootstrapPubKey()
 		}
 	}
-	if validatorMgr.myself.NodeType != indexer.NODE_TYPE_BOOTSTRAP {
+	if myself.NodeType != indexer.NODE_TYPE_BOOTSTRAP {
 		// check server node is the same
-		if validatorMgr.myself.Father.PubKey != validatorMgr.serverValidatorId {
-			utils.Log.Errorf("the server pubkey %s is not the same as %s", validatorMgr.serverValidatorId, validatorMgr.myself.Father.PubKey)
+		if myself.Father.PubKey != validatorMgr.serverValidatorId {
+			utils.Log.Errorf("the server pubkey %s is not the same as %s", validatorMgr.serverValidatorId, myself.Father.PubKey)
 			return nil
 		}
 	}
@@ -99,14 +95,35 @@ func NewValidatorManager(cfg *ValidatorManagerConfig) *ValidatorManager {
 	return validatorMgr
 }
 
+// Reorg replaces the compiling index and its sorter. Keep references local
+// to each operation rather than retaining them for the miner's lifetime.
+func (vm *ValidatorManager) currentMiningState() (*common.MiningSequenceMgr, *common.MiningInfo, error) {
+	if shareindexer.ShareIndexer == nil {
+		return nil, nil, fmt.Errorf("mining indexer unavailable")
+	}
+	seq := shareindexer.ShareIndexer.GetSeqMgr()
+	if seq == nil {
+		return nil, nil, fmt.Errorf("mining sorter unavailable")
+	}
+	myself := seq.GetMiningInfo(vm.localValidatorId)
+	if myself == nil {
+		return nil, nil, fmt.Errorf("local validator %s is absent from current sorter", vm.localValidatorId)
+	}
+	return seq, myself, nil
+}
+
 func (vm *ValidatorManager) Start() {
 	utils.Log.Tracef("StartValidatorManager")
 
-	// 测试用，set mining address
-	//vm.miningSeqMgr.SetCurrentMiningAddr("tb1qqs42pk590l0qvz7jwa2xfeg0krcxjdg5fax2r0aavzd3u8yhfqksfe8rhm")
-
-	go vm.generatorTimer()
-	go vm.pingTimer()
+	vm.cfg.PosMiner.workerWG.Add(2)
+	go func() {
+		defer vm.cfg.PosMiner.workerWG.Done()
+		vm.generatorTimer()
+	}()
+	go func() {
+		defer vm.cfg.PosMiner.workerWG.Done()
+		vm.pingTimer()
+	}()
 }
 
 func (vm *ValidatorManager) Stop() {
@@ -189,7 +206,15 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 		utils.Log.Infof("[ValidatorManager] not reach the tip of block yet")
 		return
 	}
+	if vm.cfg.ChainParams.POSV2Active(vm.GetCurrentBlockHeight()+1) && !vm.cfg.Chain.POSReady() {
+		return
+	}
 
+	seq, myself, err := vm.currentMiningState()
+	if err != nil {
+		utils.Log.Errorf("%v", err)
+		return
+	}
 	now := time.Now().Unix()
 	if vm.lastBlock != int(vm.cfg.PosMiner.GetBlockHeight()) {
 		vm.lastBlockTime = vm.cfg.PosMiner.GetBlockRecvTime()
@@ -200,7 +225,7 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 
 	txSizeInMempool := vm.cfg.PosMiner.GetMempoolTxSize()
 	if txSizeInMempool == 0 {
-		utils.Log.Infof("[ValidatorManager] mempool is empty, current miner %s", vm.miningSeqMgr.GetCurrentMiningAddr())
+		utils.Log.Infof("[ValidatorManager] mempool is empty, current miner %s", seq.GetCurrentMiningAddr())
 		// 重置等待时间
 		vm.lastBlockTime = now
 		utils.Log.Debugf("reset lastBlockTime time to %d", vm.lastBlockTime)
@@ -213,32 +238,32 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 		return
 	}
 
-	if !vm.hasMultiMiner() {
+	if !vm.hasMultiMiner(myself) {
 		utils.Log.Infof("need multi miner to generate block")
 		return
 	}
 
-	var err error
-	switch vm.GetNodeType() {
+	err = nil
+	switch myself.NodeType {
 	case indexer.NODE_TYPE_BOOTSTRAP:
-		if vm.isMyTurn() {
-			err = vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
+		if vm.isMyTurn(seq) {
+			err = vm.generateNewBlock_miner(myself, myself.Next)
 		} else {
 			err = vm.generateNewBlock_bootstrap()
 		}
 
 	case indexer.NODE_TYPE_CORE:
-		if vm.isMyTurn() {
-			err = vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
-		} else if vm.isMyGroupTurn() {
+		if vm.isMyTurn(seq) {
+			err = vm.generateNewBlock_miner(myself, myself.Next)
+		} else if vm.isMyGroupTurn(seq) {
 			err = vm.generateNewBlock_core()
 		} else {
 			utils.Log.Debugf("not my group turn")
 		}
 
 	case indexer.NODE_TYPE_MINER:
-		if vm.isMyTurn() {
-			err = vm.generateNewBlock_miner(vm.myself, vm.myself.Next)
+		if vm.isMyTurn(seq) {
+			err = vm.generateNewBlock_miner(myself, myself.Next)
 		} else {
 			utils.Log.Debugf("not my turn")
 		}
@@ -258,31 +283,56 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 }
 
 func (vm *ValidatorManager) generateNewBlock_bootstrap() error {
+	seq, myself, err := vm.currentMiningState()
+	if err != nil {
+		return err
+	}
 	// 需要监控出块的miner有没有及时出块，如果没有，需要由核心节点代替出块
 	// 如果核心节点也不在线，由引导节点代替出块
 	now := time.Now().Unix()
 	past := now - vm.lastBlockTime
 
-	miningNode := vm.miningSeqMgr.GetCurrentMiningInfo()
+	miningNode := seq.GetCurrentMiningInfo()
+	if vm.cfg.ChainParams.POSV2Active(vm.GetCurrentBlockHeight() + 1) {
+		bootstrap, err := seq.POSBootstrap(int(vm.GetCurrentBlockHeight() + 1))
+		if err != nil {
+			return err
+		}
+		if bootstrap != vm.localValidatorId {
+			return fmt.Errorf("not the scheduled Bootstrap group")
+		}
+	}
 	minerPeer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
 	var fatherPeer *peerpkg.Peer
 	if miningNode.NodeType == indexer.NODE_TYPE_MINER {
 		fatherPeer = vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.Father.PubKey)
 	}
 
+	// LastPingTime is when we sent a Ping, not when the peer was last alive.
+	// A freshly connected producer may not have been pinged yet. Under v2 use
+	// the established connection and the existing substitute timeout below.
+	unavailable := func(p *peerpkg.Peer) bool {
+		if p == nil {
+			return true
+		}
+		if vm.cfg.ChainParams.POSV2Active(vm.GetCurrentBlockHeight() + 1) {
+			return !p.Connected()
+		}
+		return now-p.LastPingTime().Unix() > 4*int64(peerpkg.MinerPingSeconds)
+	}
 	if miningNode.NodeType == indexer.NODE_TYPE_MINER {
-		if minerPeer == nil || now-minerPeer.LastPingTime().Unix() > 4*int64(peerpkg.MinerPingSeconds) {
+		if unavailable(minerPeer) {
 			// 该节点没连接，要等core node代替出块
-			if fatherPeer == nil || now-fatherPeer.LastPingTime().Unix() > 4*int64(peerpkg.MinerPingSeconds) {
+			if unavailable(fatherPeer) {
 				// 该组的corenode不存在，或者已经很久没有连接过来，直接出块
-				return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
+				return vm.generateNewBlock_miner(myself, miningNode.Next)
 			}
 		}
 	} else {
 		// core node
-		if minerPeer == nil || now-minerPeer.LastPingTime().Unix() > 4*int64(peerpkg.MinerPingSeconds) {
+		if unavailable(minerPeer) {
 			// corenode不存在，或者已经很久没有连接过来，直接出块
-			return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
+			return vm.generateNewBlock_miner(myself, miningNode.Next)
 		}
 	}
 
@@ -292,17 +342,21 @@ func (vm *ValidatorManager) generateNewBlock_bootstrap() error {
 	}
 
 	// 已经超时，或者不在线，bootstrap节点代替出块
-	return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
+	return vm.generateNewBlock_miner(myself, miningNode.Next)
 }
 
 func (vm *ValidatorManager) generateNewBlock_core() error {
+	seq, myself, err := vm.currentMiningState()
+	if err != nil {
+		return err
+	}
 	// 监控下面的节点出块
 
 	// 该组成员出块，需要监控出块的miner有没有及时出块，如果没有，需要由核心节点代替出块
 	now := time.Now().Unix()
 	past := now - vm.lastBlockTime
 
-	miningNode := vm.miningSeqMgr.GetCurrentMiningInfo()
+	miningNode := seq.GetCurrentMiningInfo()
 	peer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
 	if peer != nil && peer.Connected() {
 		if past < MinerInterval+PreWarningInterval {
@@ -312,20 +366,27 @@ func (vm *ValidatorManager) generateNewBlock_core() error {
 	}
 
 	// 已经超时，或者不在线，core节点代替出块
-	return vm.generateNewBlock_miner(vm.myself, miningNode.Next)
+	return vm.generateNewBlock_miner(myself, miningNode.Next)
 }
 
-func (vm *ValidatorManager) hasMultiMiner() bool {
-	switch vm.myself.NodeType {
+func (vm *ValidatorManager) hasMultiMiner(myself *common.MiningInfo) bool {
+	switch myself.NodeType {
 	case indexer.NODE_TYPE_BOOTSTRAP:
 		return vm.cfg.PosMiner.GetRandomCorePeer() != nil
 	case indexer.NODE_TYPE_CORE, indexer.NODE_TYPE_MINER:
-		return vm.cfg.PosMiner.GetPeerByValidatorId(vm.myself.Father.PubKey) != nil
+		return vm.cfg.PosMiner.GetPeerByValidatorId(myself.Father.PubKey) != nil
 	}
 	return false
 }
 
 func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.MiningInfo) error {
+	if vm.cfg.ChainParams.POSV2Active(vm.GetCurrentBlockHeight() + 1) {
+		return vm.generatePOSBlock()
+	}
+	seq, _, err := vm.currentMiningState()
+	if err != nil {
+		return err
+	}
 	var father, next *peerpkg.Peer
 	if miningNode.Father != nil {
 		father = vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.Father.PubKey)
@@ -342,7 +403,7 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 	}
 
 	// 仅仅是记录排序器的实际挖矿地址，不是输入的miningNode
-	currentMiningAddr := vm.miningSeqMgr.GetCurrentMiningAddr()
+	currentMiningAddr := seq.GetCurrentMiningAddr()
 
 	// 出块后不要直接上链，而是给father节点去做进一步的审核，杜绝分叉
 	block, err := vm.cfg.PosMiner.OnTimeGenerateBlock()
@@ -427,28 +488,32 @@ func (vm *ValidatorManager) generateNewBlock_miner(miningNode, nextNode *common.
 
 	// 等待排序器移动当前挖矿地址，避免下次进来还能继续挖矿
 	i := 0
-	for vm.miningSeqMgr.GetCurrentMiningAddr() == currentMiningAddr && i < 20 {
+	for seq.GetCurrentMiningAddr() == currentMiningAddr && i < 20 {
 		time.Sleep(100 * time.Millisecond)
 		i++
 	}
 	utils.Log.Infof("[ValidatorManager] SubmitNewBlock %s succeeded, height %d, next miner %s",
-		hash.String(), height, vm.miningSeqMgr.GetCurrentMiningAddr())
+		hash.String(), height, seq.GetCurrentMiningAddr())
 
 	return nil
 }
 
 func (vm *ValidatorManager) GetNodeType() int {
-	return vm.miningSeqMgr.GetNodeType(vm.localValidatorId)
+	_, myself, err := vm.currentMiningState()
+	if err != nil {
+		return indexer.NODE_TYPE_NORMAL
+	}
+	return myself.NodeType
 }
 
-func (vm *ValidatorManager) isMyTurn() bool {
+func (vm *ValidatorManager) isMyTurn(seq *common.MiningSequenceMgr) bool {
 	// 查询索引器当前轮到出块的pubkey
-	info := vm.miningSeqMgr.GetCurrentMiningInfo()
+	info := seq.GetCurrentMiningInfo()
 	return info.PubKey == vm.localValidatorId
 }
 
-func (vm *ValidatorManager) isMyGroupTurn() bool {
-	return vm.miningSeqMgr.CheckCurrentMiningPubKey(vm.localValidatorId) == nil
+func (vm *ValidatorManager) isMyGroupTurn(seq *common.MiningSequenceMgr) bool {
+	return seq.CheckCurrentMiningPubKey(vm.localValidatorId) == nil
 }
 
 func GetMinerToken(height int, validatorId string) []byte {
@@ -490,6 +555,20 @@ func (vm *ValidatorManager) VerifyBlockSig(validatorId string, payload, sig []by
 
 // 接收到其他节点发送过来的刚生成的block，需要进行验证
 func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgMineBlock) {
+	if vm.cfg.ChainParams.POSV2Height > 0 {
+		var decoded wire.MsgBlock
+		if decoded.Deserialize(bytes.NewReader(msg.Payload)) == nil && len(decoded.Transactions) > 0 {
+			height, err := blockchain.ExtractCoinbaseHeight(btcutil.NewTx(decoded.Transactions[0]))
+			if err == nil && vm.cfg.ChainParams.POSV2Active(height) {
+				vm.onPOSBlockGenerated(peer, msg, &decoded, height)
+				return
+			}
+		}
+		if vm.cfg.ChainParams.POSV2Active(vm.GetCurrentBlockHeight() + 1) {
+			peer.QueueMessage(wire.NewMsgMineAckWithCode(msg.Nonce, wire.RejectInvalid, "invalid POS candidate"), nil)
+			return
+		}
+	}
 	// 特殊的ping消息：
 	// 如果是outbound的peer发过来的消息，不需要再往上发送，因为peer就是上级
 	// 如果是inbound的peer发过来的消息，需要往上一级发送

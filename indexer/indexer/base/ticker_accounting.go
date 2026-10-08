@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	indexer "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 
@@ -15,7 +16,7 @@ func (b *BaseIndexer) applyAscendingTicker(ascend *common.AscendData, data []byt
 		return fmt.Errorf("anchor contains %d assets", len(ascend.Assets))
 	}
 
-	tickerInfo, err := common.GenTickerInfo(data)
+	tickerInfo, err := common.ValidateAscendingTicker(data, ascend.Assets)
 	if err != nil {
 		return err
 	}
@@ -40,14 +41,23 @@ func (b *BaseIndexer) applyAscendingTicker(ascend *common.AscendData, data []byt
 	existingTicker := b.GetTickerInfo(markerName)
 	if existingTicker == nil {
 		b.tickInfoMap[markerName.String()] = tickerInfo
-		return nil
+	} else {
+		if err := sameTickerMetadata(existingTicker, tickerInfo); err != nil {
+			return err
+		}
+		existingTicker.TotalAscendAmt = existingTicker.TotalAscendAmt.Add(ascendAmount)
+		if existingTicker.TotalDescendAmt == nil {
+			existingTicker.TotalDescendAmt = indexer.NewDecimal(0, existingTicker.Divisibility)
+		}
 	}
-	if err := sameTickerMetadata(existingTicker, tickerInfo); err != nil {
-		return err
-	}
-	existingTicker.TotalAscendAmt = existingTicker.TotalAscendAmt.Add(ascendAmount)
-	if existingTicker.TotalDescendAmt == nil {
-		existingTicker.TotalDescendAmt = indexer.NewDecimal(0, existingTicker.Divisibility)
+	// Asset carriers may also fund ordinary sats. Use the same deduction as
+	// withdrawals and the ordinary BTC ticker path, without counting bound sats.
+	if len(ascend.Assets) != 0 {
+		plainSats := ascend.Value - ascend.Assets.GetBindingSatAmout()
+		if plainSats > 0 {
+			return b.applyAscendingTicker(&common.AscendData{Value: plainSats},
+				[]byte(fmt.Sprintf("%s-%d-0-1", indexer.ASSET_PLAIN_SAT.String(), int64(btcutil.MaxSatoshi))))
+		}
 	}
 	return nil
 }

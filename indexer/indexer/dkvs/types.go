@@ -247,6 +247,7 @@ type Config struct {
 	Resolver       DIDResolver
 	FeeVerifier    FeeVerifier
 	SystemVerifier SystemVerifier
+	EVMSourceVerifier func(*wire.DKVSRecord) error
 	Notify         NotifyFunc
 	Subscription   SubscriptionNotifyFunc
 	CurrentHeight  func() uint64

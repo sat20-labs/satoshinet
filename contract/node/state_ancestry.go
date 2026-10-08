@@ -24,6 +24,7 @@ func previousBlockHash(tx database.Tx, hash chainhash.Hash) (chainhash.Hash, err
 // Snapshots are sparse: blocks without module activity inherit their parent's
 // state. Follow the requested branch, never the global latest module snapshot.
 func ancestorStateHash(tx database.Tx, parent database.Bucket, byBlockKey []byte, hash chainhash.Hash, transient func(*chainhash.Hash) bool) (*chainhash.Hash, error) {
+	requested := hash
 	if parent == nil && transient == nil {
 		return nil, nil
 	}
@@ -46,6 +47,9 @@ func ancestorStateHash(tx database.Tx, parent database.Bucket, byBlockKey []byte
 			return nil, err
 		}
 		hash = previous
+	}
+	if parent != nil && len(parent.Get([]byte("tip"))) != 0 {
+		return nil, fmt.Errorf("latest contract state is not an ancestor of %s; historical state is unavailable", requested)
 	}
 	return nil, nil
 }

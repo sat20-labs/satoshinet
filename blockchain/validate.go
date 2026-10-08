@@ -44,9 +44,8 @@ const (
 	// coinbases to start with the serialized block height.
 	serializedHeightVersion = 2
 
-	// baseSubsidy is the starting subsidy amount for mined blocks.  This
-	// value is halved every SubsidyHalvingInterval blocks.
-	baseSubsidy = 50 * btcutil.SatoshiPerBitcoin
+	// SatoshiNet creates no BTC. Coinbase may collect transaction fees only.
+	baseSubsidy = 0
 
 	// coinbaseHeightAllocSize is the amount of bytes that the
 	// ScriptBuilder will allocate when validating the coinbase height.
@@ -888,6 +887,10 @@ func checkEVMBlockOrder(block *btcutil.Block, params *chaincfg.Params) error {
 //
 // This function MUST be called with the chain state lock held (for writes).
 func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode, flags BehaviorFlags) error {
+	return b.checkBlockContextFor(block, prevNode, flags, false)
+}
+
+func (b *BlockChain) checkBlockContextFor(block *btcutil.Block, prevNode *blockNode, flags BehaviorFlags, proposal bool) error {
 	// Perform all block header related validation checks.
 	header := &block.MsgBlock().Header
 	err := CheckBlockHeaderContext(header, prevNode, flags, b, false)
@@ -900,7 +903,12 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 	}
 
 	// 检查是不是由正确的miner挖出来的块，需要先确定这个block的高度
-	if b.assetIndexerMgr != nil {
+	if b.chainParams.POSV2Active(prevNode.height + 1) {
+		block.SetHeight(prevNode.height + 1)
+		if err := b.checkPOSBlockLocked(block, proposal); err != nil {
+			return err
+		}
+	} else if b.assetIndexerMgr != nil {
 		err = b.assetIndexerMgr.CheckBlockMiningInfo(block)
 		if err != nil {
 			return err
@@ -965,7 +973,7 @@ func (b *BlockChain) checkBlockContext(block *btcutil.Block, prevNode *blockNode
 
 		// If segwit is active, then we'll need to fully validate the
 		// new witness commitment for adherence to the rules.
-		if segwitState == ThresholdActive {
+		if segwitState == ThresholdActive && !b.chainParams.POSV2Active(blockHeight) {
 			// Validate the witness commitment (if any) within the
 			// block.  This involves asserting that if the coinbase
 			// contains the special commitment output, then this
@@ -1057,7 +1065,7 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 	// mapping transactions have anchor inputs.
 	if IsAnchorTx(msgTx) {
 		// Check anchor input
-		_, err := anchortx.CheckAnchorTxValid(msgTx, isNew)
+		_, err := anchortx.CheckAnchorTxValid(msgTx, isNew, chainParams.POSV2Active(txHeight))
 		if err != nil {
 			str := fmt.Sprintf("invalid anchor tx with %s, %v", tx.Hash(), err)
 			return 0, nil, ruleError(ErrAnchorTXVerifyFailed, str)
@@ -1207,26 +1215,55 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 	return txFeeInSatoshi, feeTxAssets, nil
 }
 
+// The caller holds chainLock. Historical exceptions are fixed consensus
+// inputs, independent of peer heights, sync status and the acceptance entry.
 func (b *BlockChain) checkAnchorTxsUnique(block *btcutil.Block) error {
+	// TODO: 测试网重建后删除。仅兼容既有 H1708/H1709 中重复的同一
+	// Anchor，不将 replay 放行范围随 peer 宣告高度扩展到未来区块。
+	legacySameAnchor := b.chainParams.Net == wire.TestNet &&
+		((block.Height() == 1708 && block.Hash().String() == "ac11b5d39e67af3ea2177150be8021a969383c7528675e97a4c6c93ce4785964") ||
+			(block.Height() == 1709 && block.Hash().String() == "7120c6cb241034f458893b38d7a01e8c8b65fd7962c0b42ac76e526ea355ef30"))
+	// TODO: 测试网重建后删除此特例。仅批准既有 H1748 区块中的指定
+	// Anchor 重用 funding UTXO；其脚本、签名、资产及合约校验仍正常执行。
+	legacy1748 := b.chainParams.Net == wire.TestNet && block.Height() == 1748 &&
+		block.Hash().String() == "af898ea0b898e1e93024aef9e39aefd26077421666eabbac37f14f7743fa712e"
+	approved1748Anchor := func(txid string) bool {
+		return legacy1748 && (txid == "12818525d7a1a6801dce1143e03c2b4bea6f59c8e76c2e7dad1cb6f2fff094e7" ||
+			txid == "ffd55194f0dae8daf18b1831fda96257cd73ad835869838cc49c1cf1f6bcbd49")
+	}
 	seen := make(map[string]*chainhash.Hash)
 	for _, tx := range block.Transactions() {
 		if !IsAnchorTx(tx.MsgTx()) {
 			continue
 		}
 
-		lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false)
+		lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false, b.chainParams.POSV2Active(block.Height()))
 		if err != nil {
 			str := fmt.Sprintf("invalid anchor tx with %s, %v", tx.Hash(), err)
 			return ruleError(ErrAnchorTXVerifyFailed, str)
 		}
 		if prevHash, ok := seen[lockedInfo.Utxo]; ok {
-			str := fmt.Sprintf("block contains duplicate anchor funding utxo %s in tx %s and %s",
-				lockedInfo.Utxo, prevHash, tx.Hash())
-			return ruleError(ErrAnchorTXVerifyFailed, str)
+			if prevHash.IsEqual(tx.Hash()) || !approved1748Anchor(prevHash.String()) || !approved1748Anchor(tx.MsgTx().TxID()) {
+				str := fmt.Sprintf("block contains duplicate anchor funding utxo %s in tx %s and %s",
+					lockedInfo.Utxo, prevHash, tx.Hash())
+				return ruleError(ErrAnchorTXVerifyFailed, str)
+			}
 		}
 		seen[lockedInfo.Utxo] = tx.Hash()
 
 		if info, _ := b.FetchAnchorTx(lockedInfo.Utxo); info != nil {
+			if legacySameAnchor && tx.MsgTx().TxID() == "2025513a5ad2bdb180bc1d239915fa813237f9c6724acfcaf5ae02971d803215" && info.AnchorTxid == tx.MsgTx().TxID() {
+				continue
+			}
+			if approved1748Anchor(info.AnchorTxid) && approved1748Anchor(tx.MsgTx().TxID()) {
+				continue
+			}
+			// H1748 的 rarepizza Anchor 复用了 H1747 已锚定的 funding
+			// UTXO。仅放行此固定交易及其已批准历史记录；重建测试网后删除。
+			if legacy1748 && tx.MsgTx().TxID() == "5da834f2e726daac5341dec4d7ce20c906969ac8517fb3b7f776b703b72030e9" &&
+				(info.AnchorTxid == "5387e75dbb0b585ee6aa43cef65fe55854485202ca2cd4b6c10fb36fea04d89e" || info.AnchorTxid == tx.MsgTx().TxID()) {
+				continue
+			}
 			str := fmt.Sprintf("anchor funding utxo %s already anchored by tx %s", lockedInfo.Utxo, info.AnchorTxid)
 			return ruleError(ErrAnchorTXVerifyFailed, str)
 		}
@@ -1413,6 +1450,10 @@ func checkCoinbaseFees(coinbaseTx *wire.MsgTx, expectedSatoshiOut int64,
 //
 // This function MUST be called with the chain state lock held (for writes).
 func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, view *UtxoViewpoint, stxos *[]SpentTxOut) error {
+	return b.checkConnectBlockFor(node, block, view, stxos, false)
+}
+
+func (b *BlockChain) checkConnectBlockFor(node *blockNode, block *btcutil.Block, view *UtxoViewpoint, stxos *[]SpentTxOut, branch bool) error {
 	// If the side chain blocks end up in the database, a call to
 	// CheckBlockSanity should be done here in case a previous version
 	// allowed a block that is no longer valid.  However, since the
@@ -1466,7 +1507,7 @@ func (b *BlockChain) checkConnectBlock(node *blockNode, block *btcutil.Block, vi
 	if err != nil {
 		return err
 	}
-	if err := b.validateContractBlock(block, view); err != nil {
+	if err := b.validateContractBlockFor(block, view, branch); err != nil {
 		return err
 	}
 	if err := b.checkAnchorTxsUnique(block); err != nil {
@@ -1723,7 +1764,8 @@ func (b *BlockChain) checkConnectBlockTemplateLocked(block *btcutil.Block) error
 		return err
 	}
 
-	err = b.checkBlockContext(block, tip, flags)
+	block.SetHeight(tip.height + 1)
+	err = b.checkBlockContextFor(block, tip, flags, true)
 	if err != nil {
 		return err
 	}
@@ -1738,8 +1780,12 @@ func (b *BlockChain) checkConnectBlockTemplateLocked(block *btcutil.Block) error
 }
 
 func (b *BlockChain) validateContractBlock(block *btcutil.Block, view *UtxoViewpoint) error {
+	return b.validateContractBlockFor(block, view, false)
+}
+
+func (b *BlockChain) validateContractBlockFor(block *btcutil.Block, view *UtxoViewpoint, branch bool) error {
 	if b.contractBlockValidator != nil {
-		if err := b.requireContractParentReadyLocked(block); err != nil {
+		if err := b.requireContractParentReadyFor(block, branch); err != nil {
 			return err
 		}
 		return b.contractBlockValidator.ValidateContractBlock(block, view)

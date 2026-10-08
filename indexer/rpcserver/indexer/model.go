@@ -591,8 +591,9 @@ func (s *Model) GetEVMSourceMetadata(contractAddress string) (contractengine.EVM
 	return s.indexer.GetEVMSourceMetadata(contractAddress)
 }
 
-func (s *Model) PutEVMSourceMetadata(metadata contractengine.EVMSourceMetadata) error {
-	return s.indexer.PutEVMSourceMetadata(metadata)
+func (s *Model) PutEVMSourceRecord(record *swire.DKVSRecord) error {
+	_, err := s.indexer.PutDKVSRecordCAS(record, dkvsindexer.WritePrecondition{ExpectAbsent: true})
+	return err
 }
 
 func (s *Model) GetContractHistory(contractAddress string, start, limit int) ([]contractengine.ContractHistoryRecord, int, error) {

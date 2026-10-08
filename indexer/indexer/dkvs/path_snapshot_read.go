@@ -76,6 +76,7 @@ func validateRelayableExpiry(record *wire.DKVSRecord) error {
 
 func validateSnapshotPermission(record *wire.DKVSRecord, parsed ParsedKey, validators runtimeValidators) error {
 	if record == nil { return ErrInvalidRecord }
+	if IsEVMSourceKey(parsed) { return validateEVMSourceWrite(record, nil, validators.evmSourceVerifier) }
 	if len(record.PubKey) == 0 { return ValidateRecordIdentity(record, parsed) }
 	if parsed.Namespace == "mail" { return validateMailWritePermissionWith(parsed, record, nil, validators.resolver, validators.system) }
 	return validatePermissionWith(parsed, record.PubKey, validators.resolver, validators.system)

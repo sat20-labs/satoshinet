@@ -446,9 +446,14 @@ func newBlock(chain *BlockChain, prev *btcutil.Block,
 
 	// Spend all txs to be spent.
 	for _, spend := range spends {
-		cb.TxOut[0].Value += int64(testhelper.LowFee)
+		fee := testhelper.LowFee
+		if spend.Amount == 0 {
+			// Zero-subsidy coinbases are still spendable, but cannot pay a fee.
+			fee = 0
+		}
+		cb.TxOut[0].Value += int64(fee)
 
-		spendTx := testhelper.CreateSpendTx(spend, testhelper.LowFee)
+		spendTx := testhelper.CreateSpendTx(spend, fee)
 		txns = append(txns, spendTx)
 	}
 

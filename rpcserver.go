@@ -305,8 +305,6 @@ var rpcLimited = map[string]struct{}{
 	"getrawmempool":         {},
 	"getrawtransaction":     {},
 	"gettxout":              {},
-	"invalidateblock":       {},
-	"reconsiderblock":       {},
 	"searchrawtransactions": {},
 	"sendrawtransaction":    {},
 	"submitblock":           {},
@@ -1832,6 +1830,9 @@ func handleGetBlock(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 	if err != nil {
 		return nil, rpcDecodeHexError(c.Hash)
 	}
+	if !s.cfg.Chain.CanServeBlock(hash) {
+		return nil, &btcjson.RPCError{Code: btcjson.ErrRPCBlockNotFound, Message: "Block not ready for publication"}
+	}
 	var blkBytes []byte
 	err = s.cfg.DB.View(func(dbTx database.Tx) error {
 		var err error
@@ -2654,6 +2655,8 @@ func handleGetBlockTemplateLongPoll(s *rpcServer, longPollID string, useCoinbase
 	// When the client closes before it's time to send a reply, just return
 	// now so the goroutine doesn't hang around.
 	case <-closeChan:
+		return nil, ErrClientQuit
+	case <-s.quit:
 		return nil, ErrClientQuit
 
 	// Wait until signal received to send the reply.
@@ -3517,6 +3520,9 @@ func handleGetRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan str
 		if blockRegion == nil {
 			return nil, rpcNoTxInfoError(txHash)
 		}
+		if !s.cfg.Chain.CanServeBlock(blockRegion.Hash) {
+			return nil, rpcNoTxInfoError(txHash)
+		}
 
 		// Load the raw transaction bytes from the database.
 		var txBytes []byte
@@ -4132,14 +4138,31 @@ func handleSearchRawTransactions(s *rpcServer, cmd interface{}, closeChan <-chan
 	// Fetch transactions from the database in the desired order if more are
 	// needed.
 	if len(addressTxns) < numRequested {
+		var regions []database.BlockRegion
+		var dbSkipped uint32
 		err = s.cfg.DB.View(func(dbTx database.Tx) error {
-			regions, dbSkipped, err := addrIndex.TxRegionsForAddress(
+			var err error
+			regions, dbSkipped, err = addrIndex.TxRegionsForAddress(
 				dbTx, addr, uint32(numToSkip)-numSkipped,
 				uint32(numRequested-len(addressTxns)), reverse)
 			if err != nil {
 				return err
 			}
 
+			return nil
+		})
+		if err != nil {
+			return nil, internalRPCError(err.Error(), "Failed to load address index entries")
+		}
+		// Do not acquire chainLock while a database read transaction is held.
+		// This also protects the non-verbose early return from publishing an
+		// approval witness before the canonical Sync barrier completes.
+		for _, region := range regions {
+			if !s.cfg.Chain.CanServeBlock(region.Hash) {
+				return nil, &btcjson.RPCError{Code: btcjson.ErrRPCBlockNotFound, Message: "Block not ready for publication"}
+			}
+		}
+		err = s.cfg.DB.View(func(dbTx database.Tx) error {
 			// Load the raw transaction bytes from the database.
 			serializedTxns, err := dbTx.FetchBlockRegions(regions)
 			if err != nil {
@@ -4894,6 +4917,7 @@ type rpcServer struct {
 	authsha                [sha256.Size]byte
 	limitauthsha           [sha256.Size]byte
 	ntfnMgr                *wsNotificationManager
+	httpServer             *http.Server
 	numClients             int32
 	statusLines            map[int]string
 	statusLock             sync.RWMutex
@@ -4966,19 +4990,25 @@ func (s *rpcServer) Stop() error {
 		return nil
 	}
 	rpcsLog.Warnf("RPC server shutting down")
+	var shutdownErr error
 	for _, listener := range s.cfg.Listeners {
 		err := listener.Close()
 		if err != nil {
 			rpcsLog.Errorf("Problem shutting down rpc: %v", err)
-			return err
+			shutdownErr = errors.Join(shutdownErr, err)
 		}
 	}
 	s.ntfnMgr.Shutdown()
 	s.ntfnMgr.WaitForShutdown()
 	close(s.quit)
+	if s.httpServer != nil {
+		shutdownErr = errors.Join(shutdownErr, s.httpServer.Shutdown(context.Background()))
+	}
+	// HTTP JSON-RPC and WebSocket both hijack connections; Shutdown alone
+	// does not wait for their handlers or in-flight commands.
 	s.wg.Wait()
 	rpcsLog.Infof("RPC server shutdown complete")
-	return nil
+	return shutdownErr
 }
 
 // RequestedProcessShutdown returns a channel that is sent to when an authorized
@@ -5490,12 +5520,17 @@ func (s *rpcServer) Start() {
 	rpcsLog.Trace("Starting RPC server")
 	rpcServeMux := http.NewServeMux()
 	httpServer := &http.Server{
-		Handler: rpcServeMux,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s.wg.Add(1)
+			defer s.wg.Done()
+			rpcServeMux.ServeHTTP(w, r)
+		}),
 
 		// Timeout connections which don't complete the initial
 		// handshake within the allowed timeframe.
 		ReadTimeout: time.Second * rpcAuthTimeoutSeconds,
 	}
+	s.httpServer = httpServer
 	rpcServeMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "close")
 		w.Header().Set("Content-Type", "application/json")

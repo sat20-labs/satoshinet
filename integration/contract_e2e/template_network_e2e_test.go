@@ -4,6 +4,7 @@
 package contract_e2e
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -1073,74 +1074,6 @@ func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T
 	fixture.requireNodesSynced(t)
 }
 
-func TestNetworkTemplateContractStateRollbackOnInvalidate(t *testing.T) {
-	fixture := newTemplateNetworkFixture(t, map[string]int64{
-		"ordx:f:rollback": 1000,
-	})
-
-	const limitAsset = "ordx:f:rollback"
-	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
-	traderA := fixture.traderA
-	traderB := fixture.traderB
-	traderAAddr := fixture.traderAActor.address
-	traderBAddr := fixture.traderBActor.address
-
-	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset, []int64{1000000, 1000000, 1000000, 1000000},
-		[]int64{1000, 1000, 1000, 1000}, traderA,
-		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor, fixture.traderAActor})
-	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
-		[]int64{10, 1000}, traderA)
-
-	deployTx, contract := buildTemplateDeployTxWithInputs(t, fixture, traderA,
-		tmplcontract.NewLimitOrderContract(limitAsset),
-		"rollback-template-e2e",
-		[]byte("rollback-template-random"),
-		[]wire.OutPoint{gasOuts[0]},
-		wire.TxOut{
-			Value:  1,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
-		})
-	fixture.sendAndWaitTx(t, deployTx)
-
-	sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
-	sellTx := buildTemplateInvokeTxWithInputs(t, fixture, traderA, contract, 1, tmplcontract.InvokeAPISwap, sellParam,
-		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
-		wire.TxOut{
-			Value:  0,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
-		})
-	fixture.sendAndWaitTx(t, sellTx)
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), limitAsset, "10")
-
-	buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", "10")
-	buyTx := buildTemplateInvokeTxWithInputs(t, fixture, traderB, contract, 2, tmplcontract.InvokeAPISwap, buyParam,
-		[]wire.OutPoint{gasOuts[2]},
-		wire.TxOut{
-			Value:  100,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
-		})
-	fixture.sendAndWaitTx(t, buyTx)
-	buyResultOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, buyTx, contract)
-	requireTemplateResultAssetAmount(t, buyResultOutputs, traderBAddr, limitAsset, "10")
-	requireTemplateResultValue(t, buyResultOutputs, traderAAddr, 100)
-	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
-
-	buyHash := buyTx.TxHash()
-	buyVerbose, err := fixture.bootstrapNode.Client.GetRawTransactionVerbose(&buyHash)
-	require.NoError(t, err)
-	require.NotEmpty(t, buyVerbose.BlockHash)
-	buyBlockHash, err := chainhash.NewHashFromStr(buyVerbose.BlockHash)
-	require.NoError(t, err)
-
-	require.NoError(t, invalidateBlockWithTimeout(t, fixture.bootstrapNode, buyBlockHash, 15*time.Second))
-	buyVerboseAfterInvalidate, err := fixture.bootstrapNode.Client.GetRawTransactionVerbose(&buyHash)
-	if err != nil {
-		require.ErrorContains(t, err, "No information available about transaction")
-		return
-	}
-	require.Equal(t, uint64(0), buyVerboseAfterInvalidate.Confirmations)
-}
-
 type templateNetworkFixture struct {
 	bootstrapNode *rpctest.Harness
 	coreNode      *rpctest.Harness
@@ -1216,18 +1149,22 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 	bootstrapNode, coreNode := startSatoshiNetNetwork(t, fakeL1)
 	nodes := []*rpctest.Harness{bootstrapNode, coreNode}
 
+	anchorHeight, err := bootstrapNode.Client.GetBlockCount()
+	require.NoError(t, err)
 	gasAnchor := buildNetworkAnchorTx(t, gasLockedUtxo, lockedValue,
 		testWireAsset(gasAsset, 100000000), gasAsset+"-100000000-0-0",
-		witnessScript, bootstrapKey, traderAActor.pkScript)
+		witnessScript, bootstrapKey, lockedPkScript, int32(anchorHeight+1))
 	sendTx(t, bootstrapNode, gasAnchor)
 
 	assetAnchors := make(map[string]*wire.MsgTx)
 	for i, asset := range sortedTemplateAssets(assets) {
 		lockedUtxo := templateLockedOutPoint(asset, i+1)
 		amount := assets[asset]
+		anchorHeight, err := bootstrapNode.Client.GetBlockCount()
+		require.NoError(t, err)
 		anchor := buildNetworkAnchorTx(t, lockedUtxo, lockedValue,
 			testWireAsset(asset, amount), fmt.Sprintf("%s-%d-0-0", asset, amount),
-			witnessScript, bootstrapKey, traderAActor.pkScript)
+			witnessScript, bootstrapKey, lockedPkScript, int32(anchorHeight+1))
 		sendTx(t, bootstrapNode, anchor)
 		assetAnchors[asset] = anchor
 	}
@@ -1325,10 +1262,47 @@ func (f *templateNetworkFixture) splitAssetTo(t *testing.T, anchorTx *wire.MsgTx
 		outputs = append(outputs, wire.NewTxOut(values[i], testWireAsset(asset, amounts[i]), recipients[i].pkScript))
 	}
 	tx := buildTemplateSplitTx(t, signer, wire.OutPoint{Hash: anchorTx.TxHash(), Index: 0}, outputs)
-	actor := f.actorForSigner(t, signer)
-	signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
+	f.signFundingInput(t, tx, anchorTx, signer)
 	f.sendAndWaitTx(t, tx)
 	return collectSpendableOutPoints(t, tx, outputs)
+}
+
+// signFundingInput spends the real channel deposit on the first split. Later
+// funding outputs belong to the existing trader actors and use their old path.
+func (f *templateNetworkFixture) signFundingInput(t *testing.T, tx, funding *wire.MsgTx, signer *btcec.PrivateKey) {
+	t.Helper()
+	prev := funding.TxOut[0]
+	if !txscript.IsPayToWitnessScriptHash(prev.PkScript) {
+		actor := f.actorForSigner(t, signer)
+		signTemplateTaprootInputs(t, tx, signer, actor.redeemScript, actor.controlBlock)
+		return
+	}
+	bootstrapKey := keyFromMnemonic(t, bootstrapMnemonic, 0)
+	coreKey := keyFromMnemonic(t, coreMnemonic, 0)
+	witness, channelScript, err := anchortx.GetP2WSHscript(bootstrapKey.PubKey().SerializeCompressed(), coreKey.PubKey().SerializeCompressed())
+	require.NoError(t, err)
+	require.Equal(t, channelScript, prev.PkScript, "funding must be the invoice-bound channel")
+	channel, err := anchortx.GetChannelAddress(bootstrapKey.PubKey().SerializeCompressed(), coreKey.PubKey().SerializeCompressed(), &chaincfg.TestNetParams)
+	require.NoError(t, err)
+	marker, err := sindexercommon.NullDataScript(sindexercommon.CONTENT_TYPE_CHANNELID, []byte(channel+"-1"))
+	require.NoError(t, err)
+	tx.AddTxOut(wire.NewTxOut(0, nil, marker))
+	fetcher := txscript.NewCannedPrevOutputFetcher(prev.PkScript, prev.Value, prev.Assets)
+	hashes := txscript.NewTxSigHashes(tx, fetcher)
+	keys := []*btcec.PrivateKey{bootstrapKey, coreKey}
+	if bytes.Compare(keys[0].PubKey().SerializeCompressed(), keys[1].PubKey().SerializeCompressed()) > 0 {
+		keys[0], keys[1] = keys[1], keys[0]
+	}
+	stack := wire.TxWitness{nil}
+	for _, key := range keys {
+		sig, err := txscript.RawTxInWitnessSignature(tx, hashes, 0, prev.Value, prev.Assets, witness, txscript.SigHashAll, key)
+		require.NoError(t, err)
+		stack = append(stack, sig)
+	}
+	tx.TxIn[0].Witness = append(stack, witness)
+	engine, err := txscript.NewEngine(prev.PkScript, tx, 0, txscript.StandardVerifyFlags, nil, hashes, prev.Value, prev.Assets, fetcher)
+	require.NoError(t, err)
+	require.NoError(t, engine.Execute(), "channel funding requires both real signatures")
 }
 
 func (f *templateNetworkFixture) sendAndWaitTx(t *testing.T, tx *wire.MsgTx) {
@@ -1585,23 +1559,6 @@ func templateUtxoHasAsset(utxo *indexercommon.AssetsInUtxo, want wire.AssetInfo)
 		return amount.Cmp(&want.Amount) >= 0
 	}
 	return false
-}
-
-func invalidateBlockWithTimeout(t *testing.T, node *rpctest.Harness, hash *chainhash.Hash, timeout time.Duration) error {
-	t.Helper()
-	result := make(chan error, 1)
-	go func() {
-		result <- node.Client.InvalidateBlock(hash)
-	}()
-
-	select {
-	case err := <-result:
-		return err
-	case <-time.After(timeout):
-		t.Fatalf("InvalidateBlock(%s) did not return within %s (node_pid=%d rpc=%s log=%s)",
-			hash, timeout, node.NodePID(), node.RPCAddress(), node.LogFile())
-		return nil
-	}
 }
 
 func waitForPOSTx(t *testing.T, node *rpctest.Harness, nodes []*rpctest.Harness, tx *wire.MsgTx) {

@@ -1,6 +1,10 @@
 package indexer
 
-import contractengine "github.com/sat20-labs/satoshinet/contract/engine"
+import (
+	"encoding/json"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
+	"strings"
+)
 
 func (s *IndexerMgr) GetContractSummaries(start, limit int) ([]contractengine.ContractSummary, int) {
 	if s.contractIndexer == nil {
@@ -24,15 +28,21 @@ func (s *IndexerMgr) GetContractHistory(address string, start, limit int) ([]con
 }
 
 func (s *IndexerMgr) GetEVMSourceMetadata(address string) (contractengine.EVMSourceMetadata, bool) {
-	if s.contractIndexer == nil {
+	if s.dkvsIndexer == nil {
 		return contractengine.EVMSourceMetadata{}, false
 	}
-	return s.contractIndexer.GetEVMSourceMetadata(address)
-}
-
-func (s *IndexerMgr) PutEVMSourceMetadata(metadata contractengine.EVMSourceMetadata) error {
-	if s.contractIndexer == nil {
-		return nil
+	record, err := s.dkvsIndexer.Get("/blob/evm/source/" + strings.ToLower(strings.TrimSpace(address)))
+	if err != nil {
+		return contractengine.EVMSourceMetadata{}, false
 	}
-	return s.contractIndexer.PutEVMSourceMetadata(metadata)
+	var metadata contractengine.EVMSourceMetadata
+	if err := json.Unmarshal(record.Value, &metadata); err != nil {
+		return metadata, false
+	}
+	// Admission verified the complete init code and ABI. Client flags never
+	// determine the returned verification status; runtime replay is not claimed.
+	metadata.Verified = true
+	metadata.VerifyStatus = "verified-init-code"
+	metadata.VerifyError = ""
+	return metadata, true
 }

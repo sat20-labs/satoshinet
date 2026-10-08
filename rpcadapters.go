@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"sync/atomic"
 
 	"github.com/sat20-labs/satoshinet/blockchain"
@@ -78,13 +79,22 @@ var _ rpcserverConnManager = &rpcConnManager{}
 // This function is safe for concurrent access and is part of the
 // rpcserverConnManager interface implementation.
 func (cm *rpcConnManager) Connect(addr string, permanent bool) error {
-	replyChan := make(chan error)
-	cm.server.query <- connectNodeMsg{
+	replyChan := make(chan error, 1)
+	select {
+	case cm.server.query <- connectNodeMsg{
 		addr:      addr,
 		permanent: permanent,
 		reply:     replyChan,
+	}:
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
 	}
-	return <-replyChan
+	select {
+	case err := <-replyChan:
+		return err
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
+	}
 }
 
 // RemoveByID removes the peer associated with the provided id from the list of
@@ -94,12 +104,21 @@ func (cm *rpcConnManager) Connect(addr string, permanent bool) error {
 // This function is safe for concurrent access and is part of the
 // rpcserverConnManager interface implementation.
 func (cm *rpcConnManager) RemoveByID(id int32) error {
-	replyChan := make(chan error)
-	cm.server.query <- removeNodeMsg{
+	replyChan := make(chan error, 1)
+	select {
+	case cm.server.query <- removeNodeMsg{
 		cmp:   func(sp *serverPeer) bool { return sp.ID() == id },
 		reply: replyChan,
+	}:
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
 	}
-	return <-replyChan
+	select {
+	case err := <-replyChan:
+		return err
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
+	}
 }
 
 // RemoveByAddr removes the peer associated with the provided address from the
@@ -109,12 +128,21 @@ func (cm *rpcConnManager) RemoveByID(id int32) error {
 // This function is safe for concurrent access and is part of the
 // rpcserverConnManager interface implementation.
 func (cm *rpcConnManager) RemoveByAddr(addr string) error {
-	replyChan := make(chan error)
-	cm.server.query <- removeNodeMsg{
+	replyChan := make(chan error, 1)
+	select {
+	case cm.server.query <- removeNodeMsg{
 		cmp:   func(sp *serverPeer) bool { return sp.Addr() == addr },
 		reply: replyChan,
+	}:
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
 	}
-	return <-replyChan
+	select {
+	case err := <-replyChan:
+		return err
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
+	}
 }
 
 // DisconnectByID disconnects the peer associated with the provided id.  This
@@ -124,12 +152,21 @@ func (cm *rpcConnManager) RemoveByAddr(addr string) error {
 // This function is safe for concurrent access and is part of the
 // rpcserverConnManager interface implementation.
 func (cm *rpcConnManager) DisconnectByID(id int32) error {
-	replyChan := make(chan error)
-	cm.server.query <- disconnectNodeMsg{
+	replyChan := make(chan error, 1)
+	select {
+	case cm.server.query <- disconnectNodeMsg{
 		cmp:   func(sp *serverPeer) bool { return sp.ID() == id },
 		reply: replyChan,
+	}:
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
 	}
-	return <-replyChan
+	select {
+	case err := <-replyChan:
+		return err
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
+	}
 }
 
 // DisconnectByAddr disconnects the peer associated with the provided address.
@@ -139,12 +176,21 @@ func (cm *rpcConnManager) DisconnectByID(id int32) error {
 // This function is safe for concurrent access and is part of the
 // rpcserverConnManager interface implementation.
 func (cm *rpcConnManager) DisconnectByAddr(addr string) error {
-	replyChan := make(chan error)
-	cm.server.query <- disconnectNodeMsg{
+	replyChan := make(chan error, 1)
+	select {
+	case cm.server.query <- disconnectNodeMsg{
 		cmp:   func(sp *serverPeer) bool { return sp.Addr() == addr },
 		reply: replyChan,
+	}:
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
 	}
-	return <-replyChan
+	select {
+	case err := <-replyChan:
+		return err
+	case <-cm.server.quit:
+		return errors.New("server shutting down")
+	}
 }
 
 // ConnectedCount returns the number of currently connected peers.
@@ -169,9 +215,18 @@ func (cm *rpcConnManager) NetTotals() (uint64, uint64) {
 // This function is safe for concurrent access and is part of the
 // rpcserverConnManager interface implementation.
 func (cm *rpcConnManager) ConnectedPeers() []rpcserverPeer {
-	replyChan := make(chan []*serverPeer)
-	cm.server.query <- getPeersMsg{reply: replyChan}
-	serverPeers := <-replyChan
+	replyChan := make(chan []*serverPeer, 1)
+	select {
+	case cm.server.query <- getPeersMsg{reply: replyChan}:
+	case <-cm.server.quit:
+		return nil
+	}
+	var serverPeers []*serverPeer
+	select {
+	case serverPeers = <-replyChan:
+	case <-cm.server.quit:
+		return nil
+	}
 
 	// Convert to RPC server peers.
 	peers := make([]rpcserverPeer, 0, len(serverPeers))
@@ -187,9 +242,18 @@ func (cm *rpcConnManager) ConnectedPeers() []rpcserverPeer {
 // This function is safe for concurrent access and is part of the
 // rpcserverConnManager interface implementation.
 func (cm *rpcConnManager) PersistentPeers() []rpcserverPeer {
-	replyChan := make(chan []*serverPeer)
-	cm.server.query <- getAddedNodesMsg{reply: replyChan}
-	serverPeers := <-replyChan
+	replyChan := make(chan []*serverPeer, 1)
+	select {
+	case cm.server.query <- getAddedNodesMsg{reply: replyChan}:
+	case <-cm.server.quit:
+		return nil
+	}
+	var serverPeers []*serverPeer
+	select {
+	case serverPeers = <-replyChan:
+	case <-cm.server.quit:
+		return nil
+	}
 
 	// Convert to generic peers.
 	peers := make([]rpcserverPeer, 0, len(serverPeers))

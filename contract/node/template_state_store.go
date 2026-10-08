@@ -175,10 +175,7 @@ func dbStoreTemplateBlockState(dbTx database.Tx, hash *chainhash.Hash, store *te
 	if err != nil {
 		return err
 	}
-	if err := putStateBlob(byBlock, hash[:], encoded); err != nil {
-		return err
-	}
-	return parent.Put(templateStateTipKeyName, hash[:])
+	return putLatestStateBlob(parent, byBlock, templateStateTipKeyName, hash[:], encoded)
 }
 
 func dbDeleteTemplateBlockState(dbTx database.Tx, hash, newTip *chainhash.Hash) error {

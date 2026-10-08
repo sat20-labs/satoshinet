@@ -1878,6 +1878,19 @@ func (db *db) Type() string {
 	return dbType
 }
 
+// Sync uses the same write/close lock order as Begin. cache.flush syncs block
+// files before atomically committing the metadata to LevelDB's synced manifest.
+func (db *db) Sync() error {
+	db.writeLock.Lock()
+	defer db.writeLock.Unlock()
+	db.closeLock.RLock()
+	defer db.closeLock.RUnlock()
+	if db.closed {
+		return makeDbErr(database.ErrDbNotOpen, errDbNotOpenStr, nil)
+	}
+	return db.cache.flush()
+}
+
 // begin is the implementation function for the Begin database method.  See its
 // documentation for more details.
 //

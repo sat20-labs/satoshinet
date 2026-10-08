@@ -204,6 +204,13 @@ func (b *BlockChain) ProcessBlock(block *btcutil.Block, flags BehaviorFlags) (bo
 // processBlockLocked contains ProcessBlock's state transition after readiness
 // has been checked. It MUST be called with chainLock held for writes.
 func (b *BlockChain) processBlockLocked(block *btcutil.Block, flags BehaviorFlags) (bool, bool, error) {
+	if b.posDurabilityErr != nil {
+		return false, false, b.posDurabilityErr
+	}
+	if node := b.index.LookupNode(block.Hash()); b.recoverablePOSNodeLocked(node) {
+		_, err := b.recoverStoredPOSBlockLocked(node)
+		return err == nil, false, err
+	}
 	fastAdd := flags&BFFastAdd == BFFastAdd
 
 	blockHash := block.Hash()
@@ -278,6 +285,10 @@ func (b *BlockChain) processBlockLocked(block *btcutil.Block, flags BehaviorFlag
 		return false, false, err
 	}
 	if !prevHashExists {
+		height, err := ExtractCoinbaseHeight(block.Transactions()[0])
+		if err == nil && b.chainParams.POSV2Active(height) {
+			return false, false, ruleError(ErrPreviousBlockUnknown, "POS approval requires the exact parent state")
+		}
 		log.Infof("Adding orphan block %v with parent %v", blockHash, prevHash)
 		b.addOrphanBlock(block)
 

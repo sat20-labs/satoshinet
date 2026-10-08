@@ -277,6 +277,9 @@ func (p *TemplateAutopayConfigInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing blob key limit")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("blob key limit exceeds eight bytes")
+	}
 	limit := tokenizer.ExtractInt64()
 	if limit < 0 || limit > 1024 {
 		return fmt.Errorf("invalid blob key limit")
@@ -305,6 +308,9 @@ func (p *TemplateLimitOrderInvokeParam) Decode(data []byte) error {
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
 	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 	if !tokenizer.Next() || tokenizer.Err() != nil {
@@ -346,6 +352,9 @@ func (p *TemplateRefundInvokeParam) Decode(data []byte) error {
 	}
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
 	for tokenizer.Next() {
+		if len(tokenizer.Data()) > 8 {
+			return fmt.Errorf("refund item id exceeds eight bytes")
+		}
 		itemID := tokenizer.ExtractInt64()
 		if itemID < 0 {
 			return fmt.Errorf("invalid refund item id %d", itemID)
@@ -369,6 +378,9 @@ func (p *TemplateAddLiquidityInvokeParam) Decode(data []byte) error {
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
 	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
+	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing asset name")
@@ -380,6 +392,9 @@ func (p *TemplateAddLiquidityInvokeParam) Decode(data []byte) error {
 	p.Amt = string(tokenizer.Data())
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing sat value")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("sat value exceeds eight bytes")
 	}
 	p.Value = tokenizer.ExtractInt64()
 	if tokenizer.Next() {
@@ -400,6 +415,9 @@ func (p *TemplateRemoveLiquidityInvokeParam) Decode(data []byte) error {
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
 	if !tokenizer.Next() || tokenizer.Err() != nil {
 		return fmt.Errorf("missing order type")
+	}
+	if len(tokenizer.Data()) > 8 {
+		return fmt.Errorf("order type exceeds eight bytes")
 	}
 	p.OrderType = int(tokenizer.ExtractInt64())
 	if !tokenizer.Next() || tokenizer.Err() != nil {

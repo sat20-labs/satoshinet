@@ -42,15 +42,7 @@ func bindDKVSJSON(c *gin.Context, target interface{}, limit int64) error {
 }
 
 func defaultEVMCompilerConfig() contractcommon.EVMCompilerConfig {
-	var cfg contractcommon.EVMCompilerConfig
-	cfg.SolcVersion = "0.8.30"
-	cfg.EVMVersion = "paris"
-	cfg.Optimizer.Enabled = true
-	cfg.Optimizer.Runs = 200
-	cfg.Metadata.BytecodeHash = "none"
-	cfg.SingleFileOnly = true
-	cfg.AllowImports = false
-	return cfg
+	return contractcommon.DefaultEVMCompilerConfig()
 }
 
 func contractRespSetData(resp *localwire.ContractResp, data interface{}) {
@@ -1253,68 +1245,33 @@ func (s *Handle) getEVMSourceMetadata(c *gin.Context) {
 }
 
 func (s *Handle) putEVMSourceMetadata(c *gin.Context) {
-	resp := &localwire.ContractResp{
-		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
+	resp := &localwire.ContractResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	address := strings.ToLower(strings.TrimSpace(c.Param("contract")))
+	var req struct {
+		Record *swire.DKVSRecord `json:"record"`
 	}
-	contractAddress := strings.TrimSpace(c.Param("contract"))
-	summary, err := s.model.GetContract(contractAddress)
-	if err == nil && summary.ContractTypeID != contractcommon.ContractTypeEVM {
-		resp.Code = -1
-		resp.Msg = "contract is not EVM"
-		c.JSON(http.StatusOK, resp)
+	if err := bindDKVSJSON(c, &req, dkvsRecordHTTPBodyLimit); err != nil {
+		resp.Code, resp.Msg = -1, err.Error()
+		c.JSON(http.StatusBadRequest, resp)
 		return
 	}
-	if err != nil {
-		contractAddr, decodeErr := contractcommon.DecodeContractAddress(contractAddress)
-		if decodeErr != nil || contractAddr.ContractType() != contractcommon.ContractTypeEVM {
-			resp.Code = -1
-			resp.Msg = err.Error()
-			c.JSON(http.StatusOK, resp)
-			return
-		}
-	}
-	var req contractcommon.EVMSourceMetadata
-	if err := c.ShouldBindJSON(&req); err != nil {
-		resp.Code = -1
-		resp.Msg = err.Error()
-		c.JSON(http.StatusOK, resp)
+	if req.Record == nil || req.Record.Key != "/blob/evm/source/"+address {
+		resp.Code, resp.Msg = -1, "missing signed source record or source path mismatch"
+		c.JSON(http.StatusBadRequest, resp)
 		return
 	}
-	req.ContractAddress = contractAddress
-	if strings.TrimSpace(req.ContractName) == "" {
-		resp.Code = -1
-		resp.Msg = "missing contractName"
-		c.JSON(http.StatusOK, resp)
+	if err := s.model.PutEVMSourceRecord(req.Record); err != nil {
+		resp.Code, resp.Msg = -1, err.Error()
+		c.JSON(dkvsHTTPStatus(err), resp)
 		return
 	}
-	if strings.TrimSpace(req.Source) == "" {
-		resp.Code = -1
-		resp.Msg = "missing source"
-		c.JSON(http.StatusOK, resp)
+	metadata, ok := s.model.GetEVMSourceMetadata(address)
+	if !ok {
+		resp.Code, resp.Msg = -1, "verified source record is unavailable"
+		c.JSON(http.StatusInternalServerError, resp)
 		return
 	}
-	if len(req.ABI) > 0 && !json.Valid(req.ABI) {
-		resp.Code = -1
-		resp.Msg = "invalid ABI JSON"
-		c.JSON(http.StatusOK, resp)
-		return
-	}
-	req.CompilerConfig = defaultEVMCompilerConfig()
-	req.Verified = false
-	req.VerifyStatus = "stored"
-	req.VerifyError = "server-side Solidity recompilation is not enabled"
-	now := time.Now().Unix()
-	if req.SubmittedAt == 0 {
-		req.SubmittedAt = now
-	}
-	req.UpdatedAt = now
-	if err := s.model.PutEVMSourceMetadata(req); err != nil {
-		resp.Code = -1
-		resp.Msg = err.Error()
-		c.JSON(http.StatusOK, resp)
-		return
-	}
-	contractRespSetData(resp, req)
+	contractRespSetData(resp, metadata)
 	c.JSON(http.StatusOK, resp)
 }
 

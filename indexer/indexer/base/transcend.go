@@ -1,19 +1,28 @@
 package base
 
 import (
+	"encoding/hex"
+	"fmt"
+	"github.com/sat20-labs/satoshinet/wire"
 	"strconv"
 	"strings"
 
+	indexer "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/anchortx"
-	"github.com/sat20-labs/satoshinet/chaincfg"
 
 	"github.com/sat20-labs/satoshinet/indexer/common"
 )
 
-// anchorPkScript, err := StandardAnchorScript(txid, witnessScript, amount)
-func GenAscendFromAnchorPkScript(anchorPkScript []byte, netParams *chaincfg.Params) (*common.AscendData, error) {
-
-	ascend, err := anchortx.CheckAnchorPkScript(anchorPkScript, false)
+// genAscendFromAnchorPkScript requires b.mutex held by block indexing.
+func (b *BaseIndexer) genAscendFromAnchorPkScript(anchorPkScript []byte, outputs []*wire.TxOut, bindOutputs bool) (*common.AscendData, error) {
+	ascend, err := anchortx.CheckAnchorPkScriptWithCoreCheck(anchorPkScript, false, func(pub []byte) bool {
+		key := hex.EncodeToString(pub)
+		if key == indexer.GetBootstrapPubKey() || key == indexer.GetCoreNodePubKey() {
+			return true
+		}
+		_, ok := b.coreNodeMap[key]
+		return ok
+	}, outputs, bindOutputs)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +76,10 @@ func NewDescendingLedgerEntry(descend *common.DescendData) *common.ChannelLedger
 }
 
 func GenDescend(tx *common.Transaction, index, height int, descendTxId string) (*common.DescendData, error) {
+	if tx == nil || index < 0 || index >= len(tx.Outputs) || len(tx.Inputs) == 0 ||
+		tx.Inputs[0] == nil || tx.Inputs[0].Address == nil || len(tx.Inputs[0].Address.Addresses) == 0 {
+		return nil, fmt.Errorf("descending requires an ordinary input address")
+	}
 
 	var result common.DescendData
 	result.Height = height
