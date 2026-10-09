@@ -3,6 +3,7 @@ package dkvs
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 
 	indexercommon "github.com/sat20-labs/indexer/common"
@@ -76,7 +77,21 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 	for _, record := range validated.active {
 		incoming[record.Key] = record
 	}
-	if err := protectEVMSourceReplacement(current, incoming); err != nil { return 0, err }
+	if err := protectEVMSourceReplacement(current, incoming); err != nil {
+		return 0, err
+	}
+	replacedContracts := make(map[string]struct{})
+	for _, record := range current {
+		parsed, _ := ParseKey(record.Key)
+		if IsAuthorityContractKey(parsed) {
+			replacedContracts[record.Key] = struct{}{}
+		}
+	}
+	if strings.HasPrefix(validated.path, "/contract/") {
+		if err := i.validateContractIncomingLocked(validated.active, replacedContracts); err != nil {
+			return 0, err
+		}
+	}
 	// Snapshot omissions replace only the network view. Placement-bound data
 	// and unpaid AUTOPAY retention stay local until their existing prune path
 	// removes them. An incoming record for the same key can still replace them.

@@ -28,7 +28,7 @@ func (b *sourceHTTPBackend) PutDKVSRecordCAS(record *wire.DKVSRecord, preconditi
 }
 
 func (b *sourceHTTPBackend) GetEVMSourceMetadata(address string) (contract.EVMSourceMetadata, bool) {
-	record, err := b.store.Get("/blob/evm/source/" + address)
+	record, err := b.store.Get("/contract/evm/source/" + address)
 	if err != nil {
 		return contract.EVMSourceMetadata{}, false
 	}
@@ -72,13 +72,13 @@ func TestEVMSourceHTTPRequiresSignedImmutableRecord(t *testing.T) {
 		record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
 		return record
 	}
-	key := "/blob/evm/source/testcontract"
+	key := "/contract/evm/source/testcontract"
 	bad := sign(key, `{"source":"unchecked"}`)
 	require.Equal(t, http.StatusBadRequest, post(map[string]any{"record": bad}).Code)
 	_, err = store.Get(key)
 	require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
 	record := sign(key, `{"version":1,"source":"checked"}`)
-	wrong := sign("/blob/evm/source/other", string(record.Value))
+	wrong := sign("/contract/evm/source/other", string(record.Value))
 	require.Equal(t, http.StatusBadRequest, post(map[string]any{"record": wrong}).Code)
 	unsigned := *record
 	unsigned.Signature = nil

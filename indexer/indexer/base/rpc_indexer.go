@@ -330,7 +330,8 @@ func (b *RpcIndexer) GetAscendData(fundingUtxo string) *common.AscendData {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 
-	return b.getAscendData(fundingUtxo)
+	// Public callers may shape the response; keep the RPC index cache intact.
+	return cloneAscendData(b.getAscendData(fundingUtxo))
 }
 
 // only for RPC interface

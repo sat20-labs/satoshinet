@@ -3,9 +3,9 @@ package dkvs
 import "github.com/sat20-labs/satoshinet/wire"
 
 // IsBlobKey reports whether parsed is the canonical single-record blob layout:
-// /blob/<account_id>/<blob_key>, or the fixed EVM source slot.
+// /blob/<account_id>/<blob_key>.
 func IsBlobKey(parsed ParsedKey) bool {
-	return parsed.Namespace == "blob" && (len(parsed.Segments) == 2 || IsEVMSourceKey(parsed))
+	return parsed.Namespace == "blob" && len(parsed.Segments) == 2
 }
 
 func validateRecordSizeForParsed(record *wire.DKVSRecord, parsed ParsedKey) error {
@@ -14,7 +14,7 @@ func validateRecordSizeForParsed(record *wire.DKVSRecord, parsed ParsedKey) erro
 	}
 	valueLimit := MaxRecordValueSize
 	recordLimit := wire.MaxDKVSRecordSize
-	if IsBlobKey(parsed) {
+	if IsBlobKey(parsed) || IsEVMSourceKey(parsed) || IsAuthorityContractKey(parsed) {
 		valueLimit = wire.MaxDKVSBlobValueSize
 		recordLimit = wire.MaxDKVSBlobRecordSize
 	}
@@ -25,14 +25,16 @@ func validateRecordSizeForParsed(record *wire.DKVSRecord, parsed ParsedKey) erro
 }
 
 func validateBlobRecord(record *wire.DKVSRecord, parsed ParsedKey, policy BlobPolicy) error {
-	if record == nil || !IsBlobKey(parsed) {
+	if record == nil || (!IsBlobKey(parsed) && !IsEVMSourceKey(parsed)) {
 		return ErrInvalidKey
 	}
 	policy = normalizeBlobPolicy(policy)
 	if err := validateRecordSizeForParsed(record, parsed); err != nil {
 		return err
 	}
-	if IsEVMSourceKey(parsed) { return validateEVMSourceEnvelope(record) }
+	if IsEVMSourceKey(parsed) {
+		return validateEVMSourceEnvelope(record)
+	}
 	if IsTombstone(record.Flags) {
 		return nil
 	}

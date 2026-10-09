@@ -98,7 +98,7 @@ func TestSourceDeploymentProofAndCompiledVector(t *testing.T) {
 	require.Error(t, err)
 	value, err := json.Marshal(source)
 	require.NoError(t, err)
-	record := &wire.DKVSRecord{Key: "/blob/evm/source/" + source.ContractAddress, Value: value}
+	record := &wire.DKVSRecord{Key: "/contract/evm/source/" + source.ContractAddress, Value: value}
 	verifier.Params = &chaincfg.MainNetParams
 	require.ErrorContains(t, verifier.Verify(record), "network")
 }

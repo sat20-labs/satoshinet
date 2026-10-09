@@ -10,6 +10,10 @@ func validateReadablePrefix(prefix string) error {
 	}
 	segments := parsed.Segments
 	switch parsed.Namespace {
+	case "contract":
+		if len(segments) >= 1 {
+			return nil
+		}
 	case "account":
 		if (len(segments) == 1 || len(segments) == 2) && validAccountNetwork(segments[0]) {
 			return nil
@@ -23,7 +27,6 @@ func validateReadablePrefix(prefix string) error {
 			return nil
 		}
 	case "blob":
-		if IsEVMSourceKey(parsed) { return nil }
 		if (len(segments) == 1 || len(segments) == 2) && validAccountID(segments[0]) {
 			return nil
 		}

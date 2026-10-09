@@ -18,7 +18,7 @@ func TestEVMSourceBlobIsImmutableAndDeploymentFunded(t *testing.T) {
 	idx := testIndexerWithConfig(t, Config{EVMSourceVerifier: verify})
 	priv, err := btcec.NewPrivateKey()
 	require.NoError(t, err)
-	record, err := NewRecord("/blob/evm/source/testcontract", []byte("verified-source"), priv.PubKey().SerializeCompressed(), RecordOptions{Seq: 1})
+	record, err := NewRecord("/contract/evm/source/testcontract", []byte("verified-source"), priv.PubKey().SerializeCompressed(), RecordOptions{Seq: 1})
 	require.NoError(t, err)
 	SignRecord(priv, record)
 	updated, err := idx.PutLocalCAS(record, WritePrecondition{ExpectAbsent: true})

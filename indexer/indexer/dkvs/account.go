@@ -73,10 +73,6 @@ func AccountMappingKey(network, address string) (string, error) {
 const (
 	AccountServiceDescriptorVersion = uint8(1)
 
-	// AccountServiceCapabilityRGB11Direct advertises direct RGB11 transfers to
-	// the root account's address. Standard invoice transfers do not depend on it.
-	AccountServiceCapabilityRGB11Direct = uint64(1 << 0)
-
 	accountServiceDescriptorFixedSize = 1 + accountIDSize + 33 + 8
 	maxAccountServiceDescriptorSize   = 1024
 	maxAccountServiceExtensionSize    = 512

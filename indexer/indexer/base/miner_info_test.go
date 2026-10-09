@@ -132,3 +132,32 @@ func TestL2StakeCoreUsesActualAssetInMultiAssetOutput(t *testing.T) {
 	check(b)
 	check(restartMembership(t, b, path, 1))
 }
+
+func TestAscendQueryCannotClearCachedMinerStake(t *testing.T) {
+	b, _, pubs := membershipIndexer(t)
+	parent, child := pubs[0], pubs[2]
+	a, err := hex.DecodeString(parent)
+	require.NoError(t, err)
+	c, err := hex.DecodeString(child)
+	require.NoError(t, err)
+	name := idxcommon.NewAssetNameFromString(idxcommon.GetStakeAssetNameWithHeightL2(1))
+	amount := idxcommon.NewDefaultDecimal(idxcommon.GetStakeAssetAmtWithHeightL2(1))
+	funding := strings.Repeat("12", 32) + ":0"
+	b.utxoIndex.AscendMap[funding] = &common.AscendData{
+		Height: 1, FundingUtxo: funding, AnchorTxId: strings.Repeat("34", 32),
+		Value: 1000, Address: "stake-channel", PubA: a, PubB: c,
+		Assets: wire.TxAssets{{Name: *name, Amount: *amount}},
+	}
+	b.addMinerNode(b.utxoIndex.AscendMap[funding])
+	rpc := NewRpcIndexer(b)
+	before := rpc.GetMinerInfo(child)
+	require.NotNil(t, before)
+	require.Equal(t, name.String(), before.AssetName)
+	require.Equal(t, amount.String(), before.AssetAmt)
+	response := rpc.GetAscendData(funding)
+	require.NotNil(t, response)
+	// The existing /v3/ascend handler clears Assets for its response.
+	response.Assets = nil
+	require.Equal(t, before, rpc.GetMinerInfo(child))
+	require.Len(t, rpc.GetAscendData(funding).Assets, 1)
+}

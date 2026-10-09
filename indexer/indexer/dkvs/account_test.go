@@ -74,7 +74,7 @@ func accountMappingAndPersonalRecords(t *testing.T, signer *btcec.PrivateKey,
 	}
 	mappingValue, err := EncodeAccountServiceDescriptor(AccountServiceDescriptor{
 		AccountID: accountID, CoreNodeID: hex.EncodeToString(core.PubKey().SerializeCompressed()),
-		Capabilities: AccountServiceCapabilityRGB11Direct,
+		Capabilities: uint64(1 << 0),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +277,7 @@ func TestAccountIDAndAddressMapping(t *testing.T) {
 	core, _ := btcec.NewPrivateKey()
 	value, err := EncodeAccountServiceDescriptor(AccountServiceDescriptor{
 		AccountID: accountID, CoreNodeID: hex.EncodeToString(core.PubKey().SerializeCompressed()),
-		Capabilities: AccountServiceCapabilityRGB11Direct,
+		Capabilities: uint64(1 << 0),
 	})
 	if err != nil {
 		t.Fatal(err)

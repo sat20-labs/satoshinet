@@ -7,6 +7,13 @@ func collectionPath(parsed ParsedKey) string {
 		return ""
 	}
 	switch parsed.Namespace {
+	case "contract":
+		if IsEVMSourceKey(parsed) {
+			return "/contract/evm/source/" + parsed.Segments[2]
+		}
+		if IsAuthorityContractKey(parsed) {
+			return "/contract/" + strings.Join(parsed.Segments[:len(parsed.Segments)-1], "/")
+		}
 	case "account":
 		if len(parsed.Segments) == 2 {
 			return "/account/" + parsed.Segments[0] + "/" + parsed.Segments[1]
@@ -36,7 +43,6 @@ func collectionPath(parsed ParsedKey) string {
 			return "/topic/" + parsed.Segments[0]
 		}
 	case "blob":
-		if IsEVMSourceKey(parsed) { return "/blob/evm/source/" + parsed.Segments[2] }
 		if len(parsed.Segments) == 2 {
 			return "/blob/" + parsed.Segments[0] + "/" + parsed.Segments[1]
 		}
@@ -53,8 +59,12 @@ func collectionPath(parsed ParsedKey) string {
 }
 
 func pathMode(parsed ParsedKey) PathMode {
-	if IsEVMSourceKey(parsed) { return PathAuthorityExclusive }
+	if IsEVMSourceKey(parsed) {
+		return PathAuthorityExclusive
+	}
 	switch parsed.Namespace {
+	case "contract":
+		return PathAuthorityExclusive
 	case "personal", "blob":
 		return PathOwnerExclusive
 	case "mail":
@@ -77,6 +87,13 @@ func collectionPathForPrefix(prefix string) string {
 		return ""
 	}
 	switch parsed.Namespace {
+	case "contract":
+		if IsEVMSourceKey(parsed) {
+			return prefix
+		}
+		if len(parsed.Segments) >= 1 {
+			return prefix
+		}
 	case "account":
 		if len(parsed.Segments) == 2 {
 			return prefix
@@ -104,7 +121,6 @@ func collectionPathForPrefix(prefix string) string {
 			return prefix
 		}
 	case "blob":
-		if IsEVMSourceKey(parsed) { return prefix }
 		if len(parsed.Segments) == 2 && validAccountID(parsed.Segments[0]) {
 			return prefix
 		}

@@ -47,6 +47,7 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/channel/state/:channel", s.handle.getChannelStateEvents)
 	r.POST(proxy+"/v3/channel/state", s.handle.recordChannelStateEvent)
 	r.GET(proxy+"/v3/referrer/:address", s.handle.getReferrer)
+	s.initInternalContractRoutes(r, proxy)
 	r.GET(proxy+"/v3/referree/:name", s.handle.getReferree)
 	r.GET(proxy+"/v3/corenode/all", s.handle.getAllCoreNode)
 	r.GET(proxy+"/v3/corenode/check/:pubkey", s.handle.checkCoreNode)

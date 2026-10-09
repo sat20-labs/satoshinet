@@ -3,6 +3,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,22 @@ type Config struct {
 	DataPath string
 	RPCCfg   *RPCConfig
 	DKVS     *DKVSIntegrationConfig
+}
+
+type coreNodeDKVSSystemVerifier struct{ fallback dkvs_indexer.SystemVerifier }
+
+func (v coreNodeDKVSSystemVerifier) CanWriteSystem(key string, pubKey []byte) error {
+	if strings.HasPrefix(key, "/contract/") {
+		signer := fmt.Sprintf("%x", pubKey)
+		if signer != indexer.GetCoreNodePubKey() {
+			return dkvs_indexer.ErrPermissionDenied
+		}
+		return nil
+	}
+	if v.fallback == nil {
+		return dkvs_indexer.ErrPermissionDenied
+	}
+	return v.fallback.CanWriteSystem(key, pubKey)
 }
 
 type DKVSIntegrationConfig struct {
@@ -287,6 +304,7 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 	if cfg.SystemVerifier == nil && ext.SystemVerifierHTTPEndpoint != "" {
 		cfg.SystemVerifier = dkvs_indexer.HTTPSystemVerifier{Endpoint: ext.SystemVerifierHTTPEndpoint}
 	}
+	cfg.SystemVerifier = coreNodeDKVSSystemVerifier{fallback: cfg.SystemVerifier}
 	cfg.MailboxPolicy = ext.MailboxPolicy
 	cfg.BlobPolicy = ext.BlobPolicy
 	cfg.TmpPolicy = ext.TmpPolicy

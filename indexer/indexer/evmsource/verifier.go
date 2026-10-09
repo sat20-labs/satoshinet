@@ -79,7 +79,7 @@ func (v Verifier) Verify(record *wire.DKVSRecord) error {
 		return err
 	}
 	if addr.ContractType() != contract.ContractTypeEVM || addr.EncodeAddress() != source.ContractAddress ||
-		v.Params == nil || !addr.IsForNet(v.Params) || record.Key != "/blob/evm/source/"+source.ContractAddress {
+		v.Params == nil || !addr.IsForNet(v.Params) || record.Key != "/contract/evm/source/"+source.ContractAddress {
 		return fmt.Errorf("source address, network or blob path mismatch")
 	}
 	txid, err := chainhash.NewHashFromStr(source.DeployTxID)

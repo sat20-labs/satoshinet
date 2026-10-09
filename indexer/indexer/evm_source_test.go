@@ -25,7 +25,7 @@ func TestEVMSourceQueryDerivesVerificationFromAdmittedBlob(t *testing.T) {
 	require.NoError(t, err)
 	priv, err := btcec.NewPrivateKey()
 	require.NoError(t, err)
-	record, err := dkvs.NewRecord("/blob/evm/source/testcontract", value, priv.PubKey().SerializeCompressed(), dkvs.RecordOptions{Seq: 1})
+	record, err := dkvs.NewRecord("/contract/evm/source/testcontract", value, priv.PubKey().SerializeCompressed(), dkvs.RecordOptions{Seq: 1})
 	require.NoError(t, err)
 	hash := dkvs.SigningHash(record)
 	record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()

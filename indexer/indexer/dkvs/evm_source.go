@@ -4,10 +4,10 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-// This is the only deployment-funded blob path. Ordinary account blobs retain
-// their existing ownership and fee rules.
+// The deployment-funded EVM source slot belongs to the contract namespace.
+// Ordinary account blobs retain their existing ownership and fee rules.
 func IsEVMSourceKey(parsed ParsedKey) bool {
-	return parsed.Namespace == "blob" && len(parsed.Segments) == 3 &&
+	return parsed.Namespace == "contract" && len(parsed.Segments) == 3 &&
 		parsed.Segments[0] == "evm" && parsed.Segments[1] == "source"
 }
 

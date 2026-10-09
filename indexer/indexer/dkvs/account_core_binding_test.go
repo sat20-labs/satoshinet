@@ -24,7 +24,7 @@ func signedBindingRecord(t *testing.T, accountPriv *btcec.PrivateKey, corePriv *
 	}
 	value, err := EncodeAccountServiceDescriptor(AccountServiceDescriptor{
 		AccountID: accountID, CoreNodeID: hex.EncodeToString(corePriv.PubKey().SerializeCompressed()),
-		Capabilities: AccountServiceCapabilityRGB11Direct,
+		Capabilities: uint64(1 << 0),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestAccountServiceDescriptorCanonicalExtensions(t *testing.T) {
 	descriptor := AccountServiceDescriptor{
 		AccountID:    accountID,
 		CoreNodeID:   hex.EncodeToString(corePriv.PubKey().SerializeCompressed()),
-		Capabilities: AccountServiceCapabilityRGB11Direct | 1<<9,
+		Capabilities: uint64(1<<0) | 1<<9,
 		Extensions: []AccountServiceExtension{
 			{Type: 1, Value: []byte("first")},
 			{Type: 7, Value: []byte{0, 1, 2}},

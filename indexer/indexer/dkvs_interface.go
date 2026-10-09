@@ -55,9 +55,15 @@ func (p *IndexerMgr) PutDKVSRecord(record *wire.DKVSRecord) (bool, error) {
 	return p.dkvsIndexer.PutLocal(record)
 }
 
-// PutDKVSInternalMailbox is reserved for MessageManager after it has completed
-// binding, signature, sequence and billing admission. Generic DKVS RPCs must
-// never expose this method directly.
+// PutDKVSInternalContract stores an opaque, authority-signed contract value.
+// Business validation belongs to the trusted caller.
+func (p *IndexerMgr) PutDKVSInternalContract(record *wire.DKVSRecord) (bool, error) {
+	if p == nil || p.dkvsIndexer == nil {
+		return false, errDKVSNotInitialized
+	}
+	return p.dkvsIndexer.PutInternalContract(record)
+}
+
 func (p *IndexerMgr) PutDKVSInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 	if p.dkvsIndexer == nil {
 		return false, errDKVSNotInitialized

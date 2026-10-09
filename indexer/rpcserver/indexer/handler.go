@@ -1255,7 +1255,7 @@ func (s *Handle) putEVMSourceMetadata(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, resp)
 		return
 	}
-	if req.Record == nil || req.Record.Key != "/blob/evm/source/"+address {
+	if req.Record == nil || req.Record.Key != "/contract/evm/source/"+address {
 		resp.Code, resp.Msg = -1, "missing signed source record or source path mismatch"
 		c.JSON(http.StatusBadRequest, resp)
 		return

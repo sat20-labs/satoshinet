@@ -31,7 +31,7 @@ func (s *IndexerMgr) GetEVMSourceMetadata(address string) (contractengine.EVMSou
 	if s.dkvsIndexer == nil {
 		return contractengine.EVMSourceMetadata{}, false
 	}
-	record, err := s.dkvsIndexer.Get("/blob/evm/source/" + strings.ToLower(strings.TrimSpace(address)))
+	record, err := s.dkvsIndexer.Get("/contract/evm/source/" + strings.ToLower(strings.TrimSpace(address)))
 	if err != nil {
 		return contractengine.EVMSourceMetadata{}, false
 	}

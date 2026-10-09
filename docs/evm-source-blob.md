@@ -1,4 +1,4 @@
-# EVM source 系统 Blob 实现说明
+# EVM 合约源码 DKVS 实现说明
 
 更新时间：2026-10-07。本文描述本地实现与接口；受支持平台的完整编译/落库及实际节点网络验收仍待完成，见 [剩余计划](satoshinet-review-remediation-plan.md)。
 
@@ -10,7 +10,7 @@
 
 ## 记录与签名
 
-路径固定为 `/blob/evm/source/<contract_address>`。地址是当前网络、EVM 类型、规范小写编码的 SatoshiNet 合约地址，不能使用 `0x` EVM 地址或地址 hash 别名。
+路径固定为 `/contract/evm/source/<contract_address>`。地址是当前网络、EVM 类型、规范小写编码的 SatoshiNet 合约地址，不能使用 `0x` EVM 地址或地址 hash 别名。
 
 任何有效签名者都可提交，不要求是 deployer；使用现有显式公钥 ECDSA 记录签名接口。SDK 的 `wallet/dkvs.NewSignedRecord` 已识别该固定路径，使用钱包原有 `SignMessage`。签名绑定完整记录和 Value。
 
@@ -70,7 +70,7 @@
 `POST /v3/contracts/:contract/evm/source` 现在接收签名记录：
 
 ```json
-{"record": {"Version": 1, "Key": "/blob/evm/source/<address>", "Seq": 1, "TTL": 0, "Flags": 0, "PubKey": "<base64>", "Value": "<base64 JSON>", "FeeProof": null, "Signature": "<base64>"}}
+{"record": {"Version": 1, "Key": "/contract/evm/source/<address>", "Seq": 1, "TTL": 0, "Flags": 0, "PubKey": "<base64>", "Value": "<base64 JSON>", "FeeProof": null, "Signature": "<base64>"}}
 ```
 
 `wire.DKVSRecord` 的 JSON 字节字段按 Go JSON 规则使用 base64；生产者应序列化 SDK 签好的完整记录，不手工修改签名字段。HTTP 路径须与 record key 相同。未签名的旧 metadata 请求已移除；验证失败返回错误，槽位不被占用。相同记录重试成功，不同记录冲突。

@@ -113,8 +113,13 @@ func isDKVSMailMessageKey(key string) bool {
 	return len(parts) == 7 && parts[0] == "mail" && parts[2] == "topic" && parts[4] == "msg"
 }
 
+func isDKVSContractKey(key string) bool {
+	parts := strings.Split(key, "/")
+	return len(parts) >= 4 && parts[0] == "" && parts[1] == "contract" && parts[2] != "" && parts[len(parts)-1] != ""
+}
+
 func DKVSValueSizeLimit(key string) uint32 {
-	if strings.HasPrefix(key, "/blob/") || isDKVSMailMessageKey(key) {
+	if strings.HasPrefix(key, "/blob/") || isDKVSContractKey(key) || isDKVSMailMessageKey(key) {
 		return MaxDKVSBlobValueSize
 	}
 	return MaxDKVSValueSize
@@ -124,7 +129,7 @@ func DKVSValueSizeLimit(key string) uint32 {
 // Large /mail message records are admitted only by MessageManager internally;
 // this larger codec bound does not widen generic DKVS write permission.
 func DKVSRecordSizeLimit(key string) int {
-	if strings.HasPrefix(key, "/blob/") || isDKVSMailMessageKey(key) {
+	if strings.HasPrefix(key, "/blob/") || isDKVSContractKey(key) || isDKVSMailMessageKey(key) {
 		return MaxDKVSBlobRecordSize
 	}
 	return MaxDKVSRecordSize
