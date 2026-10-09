@@ -1,0 +1,70 @@
+name: DKVS contract store
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/rgb11-naming-indexer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rgb11-naming-indexer-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  naming:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout SatoshiNet
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: satoshinet
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout indexer dependency
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: sat20-labs/indexer
+          ref: 1d259d64ee3603bbf1ff8189dc1bbada76e2f8b3
+          path: indexer
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.24.13'
+          cache: false
+      - name: Check changed Go formatting
+        working-directory: satoshinet
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.go')
+          if [[ ${#files[@]} -gt 0 ]]; then
+            unformatted=$(gofmt -l "${files[@]}")
+            if [[ -n "$unformatted" ]]; then
+              printf 'Unformatted files:\n%s\n' "$unformatted"
+              gofmt -d "${files[@]}"
+              exit 1
+            fi
+          fi
+          git diff --check origin/main...HEAD
+      - name: Race-test opaque DKVS contract store
+        working-directory: satoshinet
+        run: go test -race ./indexer/indexer/dkvs -run '^(TestPrimaryDID|TestContractStore)' -count=1 -timeout=10m -v
+      - name: Test internal contract store RPC
+        working-directory: satoshinet
+        run: go test ./indexer/rpcserver/indexer -run '^TestContractStoreHTTP' -count=1 -timeout=10m -v
+      - name: Test complete indexer suite
+        working-directory: satoshinet
+        run: go test ./indexer/... -count=1 -timeout=15m
+      - name: Vet DKVS registry
+        working-directory: satoshinet
+        run: go vet ./indexer/indexer/dkvs ./indexer/rpcserver/indexer
+      - name: Compile all node packages
+        working-directory: satoshinet
+        run: go test ./... -run '^$' -count=1 -timeout=15m
