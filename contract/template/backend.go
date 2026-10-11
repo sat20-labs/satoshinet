@@ -66,6 +66,14 @@ type Backend struct {
 	closing     map[string]bool
 	utxoOverlay *contractframework.ContractUTXOOverlay
 	finalized   *BlockExecutionResult
+	callState   *invocationState
+}
+
+// A lifecycle read is handed to its matching default invocation only within
+// ExecuteTx/ExecuteParsedTx. Each output starts with a fresh lifecycle read.
+type invocationState struct {
+	runtime *ContractRuntime
+	state   TemplateRuntimeState
 }
 
 func ExecuteBlock(req BlockExecutionRequest) (BlockExecutionResult, error) {
@@ -159,6 +167,8 @@ func (e *Backend) ExecuteTx(tx *wire.MsgTx) error {
 	if e.finalized != nil {
 		return fmt.Errorf("template block has already been finalized")
 	}
+	e.callState = &invocationState{}
+	defer func() { e.callState = nil }()
 	if err := contractframework.NewExecutor(e.executorConfig()).ExecuteTx(tx); err != nil {
 		return err
 	}
@@ -169,6 +179,8 @@ func (e *Backend) ExecuteParsedTx(tx *wire.MsgTx, parsed ParsedTx) error {
 	if e.finalized != nil {
 		return fmt.Errorf("template block has already been finalized")
 	}
+	e.callState = &invocationState{}
+	defer func() { e.callState = nil }()
 	if err := contractframework.NewExecutor(e.executorConfig()).ExecuteParsedTx(tx, parsed); err != nil {
 		return err
 	}
@@ -250,6 +262,17 @@ func (e *Backend) resultFee(cfg GasConfig) (*scommon.Decimal, error) {
 	return policy.NormalizeUp(cfg.Normalize().GasAssetName, fee), nil
 }
 
+func (e *Backend) defaultInvokeRuntimeState(runtime *ContractRuntime) (TemplateRuntimeState, error) {
+	if e.callState != nil {
+		prepared := *e.callState
+		*e.callState = invocationState{}
+		if prepared.runtime == runtime {
+			return prepared.state, nil
+		}
+	}
+	return runtime.RuntimeState()
+}
+
 func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 	contractTx contractcommon.Tx, output ContractOutput) error {
 
@@ -281,7 +304,11 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 		_, err := e.RejectFunding(contractframework.ExecutionContext{RawTx: tx}, contractTx)
 		return err
 	}
-	if err := runtime.CheckInvocationLifecycle(contractcommon.ContractInvokeAPIDefault, invoker); err != nil {
+	state, err := e.defaultInvokeRuntimeState(runtime)
+	if err != nil {
+		return reject()
+	}
+	if err := runtime.checkInvocationLifecycle(state, contractcommon.ContractInvokeAPIDefault, invoker); err != nil {
 		return reject()
 	}
 	if e.closing[output.Contract.MustEncode()] {
@@ -290,7 +317,7 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 	if err := checkTemplateFundingAssets(runtime.Contract(), output, gasConfig.GasAssetName); err != nil {
 		return reject()
 	}
-	if err := checkRuntimeAutopayDelegateCapacity(runtime, invoker); err != nil {
+	if err := checkAutopayDelegateCapacity(runtime.Contract(), &state, invoker); err != nil {
 		return reject()
 	}
 	hasResultGas, err := contractframework.OutputHasRequiredGas(output, gasConfig.GasAssetName, resultFee)
@@ -312,10 +339,10 @@ func (e *Backend) executeDefaultInvokeOutputTx(tx *wire.MsgTx,
 		txID = tx.TxID()
 	}
 	callID := DeriveInvokeCallID(txID, output.Vout, output.Contract)
-	item, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{
+	item, err := runtime.applyDefaultInvoke(state, ApplyInvokeRequest{
 		Action: contractcommon.ContractInvokeAPIDefault, CallID: callID, Invoker: invoker,
 		FundingOutput: fundingOutput, Height: e.BlockHeight, Timestamp: e.BlockHeight,
-		ResultGasFee: contractframework.GasFeeIf(hasResultGas, resultFee),
+		ResultGasFee:          contractframework.GasFeeIf(hasResultGas, resultFee),
 		ApplyDefaultRetention: !hasResultGas,
 	})
 	if err != nil {

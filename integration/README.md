@@ -10,10 +10,26 @@ package to drive nodes via RPC.
 
 The supported network-level suite lives in `contract_e2e` and models the
 current SatoshiNet runtime: a configured L1 indexer, wallet-backed POS signing,
-and transaction-driven block production. Run it with:
+and transaction-driven block production. The four template contract suites run
+automatically with ordinary repository tests, without an outer build tag:
 
 ```bash
-go test -tags=rpctest ./integration/contract_e2e
+go test ./... -count=1 -timeout=45m
+```
+
+Run only template contracts with:
+
+```bash
+go test ./integration/contract_e2e -run '^TestNetwork(Template|LimitRefundBuy$|AMMSameBlockSequentialPricing$)' -count=1 -timeout=45m
+```
+
+See [the template case matrix](../docs/template-contract-e2e-cases.md) for exact
+commands, coverage, and verification status.
+
+The broader EVM, Agent, and POS network suites retain the `rpctest` tag:
+
+```bash
+go test -tags=rpctest ./integration/contract_e2e -count=1 -timeout=45m
 ```
 
 The upstream btcd tests which depended on PoW hash-rate RPCs, empty-block chain

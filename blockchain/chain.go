@@ -180,23 +180,9 @@ type BlockChain struct {
 	// This information is stored in the database so it can be quickly
 	// reconstructed on load.
 	//
-	// warningCaches caches the current deployment threshold state for blocks
-	// in each of the **possible** deployments.  This is used in order to
-	// detect when new unrecognized rule changes are being voted on and/or
-	// have been activated such as will be the case when older versions of
-	// the software are being used
-	//
 	// deploymentCaches caches the current deployment threshold state for
 	// blocks in each of the actively defined deployments.
-	warningCaches    []thresholdStateCache
 	deploymentCaches []thresholdStateCache
-
-	// The following fields are used to determine if certain warnings have
-	// already been shown.
-	//
-	// unknownRulesWarned refers to warnings due to unknown rules being
-	// activated.
-	unknownRulesWarned bool
 
 	// The notifications field stores a slice of callbacks to be executed on
 	// certain blockchain events.
@@ -610,15 +596,6 @@ func (b *BlockChain) connectBlock(node *blockNode, block *btcutil.Block,
 	if len(stxos) != countSpentOutputs(block) {
 		return AssertError("connectBlock called with inconsistent " +
 			"spent transaction out information")
-	}
-
-	// No warnings about unknown rules until the chain is current.
-	if b.isCurrent() {
-		// Warn if any unknown new rules are either about to activate or
-		// have already been activated.
-		if err := b.warnUnknownRuleActivations(node); err != nil {
-			return err
-		}
 	}
 
 	// Write any block status changes to DB before updating best state.
@@ -2421,7 +2398,6 @@ func New(config *Config) (*BlockChain, error) {
 		onBlockConnected:       config.OnBlockConnected,
 		orphans:                make(map[chainhash.Hash]*orphanBlock),
 		prevOrphans:            make(map[chainhash.Hash][]*orphanBlock),
-		warningCaches:          newThresholdCaches(vbNumBits),
 		deploymentCaches:       newThresholdCaches(chaincfg.DefinedDeployments),
 		pruneTarget:            config.Prune,
 	}

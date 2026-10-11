@@ -1,7 +1,6 @@
 package template
 
 import (
-	"encoding/json"
 	"fmt"
 
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
@@ -41,15 +40,18 @@ func (s *RuntimeStore) MarshalBinary() ([]byte, error) {
 			snapshot.Runtimes = append(snapshot.Runtimes, snapshotRuntime(runtime))
 		}
 	}
-	return json.Marshal(snapshot)
+	e := contractcommon.NewStateEncoder(templateStoreHeader)
+	writeCompactruntimeStoreSnapshot(e, snapshot)
+	return e.Data()
 }
 
 func DecodeRuntimeStore(data []byte, registry *Registry) (*RuntimeStore, error) {
 	if len(data) == 0 {
 		return NewRuntimeStore(), nil
 	}
-	var snapshot runtimeStoreSnapshot
-	if err := json.Unmarshal(data, &snapshot); err != nil {
+	d := contractcommon.NewStateDecoder(data, templateStoreHeader)
+	snapshot := readCompactruntimeStoreSnapshot(d)
+	if err := d.End(); err != nil {
 		return nil, err
 	}
 	store := NewRuntimeStore()

@@ -2,6 +2,7 @@ package template
 
 import (
 	"encoding/json"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"reflect"
 	"testing"
 
@@ -151,17 +152,19 @@ func TestDefaultInvokeItemConsistency(t *testing.T) {
 
 func TestDecodeRuntimeStoreValidatesInnerTemplateState(t *testing.T) {
 	runtime := testLimitOrderRuntime(t)
-	runtime.SetState(runtimeStateKey, []byte(`{
-		"nextItemId": 2,
-		"invokeCount": 1,
-		"items": [{
-			"id": 1,
-			"action": "close",
-			"orderType": 2,
-			"reason": "normal",
-			"done": 0
-		}]
-	}`))
+	data, err := encodeTemplateRuntimeState(TemplateRuntimeState{NextItemID: 2, InvokeCount: 1,
+		Items: []InvokeItem{{ID: 1, Action: InvokeAPIClose, OrderType: OrderTypeClose, Reason: InvokeReasonNormal}}})
+	require.NoError(t, err)
+	d := contractcommon.NewStateDecoder(data, templateRuntimeStateHeader)
+	d.I64()
+	d.U64()
+	d.Count()
+	d.I64()
+	d.Text()
+	d.Text()
+	// Corrupt the compact signed OrderType field without altering the action.
+	data[len(data)-d.Len()] = 4 // zigzag encoding of order type 2
+	runtime.SetState(runtimeStateKey, data)
 	store := NewRuntimeStore()
 	store.Add(runtime)
 	encoded, err := store.MarshalBinary()

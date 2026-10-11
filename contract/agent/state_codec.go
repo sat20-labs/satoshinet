@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 )
 
 // Missing managed quantities cannot be reconstructed from a physical address
@@ -38,19 +39,30 @@ func (s *RuntimeStore) Clone() *RuntimeStore {
 }
 
 func (s *RuntimeStore) MarshalBinary() ([]byte, error) {
-	return json.Marshal(s)
+	snapshots, err := s.Snapshots()
+	if err != nil {
+		return nil, err
+	}
+	e := contractcommon.NewStateEncoder(agentStoreHeader)
+	e.U64(uint64(len(snapshots)))
+	for _, snapshot := range snapshots {
+		writeCompactRuntimeSnapshot(e, snapshot)
+	}
+	return e.Data()
 }
 
 func DecodeRuntimeStore(data []byte) (*RuntimeStore, error) {
 	if len(data) == 0 {
 		return NewRuntimeStore(), nil
 	}
-	var snapshots []RuntimeSnapshot
-	if err := json.Unmarshal(data, &snapshots); err != nil {
-		return nil, err
-	}
+	d := contractcommon.NewStateDecoder(data, agentStoreHeader)
+	count := d.CountEntries(36)
 	store := NewRuntimeStore()
-	for _, snapshot := range snapshots {
+	for i := 0; i < count; i++ {
+		snapshot := readCompactRuntimeSnapshot(d)
+		if d.Err != nil {
+			return nil, d.Err
+		}
 		runtime, err := runtimeFromSnapshot(snapshot)
 		if err != nil {
 			return nil, err
@@ -59,6 +71,9 @@ func DecodeRuntimeStore(data []byte) (*RuntimeStore, error) {
 			return nil, fmt.Errorf("duplicate agent runtime %s", snapshot.Address)
 		}
 		store.Add(runtime)
+	}
+	if err := d.End(); err != nil {
+		return nil, err
 	}
 	return store, nil
 }
@@ -88,12 +103,9 @@ func runtimeFromSnapshot(snapshot RuntimeSnapshot) (*Runtime, error) {
 		return nil, fmt.Errorf("invalid managed agent balance: %w", err)
 	}
 	runtime.managed = snapshot.Managed.Clone()
-	stateJSON, err := json.Marshal(snapshot.State)
-	if err != nil {
-		return nil, err
-	}
-	if err := runtime.LoadStateJSON(stateJSON); err != nil {
-		return nil, err
+	runtime.state = snapshot.State.Clone()
+	if runtime.state.Prediction.Bets == nil {
+		runtime.state.Prediction.Bets = make(map[string]PredictionBetRecord)
 	}
 	runtimeAddr := runtime.Address()
 	if runtimeAddr.EncodeAddress() != snapshot.Address {

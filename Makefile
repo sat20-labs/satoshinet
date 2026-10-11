@@ -100,7 +100,7 @@ check: unit
 #? unit: Run unit tests
 unit:
 	@$(call print, "Running unit tests.")
-	$(GOTEST_DEV) ./... -test.timeout=20m
+	$(GOTEST_DEV) ./... -test.timeout=45m
 	cd btcec; $(GOTEST_DEV) ./... -test.timeout=20m
 	cd btcutil; $(GOTEST_DEV) ./... -test.timeout=20m
 	cd btcutil/psbt; $(GOTEST_DEV) ./... -test.timeout=20m
@@ -121,7 +121,7 @@ unit-cover: $(GOACC_BIN)
 #? unit-race: Run unit race tests
 unit-race:
 	@$(call print, "Running unit race tests.")
-	env CGO_ENABLED=1 GORACE="history_size=7 halt_on_errors=1" $(GOTEST) -race -test.timeout=20m ./...
+	env CGO_ENABLED=1 GORACE="history_size=7 halt_on_errors=1" $(GOTEST) -race -test.timeout=45m ./...
 	cd btcec; env CGO_ENABLED=1 GORACE="history_size=7 halt_on_errors=1" $(GOTEST) -race -test.timeout=20m ./...
 	cd btcutil; env CGO_ENABLED=1 GORACE="history_size=7 halt_on_errors=1" $(GOTEST) -race -test.timeout=20m ./...
 	cd btcutil/psbt; env CGO_ENABLED=1 GORACE="history_size=7 halt_on_errors=1" $(GOTEST) -race -test.timeout=20m ./...

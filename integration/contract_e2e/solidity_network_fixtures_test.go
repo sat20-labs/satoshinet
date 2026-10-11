@@ -1,6 +1,3 @@
-//go:build rpctest
-// +build rpctest
-
 package contract_e2e
 
 import (

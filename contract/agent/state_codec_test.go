@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"encoding/json"
+	"bytes"
 	"testing"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -16,19 +16,15 @@ func TestRuntimeStoreRejectsMissingManagedBalance(t *testing.T) {
 	// A present zero balance is valid; absence cannot be inferred as zero.
 	_, err = DecodeRuntimeStore(encoded)
 	require.NoError(t, err)
-	for _, missing := range []bool{true, false} {
-		var snapshots []map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(encoded, &snapshots))
-		if missing {
-			delete(snapshots[0], "managed")
-		} else {
-			snapshots[0]["managed"] = json.RawMessage(`null`)
-		}
-		legacy, err := json.Marshal(snapshots)
-		require.NoError(t, err)
-		_, err = DecodeRuntimeStore(legacy)
-		require.ErrorContains(t, err, "no managed balance")
+	// The binary schema requires a complete managed-balance field. Legacy
+	// JSON, a missing field and a truncated field must all fail closed.
+	_, err = DecodeRuntimeStore([]byte(`[{"managed":null}]`))
+	require.Error(t, err)
+	for i := len(agentStoreHeader); i < len(encoded); i++ {
+		_, err = DecodeRuntimeStore(bytes.Clone(encoded[:i]))
+		require.Error(t, err)
 	}
+
 }
 
 func TestRuntimeStoreCodecRoundTrip(t *testing.T) {

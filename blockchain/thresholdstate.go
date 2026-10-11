@@ -404,40 +404,21 @@ func (b *BlockChain) deploymentState(prevNode *blockNode, deploymentID uint32) (
 	return b.thresholdState(prevNode, checker, cache)
 }
 
-// initThresholdCaches initializes the threshold state caches for each warning
-// bit and defined deployment and provides warnings if the chain is current per
-// the warnUnknownRuleActivations function.
+// initThresholdCaches initializes the threshold state caches for known
+// deployments. Unknown-version-bit warnings do not apply to SatoshiNet's
+// rule upgrade policy.
 func (b *BlockChain) initThresholdCaches() error {
-	// Initialize the warning and deployment caches by calculating the
+	// Initialize the deployment caches by calculating the
 	// threshold state for each of them.  This will ensure the caches are
 	// populated and any states that needed to be recalculated due to
 	// definition changes is done now.
 	prevNode := b.bestChain.Tip().parent
-	for bit := uint32(0); bit < vbNumBits; bit++ {
-		checker := bitConditionChecker{bit: bit, chain: b}
-		cache := &b.warningCaches[bit]
-		_, err := b.thresholdState(prevNode, checker, cache)
-		if err != nil {
-			return err
-		}
-	}
 	for id := 0; id < len(b.chainParams.Deployments); id++ {
 		deployment := &b.chainParams.Deployments[id]
 		cache := &b.deploymentCaches[id]
 		checker := deploymentChecker{deployment: deployment, chain: b}
 		_, err := b.thresholdState(prevNode, checker, cache)
 		if err != nil {
-			return err
-		}
-	}
-
-	// No warnings about unknown rules until the chain is current.
-	if b.isCurrent() {
-		bestNode := b.bestChain.Tip()
-
-		// Warn if any unknown new rules are either about to activate or
-		// have already been activated.
-		if err := b.warnUnknownRuleActivations(bestNode); err != nil {
 			return err
 		}
 	}

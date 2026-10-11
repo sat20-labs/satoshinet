@@ -15,7 +15,7 @@ permissions:
 jobs:
   dkvs-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Check out SatoshiNet
         uses: actions/checkout@v4
@@ -117,7 +117,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test ./... -count=1 2>&1 | tee /tmp/satoshinet-full-regression.log
+          go test ./... -count=1 -timeout=45m 2>&1 | tee /tmp/satoshinet-full-regression.log
 
       - name: Upload full repository diagnostics
         if: failure()

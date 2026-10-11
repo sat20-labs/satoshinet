@@ -352,6 +352,11 @@ func (p *TemplateRefundInvokeParam) Decode(data []byte) error {
 	}
 	tokenizer := txscript.MakeScriptTokenizer(0, data)
 	for tokenizer.Next() {
+		opcode := tokenizer.Opcode()
+		if opcode > txscript.OP_PUSHDATA4 && opcode != txscript.OP_1NEGATE &&
+			(opcode < txscript.OP_1 || opcode > txscript.OP_16) {
+			return fmt.Errorf("refund item id must be an integer push")
+		}
 		if len(tokenizer.Data()) > 8 {
 			return fmt.Errorf("refund item id exceeds eight bytes")
 		}

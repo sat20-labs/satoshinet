@@ -87,9 +87,10 @@ func TestTemplateStateRootIgnoresFinishedItems(t *testing.T) {
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)
 	require.Len(t, state.Items, 2)
-	state.Items = unfinishedItems(state.Items)
+	require.NoError(t, runtimeStoreWith(runtime).PruneFinishedItems())
+	state, err = runtime.RuntimeState()
+	require.NoError(t, err)
 	require.Empty(t, state.Items)
-	require.NoError(t, runtime.saveRuntimeState(state))
 
 	require.Equal(t, rootWithFinishedItems, runtime.StateRoot())
 }

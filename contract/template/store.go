@@ -3,7 +3,6 @@ package template
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -249,12 +248,12 @@ func (s *RuntimeStore) sortedKeys() []string {
 }
 
 func cloneRuntimeState(state TemplateRuntimeState) TemplateRuntimeState {
-	encoded, err := json.Marshal(state)
+	encoded, err := encodeTemplateRuntimeState(state)
 	if err != nil {
 		return TemplateRuntimeState{}
 	}
-	var out TemplateRuntimeState
-	if err := json.Unmarshal(encoded, &out); err != nil {
+	out, err := decodeTemplateRuntimeState(encoded)
+	if err != nil {
 		return TemplateRuntimeState{}
 	}
 	return out

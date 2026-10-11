@@ -23,6 +23,15 @@ func (r *ContractRuntime) CheckInvocationLifecycle(action, actor string) error {
 	if err != nil {
 		return err
 	}
+	return r.checkInvocationLifecycle(state, action, actor)
+}
+
+// The caller may reuse its decoded state through admission and execution.
+// This helper neither reads storage nor publishes any state changes.
+func (r *ContractRuntime) checkInvocationLifecycle(state TemplateRuntimeState, action, actor string) error {
+	if r == nil || r.base == nil {
+		return fmt.Errorf("missing template runtime")
+	}
 	if action == contract.ContractInvokeAPIClose {
 		return contract.ValidateContractClose(r.base.flags,
 			state.ClosedForContract(r.contract), r.base.Deployer(), actor)

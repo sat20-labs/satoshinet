@@ -7,14 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"strings"
-	"testing"
-	"time"
-
 	indexercommon "github.com/sat20-labs/indexer/common"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -29,6 +21,13 @@ import (
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
 )
 
 func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
@@ -36,6 +35,7 @@ func TestNetworkAgentPredictionAutoConfirm(t *testing.T) {
 		LLMContent:    `{"result_type":"outcome","outcome_id":"a","result":"Team A 101, Team B 98.","evidence_quote":"Team A 101, Team B 98.","reason":"Team A won"}`,
 		Outcomes:      defaultAgentPredictionOutcomes(),
 		ExpectedAlice: "90000",
+		RestartCore:   true,
 	})
 }
 
@@ -86,6 +86,7 @@ type agentPredictionE2EScenario struct {
 	ExpectedAlice    string
 	ExpectedBob      string
 	ExpectedRejected bool
+	RestartCore      bool
 }
 
 func defaultAgentPredictionOutcomes() []agentcontract.PredictionOutcome {
@@ -245,6 +246,9 @@ func runAgentPredictionAutoConfirmScenario(t *testing.T, scenario agentPredictio
 	addAgentExpectedAmount(expected, bobAddress, scenario.ExpectedBob)
 	waitForAgentAssetAmounts(t, bootstrapNode, coreNode, nodes, expected, gasAsset, int32(contract.ConfirmAfter))
 	waitForAgentPredictionContractQueries(t, bootstrapNode, coreNode, agentAddress.EncodeAddress(), aliceAddress, bobAddress)
+	if scenario.RestartCore {
+		requireContractStateAfterCoreRestart(t, coreNode, bootstrapNode, nodes, agentAddress.EncodeAddress())
+	}
 }
 
 func llmRequestContains(req map[string]interface{}, needle string) bool {
@@ -668,18 +672,6 @@ func fetchAgentPredictionState(baseURL, contract string) (agentPredictionStateRe
 		return out, err
 	}
 	return out, nil
-}
-
-func getIndexerJSON(url string, out interface{}) error {
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected indexer status %d", resp.StatusCode)
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func stringSliceContains(values []string, want string) bool {

@@ -2,22 +2,10 @@ package template
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"sort"
+
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 )
-
-const templateStateRootVersion = 1
-
-type templateStateRootPayload struct {
-	Version    int          `json:"version"`
-	NextID     int64        `json:"nextId"`
-	Invokes    uint64       `json:"invokes"`
-	Items      []InvokeItem `json:"items,omitempty"`
-	LimitOrder interface{}  `json:"limitOrder,omitempty"`
-	AMM        interface{}  `json:"amm,omitempty"`
-	Exchange   interface{}  `json:"exchange,omitempty"`
-	Autopay    interface{}  `json:"autopay,omitempty"`
-}
 
 func (r *ContractRuntime) StateRoot() [32]byte {
 	h := sha256.New()
@@ -26,7 +14,13 @@ func (r *ContractRuntime) StateRoot() [32]byte {
 	writeUint32(h, r.base.templateVersion)
 	writeLengthPrefixed(h, []byte(r.base.deployer))
 	writeUint64(h, r.base.deployNonce)
+	writeUint32(h, uint32(r.base.flags))
 	writeLengthPrefixed(h, r.base.contractContent)
+	e := contractcommon.NewStateEncoderTo(h)
+	contractcommon.WriteManagedBalance(e, r.base.managed)
+	if e.Err != nil {
+		return [32]byte{}
+	}
 	writeUint64(h, uint64(r.base.currentBlock))
 	writeUint64(h, r.base.invokeCount)
 
@@ -43,13 +37,11 @@ func (r *ContractRuntime) StateRoot() [32]byte {
 			writeLengthPrefixed(h, value)
 		}
 	} else {
-		payload := templateCanonicalStatePayload(r.contract, state)
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			encoded = nil
-		}
 		writeLengthPrefixed(h, []byte(runtimeStateKey))
-		writeLengthPrefixed(h, encoded)
+		writeTemplateRootState(e, r.contract, state)
+		if e.Err != nil {
+			return [32]byte{}
+		}
 	}
 
 	var root [32]byte
@@ -57,38 +49,45 @@ func (r *ContractRuntime) StateRoot() [32]byte {
 	return root
 }
 
-func templateCanonicalStatePayload(contract Contract, state TemplateRuntimeState) templateStateRootPayload {
-	payload := templateStateRootPayload{
-		Version: templateStateRootVersion,
-		NextID:  state.NextItemID,
-		Invokes: state.InvokeCount,
-		Items:   unfinishedItems(state.Items),
+// Keep the same logical projection as execution: only unfinished items and
+// the deployed template's running data. No projected struct or item slice.
+func writeTemplateRootState(e *contractcommon.StateEncoder, contract Contract, state TemplateRuntimeState) {
+	e.I64(state.NextItemID)
+	e.U64(state.InvokeCount)
+	count := uint64(0)
+	for i := range state.Items {
+		if !state.Items[i].Finished() {
+			count++
+		}
+	}
+	e.U64(count)
+	for i := range state.Items {
+		if !state.Items[i].Finished() {
+			writeCompactInvokeItemFields(e, state.Items[i])
+		}
 	}
 	switch contract.(type) {
 	case *LimitOrderContract:
-		payload.LimitOrder = state.LimitOrder
-	case *AMMContract:
-		payload.AMM = state.AMM
-	case *ExchangeContract:
-		payload.Exchange = state.Exchange
-	case *AutopayContract:
-		payload.Autopay = state.Autopay
-	}
-	return payload
-}
-
-func unfinishedItems(items []InvokeItem) []InvokeItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]InvokeItem, 0, len(items))
-	for _, item := range items {
-		if item.Finished() {
-			continue
+		e.Bool(state.LimitOrder != nil)
+		if state.LimitOrder != nil {
+			writeCompactLimitOrderRunningData(e, *state.LimitOrder)
 		}
-		out = append(out, item)
+	case *AMMContract:
+		e.Bool(state.AMM != nil)
+		if state.AMM != nil {
+			writeCompactAMMRunningData(e, *state.AMM)
+		}
+	case *ExchangeContract:
+		e.Bool(state.Exchange != nil)
+		if state.Exchange != nil {
+			writeCompactExchangeRunningData(e, *state.Exchange)
+		}
+	case *AutopayContract:
+		e.Bool(state.Autopay != nil)
+		if state.Autopay != nil {
+			writeCompactAutopayRunningData(e, *state.Autopay)
+		}
 	}
-	return out
 }
 
 func (s *RuntimeStore) PruneFinishedItems() error {
@@ -103,11 +102,18 @@ func (s *RuntimeStore) PruneFinishedItems() error {
 		if err != nil {
 			return err
 		}
-		pruned := unfinishedItems(state.Items)
-		if len(pruned) == len(state.Items) {
+		kept := 0
+		for i := range state.Items {
+			if !state.Items[i].Finished() {
+				state.Items[kept] = state.Items[i]
+				kept++
+			}
+		}
+		if kept == len(state.Items) {
 			continue
 		}
-		state.Items = pruned
+		clear(state.Items[kept:])
+		state.Items = state.Items[:kept]
 		if err := runtime.saveRuntimeState(state); err != nil {
 			return err
 		}

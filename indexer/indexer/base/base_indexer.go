@@ -1567,7 +1567,7 @@ func (b *BaseIndexer) prefetchIndexesFromDB(block *common.Block) {
 						data, err := db.GetAddressDataFromDBTxnV2(txn, address)
 						if err != nil {
 							addressId := b.generateAddressId()
-							common.Log.Infof("generateAddressId %d %s", addressId, address)
+							common.Log.Debugf("generateAddressId %d %s", addressId, address)
 							b.addressValueMap[address] = &indexer.AddressValueV2{
 								AddressType: (output.Address.Type),
 								AddressId:   addressId,

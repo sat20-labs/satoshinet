@@ -20,14 +20,14 @@ type RuntimeStore struct {
 }
 
 type RuntimeSnapshot struct {
-	Address string                        `json:"address"`
-	Subtype string                        `json:"subtype"`
-	Version uint32                        `json:"version"`
-	Contract PredictionContract           `json:"contract"`
-	State RuntimeState                    `json:"state"`
-	Managed contractcommon.ManagedBalance `json:"managed"`
-	Config RuntimeConfig                  `json:"config"`
-	Deploy DeployPayloadHeader            `json:"deploy"`
+	Address  string                        `json:"address"`
+	Subtype  string                        `json:"subtype"`
+	Version  uint32                        `json:"version"`
+	Contract PredictionContract            `json:"contract"`
+	State    RuntimeState                  `json:"state"`
+	Managed  contractcommon.ManagedBalance `json:"managed"`
+	Config   RuntimeConfig                 `json:"config"`
+	Deploy   DeployPayloadHeader           `json:"deploy"`
 }
 
 type DeployPayloadHeader struct {
@@ -104,16 +104,12 @@ func (r *Runtime) StateRoot() [32]byte {
 	writeUint64(h, r.deploy.DeployNonce)
 	writeUint32(h, uint32(r.deploy.Flags))
 	writeLengthPrefixed(h, r.deploy.ContractContent)
-	managed, err := r.managed.MarshalJSON()
-	if err != nil {
+	e := contractcommon.NewStateEncoderTo(h)
+	contractcommon.WriteManagedBalance(e, r.managed)
+	writeCompactRuntimeState(e, r.state)
+	if e.Err != nil {
 		return [32]byte{}
 	}
-	writeLengthPrefixed(h, managed)
-	stateJSON, err := r.StateJSON()
-	if err != nil {
-		return [32]byte{}
-	}
-	writeLengthPrefixed(h, stateJSON)
 	var root [32]byte
 	copy(root[:], h.Sum(nil))
 	return root

@@ -1,6 +1,3 @@
-//go:build rpctest
-// +build rpctest
-
 package contract_e2e
 
 import (
@@ -10,14 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
-	"os"
-	"sort"
-	"strings"
-	"testing"
-	"time"
-
 	"github.com/ethereum/go-ethereum/crypto"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
@@ -36,6 +25,13 @@ import (
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
+	"net/http"
+	"net/url"
+	"os"
+	"sort"
+	"strings"
+	"testing"
+	"time"
 )
 
 func deployNonceFromBytes(seed []byte) uint64 {
@@ -232,52 +228,6 @@ func TestNetworkTemplateExchangeDefaultFundBuyAndClose(t *testing.T) {
 	fixture.sendAndWaitTx(t, closeTx)
 	requireAssetSummaryZero(t, fixture.bootstrapNode, contract.MustEncode(), assetA)
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, assetA, "88")
-	fixture.requireNodesSynced(t)
-}
-
-func TestNetworkEVMCloseProfit(t *testing.T) {
-	fixture := newTemplateNetworkFixture(t, map[string]int64{
-		"ordx:f:evmprofit": 100,
-	})
-
-	const profitAsset = "ordx:f:evmprofit"
-	gasAsset := evm.DefaultGasConfig().GasAssetName
-	deployer := fixture.traderA
-	deployerAddr := fixture.traderAActor.address
-	bootstrapAddr := bootstrapP2TRAddress(t)
-
-	gasOuts := fixture.splitAsset(t, fixture.gasAnchor, gasAsset,
-		[]int64{1000000, 1000000},
-		[]int64{1000, 1000}, deployer)
-	profitOuts := fixture.splitAsset(t, fixture.assetAnchors[profitAsset], profitAsset,
-		[]int64{100},
-		[]int64{1000}, deployer)
-
-	deployTx, contract, _ := buildTemplateWitnessEVMDeployTx(t, fixture, deployer, 91,
-		testEVMCloseInitCode(),
-		[]wire.OutPoint{gasOuts[0]},
-		wire.TxOut{
-			Value:  0,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
-		},
-		nil)
-	fixture.sendAndWaitTx(t, deployTx)
-
-	profitDeposit := buildContractAssetDepositTx(t, deployer, profitOuts[0], contract, testWireAsset(profitAsset, 100))
-	fixture.sendAndWaitTx(t, profitDeposit)
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, contract.MustEncode(), profitAsset, "100")
-
-	closeTx := buildTemplateWitnessEVMCloseTx(t, fixture, deployer, contract, 1,
-		[]wire.OutPoint{gasOuts[1]},
-		wire.TxOut{
-			Value:  0,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
-		})
-	fixture.sendAndWaitTx(t, closeTx)
-
-	requireAssetSummaryZero(t, fixture.bootstrapNode, contract.MustEncode(), profitAsset)
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, deployerAddr, profitAsset, "70")
-	requireAssetSummaryAmount(t, fixture.bootstrapNode, bootstrapAddr, profitAsset, "30")
 	fixture.requireNodesSynced(t)
 }
 
@@ -808,11 +758,11 @@ func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
 	fixture.sendAndWaitTx(t, buyTx)
 	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, ammAsset, beforeBuySummary[ammAsset])
 
-	addParam := templateAddLiquidityParam(t, ammAsset, "10", 1)
+	addParam := templateAddLiquidityParam(t, ammAsset, "10", 3)
 	addTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 2, tmplcontract.InvokeAPIAddLiquidity, addParam,
 		[]wire.OutPoint{assetOuts[1], gasOuts[2]},
 		wire.TxOut{
-			Value: 1,
+			Value: 3,
 			Assets: networkTxAssets(
 				networkTemplateFunding(t, gasAsset, 100000),
 				networkTemplateFunding(t, ammAsset, 10),
@@ -820,16 +770,18 @@ func TestNetworkTemplateAMMWaitsUntilAddLiquidityMeetsK(t *testing.T) {
 		})
 	fixture.sendAndWaitTx(t, addTx)
 
-	triggerParam := templateRefundParam(t, []int64{})
-	triggerTx := buildTemplateInvokeTx(t, fixture, traderA, contract, 3, tmplcontract.InvokeAPIRefund, triggerParam,
-		[]wire.OutPoint{gasOuts[3]},
-		wire.TxOut{
-			Value:  0,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
-		})
-	fixture.sendAndWaitTx(t, triggerTx)
-
-	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
+	// POS is transaction-driven. An ordinary transfer advances the next block
+	// without invoking an unsupported AMM API or changing its liquidity.
+	tick := buildPassthroughAssetTx(t, traderA, gasOuts[3], gasAsset, 900000, fixture.spendScript)
+	fixture.sendAndWaitTx(t, tick)
+	// The next real POS block settles the pending buy. A positive balance alone
+	// was insufficient: the buyer already owned 900 units before the purchase.
+	requireAssetSummaryAmount(t, fixture.bootstrapNode, traderBAddr, ammAsset, "930")
+	view := scenarioAMMView(t, fixture, contract)
+	require.True(t, view.TradingReady)
+	require.Equal(t, 1, view.TotalDealCount)
+	require.Equal(t, "70", view.AssetAInPool)
+	require.Equal(t, "33", view.AssetBInPool)
 	fixture.requireNodesSynced(t)
 }
 
@@ -988,89 +940,6 @@ func TestNetworkTemplateAMMAddRemoveLiquidity(t *testing.T) {
 	require.Greater(t, templateResultValueTo(removeResultOutputs, traderBAddr), int64(0))
 	requirePositiveDecimalString(t, templateResultAssetAmountTo(t, removeResultOutputs, traderBAddr, ammAsset))
 	requirePositiveAssetSummary(t, fixture.bootstrapNode, traderBAddr, ammAsset)
-	fixture.requireNodesSynced(t)
-}
-
-func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T) {
-	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "5")
-	t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "5")
-	t.Setenv("SATOSHINET_POS_CHECKING_INTERVAL", "1")
-
-	counter := compileNetworkSolidityContract(t, solidityNetworkCounterSource, "Counter")
-	fixture := newTemplateNetworkFixture(t, map[string]int64{
-		"ordx:f:mix": 1000,
-	})
-
-	const limitAsset = "ordx:f:mix"
-	gasAsset := tmplcontract.DefaultGasConfig().GasAssetName
-	traderA := fixture.traderA
-	traderB := fixture.traderB
-	traderAAddr := fixture.traderAActor.address
-	traderBAddr := fixture.traderBActor.address
-
-	gasOuts := fixture.splitAssetTo(t, fixture.gasAnchor, gasAsset,
-		[]int64{3000000, 3000000, 3000000, 5000000},
-		[]int64{1000, 1000, 1000, 1000}, traderA,
-		[]*templateNetworkActor{fixture.traderAActor, fixture.traderAActor, fixture.traderBActor, fixture.traderAActor})
-	assetOuts := fixture.splitAsset(t, fixture.assetAnchors[limitAsset], limitAsset, []int64{10, 900},
-		[]int64{10, 1000}, traderA)
-
-	templateDeployTx, templateContract := buildTemplateDeployTxWithInputs(t, fixture, traderA,
-		tmplcontract.NewLimitOrderContract(limitAsset),
-		"mixed-template-e2e",
-		[]byte("mixed-template-random"),
-		[]wire.OutPoint{gasOuts[0]},
-		wire.TxOut{
-			Value:  1,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
-		})
-	fixture.sendAndWaitTx(t, templateDeployTx)
-
-	evmDeployTx, evmContract, evmChanges := buildTemplateWitnessEVMDeployTx(t, fixture, traderA, 1,
-		solidityDeployCode(t, counter, nil),
-		[]wire.OutPoint{gasOuts[3]},
-		wire.TxOut{Assets: wire.TxAssets{networkEVMGasFunding(t, gasAsset, 3000000)}},
-		[]*wire.TxOut{testSpendAssetOutput(gasAsset, 1900000, fixture.spendScript)})
-	fixture.sendAndWaitTx(t, evmDeployTx)
-	require.NotEmpty(t, evmChanges)
-	requireEVMResultStatusForTx(t, fixture.bootstrapNode, evmDeployTx, evmContract, evm.ResultStatusSuccess)
-	waitForTemplateAssetUtxo(t, fixture.bootstrapNode, fixture.spendAddress, gasAsset, 1)
-
-	sellParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeSell, "10", "10")
-	templateSellTx := buildTemplateInvokeTxWithInputs(t, fixture, traderA, templateContract, 1, tmplcontract.InvokeAPISwap, sellParam,
-		[]wire.OutPoint{assetOuts[0], gasOuts[1]},
-		wire.TxOut{
-			Value:  0,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000), networkTemplateFunding(t, limitAsset, 10)},
-		})
-	buyParam := templateLimitOrderParam(t, limitAsset, tmplcontract.OrderTypeBuy, "10", "10")
-	templateBuyTx := buildTemplateInvokeTxWithInputs(t, fixture, traderB, templateContract, 2, tmplcontract.InvokeAPISwap, buyParam,
-		[]wire.OutPoint{gasOuts[2]},
-		wire.TxOut{
-			Value:  100,
-			Assets: wire.TxAssets{networkTemplateFunding(t, gasAsset, 100000)},
-		})
-	evmInvokeTx := buildTemplateWitnessEVMInvokeTx(t, fixture, traderA, evmContract, 2,
-		contractcommon.ContractInvokeAPICall, networkSoliditySelector("inc()"),
-		[]wire.OutPoint{evmChanges[0]},
-		wire.TxOut{Assets: wire.TxAssets{networkEVMGasFunding(t, gasAsset, 100000)}})
-
-	sendTx(t, fixture.bootstrapNode, templateSellTx)
-	sendTx(t, fixture.bootstrapNode, templateBuyTx)
-	sendTx(t, fixture.bootstrapNode, evmInvokeTx)
-	blockHash := fixture.waitForTxsInSameBlock(t, templateSellTx, templateBuyTx, evmInvokeTx)
-
-	block, err := fixture.bootstrapNode.Client.GetBlock(blockHash)
-	require.NoError(t, err)
-	requireTemplateResultBeforeEVMResult(t, block)
-	templateBuyOutputs := templateResultOutputsForTx(t, fixture.bootstrapNode, templateBuyTx, templateContract)
-	requireTemplateResultAssetAmount(t, templateBuyOutputs, traderBAddr, limitAsset, "10")
-	requireTemplateResultValue(t, templateBuyOutputs, traderAAddr, 100)
-	root, found, err := evm.FindCoinbaseStateRoot(block.Transactions[0])
-	require.NoError(t, err)
-	require.True(t, found)
-	require.NotEqual(t, [32]byte{}, root.StateRoot)
-	requireAssetSummaryAtLeast(t, fixture.bootstrapNode, traderBAddr, limitAsset, "10")
 	fixture.requireNodesSynced(t)
 }
 
@@ -1445,9 +1314,13 @@ func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, actor *tem
 	t.Helper()
 	require.NotNil(t, actor)
 	selected := make([]wire.OutPoint, 0, len(funding.Assets))
+	var selectedAssets wire.TxAssets
 	seen := make(map[string]bool)
 	totalValue := int64(0)
 	for _, want := range funding.Assets {
+		if have, err := selectedAssets.Find(&want.Name); err == nil && have.Amount.Cmp(&want.Amount) >= 0 {
+			continue
+		}
 		wantAssetName := want.Name.String()
 		utxos := fetchTemplateAssetUtxos(t, f.bootstrapNode, actor.address, wantAssetName)
 		sort.SliceStable(utxos, func(i, j int) bool {
@@ -1468,6 +1341,7 @@ func (f *templateNetworkFixture) selectFundingOutPoints(t *testing.T, actor *tem
 		outpoint, err := tmplcontract.ParseOutPoint(picked.OutPoint)
 		require.NoError(t, err)
 		selected = append(selected, outpoint)
+		require.NoError(t, selectedAssets.Merge(picked.ToTxAssets()))
 		seen[picked.OutPoint] = true
 		totalValue += picked.Value
 	}

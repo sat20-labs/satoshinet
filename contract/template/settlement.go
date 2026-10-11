@@ -402,9 +402,8 @@ func applyAMMLiquidity(state *TemplateRuntimeState, plan *SettlementPlan, founda
 			if err != nil {
 				return false, err
 			}
-			ratio := scommon.DecimalDiv(remove, totalLPT)
-			outAsset := scommon.DecimalMul(poolAsset, ratio)
-			outGas, err := scommon.DecimalMul(scommon.NewDefaultDecimal(poolGas), ratio).FloorInt64()
+			outAsset := proportionalDecimal(poolAsset, remove, totalLPT)
+			outGas, err := proportionalInt64(poolGas, remove, totalLPT)
 			if err != nil {
 				return false, fmt.Errorf("AMM remove liquidity gas output: %w", err)
 			}
@@ -979,8 +978,7 @@ func appendAMMLPCloseTransfers(state *TemplateRuntimeState, plan *SettlementPlan
 		assetOut := remainingAsset.Clone()
 		gasOut := remainingGas
 		if i != len(addresses)-1 {
-			ratio := scommon.DecimalDiv(balance, totalLP)
-			assetOut = decimalMulAssetRatio(poolAsset, ratio)
+			assetOut = proportionalDecimal(poolAsset, balance, totalLP)
 			var err error
 			gasOut, err = proportionalInt64(poolGas, balance, totalLP)
 			if err != nil {
@@ -1466,11 +1464,29 @@ func splitAMMRemoveLiquidity(asset *scommon.Decimal, gas int64, depositValue int
 	return lpAsset, lpGas, foundationAsset, foundationGas, nil
 }
 
+// proportionalDecimal rounds only the final amount in value's smallest units.
+// Align the LP scales before multiplying so fractional LP balances stay exact.
+func proportionalDecimal(value, part, total *scommon.Decimal) *scommon.Decimal {
+	if value == nil {
+		return parseDecimalOrZero("0")
+	}
+	out := &scommon.Decimal{Precision: value.Precision, Value: new(big.Int)}
+	if value.Sign() <= 0 || part == nil || total == nil || part.Sign() <= 0 || total.Sign() <= 0 {
+		return out
+	}
+	precision := max(part.Precision, total.Precision)
+	partUnits := part.NewPrecision(precision)
+	totalUnits := total.NewPrecision(precision)
+	out.Value.Mul(value.Value, partUnits.Value)
+	out.Value.Quo(out.Value, totalUnits.Value)
+	return out
+}
+
 func proportionalInt64(value int64, part, total *scommon.Decimal) (int64, error) {
 	if value <= 0 || part == nil || total == nil || part.Sign() <= 0 || total.Sign() <= 0 {
 		return 0, nil
 	}
-	out, err := scommon.DecimalMul(scommon.NewDefaultDecimal(value), scommon.DecimalDiv(part, total)).FloorInt64()
+	out, err := proportionalDecimal(scommon.NewDefaultDecimal(value), part, total).FloorInt64()
 	if err != nil {
 		return 0, fmt.Errorf("proportional value: %w", err)
 	}

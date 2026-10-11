@@ -716,16 +716,22 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 	if err != nil {
 		return nil, err
 	}
+	return r.applyDefaultInvoke(state, req)
+}
+
+// The decoded state belongs to this invocation only. Publish the compact state
+// after all checks and item construction succeed; retain no decoded cache.
+func (r *ContractRuntime) applyDefaultInvoke(state TemplateRuntimeState, req ApplyInvokeRequest) (*InvokeItem, error) {
 	if err := checkAutopayDelegateCapacity(r.contract, &state, req.Invoker); err != nil {
 		return nil, err
 	}
 	retention := defaultInvokeRetention{}
 	if req.ApplyDefaultRetention {
-		var fundingOutput ContractOutput
-		retention, fundingOutput, err = retainDefaultInvokeFunding(r.contract, req.FundingOutput)
+		nextRetention, fundingOutput, err := retainDefaultInvokeFunding(r.contract, req.FundingOutput)
 		if err != nil {
 			return nil, err
 		}
+		retention = nextRetention
 		req.FundingOutput = fundingOutput
 	}
 	item, err := NewDefaultInvokeItemFromRequest(r.contract, state.NextItemID, state, req)
@@ -1654,16 +1660,12 @@ func (r *ContractRuntime) loadRuntimeState() (TemplateRuntimeState, error) {
 	if !ok || len(data) == 0 {
 		return TemplateRuntimeState{}, nil
 	}
-	var state TemplateRuntimeState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return TemplateRuntimeState{}, err
-	}
-	return state, nil
+	return decodeTemplateRuntimeState(data)
 }
 
 func (r *ContractRuntime) saveRuntimeState(state TemplateRuntimeState) error {
 	state.applyFinishedItemStats(r.contract)
-	data, err := json.Marshal(state)
+	data, err := encodeTemplateRuntimeState(state)
 	if err != nil {
 		return err
 	}

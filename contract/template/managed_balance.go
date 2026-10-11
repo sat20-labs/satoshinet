@@ -28,13 +28,20 @@ func (s *RuntimeStore) ContractClosed(addr ContractAddress) (bool, error) {
 }
 
 func (e *Backend) Lifecycle(addr ContractAddress) (contractcommon.ContractLifecycle, bool, error) {
+	if e.callState != nil {
+		*e.callState = invocationState{}
+	}
 	runtime, ok := e.Store.Get(addr)
 	if !ok || runtime == nil {
 		return contractcommon.ContractLifecycle{}, false, nil
 	}
-	closed, err := e.Store.ContractClosed(addr)
+	state, err := runtime.RuntimeState()
 	if err != nil {
 		return contractcommon.ContractLifecycle{}, false, err
+	}
+	closed := state.ClosedForContract(runtime.Contract())
+	if e.callState != nil {
+		*e.callState = invocationState{runtime: runtime, state: state}
 	}
 	return contractcommon.ContractLifecycle{
 		Deployer: runtime.base.Deployer(), Flags: runtime.base.flags,

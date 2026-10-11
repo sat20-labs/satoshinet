@@ -56,7 +56,7 @@ func (s *MemoryStateDB) StateRoot() [32]byte {
 		return [32]byte{}
 	}
 	h := stdsha256.New()
-	h.Write([]byte("SATOSHINET:EVM_STATE_ROOT:V1\x00"))
+	h.Write([]byte("SATOSHINET:EVM_STATE_ROOT\x00"))
 	h.Write(encoded)
 	var root [32]byte
 	copy(root[:], h.Sum(nil))

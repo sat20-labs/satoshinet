@@ -35,11 +35,11 @@ func TestMemoryStateDBStateRootChanges(t *testing.T) {
 	require.NotEqual(t, before, after)
 }
 
-func TestStateRootUsesVersionedCanonicalEncoding(t *testing.T) {
+func TestStateRootUsesCanonicalEncoding(t *testing.T) {
 	state := NewMemoryStateDB()
 	state.SetNonce(gethcommon.HexToAddress("0x1234"), 7, 0)
 	encoded, err := state.MarshalBinary()
 	require.NoError(t, err)
-	want := sha256.Sum256(append([]byte("SATOSHINET:EVM_STATE_ROOT:V1\x00"), encoded...))
+	want := sha256.Sum256(append([]byte("SATOSHINET:EVM_STATE_ROOT\x00"), encoded...))
 	require.Equal(t, want, state.StateRoot())
 }

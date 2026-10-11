@@ -51,15 +51,15 @@ func NewRuntimeWithDeployer(address ContractAddress, deploy DeployPayload, regis
 	return runtime, nil
 }
 
-func (r *ContractRuntime) Address() ContractAddress { return r.base.Address() }
-func (r *ContractRuntime) URL() string              { return r.base.URL() }
-func (r *ContractRuntime) TemplateName() string     { return r.contract.TemplateName() }
-func (r *ContractRuntime) Version() uint32          { return r.contract.Version() }
-func (r *ContractRuntime) NetworkExclusive() bool   { return r.contract.NetworkExclusive() }
-func (r *ContractRuntime) Encode() ([]byte, error)  { return r.contract.Encode() }
-func (r *ContractRuntime) Decode(data []byte) error { return r.contract.Decode(data) }
-func (r *ContractRuntime) CheckContent() error      { return r.contract.CheckContent() }
-func (r *ContractRuntime) Contract() Contract       { return r.contract }
+func (r *ContractRuntime) Address() ContractAddress  { return r.base.Address() }
+func (r *ContractRuntime) URL() string               { return r.base.URL() }
+func (r *ContractRuntime) TemplateName() string      { return r.contract.TemplateName() }
+func (r *ContractRuntime) Version() uint32           { return r.contract.Version() }
+func (r *ContractRuntime) NetworkExclusive() bool    { return r.contract.NetworkExclusive() }
+func (r *ContractRuntime) Encode() ([]byte, error)   { return r.contract.Encode() }
+func (r *ContractRuntime) Decode(data []byte) error  { return r.contract.Decode(data) }
+func (r *ContractRuntime) CheckContent() error       { return r.contract.CheckContent() }
+func (r *ContractRuntime) Contract() Contract        { return r.contract }
 func (r *ContractRuntime) RuntimeBase() *RuntimeBase { return r.base }
 
 func (r *ContractRuntime) BaseGasConfig() contractframework.BaseGasConfig {
@@ -175,11 +175,11 @@ func (r *ContractRuntime) SettleBlockWithGasConfigAndPrecision(height int64, gas
 	}
 }
 
-func (r *ContractRuntime) SetCurrentBlock(height int64) { r.base.SetCurrentBlock(height) }
-func (r *ContractRuntime) CurrentBlock() int64          { return r.base.CurrentBlock() }
-func (r *ContractRuntime) InvokeCount() uint64          { return r.base.InvokeCount() }
-func (r *ContractRuntime) IncrementInvokeCount()        { r.base.IncrementInvokeCount() }
-func (r *ContractRuntime) SetState(key string, value []byte) { r.base.SetState(key, value) }
+func (r *ContractRuntime) SetCurrentBlock(height int64)       { r.base.SetCurrentBlock(height) }
+func (r *ContractRuntime) CurrentBlock() int64                { return r.base.CurrentBlock() }
+func (r *ContractRuntime) InvokeCount() uint64                { return r.base.InvokeCount() }
+func (r *ContractRuntime) IncrementInvokeCount()              { r.base.IncrementInvokeCount() }
+func (r *ContractRuntime) SetState(key string, value []byte)  { r.base.SetState(key, value) }
 func (r *ContractRuntime) GetState(key string) ([]byte, bool) { return r.base.GetState(key) }
 
 type RuntimeBase struct {
@@ -221,15 +221,15 @@ func NewRuntimeBase(address ContractAddress, deploy DeployPayload, deployer stri
 	}, nil
 }
 
-func (r *RuntimeBase) Address() ContractAddress        { return r.address }
-func (r *RuntimeBase) URL() string                     { return r.address.EncodeAddress() }
-func (r *RuntimeBase) TemplateName() string            { return r.templateName }
-func (r *RuntimeBase) Version() uint32                 { return r.templateVersion }
-func (r *RuntimeBase) Deployer() string                { return r.deployer }
-func (r *RuntimeBase) CurrentBlock() int64             { return r.currentBlock }
-func (r *RuntimeBase) SetCurrentBlock(height int64)    { r.currentBlock = height }
-func (r *RuntimeBase) InvokeCount() uint64             { return r.invokeCount }
-func (r *RuntimeBase) IncrementInvokeCount()           { r.invokeCount++ }
+func (r *RuntimeBase) Address() ContractAddress     { return r.address }
+func (r *RuntimeBase) URL() string                  { return r.address.EncodeAddress() }
+func (r *RuntimeBase) TemplateName() string         { return r.templateName }
+func (r *RuntimeBase) Version() uint32              { return r.templateVersion }
+func (r *RuntimeBase) Deployer() string             { return r.deployer }
+func (r *RuntimeBase) CurrentBlock() int64          { return r.currentBlock }
+func (r *RuntimeBase) SetCurrentBlock(height int64) { r.currentBlock = height }
+func (r *RuntimeBase) InvokeCount() uint64          { return r.invokeCount }
+func (r *RuntimeBase) IncrementInvokeCount()        { r.invokeCount++ }
 
 func (r *RuntimeBase) SetState(key string, value []byte) {
 	if r.state == nil {
@@ -255,11 +255,11 @@ func (r *RuntimeBase) StateRoot() [32]byte {
 	writeUint64(h, r.deployNonce)
 	writeUint32(h, uint32(r.flags))
 	writeLengthPrefixed(h, r.contractContent)
-	managed, err := r.managed.MarshalJSON()
-	if err != nil {
+	e := contractcommon.NewStateEncoderTo(h)
+	contractcommon.WriteManagedBalance(e, r.managed)
+	if e.Err != nil {
 		return [32]byte{}
 	}
-	writeLengthPrefixed(h, managed)
 	writeUint64(h, uint64(r.currentBlock))
 	writeUint64(h, r.invokeCount)
 	keys := make([]string, 0, len(r.state))

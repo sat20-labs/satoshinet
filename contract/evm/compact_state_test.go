@@ -5,39 +5,25 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
-	"sort"
-
 	gethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/holiman/uint256"
+	scommon "github.com/sat20-labs/indexer/common"
+	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/wire"
+	"github.com/stretchr/testify/require"
+	"io"
+	"testing"
 )
 
-var stateCodecMagic = []byte("EVMSTATE")
-
-const stateCodecVersion byte = 1
-
-func (s *MemoryStateDB) Clone() *MemoryStateDB {
-	if s == nil {
-		return NewMemoryStateDB()
-	}
-	return &MemoryStateDB{
-		accounts:   cloneAccounts(s.accounts),
-		triggers:   cloneTriggers(s.triggers),
-		logs:       cloneLogs(s.logs),
-		refund:     s.refund,
-		accessList: make(map[gethcommon.Address]map[gethcommon.Hash]struct{}),
-		original:   make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash),
-	}
-}
-
-func (s *MemoryStateDB) MarshalBinary() ([]byte, error) {
+// Historical JSON balance format exists only in this benchmark fixture.
+func marshalEVMJSONBalanceBaseline(s *MemoryStateDB) ([]byte, error) {
 	if s == nil {
 		s = NewMemoryStateDB()
 	}
 	var buf bytes.Buffer
 	buf.Write(stateCodecMagic)
-	buf.WriteByte(stateCodecVersion)
+	buf.WriteByte(1)
 
 	addresses := sortedStateAddresses(s.accounts)
 	writeUvarint(&buf, uint64(len(addresses)))
@@ -55,7 +41,7 @@ func (s *MemoryStateDB) MarshalBinary() ([]byte, error) {
 		writeBytes(&buf, acct.Code)
 		writeBytes(&buf, []byte(acct.DeployerAddr))
 		writeUvarint(&buf, uint64(acct.DeployFlags))
-		managed, err := acct.Managed.MarshalBinary()
+		managed, err := acct.Managed.MarshalJSON()
 		if err != nil {
 			return nil, fmt.Errorf("encode EVM managed balance %s: %w", addr, err)
 		}
@@ -92,24 +78,7 @@ func (s *MemoryStateDB) MarshalBinary() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (s *MemoryStateDB) UnmarshalBinary(data []byte) error {
-	decoded, err := DecodeMemoryStateDB(data)
-	if err != nil {
-		return err
-	}
-	s.accounts = decoded.accounts
-	s.triggers = decoded.triggers
-	s.logs = nil
-	s.refund = 0
-	s.journal = nil
-	s.revisions = nil
-	s.nextRevID = 0
-	s.accessList = make(map[gethcommon.Address]map[gethcommon.Hash]struct{})
-	s.original = make(map[gethcommon.Address]map[gethcommon.Hash]gethcommon.Hash)
-	return nil
-}
-
-func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
+func decodeEVMJSONBalanceBaseline(data []byte) (*MemoryStateDB, error) {
 	r := bytes.NewReader(data)
 	magic := make([]byte, len(stateCodecMagic))
 	if _, err := io.ReadFull(r, magic); err != nil {
@@ -122,7 +91,7 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode state version: %w", err)
 	}
-	if version != stateCodecVersion {
+	if version != 1 {
 		return nil, fmt.Errorf("unsupported EVM state version %d", version)
 	}
 
@@ -178,7 +147,7 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode account managed balance %d: %w", i, err)
 		}
-		if err := acct.Managed.UnmarshalBinary(managed); err != nil {
+		if err := acct.Managed.UnmarshalJSON(managed); err != nil {
 			return nil, fmt.Errorf("decode account managed balance %d: %w", i, err)
 		}
 		closed, err := r.ReadByte()
@@ -274,67 +243,70 @@ func DecodeMemoryStateDB(data []byte) (*MemoryStateDB, error) {
 	return state, nil
 }
 
-func sortedStateAddresses(accounts map[gethcommon.Address]*memoryAccount) []gethcommon.Address {
-	addresses := make([]gethcommon.Address, 0, len(accounts))
-	for addr := range accounts {
-		addresses = append(addresses, addr)
+func TestCompactEVMRejectsJSONBalance(t *testing.T) {
+	raw, err := NewMemoryStateDB().MarshalBinary()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, raw[len(stateCodecMagic)])
+	_, err = DecodeMemoryStateDB(raw)
+	require.NoError(t, err)
+	// An empty store has no embedded balance, so use one account to exercise it.
+	state := NewMemoryStateDB()
+	state.SetNonce(gethcommon.Address{1}, 1, 0)
+	legacy, err := marshalEVMJSONBalanceBaseline(state)
+	require.NoError(t, err)
+	_, err = DecodeMemoryStateDB(legacy)
+	require.Error(t, err)
+}
+func TestCompactEVMStatePerformance(t *testing.T) {
+	for _, count := range []int{20, 500, 1001} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			state := NewMemoryStateDB()
+			for i := 0; i < count; i++ {
+				addr := gethcommon.BytesToAddress([]byte{byte(i >> 8), byte(i)})
+				state.SetNonce(addr, uint64(i), 0)
+				state.SetCode(addr, []byte{0x60, 0x2a}, 0)
+				state.SetState(addr, gethcommon.Hash{1}, gethcommon.Hash{2})
+				state.AddBalance(addr, uint256.NewInt(1000), 0)
+				state.ensure(addr).Managed = contractcommon.ManagedBalance{Value: 1000, Assets: wire.TxAssets{{Name: wire.AssetName{Protocol: "ordx", Type: "f", Ticker: "test"}, Amount: *scommon.NewDecimal(1000, 6), BindingSat: 2}}}
+			}
+			compact, err := state.MarshalBinary()
+			require.NoError(t, err)
+			old, err := marshalEVMJSONBalanceBaseline(state)
+			require.NoError(t, err)
+			recovered, err := DecodeMemoryStateDB(compact)
+			require.NoError(t, err)
+			require.Equal(t, state.StateRoot(), recovered.StateRoot())
+			require.Equal(t, state.accounts, recovered.accounts)
+			baseline, err := decodeEVMJSONBalanceBaseline(old)
+			require.NoError(t, err)
+			require.Equal(t, recovered.accounts, baseline.accounts)
+			for _, codec := range []struct {
+				name   string
+				encode func() ([]byte, error)
+				decode func() error
+				size   int
+			}{
+				{"json_balance", func() ([]byte, error) { return marshalEVMJSONBalanceBaseline(state) }, func() error { _, err := decodeEVMJSONBalanceBaseline(old); return err }, len(old)},
+				{"compact", state.MarshalBinary, func() error { _, err := DecodeMemoryStateDB(compact); return err }, len(compact)},
+			} {
+				for _, op := range []string{"encode", "decode"} {
+					result := testing.Benchmark(func(b *testing.B) {
+						b.ReportAllocs()
+						for i := 0; i < b.N; i++ {
+							var err error
+							if op == "encode" {
+								_, err = codec.encode()
+							} else {
+								err = codec.decode()
+							}
+							if err != nil {
+								b.Fatal(err)
+							}
+						}
+					})
+					t.Logf("METRIC accounts=%d codec=%s op=%s bytes=%d ns_op=%d B_op=%d allocs_op=%d", count, codec.name, op, codec.size, result.NsPerOp(), result.AllocedBytesPerOp(), result.AllocsPerOp())
+				}
+			}
+		})
 	}
-	sort.Slice(addresses, func(i, j int) bool {
-		return bytes.Compare(addresses[i].Bytes(), addresses[j].Bytes()) < 0
-	})
-	return addresses
-}
-
-func sortedStorageKeys(storage map[gethcommon.Hash]gethcommon.Hash) []gethcommon.Hash {
-	keys := make([]gethcommon.Hash, 0, len(storage))
-	for key := range storage {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return bytes.Compare(keys[i].Bytes(), keys[j].Bytes()) < 0
-	})
-	return keys
-}
-
-func writeBytes(w *bytes.Buffer, b []byte) {
-	writeUvarint(w, uint64(len(b)))
-	w.Write(b)
-}
-
-func writeUvarint(w *bytes.Buffer, v uint64) {
-	var tmp [binary.MaxVarintLen64]byte
-	n := binary.PutUvarint(tmp[:], v)
-	w.Write(tmp[:n])
-}
-
-func writeVarint64(w *bytes.Buffer, v int64) {
-	writeUvarint(w, uint64(v<<1)^uint64(v>>63))
-}
-
-func writeGasUvarint(w *bytes.Buffer, v int64) {
-	if v < 0 {
-		v = 0
-	}
-	writeUvarint(w, uint64(v))
-}
-
-func readBytes(r *bytes.Reader) ([]byte, error) {
-	length, err := binary.ReadUvarint(r)
-	if err != nil {
-		return nil, err
-	}
-	if length > uint64(r.Len()) {
-		return nil, io.ErrUnexpectedEOF
-	}
-	out := make([]byte, int(length))
-	_, err = io.ReadFull(r, out)
-	return out, err
-}
-
-func readVarint64(r *bytes.Reader) (int64, error) {
-	value, err := binary.ReadUvarint(r)
-	if err != nil {
-		return 0, err
-	}
-	return int64(value>>1) ^ -int64(value&1), nil
 }
