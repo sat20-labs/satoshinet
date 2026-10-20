@@ -1,6 +1,7 @@
 package dkvs
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -198,6 +199,10 @@ func paidRetentionCurrent(retention PaidRecordRetention, height uint64) bool {
 // the current-block payment has been verified. Newly accepted records publish
 // that verification with their successful commit; local readability is unaffected.
 func (i *Indexer) paidRecordRelayable(record *wire.DKVSRecord) bool {
+	return i.paidRecordRelayableAt(record, i.currentHeight())
+}
+
+func (i *Indexer) paidRecordRelayableAt(record *wire.DKVSRecord, height uint64) bool {
 	if !isAutopayRecord(record) {
 		return true
 	}
@@ -205,15 +210,25 @@ func (i *Indexer) paidRecordRelayable(record *wire.DKVSRecord) bool {
 	if !ok {
 		return false
 	}
-	return paidRetentionCurrent(retention, i.currentHeight())
+	return paidRetentionCurrent(retention, height)
 }
 
 // RefreshPaidRetentionAt reads contract state without holding the indexer lock
 // and atomically refreshes the local relay view for all AUTOPAY records.
 func (i *Indexer) RefreshPaidRetentionAt(height uint64) error {
+	return i.refreshPaidRetentionAt(context.Background(), height, ActiveScope{})
+}
+
+// An empty scope is the maintenance refresh. Network reads prepare only their
+// normalized exact scope and reuse payments already verified through its view.
+func (i *Indexer) refreshPaidRetentionAt(ctx context.Context, height uint64, scope ActiveScope) error {
 	if i == nil {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	prefix := scope.Prefix
 	validators := i.snapshotValidators()
 	verifier, ok := validators.feeVerifier.(PaidRecordRetentionVerifier)
 	if !ok {
@@ -226,63 +241,162 @@ func (i *Indexer) RefreshPaidRetentionAt(height uint64) error {
 		i.resetFreeLocalUsageLocked()
 		return nil
 	}
+	// Retain only keys and hashes across provider I/O, never directory values.
+	// Exact-key reads do not scan or decode unrelated blob records.
+	type recordRef struct {
+		key  string
+		hash chainhash.Hash
+	}
+	var refs []recordRef
+	collect := func(record *wire.DKVSRecord) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !isAutopayRecord(record) || IsTombstone(record.Flags) {
+			return nil
+		}
+		if prefix != "" && (!ActiveScopeMatches(scope, record.Key) || isEndpointCacheRecord(record)) {
+			return nil
+		}
+		refs = append(refs, recordRef{key: record.Key, hash: RecordHash(record)})
+		return nil
+	}
 	i.mutex.RLock()
 	validationHeight := i.currentHeight()
-	records, _, _, err := i.scanLocked("", nil, 0, false, height, currentUnixMilli())
+	err := func() error {
+		if len(scope.Keys) != 0 {
+			for _, key := range scope.Keys {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				record, err := i.getRaw(key)
+				if errors.Is(err, ErrRecordNotFound) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if err := collect(record); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		base := recordKeyPrefix
+		if prefix != "" {
+			base = recordDBKey(prefix)
+		}
+		return i.db.BatchReadV2(base, base, false, func(_, encoded []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			record, err := UnmarshalRecord(encoded)
+			if err != nil {
+				return err
+			}
+			return collect(record)
+		})
+	}()
 	i.mutex.RUnlock()
 	if err != nil {
 		return err
 	}
 	entries := make(map[string]PaidRecordRetention)
-	hashes := make(map[string]chainhash.Hash)
 	var firstErr error
-	for _, record := range records {
-		if !isAutopayRecord(record) || IsTombstone(record.Flags) {
+	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		i.mutex.RLock()
+		record, err := i.getRaw(ref.key)
+		i.mutex.RUnlock()
+		if errors.Is(err, ErrRecordNotFound) {
 			continue
 		}
-		hashes[record.Key] = RecordHash(record)
+		if err != nil {
+			return err
+		}
+		if RecordHash(record) != ref.hash {
+			continue
+		}
+		if prefix != "" {
+			if retention, known := paidRetentionCacheFor(i).get(record.Key); known && paidRetentionCurrent(retention, height) {
+				entries[record.Key] = retention
+				continue
+			}
+		}
 		parsed, err := ParseKey(record.Key)
 		if err != nil {
+			if prefix != "" {
+				return err
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
-			entries[record.Key] = PaidRecordRetention{CurrentBlock: height}
 			continue
 		}
 		retention, err := verifier.PaidRecordRetention(record, parsed)
+		if cancelled := ctx.Err(); cancelled != nil {
+			return cancelled
+		}
 		if err != nil {
+			// A failed query must not cache an apparently confirmed unpaid
+			// state that a later snapshot could interpret as deletion.
+			if prefix != "" {
+				return err
+			}
 			if firstErr == nil {
 				firstErr = err
 			}
-			entries[record.Key] = PaidRecordRetention{CurrentBlock: height}
 			continue
+		}
+		if prefix != "" && !paidRetentionCurrent(retention, height) && retention.CurrentBlock < height {
+			return ErrConcurrentUpdate
 		}
 		entries[record.Key] = retention
 	}
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if i.currentHeight() != validationHeight || atomic.LoadUint64(&i.policyGeneration) != validators.policyGeneration {
 		return ErrConcurrentUpdate
 	}
-	current, _, _, err := i.scanLocked("", nil, 0, false, height, currentUnixMilli())
-	if err != nil {
-		return err
-	}
 	cache := paidRetentionCacheFor(i)
-	merged := make(map[string]PaidRecordRetention, len(current))
-	for _, record := range current {
-		if !isAutopayRecord(record) || IsTombstone(record.Flags) {
+	updates := make(map[string]PaidRecordRetention, len(entries))
+	var removals []string
+	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		record, err := i.getRaw(ref.key)
+		if errors.Is(err, ErrRecordNotFound) {
 			continue
 		}
-		if hash, scanned := hashes[record.Key]; scanned && hash == RecordHash(record) {
-			merged[record.Key] = entries[record.Key]
-		} else if retention, ok := cache.get(record.Key); ok {
+		if err != nil {
+			return err
+		}
+		if ref.hash != RecordHash(record) {
 			// A concurrent write committed this current record and its cache
 			// together. Old scan results cannot replace that verification.
-			merged[record.Key] = retention
+			continue
+		}
+		if retention, verified := entries[record.Key]; verified {
+			updates[record.Key] = retention
+		} else if retention, known := cache.get(record.Key); !known || !paidRetentionCurrent(retention, height) {
+			// Failed verification is unknown. Preserve a concurrent current
+			// proof; otherwise remove the entry so complete views fail closed.
+			removals = append(removals, record.Key)
 		}
 	}
-	cache.replace(merged)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cache.remove(removals)
+	for key, retention := range updates {
+		cache.set(key, retention)
+	}
 	// AUTOPAY records that stop paying become local cache entries. Rebuild free
 	// cache accounting lazily on the next FREE_LOCAL capacity check.
 	i.resetFreeLocalUsageLocked()

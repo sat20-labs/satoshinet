@@ -114,7 +114,7 @@ func (vm *ValidatorManager) handlePOSCandidate(peer *peerpkg.Peer, msg *wire.Msg
 	// A substitute must wait for the existing timeout; payout no longer
 	// identifies which of Miner/Core/Bootstrap actually signed the candidate.
 	if producer != seq.GetCurrentMiningInfo().PubKey &&
-		time.Now().Unix()-best.RecvTime < MinerInterval+PreWarningInterval {
+		time.Now().Unix()-best.RecvTime < vm.minerInterval()+PreWarningInterval {
 		return fmt.Errorf("substitute is not yet eligible online")
 	}
 	if vm.localValidatorId == bootstrap {

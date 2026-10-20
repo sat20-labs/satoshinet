@@ -59,6 +59,7 @@ func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []R
 	out := contractframework.MergeResultPlansByContract(plans)
 	coveredItems := make(map[settlementItemKey]struct{})
 	planByContract := make(map[string]int)
+	itemPrefixes := make(map[int]int)
 	for i := range out {
 		planByContract[out[i].Contract] = i
 		for _, itemID := range out[i].ItemIDs {
@@ -86,13 +87,24 @@ func AddMissingGasResultPlans(plans []ResultPlan, records []ExecutionRecord) []R
 		if record.GasFee != nil && record.GasFee.Sign() != 0 {
 			out[i].GasFee = contractframework.DecimalAddAllowNil(out[i].GasFee, record.GasFee)
 		}
-		out[i].Inputs = contractframework.UniqueOutPoints(append(out[i].Inputs, record.FundingInputs...))
-		out[i].ItemIDs = appendMissingItemIDs(out[i].ItemIDs, record.ItemIDs)
+		if _, ok := itemPrefixes[i]; !ok {
+			itemPrefixes[i] = len(out[i].ItemIDs)
+		}
+		out[i].Inputs = append(out[i].Inputs, record.FundingInputs...)
+		out[i].ItemIDs = append(out[i].ItemIDs, record.ItemIDs...)
 		if record.ResultFeeMode == contractframework.ResultFeeModeGasAsset {
 			if refund := contractframework.ResultGasRefundFromRecord(record); refund.To != "" {
 				out[i].GasRefunds = append(out[i].GasRefunds, refund)
 			}
 		}
+	}
+	for i := range out {
+		prefix, updated := itemPrefixes[i]
+		if !updated {
+			continue
+		}
+		out[i].Inputs = contractframework.UniqueOutPoints(out[i].Inputs)
+		out[i].ItemIDs = appendMissingItemIDs(out[i].ItemIDs[:prefix], out[i].ItemIDs[prefix:])
 	}
 	return contractframework.AttachCallFunding(out, records)
 }
@@ -110,8 +122,16 @@ func executionRecordItemsCovered(record ExecutionRecord, covered map[settlementI
 }
 
 func appendMissingItemIDs(ids []int64, more []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids)+len(more))
+	for _, id := range ids {
+		seen[id] = struct{}{}
+	}
 	for _, id := range more {
-		ids = appendPlanItemID(ids, id)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
 	}
 	return ids
 }

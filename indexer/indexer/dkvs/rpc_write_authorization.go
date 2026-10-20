@@ -28,9 +28,9 @@ type WalletWriteAuthorization struct {
 
 const WalletWriteHeightTolerance = uint64(2)
 
-func validateWalletWriteHeight(issueHeight, currentHeight uint64) error {
+func validateWalletWriteHeight(issueHeight, tipHeight uint64) error {
 	// Subtraction follows the upper-bound check to avoid uint64 underflow.
-	if issueHeight > currentHeight || currentHeight-issueHeight > WalletWriteHeightTolerance {
+	if issueHeight > tipHeight || tipHeight-issueHeight > WalletWriteHeightTolerance {
 		return ErrStaleEndpoint
 	}
 	return nil
@@ -147,9 +147,9 @@ func VerifyWalletWriteAuthorization(mutations []CASMutation, options BatchCASOpt
 // Called under the SAME lock as batchCASReady/commit. An old authorization
 // can only observe an exact present-state retry; it never authorizes restoring
 // absence. No persistent per-request or per-deleted-key state is retained.
-func (i *Indexer) walletWriteContextCurrentLocked(ctx WalletWriteContext, mutations []CASMutation, height, now uint64) error {
+func (i *Indexer) walletWriteContextCurrentLocked(ctx WalletWriteContext, mutations []CASMutation, indexedHeight, tipHeight, now uint64) error {
 	for _, prefix := range ctx.Prefixes {
-		meta, err := i.ensurePathMetaLocked(prefix.Prefix, height, now)
+		meta, err := i.ensurePathMetaLocked(prefix.Prefix, indexedHeight, now)
 		if err != nil {
 			return err
 		}
@@ -158,7 +158,7 @@ func (i *Indexer) walletWriteContextCurrentLocked(ctx WalletWriteContext, mutati
 		}
 	}
 	for _, mutation := range mutations {
-		if err := validateWalletWriteHeight(mutation.Record.IssueHeight, height); err != nil {
+		if err := validateWalletWriteHeight(mutation.Record.IssueHeight, tipHeight); err != nil {
 			return err
 		}
 	}

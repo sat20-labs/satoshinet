@@ -64,6 +64,22 @@ type ValidatorManager struct {
 	pingTicker      *time.Ticker
 }
 
+// Scheduling is derived from this manager's network, never shared mutable
+// state. Public networks retain their existing defaults and environment values.
+func (vm *ValidatorManager) minerInterval() int64 {
+	if vm.cfg.ChainParams != nil && vm.cfg.ChainParams.Net == wire.RegNet {
+		return 2
+	}
+	return MinerInterval
+}
+
+func (vm *ValidatorManager) checkingInterval() int64 {
+	if vm.cfg.ChainParams != nil && vm.cfg.ChainParams.Net == wire.RegNet {
+		return 1
+	}
+	return CheckingInterval
+}
+
 func NewValidatorManager(cfg *ValidatorManagerConfig) *ValidatorManager {
 	utils.Log.Tracef("New ValidatorManager")
 	validatorMgr := &ValidatorManager{
@@ -144,13 +160,13 @@ func (vm *ValidatorManager) ResetGeneratorMoniter() {
 		return
 	}
 
-	utils.Log.Debugf("local generator: Next check generator after %d seconds.", MinerInterval)
-	vm.generatorTicker.Reset(time.Duration(MinerInterval) * time.Second)
+	utils.Log.Debugf("local generator: Next check generator after %d seconds.", vm.minerInterval())
+	vm.generatorTicker.Reset(time.Duration(vm.minerInterval()) * time.Second)
 }
 
 // 一些有上下前后关系的miner相互ping，保持连接
 func (vm *ValidatorManager) pingTimer() {
-	vm.pingTicker = time.NewTicker(time.Duration(MinerInterval*2) * time.Second)
+	vm.pingTicker = time.NewTicker(time.Duration(vm.minerInterval()*2) * time.Second)
 
 exit:
 	for {
@@ -176,7 +192,7 @@ func (vm *ValidatorManager) onPingTimer() {
 
 // 在轮到自己出块时，reset interval
 func (vm *ValidatorManager) generatorTimer() {
-	vm.generatorTicker = time.NewTicker(time.Duration(CheckingInterval) * time.Second)
+	vm.generatorTicker = time.NewTicker(time.Duration(vm.checkingInterval()) * time.Second)
 	vm.lastBlockTime = vm.cfg.PosMiner.GetBlockRecvTime()
 	vm.lastBlock = int(vm.cfg.PosMiner.GetBlockHeight())
 
@@ -232,7 +248,7 @@ func (vm *ValidatorManager) checkAndGenerateNewBlock() {
 		return
 	}
 
-	if now-vm.lastBlockTime < MinerInterval {
+	if now-vm.lastBlockTime < vm.minerInterval() {
 		// The miner time is not past, ignore
 		utils.Log.Debugf("[ValidatorManager] not in time %d", now-vm.lastBlockTime)
 		return
@@ -337,7 +353,7 @@ func (vm *ValidatorManager) generateNewBlock_bootstrap() error {
 	}
 
 	// 等待miner或者其father出块
-	if past < 2*MinerInterval+PreWarningInterval {
+	if past < 2*vm.minerInterval()+PreWarningInterval {
 		return fmt.Errorf("wait miner node %s to mine block", miningNode.PubKey)
 	}
 
@@ -359,7 +375,7 @@ func (vm *ValidatorManager) generateNewBlock_core() error {
 	miningNode := seq.GetCurrentMiningInfo()
 	peer := vm.cfg.PosMiner.GetPeerByValidatorId(miningNode.PubKey)
 	if peer != nil && peer.Connected() {
-		if past < MinerInterval+PreWarningInterval {
+		if past < vm.minerInterval()+PreWarningInterval {
 			// 再等等
 			return fmt.Errorf("wait miner node %s to mine block", miningNode.PubKey)
 		}
@@ -621,7 +637,7 @@ func (vm *ValidatorManager) OnBlockGenerated(peer *peerpkg.Peer, msg *wire.MsgMi
 		if currentMiner != miningAddr {
 			// 非miner本身，需要等过一个时间窗口
 			now := time.Now().Unix()
-			if now-vm.lastBlockTime < MinerInterval+PreWarningInterval {
+			if now-vm.lastBlockTime < vm.minerInterval()+PreWarningInterval {
 				// The miner time is not past, ignore
 				utils.Log.Debugf("now %d - lastblockTime %d = %d, < 15s", now, vm.lastBlockTime, now-vm.lastBlockTime)
 				reason = "not in time"

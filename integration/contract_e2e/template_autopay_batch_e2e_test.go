@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Every delegate is created by a signed, mined funding transaction. This crosses
+// Every delegate is created by a signed, mined config transaction. This crosses
 // the real Result output limit without seeding private runtime state or storage.
 func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
 	f := newTemplateNetworkFixture(t, nil)
@@ -31,15 +31,19 @@ func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
 	address := scenarioDeploy(t, f, tmplcontract.NewAutopayContract("batch-close", f.traderAActor.address, gas, "2000"),
 		"autopay-batch", 0, scenarioFunding(t, 0, map[string]int64{gas: 50}))
 	works := make([]*wire.MsgTx, len(actors))
-	pkScript, err := contractcommon.ContractPkScript(address)
+	delegateParam, err := (&tmplcontract.AutopayConfigInvokeParam{AmountPerBlock: "2000"}).Encode()
 	require.NoError(t, err)
 	for i, actor := range actors {
 		// The existing fixture resolves two active signers. Reuse its second slot
 		// while creating each independent delegate; all previous UTXOs persist.
 		f.traderB, f.traderBActor = actor.key, actor
-		tx := wire.NewMsgTx(wire.TxVersion)
-		tx.AddTxIn(wire.NewTxIn(&fundingInputs[i+1], nil, nil))
-		tx.AddTxOut(wire.NewTxOut(0, wire.TxAssets{networkTemplateFunding(t, gas, 1050)}, pkScript))
+		tx, err := tmplcontract.BuildInvokeTx(tmplcontract.InvokeTxBuildRequest{
+			Contract: address, GasLimit: networkTemplateInvokeGasLimit(), CallNonce: uint64(i + 1),
+			Action: tmplcontract.InvokeAPIConfig, Param: delegateParam,
+			Inputs:  []wire.OutPoint{fundingInputs[i+1]},
+			Funding: scenarioFunding(t, 0, map[string]int64{gas: 1050}),
+		})
+		require.NoError(t, err)
 		signScenarioInputsWithChange(t, f, tx, actor.key, contractcommon.InvokeBaseGas, 0)
 		sendTx(t, f.bootstrapNode, tx)
 		works[i] = tx

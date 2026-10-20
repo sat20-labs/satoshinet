@@ -251,6 +251,8 @@ type Config struct {
 	Notify         NotifyFunc
 	Subscription   SubscriptionNotifyFunc
 	CurrentHeight  func() uint64
+	// TipHeight bounds IssueHeight by the locally validated chain tip.
+	TipHeight      func() uint64
 	MailboxPolicy  MailboxPolicy
 	BlobPolicy     BlobPolicy
 	TmpPolicy      TmpPolicy

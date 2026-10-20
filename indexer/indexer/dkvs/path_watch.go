@@ -69,7 +69,7 @@ func (i *Indexer) computePathMetaViewLocked(path string, height, now uint64) (*P
 		meta.Generation, meta.EndpointGeneration = previous.Generation, previous.EndpointGeneration
 	} else if !errors.Is(readErr, ErrRecordNotFound) { return nil, readErr }
 	for _, record := range records {
-		if !i.networkPathRecordVisible(record) { continue }
+		if !i.networkPathRecordVisible(record, height) { continue }
 		meta.ActiveRecords++
 		meta.ActiveTotalSize += uint64(RecordSize(record))
 		xorPathMetaRoot(&meta.StateRoot, record)

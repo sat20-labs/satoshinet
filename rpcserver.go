@@ -1179,6 +1179,7 @@ func handleReviewPredictionReady(s *rpcServer, cmd interface{}, closeChan <-chan
 		return nil, btcjson.NewRPCError(btcjson.ErrRPCMisc, "agent LLM access is disabled")
 	}
 	agent := agentcontract.NewPredictionAgent(client)
+	agent.Fetcher = agentcontract.HTTPPredictionResultTextFetcher{RequirePublicNetwork: !cfg.AgentAllowPrivateEvidence}
 	timeout := cfg.AgentLLMTimeout + 30*time.Second
 	if timeout <= 30*time.Second {
 		timeout = 90 * time.Second

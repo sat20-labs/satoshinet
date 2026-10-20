@@ -226,6 +226,8 @@ type server struct {
 
 	// Peer callbacks run outside wg; share this barrier with final DB closure.
 	indexCallbackMu sync.RWMutex
+	// Written by the first Stop caller; read only after wg has drained it.
+	shutdownErr error
 
 	chainParams            *chaincfg.Params
 	assetIndexer           *indexer.IndexerMgr
@@ -3183,19 +3185,19 @@ func (s *server) Stop() error {
 	}
 
 	// Save fee estimator state in the database.
-	s.db.Update(func(tx database.Tx) error {
-		metadata := tx.Metadata()
-		metadata.Put(mempool.EstimateFeeDatabaseKey, s.feeEstimator.Save())
+	if err := s.db.Update(func(tx database.Tx) error {
+		return tx.Metadata().Put(mempool.EstimateFeeDatabaseKey, s.feeEstimator.Save())
+	}); err != nil {
+		s.shutdownErr = fmt.Errorf("save fee estimator: %w", err)
+	}
 
-		return nil
-	})
-
-	return nil
+	return s.shutdownErr
 }
 
 // WaitForShutdown drains database users before closing the index databases.
 // Stop only signals shutdown; normal writes and their callbacks stay unchanged.
-func (s *server) WaitForShutdown() {
+// Persistence errors are returned even if another caller initiated Stop.
+func (s *server) WaitForShutdown() error {
 	s.wg.Wait()
 	if s.posMiner != nil {
 		// A delayed startup may have overlapped Stop; signal it once more.
@@ -3207,9 +3209,10 @@ func (s *server) WaitForShutdown() {
 	stp.ReleaseSTP()
 	if s.assetIndexer != nil {
 		if err := s.assetIndexer.Close(); err != nil {
-			srvrLog.Errorf("Close index databases: %v", err)
+			return errors.Join(s.shutdownErr, fmt.Errorf("close index databases: %w", err))
 		}
 	}
+	return s.shutdownErr
 }
 
 func (s *server) saveMempoolCache() {
@@ -3819,7 +3822,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	// seqMgr 最早初始化
 	dkvsCfg := nodeDKVSConfig(db, resolveIndexerBaseURL())
 	assetIndexer, err := indexerEntry.NewIndexerMgrWithDKVS(assetIndexerRPCDataPath, "",
-		assetIndexerRPCPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, cfg.TestNet,
+		assetIndexerRPCPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, chainParams,
 		interrupt, dkvsCfg)
 	if err != nil {
 		return nil, err

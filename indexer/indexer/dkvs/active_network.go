@@ -43,7 +43,7 @@ func (i *Indexer) AcceptCurrentRecord(record *wire.DKVSRecord) (bool, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		height, now := i.currentHeight(), currentUnixMilli()
 		validators := i.snapshotValidators()
-		parsed, err := validateParsedCoreWithVerifier(record, height, false, false, nil)
+		parsed, err := i.validateCoreWithVerifier(record, height, false, false, nil)
 		if err != nil {
 			return false, err
 		}
@@ -145,7 +145,7 @@ func (i *Indexer) AcceptCurrentRecord(record *wire.DKVSRecord) (bool, error) {
 		}
 
 		ready := []preparedCASMutation{prepared}
-		if err := i.validateBatchStateLocked(ready, height, now); err != nil {
+		if err := i.validateBatchStateLocked(ready, height, height, now); err != nil {
 			i.mutex.Unlock()
 			return false, err
 		}

@@ -18,6 +18,7 @@ func TestDefaultInvokeLoadedStateMatchesRuntimePath(t *testing.T) {
 	require.NoError(t, err)
 	req := ApplyInvokeRequest{
 		Action: contractcommon.ContractInvokeAPIDefault, CallID: "loaded-state", Invoker: "delegate",
+		GasAssetName:  gas,
 		FundingOutput: testContractOutput("funding", 0, runtime.Address(), 0, testAsset(gas, 1000)),
 		Height:        100, Timestamp: 100,
 	}
@@ -28,7 +29,6 @@ func TestDefaultInvokeLoadedStateMatchesRuntimePath(t *testing.T) {
 	// supplied call-local state, without silently loading a second snapshot.
 	other.SetState(runtimeStateKey, []byte("invalid-json"))
 	require.NoError(t, other.checkInvocationLifecycle(state, req.Action, req.Invoker))
-	require.NoError(t, checkAutopayDelegateCapacity(other.Contract(), &state, req.Invoker))
 	got, err := other.applyDefaultInvoke(state, req)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
@@ -37,7 +37,7 @@ func TestDefaultInvokeLoadedStateMatchesRuntimePath(t *testing.T) {
 	require.Equal(t, wantBytes, gotBytes, "retain the exact persisted JSON and accounting")
 }
 
-func TestDefaultInvokeStateReuseSequentialOutputsAndCapacity(t *testing.T) {
+func TestDefaultInvokeStateReuseSequentialOutputsAndGasCapacityIndependence(t *testing.T) {
 	gas := DefaultGasConfig().GasAssetName
 	runtime := testAutopayRuntime(t, "recipient-address", gas, "2000")
 	state, err := runtime.RuntimeState()
@@ -47,10 +47,10 @@ func TestDefaultInvokeStateReuseSequentialOutputsAndCapacity(t *testing.T) {
 		state.AutopayData().AutopayDelegates[fmt.Sprintf("existing-%d", i)] = AutopayDelegate{}
 	}
 	require.NoError(t, runtime.saveRuntimeState(state))
-	actor := "last-delegate"
+	beforeDelegates := state.AutopayData().AutopayDelegates
 	backend := NewBackend(BlockExecutionRequest{
 		Store: runtimeStoreWith(runtime), BlockHeight: 100,
-		ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) { return actor, nil },
+		ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) { return "ordinary-user", nil },
 	})
 	fee := testTemplateGasFeeAmount(t, DefaultGasConfig().ResultBaseGas)
 	tx := testTemplateDefaultInvokeTx(t, runtime.Address(), 0, testAsset(gas, 1000+fee))
@@ -58,8 +58,8 @@ func TestDefaultInvokeStateReuseSequentialOutputsAndCapacity(t *testing.T) {
 	require.NoError(t, backend.ExecuteTx(tx))
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Len(t, state.AutopayData().AutopayDelegates, AutopayMaxDelegates)
-	requireDecimalString(t, "2000", state.AutopayData().AutopayDelegates[actor].Balance)
+	require.Equal(t, beforeDelegates, state.AutopayData().AutopayDelegates)
+	requireDecimalString(t, "2000", state.AutopayData().GasBalance)
 	require.Len(t, state.Items, 2)
 	require.NotEqual(t, state.Items[0].ID, state.Items[1].ID)
 	require.NotEqual(t, state.Items[0].CallID, state.Items[1].CallID)
@@ -68,12 +68,15 @@ func TestDefaultInvokeStateReuseSequentialOutputsAndCapacity(t *testing.T) {
 		require.Equal(t, ResultStatusSuccess, record.Status)
 	}
 	before, _ := runtime.GetState(runtimeStateKey)
-	actor = "one-too-many"
 	require.NoError(t, backend.ExecuteTx(testTemplateDefaultInvokeTx(t, runtime.Address(), 0, testAsset(gas, 1000+fee))))
 	after, _ := runtime.GetState(runtimeStateKey)
-	require.Equal(t, before, after, "capacity rejection must not publish the loaded state")
-	require.Equal(t, ResultStatusInvalid, backend.records[2].Status)
-	require.True(t, backend.records[2].RequiresResult)
+	require.NotEqual(t, before, after, "default GAS funding must publish even when the delegate catalog is full")
+	state, err = runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, beforeDelegates, state.AutopayData().AutopayDelegates)
+	requireDecimalString(t, "3000", state.AutopayData().GasBalance)
+	require.Len(t, state.Items, 3)
+	require.Equal(t, ResultStatusSuccess, backend.records[2].Status)
 }
 
 func TestDefaultInvokeStateReuseFailurePreservesState(t *testing.T) {

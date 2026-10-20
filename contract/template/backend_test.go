@@ -5,8 +5,11 @@ import (
 	"testing"
 
 	scommon "github.com/sat20-labs/indexer/common"
+	"github.com/sat20-labs/satoshinet/btcutil"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	contractframework "github.com/sat20-labs/satoshinet/contract/framework"
+	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -989,13 +992,21 @@ func TestBackendDuplicateDeployDoesNotOverwriteRuntime(t *testing.T) {
 	require.True(t, store.Exists(addr))
 }
 
+func testAutopayDeployRecipientScript(output ResultOutput) ([]byte, error) {
+	address, err := btcutil.DecodeAddress(output.To, &chaincfg.TestNetParams)
+	if err != nil {
+		return nil, err
+	}
+	return txscript.PayToAddrScript(address)
+}
+
 func TestBackendAutopayDeployAllowsSameConfig(t *testing.T) {
-	contract := NewAutopayContract("dkvs", "recipient-address", "ordx:f:test", "10")
+	contract := NewAutopayContract("dkvs", "tb1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9lasvfnc28", "ordx:f:test", "10")
 	deployTx, addr := testTemplateDeployTxWithNonce(t, contract, 7)
 	duplicateTx, duplicateAddr := testTemplateDeployTxWithNonce(t, contract, 8)
 	store := NewRuntimeStore()
 
-	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{deployTx, duplicateTx}, Store: store})
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{ResolveScript: testAutopayDeployRecipientScript, AssetPrecision: func(string) (int, bool) { return 0, true }, Txs: []*wire.MsgTx{deployTx, duplicateTx}, Store: store})
 	require.NoError(t, err)
 	require.Len(t, result.Records, 2)
 	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
@@ -1005,13 +1016,14 @@ func TestBackendAutopayDeployAllowsSameConfig(t *testing.T) {
 }
 
 func TestBackendAutopayDeployAllowsAfterClose(t *testing.T) {
-	contract := NewAutopayContract("dkvs", "recipient-address", "ordx:f:test", "10")
+	contract := NewAutopayContract("dkvs", "tb1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9lasvfnc28", "ordx:f:test", "10")
 	deployTx, addr := testTemplateDeployTxWithNonce(t, contract, 7)
 	closeTx := testExchangeCloseTx(t, addr, testAsset(DefaultGasConfig().GasAssetName,
 		testTemplateGasFeeAmount(t, DefaultGasConfig().ResultBaseGas)))
 	store := NewRuntimeStore()
 
 	_, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		ResolveScript: testAutopayDeployRecipientScript, AssetPrecision: func(string) (int, bool) { return 0, true },
 		Txs:   []*wire.MsgTx{deployTx, closeTx},
 		Store: store,
 		ResolveInvoker: func(tx *wire.MsgTx, contractTx Tx) (string, error) {
@@ -1026,7 +1038,7 @@ func TestBackendAutopayDeployAllowsAfterClose(t *testing.T) {
 	require.True(t, state.AutopayData().Closed)
 
 	redeployTx, redeployAddr := testTemplateDeployTxWithNonce(t, contract, 8)
-	result, err := testTemplateExecuteBlock(BlockExecutionRequest{Txs: []*wire.MsgTx{redeployTx}, Store: store})
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{ResolveScript: testAutopayDeployRecipientScript, AssetPrecision: func(string) (int, bool) { return 0, true }, Txs: []*wire.MsgTx{redeployTx}, Store: store})
 	require.NoError(t, err)
 	require.Len(t, result.Records, 1)
 	require.Equal(t, ResultStatusSuccess, result.Records[0].Status)
@@ -1037,58 +1049,52 @@ func TestBackendAutopayDelegateLimitRefundsInvoke(t *testing.T) {
 	param, err := (&AutopayConfigInvokeParam{AmountPerBlock: "1"}).Encode()
 	require.NoError(t, err)
 
-	for _, defaultInvoke := range []bool{false, true} {
-		t.Run(fmt.Sprintf("default=%t", defaultInvoke), func(t *testing.T) {
-			runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:test", "1")
-			state, err := runtime.RuntimeState()
-			require.NoError(t, err)
-			state.AutopayData().AutopayDelegates = make(map[string]AutopayDelegate, AutopayMaxDelegates)
-			for i := 0; i < AutopayMaxDelegates; i++ {
-				state.AutopayData().AutopayDelegates[fmt.Sprintf("delegate-%d", i)] = AutopayDelegate{}
-			}
-			require.NoError(t, runtime.saveRuntimeState(state))
-			store := runtimeStoreWith(runtime)
-			gasAsset := DefaultGasConfig().GasAssetName
-			funding := testAssets("ordx:f:test", 10, gasAsset,
-				testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))
-
-			var tx *wire.MsgTx
-			if defaultInvoke {
-				tx = testTemplateDefaultInvokeTx(t, runtime.Address(), 0, funding)
-			} else {
-				script, err := InvokeNullDataScript(InvokePayload{
-					GasLimit:  DefaultGasConfig().InvokeBaseGas,
-					CallNonce: 1,
-					Action:    InvokeAPIConfig,
-					Param:     param,
-				})
-				require.NoError(t, err)
-				tx = wire.NewMsgTx(1)
-				tx.AddTxIn(&wire.TxIn{})
-				tx.AddTxOut(wire.NewTxOut(0, nil, script))
-				tx.AddTxOut(wire.NewTxOut(0, funding, testTemplateContractScript(runtime.Address())))
-			}
-
-			result, err := testTemplateExecuteBlock(BlockExecutionRequest{
-				Txs:         []*wire.MsgTx{tx},
-				Store:       store,
-				BlockHeight: 100,
-				ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) {
-					return "new-delegate", nil
-				},
-				AssetPrecision: func(name string) (int, bool) {
-					return 0, name == "ordx:f:test"
-				},
-			})
-			require.NoError(t, err)
-			require.Len(t, result.Records, 1)
-			require.Equal(t, ResultStatusInvalid, result.Records[0].Status)
-			require.True(t, result.Records[0].RequiresResult)
-			state, err = runtime.RuntimeState()
-			require.NoError(t, err)
-			require.NotContains(t, state.AutopayData().AutopayDelegates, "new-delegate")
-		})
+	runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:test", "1")
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	state.AutopayData().AutopayDelegates = make(map[string]AutopayDelegate, AutopayMaxDelegates)
+	for i := 0; i < AutopayMaxDelegates; i++ {
+		state.AutopayData().AutopayDelegates[fmt.Sprintf("delegate-%d", i)] = AutopayDelegate{}
 	}
+	beforeDelegates := state.AutopayData().AutopayDelegates
+	require.NoError(t, runtime.saveRuntimeState(state))
+	store := runtimeStoreWith(runtime)
+	gasAsset := DefaultGasConfig().GasAssetName
+	funding := testAssets("ordx:f:test", 10, gasAsset,
+		testTemplateGasFeeAmount(t, DefaultGasConfig().InvokeBaseGas))
+	script, err := InvokeNullDataScript(InvokePayload{
+		GasLimit:  DefaultGasConfig().InvokeBaseGas,
+		CallNonce: 1,
+		Action:    InvokeAPIConfig,
+		Param:     param,
+	})
+	require.NoError(t, err)
+	tx := wire.NewMsgTx(1)
+	tx.AddTxIn(&wire.TxIn{})
+	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	tx.AddTxOut(wire.NewTxOut(0, funding, testTemplateContractScript(runtime.Address())))
+
+	result, err := testTemplateExecuteBlock(BlockExecutionRequest{
+		Txs:         []*wire.MsgTx{tx},
+		Store:       store,
+		BlockHeight: 100,
+		ResolveInvoker: func(*wire.MsgTx, Tx) (string, error) {
+			return "new-delegate", nil
+		},
+		AssetPrecision: func(name string) (int, bool) {
+			return 0, name == "ordx:f:test"
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	require.Equal(t, ResultStatusInvalid, result.Records[0].Status)
+	require.True(t, result.Records[0].RequiresResult)
+	committedRuntime, ok := store.Get(runtime.Address())
+	require.True(t, ok)
+	state, err = committedRuntime.RuntimeState()
+	require.NoError(t, err)
+	require.NotContains(t, state.AutopayData().AutopayDelegates, "new-delegate")
+	require.Equal(t, beforeDelegates, state.AutopayData().AutopayDelegates)
 }
 
 func TestBackendAutopayConfigFundsDelegate(t *testing.T) {

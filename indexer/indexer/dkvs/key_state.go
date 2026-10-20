@@ -37,5 +37,5 @@ func (i *Indexer) keyStateLocked(key string, includeRecord bool, height, now uin
 func (i *Indexer) GetKeyState(key string) (DKVSKeyState, error) {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	return i.keyStateLocked(key, true, i.currentHeight(), currentUnixMilli())
+	return i.keyStateLocked(key, true, i.issueHeightTip(i.currentHeight()), currentUnixMilli())
 }

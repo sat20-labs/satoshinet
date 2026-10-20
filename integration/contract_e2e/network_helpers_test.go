@@ -74,22 +74,21 @@ func waitForPOSBlockError(err error) bool {
 }
 
 func startFakeL1Indexer(t *testing.T, indexerPubKey string,
-	utxos map[string]*indexercommon.AssetsInUtxo, parentByPub ...map[string]string) *httptest.Server {
+	utxos map[string]*indexercommon.AssetsInUtxo) *httptest.Server {
 
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/testnet/v3/indexer/pubkey" {
+			err := json.NewEncoder(w).Encode(indexerwire.IndexerPubKeyResp{
+				BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}, PubKey: indexerPubKey,
+			})
+			require.NoError(t, err)
+			return
+		}
 		if r.URL.Path == "/testnet/kv/register" {
-			pub := indexerPubKey
-			if len(parentByPub) != 0 {
-				var req indexerwire.RegisterPubKeyReq
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-				if parent, ok := parentByPub[0][req.PubKey]; ok {
-					pub = parent
-				}
-			}
 			err := json.NewEncoder(w).Encode(indexerwire.RegisterPubKeyResp{
 				BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
-				PubKey:   pub,
+				PubKey:   indexerPubKey,
 			})
 			require.NoError(t, err)
 			return

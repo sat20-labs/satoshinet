@@ -56,17 +56,37 @@ func TestDKVSAutopayCallbackDoesNotWaitForRPCSlot(t *testing.T) {
 	require.NoError(t, err)
 	content, err := ap.Encode()
 	require.NoError(t, err)
-	runtime, err := template.NewRuntime(addr, contractcommon.DeployPayload{Type: contractcommon.ContractTypeTemplate, SubType: ap.TemplateName(), Version: ap.Version(), ContractContent: content}, nil)
+	runtime, err := template.NewRuntimeWithDeployer(addr, contractcommon.DeployPayload{Type: contractcommon.ContractTypeTemplate, SubType: ap.TemplateName(), Version: ap.Version(), ContractContent: content}, nil, payer)
 	require.NoError(t, err)
 	amount, err := indexercommon.NewDecimalFromString(defaults.FullRecordFeePerBlock, 8)
 	require.NoError(t, err)
-	running, err := runtime.RuntimeState()
+	// Build committed state through real invokes and settlement so the fixture
+	// uses the runtime's current persistence codec.
+	gas := framework.DefaultGasConfig()
+	gas.GasAssetName = defaults.AutopayFeeAssetName
+	fee2, err := gas.ContractFundingFee(framework.ExecutionKindTrigger, gas.TriggerBaseGas, true, 2)
 	require.NoError(t, err)
-	running.AutopayData().AutopayStatus = "active"
-	running.AutopayData().AutopayDelegates = map[string]template.AutopayDelegate{payer: {AmountPerBlock: amount, Balance: amount, LastPayHeight: 2, Status: "active", BlobKeyLimit: 1}}
-	raw, err := json.Marshal(running)
+	fee3, err := gas.ContractFundingFee(framework.ExecutionKindTrigger, gas.TriggerBaseGas, true, 3)
 	require.NoError(t, err)
-	runtime.SetState("template-runtime-state", raw)
+	gasFunding := fee2.AddAlignPrecision(fee3)
+	param, err := (&template.AutopayConfigInvokeParam{AmountPerBlock: defaults.FullRecordFeePerBlock,
+		GasFundingAmount: gasFunding.String(), BlobKeyLimit: 1}).Encode()
+	require.NoError(t, err)
+	funding := gasFunding.AddAlignPrecision(amount).AddAlignPrecision(amount)
+	_, err = runtime.ApplyInvoke(template.ApplyInvokeRequest{
+		Action: template.InvokeAPIConfig, Param: param, CallID: "paid-fixture", Invoker: payer,
+		GasAssetName: gas.GasAssetName, Height: 1, Timestamp: 1,
+		AssetPrecision: func(string) (int, bool) { return 8, true },
+		FundingOutput: framework.ContractOutputFromFunding(contractcommon.FundingOutput{
+			OutPoint: contractcommon.TxOutPoint{TxID: "paid-fixture"}, Contract: addr,
+			Assets: wire.TxAssets{{Name: *wire.NewAssetNameFromString(gas.GasAssetName), Amount: *funding}},
+		}),
+	})
+	require.NoError(t, err)
+	_, err = runtime.SettleBlockWithGasConfig(1, gas)
+	require.NoError(t, err)
+	_, err = runtime.SettleBlockWithGasConfig(2, gas)
+	require.NoError(t, err)
 	runtime.SetCurrentBlock(2)
 	store := template.NewRuntimeStore()
 	store.Add(runtime)

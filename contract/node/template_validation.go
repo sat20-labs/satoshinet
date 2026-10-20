@@ -1,7 +1,6 @@
 package node
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/sat20-labs/satoshinet/blockchain"
@@ -63,7 +62,7 @@ func (v *TemplateBlockExecutionValidator) ContractBlockModule(block *btcutil.Blo
 	gas := v.cfg.GasConfig
 	gas.GasAssetName = contractGasAssetNameForParams(v.cfg.ChainParams)
 	module, err := contractframework.NewSettlementModule(contractframework.SettlementModuleConfig{
-		Descriptor: templateModuleDescriptor(), ParentRoot: parent.StateRoot(), GasConfig: gas,
+		PerContract: true, Descriptor: templateModuleDescriptor(), ParentRoot: parent.StateRoot(), GasConfig: gas,
 		ResolveScript: v.cfg.ResolveResultScript, ResolveOutput: v.cfg.ResolveOutput, PlanCount: templateResultPlanCount,
 		Execute: func(work contractframework.WorkExecutionRequest) (contractframework.BackendBlockExecutionResult, any, error) {
 			// Execution clones mutable state and only replaces this wrapper on success.
@@ -73,6 +72,7 @@ func (v *TemplateBlockExecutionValidator) ContractBlockModule(block *btcutil.Blo
 				GasConfig: gas, ContractUTXOs: v.cfg.ContractUTXOs, AssetPrecision: v.cfg.AssetPrecision,
 				BlockHeight:    int64(block.Height()),
 				ResolveInvoker: template.LastInputPreviousOutputInvokerResolver(v.cfg.ChainParams, previousOutputScriptResolver(view)),
+				ResolveScript: v.cfg.ResolveResultScript,
 			})
 			return exec, &candidate, err
 		},
@@ -197,26 +197,17 @@ func (v *TemplateBlockExecutionValidator) runtime(block *btcutil.Block, view *bl
 }
 
 func (v *TemplateBlockExecutionValidator) verifyResults(txs []*wire.MsgTx, plans []template.ResultPlan) error {
-	if len(plans) == 0 {
-		if len(txs) != 0 {
-			return fmt.Errorf("unexpected template RESULT transactions")
-		}
-		return nil
-	}
-	if len(txs) != 1 {
-		return fmt.Errorf("template result transaction count mismatch: got %d want 1", len(txs))
-	}
+	var verify func(*wire.MsgTx, []contractframework.ResultPlan) error
 	if v.cfg.VerifyResult != nil {
-		return v.cfg.VerifyResult(txs[0], plans, template.ResultStatusSuccess)
+		verify = func(tx *wire.MsgTx, plans []contractframework.ResultPlan) error {
+			return v.cfg.VerifyResult(tx, plans, template.ResultStatusSuccess)
+		}
 	}
-	if v.cfg.ResolveOutput == nil || v.cfg.ResolveResultScript == nil {
-		return fmt.Errorf("missing template result output resolver or script resolver")
-	}
-	return contractframework.VerifyCanonicalResultTx(contractframework.CanonicalResultVerifyRequest{
-		Label: "template", ResultTx: txs[0], Status: template.ResultStatusSuccess, Plans: plans,
-		GasAssetName: contractGasAssetNameForParams(v.cfg.ChainParams), Resolve: v.cfg.ResolveOutput,
-		ResolveScript: v.cfg.ResolveResultScript, PlanCount: templateResultPlanCount, CheckPayload: true, UseInputUTXO: true,
-	})
+	return contractframework.VerifyContractResultTxs(contractframework.ContractResultVerifyRequest{
+		ResultTxs: txs, Verify: verify, CanonicalResultVerifyRequest: contractframework.CanonicalResultVerifyRequest{
+			Label: "template", Status: template.ResultStatusSuccess, Plans: plans,
+			GasAssetName: contractGasAssetNameForParams(v.cfg.ChainParams), Resolve: v.cfg.ResolveOutput,
+			ResolveScript: v.cfg.ResolveResultScript, PlanCount: templateResultPlanCount, CheckPayload: true, UseInputUTXO: true}})
 }
 
 func (v *TemplateBlockExecutionValidator) contractPrefix() string {

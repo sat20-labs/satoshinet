@@ -129,7 +129,7 @@ func GetIndexerMgr() *IndexerMgr {
 
 func NewIndexerMgr(
 	cfg *Config,
-	bTestNet bool,
+	chainParam *chaincfg.Params,
 	interrupt <-chan struct{},
 ) *IndexerMgr {
 
@@ -137,13 +137,7 @@ func NewIndexerMgr(
 		return instance
 	}
 
-	chainParam := &chaincfg.MainNetParams
-	if bTestNet {
-		indexer.CHAIN = "testnet"
-		chainParam = &chaincfg.TestNetParams
-	} else {
-		chainParam = &chaincfg.MainNetParams
-	}
+	indexer.CHAIN = chainParam.Name
 
 	mgr := &IndexerMgr{
 		cfg:               cfg,
@@ -211,6 +205,18 @@ func (b *IndexerMgr) dkvsConfig() dkvs_indexer.Config {
 			if b.compiling == nil {
 				return 0
 			}
+			height := b.compiling.GetHeight()
+			if height < 0 {
+				return 0
+			}
+			return uint64(height)
+		},
+		TipHeight: func() uint64 {
+			if b.compiling == nil {
+				return 0
+			}
+			// ChainTip is a peer-advertised sync target. Only applied blocks
+			// provide a locally verified upper bound for DKVS record lifetime.
 			height := b.compiling.GetHeight()
 			if height < 0 {
 				return 0

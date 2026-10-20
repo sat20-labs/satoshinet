@@ -64,8 +64,9 @@ func TestDefaultInvokeLifecycleReuseMatchesUncachedExecution(t *testing.T) {
 			}
 			state, err := runtime.RuntimeState()
 			require.NoError(t, err)
-			requireDecimalString(t, "3000", state.AutopayData().AutopayDelegates["delegate-a"].Balance)
-			requireDecimalString(t, "1000", state.AutopayData().AutopayDelegates["delegate-b"].Balance)
+			requireDecimalString(t, "4000", state.AutopayData().GasBalance)
+			require.Empty(t, state.AutopayData().AutopayDelegates,
+				"default funding must not create delegates; fee and GAS outputs are handled by the same lifecycle path")
 			require.Equal(t, ResultStatusInvalid, got.records[3].Status)
 			wantResult, err := want.Finalize()
 			require.NoError(t, err)

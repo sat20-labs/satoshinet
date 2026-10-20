@@ -50,8 +50,11 @@ func isEndpointCacheRecord(record *wire.DKVSRecord) bool {
 // PathSnapshot and P2P relay. Placement-bound application records remain
 // readable/subscribable at their authoritative endpoint without joining the
 // network-comparable path view.
-func (i *Indexer) networkPathRecordVisible(record *wire.DKVSRecord) bool {
-	return record != nil && !IsTombstone(record.Flags) && !i.isLocalOnlyRecord(record)
+// Complete views must use their captured height for both payment and record
+// visibility, even if the underlying indexer advances during a locked scan.
+func (i *Indexer) networkPathRecordVisible(record *wire.DKVSRecord, height uint64) bool {
+	return record != nil && !IsTombstone(record.Flags) && !isEndpointCacheRecord(record) &&
+		i.paidRecordRelayableAt(record, height)
 }
 
 func (i *Indexer) relayableRecords(records []*wire.DKVSRecord) []*wire.DKVSRecord {

@@ -31,10 +31,11 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 		prefix = contract.TestnetContractPrefix
 	}
 	split := BlockContractSplit{
-		WorkTxs: make(map[ModuleType][]*wire.MsgTx),
-		ResultTxs: make(map[ModuleType][]*wire.MsgTx),
+		WorkTxs:     make(map[ModuleType][]*wire.MsgTx),
+		ResultTxs:   make(map[ModuleType][]*wire.MsgTx),
 		WorkOutputs: make(map[wire.OutPoint]contract.ContractAddress),
 	}
+	knownOutputs := make(map[wire.OutPoint]contract.ContractAddress)
 	modules := make(map[ModuleType]Module, len(req.Modules))
 	for _, module := range req.Modules {
 		if module == nil {
@@ -63,7 +64,7 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 			continue
 		}
 		if foundPayload && txType == contract.TxTypeResult {
-			moduleType, err := inferResultModule(tx, prefix, req.ParentView, split.WorkOutputs)
+			moduleType, err := inferResultModule(tx, prefix, req.ParentView, knownOutputs)
 			if err != nil {
 				return split, fmt.Errorf("classify CONTRACT_RESULT %s: %w", tx.TxID(), err)
 			}
@@ -71,6 +72,8 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 				return split, fmt.Errorf("CONTRACT_RESULT %s belongs to unregistered module %d", tx.TxID(), moduleType)
 			}
 			split.ResultTxs[moduleType] = append(split.ResultTxs[moduleType], tx)
+			// Later fragments can spend this Result's contract carry output.
+			addAllContractOutputs(knownOutputs, tx, prefix)
 			continue
 		}
 		if foundPayload {
@@ -84,6 +87,7 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 			moduleType := class.ContractType
 			split.WorkTxs[moduleType] = append(split.WorkTxs[moduleType], tx)
 			addWorkOutputs(split.WorkOutputs, tx, prefix, moduleType)
+			addAllContractOutputs(knownOutputs, tx, prefix)
 			continue
 		}
 		defaultTypes, err := defaultInvokeModuleTypes(tx, prefix, modules)
@@ -99,6 +103,7 @@ func SplitBlockContractTxs(req SplitRequest) (BlockContractSplit, error) {
 			split.WorkTxs[moduleType] = append(split.WorkTxs[moduleType], tx)
 		}
 		addAllContractOutputs(split.WorkOutputs, tx, prefix)
+		addAllContractOutputs(knownOutputs, tx, prefix)
 	}
 	return split, nil
 }

@@ -18,15 +18,19 @@ func configurePOSV2TestNetwork(params *chaincfg.Params) error {
 	if raw == "" {
 		return nil
 	}
-	if params.Name != "testnet" {
-		return fmt.Errorf("POS v2 harness requires testnet")
+	if params.Name != "testnet" && params.Name != "regtest" {
+		return fmt.Errorf("POS v2 harness requires testnet or regtest")
 	}
 	height, err := strconv.ParseInt(raw, 10, 32)
 	if err != nil || height <= 0 {
 		return fmt.Errorf("invalid POS v2 harness activation height %q", raw)
 	}
 	params.POSV2Height = int32(height)
-	chaincfg.TestNetParams.POSV2Height = int32(height) // shared L2 indexer parameters
+	if params.Name == "testnet" {
+		chaincfg.TestNetParams.POSV2Height = int32(height)
+	} else {
+		chaincfg.RegressionNetParams.POSV2Height = int32(height)
+	}
 	return nil
 }
 
@@ -37,8 +41,8 @@ func unlockRPCTestWallet() (bool, error) {
 	if password == "" {
 		return false, nil
 	}
-	if activeNetParams.Name != "testnet" || os.Getenv("SATOSHINET_RPCTEST_STP_MNEMONIC") == "" {
-		return true, fmt.Errorf("test wallet unlock requires local testnet harness")
+	if (activeNetParams.Name != "testnet" && activeNetParams.Name != "regtest") || os.Getenv("SATOSHINET_RPCTEST_STP_MNEMONIC") == "" {
+		return true, fmt.Errorf("test wallet unlock requires local testnet or regtest harness")
 	}
 	return true, stp.UnlockWallet(password)
 }

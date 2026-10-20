@@ -28,10 +28,10 @@ func main() {
 	}
 	
 	stopChan := make(<-chan struct{})
-	mgr, err := indexer.NewIndexerMgr("./data", 
-	"192.168.10.103",
-	"19527", 
-	"q17AIoqBJSEhW7djqjn0nTsZcz4=", "nnlkAZn58bqsyYwVtHIajZ16cj8=", false, true,
+	mgr, err := indexer.NewIndexerMgr("./data",
+		"192.168.10.103",
+		"19527",
+		"q17AIoqBJSEhW7djqjn0nTsZcz4=", "nnlkAZn58bqsyYwVtHIajZ16cj8=", false, &chaincfg.TestNetParams,
 		stopChan)
 	if err != nil {
 		return

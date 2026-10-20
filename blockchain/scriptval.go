@@ -161,6 +161,23 @@ func (v *txValidator) Validate(items []*txValidateItem) error {
 		return nil
 	}
 
+	// A contract input validates the entire Result against the current view.
+	// Keep one such job per transaction for this invocation; ordinary inputs
+	// and missing entries still require their individual validation jobs.
+	contractTxs := make(map[*btcutil.Tx]struct{})
+	filtered := items[:0]
+	for _, item := range items {
+		entry := v.utxoView.LookupEntry(item.txIn.PreviousOutPoint)
+		if entry != nil && isContractPkScriptForPrefix(entry.PkScript(), v.contractPrefix) {
+			if _, exists := contractTxs[item.tx]; exists {
+				continue
+			}
+			contractTxs[item.tx] = struct{}{}
+		}
+		filtered = append(filtered, item)
+	}
+	items = filtered
+
 	// Limit the number of goroutines to do script validation based on the
 	// number of processor cores.  This helps ensure the system stays
 	// reasonably responsive under heavy load.

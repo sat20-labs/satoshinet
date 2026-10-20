@@ -79,7 +79,7 @@ func (r *ContractRuntime) CheckInvokeFunding(action string, param []byte, output
 }
 
 func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, error) {
-	if err := r.CheckInvocationLifecycle(req.Action, req.Invoker); err != nil {
+	if err := r.CheckInvocationLifecycle(req.Action, req.Invoker, req.Param); err != nil {
 		return nil, err
 	}
 	if err := r.CheckInvoke(req.Action, req.Param); err != nil {
@@ -94,7 +94,7 @@ func (r *ContractRuntime) ApplyInvoke(req ApplyInvokeRequest) (*InvokeItem, erro
 	if err != nil {
 		return nil, err
 	}
-	if !autopayGasOnlyConfig(r.contract, req.Action, req.Param) {
+	if req.Action != InvokeAPIClose && !autopayGasOnlyConfig(r.contract, req.Action, req.Param) {
 		if err := checkAutopayDelegateCapacity(r.contract, &state, req.Invoker); err != nil {
 			return nil, err
 		}
@@ -161,7 +161,7 @@ func (r *ContractRuntime) SettleBlockWithGasConfigAndPrecision(height int64, gas
 		if err != nil {
 			return nil, err
 		}
-		plan, err := c.settleAutopay(r, &state, height, gasConfig.Normalize())
+		plan, err := c.settleAutopay(r, &state, height, gasConfig.Normalize(), assetPrecision)
 		if err != nil {
 			return nil, err
 		}

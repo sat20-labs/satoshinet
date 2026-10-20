@@ -80,6 +80,10 @@ func CloneResultPlans(plans []ResultPlan) []ResultPlan {
 func MergeResultPlansByContract(plans []ResultPlan) []ResultPlan {
 	out := make([]ResultPlan, 0, len(plans))
 	index := make(map[string]int, len(plans))
+	// Keep the original prefixes: ItemIDs and InputUTXOs historically retain
+	// duplicates in the first plan, while subsequent entries are unique.
+	type mergePrefix struct{ itemIDs, inputUTXOs int }
+	prefixes := make(map[int]mergePrefix)
 	for _, plan := range plans {
 		if plan.Contract == "" {
 			cloned := CloneResultPlan(plan)
@@ -100,6 +104,9 @@ func MergeResultPlansByContract(plans []ResultPlan) []ResultPlan {
 			continue
 		}
 		merged := &out[i]
+		if _, ok := prefixes[i]; !ok {
+			prefixes[i] = mergePrefix{len(merged.ItemIDs), len(merged.InputUTXOs)}
+		}
 		count := plan.ResultCount
 		if count == 0 {
 			count = 1
@@ -108,22 +115,36 @@ func MergeResultPlansByContract(plans []ResultPlan) []ResultPlan {
 		if merged.Height == 0 {
 			merged.Height = plan.Height
 		}
-		merged.ItemIDs = appendUniqueInt64s(merged.ItemIDs, plan.ItemIDs)
+		merged.ItemIDs = append(merged.ItemIDs, plan.ItemIDs...)
 		merged.GasFee = DecimalAddAllowNil(merged.GasFee, plan.GasFee)
 		merged.SatoshiFee += plan.SatoshiFee
 		merged.GasRefunds = append(merged.GasRefunds, CloneResultGasRefunds(plan.GasRefunds)...)
 		if merged.InputScope != plan.InputScope {
 			merged.InputScope = ResultInputScopeAllContractUTXOs
 		}
-		merged.Inputs = UniqueOutPoints(append(merged.Inputs, plan.Inputs...))
-		merged.CallFunding = UniqueOutPoints(append(merged.CallFunding, plan.CallFunding...))
-		merged.RefundFunding = UniqueOutPoints(append(merged.RefundFunding, plan.RefundFunding...))
-		merged.InputUTXOs = appendUniqueUTXOs(merged.InputUTXOs, plan.InputUTXOs)
+		merged.Inputs = append(merged.Inputs, plan.Inputs...)
+		merged.CallFunding = append(merged.CallFunding, plan.CallFunding...)
+		merged.RefundFunding = append(merged.RefundFunding, plan.RefundFunding...)
+		// The suffix is borrowed only until the final deduplication below,
+		// which clones each retained UTXO before returning it to the caller.
+		merged.InputUTXOs = append(merged.InputUTXOs, plan.InputUTXOs...)
 		merged.FeeOutputs = append(merged.FeeOutputs, CloneResultOutputs(plan.FeeOutputs)...)
 		merged.Outputs = append(merged.Outputs, CloneResultOutputs(plan.Outputs)...)
 		// A merged business plan must be accounted as a whole before it is
 		// committed. Finalized per-contract plans are produced after this merge.
 		merged.ManagedRemainder = nil
+	}
+	for i := range out {
+		prefix, merged := prefixes[i]
+		if !merged {
+			continue
+		}
+		plan := &out[i]
+		plan.ItemIDs = appendUniqueInt64s(plan.ItemIDs[:prefix.itemIDs], plan.ItemIDs[prefix.itemIDs:])
+		plan.Inputs = UniqueOutPoints(plan.Inputs)
+		plan.CallFunding = UniqueOutPoints(plan.CallFunding)
+		plan.RefundFunding = UniqueOutPoints(plan.RefundFunding)
+		plan.InputUTXOs = appendUniqueUTXOs(plan.InputUTXOs[:prefix.inputUTXOs], plan.InputUTXOs[prefix.inputUTXOs:])
 	}
 	return out
 }
@@ -371,7 +392,6 @@ func CompactResultOutputs(outputs []ResultOutput) ([]ResultOutput, error) {
 	}
 	return out, nil
 }
-
 
 func compactResultOutputKey(output ResultOutput) (string, bool) {
 	if len(output.ExtraData) != 0 || output.AssetName != "" || output.AssetAmt != "" || output.Reason != "" {

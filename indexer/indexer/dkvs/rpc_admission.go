@@ -138,10 +138,11 @@ func (i *Indexer) putBoundWalletBatch(mutations []CASMutation, options BatchCASO
 		}
 		i.mutex.Lock()
 		height, now := i.currentHeight(), currentUnixMilli()
+		tipHeight := i.issueHeightTip(height)
 		err = i.rpcBindingsCurrentLocked(bindings)
 		var exact bool
 		if err == nil {
-			exact, err = i.exactCurrentWalletRetryLocked(mutations, height, now)
+			exact, err = i.exactCurrentWalletRetryLocked(mutations, tipHeight, now)
 		}
 		// A matching current value or current absence can be reported without
 		// executing anything. Every state-changing operation must still match
@@ -150,22 +151,22 @@ func (i *Indexer) putBoundWalletBatch(mutations []CASMutation, options BatchCASO
 			if len(bindings) == 0 {
 				// The validated standalone binding is the sole bootstrap
 				// exception to request authorization, not to fresh height.
-				err = validateWalletWriteHeight(mutations[0].Record.IssueHeight, height)
+				err = validateWalletWriteHeight(mutations[0].Record.IssueHeight, tipHeight)
 			} else {
-				err = i.walletWriteContextCurrentLocked(authorization, mutations, height, now)
+				err = i.walletWriteContextCurrentLocked(authorization, mutations, height, tipHeight, now)
 			}
 		}
 		var ready []preparedCASMutation
 		if err == nil {
-			ready, err = i.batchCASReadyLocked(prep, height, now)
+			ready, err = i.batchCASReadyLocked(prep, height, tipHeight, now)
 		}
 		if err == nil && len(ready) != 0 {
-			err = i.validateBatchStateLocked(ready, height, now)
+			err = i.validateBatchStateLocked(ready, height, tipHeight, now)
 		}
 		var events []batchCASEvent
 		var states []PrefixGeneration
 		if err == nil && len(ready) != 0 {
-			events, states, err = i.commitBatchCASLocked(ready, height, now)
+			events, states, err = i.commitBatchCASLocked(ready, tipHeight, now)
 		} else if err == nil {
 			states, err = i.prefixStatesForPreparedLocked(prep.mutations)
 		}
@@ -177,7 +178,7 @@ func (i *Indexer) putBoundWalletBatch(mutations []CASMutation, options BatchCASO
 			return nil, err
 		}
 		i.emitCommittedEvents(events)
-		result := &WriteResult{Applied: len(ready), ServerTimeMS: now, ViewHeight: height,
+		result := &WriteResult{Applied: len(ready), ServerTimeMS: now, ViewHeight: tipHeight,
 			EndpointID: i.EndpointID(), RequestID: options.RequestID, PrefixStates: states}
 		for _, item := range prep.mutations {
 			record := cloneRecord(item.mutation.Record)

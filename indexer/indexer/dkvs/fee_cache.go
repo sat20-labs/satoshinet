@@ -30,7 +30,7 @@ func (p *HeightCachedAutopayStateProvider) GetAutopayState(contract string) (*Au
 		if err != nil {
 			return nil, err
 		}
-		return normalizeAutopayStateForPaidRetention(state), nil
+		return normalizeAutopayStateForPaidRetention(state, height), nil
 	}
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
@@ -45,7 +45,7 @@ func (p *HeightCachedAutopayStateProvider) GetAutopayState(contract string) (*Au
 	if err != nil {
 		return nil, err
 	}
-	state = normalizeAutopayStateForPaidRetention(state)
+	state = normalizeAutopayStateForPaidRetention(state, height)
 	p.states[contract] = cloneAutopayState(state)
 	return cloneAutopayState(state), nil
 }
@@ -54,10 +54,19 @@ func (p *HeightCachedAutopayStateProvider) GetAutopayState(contract string) (*Au
 // payment history into the active/funding shape consumed by the existing DKVS
 // fee verifier. A delegate is active only after it has paid the current block.
 // The synthetic balance is verifier-local and never changes contract state.
-func normalizeAutopayStateForPaidRetention(state *AutopayContractState) *AutopayContractState {
+func normalizeAutopayStateForPaidRetention(state *AutopayContractState, indexedHeight uint64) *AutopayContractState {
 	state = cloneAutopayState(state)
-	if state == nil || state.CurrentBlock <= 0 || state.Closed || strings.EqualFold(state.Status, "closed") ||
-		strings.EqualFold(state.Status, "expired") {
+	if state == nil || state.CurrentBlock <= 0 {
+		return state
+	}
+	// Runtime currentBlock may retain the last explicit invoke height.
+	// Payment retention must also cover the height currently indexed.
+	if indexedHeight > uint64(state.CurrentBlock) {
+		state.CurrentBlock = int64(indexedHeight)
+	}
+	// A confirmed terminal state is known at the indexed view too. Preserve
+	// its closed status and payment history without activating any delegate.
+	if state.Closed || strings.EqualFold(state.Status, "closed") || strings.EqualFold(state.Status, "expired") {
 		return state
 	}
 	active := false

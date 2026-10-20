@@ -226,6 +226,8 @@ func NewWithEnv(activeNet *chaincfg.Params, handlers *rpcclient.NotificationHand
 	switch activeNet.Net {
 	case wire.MainNet:
 		// No extra flags since mainnet is the default
+	case wire.RegNet:
+		extraArgs = append(extraArgs, "--regtest")
 	case wire.TestNet:
 		extraArgs = append(extraArgs, "--testnet")
 	case wire.SimNet:

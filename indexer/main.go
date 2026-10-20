@@ -4,23 +4,24 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/rpcserver"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 )
 
-func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool, interrupt <-chan struct{}) (*indexer.IndexerMgr, error) {
-	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, bTestNet, interrupt, nil)
+func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls bool, params *chaincfg.Params, interrupt <-chan struct{}) (*indexer.IndexerMgr, error) {
+	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, params, interrupt, nil)
 }
 
-func NewIndexerMgrWithDKVS(dbPath, host, port, user, ps string, enableTls, bTestNet bool,
+func NewIndexerMgrWithDKVS(dbPath, host, port, user, ps string, enableTls bool, params *chaincfg.Params,
 	interrupt <-chan struct{}, dkvs *indexer.DKVSIntegrationConfig) (*indexer.IndexerMgr, error) {
 
-	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, bTestNet, interrupt, dkvs)
+	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, params, interrupt, dkvs)
 }
 
-func newIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool,
+func newIndexerMgr(dbPath, host, port, user, ps string, enableTls bool, params *chaincfg.Params,
 	interrupt <-chan struct{}, dkvs *indexer.DKVSIntegrationConfig) (*indexer.IndexerMgr, error) {
 
 	p, err := strconv.Atoi(port)
@@ -43,11 +44,11 @@ func newIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool
 		DKVS: dkvs,
 	}
 
-	indexerMgr := indexer.NewIndexerMgr(&cfg, bTestNet, interrupt)
+	indexerMgr := indexer.NewIndexerMgr(&cfg, params, interrupt)
 	shareIndexer.InitIndexer(indexerMgr)
 	indexerMgr.Init()
 
-	rpc, err := initRpcService(dbPath, p+1, bTestNet, indexerMgr)
+	rpc, err := initRpcService(dbPath, p+1, indexerMgr)
 	if err != nil {
 		common.Log.Error(err)
 		if closeErr := indexerMgr.Close(); closeErr != nil {
@@ -59,13 +60,10 @@ func newIndexerMgr(dbPath, host, port, user, ps string, enableTls, bTestNet bool
 	return indexerMgr, nil
 }
 
-func initRpcService(dbPath string, port int, bTestNet bool, indexerMgr *indexer.IndexerMgr) (*rpcserver.Rpc, error) {
+func initRpcService(dbPath string, port int, indexerMgr *indexer.IndexerMgr) (*rpcserver.Rpc, error) {
 
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	proxy := "mainnet"
-	if bTestNet {
-		proxy = "testnet"
-	}
+	proxy := indexerMgr.GetChainParam().Name
 
 	rpc := rpcserver.NewRpc(indexerMgr)
 	err := rpc.Start(addr, proxy, dbPath+"/logs/"+indexerMgr.GetChainParam().Name)

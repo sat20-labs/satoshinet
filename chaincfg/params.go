@@ -439,12 +439,11 @@ type Params struct {
 // 	HDCoinType: 0,
 // }
 
-// RegressionNetParams defines the network parameters for the regression test
-// Bitcoin network.  Not to be confused with the test Bitcoin network (version
-// 3), this network is sometimes simply called "testnet".
+// RegressionNetParams defines the isolated local SatoshiNet regression network.
+// CSV, Segwit and Taproot become active for block 3 through normal BIP9 warmup.
 var RegressionNetParams = Params{
 	Name:        "regtest",
-	Net:         wire.TestNet,
+	Net:         wire.RegNet,
 	DefaultPort: "39526",
 	DNSSeeds:    []DNSSeed{},
 
@@ -454,27 +453,27 @@ var RegressionNetParams = Params{
 	PowLimit:                 regressionPowLimit,
 	PowLimitBits:             0x207fffff,
 	PoWNoRetargeting:         true,
-	CoinbaseMaturity:         100,
-	BIP0034Height:            100000000, // Not active - Permit ver 1 blocks
-	BIP0065Height:            1351,      // Used by regression tests
-	BIP0066Height:            1251,      // Used by regression tests
-	SubsidyReductionInterval: 150,
+	CoinbaseMaturity:         1,
+	BIP0034Height:            1,
+	BIP0065Height:            1,
+	BIP0066Height:            1,
+	SubsidyReductionInterval: 210000,
 	TargetTimespan:           time.Hour * 24 * 14, // 14 days
-	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes
+	TargetTimePerBlock:       2 * time.Second,     // POS production interval
 	RetargetAdjustmentFactor: 4,                   // 25% less, 400% more
 	ReduceMinDifficulty:      true,
-	MinDiffReductionTime:     time.Minute * 20, // TargetTimePerBlock * 2
+	MinDiffReductionTime:     4 * time.Second, // TargetTimePerBlock * 2
 	GenerateSupported:        true,
 
 	// Checkpoints ordered from oldest to newest.
-	Checkpoints: nil,
+	Checkpoints: []Checkpoint{{0, &regTestGenesisHash}},
 
 	// Consensus rule change deployments.
 	//
 	// The miner confirmation window is defined as:
 	//   target proof of work timespan / target proof of work spacing
-	RuleChangeActivationThreshold: 108, // 75%  of MinerConfirmationWindow
-	MinerConfirmationWindow:       144,
+	RuleChangeActivationThreshold: 0,
+	MinerConfirmationWindow:       1,
 	Deployments: [DefinedDeployments]ConsensusDeployment{
 		DeploymentTestDummy: {
 			BitNumber: 28,
@@ -487,8 +486,8 @@ var RegressionNetParams = Params{
 		},
 		DeploymentTestDummyMinActivation: {
 			BitNumber:                 22,
-			CustomActivationThreshold: 72,  // Only needs 50% hash rate.
-			MinActivationHeight:       600, // Can only activate after height 600.
+			CustomActivationThreshold: 0,
+			MinActivationHeight:       0,
 			DeploymentStarter: NewMedianTimeDeploymentStarter(
 				time.Time{}, // Always available for vote
 			),
@@ -522,7 +521,7 @@ var RegressionNetParams = Params{
 			DeploymentEnder: NewMedianTimeDeploymentEnder(
 				time.Time{}, // Never expires.
 			),
-			CustomActivationThreshold: 108, // Only needs 75% hash rate.
+			CustomActivationThreshold: 0,
 		},
 	},
 
@@ -534,9 +533,11 @@ var RegressionNetParams = Params{
 	Bech32HRPSegwit: "bcrt", // always bcrt for reg test net
 
 	// Address encoding magics
-	PubKeyHashAddrID: 0x6f, // starts with m or n
-	ScriptHashAddrID: 0xc4, // starts with 2
-	PrivateKeyID:     0xef, // starts with 9 (uncompressed) or c (compressed)
+	WitnessPubKeyHashAddrID: 0x03,
+	WitnessScriptHashAddrID: 0x28,
+	PubKeyHashAddrID:        0x6f, // starts with m or n
+	ScriptHashAddrID:        0xc4, // starts with 2
+	PrivateKeyID:            0xef, // starts with 9 (uncompressed) or c (compressed)
 
 	// BIP32 hierarchical deterministic extended key magics
 	HDPrivateKeyID: [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
@@ -1293,4 +1294,5 @@ func init() {
 	// mustRegister(&SimNetParams)
 	mustRegister(&MainNetParams)
 	mustRegister(&TestNetParams)
+	mustRegister(&RegressionNetParams)
 }

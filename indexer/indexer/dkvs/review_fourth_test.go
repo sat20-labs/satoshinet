@@ -63,6 +63,10 @@ func TestDKVSReviewPathSnapshotPreservesUnpaidAutopayGrace(t *testing.T) {
 	}
 	source, _, _ = newAutopayMirrorIndexerForPrivateKey(t, priv, int64(height))
 	source.height = target.height
+	sourceVerifier := source.snapshotValidators().feeVerifier.(LocalCacheAutopayFeeVerifier)
+	sourceCached := sourceVerifier.StateProvider.(*HeightCachedAutopayStateProvider)
+	sourceCached.CurrentHeight = source.height
+	sourceCached.Provider.(*mutableAutopayStateProvider).state.CurrentBlock = int64(height)
 	replacement := signedAutopayPersonalRecord(t, priv, "autopay", 2)
 	if _, err := source.PutLocal(replacement); err != nil {
 		t.Fatal(err)

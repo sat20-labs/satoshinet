@@ -338,7 +338,7 @@ func newTemplateMiningModule(cfg Config, req mining.ContractBuildRequest) (contr
 		return nil, err
 	}
 	return contractframework.NewSettlementModule(contractframework.SettlementModuleConfig{
-		Descriptor: templateModuleDescriptor(), ParentRoot: parent.StateRoot(), GasConfig: gas,
+		PerContract: true, Descriptor: templateModuleDescriptor(), ParentRoot: parent.StateRoot(), GasConfig: gas,
 		ResolveScript: templateResultScriptResolver(cfg.ChainParams), ResolveOutput: templateResultOutputResolver(cfg),
 		PlanCount: templateResultPlanCount,
 		Execute: func(work contractframework.WorkExecutionRequest) (contractframework.BackendBlockExecutionResult, any, error) {
@@ -350,6 +350,7 @@ func newTemplateMiningModule(cfg Config, req mining.ContractBuildRequest) (contr
 				GasConfig:      gas, ContractUTXOs: templateContractUTXOProvider(cfg.TemplateContractUTXOs),
 				AssetPrecision: cfg.AssetPrecision, BlockHeight: int64(req.Height),
 				ResolveInvoker: tmplcontract.LastInputPreviousOutputInvokerResolver(cfg.ChainParams, previousOutputScriptResolver(req.UtxoView)),
+				ResolveScript: templateResultScriptResolver(cfg.ChainParams),
 			})
 			return exec, &candidate, err
 		},

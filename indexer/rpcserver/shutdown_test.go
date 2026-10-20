@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	idxdb "github.com/sat20-labs/indexer/indexer/db"
+	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/indexer"
 	"github.com/sat20-labs/satoshinet/indexer/share/satsnet_rpc"
 	"github.com/stretchr/testify/require"
@@ -23,7 +24,7 @@ import (
 
 func TestIndexerCloseWaitsForActiveHTTPReader(t *testing.T) {
 	dataPath := t.TempDir()
-	mgr := indexer.NewIndexerMgr(&indexer.Config{DataPath: dataPath}, true, nil)
+	mgr := indexer.NewIndexerMgr(&indexer.Config{DataPath: dataPath}, &chaincfg.TestNetParams, nil)
 	mgr.Init()
 	rpc := NewRpc(mgr)
 	require.NoError(t, rpc.Start("127.0.0.1:0", "testnet", ""))

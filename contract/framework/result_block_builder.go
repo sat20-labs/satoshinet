@@ -23,6 +23,7 @@ type SingleResultBlockRequest[T any] struct {
 }
 
 type SingleResultTxPolicy struct {
+	PerContract   bool
 	Label         string
 	Status        contract.ResultStatus
 	GasAssetName  string
@@ -159,7 +160,19 @@ func BuildSingleResultTxBlock[T any](req SingleResultBlockRequest[T]) (BlockResu
 		execution = req.SetPlans(execution, plans)
 	}
 	resultTxs := make([]*wire.MsgTx, 0, 1)
-	if len(plans) != 0 {
+	if req.Policy.PerContract {
+		resultTxs, err = BuildContractResultTxs(ResultTxBuildRequest{Status: req.Policy.Status,
+			Plans: plans, ResolveScript: req.Policy.ResolveScript}, ResultTxBuildOptions{PlanCount: req.Policy.PlanCount})
+		if err == nil {
+			err = VerifyContractResultTxs(ContractResultVerifyRequest{ResultTxs: resultTxs,
+				CanonicalResultVerifyRequest: CanonicalResultVerifyRequest{Label: req.Policy.Label, Status: req.Policy.Status,
+					Plans: plans, GasAssetName: req.Policy.GasAssetName, Resolve: req.Policy.ResolveOutput,
+					ResolveScript: req.Policy.ResolveScript, PlanCount: req.Policy.PlanCount, CheckPayload: true}})
+		}
+		if err != nil {
+			return BlockResultBuildResult{}, err
+		}
+	} else if len(plans) != 0 {
 		tx, err := req.Policy.BuildTx(plans)
 		if err != nil {
 			return BlockResultBuildResult{}, err

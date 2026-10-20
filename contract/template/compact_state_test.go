@@ -193,6 +193,12 @@ func TestCompactTemplateMapOrderAndDecimalBoundaries(t *testing.T) {
 	_, err = encodeTemplateRuntimeState(bad)
 	require.Error(t, err)
 	bad.Items[0].InAmt = scommon.NewDecimalWithScale(1, 11)
+	raw, err = encodeTemplateRuntimeState(bad)
+	require.NoError(t, err)
+	restored, err := decodeTemplateRuntimeState(raw)
+	require.NoError(t, err)
+	require.Equal(t, bad.Items[0].InAmt, restored.Items[0].InAmt)
+	bad.Items[0].InAmt = &scommon.Decimal{Precision: scommon.MAX_PRECISION + 1, Value: scommon.NewDefaultDecimal(1).Value}
 	_, err = encodeTemplateRuntimeState(bad)
 	require.Error(t, err)
 }
@@ -328,8 +334,10 @@ func compactAutopayFixture(t *testing.T, count, pending int) (*ContractRuntime, 
 	t.Helper()
 	runtime := testAutopayRuntime(t, "recipient", DefaultGasConfig().GasAssetName, "2000")
 	for i := 0; i < pending; i++ {
-		_, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{Invoker: fmt.Sprintf("delegate-%04d", i), Height: 100, FundingOutput: testContractOutput(fmt.Sprintf("funding-%04d", i), 0, runtime.Address(), 0, testAsset(DefaultGasConfig().GasAssetName, 1000))})
-		require.NoError(t, err)
+		id := fmt.Sprintf("funding-%04d", i)
+		applyAutopayDelegateConfigForTest(t, runtime, fmt.Sprintf("delegate-%04d", i), id, 100, "2000",
+			DefaultGasConfig().GasAssetName, testContractOutput(id, 0, runtime.Address(), 0,
+				testAsset(DefaultGasConfig().GasAssetName, 1000)))
 	}
 	state, err := runtime.RuntimeState()
 	require.NoError(t, err)

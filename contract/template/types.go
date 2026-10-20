@@ -36,6 +36,7 @@ const (
 	InvokeAPIProfit          = contractcommon.TemplateInvokeAPIProfit
 	InvokeAPIExchange        = contractcommon.TemplateInvokeAPIExchange
 	InvokeAPIConfig          = contractcommon.TemplateInvokeAPIConfig
+	InvokeAPIFunding         = contractcommon.TemplateInvokeAPIFunding
 	InvokeAPICancel          = contractcommon.TemplateInvokeAPICancel
 	InvokeAPIClose           = contractcommon.TemplateInvokeAPIClose
 )

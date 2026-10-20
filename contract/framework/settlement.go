@@ -302,7 +302,7 @@ func ScaleResultOutputsToPool(outputs []ResultOutput, assetName string, pool *sc
 		if output.AssetName != assetName {
 			continue
 		}
-		amount, err := parseTransferAmount(output.AssetAmt, opts.Precision.ParsePrecision(),
+		amount, err := parseTransferAmount(output.AssetAmt, opts.Precision.parsePrecisionForAsset(output.AssetName),
 			opts.RequireIntegerSatoshi && output.AssetName == opts.SatoshiAssetName,
 			opts.IntegerSatoshiError)
 		if err != nil {
@@ -338,7 +338,7 @@ func ScaleResultOutputsToPool(outputs []ResultOutput, assetName string, pool *sc
 		if output.AssetName != assetName {
 			continue
 		}
-		amount, err := parseTransferAmount(output.AssetAmt, opts.Precision.ParsePrecision(),
+		amount, err := parseTransferAmount(output.AssetAmt, opts.Precision.parsePrecisionForAsset(output.AssetName),
 			opts.RequireIntegerSatoshi && output.AssetName == opts.SatoshiAssetName,
 			opts.IntegerSatoshiError)
 		if err != nil {
@@ -404,7 +404,7 @@ func RebuildResultOutputAsset(output *ResultOutput, opts SettlementResultOptions
 		return nil
 	}
 	if output.AssetName == opts.SatoshiAssetName {
-		amt, err := parseTransferAmount(output.AssetAmt, opts.Precision.ParsePrecision(),
+		amt, err := parseTransferAmount(output.AssetAmt, opts.Precision.parsePrecisionForAsset(output.AssetName),
 			opts.RequireIntegerSatoshi, opts.IntegerSatoshiError)
 		if err != nil {
 			return err

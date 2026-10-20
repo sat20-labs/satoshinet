@@ -48,6 +48,7 @@ type Indexer struct {
 	notify                    NotifyFunc
 	subNotify                 SubscriptionNotifyFunc
 	height                    func() uint64
+	tipHeight                 func() uint64
 	mutex                     sync.RWMutex
 	watchMutex                sync.Mutex
 	pathSignals               map[string]*pathWatchSignal
@@ -78,7 +79,7 @@ func New(db indexercommon.KVDB, cfg Config) *Indexer {
 		mailbox: normalizeMailboxPolicy(cfg.MailboxPolicy), blob: normalizeBlobPolicy(cfg.BlobPolicy),
 		tmp: normalizeTmpPolicy(cfg.TmpPolicy), endpointIdentity: strings.TrimSpace(cfg.EndpointID),
 		freeLocal: freeLocal, subs: newSubscriptionSet(), notify: cfg.Notify,
-		subNotify: cfg.Subscription, height: cfg.CurrentHeight, pathSignals: make(map[string]*pathWatchSignal),
+		subNotify: cfg.Subscription, height: cfg.CurrentHeight, tipHeight: cfg.TipHeight, pathSignals: make(map[string]*pathWatchSignal),
 	}
 	indexer.resetFeeUsageLocked()
 	indexer.resetFreeLocalUsageLocked()
@@ -109,6 +110,8 @@ func (i *Indexer) SetFeeVerifier(verifier FeeVerifier) {
 	}
 	i.feeVerifier = verifier
 	i.resetFeeUsageLocked()
+	paidRetentionCacheFor(i).replace(make(map[string]PaidRecordRetention))
+	i.resetFreeLocalUsageLocked()
 	atomic.AddUint64(&i.policyGeneration, 1)
 }
 func (i *Indexer) SetSystemVerifier(verifier SystemVerifier) {
@@ -191,7 +194,7 @@ func (i *Indexer) Get(key string) (*wire.DKVSRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := i.activeError(record, i.currentHeight(), currentUnixMilli()); err != nil {
+	if err := i.activeError(record, i.issueHeightTip(i.currentHeight()), currentUnixMilli()); err != nil {
 		return nil, ErrRecordNotFound
 	}
 	return record, nil
@@ -210,7 +213,7 @@ func (i *Indexer) GetByHash(hash chainhash.Hash) (*wire.DKVSRecord, error) {
 	if RecordHash(record) != hash {
 		return nil, ErrRecordNotFound
 	}
-	if err := i.activeError(record, i.currentHeight(), currentUnixMilli()); err != nil {
+	if err := i.activeError(record, i.issueHeightTip(i.currentHeight()), currentUnixMilli()); err != nil {
 		return nil, ErrRecordNotFound
 	}
 	return record, nil
@@ -240,7 +243,7 @@ func (i *Indexer) ListPrefix(prefix string, start, limit int) ([]*wire.DKVSRecor
 		limit = 100
 	}
 	prefix = strings.TrimSuffix(prefix, "/")
-	height, now := i.currentHeight(), currentUnixMilli()
+	height, now := i.issueHeightTip(i.currentHeight()), currentUnixMilli()
 	// Application listing includes endpoint-local data; canonical PathMeta
 	// counts must never suppress local values here.
 	i.mutex.RLock()
@@ -526,7 +529,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 	for attempt := 0; attempt < 3; attempt++ {
 		height, now := i.currentHeight(), currentUnixMilli()
 		validators := i.snapshotValidators()
-		parsed, err := validateParsedCoreWithVerifier(record, height, remote, false, nil)
+		parsed, err := i.validateCoreWithVerifier(record, height, remote, false, nil)
 		if err != nil {
 			return false, 0, chainhash.Hash{}, false, err
 		}
@@ -629,7 +632,7 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 			i.mutex.Unlock()
 			return false, 0, chainhash.Hash{}, false, err
 		}
-		meta, err := i.pathMetaForMutationLocked(parsed, existing, record, retention != nil || i.networkPathRecordVisible(record), height, now)
+		meta, err := i.pathMetaForMutationLocked(parsed, existing, record, retention != nil || i.networkPathRecordVisible(record, height), height, now)
 		if err != nil {
 			i.mutex.Unlock()
 			return false, 0, chainhash.Hash{}, false, err
@@ -715,7 +718,7 @@ func (i *Indexer) validateParsedCore(record *wire.DKVSRecord, height uint64, all
 	if verifyFee {
 		verifier = i.snapshotValidators().feeVerifier
 	}
-	return validateParsedCoreWithVerifier(record, height, allowExpiredTombstone, verifyFee, verifier)
+	return i.validateCoreWithVerifier(record, height, allowExpiredTombstone, verifyFee, verifier)
 }
 func (i *Indexer) verifyFeeProof(record *wire.DKVSRecord, parsed ParsedKey) error {
 	return verifyFeeProofWith(i.snapshotValidators().feeVerifier, record, parsed)
@@ -998,6 +1001,16 @@ func (i *Indexer) emitSubscription(sub Subscription) {
 		notify(sub)
 	}
 }
+func (i *Indexer) issueHeightTip(indexedHeight uint64) uint64 {
+	if i.tipHeight != nil { return i.tipHeight() }
+	return indexedHeight
+}
+
+func (i *Indexer) validateCoreWithVerifier(record *wire.DKVSRecord, height uint64, allowExpiredTombstone, verifyFee bool, verifier FeeVerifier) (ParsedKey, error) {
+	if i.tipHeight == nil { return validateParsedCoreWithVerifier(record, height, allowExpiredTombstone, verifyFee, verifier) }
+	return validateParsedCoreWithVerifier(record, height, allowExpiredTombstone, verifyFee, verifier, i.tipHeight())
+}
+
 func (i *Indexer) currentHeight() uint64 {
 	if i.height == nil {
 		return 0

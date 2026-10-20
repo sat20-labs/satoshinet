@@ -436,7 +436,15 @@ func calcMerkleRoot(txns []*wire.MsgTx) chainhash.Hash {
 func newBlock(chain *BlockChain, prev *btcutil.Block,
 	spends []*testhelper.SpendableOut) (*btcutil.Block, []*testhelper.SpendableOut, error) {
 
-	blockHeight := prev.Height() + 1
+	parentHeight := prev.Height()
+	if parentHeight == btcutil.BlockHeightUnknown {
+		parent := chain.index.LookupNode(prev.Hash())
+		if parent == nil {
+			return nil, nil, fmt.Errorf("unknown fixture parent block %s", prev.Hash())
+		}
+		parentHeight = parent.height
+	}
+	blockHeight := parentHeight + 1
 	txns := make([]*wire.MsgTx, 0, 1+len(spends))
 
 	// Create and add coinbase tx.
@@ -469,7 +477,8 @@ func newBlock(chain *BlockChain, prev *btcutil.Block,
 	// SolveBlock.
 	block := btcutil.NewBlock(&wire.MsgBlock{
 		Header: wire.BlockHeader{
-			Version:    1,
+			// Satisfy BIP34/66/65 even when a regtest fixture changes Net.
+			Version:    4,
 			PrevBlock:  *prev.Hash(),
 			MerkleRoot: calcMerkleRoot(txns),
 			Bits:       chain.chainParams.PowLimitBits,

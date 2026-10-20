@@ -27,6 +27,14 @@ func (p AssetPrecisionPolicy) ParsePrecision() int {
 	return p.Fallback
 }
 
+func (p AssetPrecisionPolicy) parsePrecisionForAsset(assetName string) int {
+	precision := p.ParsePrecision()
+	if resolved, ok := p.precisionForAsset(assetName); ok && resolved > precision {
+		precision = resolved
+	}
+	return precision
+}
+
 func (p AssetPrecisionPolicy) AssetPrecision(assetName string) (int, bool) {
 	if assetName == "" || p.Resolve == nil {
 		return 0, false
@@ -192,7 +200,7 @@ func NewAssetSetWithPrecisionPolicy(assetName, amount string, policy AssetPrecis
 		}
 		return nil, ErrInvalidAsset
 	}
-	amt, err := scommon.NewDecimalFromString(amount, policy.ParsePrecision())
+	amt, err := scommon.NewDecimalFromString(amount, policy.parsePrecisionForAsset(assetName))
 	if err != nil {
 		return nil, err
 	}

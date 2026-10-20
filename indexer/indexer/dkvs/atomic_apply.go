@@ -48,7 +48,7 @@ func (i *Indexer) prevalidateRecordSet(records []*wire.DKVSRecord, rejectFreeLoc
 	retentions := make(map[string]*PaidRecordRetention, len(ordered))
 	forceReplace := make(map[string]bool, len(ordered))
 	for _, record := range ordered {
-		parsed, err := validateParsedCoreWithVerifier(record, height, false, false, nil)
+		parsed, err := i.validateCoreWithVerifier(record, height, false, false, nil)
 		if err != nil {
 			return preparedRecordSet{}, err
 		}

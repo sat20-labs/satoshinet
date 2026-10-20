@@ -27,6 +27,7 @@ type TemplateStateView struct {
 
 type LimitOrderStateView struct {
 	TemplateStateView
+	Closed          bool         `json:"closed,omitempty"`
 	TradingReady    bool         `json:"tradingReady"`
 	ActiveBuyCount  int          `json:"activeBuyCount"`
 	ActiveSellCount int          `json:"activeSellCount"`
@@ -124,6 +125,7 @@ func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (int
 		}
 		view := LimitOrderStateView{
 			TemplateStateView: base,
+			Closed:            running.Closed,
 			TradingReady:      running.TradingReady,
 			ActiveBuyCount:    len(buyIDs),
 			ActiveSellCount:   len(sellIDs),

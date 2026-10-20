@@ -189,7 +189,7 @@ func validateInvokeItemParamConsistency(item *InvokeItem) error {
 	case InvokeAPIExchange:
 		_, err := exchangeItemMinimumOutput(item)
 		return err
-	case InvokeAPIConfig:
+	case InvokeAPIConfig, InvokeAPIFunding:
 		_, err := decodeAutopayConfigItemParam(item)
 		return err
 	case InvokeAPICancel:

@@ -1476,6 +1476,22 @@ func (b *BaseIndexer) loadUtxoFromTxn(utxostr string, txn indexer.ReadBatch) err
 	}
 	addresses.Type = int(utxo.AddressType)
 	addresses.ReqSig = int(utxo.ReqSig)
+	if addresses.Type == int(txscript.ContractTy) {
+		// Stored contract outputs retain their canonical address, not the
+		// script bytes. Restore the script before handing spent inputs to
+		// contract history indexing, just as for an in-memory output.
+		if len(addresses.Addresses) != 1 || b.chaincfgParam == nil {
+			return fmt.Errorf("invalid stored contract address for UTXO %s", utxostr)
+		}
+		script, err := addressToPkScript(addresses.Addresses[0], b.chaincfgParam.Name)
+		if err != nil {
+			return fmt.Errorf("restore contract script for UTXO %s: %w", utxostr, err)
+		}
+		if txscript.GetScriptClass(script) != txscript.ContractTy {
+			return fmt.Errorf("stored address for contract UTXO %s is not a contract", utxostr)
+		}
+		addresses.PkScript = script
+	}
 
 	// TODO 对于多签的utxo，目前相当于把这个utxo给第一个地址
 	height, txid, vout := indexer.FromUtxoId(utxo.UtxoId)

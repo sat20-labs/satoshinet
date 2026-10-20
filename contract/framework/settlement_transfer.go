@@ -24,7 +24,7 @@ func ResultOutputFromTransferFields(req TransferOutputRequest) (ResultOutput, er
 	if req.AssetName == req.SatoshiAssetName {
 		value := req.SatValue
 		if req.AssetAmt != "" {
-			amt, err := parseTransferAmount(req.AssetAmt, req.Precision.ParsePrecision(),
+			amt, err := parseTransferAmount(req.AssetAmt, req.Precision.parsePrecisionForAsset(req.AssetName),
 				req.RequireIntegerSatoshi, req.IntegerSatoshiError)
 			if err != nil {
 				return ResultOutput{}, err
@@ -83,7 +83,7 @@ type TransferIntentRequest struct {
 func AssetIntentsFromTransferFields(req TransferIntentRequest) ([]AssetIntent, error) {
 	out := make([]AssetIntent, 0, 2)
 	if req.AssetName != "" && req.AssetAmt != "" {
-		amount, err := parseTransferAmount(req.AssetAmt, req.Precision.ParsePrecision(),
+		amount, err := parseTransferAmount(req.AssetAmt, req.Precision.parsePrecisionForAsset(req.AssetName),
 			req.RequireIntegerSatoshi && req.AssetName == req.SatoshiAssetName,
 			req.IntegerSatoshiError)
 		if err != nil {

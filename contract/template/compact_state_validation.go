@@ -34,7 +34,7 @@ func normalizeCompactInvokeItem(item *InvokeItem) error {
 		if field.gas {
 			*field.value, err = parseGasStateDecimal(field.name, text)
 		} else {
-			*field.value, err = parseStateDecimal(field.name, text)
+			*field.value, err = parseInvokeAssetAmount(field.name, text)
 		}
 		if err != nil {
 			return err

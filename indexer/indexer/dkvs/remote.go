@@ -44,7 +44,7 @@ func (i *Indexer) AcceptRemoteRecord(record *wire.DKVSRecord, peer string) (bool
 	record = cloneRecord(record)
 	if record == nil { return false, ErrInvalidRecord }
 	if err := validateRelayableExpiry(record); err != nil { return false, err }
-	parsed, err := validateParsedCoreWithVerifier(record, i.currentHeight(), true, false, nil)
+	parsed, err := i.validateCoreWithVerifier(record, i.currentHeight(), true, false, nil)
 	if err != nil { return false, err }
 	if parsed.Namespace == "mail" { return false, ErrFreeLocalNotRelayable }
 	path := collectionPath(parsed)

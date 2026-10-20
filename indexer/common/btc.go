@@ -15,12 +15,15 @@ import (
 
 var (
 	ChainTestnet = chaincfg.TestNetParams.Name
+	ChainRegtest = chaincfg.RegressionNetParams.Name
 	ChainMainnet = chaincfg.MainNetParams.Name
 )
 
 func PkScriptToAddr(pkScript []byte, chain string) (string, error) {
 	chainParams := &chaincfg.TestNetParams
 	switch chain {
+	case ChainRegtest:
+		chainParams = &chaincfg.RegressionNetParams
 	case ChainTestnet:
 		chainParams = &chaincfg.TestNetParams
 	case ChainMainnet:
@@ -39,6 +42,8 @@ func PkScriptToAddr(pkScript []byte, chain string) (string, error) {
 func IsValidAddr(addr string, chain string) (bool, error) {
 	chainParams := &chaincfg.TestNetParams
 	switch chain {
+	case ChainRegtest:
+		chainParams = &chaincfg.RegressionNetParams
 	case ChainTestnet:
 		chainParams = &chaincfg.TestNetParams
 	case ChainMainnet:
@@ -56,6 +61,8 @@ func IsValidAddr(addr string, chain string) (bool, error) {
 func AddrToPkScript(addr string, chain string) ([]byte, error) {
 	chainParams := &chaincfg.MainNetParams
 	switch chain {
+	case ChainRegtest:
+		chainParams = &chaincfg.RegressionNetParams
 	case ChainTestnet:
 		chainParams = &chaincfg.TestNetParams
 	case ChainMainnet:

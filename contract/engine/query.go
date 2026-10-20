@@ -48,6 +48,28 @@ func NewContractIndexContext() *ContractIndexContext {
 	return &ContractIndexContext{funding: make(map[string]ContractFundingRef)}
 }
 
+// AddInputRef supplies ownership from a resolved spent output. It does not
+// identify a deploy/invoke, and must not replace an association already known
+// from an earlier transaction in this block.
+func (c *ContractIndexContext) AddInputRef(point wire.OutPoint, pkScript []byte, prefix string) {
+	if c == nil {
+		return
+	}
+	key := outpointKey(point.Hash.String(), point.Index)
+	if _, known := c.funding[key]; known {
+		return
+	}
+	addr, ok, err := contractcommon.ParseContractPkScript(pkScript, prefix)
+	if err != nil || !ok {
+		return
+	}
+	c.funding[key] = ContractFundingRef{
+		Contract:       addr.EncodeAddress(),
+		ContractType:   GetContractTypeName(addr.ContractType()),
+		ContractTypeID: addr.ContractType(),
+	}
+}
+
 func (c *ContractIndexContext) AddFundingRefs(tx *wire.MsgTx, records []ContractHistoryRecord, prefix string) {
 	if c == nil || tx == nil || len(records) == 0 {
 		return
@@ -55,7 +77,7 @@ func (c *ContractIndexContext) AddFundingRefs(tx *wire.MsgTx, records []Contract
 	recordsByContract := make(map[string]ContractHistoryRecord)
 	for _, record := range records {
 		if record.Contract == "" || (record.Kind != string(contractcommon.IndexEventDeploy) &&
-			record.Kind != string(contractcommon.IndexEventInvoke)) {
+			record.Kind != string(contractcommon.IndexEventInvoke) && record.Kind != string(contractcommon.IndexEventResult)) {
 			continue
 		}
 		recordsByContract[record.Contract] = record
@@ -78,6 +100,14 @@ func (c *ContractIndexContext) AddFundingRefs(tx *wire.MsgTx, records []Contract
 			continue
 		}
 		vout := uint32(i)
+		if record.Kind == string(contractcommon.IndexEventResult) {
+			// A later fragment can spend only this carry. Preserve the
+			// original call association through the physical Result chain.
+			if ref, ok := c.ResultInputRef(tx); ok && ref.Contract == contractText {
+				c.funding[outpointKey(txid, vout)] = ref
+				continue
+			}
+		}
 		c.funding[outpointKey(txid, vout)] = ContractFundingRef{
 			Contract:       record.Contract,
 			ContractType:   record.ContractType,
@@ -95,16 +125,22 @@ func (c *ContractIndexContext) ResultInputRef(tx *wire.MsgTx) (ContractFundingRe
 	if c == nil || tx == nil {
 		return ContractFundingRef{}, false
 	}
+	var ownership ContractFundingRef
 	for _, txIn := range tx.TxIn {
 		if txIn == nil {
 			continue
 		}
 		key := outpointKey(txIn.PreviousOutPoint.Hash.String(), txIn.PreviousOutPoint.Index)
 		if ref, ok := c.funding[key]; ok {
-			return ref, true
+			if ref.SourceTxID != "" {
+				return ref, true
+			}
+			if ownership.Contract == "" {
+				ownership = ref
+			}
 		}
 	}
-	return ContractFundingRef{}, false
+	return ownership, ownership.Contract != ""
 }
 
 type ContractQueryStore interface {
@@ -254,7 +290,7 @@ func BuildContractIndexRecordsWithContext(tx *wire.MsgTx, height int64, prefix s
 			contract = outputByType[op.ContractTypeID]
 		}
 		var resultRef ContractFundingRef
-		if contract == "" && op.Kind == "result" && ctx != nil {
+		if op.Kind == "result" && ctx != nil {
 			if ref, ok := ctx.ResultInputRef(tx); ok {
 				resultRef = ref
 				contract = ref.Contract
@@ -269,7 +305,7 @@ func BuildContractIndexRecordsWithContext(tx *wire.MsgTx, height int64, prefix s
 		}
 		details := cloneDetails(op.Details)
 		enrichDetailsFromPayload(details, op)
-		if resultRef.Contract != "" {
+		if resultRef.SourceTxID != "" {
 			details["result_for_txid"] = resultRef.SourceTxID
 			details["result_for_vout"] = resultRef.SourceVout
 			details["result_for_kind"] = resultRef.SourceKind

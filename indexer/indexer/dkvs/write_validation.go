@@ -323,7 +323,7 @@ func (i *Indexer) validatePreparedFeeCapacityLocked(record *wire.DKVSRecord, pre
 	return nil
 }
 
-func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height uint64, allowExpiredTombstone, verifyFee bool, feeVerifier FeeVerifier) (ParsedKey, error) {
+func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height uint64, allowExpiredTombstone, verifyFee bool, feeVerifier FeeVerifier, issueTips ...uint64) (ParsedKey, error) {
 	var parsed ParsedKey
 	if record == nil || record.Version != Version {
 		return parsed, ErrInvalidRecord
@@ -346,7 +346,9 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height uint64, allo
 	if err := validateRecordSizeForParsed(record, parsed); err != nil {
 		return parsed, err
 	}
-	if record.Flags&^FlagTombstone != 0 || (height != 0 && record.IssueHeight > height) || (record.TTL != 0 && RecordExpiryHeight(record) == 0) {
+	issueTip := height
+	if len(issueTips) != 0 { issueTip = issueTips[0] }
+	if record.Flags&^FlagTombstone != 0 || ((height != 0 || len(issueTips) != 0) && record.IssueHeight > issueTip) || (record.TTL != 0 && RecordExpiryHeight(record) == 0) {
 		return parsed, ErrInvalidRecord
 	}
 	if verifyFee && !IsTombstone(record.Flags) && isAutopayRecord(record) && record.TTL != 0 {

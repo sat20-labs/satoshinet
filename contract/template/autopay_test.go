@@ -54,16 +54,13 @@ func TestAutopayPaysDelegatedFeesFromNextBlock(t *testing.T) {
 	require.Equal(t, int64(2), state.AutopayData().PaidBlockCount)
 }
 
-func TestAutopaySameAssetOperatingGasIsolation(t *testing.T) {
+func TestAutopaySameAssetDelegateGasIsolation(t *testing.T) {
 	gas := testAutopayGasConfig()
 	gas.TriggerBaseGas, gas.ResultBaseGas = 150000, 50000
 	runtime := testAutopayRuntime(t, "recipient-address", gas.GasAssetName, "10")
 	for _, address := range []string{"a-user", "z-user"} {
-		_, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{
-			Invoker: address, Height: 100,
-			FundingOutput: testContractOutput(address, 0, runtime.Address(), 0, testAsset(gas.GasAssetName, 10000)),
-		})
-		require.NoError(t, err)
+		applyAutopayDelegateConfigForTest(t, runtime, address, address, 100, "10", gas.GasAssetName,
+			testContractOutput(address, 0, runtime.Address(), 0, testAsset(gas.GasAssetName, 10000)))
 	}
 	param, err := (&AutopayConfigInvokeParam{GasFundingAmount: "400"}).Encode()
 	require.NoError(t, err)
@@ -198,7 +195,7 @@ func TestAutopayGasFundingRequiresExactAssetPrecision(t *testing.T) {
 	}
 }
 
-func TestAutopayDefaultFundingAndCloseReturnsBalances(t *testing.T) {
+func TestAutopayExplicitDelegateFundingAndCloseReturnsBalances(t *testing.T) {
 	gasConfig := testAutopayGasConfig()
 	runtime := testAutopayRuntime(t, "recipient-address", "ordx:f:test", "10")
 	contractAddr := runtime.Address()
@@ -208,17 +205,10 @@ func TestAutopayDefaultFundingAndCloseReturnsBalances(t *testing.T) {
 	_, err = runtime.SettleBlockWithGasConfig(100, gasConfig)
 	require.NoError(t, err)
 
-	item, err := runtime.ApplyDefaultInvoke(ApplyInvokeRequest{
-		Action:        contractcommon.ContractInvokeAPIDefault,
-		CallID:        DeriveInvokeCallID("invoke", 0, contractAddr),
-		Invoker:       "funder-address",
-		FundingOutput: testContractOutput("invoke", 0, contractAddr, 0, testAsset("ordx:f:test", 15)),
-		Height:        101,
-		Timestamp:     101,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, item)
-	require.Equal(t, OrderTypeFund, item.OrderType)
+	item := applyAutopayDelegateConfigForTest(t, runtime, "funder-address",
+		DeriveInvokeCallID("invoke", 0, contractAddr), 101, "10", gasConfig.GasAssetName,
+		testContractOutput("invoke", 0, contractAddr, 0, testAsset("ordx:f:test", 15)))
+	require.Equal(t, OrderTypeValidate, item.OrderType)
 
 	_, err = runtime.ApplyInvoke(ApplyInvokeRequest{
 		Action:        InvokeAPIClose,
@@ -288,12 +278,26 @@ func TestAutopayEmptyRecipientPaysMinerFee(t *testing.T) {
 }
 
 func TestAutopayCloseBatchRequiresGasBeforeRefunding(t *testing.T) {
-	contract := NewAutopayContract("dkvs", "recipient", "ordx:f:test", "1")
-	state := &TemplateRuntimeState{}
+	runtime := testAutopayRuntime(t, "recipient", "ordx:f:test", "1")
+	state, err := runtime.RuntimeState()
+	require.NoError(t, err)
 	state.AutopayData().AutopayCloseStarted = true
 	state.AutopayData().GasBalance = parseDecimalOrZero("0")
-	_, err := contract.closeBatchGasFee(state, &InvokeItem{}, testAutopayGasConfig(), 100)
-	require.ErrorContains(t, err, "insufficient autopay gas")
+	state.AutopayData().FeeBalance = parseDecimalOrZero("5")
+	state.AutopayData().AutopayDelegates = map[string]AutopayDelegate{
+		"payer": {AmountPerBlock: parseDecimalOrZero("1"), Balance: parseDecimalOrZero("5")},
+	}
+	state.Items = []InvokeItem{{ID: 1, OrderType: OrderTypeClose, Address: "deployer-address", Height: 99}}
+	require.NoError(t, runtime.saveRuntimeState(state))
+	plan, err := runtime.SettleBlockWithGasConfig(100, testAutopayGasConfig())
+	require.NoError(t, err)
+	require.Empty(t, plan.Transfers)
+	require.Empty(t, plan.Inputs)
+	require.Empty(t, plan.ItemIDs)
+	require.Nil(t, plan.GasFee)
+	after, err := runtime.RuntimeState()
+	require.NoError(t, err)
+	require.Equal(t, state, after)
 }
 
 func TestAutopayCloseFitsResultOutputLimit(t *testing.T) {
@@ -346,13 +350,28 @@ func TestAutopayCloseFitsResultOutputLimit(t *testing.T) {
 	require.Len(t, plans, 1)
 	require.Len(t, plans[0].Outputs, contractframework.MaxContractResultOutputs)
 
-	_, err = contractframework.BuildResultTx(contractframework.ResultTxBuildRequest{
+	resolve := func(output contractframework.ResultOutput) ([]byte, error) {
+		if output.To == contractAddr.MustEncode() {
+			return contractcommon.ContractPkScript(contractAddr)
+		}
+		return []byte{0x51}, nil
+	}
+	txs, err := contractframework.BuildContractResultTxs(contractframework.ResultTxBuildRequest{
 		Status:        ResultStatusSuccess,
 		ResultCount:   1,
 		Plans:         plans,
-		ResolveScript: func(contractframework.ResultOutput) ([]byte, error) { return []byte{0x51}, nil },
-	}, contractframework.ResultTxBuildOptions{})
+		ResolveScript: resolve,
+	}, contractframework.ResultTxBuildOptions{UseInputUTXOs: true})
 	require.NoError(t, err)
+	require.Len(t, txs, 2, "1000 business outputs require room for metadata and real carry")
+	for _, tx := range txs {
+		require.LessOrEqual(t, len(tx.TxOut), contractframework.MaxContractResultOutputs)
+	}
+	require.NoError(t, contractframework.VerifyContractResultTxs(contractframework.ContractResultVerifyRequest{
+		ResultTxs: txs, CanonicalResultVerifyRequest: contractframework.CanonicalResultVerifyRequest{
+			Plans: plans, GasAssetName: gasConfig.GasAssetName, ResolveScript: resolve, UseInputUTXO: true, CheckPayload: true,
+		},
+	}))
 }
 
 func TestAutopayRejectsFractionalSatsConfig(t *testing.T) {
@@ -426,10 +445,10 @@ func testAutopayGasConfig() GasConfig {
 	return GasConfig{
 		GasAssetName:     "ordx:f:gas",
 		BootstrapAddress: "bootstrap-address",
-		DeployBaseGas:   1,
-		InvokeBaseGas:   1,
-		ResultBaseGas:   1,
-		TriggerBaseGas:  1,
-		MaxGasPerInvoke: DefaultGasConfig().MaxGasPerInvoke,
+		DeployBaseGas:    1,
+		InvokeBaseGas:    1,
+		ResultBaseGas:    1,
+		TriggerBaseGas:   1,
+		MaxGasPerInvoke:  DefaultGasConfig().MaxGasPerInvoke,
 	}
 }

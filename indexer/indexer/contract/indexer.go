@@ -139,6 +139,18 @@ func (s *Indexer) ProcessBlock(block *sncommon.Block) {
 			continue
 		}
 
+		// Base indexing has resolved these spent scripts, including outputs
+		// created before this block. Bind only matching physical inputs.
+		for n, input := range tx.Inputs {
+			if input == nil || input.Address == nil || n >= len(tx.MsgTx.TxIn) || tx.MsgTx.TxIn[n] == nil {
+				continue
+			}
+			point := tx.MsgTx.TxIn[n].PreviousOutPoint
+			if point.Hash.String() == input.Txid && point.Index == input.Vout {
+				ctx.AddInputRef(point, input.Address.PkScript, prefix)
+			}
+		}
+
 		txSummaries, txHistory, err := contractengine.BuildContractIndexRecordsWithContext(tx.MsgTx, int64(block.Height), prefix, s.chaincfgParam, ctx)
 		if err != nil {
 			sncommon.Log.Errorf("index contract tx %s at block %d failed: %v", tx.MsgTx.TxID(), block.Height, err)

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -154,7 +155,25 @@ func ActiveRecordsRoot(records []*wire.DKVSRecord) (chainhash.Hash, error) {
 
 func (i *Indexer) activeScopeRecord(record *wire.DKVSRecord, scope ActiveScope, height, now uint64) bool {
 	return record != nil && ActiveScopeMatches(scope, record.Key) &&
-		i.activeError(record, height, now) == nil && (!scope.Network || i.networkPathRecordVisible(record))
+		i.activeError(record, height, now) == nil && (!scope.Network || i.networkPathRecordVisible(record, height))
+}
+
+// Caller holds the indexer lock. Unknown payment cannot certify absence from
+// a complete network view; provider I/O is prepared outside this lock.
+func (i *Indexer) networkRecordReadyLocked(record *wire.DKVSRecord, scope ActiveScope, height uint64) error {
+	if !scope.Network || !ActiveScopeMatches(scope, record.Key) || isEndpointCacheRecord(record) {
+		return nil
+	}
+	if record.IssueHeight > height {
+		return ErrConcurrentUpdate
+	}
+	if isAutopayRecord(record) {
+		retention, known := paidRetentionCacheFor(i).get(record.Key)
+		if !known || (!paidRetentionCurrent(retention, height) && retention.CurrentBlock < height) {
+			return ErrConcurrentUpdate
+		}
+	}
+	return nil
 }
 
 // The root pass streams through the database. Only one bounded page of values
@@ -177,6 +196,9 @@ func (i *Indexer) activeMetaLocked(ctx context.Context, scope ActiveScope, heigh
 		if err != nil {
 			return err
 		}
+		if err := i.networkRecordReadyLocked(record, scope, height); err != nil {
+			return err
+		}
 		if i.activeScopeRecord(record, scope, height, now) {
 			xorPathMetaRoot(&meta.Root, record)
 		}
@@ -196,9 +218,20 @@ func (i *Indexer) ActiveMetadata(ctx context.Context, scope ActiveScope) (Active
 	if err != nil {
 		return ActiveMeta{}, err
 	}
+	indexed := i.currentHeight()
+	height := i.issueHeightTip(indexed)
+	policy := atomic.LoadUint64(&i.policyGeneration)
+	if scope.Network {
+		if err := i.refreshPaidRetentionAt(ctx, height, scope); err != nil {
+			return ActiveMeta{}, err
+		}
+	}
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	return i.activeMetaLocked(ctx, scope, i.currentHeight())
+	if scope.Network && (i.currentHeight() != indexed || i.issueHeightTip(indexed) != height || atomic.LoadUint64(&i.policyGeneration) != policy) {
+		return ActiveMeta{}, ErrConcurrentUpdate
+	}
+	return i.activeMetaLocked(ctx, scope, height)
 }
 
 func (i *Indexer) ActiveSyncPage(ctx context.Context, request ActiveSyncRequest) (*ActivePage, error) {
@@ -219,14 +252,31 @@ func (i *Indexer) ActiveSyncPage(ctx context.Context, request ActiveSyncRequest)
 	if limit <= 0 || limit > ActiveSyncPageRecords {
 		limit = ActiveSyncPageRecords
 	}
+	indexed := i.currentHeight()
+	tip := i.issueHeightTip(indexed)
+	height := tip
+	policy := atomic.LoadUint64(&i.policyGeneration)
+	if request.Cursor != nil {
+		height = request.Cursor.Meta.ViewHeight
+	}
+	if scope.Network {
+		if height > tip {
+			return nil, ErrInvalidSnapshot
+		}
+		if err := i.refreshPaidRetentionAt(ctx, height, scope); err != nil {
+			return nil, err
+		}
+	}
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
-	height := i.currentHeight()
+	if scope.Network && (i.currentHeight() != indexed || i.issueHeightTip(indexed) != tip || atomic.LoadUint64(&i.policyGeneration) != policy) {
+		return nil, ErrConcurrentUpdate
+	}
 	if request.Cursor != nil {
 		c := request.Cursor
 		if c.Meta.EndpointID != request.EndpointID || !SameActiveScope(c.Meta.Scope, scope) ||
 			c.After != request.After || c.Full != request.Full || c.LastKey == "" ||
-			!ActiveScopeMatches(scope, c.LastKey) || c.Meta.ViewHeight > height {
+			!ActiveScopeMatches(scope, c.LastKey) || c.Meta.ViewHeight > tip {
 			return nil, ErrInvalidSnapshot
 		}
 		height = c.Meta.ViewHeight

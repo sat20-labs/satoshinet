@@ -2,6 +2,7 @@ package contract_e2e
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -25,6 +26,7 @@ import (
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -967,7 +969,7 @@ type templateNetworkActor struct {
 	controlBlock []byte
 }
 
-func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateNetworkFixture {
+func newTemplateNetworkFixture(t *testing.T, assets map[string]int64, bindings ...map[string]uint32) *templateNetworkFixture {
 	t.Helper()
 	configureFastPOSTimers(t)
 
@@ -1004,12 +1006,16 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 	}
 	for i, asset := range sortedTemplateAssets(assets) {
 		lockedUtxo := templateLockedOutPoint(asset, i+1)
+		display := testDisplayAsset(asset, fmt.Sprintf("%d", assets[asset]))
+		if len(bindings) != 0 {
+			display.BindingSat = int(bindings[0][asset])
+		}
 		utxos[lockedUtxo] = &indexercommon.AssetsInUtxo{
 			OutPoint: lockedUtxo,
 			Value:    lockedValue,
 			PkScript: lockedPkScript,
 			Assets: []*indexercommon.DisplayAsset{
-				testDisplayAsset(asset, fmt.Sprintf("%d", assets[asset])),
+				display,
 			},
 		}
 	}
@@ -1017,6 +1023,23 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 	fakeL1 := startFakeL1Indexer(t, hex.EncodeToString(bootstrapKey.PubKey().SerializeCompressed()), utxos)
 	bootstrapNode, coreNode := startSatoshiNetNetwork(t, fakeL1)
 	nodes := []*rpctest.Harness{bootstrapNode, coreNode}
+
+	// RPC connectivity and matching tips do not imply POS has started. Fund
+	// only after both receivers can process mining proposals and return ACKs.
+	readyStarted := time.Now()
+	for {
+		bootstrapReady, bootstrapErr := bootstrapNode.Client.GetGenerate()
+		coreReady, coreErr := coreNode.Client.GetGenerate()
+		if bootstrapErr == nil && coreErr == nil && bootstrapReady && coreReady {
+			t.Logf("both POS miners ready before funding after %s", time.Since(readyStarted))
+			break
+		}
+		if time.Since(readyStarted) >= 30*time.Second {
+			t.Fatalf("POS miners not ready before funding: bootstrap=%v err=%v core=%v err=%v",
+				bootstrapReady, bootstrapErr, coreReady, coreErr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	anchorHeight, err := bootstrapNode.Client.GetBlockCount()
 	require.NoError(t, err)
@@ -1029,10 +1052,14 @@ func newTemplateNetworkFixture(t *testing.T, assets map[string]int64) *templateN
 	for i, asset := range sortedTemplateAssets(assets) {
 		lockedUtxo := templateLockedOutPoint(asset, i+1)
 		amount := assets[asset]
+		funding := testWireAsset(asset, amount)
+		if len(bindings) != 0 {
+			funding[0].BindingSat = bindings[0][asset]
+		}
 		anchorHeight, err := bootstrapNode.Client.GetBlockCount()
 		require.NoError(t, err)
 		anchor := buildNetworkAnchorTx(t, lockedUtxo, lockedValue,
-			testWireAsset(asset, amount), fmt.Sprintf("%s-%d-0-0", asset, amount),
+			funding, fmt.Sprintf("%s-%d-0-%d", asset, amount, funding[0].BindingSat),
 			witnessScript, bootstrapKey, lockedPkScript, int32(anchorHeight+1))
 		sendTx(t, bootstrapNode, anchor)
 		assetAnchors[asset] = anchor
@@ -1438,41 +1465,33 @@ func templateUtxoHasAsset(utxo *indexercommon.AssetsInUtxo, want wire.AssetInfo)
 func waitForPOSTx(t *testing.T, node *rpctest.Harness, nodes []*rpctest.Harness, tx *wire.MsgTx) {
 	t.Helper()
 	txHash := tx.TxHash()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		verbose, err := node.Client.GetRawTransactionVerbose(&txHash)
-		if err == nil && verbose.Confirmations >= 1 {
-			require.NoError(t, rpctest.JoinNodes(nodes, rpctest.Blocks))
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := waitForPOSTxAndSync(ctx, node, nodes, &txHash)
+	if err == nil {
+		return
 	}
+	// RPC clients may already be shut down. Read only bounded local log tails
+	// so an unresponsive node cannot block failure diagnostics.
 	for i, n := range nodes {
-		if n == nil || n.Client == nil {
+		if n == nil {
 			continue
 		}
-		_, height, heightErr := n.Client.GetBestBlock()
-		mempool, mempoolErr := n.Client.GetRawMempool()
-		verbose, verboseErr := n.Client.GetRawTransactionVerbose(&txHash)
-		confirmations := uint64(0)
-		if verboseErr == nil {
-			confirmations = verbose.Confirmations
-		}
-		t.Logf("waitForPOSTx timeout node=%d rpc=%s height=%d height_err=%v mempool_len=%d mempool_err=%v tx_confirmations=%d tx_verbose_err=%v",
-			i, n.RPCAddress(), height, heightErr, len(mempool), mempoolErr, confirmations, verboseErr)
 		if logPath := n.LogFile(); logPath != "" {
-			if data, err := os.ReadFile(logPath); err == nil {
+			if file, openErr := os.Open(logPath); openErr == nil {
 				const maxLogTail = 8192
-				if len(data) > maxLogTail {
-					data = data[len(data)-maxLogTail:]
+				if info, statErr := file.Stat(); statErr == nil && info.Size() > maxLogTail {
+					_, _ = file.Seek(-maxLogTail, io.SeekEnd)
 				}
-				t.Logf("waitForPOSTx timeout node=%d log_tail:\n%s", i, string(data))
+				data, readErr := io.ReadAll(io.LimitReader(file, maxLogTail))
+				file.Close()
+				if readErr == nil {
+					t.Logf("waitForPOSTx failure node=%d log_tail:\n%s", i, string(data))
+				}
 			}
 		}
 	}
-	verbose, err := node.Client.GetRawTransactionVerbose(&txHash)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, verbose.Confirmations, uint64(1))
 }
 
 func templateLockedOutPoint(asset string, index int) string {

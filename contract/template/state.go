@@ -164,7 +164,7 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 	i.InAmt = nil
 	if item.InAmt != "" {
 		var err error
-		i.InAmt, err = parseStateDecimal("inAmt", item.InAmt)
+		i.InAmt, err = parseInvokeAssetAmount("inAmt", item.InAmt)
 		if err != nil {
 			return err
 		}
@@ -172,7 +172,7 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 	i.RetainedAssetA = nil
 	if item.RetainedAssetA != "" {
 		var err error
-		i.RetainedAssetA, err = parseStateDecimal("retainedAssetA", item.RetainedAssetA)
+		i.RetainedAssetA, err = parseInvokeAssetAmount("retainedAssetA", item.RetainedAssetA)
 		if err != nil {
 			return err
 		}
@@ -180,7 +180,7 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 	i.RetainedAssetB = nil
 	if item.RetainedAssetB != "" {
 		var err error
-		i.RetainedAssetB, err = parseStateDecimal("retainedAssetB", item.RetainedAssetB)
+		i.RetainedAssetB, err = parseInvokeAssetAmount("retainedAssetB", item.RetainedAssetB)
 		if err != nil {
 			return err
 		}
@@ -188,7 +188,7 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 	i.RemainingAmt = nil
 	if item.RemainingAmt != "" {
 		var err error
-		i.RemainingAmt, err = parseStateDecimal("remainingAmt", item.RemainingAmt)
+		i.RemainingAmt, err = parseInvokeAssetAmount("remainingAmt", item.RemainingAmt)
 		if err != nil {
 			return err
 		}
@@ -198,7 +198,7 @@ func (i *InvokeItem) UnmarshalJSON(data []byte) error {
 	i.OutAmt = nil
 	if item.OutAmt != "" {
 		var err error
-		i.OutAmt, err = parseStateDecimal("outAmt", item.OutAmt)
+		i.OutAmt, err = parseInvokeAssetAmount("outAmt", item.OutAmt)
 		if err != nil {
 			return err
 		}
@@ -722,9 +722,6 @@ func (r *ContractRuntime) ApplyDefaultInvoke(req ApplyInvokeRequest) (*InvokeIte
 // The decoded state belongs to this invocation only. Publish the compact state
 // after all checks and item construction succeed; retain no decoded cache.
 func (r *ContractRuntime) applyDefaultInvoke(state TemplateRuntimeState, req ApplyInvokeRequest) (*InvokeItem, error) {
-	if err := checkAutopayDelegateCapacity(r.contract, &state, req.Invoker); err != nil {
-		return nil, err
-	}
 	retention := defaultInvokeRetention{}
 	if req.ApplyDefaultRetention {
 		nextRetention, fundingOutput, err := retainDefaultInvokeFunding(r.contract, req.FundingOutput)
@@ -1139,8 +1136,10 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		if err != nil {
 			return nil, err
 		}
-		amt = parseDecimalOrZero(amt.String())
-		inAmt = scommon.DecimalAdd(inAmt, amt)
+		if _, autopay := contract.(*AutopayContract); !autopay {
+			amt = parseDecimalOrZero(amt.String())
+		}
+		inAmt = inAmt.AddAlignPrecision(amt)
 	}
 	if inAmt.Sign() == 0 {
 		inAmt = nil
@@ -1244,18 +1243,13 @@ func NewInvokeItemFromRequest(contract Contract, id int64, req ApplyInvokeReques
 		if inputA.Sign() > 0 {
 			item.OutAmt = inputA
 		}
-	case InvokeAPIConfig:
+	case InvokeAPIConfig, InvokeAPIFunding:
 		autopay, ok := contract.(*AutopayContract)
 		if !ok {
 			return nil, fmt.Errorf("config action requires autopay contract")
 		}
-		var param AutopayConfigInvokeParam
-		if err := param.Decode(req.Param); err != nil {
+		if err := autopay.CheckInvoke(req.Action, req.Param); err != nil {
 			return nil, err
-		}
-		amount := parseDecimalOrZero(param.AmountPerBlock)
-		if param.AmountPerBlock != "" && amount.Cmp(autopay.minAmountPerBlock()) < 0 {
-			item.Reason = InvokeReasonInvalid
 		}
 		item.OrderType = OrderTypeValidate
 		item.Done = ItemStatusDealt
@@ -1719,6 +1713,19 @@ func parseStateDecimal(field, value string) (*scommon.Decimal, error) {
 	d, err := scommon.NewDecimalFromString(value, MaxPriceDivisibility)
 	if err != nil {
 		return nil, fmt.Errorf("invalid %s decimal %q: %w", field, value, err)
+	}
+	return d, nil
+}
+
+// Invoke item quantities are assets, not prices. Preserve their validated
+// precision while retaining the existing normalization for amounts up to 10 places.
+func parseInvokeAssetAmount(field, value string) (*scommon.Decimal, error) {
+	d, err := contractframework.ParseDecimalAmountString(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s decimal %q: %w", field, value, err)
+	}
+	if d.Precision < MaxPriceDivisibility {
+		d = d.NewPrecision(MaxPriceDivisibility)
 	}
 	return d, nil
 }

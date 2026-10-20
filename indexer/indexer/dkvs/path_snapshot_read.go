@@ -1,8 +1,10 @@
 package dkvs
 
 import (
+	"context"
 	"fmt"
 	"sort"
+	"sync/atomic"
 
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -38,9 +40,19 @@ func (i *Indexer) GetPathSnapshot(path string) (*PathSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	height, now := i.currentHeight(), currentUnixMilli()
+	indexedHeight := i.currentHeight()
+	height, now := i.issueHeightTip(indexedHeight), currentUnixMilli()
+	policy := atomic.LoadUint64(&i.policyGeneration)
+	// An unverified payment is not evidence that a persisted record is absent.
+	// Refresh only this prefix, outside the lock, before serving a complete set.
+	if err := i.refreshPaidRetentionAt(context.Background(), height, scope); err != nil {
+		return nil, err
+	}
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
+	if i.currentHeight() != indexedHeight || i.issueHeightTip(indexedHeight) != height || atomic.LoadUint64(&i.policyGeneration) != policy {
+		return nil, ErrConcurrentUpdate
+	}
 	previous, err := i.ensurePathMetaLocked(scope.Prefix, height, now)
 	if err != nil {
 		return nil, err
@@ -52,6 +64,9 @@ func (i *Indexer) GetPathSnapshot(path string) (*PathSnapshot, error) {
 	err = i.db.BatchReadV2(base, base, false, func(_, encoded []byte) error {
 		record, err := UnmarshalRecord(encoded)
 		if err != nil {
+			return err
+		}
+		if err := i.networkRecordReadyLocked(record, scope, height); err != nil {
 			return err
 		}
 		if !i.activeScopeRecord(record, scope, height, now) {
@@ -132,7 +147,7 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 	}
 	viewHeight := snapshot.PathMeta.ViewHeight
 	height := i.currentHeight()
-	if viewHeight > height {
+	if viewHeight > i.issueHeightTip(height) {
 		return validatedPathSnapshot{}, ErrStaleEndpoint
 	}
 	validators := i.snapshotValidators()
@@ -156,7 +171,7 @@ func (i *Indexer) validatePathSnapshot(snapshot *PathSnapshot) (validatedPathSna
 		if size > MaxNetworkSnapshotBytes-computed.ActiveTotalSize {
 			return validatedPathSnapshot{}, ErrBatchTooLarge
 		}
-		if _, err := validateParsedCoreWithVerifier(record, viewHeight, false, false, nil); err != nil {
+		if _, err := i.validateCoreWithVerifier(record, viewHeight, false, false, nil); err != nil {
 			return validatedPathSnapshot{}, err
 		}
 		if err := validateSnapshotPermission(record, parsed, validators); err != nil {

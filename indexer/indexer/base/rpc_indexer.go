@@ -152,7 +152,7 @@ func (b *RpcIndexer) GetUtxoInfo(utxo string) (*common.UtxoInfo, error) {
 		if err != nil {
 			return nil, err
 		}
-		pkScript, err = addressToPkScript(addr, b.IsMainnet())
+		pkScript, err = addressToPkScript(addr, b.chaincfgParam.Name)
 		if err != nil {
 			return nil, err
 		}

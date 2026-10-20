@@ -2356,6 +2356,9 @@ func New(config *Config) (*BlockChain, error) {
 	// and assert the provided checkpoints are sorted by height as required.
 	var checkpointsByHeight map[int32]*chaincfg.Checkpoint
 	var prevCheckpointHeight int32
+	if config.ChainParams.Net == wire.RegNet {
+		prevCheckpointHeight = -1 // Permit this network's genesis checkpoint.
+	}
 	if len(config.Checkpoints) > 0 {
 		checkpointsByHeight = make(map[int32]*chaincfg.Checkpoint)
 		for i := range config.Checkpoints {

@@ -137,7 +137,7 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.Bech32HRPSegwit + "1",
-					valid:  false,
+					valid:  true,
 				},
 				{
 					prefix: SimNetParams.Bech32HRPSegwit + "1",
@@ -271,7 +271,7 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.Bech32HRPSegwit + "1",
-					valid:  false,
+					valid:  true,
 				},
 				{
 					prefix: SimNetParams.Bech32HRPSegwit + "1",
@@ -398,7 +398,7 @@ func TestRegister(t *testing.T) {
 				},
 				{
 					prefix: RegressionNetParams.Bech32HRPSegwit + "1",
-					valid:  false,
+					valid:  true,
 				},
 				{
 					prefix: SimNetParams.Bech32HRPSegwit + "1",

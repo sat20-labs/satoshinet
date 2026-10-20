@@ -372,8 +372,8 @@ func TestNetworkTemplateAutopayScenarioMatrix(t *testing.T) {
 	waitBlocks := func(t *testing.T, count int64) {
 		scenarioMineBlocks(t, f, int(count))
 	}
-	t.Run("default_funding_registers_delegate_and_preserves_principal", func(t *testing.T) {
-		scenarioInvoke(t, f, f.traderB, address, "", nil, funding(1050))
+	t.Run("explicit_config_registers_delegate_and_preserves_principal", func(t *testing.T) {
+		scenarioInvoke(t, f, f.traderB, address, tmplcontract.InvokeAPIConfig, config(t, "10", "", 1), funding(1050))
 		view := scenarioAutopayView(t, f.bootstrapNode, address)
 		require.Equal(t, "1000", view.Delegates[f.traderBActor.address].Balance)
 		require.Equal(t, "10", view.Delegates[f.traderBActor.address].AmountPerBlock)
@@ -449,7 +449,7 @@ func TestNetworkTemplateAutopayScenarioMatrix(t *testing.T) {
 		require.Equal(t, "980", view.FeeBalance)
 	})
 	t.Run("cancel_returns_only_own_unused_balance", func(t *testing.T) {
-		scenarioInvoke(t, f, f.traderA, address, "", nil, funding(1050))
+		scenarioInvoke(t, f, f.traderA, address, tmplcontract.InvokeAPIConfig, config(t, "10", "", 1), funding(1050))
 		outputs := scenarioInvoke(t, f, f.traderB, address, tmplcontract.InvokeAPICancel, nil, funding(50))
 		requireTemplateResultAssetAmount(t, outputs, f.traderBActor.address, gas, "980")
 		require.Equal(t, tmplcontract.AutopayStatusClosed, scenarioAutopayView(t, f.bootstrapNode, address).Delegates[f.traderBActor.address].Status)
@@ -474,6 +474,18 @@ func TestNetworkTemplateAutopayScenarioMatrix(t *testing.T) {
 		view := scenarioAutopayView(t, f.bootstrapNode, address)
 		require.True(t, view.Closed)
 		require.Equal(t, tmplcontract.AutopayStatusClosed, view.Status)
+	})
+	t.Run("default_funding_only_increases_operating_gas", func(t *testing.T) {
+		gasOnly := scenarioDeploy(t, f, tmplcontract.NewAutopayContract("gas-only", f.traderBActor.address, gas, "10"), "autopay-default-gas", 0, funding(50))
+		scenarioInvoke(t, f, f.traderB, gasOnly, "", nil, funding(1050))
+		view := scenarioAutopayView(t, f.bootstrapNode, gasOnly)
+		require.Empty(t, view.Delegates, "default funding must not create a delegate")
+		require.Equal(t, "1000", view.GasBalance)
+		require.Contains(t, []string{"", "0"}, view.FeeBalance)
+		require.Zero(t, view.PaidBlocks)
+		outputs := scenarioInvoke(t, f, f.traderA, gasOnly, tmplcontract.InvokeAPIClose, nil, funding(50))
+		requireTemplateResultAssetAmount(t, outputs, f.traderAActor.address, gas, "1000")
+		require.True(t, scenarioAutopayView(t, f.bootstrapNode, gasOnly).Closed)
 	})
 }
 

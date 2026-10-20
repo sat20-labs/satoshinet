@@ -18,6 +18,7 @@ type SettlementModuleConfig struct {
 	ResolveScript   ResultRecipientScriptResolver
 	ResolveOutput   ResultOutputResolver
 	PlanCount       func(ResultPlan) int
+	PerContract     bool
 	CountRecords    bool
 	UseRecordStatus bool
 }
@@ -71,6 +72,11 @@ func NewSettlementModule(cfg SettlementModuleConfig) (ModuleAdapter, error) {
 			if err != nil {
 				return ResultBuildResult{}, err
 			}
+			if cfg.PerContract {
+				out.ResultTxs, err = BuildContractResultTxs(ResultTxBuildRequest{Status: status(exec),
+					Plans: exec.ResultPlans, ResolveScript: cfg.ResolveScript}, ResultTxBuildOptions{UseInputUTXOs: true, PlanCount: cfg.PlanCount})
+				return out, err
+			}
 			tx, err := BuildResultTx(ResultTxBuildRequest{
 				Status: status(exec), ResultCount: uint16(n), Plans: CloneResultPlans(exec.ResultPlans), ResolveScript: cfg.ResolveScript,
 			}, ResultTxBuildOptions{UseInputUTXOs: true, PlanCount: cfg.PlanCount})
@@ -87,6 +93,13 @@ func NewSettlementModule(cfg SettlementModuleConfig) (ModuleAdapter, error) {
 			n, err := count(exec)
 			if err != nil {
 				return err
+			}
+			if cfg.PerContract {
+				return VerifyContractResultTxs(ContractResultVerifyRequest{ResultTxs: req.ResultTxs,
+					CanonicalResultVerifyRequest: CanonicalResultVerifyRequest{Label: cfg.Descriptor.Name(),
+						Status: status(exec), Plans: exec.ResultPlans, GasAssetName: cfg.GasConfig.Normalize().GasAssetName,
+						Resolve: cfg.ResolveOutput, ResolveScript: cfg.ResolveScript, PlanCount: cfg.PlanCount,
+						UseInputUTXO: true, CheckPayload: true}})
 			}
 			return VerifySingleResultTx(SingleResultTxVerifyRequest{
 				Label: cfg.Descriptor.Name(), ResultTxs: req.ResultTxs, Expectations: exec.ResultPlans,

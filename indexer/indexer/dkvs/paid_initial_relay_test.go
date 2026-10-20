@@ -197,6 +197,10 @@ func TestAutopayGraceRecordIsExcludedConsistentlyFromPathSnapshot(t *testing.T) 
 	// Payment covered height 10. At height 11 the record remains locally
 	// readable during grace, but must leave the network-comparable path view.
 	idx.height = func() uint64 { return 11 }
+	verifier := idx.snapshotValidators().feeVerifier.(LocalCacheAutopayFeeVerifier)
+	cached := verifier.StateProvider.(*HeightCachedAutopayStateProvider)
+	cached.CurrentHeight = idx.height
+	cached.Provider.(*mutableAutopayStateProvider).state.CurrentBlock = 11
 	if got, err := idx.Get(record.Key); err != nil || RecordHash(got) != RecordHash(record) {
 		t.Fatalf("grace record not locally readable: record=%#v err=%v", got, err)
 	}

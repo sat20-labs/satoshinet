@@ -9,6 +9,8 @@ import (
 
 const (
 	DefaultTestNetAutopayDeployer = "tb1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aq6qv65g"
+	// Same witness program as testnet, encoded for the local network.
+	DefaultRegressionNetAutopayDeployer = "bcrt1p339xkycqwld32maj9eu5vugnwlqxxfef3dx8umse5m42szx3n6aqhexupj"
 
 	DefaultTestNetAutopayDeployNonce    uint64 = 8888
 	DefaultAutopayServiceName                  = "dkvs"
@@ -49,6 +51,9 @@ func NetworkDefaultsForParams(params *chaincfg.Params) NetworkDefaults {
 		AutopayDeployNonce:       DefaultTestNetAutopayDeployNonce,
 		FullRecordFeePerBlock:    DefaultAutopayFullRecordFeePerBlock,
 		UseAutopayFeeVerifier:    true,
+	}
+	if params.Net == wire.RegNet {
+		defaults.AutopayDeployer = DefaultRegressionNetAutopayDeployer
 	}
 	defaults.AutopayContract = defaults.deriveAutopayContract(params)
 	return defaults

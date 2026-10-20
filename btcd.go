@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -51,7 +52,7 @@ var winServiceMain func() (bool, error)
 // optional serverChan parameter is mainly used by the service code to be
 // notified with the server once it is setup so it can gracefully stop it when
 // requested from the service control manager.
-func btcdMain(serverChan chan<- *server) error {
+func btcdMain(serverChan chan<- *server) (returnErr error) {
 	// Load configuration and parse command line.  This function also
 	// initializes logging and configures it accordingly.
 	fmt.Printf("Starting btcd command is %v\n\r", os.Args)
@@ -68,7 +69,13 @@ func btcdMain(serverChan chan<- *server) error {
 	// triggered either from an OS signal such as SIGINT (Ctrl+C) or from
 	// another subsystem such as the RPC server.
 	interrupt := interruptListener()
-	defer btcdLog.Info("Shutdown complete")
+	defer func() {
+		if returnErr != nil {
+			btcdLog.Errorf("Shutdown failed: %v", returnErr)
+			return
+		}
+		btcdLog.Info("Shutdown complete")
+	}()
 
 	// Show version at startup.
 	btcdLog.Infof("Version %s", version())
@@ -120,9 +127,7 @@ func btcdMain(serverChan chan<- *server) error {
 		return nil
 	}
 
-	if cfg.TestNet {
-		indexer.CHAIN = "testnet"
-	}
+	indexer.CHAIN = activeNetParams.Name
 
 	// initialize anchor config
 	anchorCfg := &anchortx.AnchorConfig{
@@ -267,9 +272,7 @@ func btcdMain(serverChan chan<- *server) error {
 		return err
 	}
 	defer func() {
-		// Ensure the database is sync'd and closed on shutdown.
-		btcdLog.Infof("Gracefully shutting down the database...")
-		db.Close()
+		returnErr = closeBlockDB(db, returnErr)
 	}()
 
 	// Return now if an interrupt signal was triggered.
@@ -416,7 +419,11 @@ func btcdMain(serverChan chan<- *server) error {
 	defer func() {
 		btcdLog.Infof("Gracefully shutting down the server...")
 		server.Stop()
-		server.WaitForShutdown()
+		// Also report a failure from a concurrent or earlier Stop caller.
+		if err := server.WaitForShutdown(); err != nil {
+			returnErr = errors.Join(returnErr, err)
+			return
+		}
 		srvrLog.Infof("Server shutdown complete")
 	}()
 
@@ -431,6 +438,17 @@ func btcdMain(serverChan chan<- *server) error {
 	<-interrupt
 	return nil
 }
+
+// closeBlockDB preserves an earlier failure while still flushing and closing
+// the database. Deferred shutdown must not turn a failed final flush into success.
+func closeBlockDB(db database.DB, priorErr error) error {
+	btcdLog.Infof("Gracefully shutting down the database...")
+	if err := db.Close(); err != nil {
+		return errors.Join(priorErr, fmt.Errorf("close block database: %w", err))
+	}
+	return priorErr
+}
+
 func getUserInput(scanner *bufio.Scanner, interrupt <-chan struct{}, echo bool) (string, error) {
     inputChan := make(chan string)
     defer close(inputChan)
@@ -568,34 +586,6 @@ func walletInterAction(interrupt <-chan struct{}) error {
 	}
 }
 
-// removeRegressionDB removes the existing regression test database if running
-// in regression test mode and it already exists.
-func removeRegressionDB(dbPath string) error {
-	// Don't do anything if not in regression test mode.
-	if !cfg.RegressionTest {
-		return nil
-	}
-
-	// Remove the old regression test database if it already exists.
-	fi, err := os.Stat(dbPath)
-	if err == nil {
-		btcdLog.Infof("Removing regression test database from '%s'", dbPath)
-		if fi.IsDir() {
-			err := os.RemoveAll(dbPath)
-			if err != nil {
-				return err
-			}
-		} else {
-			err := os.Remove(dbPath)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 // dbPath returns the path to the block database given a database type.
 func blockDbPath(dbType string) string {
 	// The database name is based on the database type.
@@ -643,8 +633,7 @@ func warnMultipleDBs() {
 // loadBlockDB loads (or creates when needed) the block database taking into
 // account the selected database backend and returns a handle to it.  It also
 // contains additional logic such warning the user if there are multiple
-// databases which consume space on the file system and ensuring the regression
-// test database is clean when in regression test mode.
+// databases which consume space on the file system.
 func loadBlockDB() (database.DB, error) {
 	// The memdb backend does not have a file path associated with it, so
 	// handle it uniquely.  We also don't want to worry about the multiple
@@ -662,10 +651,6 @@ func loadBlockDB() (database.DB, error) {
 
 	// The database name is based on the database type.
 	dbPath := blockDbPath(cfg.DbType)
-
-	// The regression test is special in that it needs a clean database for
-	// each run, so remove it now if it already exists.
-	removeRegressionDB(dbPath)
 
 	btcdLog.Infof("Loading block database from '%s'", dbPath)
 	db, err := database.Open(cfg.DbType, dbPath, activeNetParams.Net)

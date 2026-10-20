@@ -151,7 +151,7 @@ func (i *Indexer) rebuildPathMetaLocked(path string, height, now uint64) (*PathM
 		meta.Generation, meta.EndpointGeneration = previous.Generation, previous.EndpointGeneration
 	} else if !errors.Is(readErr, ErrRecordNotFound) { return nil, readErr }
 	for _, record := range records {
-		if !i.networkPathRecordVisible(record) { continue }
+		if !i.networkPathRecordVisible(record, height) { continue }
 		meta.ActiveRecords++
 		meta.ActiveTotalSize += uint64(RecordSize(record))
 		xorPathMetaRoot(&meta.StateRoot, record)
@@ -197,7 +197,7 @@ func (i *Indexer) activePathRootLocked(path string, height, now uint64) (chainha
 	records, _, _, err := i.scanLocked(path, nil, 0, true, height, now)
 	if err != nil { return chainhash.Hash{}, err }
 	var root chainhash.Hash
-	for _, record := range records { if i.networkPathRecordVisible(record) { xorPathMetaRoot(&root, record) } }
+	for _, record := range records { if i.networkPathRecordVisible(record, height) { xorPathMetaRoot(&root, record) } }
 	return root, nil
 }
 
@@ -245,7 +245,7 @@ func (i *Indexer) pathMetaForMutationLocked(parsed ParsedKey, existing, next *wi
 	meta = clonePathMeta(meta)
 	if meta.EndpointGeneration == ^uint64(0) { return nil, ErrStaleGeneration }
 	meta.EndpointGeneration++
-	beforeVisible := existingRecordActive(i, existing, height, now) && i.networkPathRecordVisible(existing)
+	beforeVisible := existingRecordActive(i, existing, height, now) && i.networkPathRecordVisible(existing, height)
 	afterVisible := next != nil && !IsTombstone(next.Flags) && !isEndpointCacheRecord(next) && nextVisible && !IsExpired(next, height)
 	if beforeVisible {
 		xorPathMetaRoot(&meta.StateRoot, existing)

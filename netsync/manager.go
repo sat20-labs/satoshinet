@@ -399,19 +399,16 @@ func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
 	// however regression test is special in that the regression tool is
 	// not a full node and still needs to be considered a sync candidate.
 	if sm.chainParams == &chaincfg.RegressionNetParams {
-		// The peer is not a candidate if it's not coming from localhost
-		// or the hostname can't be determined for some reason.
+		// Keep the localhost exception for the non-full-node regression
+		// tool. Other valid addresses use the normal capability checks.
 		host, _, err := net.SplitHostPort(peer.Addr())
 		if err != nil {
 			return false
 		}
 
-		if host != "127.0.0.1" && host != "localhost" {
-			return false
+		if host == "127.0.0.1" || host == "localhost" {
+			return true
 		}
-
-		// Candidate if all checks passed.
-		return true
 	}
 
 	// If the segwit soft-fork package has activated, then the peer must

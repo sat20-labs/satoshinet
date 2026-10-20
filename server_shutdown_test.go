@@ -23,7 +23,7 @@ func TestServerShutdownDrainsIndexCallbacksAndClosesDB(t *testing.T) {
 	t.Cleanup(func() { idxcommon.CHAIN = previousChain; cfg = previousCfg })
 	path := t.TempDir()
 	interrupt := make(chan struct{})
-	mgr := assetindexer.NewIndexerMgr(&assetindexer.Config{DataPath: path}, true, interrupt)
+	mgr := assetindexer.NewIndexerMgr(&assetindexer.Config{DataPath: path}, &chaincfg.TestNetParams, interrupt)
 	mgr.Init()
 	chainDB, err := database.Create("ffldb", t.TempDir(), chaincfg.TestNetParams.Net)
 	require.NoError(t, err)

@@ -175,7 +175,7 @@ func (i *Indexer) prepareBatchCAS(mutations []CASMutation, _ BatchCASOptions) (b
 		height: i.currentHeight(), now: currentUnixMilli(), policyGeneration: validators.policyGeneration}
 	for _, mutation := range mutations {
 		record := mutation.Record
-		parsed, err := validateParsedCoreWithVerifier(record, prep.height, false, false, nil)
+		parsed, err := i.validateCoreWithVerifier(record, prep.height, false, false, nil)
 		if err != nil {
 			return batchCASPreparation{}, err
 		}
@@ -248,8 +248,8 @@ func (i *Indexer) groupedReadyByPath(ready []preparedCASMutation) map[string][]p
 	return groups
 }
 
-func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint64) ([]preparedCASMutation, error) {
-	if atomic.LoadUint64(&i.policyGeneration) != prep.policyGeneration {
+func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, indexedHeight, viewHeight, now uint64) ([]preparedCASMutation, error) {
+	if atomic.LoadUint64(&i.policyGeneration) != prep.policyGeneration || indexedHeight != prep.height {
 		return nil, ErrConcurrentUpdate
 	}
 	already := 0
@@ -261,6 +261,10 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 		if !current {
 			return nil, ErrConcurrentUpdate
 		}
+		// Validate the receipt's record view before the idempotent fast path.
+		if IsExpired(item.mutation.Record, viewHeight) {
+			return nil, ErrExpiredRecord
+		}
 		if item.applied {
 			already++
 		}
@@ -271,23 +275,17 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 		}
 		return nil, ErrWriteConflict
 	}
-	if height != prep.height {
-		return nil, ErrConcurrentUpdate
-	}
 	ready := make([]preparedCASMutation, 0, len(prep.mutations))
 	for _, item := range prep.mutations {
 		record, existing := item.mutation.Record, item.snapshot.existing
 		if storageModeDowngrade(item) {
 			return nil, ErrStorageModeDowngrade
 		}
-		if IsExpired(record, height) {
-			return nil, ErrExpiredRecord
-		}
-		if !writePreconditionMatches(item.snapshot, item.mutation.Precondition, height, now, i) {
+		if !writePreconditionMatches(item.snapshot, item.mutation.Precondition, viewHeight, now, i) {
 			return nil, ErrWriteConflict
 		}
 		basis := item.snapshot
-		if !existingRecordActive(i, existing, height, now) {
+		if !existingRecordActive(i, existing, viewHeight, now) {
 			basis.existing = nil
 		}
 		nextSeq, err := nextCASSequence(basis)
@@ -302,7 +300,7 @@ func (i *Indexer) batchCASReadyLocked(prep batchCASPreparation, height, now uint
 			if item.parsed.Namespace == "mail" && len(item.parsed.Segments) == 4 && item.parsed.Segments[1] == "msg" && !item.mutation.Precondition.ExpectAbsent {
 				return nil, ErrWriteConflict
 			}
-			if existingRecordActive(i, existing, height, now) && !item.forceReplace &&
+			if existingRecordActive(i, existing, viewHeight, now) && !item.forceReplace &&
 				(record.IssueHeight < existing.IssueHeight || CompareCurrentRecords(existing, record) >= 0) {
 				return nil, ErrWriteConflict
 			}
@@ -487,7 +485,7 @@ func (i *Indexer) validateProjectedFeeLocked(ready []preparedCASMutation, record
 	return nil
 }
 
-func (i *Indexer) validateBatchStateLocked(ready []preparedCASMutation, height, now uint64) error {
+func (i *Indexer) validateBatchStateLocked(ready []preparedCASMutation, indexedHeight, viewHeight, now uint64) error {
 	contractRecords := make([]*wire.DKVSRecord, 0)
 	for _, item := range ready {
 		if IsAuthorityContractKey(item.parsed) {
@@ -519,7 +517,7 @@ func (i *Indexer) validateBatchStateLocked(ready []preparedCASMutation, height, 
 			}
 		}
 	}
-	records, err := i.projectedActiveRecordsLocked(ready, height, now)
+	records, err := i.projectedActiveRecordsLocked(ready, viewHeight, now)
 	if err != nil {
 		return err
 	}
@@ -529,7 +527,7 @@ func (i *Indexer) validateBatchStateLocked(ready []preparedCASMutation, height, 
 	if err := i.validateProjectedFreeLocalLocked(records); err != nil {
 		return err
 	}
-	return i.validateProjectedFeeLocked(ready, records, height, now)
+	return i.validateProjectedFeeLocked(ready, records, indexedHeight, now)
 }
 
 func (i *Indexer) validateMailboxRecordStatic(record *wire.DKVSRecord, parsed ParsedKey) error {
@@ -574,7 +572,7 @@ func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, no
 		}
 		byKey := make(map[string]*wire.DKVSRecord, len(active))
 		for _, record := range active {
-			if i.networkPathRecordVisible(record) {
+			if i.networkPathRecordVisible(record, height) {
 				byKey[record.Key] = record
 			}
 		}
@@ -586,7 +584,7 @@ func (i *Indexer) projectPathMetasLocked(ready []preparedCASMutation, height, no
 			}
 			canonicalChange = true
 			delete(byKey, record.Key)
-			if !IsTombstone(record.Flags) && (item.retention != nil || i.networkPathRecordVisible(record)) {
+			if !IsTombstone(record.Flags) && (item.retention != nil || i.networkPathRecordVisible(record, height)) {
 				byKey[record.Key] = record
 			}
 		}
@@ -737,14 +735,15 @@ func (i *Indexer) PutLocalBatchCASResultWithOptions(mutations []CASMutation, opt
 		}
 		i.mutex.Lock()
 		height, now := i.currentHeight(), currentUnixMilli()
-		ready, err := i.batchCASReadyLocked(prep, height, now)
+		tipHeight := i.issueHeightTip(height)
+		ready, err := i.batchCASReadyLocked(prep, height, tipHeight, now)
 		if err == nil && len(ready) != 0 {
-			err = i.validateBatchStateLocked(ready, height, now)
+			err = i.validateBatchStateLocked(ready, height, tipHeight, now)
 		}
 		var events []batchCASEvent
 		var states []PrefixGeneration
 		if err == nil && len(ready) != 0 {
-			events, states, err = i.commitBatchCASLocked(ready, height, now)
+			events, states, err = i.commitBatchCASLocked(ready, tipHeight, now)
 		} else if err == nil {
 			states, err = i.prefixStatesForPreparedLocked(prep.mutations)
 		}
@@ -756,7 +755,7 @@ func (i *Indexer) PutLocalBatchCASResultWithOptions(mutations []CASMutation, opt
 			return nil, err
 		}
 		i.emitCommittedEvents(events)
-		result := &WriteResult{Applied: len(ready), ServerTimeMS: now, ViewHeight: height,
+		result := &WriteResult{Applied: len(ready), ServerTimeMS: now, ViewHeight: tipHeight,
 			EndpointID: i.EndpointID(), RequestID: options.RequestID, PrefixStates: states}
 		for _, item := range prep.mutations {
 			record := cloneRecord(item.mutation.Record)

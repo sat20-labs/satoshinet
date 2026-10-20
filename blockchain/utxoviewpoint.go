@@ -601,6 +601,9 @@ func (view *UtxoViewpoint) findInputsToFetch(block *btcutil.Block) []wire.OutPoi
 	for i, tx := range transactions {
 		txInFlight[*tx.Hash()] = i
 	}
+	// Loading a parent refreshes all its outputs. Repeated references in this
+	// scan need the same entries, not another copy of every output's assets.
+	loadedParents := make([]bool, len(transactions))
 
 	// Loop through all of the transaction inputs (except for the coinbase
 	// which has no inputs) collecting them into sets of what is needed and
@@ -626,8 +629,11 @@ func (view *UtxoViewpoint) findInputsToFetch(block *btcutil.Block) []wire.OutPoi
 			if inFlightIndex, ok := txInFlight[*originHash]; ok &&
 				i >= inFlightIndex {
 
-				originTx := transactions[inFlightIndex]
-				view.AddTxOuts(originTx, block.Height())
+				if !loadedParents[inFlightIndex] {
+					originTx := transactions[inFlightIndex]
+					view.AddTxOuts(originTx, block.Height())
+					loadedParents[inFlightIndex] = true
+				}
 				continue
 			}
 

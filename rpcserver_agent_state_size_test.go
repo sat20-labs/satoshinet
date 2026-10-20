@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"testing"
@@ -81,18 +82,41 @@ func TestAgentDeploymentCrossesStateChunkBoundaryDuringPOSApproval(t *testing.T)
 		parent.Add(runtime)
 		return addr
 	}
-	add(10000)
+	uvarintSize := func(n int) int {
+		var buf [binary.MaxVarintLen64]byte
+		return binary.PutUvarint(buf[:], uint64(n))
+	}
+	empty, err := parent.MarshalBinary()
+	require.NoError(t, err)
+	// Keep all fixture nonces within the same binary encoding width.
+	const firstNonce = 1 << 16
+	add(firstNonce)
 	one, err := parent.MarshalBinary()
 	require.NoError(t, err)
-	// Equal-length nonces and addresses make the JSON record size predictable.
-	count := (node.MaxPersistedContractStateBytes - 1) / (len(one) - 1)
+	recordBytes := len(one) - len(empty)
+	headerBytes := len(empty) - uvarintSize(0)
+	encodedSize := func(count int) int { return headerBytes + uvarintSize(count) + count*recordBytes }
+	count := (node.MaxPersistedContractStateBytes - headerBytes) / recordBytes
+	for encodedSize(count) > node.MaxPersistedContractStateBytes {
+		count--
+	}
+	require.Equal(t, uvarintSize(firstNonce), uvarintSize(firstNonce+count))
 	for i := 1; i < count; i++ {
-		add(uint64(10000 + i))
+		add(uint64(firstNonce + i))
+		// Check actual binary growth on both sides of the count's varint boundary.
+		if n := i + 1; n == 2 || n == 127 || n == 128 {
+			t.Run(fmt.Sprintf("encoded_records_%d", n), func(t *testing.T) {
+				data, err := parent.MarshalBinary()
+				require.NoError(t, err)
+				require.Equal(t, encodedSize(n), len(data))
+			})
+		}
 	}
 	before, err := parent.MarshalBinary()
 	require.NoError(t, err)
+	require.Equal(t, encodedSize(count), len(before))
 	require.LessOrEqual(t, len(before), node.MaxPersistedContractStateBytes)
-	payload.DeployNonce = uint64(10000 + count)
+	payload.DeployNonce = uint64(firstNonce + count)
 	addr, _, err := agent.DeriveContractAddress(agent.TestnetContractPrefix, payload.SubType, content, "deployer", payload.DeployNonce)
 	require.NoError(t, err)
 	script, err := agent.DeployNullDataScript(payload)
@@ -113,6 +137,7 @@ func TestAgentDeploymentCrossesStateChunkBoundaryDuringPOSApproval(t *testing.T)
 	require.NoError(t, err)
 	require.Greater(t, len(after), node.MaxPersistedContractStateBytes)
 	require.Less(t, len(after)-len(before), len(one)+1024, "one small deployment crosses the boundary")
+	t.Logf("state boundary: records=%d before=%d after=%d limit=%d", count, len(before), len(after), node.MaxPersistedContractStateBytes)
 	provider := node.NewCompositeContractBlockValidator(node.CompositeContractBlockValidatorConfig{ChainParams: &chaincfg.RegressionNetParams,
 		Modules: []node.RegisteredContractValidator{{Descriptor: growingAgentDescriptor(), Validator: execution}}})
 	manager := node.NewContractStateManager()

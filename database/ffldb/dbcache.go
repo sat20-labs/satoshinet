@@ -426,9 +426,11 @@ func (c *dbCache) updateDB(fn func(ldbTx *leveldb.Transaction) error) error {
 	if err != nil {
 		return convertErr("failed to open ldb transaction", err)
 	}
+	// Commit leaves a failed transaction open. Discard also covers panics,
+	// and is a no-op after a successful commit.
+	defer ldbTx.Discard()
 
 	if err := fn(ldbTx); err != nil {
-		ldbTx.Discard()
 		return err
 	}
 

@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildResultTxRejectsTooManyOutputs(t *testing.T) {
-	outputs := make([]ResultOutput, MaxContractResultOutputs+1)
+	outputs := make([]ResultOutput, MaxContractResultOutputs)
 	for i := range outputs {
 		outputs[i] = ResultOutput{To: "recipient", Value: 1}
 	}

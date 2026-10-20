@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strings"
@@ -108,11 +109,11 @@ func TestNetworkPOSV2MultiCoreMultiMinerOffline(t *testing.T) {
 	}
 	// Ordinary Miners use their parent Core's indexer identity, which startup
 	// checks against --serverpubkey. The two-node fixture used Bootstrap for all.
-	parentByPub := make(map[string]string)
-	for _, m := range sequence[1:] {
-		parentByPub[m.pub] = m.parent.pub
+	coreIndexers := make(map[*member]*httptest.Server)
+	for _, core := range boot.children {
+		coreIndexers[core] = startFakeL1Indexer(t, core.pub, utxos)
 	}
-	fake := startFakeL1Indexer(t, boot.pub, utxos, parentByPub)
+	fake := startFakeL1Indexer(t, boot.pub, utxos)
 	boot.node, defaultCore.node = startSatoshiNetNetwork(t, fake)
 	boot.online, defaultCore.online = true, true
 	onlineNodes := func() []*rpctest.Harness {
@@ -161,7 +162,11 @@ func TestNetworkPOSV2MultiCoreMultiMinerOffline(t *testing.T) {
 	require.Equal(t, int32(2), height, "registration must complete in two blocks")
 	for _, m := range sequence[1:] {
 		if m.node == nil {
-			m.node = startSatoshiNetNode(t, fake, m.name, m.mnemonic, "--serverpubkey="+m.parent.pub)
+			indexer := fake
+			if m.parent != boot {
+				indexer = coreIndexers[m.parent]
+			}
+			m.node = startSatoshiNetNode(t, indexer, m.name, m.mnemonic, "--serverpubkey="+m.parent.pub)
 			m.online = true
 			require.NoError(t, rpctest.ConnectNode(m.node, m.parent.node))
 		}

@@ -16,9 +16,10 @@ func (i *Indexer) ReadPrefix(prefix string) (*PrefixReadResult, error) {
 	if err := validateReadablePrefix(prefix); err != nil {
 		return nil, err
 	}
-	height, now := i.currentHeight(), currentUnixMilli()
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
+	indexedHeight := i.currentHeight()
+	height, now := i.issueHeightTip(indexedHeight), currentUnixMilli()
 	records, _, _, err := i.scanLocked(prefix, nil, MaxPrefixReadRecords+1, true, height, now)
 	if err != nil {
 		return nil, err

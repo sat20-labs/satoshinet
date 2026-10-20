@@ -9,6 +9,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
+// MaxContractResultOutputs counts every physical TxOut, including metadata and carry.
 const MaxContractResultOutputs = 1000
 
 type ResultTxBuildOptions struct {
@@ -89,8 +90,8 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 			}
 		}
 		for _, output := range plan.Outputs {
-			if outputCount >= MaxContractResultOutputs {
-				return nil, fmt.Errorf("too many contract result outputs: %d", outputCount+1)
+			if outputCount >= MaxContractResultOutputs-1 {
+				return nil, fmt.Errorf("too many contract result outputs: %d", outputCount+2)
 			}
 			txOut, err := ResultTxOut(output, req.ResolveScript)
 			if err != nil {
@@ -113,6 +114,9 @@ func BuildResultTx(req ResultTxBuildRequest, opts ResultTxBuildOptions) (*wire.M
 		return nil, err
 	}
 	tx.AddTxOut(wire.NewTxOut(0, nil, script))
+	if len(tx.TxOut) > MaxContractResultOutputs {
+		return nil, fmt.Errorf("too many contract result outputs: %d", len(tx.TxOut))
+	}
 	if tx.SerializeSize() > wire.MaxBlockPayload {
 		return nil, fmt.Errorf("contract result transaction is too large: %d", tx.SerializeSize())
 	}

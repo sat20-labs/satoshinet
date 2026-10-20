@@ -27,6 +27,7 @@ const (
 	TemplateInvokeAPIProfit          = "profit"
 	TemplateInvokeAPIExchange        = "exchange"
 	TemplateInvokeAPIConfig          = "config"
+	TemplateInvokeAPIFunding         = "funding"
 	TemplateInvokeAPICancel          = "cancel"
 	TemplateInvokeAPIClose           = "close"
 )
@@ -54,9 +55,10 @@ var templateInvokeActions = map[string]map[string]struct{}{
 		TemplateInvokeAPIClose:    {},
 	},
 	TemplateAutopay: {
-		TemplateInvokeAPIConfig: {},
-		TemplateInvokeAPICancel: {},
-		TemplateInvokeAPIClose:  {},
+		TemplateInvokeAPIConfig:  {},
+		TemplateInvokeAPIFunding: {},
+		TemplateInvokeAPICancel:  {},
+		TemplateInvokeAPIClose:   {},
 	},
 }
 
