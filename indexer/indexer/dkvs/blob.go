@@ -14,7 +14,8 @@ func validateRecordSizeForParsed(record *wire.DKVSRecord, parsed ParsedKey) erro
 	}
 	valueLimit := MaxRecordValueSize
 	recordLimit := wire.MaxDKVSRecordSize
-	if IsBlobKey(parsed) || IsEVMSourceKey(parsed) || IsAuthorityContractKey(parsed) {
+	if IsBlobKey(parsed) || IsEVMSourceKey(parsed) || IsAuthorityContractKey(parsed) ||
+		isInternalDirectMailbox(parsed) && isInternalMailboxRecord(record) {
 		valueLimit = wire.MaxDKVSBlobValueSize
 		recordLimit = wire.MaxDKVSBlobRecordSize
 	}
