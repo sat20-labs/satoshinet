@@ -44,7 +44,8 @@ func TestIndexerReorgStopsBeforeClosingDKVS(t *testing.T) {
 			originalExit := logger.ExitFunc
 			logger.ExitFunc = func(code int) { panic(code) }
 			defer func() { logger.ExitFunc = originalExit }()
-			mgr := &IndexerMgr{cfg: &Config{}, dbDir: t.TempDir() + "/", chaincfgParam: params,
+			dir := t.TempDir()
+			mgr := &IndexerMgr{cfg: &Config{DataPath: dir}, dbDir: dir + "/", chaincfgParam: params,
 				periodFlushToDB: 30}
 			mgr.Init()
 			t.Cleanup(func() {

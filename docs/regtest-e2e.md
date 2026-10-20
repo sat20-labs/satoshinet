@@ -12,6 +12,8 @@ CSV、Segwit、Taproot 沿现有 BIP9 状态机暖机，第3块开始激活。PO
 
 节点重启保留原 block DB、索引器、钱包和 STP 数据。首次建立该独立网络使用专属目录，后续继续使用同一目录；配置支持不会自动迁移旧的不完整 regtest 数据。
 
+DKVS 数据库独立保存在 `data/db/dkvs/<network>`，例如 `data/db/dkvs/regtest`；`data` 对应配置的数据根目录。`data/db/indexer/<network>` 保存可从链重建的索引，重建索引时应保留 DKVS 目录。DKVS 含有不能通过链重建的数据，需单独备份；记录原有的 TTL 和付费保留规则继续生效。本次路径调整不读取或自动迁移旧的 `data/db/indexer/<network>/dkvs`。
+
 现有 SDK runner 的真实节点入口为 `sdk/e2e/real_regtest_environment_test.go`。它接受 `SAT20_REAL_L1_INDEXER`、`SAT20_REAL_TEST_WALLETS` 和 `SAT20_REAL_REGTEST_RUNTIME`，复用现有插件构建与节点 runner，在持久目录启动固定 bootstrap/core 身份。私密钱包 fixture 位置由 `knowledge/pwa-test-wallets.md` 登记，不写入文档、日志或命令输出。
 
 验证顺序：参数/地址与正常网络对照 → 同DB重启 → 真实暖机与激活 → SDK实际资金/资产准备 → 有效交易下的2秒节拍 → SDK/PWA业务验收。参数测试通过不能代替真实节拍和业务验证。当前状态及证据见 `knowledge/sdk-pwa-e2e-real-l1-plan-20261012.md`。

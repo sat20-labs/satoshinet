@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/sat20-labs/indexer/common"
 	db "github.com/sat20-labs/indexer/indexer/db"
@@ -29,7 +30,8 @@ func (p *IndexerMgr) initDB() (err error) {
 		return err
 	}
 
-	p.dkvsDB, err = openDB(p.dbDir + "dkvs")
+	// Off-chain records must survive deletion of the rebuildable chain index.
+	p.dkvsDB, err = openDB(filepath.Join(p.cfg.DataPath, "db", "dkvs", p.chaincfgParam.Name))
 	if err != nil {
 		return err
 	}

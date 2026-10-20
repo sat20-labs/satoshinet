@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -65,7 +66,8 @@ func TestIndexerCloseWaitsBeforeGCAndClosesEveryDBOnce(t *testing.T) {
 }
 
 func TestIndexerCloseReleasesRealDatabases(t *testing.T) {
-	mgr := &IndexerMgr{cfg: &Config{}, dbDir: t.TempDir() + "/", chaincfgParam: &chaincfg.TestNetParams, periodFlushToDB: 30}
+	dir := t.TempDir()
+	mgr := &IndexerMgr{cfg: &Config{DataPath: dir}, dbDir: dir + "/", chaincfgParam: &chaincfg.TestNetParams, periodFlushToDB: 30}
 	mgr.Init()
 	require.NoError(t, mgr.baseDB.Write([]byte("shutdown-marker"), []byte("base")))
 	require.NoError(t, mgr.localDB.Write([]byte("shutdown-marker"), []byte("local")))
@@ -77,8 +79,11 @@ func TestIndexerCloseReleasesRealDatabases(t *testing.T) {
 	}
 	require.NoError(t, mgr.Close())
 	require.NoError(t, mgr.Close())
-	for _, name := range []string{"base", "local", "dkvs"} {
-		reopened := idxdb.NewKVDB(mgr.dbDir + name)
+	for name, path := range map[string]string{
+		"base": mgr.dbDir + "base", "local": mgr.dbDir + "local",
+		"dkvs": filepath.Join(dir, "db", "dkvs", mgr.chaincfgParam.Name),
+	} {
+		reopened := idxdb.NewKVDB(path)
 		require.NotNil(t, reopened)
 		data, err := reopened.Read([]byte("shutdown-marker"))
 		require.NoError(t, err)
