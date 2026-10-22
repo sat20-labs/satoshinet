@@ -32,7 +32,7 @@ func (mp *TxPool) CheckAnchorTxValid(tx *wire.MsgTx, isNew bool, txHeight int32)
 	log.Debug("CheckAnchorTxValid ...\n")
 
 	// Check the locked tx out is valid
-	txInfo, err := anchortx.CheckAnchorTxValid(tx, isNew, mp.cfg.ChainParams.POSV2Active(txHeight))
+	txInfo, err := anchortx.CheckAnchorTxValid(tx, isNew, mp.cfg.ChainParams.POSV2Active(txHeight), mp.cfg.ChainParams.NativeAssetsActive(txHeight))
 	if err != nil {
 		log.Errorf("invalid Anchor tx: %s, %v", tx.TxHash().String(), err)
 		return err
