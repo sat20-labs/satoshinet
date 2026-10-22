@@ -4,16 +4,15 @@ package main
 
 import (
 	"bytes"
-	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
 	gethcommon "github.com/ethereum/go-ethereum/common"
@@ -27,7 +26,7 @@ import (
 )
 
 func TestEVMEndToEndSolidityCounter(t *testing.T) {
-	compiled := compileSolidityContract(t, solidityCounterSource, "Counter")
+	compiled := loadSolidityContract(t, "Counter")
 	rt := evm.NewRuntime(nil)
 	deployer := mustE2EEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	callers := []evm.EVMAddress{
@@ -60,7 +59,7 @@ func TestEVMEndToEndSolidityCounter(t *testing.T) {
 }
 
 func TestEVMEndToEndSolidityMiniERC20(t *testing.T) {
-	compiled := compileSolidityContract(t, solidityMiniERC20Source, "MiniERC20")
+	compiled := loadSolidityContract(t, "MiniERC20")
 	rt := evm.NewRuntime(nil)
 	deployer := mustE2EEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	alice := mustE2EEVMAddress(t, "0x2222222222222222222222222222222222222222")
@@ -122,7 +121,7 @@ func TestEVMEndToEndSolidityVaultTriggerAssetSettlement(t *testing.T) {
 		vaultAsset    = "ordx:ft:usd"
 		recipientAddr = "tb1qvaultrecipient"
 	)
-	compiled := compileSolidityContract(t, solidityVaultSource, "SatoshiNetTimelockVault")
+	compiled := loadSolidityContract(t, "SatoshiNetTimelockVault")
 	deployer := mustE2EEVMAddress(t, "0x11112233445566778899aabbccddeeff00112233")
 	contract, err := evm.DeriveCreateContractAddress(evm.TestnetContractPrefix, deployer, 3)
 	require.NoError(t, err)
@@ -199,60 +198,38 @@ type compiledSolidityContract struct {
 	Bytecode []byte
 }
 
-const solidityCompileTimeout = 30 * time.Second
-
-func compileSolidityContract(t *testing.T, source, contractName string) compiledSolidityContract {
+// Solidity fixtures are compiled offline; E2E execution never invokes solc.
+func loadSolidityContract(t *testing.T, contractName string) compiledSolidityContract {
 	t.Helper()
-	solc := os.Getenv("SATOSHINET_SOLC")
-	if solc == "" {
-		var err error
-		solc, err = exec.LookPath("solc")
-		if err != nil {
-			t.Fatal("solc not found; install solc or set SATOSHINET_SOLC to run Solidity E2E tests")
-		}
-	}
-	input := map[string]interface{}{
-		"language": "Solidity",
-		"sources": map[string]interface{}{
-			"Contract.sol": map[string]string{"content": source},
-		},
-		"settings": map[string]interface{}{
-			"evmVersion": "paris",
-			"optimizer":  map[string]interface{}{"enabled": true, "runs": 200},
-			"outputSelection": map[string]interface{}{
-				"*": map[string][]string{"*": []string{"abi", "evm.bytecode.object"}},
-			},
-		},
-	}
-	encoded, err := json.Marshal(input)
+	sourceName := contractName + ".sol"
+	source, err := os.ReadFile(filepath.Join("testdata", "solidity", sourceName))
 	require.NoError(t, err)
-	out := runSolcStandardJSON(t, solc, encoded)
-
-	var decoded struct {
-		Errors []struct {
-			Severity         string `json:"severity"`
-			FormattedMessage string `json:"formattedMessage"`
-		} `json:"errors"`
-		Contracts map[string]map[string]struct {
-			ABI json.RawMessage `json:"abi"`
-			EVM struct {
-				Bytecode struct {
-					Object string `json:"object"`
-				} `json:"bytecode"`
-			} `json:"evm"`
-		} `json:"contracts"`
-	}
-	require.NoError(t, json.Unmarshal(out, &decoded), string(out))
-	for _, item := range decoded.Errors {
-		if item.Severity == "error" {
-			t.Fatalf("solc error: %s", item.FormattedMessage)
-		}
-	}
-	compiled, ok := decoded.Contracts["Contract.sol"][contractName]
-	require.Truef(t, ok, "compiled contract %s not found", contractName)
-	abiValue, err := gethabi.JSON(bytes.NewReader(compiled.ABI))
+	raw, err := os.ReadFile(filepath.Join("testdata", "solidity", contractName+".json"))
 	require.NoError(t, err)
-	bytecode := gethcommon.FromHex(compiled.EVM.Bytecode.Object)
+	var fixture struct {
+		SourceName       string          `json:"sourceName"`
+		SourceSHA256     string          `json:"sourceSHA256"`
+		ContractName     string          `json:"contractName"`
+		CompilerVersion  string          `json:"compilerVersion"`
+		EVMVersion       string          `json:"evmVersion"`
+		OptimizerEnabled bool            `json:"optimizerEnabled"`
+		OptimizerRuns    int             `json:"optimizerRuns"`
+		ABI              json.RawMessage `json:"abi"`
+		Bytecode         string          `json:"bytecode"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &fixture))
+	sum := sha256.Sum256(source)
+	require.Equal(t, sourceName, fixture.SourceName)
+	require.Equal(t, hex.EncodeToString(sum[:]), fixture.SourceSHA256, "stale Solidity fixture; regenerate it offline")
+	require.Equal(t, contractName, fixture.ContractName)
+	require.NotEmpty(t, fixture.CompilerVersion)
+	require.Equal(t, "paris", fixture.EVMVersion)
+	require.True(t, fixture.OptimizerEnabled)
+	require.Equal(t, 200, fixture.OptimizerRuns)
+	abiValue, err := gethabi.JSON(bytes.NewReader(fixture.ABI))
+	require.NoError(t, err)
+	bytecode, err := hex.DecodeString(strings.TrimPrefix(fixture.Bytecode, "0x"))
+	require.NoError(t, err)
 	require.NotEmpty(t, bytecode)
 	return compiledSolidityContract{ABI: abiValue, Bytecode: bytecode}
 }
@@ -383,35 +360,6 @@ func solidityE2EResultScriptResolver(contract evm.ContractAddress) evm.ResultRec
 	}
 }
 
-func runSolcStandardJSON(t *testing.T, solc string, encoded []byte) []byte {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), solidityCompileTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, solc, "--standard-json")
-	cmd.Stdin = bytes.NewReader(encoded)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if err == syscall.ESRCH {
-			return os.ErrProcessDone
-		}
-		return err
-	}
-	cmd.WaitDelay = 5 * time.Second
-
-	out, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("solc timed out after %s: %s", solidityCompileTimeout, string(out))
-	}
-	require.NoErrorf(t, err, "solc failed: %s", string(out))
-	return out
-}
-
 func solidityE2ERecipientResolver(pkScript []byte) (string, bool, error) {
 	if len(pkScript) == 1 && pkScript[0] == 0x51 {
 		return "tb1qvaultrecipient", true, nil
@@ -483,147 +431,3 @@ func (i *solidityE2EAssetIndex) add(address, assetName string, amount *scommon.D
 	}
 	i.assets[address][assetName] = i.assets[address][assetName].AddAlignPrecision(amount)
 }
-
-const solidityCounterSource = `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
-
-// Counter verifies basic Solidity deployment, persistent storage, msg.sender,
-// event emission, and calls from multiple EVM accounts.
-contract Counter {
-    uint256 public value;
-    address public lastCaller;
-
-    event Incremented(address indexed caller, uint256 delta, uint256 value);
-    event Reset(address indexed caller);
-
-    function increment() external returns (uint256) {
-        return incrementBy(1);
-    }
-
-    function incrementBy(uint256 delta) public returns (uint256) {
-        require(delta > 0, "delta is zero");
-        value += delta;
-        lastCaller = msg.sender;
-        emit Incremented(msg.sender, delta, value);
-        return value;
-    }
-
-    function reset() external {
-        value = 0;
-        lastCaller = msg.sender;
-        emit Reset(msg.sender);
-    }
-}
-`
-
-const solidityMiniERC20Source = `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
-
-// MiniERC20 is a compact ERC20-compatible token used to exercise common
-// Ethereum application behavior: constructor mint, transfer, approve, and
-// transferFrom with allowance accounting.
-contract MiniERC20 {
-    string public name;
-    string public symbol;
-    uint8 public decimals;
-    uint256 public totalSupply;
-
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-
-    constructor(string memory name_, string memory symbol_, uint8 decimals_, uint256 initialSupply) {
-        name = name_;
-        symbol = symbol_;
-        decimals = decimals_;
-        _mint(msg.sender, initialSupply);
-    }
-
-    function transfer(address to, uint256 amount) external returns (bool) {
-        _transfer(msg.sender, to, amount);
-        return true;
-    }
-
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        emit Approval(msg.sender, spender, amount);
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        uint256 allowed = allowance[from][msg.sender];
-        require(allowed >= amount, "allowance");
-        allowance[from][msg.sender] = allowed - amount;
-        _transfer(from, to, amount);
-        return true;
-    }
-
-    function _transfer(address from, address to, uint256 amount) internal {
-        require(to != address(0), "zero to");
-        uint256 bal = balanceOf[from];
-        require(bal >= amount, "balance");
-        balanceOf[from] = bal - amount;
-        balanceOf[to] += amount;
-        emit Transfer(from, to, amount);
-    }
-
-    function _mint(address to, uint256 amount) internal {
-        require(to != address(0), "zero mint");
-        totalSupply += amount;
-        balanceOf[to] += amount;
-        emit Transfer(address(0), to, amount);
-    }
-}
-`
-
-const solidityVaultSource = `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
-
-interface ISatoshiNetAsset {
-    function transferAsset(string calldata assetName, string calldata to, string calldata amount, bytes calldata extraData) external returns (bool);
-}
-
-interface ISatoshiNetTrigger {
-    function registerHeightTrigger(string calldata id, uint256 height, uint256 gasLimit, bytes calldata callData) external returns (bool);
-}
-
-// SatoshiNetTimelockVault verifies the SatoshiNet-specific EVM extensions:
-// constructor-time trigger registration, height-trigger execution, and native
-// multi-asset settlement through the asset precompile.
-contract SatoshiNetTimelockVault {
-    ISatoshiNetAsset constant ASSET = ISatoshiNetAsset(0x0000000000000000000000000000000000534E01);
-    ISatoshiNetTrigger constant TRIGGER = ISatoshiNetTrigger(0x0000000000000000000000000000000000534e02);
-
-    string public assetName;
-    string public recipient;
-    string public amount;
-    uint256 public releaseHeight;
-    bool public released;
-
-    event Released(string assetName, string recipient, string amount);
-
-    constructor(string memory assetName_, string memory recipient_, string memory amount_, uint256 releaseHeight_) {
-        require(bytes(assetName_).length != 0, "asset");
-        require(bytes(recipient_).length != 0, "recipient");
-        require(bytes(amount_).length != 0, "amount");
-        require(releaseHeight_ > block.number, "height");
-        assetName = assetName_;
-        recipient = recipient_;
-        amount = amount_;
-        releaseHeight = releaseHeight_;
-
-        bytes memory callData = abi.encodeWithSelector(this.release.selector);
-        require(TRIGGER.registerHeightTrigger("vault-release", releaseHeight_, 800000, callData), "trigger");
-    }
-
-    function release() external {
-        require(!released, "released");
-        require(block.number >= releaseHeight, "not due");
-        released = true;
-        require(ASSET.transferAsset(assetName, recipient, amount, ""), "transfer");
-        emit Released(assetName, recipient, amount);
-    }
-}
-`

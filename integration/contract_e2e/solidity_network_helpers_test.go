@@ -2,11 +2,9 @@ package contract_e2e
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
-	gethcommon "github.com/ethereum/go-ethereum/common"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/btcec"
@@ -22,9 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -97,67 +93,12 @@ type networkCompiledSolidityContract struct {
 	Bytecode []byte
 }
 
-const networkSolidityCompileTimeout = 2 * time.Minute
-
-func compileNetworkSolidityContract(t *testing.T, source, contractName string) networkCompiledSolidityContract {
+// Network E2E uses only checked-in, source-hash-verified compiler output.
+func loadNetworkSolidityContract(t *testing.T, source, contractName string) networkCompiledSolidityContract {
 	t.Helper()
-	if os.Getenv("SATOSHINET_SOLC_RECOMPILE") != "1" {
-		if compiled, ok := precompiledNetworkSolidityContract(t, source, contractName); ok {
-			return compiled
-		}
-	}
-	solc := os.Getenv("SATOSHINET_SOLC")
-	if solc == "" {
-		var err error
-		solc, err = exec.LookPath("solc")
-		if err != nil {
-			t.Fatal("solc not found; install solc or set SATOSHINET_SOLC to recompile Solidity E2E fixtures")
-		}
-	}
-	input := map[string]interface{}{
-		"language": "Solidity",
-		"sources": map[string]interface{}{
-			"Contract.sol": map[string]string{"content": source},
-		},
-		"settings": map[string]interface{}{
-			"evmVersion": "paris",
-			"optimizer":  map[string]interface{}{"enabled": true, "runs": 200},
-			"outputSelection": map[string]interface{}{
-				"*": map[string][]string{"*": []string{"abi", "evm.bytecode.object"}},
-			},
-		},
-	}
-	encoded, err := json.Marshal(input)
-	require.NoError(t, err)
-	out := runNetworkSolcStandardJSON(t, solc, encoded)
-
-	var decoded struct {
-		Errors []struct {
-			Severity         string `json:"severity"`
-			FormattedMessage string `json:"formattedMessage"`
-		} `json:"errors"`
-		Contracts map[string]map[string]struct {
-			ABI json.RawMessage `json:"abi"`
-			EVM struct {
-				Bytecode struct {
-					Object string `json:"object"`
-				} `json:"bytecode"`
-			} `json:"evm"`
-		} `json:"contracts"`
-	}
-	require.NoError(t, json.Unmarshal(out, &decoded), string(out))
-	for _, item := range decoded.Errors {
-		if item.Severity == "error" {
-			t.Fatalf("solc error: %s", item.FormattedMessage)
-		}
-	}
-	compiled, ok := decoded.Contracts["Contract.sol"][contractName]
-	require.Truef(t, ok, "compiled contract %s not found", contractName)
-	abiValue, err := gethabi.JSON(bytes.NewReader(compiled.ABI))
-	require.NoError(t, err)
-	bytecode := gethcommon.FromHex(compiled.EVM.Bytecode.Object)
-	require.NotEmpty(t, bytecode)
-	return networkCompiledSolidityContract{ABI: abiValue, Bytecode: bytecode}
+	compiled, ok := precompiledNetworkSolidityContract(t, source, contractName)
+	require.Truef(t, ok, "missing precompiled Solidity fixture %s; generate it offline", contractName)
+	return compiled
 }
 
 func solidityDeployCode(t *testing.T, compiled networkCompiledSolidityContract, constructorArgs []interface{}) []byte {
@@ -448,35 +389,6 @@ func testDisplayAssetWithPrecision(name, amount string, precision int) *indexerc
 		Amount:    amount,
 		Precision: precision,
 	}
-}
-
-func runNetworkSolcStandardJSON(t *testing.T, solc string, encoded []byte) []byte {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), networkSolidityCompileTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, solc, "--standard-json")
-	cmd.Stdin = bytes.NewReader(encoded)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if err == syscall.ESRCH {
-			return os.ErrProcessDone
-		}
-		return err
-	}
-	cmd.WaitDelay = 5 * time.Second
-
-	out, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("solc timed out after %s: %s", networkSolidityCompileTimeout, string(out))
-	}
-	require.NoErrorf(t, err, "solc failed: %s", string(out))
-	return out
 }
 
 func testWitnessAddress(t *testing.T, key *btcec.PrivateKey) string {

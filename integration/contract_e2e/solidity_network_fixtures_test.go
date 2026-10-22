@@ -42,7 +42,7 @@ func precompiledNetworkSolidityContract(t *testing.T, source, contractName strin
 	}
 	sum := sha256.Sum256([]byte(source))
 	gotHash := gethcommon.Bytes2Hex(sum[:])
-	require.Equalf(t, fixture.SourceSHA256, gotHash, "Solidity fixture for %s is stale; refresh it or run with SATOSHINET_SOLC_RECOMPILE=1", contractName)
+	require.Equalf(t, fixture.SourceSHA256, gotHash, "Solidity fixture for %s is stale; regenerate it offline", contractName)
 	abiValue, err := gethabi.JSON(bytes.NewReader([]byte(fixture.ABI)))
 	require.NoError(t, err)
 	bytecode := gethcommon.FromHex(fixture.Bytecode)

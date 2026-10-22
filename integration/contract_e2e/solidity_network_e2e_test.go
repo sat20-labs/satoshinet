@@ -25,9 +25,9 @@ func TestNetworkSolidityContractsDeployInvokeAndAssetSettlement(t *testing.T) {
 		indexercommon.ENABLE_TESTING = oldEnableTesting
 	})
 
-	counter := compileNetworkSolidityContract(t, solidityNetworkCounterSource, "Counter")
-	erc20 := compileNetworkSolidityContract(t, solidityNetworkMiniERC20Source, "MiniERC20")
-	vault := compileNetworkSolidityContract(t, solidityNetworkVaultSource, "SatoshiNetTimelockVault")
+	counter := loadNetworkSolidityContract(t, solidityNetworkCounterSource, "Counter")
+	erc20 := loadNetworkSolidityContract(t, solidityNetworkMiniERC20Source, "MiniERC20")
+	vault := loadNetworkSolidityContract(t, solidityNetworkVaultSource, "SatoshiNetTimelockVault")
 
 	const (
 		gasLockedUtxo   = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0"
