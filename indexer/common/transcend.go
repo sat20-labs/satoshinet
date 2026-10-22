@@ -300,6 +300,11 @@ func CheckAnchorScriptEncoding(script []byte) error {
 // AnchorInvoice reconstructs the signature message from the actual transaction.
 // Parsing an invoice never authenticates it; callers must verify its signature.
 func AnchorInvoice(tx *wire.MsgTx, bindOutputs bool) ([]byte, error) {
+	_, native, err := NativeAssetProof(tx)
+	if err != nil {
+		return nil, err
+	}
+	bindOutputs = bindOutputs || native
 	if bindOutputs {
 		if err := CheckAnchorTxEncoding(tx); err != nil {
 			return nil, err
