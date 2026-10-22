@@ -2,9 +2,10 @@
 
 ## SatoshiNet contract storage
 
-DKVS stores opaque application bytes. SatoshiNet does not depend on the RGB11
-engine and does not define or decode RGB registrations, Genesis, tickers, asset
-types, names or ordinals.
+DKVS stores opaque application bytes. The DKVS subsystem does not define or
+decode RGB registrations, Genesis, tickers, asset types, names or ordinals.
+The separate STP native anchor verifier uses the RGB11 engine to validate
+proof-backed asset mappings; see [STP native assets](stp-native-assets.md).
 
 The directory layout remains:
 
