@@ -30,8 +30,15 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: sat20-labs/indexer
-          ref: 1d259d64ee3603bbf1ff8189dc1bbada76e2f8b3
+          ref: main
           path: indexer
+          persist-credentials: false
+      - name: Checkout RGB11 dependency
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: sat20-labs/rgb11
+          ref: main
+          path: rgb11
           persist-credentials: false
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff

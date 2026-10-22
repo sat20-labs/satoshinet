@@ -27,7 +27,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: sat20-labs/indexer
+          ref: main
           path: workspace/indexer
+
+      - name: Check out RGB11 dependency
+        uses: actions/checkout@v4
+        with:
+          repository: sat20-labs/rgb11
+          ref: main
+          path: workspace/rgb11
 
       - name: Check out wallet dependency
         uses: actions/checkout@v4
