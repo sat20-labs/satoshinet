@@ -167,6 +167,10 @@ type Params struct {
 	// Zero leaves the upgrade unscheduled. Set the same height on every node.
 	POSV2Height int32
 
+	// NativeAssetHeight schedules proof-backed native RGB11 mappings.
+	// Zero leaves admission disabled. Existing mapped assets may still exit.
+	NativeAssetHeight int32
+
 	// Name defines a human-readable identifier for the network.
 	Name string
 
