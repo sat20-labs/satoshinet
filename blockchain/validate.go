@@ -1065,7 +1065,7 @@ func CheckTransactionInputs(tx *btcutil.Tx, isNew bool, txHeight int32, utxoView
 	// mapping transactions have anchor inputs.
 	if IsAnchorTx(msgTx) {
 		// Check anchor input
-		_, err := anchortx.CheckAnchorTxValid(msgTx, isNew, chainParams.POSV2Active(txHeight))
+		_, err := anchortx.CheckAnchorTxValid(msgTx, isNew, chainParams.POSV2Active(txHeight), chainParams.NativeAssetsActive(txHeight))
 		if err != nil {
 			str := fmt.Sprintf("invalid anchor tx with %s, %v", tx.Hash(), err)
 			return 0, nil, ruleError(ErrAnchorTXVerifyFailed, str)
@@ -1237,7 +1237,7 @@ func (b *BlockChain) checkAnchorTxsUnique(block *btcutil.Block) error {
 			continue
 		}
 
-		lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false, b.chainParams.POSV2Active(block.Height()))
+		lockedInfo, err := anchortx.GetLockedTxInfo(tx.MsgTx(), false, b.chainParams.POSV2Active(block.Height()), b.chainParams.NativeAssetsActive(block.Height()))
 		if err != nil {
 			str := fmt.Sprintf("invalid anchor tx with %s, %v", tx.Hash(), err)
 			return ruleError(ErrAnchorTXVerifyFailed, str)

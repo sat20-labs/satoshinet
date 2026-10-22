@@ -1139,7 +1139,13 @@ func (b *BaseIndexer) processBlock(block *common.Block) {
 			for j, output := range tx.Outputs {
 				outputs[j] = wire.NewTxOut(output.Value, output.Assets, output.Address.PkScript)
 			}
-			ascend, err := b.genAscendFromAnchorPkScript(input.SignatureScript, outputs, b.chaincfgParam.POSV2Active(int32(block.Height)))
+			var ascend *common.AscendData
+			var err error
+			if tx.MsgTx != nil {
+				ascend, err = b.genAscendFromAnchorTx(tx.MsgTx, int32(block.Height))
+			} else {
+				ascend, err = b.genAscendFromAnchorPkScript(input.SignatureScript, outputs, b.chaincfgParam.POSV2Active(int32(block.Height)))
+			}
 			if err != nil {
 				common.Log.Panicf("GenAscendFromAnchorPkScript %s input %d failed: %v", tx.Txid, i, err)
 			}

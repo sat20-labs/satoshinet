@@ -9,6 +9,8 @@ import (
 	"fmt"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/btcec/schnorr"
@@ -46,6 +48,9 @@ type AnchorConfig struct {
 	IndexerHost      string
 	IndexerProxy     string
 	ChainParams      *chaincfg.Params
+	// NativeAssetResolver supplies Bitcoin facts, never client-side balances.
+	// Nil uses the configured indexer's existing Bitcoin evidence endpoints.
+	NativeAssetResolver consignment.BitcoinResolver
 }
 type AnchorManager struct {
 	anchorConfig  *AnchorConfig
@@ -102,24 +107,17 @@ func Stop() {
 	}
 }
 
-func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool) (*AscendInfo, error) {
-	if bindOutputs {
-		if err := sindexer.CheckAnchorTxEncoding(tx); err != nil {
-			return nil, err
-		}
-	}
+func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool, nativeActive ...bool) (*AscendInfo, error) {
+	return CheckAnchorTxValidWithCoreCheck(tx, bCheckUtxoAssets, bindOutputs,
+		len(nativeActive) == 1 && nativeActive[0], IsCoreNode)
+}
 
-	if len(tx.TxIn) != 1 {
-		err := fmt.Errorf("invalid Anchor tx, No Anchor info: %s", tx.TxHash().String())
-		return nil, err
-	}
-	AnchorScript := tx.TxIn[0].SignatureScript
-
-	// Check the Anchor tx has completed, all the assets is locked in lnd will be mapped to sats net only one times
-	lockedInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets, tx.TxOut, bindOutputs)
-	//	err = fmt.Errorf("invalid Anchor tx <%s>, just for test", tx.TxHash().String()) // Just for test
+// CheckAnchorTxValidWithCoreCheck lets block indexing authenticate the complete
+// native witness using its already locked Core membership view.
+func CheckAnchorTxValidWithCoreCheck(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs, nativeActive bool,
+	isCoreNode func([]byte) bool) (*AscendInfo, error) {
+	lockedInfo, err := checkAnchorInput(tx, bCheckUtxoAssets, bindOutputs, nativeActive, isCoreNode)
 	if err != nil {
-		log.Debugf("invalid Anchor tx, invalid Anchor script: %s, err: %s", tx.TxHash().String(), err.Error())
 		return nil, err
 	}
 
@@ -192,31 +190,63 @@ func checkAscendingTickerInfo(tx *wire.MsgTx, lockedInfo *AscendInfo) error {
 // The Anchor tx info is record in Anchor tx input script
 // return txscript.NewScriptBuilder().AddData(data).AddData(outputScript).
 // AddInt64(int64(amount)).AddInt64(int64(extraNonce)).Script()
-func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool) (*AnchorInfo, error) {
+func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool, nativeActive ...bool) (*AnchorInfo, error) {
+	lockedTxInfo, err := checkAnchorInput(tx, bCheckUtxoAssets, bindOutputs,
+		len(nativeActive) == 1 && nativeActive[0], IsCoreNode)
+	if err != nil {
+		return nil, err
+	}
+	return &lockedTxInfo.AnchorInfo, nil
+}
+
+func checkAnchorInput(tx *wire.MsgTx, current, bindOutputs, nativeActive bool,
+	isCoreNode func([]byte) bool) (*AscendInfo, error) {
+	if tx == nil || len(tx.TxIn) != 1 || tx.TxIn[0] == nil {
+		return nil, fmt.Errorf("anchor requires one input")
+	}
+	proof, native, err := sindexer.NativeAssetProof(tx)
+	if err != nil {
+		return nil, err
+	}
+	if native && !nativeActive {
+		return nil, fmt.Errorf("native asset mapping is not active")
+	}
+	bindOutputs = bindOutputs || native
 	if bindOutputs {
 		if err := sindexer.CheckAnchorTxEncoding(tx); err != nil {
 			return nil, err
 		}
 	}
-	if len(tx.TxIn) != 1 {
-		err := fmt.Errorf("invalid Anchor tx: %s", tx.TxHash().String())
-		return nil, err
-	}
-	AnchorScript := tx.TxIn[0].SignatureScript
-	// lenAnchorScript := len(AnchorScript)
-	// if lenAnchorScript < MIN_LEN_ANCHORTX_SCRIPT || lenAnchorScript > MAX_LEN_ANCHORTX_SCRIPT {
-	// 	err := fmt.Errorf("invalid Anchor tx script: %s", tx.TxHash().String())
-	// 	return nil, err
-	// }
-
-	log.Debugf("AnchorScript: %x\n", AnchorScript)
-
-	lockedTxInfo, err := CheckAnchorPkScript(AnchorScript, bCheckUtxoAssets, tx.TxOut, bindOutputs)
+	info, err := checkAnchorPkScriptWithCoreCheck(tx.TxIn[0].SignatureScript, current && !native,
+		isCoreNode, tx.TxOut, bindOutputs, native)
 	if err != nil {
-		err := fmt.Errorf("%s : anchortx[%s]", err.Error(), tx.TxHash().String())
 		return nil, err
 	}
-	return &lockedTxInfo.AnchorInfo, nil
+	if !native {
+		return info, nil
+	}
+	config := anchorManager.anchorConfig
+	if config == nil || config.ChainParams == nil {
+		return nil, fmt.Errorf("native anchor configuration is missing")
+	}
+	resolver := config.NativeAssetResolver
+	if resolver == nil {
+		resolver = &indexerBitcoinResolver{client: httpclient.NewIndexerClient(config.IndexerScheme, config.IndexerHost, config.IndexerProxy)}
+	}
+	pkScript, err := WitnessScriptHash(info.WitnessScript)
+	if err != nil {
+		return nil, err
+	}
+	mode := nativeproof.Historical
+	if current {
+		mode = nativeproof.Current
+	}
+	_, err = nativeproof.Validate(proof, nativeproof.Source{Outpoint: info.Utxo, PkScript: pkScript,
+		Value: info.Value, Assets: info.TxAssets, BitcoinNetwork: config.ChainParams.Name}, resolver, mode)
+	if err != nil {
+		return nil, fmt.Errorf("invalid native anchor proof: %w", err)
+	}
+	return info, nil
 }
 
 func ParseAnchorScript(AnchorScript []byte) (*AnchorInfo, error) {
@@ -379,6 +409,11 @@ func CheckAnchorPkScript(anchorPkScript []byte, bCheckUtxoAssets bool, outputs [
 // global indexer (which may also represent a different historical branch).
 func CheckAnchorPkScriptWithCoreCheck(anchorPkScript []byte, bCheckUtxoAssets bool,
 	isCoreNode func([]byte) bool, outputs []*wire.TxOut, bindOutputs bool) (*AscendInfo, error) {
+	return checkAnchorPkScriptWithCoreCheck(anchorPkScript, bCheckUtxoAssets, isCoreNode, outputs, bindOutputs, false)
+}
+
+func checkAnchorPkScriptWithCoreCheck(anchorPkScript []byte, bCheckUtxoAssets bool,
+	isCoreNode func([]byte) bool, outputs []*wire.TxOut, bindOutputs, nativeProof bool) (*AscendInfo, error) {
 	if bindOutputs {
 		if err := sindexer.CheckAnchorScriptEncoding(anchorPkScript); err != nil {
 			return nil, err
@@ -390,6 +425,14 @@ func CheckAnchorPkScriptWithCoreCheck(anchorPkScript []byte, bCheckUtxoAssets bo
 	lockedTxInfo, err := ParseAnchorScript(anchorPkScript)
 	if err != nil {
 		return nil, err
+	}
+	for _, asset := range lockedTxInfo.TxAssets {
+		if asset.Name.Protocol == nativeproof.ProtocolRGB11 && !nativeProof {
+			return nil, fmt.Errorf("RGB11 mapping requires the complete native anchor proof")
+		}
+	}
+	if anchorManager.anchorConfig == nil || anchorManager.anchorConfig.ChainParams == nil {
+		return nil, fmt.Errorf("anchor configuration is missing")
 	}
 
 	pkScript, err := WitnessScriptHash(lockedTxInfo.WitnessScript)

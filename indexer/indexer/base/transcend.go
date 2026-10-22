@@ -15,18 +15,45 @@ import (
 
 // genAscendFromAnchorPkScript requires b.mutex held by block indexing.
 func (b *BaseIndexer) genAscendFromAnchorPkScript(anchorPkScript []byte, outputs []*wire.TxOut, bindOutputs bool) (*common.AscendData, error) {
-	ascend, err := anchortx.CheckAnchorPkScriptWithCoreCheck(anchorPkScript, false, func(pub []byte) bool {
-		key := hex.EncodeToString(pub)
-		if key == indexer.GetBootstrapPubKey() || key == indexer.GetCoreNodePubKey() {
-			return true
-		}
-		_, ok := b.coreNodeMap[key]
-		return ok
-	}, outputs, bindOutputs)
+	ascend, err := anchortx.CheckAnchorPkScriptWithCoreCheck(anchorPkScript, false, b.isAnchorCoreNode, outputs, bindOutputs)
 	if err != nil {
 		return nil, err
 	}
+	return ascendData(ascend), nil
+}
 
+// genAscendFromAnchorTx preserves the native witness during indexing and
+// replay. Historical RGB validation does not require today's funding UTXO to
+// remain unspent. The caller already holds b.mutex.
+func (b *BaseIndexer) genAscendFromAnchorTx(tx *wire.MsgTx, height int32) (*common.AscendData, error) {
+	_, native, err := common.NativeAssetProof(tx)
+	if err != nil {
+		return nil, err
+	}
+	if !native {
+		if tx == nil || len(tx.TxIn) != 1 || tx.TxIn[0] == nil {
+			return nil, fmt.Errorf("invalid anchor transaction")
+		}
+		return b.genAscendFromAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, b.chaincfgParam.POSV2Active(height))
+	}
+	ascend, err := anchortx.CheckAnchorTxValidWithCoreCheck(tx, false, b.chaincfgParam.POSV2Active(height),
+		b.chaincfgParam.NativeAssetsActive(height), b.isAnchorCoreNode)
+	if err != nil {
+		return nil, err
+	}
+	return ascendData(ascend), nil
+}
+
+func (b *BaseIndexer) isAnchorCoreNode(pub []byte) bool {
+	key := hex.EncodeToString(pub)
+	if key == indexer.GetBootstrapPubKey() || key == indexer.GetCoreNodePubKey() {
+		return true
+	}
+	_, ok := b.coreNodeMap[key]
+	return ok
+}
+
+func ascendData(ascend *anchortx.AscendInfo) *common.AscendData {
 	return &common.AscendData{
 		FundingUtxo: ascend.Utxo,
 		Value:       ascend.Value,
@@ -35,7 +62,7 @@ func (b *BaseIndexer) genAscendFromAnchorPkScript(anchorPkScript []byte, outputs
 		Address:     ascend.Address,
 		PubA:        ascend.PubKeyA,
 		PubB:        ascend.PubKeyB,
-	}, nil
+	}
 }
 
 func NewAscendingLedgerEntry(ascend *common.AscendData) *common.ChannelLedgerEntry {
