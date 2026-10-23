@@ -273,6 +273,8 @@ github.com/sat20-labs/btcd v0.24.3-beta-rc1 h1:dqKhZybYnvSZxa/t/oIyOf8SMgrOeesUP
 github.com/sat20-labs/btcd v0.24.3-beta-rc1/go.mod h1:zHK7t7sw8XbsCkD64WePHE3r3k9/XoGAcf6mXV14c64=
 github.com/sat20-labs/btcd/btcutil v1.1.7 h1:aJDdf48dLZ9ouQWEhNHs5HlJRBgu4QqVxWPiryv7af0=
 github.com/sat20-labs/btcd/btcutil v1.1.7/go.mod h1:9dFymx8HpuLqBnsPELrImQeTQfKBQqzqGbbV3jK55aE=
+github.com/sat20-labs/rgb11 v1.0.0 h1:xJ6sB/JRcJplwReLyTAqTJG5bAniyazm09WJxFkqR0Y=
+github.com/sat20-labs/rgb11 v1.0.0/go.mod h1:hLB9/8omKXpYQBcOm8QdFgUZa1AGlYXGqqrU+daDKYg=
 github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible h1:Bn1aCHHRnjv4Bl16T8rcaFjYSrGrIZvpiGO6P3Q4GpU=
 github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible/go.mod h1:5b4v6he4MtMOwMlS0TUMTu2PcXUg8+E1lC7eC3UO/RA=
 github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=

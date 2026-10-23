@@ -8,8 +8,6 @@ replace github.com/btcsuite/btcd/btcutil => github.com/sat20-labs/btcd/btcutil v
 
 replace github.com/sat20-labs/indexer => ../indexer
 
-replace github.com/sat20-labs/rgb11 => ../rgb11
-
 require (
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792
@@ -24,7 +22,7 @@ require (
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/sat20-labs/indexer v0.3.0-20240926
-	github.com/sat20-labs/rgb11 v0.0.0
+	github.com/sat20-labs/rgb11 v1.0.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/files v1.0.1
