@@ -3,6 +3,7 @@ package contract_e2e
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/anchortx"
@@ -19,9 +20,12 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 	"github.com/tyler-smith/go-bip39"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +167,7 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 	t.Logf("started %s node: pid=%d rpc=%s p2p=%s log=%s",
 		role, r.NodePID(), r.RPCAddress(), r.P2PAddress(), r.LogFile())
 	t.Cleanup(func() {
+		preserveFailedRpctestData(t, r, role)
 		if err := r.TearDown(); err != nil {
 			if t.Failed() {
 				t.Logf("node teardown after test failure: %v", err)
@@ -172,6 +177,80 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 		}
 	})
 	return r
+}
+
+func preserveFailedRpctestData(t *testing.T, node *rpctest.Harness, role string) {
+	t.Helper()
+	if !t.Failed() {
+		return
+	}
+	root := os.Getenv("SATOSHINET_TEST_FAILURE_DIR")
+	logFile := node.LogFile()
+	if root == "" || logFile == "" {
+		t.Log("failed rpctest data was not copied: failure directory or node log path is unavailable")
+		return
+	}
+	source := filepath.Dir(logFile)
+	destination := filepath.Join(root, fmt.Sprintf("%s-%d", role, node.NodePID()))
+	if err := os.MkdirAll(destination, 0700); err != nil {
+		t.Logf("failed to create rpctest failure directory: %v", err)
+		return
+	}
+	if err := os.Chmod(destination, 0700); err != nil {
+		t.Logf("failed to secure rpctest failure directory: %v", err)
+		return
+	}
+	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("unsupported rpctest data file type at %s", rel)
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			_ = in.Close()
+			return err
+		}
+		_, copyErr := io.Copy(out, in)
+		inErr := in.Close()
+		closeErr := out.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if inErr != nil {
+			return inErr
+		}
+		return closeErr
+	})
+	if err != nil {
+		t.Logf("failed to copy rpctest node data from %s: %v", source, err)
+		return
+	}
+	t.Logf("preserved failed rpctest node data at %s", destination)
 }
 
 func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,

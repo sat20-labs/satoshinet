@@ -16,9 +16,9 @@ import (
 )
 
 // TestSort ensures the transaction sorting works according to the BIP.
+// Its original Bitcoin vectors are encoded with a zero SatoshiNet asset count
+// in each output so the transactions retain their BIP69 ordering cases.
 func TestSort(t *testing.T) {
-	t.Skip("BIP69 raw transaction fixtures use legacy txout encoding without SatoshiNet asset count")
-
 	tests := []struct {
 		name         string
 		hexFile      string
@@ -30,36 +30,36 @@ func TestSort(t *testing.T) {
 			name:         "first test case from BIP 69 - sorts inputs only, based on hash",
 			hexFile:      "bip69-1.hex",
 			isSorted:     false,
-			unsortedHash: "0a6a357e2f7796444e02638749d9611c008b253fb55f5dc88b739b230ed0c4c3",
-			sortedHash:   "839503cb611a3e3734bd521c608f881be2293ff77b7384057ab994c794fce623",
+			unsortedHash: "1a99a8382e4c758acadf2faa18eb2e3f2313b18689d738550a9eb7d4409f75f0",
+			sortedHash:   "649d05dc078873f094528dbcfcd5153bf95731e1f0d1885ec018a4acbdd114ad",
 		},
 		{
 			name:         "second test case from BIP 69 - already sorted",
 			hexFile:      "bip69-2.hex",
 			isSorted:     true,
-			unsortedHash: "28204cad1d7fc1d199e8ef4fa22f182de6258a3eaafe1bbe56ebdcacd3069a5f",
-			sortedHash:   "28204cad1d7fc1d199e8ef4fa22f182de6258a3eaafe1bbe56ebdcacd3069a5f",
+			unsortedHash: "0b12c217ef7ad16f16208fa2e117366be52aca3a024c64dace68736055b2b9b7",
+			sortedHash:   "0b12c217ef7ad16f16208fa2e117366be52aca3a024c64dace68736055b2b9b7",
 		},
 		{
 			name:         "block 100001 tx[1] - sorts outputs only, based on amount",
 			hexFile:      "bip69-3.hex",
 			isSorted:     false,
-			unsortedHash: "fbde5d03b027d2b9ba4cf5d4fecab9a99864df2637b25ea4cbcb1796ff6550ca",
-			sortedHash:   "0a8c246c55f6b82f094d211f4f57167bf2ea4898741d218b09bdb2536fd8d13f",
+			unsortedHash: "237c574c8f78791f601ce58fd9af53be02d049662a5f7d50f005dcb3c86e4a68",
+			sortedHash:   "14258606c8182b7ad86e3664bbea9ccf83f70360783bf97a08ae5ccebb786eab",
 		},
 		{
 			name:         "block 100001 tx[2] - sorts both inputs and outputs",
 			hexFile:      "bip69-4.hex",
 			isSorted:     false,
-			unsortedHash: "8131ffb0a2c945ecaf9b9063e59558784f9c3a74741ce6ae2a18d0571dac15bb",
-			sortedHash:   "a3196553b928b0b6154b002fa9a1ce875adabc486fedaaaf4c17430fd4486329",
+			unsortedHash: "d82a75177d9ed368c3d3ee921c2b29be6fe7ae729659214c211bf66866379116",
+			sortedHash:   "d606dabbabd8d87e79af23d81d978217c7d42d66c6aca5654bab0a49085be702",
 		},
 		{
 			name:         "block 100998 tx[6] - sorts outputs only, based on output script",
 			hexFile:      "bip69-5.hex",
 			isSorted:     false,
-			unsortedHash: "ff85e8fc92e71bbc217e3ea9a3bacb86b435e52b6df0b089d67302c293a2b81d",
-			sortedHash:   "9a6c24746de024f77cac9b2138694f11101d1c66289261224ca52a25155a7c94",
+			unsortedHash: "120ea9f47dbdf8d4f354be24a8f9a70089c3e426b923226750aae08be88f9035",
+			sortedHash:   "d71a54131c3c96d72defc40ccfaeb6ed011a3e7df1013aa13c667ddc8c61cf0d",
 		},
 	}
 
