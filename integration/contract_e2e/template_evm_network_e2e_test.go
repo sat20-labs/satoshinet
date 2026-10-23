@@ -63,7 +63,7 @@ func TestNetworkTemplateAndEVMSameBlockPriorityAndCombinedStateRoot(t *testing.T
 	t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "5")
 	t.Setenv("SATOSHINET_POS_CHECKING_INTERVAL", "1")
 
-	counter := compileNetworkSolidityContract(t, solidityNetworkCounterSource, "Counter")
+	counter := loadNetworkSolidityContract(t, solidityNetworkCounterSource, "Counter")
 	fixture := newTemplateNetworkFixture(t, map[string]int64{
 		"ordx:f:mix": 1000,
 	})
