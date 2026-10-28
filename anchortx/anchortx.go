@@ -414,6 +414,13 @@ func CheckAnchorPkScriptWithCoreCheck(anchorPkScript []byte, bCheckUtxoAssets bo
 
 func checkAnchorPkScriptWithCoreCheck(anchorPkScript []byte, bCheckUtxoAssets bool,
 	isCoreNode func([]byte) bool, outputs []*wire.TxOut, bindOutputs, nativeProof bool) (*AscendInfo, error) {
+	lucky, err := sindexer.BTCLuckyMetadataFromOutputs(outputs)
+	if err != nil {
+		return nil, err
+	}
+	if lucky != nil && !bindOutputs {
+		return nil, fmt.Errorf("BTC lucky marker requires output-bound anchor invoices")
+	}
 	if bindOutputs {
 		if err := sindexer.CheckAnchorScriptEncoding(anchorPkScript); err != nil {
 			return nil, err

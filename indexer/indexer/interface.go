@@ -162,11 +162,15 @@ func (b *IndexerMgr) GetAscendData(fundingUtxo string) *common.AscendData {
 	return b.rpcService.GetAscendData(fundingUtxo)
 }
 
+func (b *IndexerMgr) GetBTCLuckyBlocks(pubkey string, start, limit int) (*common.BTCLuckyBlocks, error) {
+	return b.rpcService.GetBTCLuckyBlocks(pubkey, start, limit)
+}
+
 func (b *IndexerMgr) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return b.rpcService.GetDescendData(nullDataUtxo)
 }
 
-func (b *IndexerMgr) GetChannelLedger(channel string) []*common.ChannelLedgerEntry {
+func (b *IndexerMgr) GetChannelLedger(channel string) ([]*common.ChannelLedgerEntry, error) {
 	return b.rpcService.GetChannelLedger(channel)
 }
 

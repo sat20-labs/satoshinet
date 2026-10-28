@@ -76,9 +76,10 @@ type AscendData struct {
 	Assets      wire.TxAssets `json:"assets"` // 最多一种资产
 	Sig         []byte        `json:"invoiceSig"`
 
-	Address string `json:"address"` // 通道地址
-	PubA    []byte `json:"pubKeyA"` // 服务节点
-	PubB    []byte `json:"puKeyB"`
+	Address  string            `json:"address"` // 通道地址
+	PubA     []byte            `json:"pubKeyA"` // 服务节点
+	PubB     []byte            `json:"puKeyB"`
+	BTCLucky *BTCLuckyMetadata `json:"btcLucky,omitempty"`
 }
 
 func (p *AscendData) ToMinerInfo() *MinerInfo {

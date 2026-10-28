@@ -654,6 +654,8 @@ GET  /v3/dkvs/snapshot
 POST/DELETE/GET /v3/dkvs/subscriptions
 ~~~
 
+其中 POST 用于 E2E 测试设置节点订阅；主网请求直接返回错误，测试网络保留。
+
 PWA 业务代码不直接操作这些接口。
 
 ---

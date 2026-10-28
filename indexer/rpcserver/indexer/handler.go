@@ -627,6 +627,12 @@ func (s *Handle) pruneDKVS(c *gin.Context) {
 
 func (s *Handle) subscribeDKVS(c *gin.Context) {
 	resp := &dkvsSubscriptionResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}}
+	if s.model.indexer.IsMainnet() {
+		resp.Code = -1
+		resp.Msg = "DKVS node subscriptions are only available for testing"
+		c.JSON(http.StatusForbidden, resp)
+		return
+	}
 	var req dkvsSubscriptionReq
 	if err := bindDKVSJSON(c, &req, dkvsSubscriptionHTTPBodyLimit); err != nil {
 		resp.Code = -1

@@ -369,15 +369,15 @@ func (b *RpcIndexer) GetDescendData(nullDataUtxo string) *common.DescendData {
 	return info
 }
 
-func (b *RpcIndexer) GetChannelLedger(channel string) []*common.ChannelLedgerEntry {
+func (b *RpcIndexer) GetChannelLedger(channel string) ([]*common.ChannelLedgerEntry, error) {
 	b.mutex.RLock()
+	defer b.mutex.RUnlock()
 	result := make([]*common.ChannelLedgerEntry, 0)
 	for _, entry := range b.utxoIndex.ChannelLedgerMap {
 		if entry.ChannelId == channel {
-			result = append(result, entry)
+			result = append(result, cloneChannelLedgerEntry(entry))
 		}
 	}
-	b.mutex.RUnlock()
 	seen := make(map[string]bool)
 	for _, entry := range result {
 		seen[string(stp.GetChannelLedgerDBKey(entry))] = true
@@ -385,7 +385,7 @@ func (b *RpcIndexer) GetChannelLedger(channel string) []*common.ChannelLedgerEnt
 
 	entries, err := stp.GetChannelLedgerFromDB(b.db, channel)
 	if err != nil {
-		common.Log.Errorf("GetChannelLedgerFromDB %s failed, %v", channel, err)
+		return nil, fmt.Errorf("GetChannelLedgerFromDB %s: %w", channel, err)
 	} else {
 		for _, entry := range entries {
 			key := string(stp.GetChannelLedgerDBKey(entry))
@@ -393,13 +393,13 @@ func (b *RpcIndexer) GetChannelLedger(channel string) []*common.ChannelLedgerEnt
 				continue
 			}
 			seen[key] = true
-			result = append(result, entry)
+			result = append(result, cloneChannelLedgerEntry(entry))
 		}
 	}
 
 	ascends, err := stp.GetAscendsFromDBByChannel(b.db, channel)
 	if err != nil {
-		common.Log.Errorf("GetAscendsFromDBByChannel %s failed, %v", channel, err)
+		return nil, fmt.Errorf("GetAscendsFromDBByChannel %s: %w", channel, err)
 	} else {
 		for _, ascend := range ascends {
 			entry := NewAscendingLedgerEntry(ascend)
@@ -408,13 +408,13 @@ func (b *RpcIndexer) GetChannelLedger(channel string) []*common.ChannelLedgerEnt
 				continue
 			}
 			seen[key] = true
-			result = append(result, entry)
+			result = append(result, cloneChannelLedgerEntry(entry))
 		}
 	}
 
 	descends, err := stp.GetDescendsFromDBByChannel(b.db, channel)
 	if err != nil {
-		common.Log.Errorf("GetDescendsFromDBByChannel %s failed, %v", channel, err)
+		return nil, fmt.Errorf("GetDescendsFromDBByChannel %s: %w", channel, err)
 	} else {
 		for _, descend := range descends {
 			entry := NewDescendingLedgerEntry(descend)
@@ -423,16 +423,11 @@ func (b *RpcIndexer) GetChannelLedger(channel string) []*common.ChannelLedgerEnt
 				continue
 			}
 			seen[key] = true
-			result = append(result, entry)
+			result = append(result, cloneChannelLedgerEntry(entry))
 		}
 	}
 
-	b.mutex.Lock()
-	for _, entry := range result {
-		b.utxoIndex.ChannelLedgerMap[string(stp.GetChannelLedgerDBKey(entry))] = entry
-	}
-	b.mutex.Unlock()
-	return result
+	return result, nil
 }
 
 func (b *RpcIndexer) GetChannelStateEvents(channel string) []*common.ChannelStateEvent {

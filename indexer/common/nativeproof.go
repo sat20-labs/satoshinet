@@ -10,8 +10,6 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const CONTENT_TYPE_NATIVE_ASSET = txscript.OP_DATA_9
-
 // SetNativeAssetProof installs the complete proof in the anchor witness and
 // its SHA256 commitment in a zero-valued metadata output. Call this BEFORE
 // constructing or signing any invoice; native invoices always bind outputs.

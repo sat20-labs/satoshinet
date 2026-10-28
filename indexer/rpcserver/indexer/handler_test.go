@@ -10,7 +10,64 @@ import (
 
 	"github.com/gin-gonic/gin"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
+	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
+	"github.com/sat20-labs/satoshinet/wire"
 )
+
+type dkvsSubscriptionRouteIndexer struct {
+	shareIndexer.Indexer
+	mainnet       bool
+	subscriptions []dkvsindexer.Subscription
+}
+
+func (i *dkvsSubscriptionRouteIndexer) IsMainnet() bool { return i.mainnet }
+
+func (i *dkvsSubscriptionRouteIndexer) SubscribeDKVS(sub dkvsindexer.Subscription) ([]*wire.DKVSRecord, int, error) {
+	i.subscriptions = append(i.subscriptions, sub)
+	return nil, 0, nil
+}
+
+func (i *dkvsSubscriptionRouteIndexer) ListDKVSSubscriptions() []dkvsindexer.Subscription {
+	return i.subscriptions
+}
+
+func TestDKVSSubscriptionCreationNetworkRestriction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name      string
+		mainnet   bool
+		proxy     string
+		body      string
+		remote    string
+		wantCode  int
+		wantCalls int
+	}{
+		{name: "mainnet", mainnet: true, proxy: "/testnet", body: `{"type":"key","target":"/name/test"}`, remote: "127.0.0.1:1000", wantCode: http.StatusForbidden},
+		{name: "mainnet malformed body", mainnet: true, proxy: "/mainnet", body: `{`, remote: "127.0.0.1:1000", wantCode: http.StatusForbidden},
+		{name: "testnet", proxy: "/mainnet", body: `{"type":"key","target":"/name/test"}`, remote: "127.0.0.1:1000", wantCode: http.StatusOK, wantCalls: 1},
+		{name: "testnet remote", proxy: "/testnet", body: `{"type":"key","target":"/name/test"}`, remote: "203.0.113.1:1000", wantCode: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			indexer := &dkvsSubscriptionRouteIndexer{mainnet: tc.mainnet}
+			router := gin.New()
+			NewService(indexer).InitRouter(router, tc.proxy)
+			req := httptest.NewRequest(http.MethodPost, tc.proxy+"/v3/dkvs/subscriptions", bytes.NewBufferString(tc.body))
+			req.RemoteAddr = tc.remote
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != tc.wantCode {
+				t.Fatalf("status=%d want=%d body=%s", resp.Code, tc.wantCode, resp.Body.String())
+			}
+			if len(indexer.subscriptions) != tc.wantCalls {
+				t.Fatalf("subscription calls=%d want=%d", len(indexer.subscriptions), tc.wantCalls)
+			}
+			if tc.wantCalls == 1 && indexer.subscriptions[0] != (dkvsindexer.Subscription{Type: dkvsindexer.SubscriptionKey, Target: "/name/test"}) {
+				t.Fatalf("unexpected subscription: %+v", indexer.subscriptions[0])
+			}
+		})
+	}
+}
 
 func TestDKVSLocalOnlyMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)

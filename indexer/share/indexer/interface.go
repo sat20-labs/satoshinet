@@ -41,8 +41,9 @@ type Indexer interface {
 	GetTxOutputWithUtxo(utxo string) *common.TxOutput
 	GetTxOutputWithUtxoV3(utxo string) *indexer.AssetsInUtxo
 	GetAscendData(fundingUtxo string) *common.AscendData
+	GetBTCLuckyBlocks(pubkey string, start, limit int) (*common.BTCLuckyBlocks, error)
 	GetDescendData(nullDataUtxo string) *common.DescendData
-	GetChannelLedger(channel string) []*common.ChannelLedgerEntry
+	GetChannelLedger(channel string) ([]*common.ChannelLedgerEntry, error)
 	GetChannelStateEvents(channel string) []*common.ChannelStateEvent
 	RecordChannelStateEvent(event *common.ChannelStateEvent) error
 	GetReferrer(address string) (*common.ReferrerInfo, error)

@@ -365,7 +365,10 @@ func (s *Model) GetDescend(utxo string) (*common.DescendData, error) {
 }
 
 func (s *Model) GetChannelLedger(channel string) ([]*common.ChannelLedgerEntry, error) {
-	data := s.indexer.GetChannelLedger(channel)
+	data, err := s.indexer.GetChannelLedger(channel)
+	if err != nil {
+		return nil, err
+	}
 	if data == nil {
 		data = []*common.ChannelLedgerEntry{}
 	}

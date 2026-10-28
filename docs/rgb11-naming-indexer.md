@@ -39,9 +39,9 @@ none parse business fields.
 
 ## Internal storage API
 
-`POST /v3/dkvs/internal/contract` accepts one signed generic DKVS record through
-the existing local-only administration boundary. It delegates to
-`IndexerMgr.PutDKVSInternalContract` / `Indexer.PutInternalContract`.
+`IndexerMgr.PutDKVSInternalContract` / `Indexer.PutInternalContract` accept one
+signed generic DKVS record through the in-process backend. This internal write
+operation is not exposed as an HTTP route.
 
 This is a trusted storage API, not an RGB registration API. A caller must validate
 its business operation before signing the bytes. The node's former RGB-specific
@@ -108,7 +108,7 @@ separate coordination design.
 
 ## Validation and remaining integration
 
-Node tests cover opaque bytes, authority and local administration boundaries,
+Node tests cover opaque bytes, authority and internal storage boundaries,
 wire size limits, ordinary-write rejection, immutable values, atomic rejection,
 snapshot omissions, P2P state and database reopen behavior.
 

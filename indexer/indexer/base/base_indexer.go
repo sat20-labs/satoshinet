@@ -272,6 +272,10 @@ func cloneAscendData(value *common.AscendData) *common.AscendData {
 	cloned.Sig = append([]byte(nil), value.Sig...)
 	cloned.PubA = append([]byte(nil), value.PubA...)
 	cloned.PubB = append([]byte(nil), value.PubB...)
+	if value.BTCLucky != nil {
+		metadata := *value.BTCLucky
+		cloned.BTCLucky = &metadata
+	}
 	return &cloned
 }
 

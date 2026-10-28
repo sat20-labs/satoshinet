@@ -19,7 +19,12 @@ func (b *BaseIndexer) genAscendFromAnchorPkScript(anchorPkScript []byte, outputs
 	if err != nil {
 		return nil, err
 	}
-	return ascendData(ascend), nil
+	data := ascendData(ascend)
+	data.BTCLucky, err = common.BTCLuckyMetadataFromOutputs(outputs)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // genAscendFromAnchorTx preserves the native witness during indexing and
@@ -41,7 +46,12 @@ func (b *BaseIndexer) genAscendFromAnchorTx(tx *wire.MsgTx, height int32) (*comm
 	if err != nil {
 		return nil, err
 	}
-	return ascendData(ascend), nil
+	data := ascendData(ascend)
+	data.BTCLucky, err = common.BTCLuckyMetadataFromOutputs(tx.TxOut)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func (b *BaseIndexer) isAnchorCoreNode(pub []byte) bool {
