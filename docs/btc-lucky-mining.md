@@ -61,13 +61,20 @@ controlled by its configuration.
 L1 indexer 同步到实际 coinbase UTXO 后，钱包先展示等待成熟的奖励。只有当前
 L1 主链上的 coinbase 达到成熟度，已有的 L1 监控流程才会将奖励全额 ascend
 到原来的 2-of-2 地址。客户端签名前、服务端共签入口及客户端广播前均校验来源
-和成熟度；ascend 不花费原始 Bitcoin 输出。未成熟 coinbase 不计入通道可用
-抵押余额；已成熟但尚未 ascend 的 Lucky 奖励也不计入公共可用抵押额度，
-不能间接支持其他映射或释放已有抵押。只有验证该奖励自身的专用 ascend 时，
-才将本次来源计入额度；复用现有通道账本识别已映射来源，不增加持久状态。
-奖励发现复用 L1 地址 UTXO
-与已有通道账本，不依赖最近中奖记录窗口；
-原始 coinbase 被 splicing 找零替换后，已映射奖励仍可发现。
+和成熟度；ascend 不花费原始 Bitcoin 输出。奖励由通道外管理，ascend 不会
+自动将其纳入通道承诺。
+
+原始 L1 Lucky coinbase 通过 coinbase 来源及 `satoshinet` 标记识别；原始
+L2 anchor 使用 `CONTENT_TYPE_BTC_LUCKY` 标识并复核其 L1 来源。无论是否成熟、
+是否已 ascend 或已 claim，原始 L1 输出始终排除在普通通道选币、扩容和通道
+可用资产汇总之外，也不计入公共可用抵押余额。未 claim 的原始 L2 anchor
+同样不能直接纳入通道或通过普通 L2 共签花费。相关汇总按请求过滤这些 UTXO，
+不建立独立负债或公共额度模型，也不新增持久化余额库。
+
+奖励发现复用 L1 地址 UTXO 与已有通道账本，不依赖最近中奖记录窗口。
+原始 coinbase 保留在其原始 outpoint，不通过 splicing 找零替换；已映射奖励
+可通过既有通道账本继续发现。原始 L1 输出已花费或来源无法验证时，奖励条目
+显示错误并拒绝提取。
 
 用户提取时，客户端和服务端重新校验原始 coinbase、当前 L1 确认数、anchor
 来源及其未花费输出。成熟度取自 L1 indexer 的 `share_rpc.bitcoin.coinbase_maturity`
@@ -75,14 +82,15 @@ L1 主链上的 coinbase 达到成熟度，已有的 L1 监控流程才会将奖
 使用 Bitcoin 默认值 100；请求、解析或服务错误仍返回错误。隔离私有链配置为
 10。成熟度按原始 L1 奖励计算，不从 ascend 重新计时。claim 继续复核成熟度，
 不增加第二轮等待。claim 收到远端签名后、广播前再次验证成熟度、来源、
-未花费的 L2 输出及通道抵押状态，并使用重新获取的 prevouts 完成签名验证。
-成熟不构成绝对最终性，极深 L1 重组仍可能影响已映射抵押。
+当前 L1 区块身份、原始 L1 与 anchor L2 输出的未花费状态，以及两层输出均未
+被普通通道管理或预留，并使用重新获取的 prevouts 完成签名验证。
+成熟不构成绝对最终性，极深 L1 重组仍可能使已映射奖励失去有效的 L1 来源。
 
 等待成熟期间若奖励被 L1 重组移除，不生成其 L2 anchor。单条来源或状态查询
 失败时，奖励列表保留该条 `status: "error"` 及 `error` 原因，其他奖励继续
-发现和处理；列表、配置或通道账本整体读取失败仍返回错误。未 ascend 的 Lucky
-coinbase 不能通过普通 L1 unstake、sweep 等共签请求提现或重新包装以规避分账。
-已映射抵押的 L1 流转仍受原有通道额度和 deanchor 校验约束。
+发现和处理；列表、配置或通道账本整体读取失败仍返回错误。普通 L1 unstake、
+sweep 等共签请求始终排除原始 Lucky coinbase，包括已 ascend 或已 claim 后，
+防止绕过分账或消耗映射的 L1 来源。
 
 提取交易花费 anchor 的第 0 个输出，要求两方真实签名；扣除
 `DEFAULT_FEE_SATSNET`（当前 10 sats）后，用户、服务节点、引导节点按
@@ -92,13 +100,24 @@ coinbase 不能通过普通 L1 unstake、sweep 等共签请求提现或重新包
 不作为中奖者，不能通过调换 2-of-2 双方身份改变分账。
 已由普通通道管理或预留的 UTXO 不允许走此路径。
 
+claim 产生的输出是普通 L2 资产，仍由通道外管理；需要纳入通道时，再使用
+既有的显式 lock 流程。原始 Lucky coinbase 与未 claim 的 anchor 均不作为
+普通通道操作的候选输入。
+
+`LockToChannelWithExpand` 优先 expand 私有通道地址中尚未纳入管理、未被预留
+且可扩容的普通 L1 目标资产 UTXO，再 lock 现有远端余额，最后从公共通道增资
+缺口部分。本地 expand 沿用整条 UTXO 的处理方式，可能超过本次请求金额。
+首次开通道前已有的 L2 资产会保留；重开前的清理只处理已确认关闭交易及其
+配对 deanchor 证明绑定的 L2 输入，依据现有关闭材料验证，不按地址总余额销毁，
+也不新增迁移额度记录或关闭 payload 字段。
+
 PWA 的 Lucky Mining 页面提供成熟进度与提取按钮，WASM 接口为
 `getBTCLuckyRewards`、`claimBTCLuckyReward(fundingUtxo)`。节点运营者可通过
 既有本地管理面调用 `GET /btc/lucky/rewards` 和 `POST /btc/lucky/claim`
 （JSON 字段 `fundingUtxo`）；这些路由不在公开协议服务上注册。
 
-这条提取路径验证的是奖励映射后在聪网的共签花费。原始 L1 coinbase 仍作为
-映射抵押，回到 Bitcoin L1 的流程需要相应的 deanchor。
+这条提取路径只花费聪网 anchor，不花费或解除原始 L1 coinbase 的隔离。
+当前 Lucky 流程没有原始 coinbase 的 L1 提现或重新包装操作。
 
 ## 聪网中奖索引与查询
 
