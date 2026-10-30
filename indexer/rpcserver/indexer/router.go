@@ -59,6 +59,7 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	// installation is P2P-only; loopback cannot bypass wallet write admission.
 	r.GET(proxy+"/v3/dkvs/config", s.handle.getDKVSConfig)
 	r.GET(proxy+"/v3/dkvs/record", s.handle.getDKVSApplicationRecord)
+	r.POST(proxy+"/v3/rgb11/contracts/register", s.handle.registerRGB11Contract)
 	r.GET(proxy+"/v3/dkvs/key-state", s.handle.getDKVSKeyState)
 	r.POST(proxy+"/v3/dkvs/records/batch-cas", s.handle.putDKVSRecordBatchCAS)
 	r.POST(proxy+"/v3/dkvs/active/sync", s.handle.getDKVSActivePage)
