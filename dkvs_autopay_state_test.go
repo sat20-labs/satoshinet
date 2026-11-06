@@ -218,9 +218,226 @@ func TestDKVSAutopayCallbackDoesNotWaitForRPCSlot(t *testing.T) {
 	require.Error(t, err)
 	missing, err := contractcommon.NewContractAddressFromHash(contractcommon.TestnetContractPrefix, 1, contractcommon.ContractTypeTemplate, bytes.Repeat([]byte{10}, 32))
 	require.NoError(t, err)
-	_, err = provider.GetAutopayState(missing.String())
-	require.ErrorIs(t, err, dkvs.ErrInvalidFeeProof)
+	state, err = provider.GetAutopayState(missing.String())
+	require.NoError(t, err)
+	require.Nil(t, state, "missing committed runtime means no subscription")
 	_, err = (localAutopayStateProvider{}).GetAutopayState(addr.String())
 	require.Error(t, err, "unavailable committed state must fail without RPC fallback")
 	require.Zero(t, stateRPCs.Load())
+}
+
+// Exercise the node's committed provider through the real retention selector,
+// receiving manager and DKVS mailbox, rather than a fixed subscription fixture.
+func TestDKVSAutopayMissingRuntimeDirectMailbox(t *testing.T) {
+	for _, initial := range []string{"no bucket", "no tip", "committed empty store"} {
+		t.Run(initial, func(t *testing.T) {
+			db := testMessageDatabase(t)
+			if initial == "no tip" {
+				require.NoError(t, db.Update(func(tx database.Tx) error {
+					_, err := tx.Metadata().CreateBucketIfNotExists([]byte("templatestate"))
+					return err
+				}))
+			} else if initial == "committed empty store" {
+				require.NoError(t, node.NewTemplateStateStore(db).StoreBlockState(&chainhash.Hash{1}, template.NewRuntimeStore()))
+			}
+			addr, err := contractcommon.NewContractAddressFromHash(contractcommon.TestnetContractPrefix, 1,
+				contractcommon.ContractTypeTemplate, bytes.Repeat([]byte{11}, 32))
+			require.NoError(t, err)
+			height := uint64(100)
+			provider := nodeDKVSConfig(db, "").AutopayStateProvider
+			cached := &dkvs.HeightCachedAutopayStateProvider{Provider: provider, CurrentHeight: func() uint64 { return height }}
+			state, err := cached.GetAutopayState(addr.String())
+			require.NoError(t, err)
+			require.Nil(t, state)
+			authorizer := AutopaySubscriptionMessageAuthorizer{
+				StateProvider: cached, ContractForAccount: func(string) (string, error) { return addr.String(), nil },
+				ServiceName: "dkvs", AddressParams: &chaincfg.TestNetParams,
+			}
+			senderPriv, sender := testAccount(t)
+			_, recipient := testAccount(t)
+			paid, err := authorizer.HasActiveSubscription(recipient)
+			require.NoError(t, err)
+			require.False(t, paid)
+			mailDB := indexerdb.NewKVDB(t.TempDir())
+			require.NotNil(t, mailDB)
+			t.Cleanup(func() { _ = mailDB.Close() })
+			idx := dkvs.New(mailDB, dkvs.Config{CurrentHeight: func() uint64 { return height }})
+			mailbox := NewDKVSMessageMailboxStoreWithRetention(e2eMailboxWriter{idx: idx},
+				func() uint64 { return height }, func(string) uint64 { return 25 }, nil, authorizer)
+			message := signedTestDirect(t, senderPriv, sender, recipient, 0, "test-direct")
+			key, err := dkvs.MailMsgKey(recipient, sender, message.MessageID)
+			require.NoError(t, err)
+			acks := 0
+			router := &testMessageRouter{}
+			router.hook = func(notify *wire.MsgDKVSNotify) error {
+				envelope, err := UnmarshalMessageEnvelope(notify.Data)
+				require.NoError(t, err)
+				ack, err := UnmarshalMessageAck(envelope.Payload)
+				require.NoError(t, err)
+				require.Equal(t, MessageAckOK, ack.Status)
+				_, err = idx.Get(key)
+				require.NoError(t, err, "successful ACK must follow mailbox commit")
+				acks++
+				return nil
+			}
+			bindings := &testMessageBindings{bindings: map[string]string{sender: "core-a", recipient: "core-b"}}
+			receiver := newTestMessageManager("core-b", bindings, mailbox, router, nil, nil)
+			payload, err := MarshalDirectMessage(message, true)
+			require.NoError(t, err)
+			data, err := MarshalMessageEnvelope(&MessageEnvelope{MessageType: MessageTypeDirect, SourceCoreNode: "core-a", Payload: payload})
+			require.NoError(t, err)
+			notify := &wire.MsgDKVSNotify{Target: "core-b", EventType: wire.DKVSNotifyEventMessage, Data: data}
+			require.NoError(t, receiver.HandleMessageNotify(notify))
+			stored, err := idx.Get(key)
+			require.NoError(t, err)
+			require.Equal(t, uint64(25), stored.TTL)
+			require.Equal(t, uint64(100), stored.IssueHeight)
+			proof, err := dkvs.ParseFeeProof(stored.FeeProof)
+			require.NoError(t, err)
+			require.Equal(t, dkvs.FeeModeFreeLocal, proof.Mode)
+			height++
+			require.NoError(t, receiver.HandleMessageNotify(notify))
+			require.Equal(t, 2, acks)
+			updated, err := mailbox.AppendDirectMessage(message)
+			require.NoError(t, err)
+			require.False(t, updated, "mailbox-level retry must also be idempotent")
+			retried, err := idx.Get(key)
+			require.NoError(t, err)
+			require.Equal(t, dkvs.RecordHash(stored), dkvs.RecordHash(retried), "retry must not renew retention")
+			records, total, err := idx.ListPrefix("/mail/"+recipient, 0, 100)
+			require.NoError(t, err)
+			require.EqualValues(t, 1, total)
+			require.Len(t, records, 1)
+
+			// A well-formed but absent configured contract grants no paid rights.
+			require.ErrorIs(t, authorizer.AuthorizeMessageSend(sender, message.MessageID), ErrMessageTopicPermission)
+			topic := AutopayTopicServiceAuthorizer{StateProvider: cached,
+				ContractForTopic: func(TopicMeta) (string, error) { return addr.String(), nil },
+				ServiceName:      "dkvs", AddressParams: &chaincfg.TestNetParams}
+			require.ErrorIs(t, topic.AuthorizeTopicService(TopicMeta{TopicName: "test", OwnerAccount: sender}), ErrMessageTopicPermission)
+			verifier := dkvs.AutopayFeeVerifier{StateProvider: cached, Contract: addr.String(), AddressParams: &chaincfg.TestNetParams}
+			paidKey, err := dkvs.PersonalKey(senderPriv.PubKey().SerializeCompressed(), "missing-autopay")
+			require.NoError(t, err)
+			record, err := dkvs.NewAccountRecord(paidKey, []byte("test"), dkvs.RecordOptions{Seq: 1})
+			require.NoError(t, err)
+			paidProof, err := dkvs.NewAutopayFeeProof(paidKey, "personal", uint32(dkvs.RecordSize(record)), 0, addr.String(), "")
+			require.NoError(t, err)
+			record.FeeProof, err = dkvs.EncodeFeeProof(paidProof)
+			require.NoError(t, err)
+			hash := dkvs.SigningHash(record)
+			signature, err := schnorr.Sign(senderPriv, hash[:])
+			require.NoError(t, err)
+			record.Signature = signature.Serialize()
+			paidDB := indexerdb.NewKVDB(t.TempDir())
+			require.NotNil(t, paidDB)
+			t.Cleanup(func() { _ = paidDB.Close() })
+			paidIdx := dkvs.New(paidDB, dkvs.Config{CurrentHeight: func() uint64 { return height }, FeeVerifier: verifier})
+			_, err = paidIdx.PutLocal(record)
+			require.ErrorIs(t, err, dkvs.ErrInvalidFeeProof)
+			_, err = paidIdx.Get(paidKey)
+			require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
+			parsed, err := dkvs.ParseKey(paidKey)
+			require.NoError(t, err)
+			_, err = verifier.PaidRecordRetention(record, parsed)
+			require.ErrorIs(t, err, dkvs.ErrInvalidFeeProof)
+
+			// Keep the existing height-scoped negative cache: commit visibility
+			// changes on the next indexed height, not during the current height.
+			defaults := dkvs.NetworkDefaultsForParams(&chaincfg.TestNetParams)
+			ap := template.NewAutopayContract("dkvs", defaults.AutopayRecipient, defaults.AutopayFeeAssetName, defaults.FullRecordFeePerBlock)
+			content, err := ap.Encode()
+			require.NoError(t, err)
+			runtime, err := template.NewRuntimeWithDeployer(addr, contractcommon.DeployPayload{
+				Type: contractcommon.ContractTypeTemplate, SubType: ap.TemplateName(), Version: ap.Version(), ContractContent: content}, nil, "deployer")
+			require.NoError(t, err)
+			store := template.NewRuntimeStore()
+			store.Add(runtime)
+			require.NoError(t, node.NewTemplateStateStore(db).StoreBlockState(&chainhash.Hash{2}, store))
+			state, err = provider.GetAutopayState(addr.String())
+			require.NoError(t, err)
+			require.NotNil(t, state)
+			state, err = cached.GetAutopayState(addr.String())
+			require.NoError(t, err)
+			require.Nil(t, state)
+			height++
+			state, err = cached.GetAutopayState(addr.String())
+			require.NoError(t, err)
+			require.NotNil(t, state)
+		})
+	}
+}
+
+func TestDKVSAutopayProviderErrorsDoNotWriteMailbox(t *testing.T) {
+	for _, failure := range []string{"invalid address", "missing database", "closed database", "corrupt tip", "missing snapshot", "corrupt snapshot", "wrong template"} {
+		t.Run(failure, func(t *testing.T) {
+			db := testMessageDatabase(t)
+			addr, err := contractcommon.NewContractAddressFromHash(contractcommon.TestnetContractPrefix, 1,
+				contractcommon.ContractTypeTemplate, bytes.Repeat([]byte{12}, 32))
+			require.NoError(t, err)
+			address := addr.String()
+			switch failure {
+			case "invalid address":
+				address = "invalid-address"
+			case "missing database":
+				db = nil
+			case "closed database":
+				require.NoError(t, db.Close())
+			case "wrong template":
+				amm := template.NewAMMContract("ordx:f:test", "100", 20, "2000")
+				content, err := amm.Encode()
+				require.NoError(t, err)
+				runtime, err := template.NewRuntimeWithDeployer(addr, contractcommon.DeployPayload{
+					Type: contractcommon.ContractTypeTemplate, SubType: amm.TemplateName(), Version: amm.Version(),
+					Flags: contractcommon.ContractFlagNonClosable, ContractContent: content}, nil, "deployer")
+				require.NoError(t, err)
+				store := template.NewRuntimeStore()
+				store.Add(runtime)
+				require.NoError(t, node.NewTemplateStateStore(db).StoreBlockState(&chainhash.Hash{1}, store))
+			default:
+				require.NoError(t, db.Update(func(tx database.Tx) error {
+					parent, err := tx.Metadata().CreateBucketIfNotExists([]byte("templatestate"))
+					if err != nil {
+						return err
+					}
+					if failure == "corrupt tip" {
+						return parent.Put([]byte("tip"), []byte{1})
+					}
+					hash := chainhash.Hash{1}
+					if err := parent.Put([]byte("tip"), hash[:]); err != nil {
+						return err
+					}
+					if failure == "corrupt snapshot" {
+						byBlock, err := parent.CreateBucketIfNotExists([]byte("byblock"))
+						if err != nil {
+							return err
+						}
+						return byBlock.Put(hash[:], []byte("invalid-runtime-codec"))
+					}
+					return nil
+				}))
+			}
+			provider := nodeDKVSConfig(db, "").AutopayStateProvider
+			state, err := provider.GetAutopayState(address)
+			require.Error(t, err)
+			require.Nil(t, state)
+			if failure == "wrong template" {
+				require.ErrorIs(t, err, dkvs.ErrInvalidFeeProof)
+			}
+			authorizer := AutopaySubscriptionMessageAuthorizer{StateProvider: provider,
+				ContractForAccount: func(string) (string, error) { return address, nil }, AddressParams: &chaincfg.TestNetParams}
+			idx := newMessageE2EIndexer(t)
+			mailbox := NewDKVSMessageMailboxStoreWithRetention(e2eMailboxWriter{idx: idx},
+				func() uint64 { return 100 }, func(string) uint64 { return 25 }, nil, authorizer)
+			priv, sender := testAccount(t)
+			_, recipient := testAccount(t)
+			message := signedTestDirect(t, priv, sender, recipient, 0, "test-direct")
+			updated, err := mailbox.AppendDirectMessage(message)
+			require.Error(t, err)
+			require.False(t, updated)
+			key, err := dkvs.MailMsgKey(recipient, sender, message.MessageID)
+			require.NoError(t, err)
+			_, err = idx.Get(key)
+			require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
+		})
+	}
 }

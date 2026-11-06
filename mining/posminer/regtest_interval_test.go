@@ -12,8 +12,8 @@ func TestRegressionSchedulingDoesNotMutatePublicIntervals(t *testing.T) {
 	reg := &ValidatorManager{cfg: &ValidatorManagerConfig{Config: &Config{ChainParams: &chaincfg.RegressionNetParams}}}
 	for _, p := range []*chaincfg.Params{&chaincfg.MainNetParams, &chaincfg.TestNetParams} {
 		public := &ValidatorManager{cfg: &ValidatorManagerConfig{Config: &Config{ChainParams: p}}}
-		if reg.minerInterval() != 2 || reg.checkingInterval() != 1 {
-			t.Fatal("regtest schedule is not 2s with 1s checking")
+		if reg.minerInterval() != 1 || reg.checkingInterval() != 1 {
+			t.Fatal("regtest schedule is not 1s with 1s checking")
 		}
 		if public.minerInterval() != 13 || public.checkingInterval() != 7 {
 			t.Fatalf("%s lost its existing configured intervals", p.Name)

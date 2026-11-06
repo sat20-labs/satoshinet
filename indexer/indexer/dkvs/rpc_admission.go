@@ -1,11 +1,14 @@
 package dkvs
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	indexercommon "github.com/sat20-labs/satoshinet/indexer/common"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -154,6 +157,22 @@ func (i *Indexer) putBoundWalletBatch(mutations []CASMutation, options BatchCASO
 				err = validateWalletWriteHeight(mutations[0].Record.IssueHeight, tipHeight)
 			} else {
 				err = i.walletWriteContextCurrentLocked(authorization, mutations, height, tipHeight, now)
+				if errors.Is(err, ErrStaleGeneration) {
+					// Diagnostic reads share the rejection's commit lock. They do
+					// not rebuild metadata or alter the authorization/response.
+					requestTag := sha256.Sum256([]byte(options.RequestID))
+					endpointTag := sha256.Sum256([]byte(authorization.EndpointID))
+					for _, prefix := range authorization.Prefixes {
+						prefixTag := sha256.Sum256([]byte(prefix.Prefix))
+						meta, readErr := i.readPathMetaLocked(prefix.Prefix)
+						var current uint64
+						if meta != nil {
+							current = meta.EndpointGeneration
+						}
+						indexercommon.Log.Debugf("DKVS stale diagnostic: at_ns=%d request_tag=%x endpoint_tag=%x prefix_tag=%x signed_generation=%d current_generation=%d current_known=%t metadata_read_failed=%t",
+							time.Now().UnixNano(), requestTag[:6], endpointTag[:6], prefixTag[:6], prefix.Generation, current, meta != nil, readErr != nil)
+					}
+				}
 			}
 		}
 		var ready []preparedCASMutation

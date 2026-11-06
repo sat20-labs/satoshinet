@@ -46,7 +46,7 @@ func (p localAutopayStateProvider) GetAutopayState(address string) (*dkvs.Autopa
 	}
 	runtime, ok := store.Get(addr)
 	if !ok {
-		return nil, dkvs.ErrInvalidFeeProof
+		return nil, nil
 	}
 	if _, ok := runtime.Contract().(*template.AutopayContract); !ok {
 		return nil, dkvs.ErrInvalidFeeProof

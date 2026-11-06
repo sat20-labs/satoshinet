@@ -68,7 +68,7 @@ type ValidatorManager struct {
 // state. Public networks retain their existing defaults and environment values.
 func (vm *ValidatorManager) minerInterval() int64 {
 	if vm.cfg.ChainParams != nil && vm.cfg.ChainParams.Net == wire.RegNet {
-		return 2
+		return 1
 	}
 	return MinerInterval
 }

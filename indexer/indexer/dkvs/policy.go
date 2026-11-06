@@ -22,7 +22,7 @@ const (
 	DefaultMailboxMaxShareTTL          = DefaultMailboxMaxShareTTLBlocks
 
 	DefaultBlobMaxValueSize              = wire.MaxDKVSBlobValueSize
-	DefaultBlobMaxFreeLocalKeysPerSigner = uint64(1)
+	DefaultBlobMaxFreeLocalKeysPerSigner = uint64(10)
 
 	DefaultTmpMaxTTL  = DefaultTmpMaxTTLBlocks
 	DefaultTmpMaxSize = MaxRecordValueSize

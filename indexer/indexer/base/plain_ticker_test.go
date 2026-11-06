@@ -21,7 +21,11 @@ func TestPlainTickerRequiresPersistedAscend(t *testing.T) {
 		db:          database,
 		tickInfoMap: make(map[string]*common.TickerInfo),
 	}
-	rpc := &RpcIndexer{BaseIndexer: *base}
+	// Build an independent fixture instead of copying BaseIndexer mutexes.
+	rpc := &RpcIndexer{BaseIndexer: BaseIndexer{
+		db:          database,
+		tickInfoMap: make(map[string]*common.TickerInfo),
+	}}
 
 	require.Nil(t, base.GetTickerInfo(&indexer.ASSET_PLAIN_SAT))
 	require.Nil(t, rpc.GetTickerInfo(&indexer.ASSET_PLAIN_SAT))
