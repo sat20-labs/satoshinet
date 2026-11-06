@@ -1,6 +1,7 @@
 package stp
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -199,7 +200,9 @@ func GetTickerInfoFromDB(ldb indexer.KVDB, assetName string) (*common.TickerInfo
 
 	v, err := ldb.Read(GetTickerInfoDBKey(assetName))
 	if err != nil {
-		common.Log.Errorf("GetTickerInfoFromDB %s error: %v", assetName, err)
+		if !errors.Is(err, indexer.ErrKeyNotFound) {
+			common.Log.Errorf("GetTickerInfoFromDB %s error: %v", assetName, err)
+		}
 		return nil, err
 	}
 

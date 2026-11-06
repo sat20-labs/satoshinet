@@ -21,6 +21,9 @@ func LoadMempoolCahce(dataDir string) ([]*TxCacheItem, error) {
 	cachePath := filepath.Join(dataDir, cacheName)
 
 	data, err := loadCacheData(cachePath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
 		err := fmt.Errorf("load local mempool cache failed: %s", err.Error())
 		return nil, err

@@ -2,6 +2,7 @@ package base
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -880,7 +881,9 @@ func (b *BaseIndexer) getTickerInfo(ticker *wire.AssetName) *common.TickerInfo {
 
 	info, err := stp.GetTickerInfoFromDB(b.db, ticker.String())
 	if err != nil {
-		common.Log.Errorf("GetTickerInfoFromDB %s failed, %v", ticker, err)
+		if !errors.Is(err, indexer.ErrKeyNotFound) {
+			common.Log.Errorf("GetTickerInfoFromDB %s failed, %v", ticker, err)
+		}
 		return nil
 	}
 
