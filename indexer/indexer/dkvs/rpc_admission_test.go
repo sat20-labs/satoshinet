@@ -127,7 +127,7 @@ func TestWalletBindingBootstrapEnforcesHeightWindowWithoutRestrictingP2P(t *test
 	record.IssueHeight = 97
 	SignRecord(accountPriv, record)
 	mutation := CASMutation{Record: record, Precondition: WritePrecondition{ExpectAbsent: true}}
-	if _, err := policy.PutRecords([]CASMutation{mutation}, BatchCASOptions{EndpointID: coreID}, nil); !errors.Is(err, ErrStaleEndpoint) {
+	if _, err := policy.PutRecords([]CASMutation{mutation}, BatchCASOptions{EndpointID: coreID}, nil); !errors.Is(err, ErrHeightTooLow) {
 		t.Fatalf("old new binding accepted: %v", err)
 	}
 	if _, err := idx.Get(record.Key); !errors.Is(err, ErrRecordNotFound) {

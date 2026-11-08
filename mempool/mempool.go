@@ -1426,6 +1426,10 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 	bestHeight := mp.cfg.BestHeight()
 	nextBlockHeight := bestHeight + 1
 
+	if !mp.cfg.ChainParams.ContractsActive(nextBlockHeight) && mp.isContractTx(tx) {
+		return nil, txRuleError(wire.RejectNonstandard, "native contracts are not active at the next block height")
+	}
+
 	// Anchor verify tx from BTC Network.
 	if blockchain.IsAnchorTx(tx.MsgTx()) {
 		fmt.Printf("current tx is an anchor tx\n")
@@ -1628,9 +1632,9 @@ func (mp *TxPool) checkMempoolAcceptance(tx *btcutil.Tx,
 
 	// Verify crypto signatures for each input and reject the transaction
 	// if any don't verify.
-	err = blockchain.ValidateTransactionScripts(tx, utxoView,
+	err = blockchain.ValidateTxScriptsAtHeight(tx, utxoView,
 		txscript.StandardVerifyFlags, mp.cfg.SigCache,
-		mp.cfg.HashCache)
+		mp.cfg.HashCache, mp.cfg.ChainParams, nextBlockHeight)
 	if err != nil {
 		if cerr, ok := err.(blockchain.RuleError); ok {
 			return nil, chainRuleError(cerr)
@@ -1868,21 +1872,7 @@ func (mp *TxPool) isContractTx(tx *btcutil.Tx) bool {
 	if tx == nil {
 		return false
 	}
-	msgTx := tx.MsgTx()
-	hasPayload, err := contractcommon.HasContractPayload(msgTx)
-	if err == nil && hasPayload {
-		return true
-	}
-	prefix := contractPrefixForParams(mp.cfg.ChainParams)
-	for _, txOut := range msgTx.TxOut {
-		if txOut == nil {
-			continue
-		}
-		if _, ok, err := contractcommon.ParseContractPkScript(txOut.PkScript, prefix); err == nil && ok {
-			return true
-		}
-	}
-	return false
+	return contractcommon.IsContractTx(tx.MsgTx(), contractPrefixForParams(mp.cfg.ChainParams))
 }
 
 func (mp *TxPool) Save(dataDir string) error {

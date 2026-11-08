@@ -47,6 +47,7 @@ Documentation is a work-in-progress. It is available at [btcd.readthedocs.io](ht
 * [Mining](mining.md)
 * [Wallet](wallet.md)
 * [Developer resources](developer_resources.md)
+* [XAP native execution network: role and migration roadmap (2026-11-03)](xap-native-execution-roadmap.md)
 * [DKVS final design](dkvs-design.md)
 * [DKVS acceptance review and approved repairs (2026-10-05)](dkvs-review-acceptance-2026-10-05.md)
 * [DKVS repeat review: unresolved failure branches (2026-10-05)](dkvs-repeat-review-2026-10-05.md)

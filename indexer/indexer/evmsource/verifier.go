@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -60,15 +59,9 @@ func (v Verifier) Verify(record *wire.DKVSRecord) error {
 	if record == nil {
 		return fmt.Errorf("missing source record")
 	}
-	var source contract.EVMSourceMetadata
-	decoder := json.NewDecoder(bytes.NewReader(record.Value))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&source); err != nil {
+	source, err := contract.DecodeEVMSourceMetadata(record.Value)
+	if err != nil {
 		return err
-	}
-	var extra any
-	if decoder.Decode(&extra) != io.EOF {
-		return fmt.Errorf("source JSON contains trailing data")
 	}
 	if source.Version != 1 || source.Language != "Solidity" || strings.TrimSpace(source.Source) == "" || strings.TrimSpace(source.ContractName) == "" ||
 		source.CompilerConfig != contract.DefaultEVMCompilerConfig() {

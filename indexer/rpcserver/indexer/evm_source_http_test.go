@@ -11,7 +11,7 @@ import (
 	dbpkg "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
-	contract "github.com/sat20-labs/satoshinet/contract/engine"
+	contract "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	shareIndexer "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -27,14 +27,12 @@ func (b *sourceHTTPBackend) PutDKVSRecordCAS(record *wire.DKVSRecord, preconditi
 	return b.store.PutLocalCAS(record, precondition)
 }
 
-func (b *sourceHTTPBackend) GetEVMSourceMetadata(address string) (contract.EVMSourceMetadata, bool) {
+func (b *sourceHTTPBackend) GetEVMSourceMetadata(address string) (contract.EVMSourceMetadata, error) {
 	record, err := b.store.Get("/contract/evm/source/" + address)
 	if err != nil {
-		return contract.EVMSourceMetadata{}, false
+		return contract.EVMSourceMetadata{}, err
 	}
-	var metadata contract.EVMSourceMetadata
-	err = json.Unmarshal(record.Value, &metadata)
-	return metadata, err == nil
+	return contract.DecodeEVMSourceMetadata(record.Value)
 }
 
 // This checks HTTP admission and atomic DKVS writes. Compiler and canonical
@@ -43,8 +41,10 @@ func TestEVMSourceHTTPRequiresSignedImmutableRecord(t *testing.T) {
 	database := dbpkg.NewKVDB(t.TempDir())
 	require.NotNil(t, database)
 	t.Cleanup(func() { _ = database.Close() })
+	checked, err := contract.EncodeEVMSourceMetadata(contract.EVMSourceMetadata{Version: 1, Source: "checked"})
+	require.NoError(t, err)
 	store := dkvs.New(database, dkvs.Config{EVMSourceVerifier: func(record *wire.DKVSRecord) error {
-		if string(record.Value) != `{"version":1,"source":"checked"}` {
+		if !bytes.Equal(record.Value, checked) {
 			return dkvs.ErrInvalidRecord
 		}
 		return nil
@@ -77,7 +77,7 @@ func TestEVMSourceHTTPRequiresSignedImmutableRecord(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, post(map[string]any{"record": bad}).Code)
 	_, err = store.Get(key)
 	require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
-	record := sign(key, `{"version":1,"source":"checked"}`)
+	record := sign(key, string(checked))
 	wrong := sign("/contract/evm/source/other", string(record.Value))
 	require.Equal(t, http.StatusBadRequest, post(map[string]any{"record": wrong}).Code)
 	unsigned := *record

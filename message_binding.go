@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -35,6 +36,9 @@ func (r *serverMessageBindingResolver) current(accountID string) (*wire.DKVSReco
 		return nil, "", ErrMessageBindingNotFound
 	}
 	record, err := r.server.assetIndexer.GetDKVSRecord(key)
+	if errors.Is(err, dkvs.ErrStorageUnavailable) {
+		return nil, "", err
+	}
 	if err != nil || record == nil {
 		return nil, "", ErrMessageBindingNotFound
 	}

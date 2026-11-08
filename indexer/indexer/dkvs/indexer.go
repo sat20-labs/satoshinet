@@ -75,7 +75,7 @@ func New(db indexercommon.KVDB, cfg Config) *Indexer {
 		systemVerifier = defaultSystemVerifier{}
 	}
 	indexer := &Indexer{
-		db: db, resolver: resolver, feeVerifier: feeVerifier, system: systemVerifier, evmSourceVerifier: cfg.EVMSourceVerifier,
+		db: storageDB{db}, resolver: resolver, feeVerifier: feeVerifier, system: systemVerifier, evmSourceVerifier: cfg.EVMSourceVerifier,
 		mailbox: normalizeMailboxPolicy(cfg.MailboxPolicy), blob: normalizeBlobPolicy(cfg.BlobPolicy),
 		tmp: normalizeTmpPolicy(cfg.TmpPolicy), endpointIdentity: strings.TrimSpace(cfg.EndpointID),
 		freeLocal: freeLocal, subs: newSubscriptionSet(), notify: cfg.Notify,
@@ -204,6 +204,9 @@ func (i *Indexer) GetByHash(hash chainhash.Hash) (*wire.DKVSRecord, error) {
 	defer i.mutex.RUnlock()
 	keyBytes, err := i.db.Read(hashDBKey(hash))
 	if err != nil {
+		if errors.Is(err, ErrStorageUnavailable) {
+			return nil, err
+		}
 		return nil, ErrRecordNotFound
 	}
 	record, err := i.getRaw(string(keyBytes))

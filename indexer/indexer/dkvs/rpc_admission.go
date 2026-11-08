@@ -83,6 +83,9 @@ func (a *WalletRPCAdmission) PutRecords(mutations []CASMutation, options BatchCA
 			continue
 		}
 		binding, err := a.CurrentBinding(account)
+		if errors.Is(err, ErrStorageUnavailable) {
+			return nil, err
+		}
 		if err != nil || binding == nil {
 			return nil, rpcBindingDenied("wallet is not bound to this CoreNode")
 		}
@@ -122,6 +125,9 @@ func (a *WalletRPCAdmission) putWalletBinding(mutation CASMutation, options Batc
 func (i *Indexer) rpcBindingsCurrentLocked(bindings map[string]rpcBindingSnapshot) error {
 	for _, binding := range bindings {
 		current, err := i.getRaw(binding.key)
+		if errors.Is(err, ErrStorageUnavailable) {
+			return err
+		}
 		if err != nil || current == nil || RecordHash(current) != binding.hash {
 			return rpcBindingDenied("wallet binding changed before KV commit")
 		}

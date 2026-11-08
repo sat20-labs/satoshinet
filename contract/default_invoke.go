@@ -24,6 +24,24 @@ func HasContractPayload(tx *wire.MsgTx) (bool, error) {
 	return found, err
 }
 
+// IsContractTx recognizes explicit envelopes and transfers to contract outputs.
+func IsContractTx(tx *wire.MsgTx, prefix string) bool {
+	if tx == nil {
+		return false
+	}
+	if found, err := HasContractPayload(tx); err == nil && found {
+		return true
+	}
+	for _, out := range tx.TxOut {
+		if out != nil {
+			if _, ok, err := ParseContractPkScript(out.PkScript, prefix); err == nil && ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // FindDefaultInvokeOutputs returns one call per funding output, in vout order.
 // contractType zero selects all types so the framework can route registered
 // modules without a hard-coded runtime list. No historical UTXOs are scanned.

@@ -348,8 +348,11 @@ func validateParsedCoreWithVerifier(record *wire.DKVSRecord, height uint64, allo
 	}
 	issueTip := height
 	if len(issueTips) != 0 { issueTip = issueTips[0] }
-	if record.Flags&^FlagTombstone != 0 || ((height != 0 || len(issueTips) != 0) && record.IssueHeight > issueTip) || (record.TTL != 0 && RecordExpiryHeight(record) == 0) {
+	if record.Flags&^FlagTombstone != 0 || (record.TTL != 0 && RecordExpiryHeight(record) == 0) {
 		return parsed, ErrInvalidRecord
+	}
+	if (height != 0 || len(issueTips) != 0) && record.IssueHeight > issueTip {
+		return parsed, ErrInvalidBlockHeight
 	}
 	if verifyFee && !IsTombstone(record.Flags) && isAutopayRecord(record) && record.TTL != 0 {
 		return parsed, ErrInvalidFeeProof

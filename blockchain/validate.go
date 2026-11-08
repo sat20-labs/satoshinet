@@ -898,8 +898,10 @@ func (b *BlockChain) checkBlockContextFor(block *btcutil.Block, prevNode *blockN
 		return err
 	}
 
-	if err := checkContractBlockOrder(block, b.chainParams); err != nil {
-		return err
+	if b.chainParams.ContractsActive(prevNode.height + 1) {
+		if err := checkContractBlockOrder(block, b.chainParams); err != nil {
+			return err
+		}
 	}
 
 	// 检查是不是由正确的miner挖出来的块，需要先确定这个block的高度
@@ -1272,6 +1274,9 @@ func (b *BlockChain) checkAnchorTxsUnique(block *btcutil.Block) error {
 }
 
 func checkContractBaseGasFee(tx *wire.MsgTx, feeAssets wire.TxAssets, height int32, params *chaincfg.Params) error {
+	if !params.ContractsActive(height) {
+		return nil
+	}
 	class, found, err := contractengine.ClassifyTxForBlockOrder(tx, params)
 	if err != nil || !found || !class.IsWork() {
 		return err
@@ -1507,8 +1512,10 @@ func (b *BlockChain) checkConnectBlockFor(node *blockNode, block *btcutil.Block,
 	if err != nil {
 		return err
 	}
-	if err := b.validateContractBlockFor(block, view, branch); err != nil {
-		return err
+	if b.chainParams.ContractsActive(node.height) {
+		if err := b.validateContractBlockFor(block, view, branch); err != nil {
+			return err
+		}
 	}
 	if err := b.checkAnchorTxsUnique(block); err != nil {
 		return err

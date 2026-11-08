@@ -13,7 +13,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const syncCursorVersion = byte(2)
+const syncCursorVersion = byte(1)
 
 type syncRange struct {
 	target string

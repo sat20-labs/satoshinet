@@ -155,6 +155,20 @@ func (s *server) ConfigureMessageManager(bindings MessageBindingResolver, usage 
 		s.miningPubKey, bindings, mailbox, serverMessageRouter{server: s},
 		usage, topicService, s.db,
 	)
+	if s.chainParams != nil && (s.chainParams.Net == wire.TestNet || s.chainParams.Net == wire.RegNet) {
+		// Test networks exercise dense Direct histories. Keep the same admission
+		// checks and one-minute window, with ten times the message/byte budget.
+		policy := DefaultDirectAdmissionPolicy()
+		policy.MaxMessagesPerSender *= 10
+		policy.MaxBytesPerSender *= 10
+		policy.MaxMessagesPerPair *= 10
+		policy.MaxBytesPerPair *= 10
+		policy.MaxMessagesPerRecipient *= 10
+		policy.MaxBytesPerRecipient *= 10
+		policy.MaxMessagesTotal *= 10
+		policy.MaxBytesTotal *= 10
+		manager.directLimiter = newDirectAdmissionLimiter(policy)
+	}
 	manager.SetCoreSigner(stp.SignMsg)
 	manager.coreAuthority = func(source string) bool {
 		if indexerShare.ShareIndexer == nil {

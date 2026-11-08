@@ -10,7 +10,7 @@ const dkvsPruneIntervalBlocks = 144
 const dkvsPruneInterval = time.Hour
 
 func (s *IndexerMgr) processBlock(block *common.Block) {
-	if s.contractIndexer != nil {
+	if s.contractIndexer != nil && block != nil && s.chaincfgParam.ContractsActive(int32(block.Height)) {
 		s.contractIndexer.ProcessBlock(block)
 	}
 	if s != nil && s.dkvsIndexer != nil && block != nil && block.Height > 0 {

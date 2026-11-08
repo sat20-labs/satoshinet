@@ -159,6 +159,7 @@ type config struct {
 	IndexerAccessKey               string        `long:"indexeraccesskey" description:"The access key of indexer"`
 	IndexerHost                    string        `long:"indexerhost" description:"The host for indexer"`
 	IndexerProxy                   string        `long:"indexerproxy" description:"The proxy for indexer"`
+	IndexerSelfCheckHeight         int32         `long:"indexerselfcheckheight" description:"Run the optional indexer self-check once when applying this height. 0 disables it; heights already restored at startup are skipped."`
 	FreeTxRelayLimit               float64       `long:"limitfreerelay" description:"Limit relay of transactions with no transaction fee to the given amount in thousands of bytes per minute"`
 	Listeners                      []string      `long:"listen" description:"Add an interface/port to listen for connections (default all interfaces port: 8333, testnet: 18333)"`
 	LogDir                         string        `long:"logdir" description:"Directory to log output."`
@@ -800,6 +801,13 @@ func loadConfig() (*config, []string, error) {
 	// Parse, validate, and set debug log level(s).
 	if err := parseAndSetDebugLevels(cfg.DebugLevel); err != nil {
 		err := fmt.Errorf("%s: %v", funcName, err.Error())
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, usageMessage)
+		return nil, nil, err
+	}
+
+	if cfg.IndexerSelfCheckHeight < 0 {
+		err := fmt.Errorf("%s: indexerselfcheckheight must not be negative", funcName)
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, usageMessage)
 		return nil, nil, err

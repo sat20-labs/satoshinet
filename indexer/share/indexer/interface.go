@@ -58,7 +58,7 @@ type Indexer interface {
 	GetContractSummaries(start, limit int) ([]contractengine.ContractSummary, int)
 	GetContractSummary(address string) (contractengine.ContractSummary, bool)
 	GetContractHistory(address string, start, limit int) ([]contractengine.ContractHistoryRecord, int)
-	GetEVMSourceMetadata(address string) (contractengine.EVMSourceMetadata, bool)
+	GetEVMSourceMetadata(address string) (contractengine.EVMSourceMetadata, error)
 
 	SetDKVSNotifyCallback(fn dkvs_indexer.NotifyFunc)
 	SetDKVSSubscriptionCallback(fn dkvs_indexer.SubscriptionNotifyFunc)

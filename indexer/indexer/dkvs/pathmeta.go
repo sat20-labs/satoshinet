@@ -3,7 +3,6 @@ package dkvs
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"strings"
 
@@ -12,7 +11,7 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const pathMetaVersion = uint32(4)
+const pathMetaVersion = uint32(1)
 
 var (
 	pathMetaKeyPrefix   = []byte("dkvs:pathmeta:")
@@ -67,20 +66,6 @@ func unmarshalPathMeta(path string, encoded []byte) (*PathMeta, error) {
 	copy(meta.StateRoot[:], encoded[offset:])
 	normalizePathMetaAliases(meta)
 	return meta, nil
-}
-
-func marshalPathStatus(status *PathLocalStatus) ([]byte, error) {
-	if status == nil || status.Path == "" { return nil, ErrInvalidRecord }
-	return json.Marshal(status)
-}
-
-func unmarshalPathStatus(path string, encoded []byte) (*PathLocalStatus, error) {
-	if path == "" || len(encoded) == 0 { return nil, ErrInvalidRecord }
-	var status PathLocalStatus
-	if err := json.Unmarshal(encoded, &status); err != nil { return nil, ErrInvalidRecord }
-	if status.Path == "" { status.Path = path }
-	if status.Path != path { return nil, ErrInvalidRecord }
-	return &status, nil
 }
 
 func (i *Indexer) readPathMetaLocked(path string) (*PathMeta, error) {

@@ -20,7 +20,7 @@ func TestDKVSReviewRetriedPageDuplicateKeepsHealthySourceSession(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	require.NoError(t, err)
 	const path = "/svc/fifth-retry.btc"
-	meta := &dkvs.PathMeta{Version: 4, Path: path, ViewHeight: 1}
+	meta := &dkvs.PathMeta{Version: 1, Path: path, ViewHeight: 1}
 	snapshot := &dkvs.PathSnapshot{Path: path, PathMeta: meta, ServerTimeMS: 1}
 	// Including the metadata row, this naturally requires more than one page.
 	for i := 0; i < 2*wire.MaxDKVSRecordsPerMsg; i++ {
@@ -118,7 +118,7 @@ func TestDKVSReviewFirstPageRetryKeepsCapturedSnapshot(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	require.NoError(t, err)
 	const path = "/svc/fifth-capture.btc"
-	meta := &dkvs.PathMeta{Version: 4, Path: path, ViewHeight: 1}
+	meta := &dkvs.PathMeta{Version: 1, Path: path, ViewHeight: 1}
 	snapshot := &dkvs.PathSnapshot{Path: path, PathMeta: meta, ServerTimeMS: 1}
 	for i := 0; i < 2; i++ {
 		record, err := dkvs.NewRecord(fmt.Sprintf("%s/key%d", path, i), []byte("v1"),

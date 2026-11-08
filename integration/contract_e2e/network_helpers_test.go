@@ -3,7 +3,6 @@ package contract_e2e
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/satoshinet/anchortx"
@@ -20,12 +19,12 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 	"github.com/tyler-smith/go-bip39"
-	"io"
-	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -157,100 +156,149 @@ func startSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemonic s
 			env = append(env, name+"="+value)
 		}
 	}
-	r, err := rpctest.NewWithEnv(
-		&chaincfg.TestNetParams, nil, btcdCfg, contractE2EExecutablePath(t), env,
-	)
-	require.NoError(t, err)
+	r := newContractE2EHarness(t, &chaincfg.TestNetParams,
+		btcdCfg, contractE2EExecutablePath(t), env, "127.0.0.1")
 	r.MaxConnRetries = 30
 	r.ConnectionRetryTimeout = 100 * time.Millisecond
 	require.NoError(t, r.SetUp(false, 0))
 	t.Logf("started %s node: pid=%d rpc=%s p2p=%s log=%s",
 		role, r.NodePID(), r.RPCAddress(), r.P2PAddress(), r.LogFile())
-	t.Cleanup(func() {
-		preserveFailedRpctestData(t, r, role)
-		if err := r.TearDown(); err != nil {
-			if t.Failed() {
-				t.Logf("node teardown after test failure: %v", err)
-				return
-			}
-			require.NoError(t, err)
-		}
-	})
 	return r
 }
 
-func preserveFailedRpctestData(t *testing.T, node *rpctest.Harness, role string) {
+// An explicit range opts into the controlled runner's port policy. The runner
+// must approve and preflight it; there is deliberately no automatic range.
+// These helpers are used only by serial E2E tests.
+var contractE2EPorts struct {
+	first, last, next int
+}
+
+func newContractE2EHarness(t *testing.T, activeNet *chaincfg.Params,
+	extraArgs []string, executable string, env []string, p2pHost string) *rpctest.Harness {
+
 	t.Helper()
-	if !t.Failed() {
-		return
-	}
-	root := os.Getenv("SATOSHINET_TEST_FAILURE_DIR")
-	logFile := node.LogFile()
-	if root == "" || logFile == "" {
-		t.Log("failed rpctest data was not copied: failure directory or node log path is unavailable")
-		return
-	}
-	source := filepath.Dir(logFile)
-	destination := filepath.Join(root, fmt.Sprintf("%s-%d", role, node.NodePID()))
-	if err := os.MkdirAll(destination, 0700); err != nil {
-		t.Logf("failed to create rpctest failure directory: %v", err)
-		return
-	}
-	if err := os.Chmod(destination, 0700); err != nil {
-		t.Logf("failed to secure rpctest failure directory: %v", err)
-		return
-	}
-	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	portRange, controlled := os.LookupEnv("SATOSHINET_CONTRACT_E2E_PORT_RANGE")
+	var generator func() (string, string)
+	if controlled {
+		p2p, rpc := contractE2EListenAddresses(t, portRange, p2pHost)
+		generator = func() (string, string) { return p2p, rpc }
+	} else if p2pHost == "::1" {
+		// Preserve the existing IPv6 scenario when no controlled range is set.
+		previous := rpctest.ListenAddressGenerator
+		generator = func() (string, string) {
+			p2p, rpc := previous()
+			_, port, err := net.SplitHostPort(p2p)
+			require.NoError(t, err)
+			return net.JoinHostPort("::1", port), rpc
 		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
+	}
+	r, err := func() (*rpctest.Harness, error) {
+		previous := rpctest.ListenAddressGenerator
+		defer func() { rpctest.ListenAddressGenerator = previous }()
+		if generator != nil {
+			rpctest.ListenAddressGenerator = generator
 		}
-		target := filepath.Join(destination, rel)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0700)
+		return rpctest.NewWithEnv(activeNet, nil, extraArgs, executable, env)
+	}()
+	require.NoError(t, err)
+	prepareContractE2ENode(t, r, controlled)
+	return r
+}
+
+func contractE2EListenAddresses(t *testing.T, portRange, p2pHost string) (string, string) {
+	t.Helper()
+	require.True(t, p2pHost == "127.0.0.1" || p2pHost == "::1", "P2P must use loopback")
+	parts := strings.Split(strings.TrimSpace(portRange), "-")
+	require.Len(t, parts, 2, "SATOSHINET_CONTRACT_E2E_PORT_RANGE must be an approved start-end range")
+	first, err := strconv.Atoi(parts[0])
+	require.NoError(t, err)
+	last, err := strconv.Atoi(parts[1])
+	require.NoError(t, err)
+	require.True(t, first >= 1024 && last <= 65535 && first <= last-2, "range must contain at least three unprivileged ports")
+	for _, port := range []int{5189, 18443, 18453, 20011, 20012, 24225, 30043, 30143} {
+		require.False(t, first <= port && port <= last, "range contains protected port %d", port)
+	}
+	require.False(t, first <= 30374 && last >= 30350, "range overlaps protected PWA ports")
+	require.False(t, first <= 53170 && last >= 53168, "range overlaps reserved PWA ports")
+	require.False(t, first <= 31464 && last >= 31450, "range overlaps reserved SDK test ports")
+	if contractE2EPorts.next == 0 {
+		contractE2EPorts.first, contractE2EPorts.last, contractE2EPorts.next = first, last, first
+	}
+	require.Equal(t, contractE2EPorts.first, first, "port range must not change during a run")
+	require.Equal(t, contractE2EPorts.last, last, "port range must not change during a run")
+
+	var lastBindErr error
+	for contractE2EPorts.next+2 <= last {
+		port := contractE2EPorts.next
+		contractE2EPorts.next += 3 // Never reuse a stopped node's ports before Restart.
+		p2p := net.JoinHostPort(p2pHost, strconv.Itoa(port))
+		rpc := net.JoinHostPort("127.0.0.1", strconv.Itoa(port+1))
+		indexer := net.JoinHostPort("127.0.0.1", strconv.Itoa(port+2))
+		p2pNetwork := "tcp4"
+		if p2pHost == "::1" {
+			p2pNetwork = "tcp6"
 		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
+		var listeners []net.Listener
+		available := true
+		for _, endpoint := range []struct{ network, address string }{
+			{p2pNetwork, p2p}, {"tcp4", rpc}, {"tcp4", indexer},
+		} {
+			listener, listenErr := net.Listen(endpoint.network, endpoint.address)
+			if listenErr != nil {
+				lastBindErr, available = listenErr, false
+				break
 			}
-			return os.Symlink(link, target)
+			listeners = append(listeners, listener)
 		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("unsupported rpctest data file type at %s", rel)
+		var closeErr error
+		for _, listener := range listeners {
+			if err := listener.Close(); err != nil && closeErr == nil {
+				closeErr = err
+			}
 		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
+		require.NoError(t, closeErr)
+		if available {
+			return p2p, rpc
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err != nil {
-			_ = in.Close()
-			return err
-		}
-		_, copyErr := io.Copy(out, in)
-		inErr := in.Close()
-		closeErr := out.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if inErr != nil {
-			return inErr
-		}
-		return closeErr
-	})
-	if err != nil {
-		t.Logf("failed to copy rpctest node data from %s: %v", source, err)
-		return
 	}
-	t.Logf("preserved failed rpctest node data at %s", destination)
+	t.Fatalf("approved E2E port range %d-%d exhausted; last bind error: %v", first, last, lastBindErr)
+	return "", ""
+}
+
+func prepareContractE2ENode(t *testing.T, node *rpctest.Harness, controlled bool) {
+	t.Helper()
+	// Register before SetUp, including all startup-failure paths.
+	t.Cleanup(func() { require.NoError(t, node.TearDown()) })
+	tmp := os.TempDir()
+	if controlled {
+		require.NotEmpty(t, os.Getenv("TMPDIR"), "controlled runner must provide a fresh private TMPDIR")
+		require.True(t, filepath.IsAbs(tmp), "TMPDIR must be absolute")
+		info, err := os.Lstat(tmp)
+		require.NoError(t, err)
+		require.True(t, info.IsDir() && info.Mode()&os.ModeSymlink == 0, "TMPDIR must be a real directory")
+		require.Zero(t, info.Mode().Perm()&0077, "controlled TMPDIR must be private")
+	}
+	logFile := node.LogFile()
+	relative, err := filepath.Rel(tmp, logFile)
+	require.NoError(t, err)
+	require.True(t, relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)), "node log must be inside TMPDIR")
+
+	// MkdirTemp creates a private directory on the same filesystem. Do not use
+	// t.TempDir: this stdout inode must survive testing cleanup and timeout.
+	// Never walk, copy, or hardlink the node's database directory.
+	archive, err := os.MkdirTemp(tmp, "contract-e2e-stdout-")
+	require.NoError(t, err)
+	stdout, err := os.OpenFile(logFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	require.NoError(t, err)
+	require.NoError(t, stdout.Close())
+	retained := filepath.Join(archive, filepath.Base(filepath.Dir(logFile))+".stdout.log")
+	require.NoError(t, os.Link(logFile, retained))
+	sourceInfo, err := os.Lstat(logFile)
+	require.NoError(t, err)
+	retainedInfo, err := os.Lstat(retained)
+	require.NoError(t, err)
+	require.True(t, sourceInfo.Mode().IsRegular() && retainedInfo.Mode().IsRegular() && os.SameFile(sourceInfo, retainedInfo), "stdout hardlink must retain the same regular-file inode")
+	t.Logf("retained node stdout: %s", retained)
 }
 
 func buildCounterContractTxs(t *testing.T, anchorTx *wire.MsgTx,

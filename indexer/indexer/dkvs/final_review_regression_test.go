@@ -64,24 +64,56 @@ func TestFinalReviewWalletRPCUsesTipHeight(t *testing.T) {
 					if err == nil {
 						t.Fatalf("out-of-window issue height %d accepted", issue)
 					}
-					if issue < 8 && !errors.Is(err, ErrStaleEndpoint) {
+					if issue < 8 && (!errors.Is(err, ErrHeightTooLow) || ErrorCodeOf(err) != ErrorCodeHeightTooLow) {
 						t.Fatalf("old issue height returned %v", err)
 					}
 					if _, getErr := idx.Get(record.Key); !errors.Is(getErr, ErrRecordNotFound) {
 						t.Fatalf("rejected write changed state: %v", getErr)
 					}
-					return
+					if issue > 10 {
+						return
+					}
+					// A definite height refusal permits refreshing only the signed
+					// height and request identity, not the CAS or prefix generations.
+					record.IssueHeight = idx.tipHeight()
+					SignRecord(priv, record)
+					options.RequestID = "tip-height-refreshed"
+					if auth != nil {
+						digest, err := WalletWriteDigest(mutations, options, auth.Context)
+						if err != nil {
+							t.Fatal(err)
+						}
+						sig, err := schnorr.Sign(priv, digest[:])
+						if err != nil {
+							t.Fatal(err)
+						}
+						auth.Signature = sig.Serialize()
+					}
+					result, err = admission.PutRecords(mutations, options, auth)
+					if err != nil {
+						t.Fatalf("resubmit after height refusal: issue=%d refreshed=%d: %v", issue, record.IssueHeight, err)
+					}
 				}
 				if err != nil {
 					t.Fatalf("indexed=8 tip=10 issue=%d: %v", issue, err)
 				}
-				if result.Applied != 1 || result.ViewHeight != 10 {
+				if result == nil || result.Applied != 1 || result.ViewHeight != 10 || len(result.Records) != 1 {
 					t.Fatalf("unexpected receipt: %+v", result)
 				}
 				for _, got := range result.Records {
 					if err := VerifyRecordForClient(got, RecordVerificationOptions{ExpectedKey: got.Key, Height: result.ViewHeight}); err != nil {
 						t.Fatal(err)
 					}
+					if RecordHash(got) != RecordHash(record) {
+						t.Fatal("receipt does not contain the submitted signed record")
+					}
+				}
+				stored, err := idx.Get(record.Key)
+				if err != nil || stored == nil || RecordHash(stored) != RecordHash(record) {
+					t.Fatalf("successful write was not stored: %v", err)
+				}
+				if issue < 8 {
+					t.Logf("rejected issue=%d, refreshed to tip=%d, re-signed and committed", issue, record.IssueHeight)
 				}
 			})
 		}

@@ -135,6 +135,7 @@ func TestTestnet1748AnchorException(t *testing.T) {
 			require.NoError(t, err)
 			defer teardown()
 			chain.chainParams.Net = wire.TestNet
+			chain.chainParams.POSV2Height = chaincfg.TestNetParams.POSV2Height
 			chain.SetTipHeight(3451)
 			msg := original.MsgBlock().Copy()
 			height := int32(1748)
@@ -324,6 +325,7 @@ func TestTestnet1708And1709AnchorExceptions(t *testing.T) {
 				require.NoError(t, err)
 				defer teardown()
 				chain.chainParams.Net = wire.TestNet
+				chain.chainParams.POSV2Height = chaincfg.TestNetParams.POSV2Height
 				previous := tx.TxID()
 				msg := original.MsgBlock().Copy()
 				h := height

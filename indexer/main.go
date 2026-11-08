@@ -12,17 +12,17 @@ import (
 )
 
 func NewIndexerMgr(dbPath, host, port, user, ps string, enableTls bool, params *chaincfg.Params, interrupt <-chan struct{}) (*indexer.IndexerMgr, error) {
-	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, params, interrupt, nil)
+	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, params, interrupt, nil, 0)
 }
 
 func NewIndexerMgrWithDKVS(dbPath, host, port, user, ps string, enableTls bool, params *chaincfg.Params,
-	interrupt <-chan struct{}, dkvs *indexer.DKVSIntegrationConfig) (*indexer.IndexerMgr, error) {
+	interrupt <-chan struct{}, dkvs *indexer.DKVSIntegrationConfig, selfCheckHeight int32) (*indexer.IndexerMgr, error) {
 
-	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, params, interrupt, dkvs)
+	return newIndexerMgr(dbPath, host, port, user, ps, enableTls, params, interrupt, dkvs, selfCheckHeight)
 }
 
 func newIndexerMgr(dbPath, host, port, user, ps string, enableTls bool, params *chaincfg.Params,
-	interrupt <-chan struct{}, dkvs *indexer.DKVSIntegrationConfig) (*indexer.IndexerMgr, error) {
+	interrupt <-chan struct{}, dkvs *indexer.DKVSIntegrationConfig, selfCheckHeight int32) (*indexer.IndexerMgr, error) {
 
 	p, err := strconv.Atoi(port)
 	if err != nil {
@@ -33,7 +33,8 @@ func newIndexerMgr(dbPath, host, port, user, ps string, enableTls bool, params *
 	}
 
 	cfg := indexer.Config{
-		DataPath: dbPath,
+		DataPath:        dbPath,
+		SelfCheckHeight: selfCheckHeight,
 		RPCCfg: &indexer.RPCConfig{
 			Host:      host,
 			Port:      p,

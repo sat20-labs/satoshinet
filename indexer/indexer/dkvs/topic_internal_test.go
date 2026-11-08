@@ -21,10 +21,22 @@ func newMessageTopicTestIndexer(t *testing.T) *Indexer {
 func TestMessageTopicInternalBatchPersistsButDoesNotRelay(t *testing.T) {
 	idx := newMessageTopicTestIndexer(t)
 	account := "0101010101010101010101010101010101010101010101010101010101010101"
+	meta, err := wire.SerializeTopicMeta(&wire.TopicMeta{TopicName: "developers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := wire.SerializeTopicState(&wire.TopicState{KeySeq: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := wire.SerializeTopicMember(&wire.TopicMember{AccountID: account, Status: "ACTIVE"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	values := map[string][]byte{
-		"/topic/developers/meta":              []byte(`{"topic":"developers"}`),
-		"/topic/developers/state":             []byte(`{"key_seq":1}`),
-		"/topic/developers/members/" + account: []byte(`{"status":"ACTIVE"}`),
+		"/topic/developers/meta":               meta,
+		"/topic/developers/state":              state,
+		"/topic/developers/members/" + account: member,
 	}
 	applied, err := idx.PutInternalTopicValues(values)
 	if err != nil || applied != 3 {

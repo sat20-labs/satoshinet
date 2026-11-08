@@ -19,7 +19,7 @@ import (
 )
 
 const rgb11TechnicalRegistryPrefix = "/contract/rgb11/"
-const rgb11TechnicalValueVersion = byte(2)
+const rgb11TechnicalValueVersion = byte(1)
 
 type rgb11RegistrationRequest struct {
 	Record *swire.DKVSRecord `json:"record"`
@@ -120,7 +120,7 @@ func rgb11PublicField(v *strict_types.Value, name string) *strict_types.Value {
 }
 
 // Public contract data has no transfer history, terminal disclosures or
-// revealed genesis seals. The validator checks the on-wire v2 business value
+// revealed genesis seals. The validator checks the on-wire v1 business value
 // itself rather than trusting a client's "public" flag or a display name.
 func validateRGB11TechnicalRecord(record *swire.DKVSRecord) (string, error) {
 	invalid := dkvsindexer.ErrInvalidRecord

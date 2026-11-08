@@ -64,23 +64,13 @@ func TestNetworkRegtestIPv6HistoricalSync(t *testing.T) {
 
 	start := func(role, mnemonic string) *rpctest.Harness {
 		t.Helper()
-		generator := rpctest.ListenAddressGenerator
-		rpctest.ListenAddressGenerator = func() (string, string) {
-			p2p, rpc := generator()
-			_, port, err := net.SplitHostPort(p2p)
-			require.NoError(t, err)
-			return net.JoinHostPort("::1", port), rpc
-		}
 		pub := hex.EncodeToString(keyFromMnemonic(t, mnemonic, 0).PubKey().SerializeCompressed())
-		node, err := rpctest.NewWithEnv(&chaincfg.RegressionNetParams, nil, []string{
+		node := newContractE2EHarness(t, &chaincfg.RegressionNetParams, []string{
 			"--notls", "--nocheckpoints", "--nodnsseed", "--generate", "--indexerscheme=http",
 			"--indexerhost=" + strings.TrimPrefix(fakeL1.URL, "http://"), "--indexerproxy=testnet",
 			"--miningpubkey=" + pub, "--debuglevel=PEER=debug,SYNC=debug,RPCS=debug",
 		}, executable, []string{"SATOSHINET_RPCTEST_NODE_ROLE=" + role,
-			"SATOSHINET_RPCTEST_STP_MNEMONIC=" + mnemonic, "SATOSHINET_RPCTEST_STP_PASSWORD=rpctest"})
-		rpctest.ListenAddressGenerator = generator
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, node.TearDown()) })
+			"SATOSHINET_RPCTEST_STP_MNEMONIC=" + mnemonic, "SATOSHINET_RPCTEST_STP_PASSWORD=rpctest"}, "::1")
 		node.MaxConnRetries, node.ConnectionRetryTimeout = 50, 100*time.Millisecond
 		require.NoError(t, node.SetUp(false, 0))
 		// Startup loads the wallet signer and starts the scheduled miner.

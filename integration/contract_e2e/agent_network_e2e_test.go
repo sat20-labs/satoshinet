@@ -313,16 +313,11 @@ func startAgentSatoshiNetNode(t *testing.T, fakeL1 *httptest.Server, role, mnemo
 			env = append(env, name+"="+value)
 		}
 	}
-	r, err := rpctest.NewWithEnv(
-		&chaincfg.TestNetParams, nil, btcdCfg, contractE2EExecutablePath(t), env,
-	)
-	require.NoError(t, err)
+	r := newContractE2EHarness(t, &chaincfg.TestNetParams,
+		btcdCfg, contractE2EExecutablePath(t), env, "127.0.0.1")
 	r.MaxConnRetries = 200
 	r.ConnectionRetryTimeout = 100 * time.Millisecond
 	require.NoError(t, r.SetUp(false, 0))
-	t.Cleanup(func() {
-		require.NoError(t, r.TearDown())
-	})
 	return r
 }
 

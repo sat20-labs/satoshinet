@@ -20,103 +20,100 @@ import (
 
 // TestHaveBlock tests the HaveBlock API to ensure proper functionality.
 func TestHaveBlock(t *testing.T) {
-	// Load up blocks such that there is a side chain.
-	// (genesis block) -> 1 -> 2 -> 3 -> 4
-	//                          \-> 3a
-	testFiles := []string{
-		"blk_0_to_4.dat.bz2",
-		"blk_3A.dat.bz2",
-	}
-
-	var blocks []*btcutil.Block
-	for _, file := range testFiles {
-		blockTmp, err := loadBlocks(file)
-		if err != nil {
-			t.Errorf("Error loading file: %v\n", err)
-			return
-		}
-		blocks = append(blocks, blockTmp...)
-	}
-
 	// Create a new database and chain instance to run tests against.
 	chain, teardownFunc, err := chainSetup("haveblock",
-		&chaincfg.MainNetParams)
+		&chaincfg.RegressionNetParams)
 	if err != nil {
-		t.Errorf("Failed to setup chain instance: %v", err)
-		return
+		t.Fatalf("Failed to setup chain instance: %v", err)
 	}
 	defer teardownFunc()
 
-	// Since we're not dealing with the real block chain, set the coinbase
-	// maturity to 1.
-	chain.TstSetCoinbaseMaturity(1)
-
-	for i := 1; i < len(blocks); i++ {
-		_, isOrphan, err := chain.ProcessBlock(blocks[i], BFNone)
+	// Build native blocks rather than loading Bitcoin fixtures.
+	// (genesis block) -> 1 -> 2 -> 3 -> 4
+	//                          \-> 3a
+	genesis := btcutil.NewBlock(chain.chainParams.GenesisBlock)
+	genesis.SetHeight(0)
+	blocks := []*btcutil.Block{genesis}
+	for height := 1; height <= 4; height++ {
+		block, _, err := newBlock(chain, blocks[height-1], nil)
 		if err != nil {
-			t.Errorf("ProcessBlock fail on block %v: %v\n", i, err)
-			return
+			t.Fatalf("Unable to create block %d: %v", height, err)
 		}
-		if isOrphan {
-			t.Errorf("ProcessBlock incorrectly returned block %v "+
-				"is an orphan\n", i)
-			return
+		isMainChain, isOrphan, err := chain.ProcessBlock(block, BFNone)
+		if err != nil || !isMainChain || isOrphan {
+			t.Fatalf("ProcessBlock main block %d: main=%v orphan=%v err=%v",
+				height, isMainChain, isOrphan, err)
 		}
+		blocks = append(blocks, block)
 	}
 
-	// Insert an orphan block.
-	orphanMsgBlock := satoshiNetBlock100000()
-	orphanBlock := btcutil.NewBlock(&orphanMsgBlock)
-	_, isOrphan, err := chain.ProcessBlock(orphanBlock, BFNoPoWCheck)
-	if err != nil {
-		t.Errorf("Unable to process block: %v", err)
-		return
+	// Give the competing block a distinct header and valid proof of work.
+	sideMsgBlock := blocks[3].MsgBlock().Copy()
+	sideMsgBlock.Header.Timestamp = sideMsgBlock.Header.Timestamp.Add(time.Second)
+	if !testhelper.SolveBlock(&sideMsgBlock.Header) {
+		t.Fatal("Unable to solve side-chain block")
 	}
-	if !isOrphan {
-		t.Errorf("ProcessBlock indicated block is an not orphan when " +
-			"it should be\n")
-		return
+	sideBlock := btcutil.NewBlock(sideMsgBlock)
+	isMainChain, isOrphan, err := chain.ProcessBlock(sideBlock, BFNone)
+	if err != nil || isMainChain || isOrphan {
+		t.Fatalf("ProcessBlock side chain: main=%v orphan=%v err=%v",
+			isMainChain, isOrphan, err)
+	}
+
+	// Leave block 5 unsubmitted so its child is a genuine orphan. These
+	// native heights remain below the unchanged POS v2 activation height.
+	orphanParent, _, err := newBlock(chain, blocks[4], nil)
+	if err != nil {
+		t.Fatalf("Unable to create orphan parent: %v", err)
+	}
+	orphanBlock, _, err := newBlock(chain, orphanParent, nil)
+	if err != nil {
+		t.Fatalf("Unable to create orphan block: %v", err)
+	}
+	if chain.chainParams.POSV2Active(orphanBlock.Height()) {
+		t.Fatal("orphan fixture must precede POS v2 activation")
+	}
+	isMainChain, isOrphan, err = chain.ProcessBlock(orphanBlock, BFNone)
+	if err != nil || isMainChain || !isOrphan {
+		t.Fatalf("ProcessBlock orphan: main=%v orphan=%v err=%v",
+			isMainChain, isOrphan, err)
 	}
 
 	tests := []struct {
+		name string
 		hash string
 		want bool
 	}{
 		// Genesis block should be present (in the main chain).
-		{hash: chaincfg.MainNetParams.GenesisHash.String(), want: true},
+		{name: "genesis", hash: genesis.Hash().String(), want: true},
+
+		// Non-genesis blocks should be present on the main and side chains.
+		{name: "main chain", hash: blocks[4].Hash().String(), want: true},
+		{name: "side chain", hash: sideBlock.Hash().String(), want: true},
 
 		// The synthetic block should be present as an orphan.
-		{hash: orphanBlock.Hash().String(), want: true},
+		{name: "orphan", hash: orphanBlock.Hash().String(), want: true},
 
-		// Random hashes should not be available.
-		{hash: "123", want: false},
-	}
-	if len(blocks) != 0 {
-		tests = append(tests, struct {
-			hash string
-			want bool
-		}{
-			hash: blocks[len(blocks)-1].Hash().String(),
-			want: true,
-		})
+		// The unsubmitted parent and random hashes should not be available.
+		{name: "unknown parent", hash: orphanParent.Hash().String(), want: false},
+		{name: "unknown hash", hash: "123", want: false},
 	}
 
-	for i, test := range tests {
+	for _, test := range tests {
 		hash, err := chainhash.NewHashFromStr(test.hash)
 		if err != nil {
-			t.Errorf("NewHashFromStr: %v", err)
+			t.Errorf("NewHashFromStr %s: %v", test.name, err)
 			continue
 		}
 
 		result, err := chain.HaveBlock(hash)
 		if err != nil {
-			t.Errorf("HaveBlock #%d unexpected error: %v", i, err)
-			return
+			t.Errorf("HaveBlock %s unexpected error: %v", test.name, err)
+			continue
 		}
 		if result != test.want {
-			t.Errorf("HaveBlock #%d got %v want %v", i, result,
+			t.Errorf("HaveBlock %s got %v want %v", test.name, result,
 				test.want)
-			continue
 		}
 	}
 }
@@ -1633,19 +1630,13 @@ func TestInvalidateBlock(t *testing.T) {
 func TestReconsiderBlock(t *testing.T) {
 	tests := []struct {
 		name     string
-		chainGen func() (*BlockChain, []*chainhash.Hash, func())
+		chainGen func(*testing.T) (*BlockChain, []*chainhash.Hash, func())
 	}{
 		{
 			name: "one branch, invalidate once and revalidate",
-			chainGen: func() (*BlockChain, []*chainhash.Hash, func()) {
-				chain, params, tearDown := utxoCacheTestChain("TestInvalidateBlock-one-branch-invalidate-once")
-
-				// Create a chain with 101 blocks.
-				tip := btcutil.NewBlock(params.GenesisBlock)
-				_, _, err := addBlocks(101, chain, tip, []*testhelper.SpendableOut{})
-				if err != nil {
-					t.Fatal(err)
-				}
+			chainGen: func(t *testing.T) (*BlockChain, []*chainhash.Hash, func()) {
+				chain, _, tearDown := reconsiderPOSChain(t,
+					"TestReconsiderBlock-one-branch-invalidate-once", false)
 
 				// Invalidate block 5.
 				block, err := chain.BlockByHeight(5)
@@ -1659,15 +1650,9 @@ func TestReconsiderBlock(t *testing.T) {
 		},
 		{
 			name: "invalidate the active branch with a side branch present and revalidate",
-			chainGen: func() (*BlockChain, []*chainhash.Hash, func()) {
-				chain, params, tearDown := utxoCacheTestChain("TestReconsiderBlock-invalidate-with-side-branch")
-
-				// Create a chain with 101 blocks.
-				tip := btcutil.NewBlock(params.GenesisBlock)
-				_, spendableOuts, err := addBlocks(101, chain, tip, []*testhelper.SpendableOut{})
-				if err != nil {
-					t.Fatal(err)
-				}
+			chainGen: func(t *testing.T) (*BlockChain, []*chainhash.Hash, func()) {
+				chain, _, tearDown := reconsiderPOSChain(t,
+					"TestReconsiderBlock-invalidate-with-side-branch", true)
 
 				// Invalidate block 5.
 				block, err := chain.BlockByHeight(5)
@@ -1676,40 +1661,14 @@ func TestReconsiderBlock(t *testing.T) {
 				}
 				invalidateHash := block.Hash()
 
-				// Create a side chain with 7 blocks that builds on block 1.
-				b1, err := chain.BlockByHeight(1)
-				if err != nil {
-					t.Fatal(err)
-				}
-				_, _, err = addBlocks(6, chain, b1, spendableOuts[0])
-				if err != nil {
-					t.Fatal(err)
-				}
-
 				return chain, []*chainhash.Hash{invalidateHash}, tearDown
 			},
 		},
 		{
 			name: "invalidate a side branch and revalidate it",
-			chainGen: func() (*BlockChain, []*chainhash.Hash, func()) {
-				chain, params, tearDown := utxoCacheTestChain("TestReconsiderBlock-invalidate-a-side-branch")
-
-				// Create a chain with 101 blocks.
-				tip := btcutil.NewBlock(params.GenesisBlock)
-				_, spendableOuts, err := addBlocks(101, chain, tip, []*testhelper.SpendableOut{})
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				// Create a side chain with 7 blocks that builds on block 1.
-				b1, err := chain.BlockByHeight(1)
-				if err != nil {
-					t.Fatal(err)
-				}
-				altBlockHashes, _, err := addBlocks(6, chain, b1, spendableOuts[0])
-				if err != nil {
-					t.Fatal(err)
-				}
+			chainGen: func(t *testing.T) (*BlockChain, []*chainhash.Hash, func()) {
+				chain, altBlockHashes, tearDown := reconsiderPOSChain(t,
+					"TestReconsiderBlock-invalidate-a-side-branch", true)
 				// Grab block at height 4:
 				//
 				// b2, b3, b4, b5
@@ -1721,7 +1680,7 @@ func TestReconsiderBlock(t *testing.T) {
 		},
 		{
 			name: "reconsider an invalid side branch with a higher work",
-			chainGen: func() (*BlockChain, []*chainhash.Hash, func()) {
+			chainGen: func(t *testing.T) (*BlockChain, []*chainhash.Hash, func()) {
 				chain, params, tearDown := utxoCacheTestChain("TestReconsiderBlock-reconsider-an-invalid-side-branch-higher")
 
 				tip := btcutil.NewBlock(params.GenesisBlock)
@@ -1755,7 +1714,7 @@ func TestReconsiderBlock(t *testing.T) {
 		},
 		{
 			name: "reconsider an invalid side branch with a lower work",
-			chainGen: func() (*BlockChain, []*chainhash.Hash, func()) {
+			chainGen: func(t *testing.T) (*BlockChain, []*chainhash.Hash, func()) {
 				chain, params, tearDown := utxoCacheTestChain("TestReconsiderBlock-reconsider-an-invalid-side-branch-lower")
 
 				tip := btcutil.NewBlock(params.GenesisBlock)
@@ -1797,8 +1756,8 @@ func TestReconsiderBlock(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		chain, invalidateHashes, tearDown := test.chainGen()
-		func() {
+		t.Run(test.name, func(t *testing.T) {
+			chain, invalidateHashes, tearDown := test.chainGen(t)
 			defer tearDown()
 			for _, invalidateHash := range invalidateHashes {
 				// Cache the chain tips before the invalidate. Since we'll reconsider
@@ -1823,6 +1782,10 @@ func TestReconsiderBlock(t *testing.T) {
 
 				// Compare the tips aginst the tips we've cached.
 				gotChainTips := chain.ChainTips()
+				if len(gotChainTips) != len(expectedChainTips) {
+					t.Errorf("TestReconsiderBlock Failed test %q. Expected %d chain tips, got %d",
+						test.name, len(expectedChainTips), len(gotChainTips))
+				}
 				for _, gotChainTip := range gotChainTips {
 					testChainTip, found := expectedChainTips[gotChainTip.BlockHash]
 					if !found {
@@ -1852,6 +1815,6 @@ func TestReconsiderBlock(t *testing.T) {
 					}
 				}
 			}
-		}()
+		})
 	}
 }

@@ -84,6 +84,9 @@ func BuildDeployTx(req DeployTxBuildRequest) (*wire.MsgTx, ContractAddress, erro
 			return nil, ContractAddress{}, err
 		}
 	case ContractTypeEVM:
+		if version == 0 {
+			version = 1
+		}
 		if subtype == "" {
 			subtype = "sol"
 		}

@@ -1,9 +1,12 @@
 package indexer
 
 import (
-	"encoding/json"
-	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
+	"fmt"
 	"strings"
+
+	contract "github.com/sat20-labs/satoshinet/contract"
+	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
+	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 )
 
 func (s *IndexerMgr) GetContractSummaries(start, limit int) ([]contractengine.ContractSummary, int) {
@@ -27,22 +30,22 @@ func (s *IndexerMgr) GetContractHistory(address string, start, limit int) ([]con
 	return s.contractIndexer.GetContractHistory(address, start, limit)
 }
 
-func (s *IndexerMgr) GetEVMSourceMetadata(address string) (contractengine.EVMSourceMetadata, bool) {
+func (s *IndexerMgr) GetEVMSourceMetadata(address string) (contractengine.EVMSourceMetadata, error) {
 	if s.dkvsIndexer == nil {
-		return contractengine.EVMSourceMetadata{}, false
+		return contractengine.EVMSourceMetadata{}, dkvs.ErrStorageUnavailable
 	}
 	record, err := s.dkvsIndexer.Get("/contract/evm/source/" + strings.ToLower(strings.TrimSpace(address)))
 	if err != nil {
-		return contractengine.EVMSourceMetadata{}, false
+		return contractengine.EVMSourceMetadata{}, err
 	}
-	var metadata contractengine.EVMSourceMetadata
-	if err := json.Unmarshal(record.Value, &metadata); err != nil {
-		return metadata, false
+	metadata, err := contract.DecodeEVMSourceMetadata(record.Value)
+	if err != nil {
+		return metadata, fmt.Errorf("decode stored EVM source metadata: %w", err)
 	}
 	// Admission verified the complete init code and ABI. Client flags never
 	// determine the returned verification status; runtime replay is not claimed.
 	metadata.Verified = true
 	metadata.VerifyStatus = "verified-init-code"
 	metadata.VerifyError = ""
-	return metadata, true
+	return metadata, nil
 }

@@ -54,7 +54,7 @@ func TestDKVSReviewSnapshotsPreserveNotifySubscriptions(t *testing.T) {
 	check(true, true, false)
 	// Exercise the actual snapshot-expiry callback without waiting two minutes.
 	request = begin(wire.DKVSSyncFilter{Type: pathSyncFilterType, Target: paths[2]})
-	store := &handlerTestStore{pathSnapshot: &dkvs.PathSnapshot{Path: paths[2], PathMeta: &dkvs.PathMeta{Version: 3, Path: paths[2]}, ServerTimeMS: 1}}
+	store := &handlerTestStore{pathSnapshot: &dkvs.PathSnapshot{Path: paths[2], PathMeta: &dkvs.PathMeta{Version: 1, Path: paths[2]}, ServerTimeMS: 1}}
 	snapshot, err := peer.pathServeSnapshot(request, store, paths[2])
 	if err != nil {
 		t.Fatal(err)

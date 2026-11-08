@@ -590,7 +590,7 @@ func (s *Model) GetContract(contractAddress string) (contractengine.ContractSumm
 	return s.contractQueries().Contract(contractAddress)
 }
 
-func (s *Model) GetEVMSourceMetadata(contractAddress string) (contractengine.EVMSourceMetadata, bool) {
+func (s *Model) GetEVMSourceMetadata(contractAddress string) (contractengine.EVMSourceMetadata, error) {
 	return s.indexer.GetEVMSourceMetadata(contractAddress)
 }
 

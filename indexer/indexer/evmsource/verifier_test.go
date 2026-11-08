@@ -77,7 +77,7 @@ func TestNativeSourceCompilationAndAdmission(t *testing.T) {
 	priv, err := btcec.NewPrivateKey()
 	require.NoError(t, err)
 	sign := func(metadata contract.EVMSourceMetadata) *wire.DKVSRecord {
-		value, err := json.Marshal(metadata)
+		value, err := contract.EncodeEVMSourceMetadata(metadata)
 		require.NoError(t, err)
 		record, err := dkvs.NewRecord("/contract/evm/source/"+address.EncodeAddress(), value, priv.PubKey().SerializeCompressed(), dkvs.RecordOptions{Seq: 1})
 		require.NoError(t, err)

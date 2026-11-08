@@ -191,7 +191,7 @@ func TestReviewCASUsesReceiptViewForRecordLifetime(t *testing.T) {
 				}
 				err = writeErr
 				if wantErr != nil {
-					staleRetry := walletRPC && operation == "expired-retry" && errors.Is(err, ErrStaleEndpoint)
+					staleRetry := walletRPC && operation == "expired-retry" && errors.Is(err, ErrHeightTooLow)
 					if !errors.Is(err, wantErr) && !staleRetry {
 						t.Fatalf("result=%+v err=%v, want %v", result, err, wantErr)
 					}

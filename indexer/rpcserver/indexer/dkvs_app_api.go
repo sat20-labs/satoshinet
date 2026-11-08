@@ -65,10 +65,12 @@ func parseDKVSPrecondition(expectedETag string, absent bool) (dkvsindexer.WriteP
 
 func dkvsHTTPStatus(err error) int {
 	switch dkvsindexer.ErrorCodeOf(err) {
+	case dkvsindexer.ErrorCodeStorageUnavailable:
+		return http.StatusServiceUnavailable
 	case dkvsindexer.ErrorCodeWriteConflict, dkvsindexer.ErrorCodeStaleGeneration,
 		dkvsindexer.ErrorCodeStaleEndpoint, dkvsindexer.ErrorCodeEndpointMismatch,
 		dkvsindexer.ErrorCodeResetRequired, dkvsindexer.ErrorCodePathDiverged,
-		dkvsindexer.ErrorCodeStorageModeDowngrade:
+		dkvsindexer.ErrorCodeStorageModeDowngrade, dkvsindexer.ErrorCodeHeightTooLow:
 		return http.StatusConflict
 	case dkvsindexer.ErrorCodePermissionDenied:
 		return http.StatusForbidden

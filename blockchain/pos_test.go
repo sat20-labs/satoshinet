@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sat20-labs/satoshinet/blockchain/internal/testhelper"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/btcutil"
@@ -98,6 +99,180 @@ func setupPOSChain(t *testing.T, networks ...*chaincfg.Params) (*BlockChain, *po
 
 func signPOS(key *btcec.PrivateKey) func([]byte) ([]byte, error) {
 	return func(msg []byte) ([]byte, error) { return ecdsa.Sign(key, chainhash.HashB(msg)).Serialize(), nil }
+}
+
+// Reconsideration needs an independent sorter at every historical parent,
+// not the live sorter left at the current chain tip. This asset-free fixture
+// uses the existing branch view and real sequence manager with one Bootstrap.
+type reconsiderPOSReadiness struct {
+	*posReadiness
+	params    *chaincfg.Params
+	genesis   chainhash.Hash
+	bootstrap string
+}
+
+type reconsiderPOSAssetView struct {
+	*testBranchAssetView
+	seq *scommon.MiningSequenceMgr
+}
+
+func (v *reconsiderPOSAssetView) GetSeqMgr() *scommon.MiningSequenceMgr { return v.seq }
+
+func (v *reconsiderPOSAssetView) ConnectBlock(block *wire.MsgBlock, height, tip int) error {
+	if err := v.testBranchAssetView.ConnectBlock(block, height, tip); err != nil {
+		return err
+	}
+	return v.seq.MoveMiningAddr(height, v.seq.GetCurrentMiningAddr())
+}
+
+func (r *reconsiderPOSReadiness) NewValidationAssetView() (ContractAssetIndexView, error) {
+	seq := scommon.NewMiningSequenceMgr(r.params)
+	if err := seq.Init(map[string]*scommon.CoreNodeInfo{
+		r.bootstrap: scommon.NewCoreNodeInfo(nil),
+	}, 0, ""); err != nil {
+		return nil, err
+	}
+	return &reconsiderPOSAssetView{
+		testBranchAssetView: &testBranchAssetView{height: 0, hash: r.genesis},
+		seq:                 seq,
+	}, nil
+}
+
+// reconsiderPOSChain preserves the 101-block reconsideration fixture and the
+// real regtest activation height. A legacy side branch must already exist
+// before activation, when ordinary competing branches are still accepted.
+func reconsiderPOSChain(t *testing.T, name string, sideBranch bool) (*BlockChain, []*chainhash.Hash, func()) {
+	t.Helper()
+	chain, _, teardown := utxoCacheTestChain(name)
+	complete := false
+	defer func() {
+		if !complete {
+			teardown()
+		}
+	}()
+	require.Equal(t, int32(32), chain.chainParams.POSV2Height)
+	genesis := btcutil.NewBlock(chain.chainParams.GenesisBlock)
+	genesis.SetHeight(0)
+	key, _ := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{1}, 32))
+	ready := &reconsiderPOSReadiness{
+		posReadiness: &posReadiness{testAssetReadiness: newTestAssetReadiness(
+			0, *genesis.Hash(), chain.interrupt)},
+		params:    chain.chainParams,
+		genesis:   *genesis.Hash(),
+		bootstrap: hex.EncodeToString(key.PubKey().SerializeCompressed()),
+	}
+	initial, err := ready.NewValidationAssetView()
+	require.NoError(t, err)
+	ready.seq = initial.(*reconsiderPOSAssetView).seq
+	chain.assetIndexReadiness = ready
+	chain.Subscribe(func(n *Notification) {
+		switch n.Type {
+		case NTBlockConnected:
+			block := n.Data.(*btcutil.Block)
+			require.True(t, ready.InternalTipReady(int(block.Height()-1), &block.MsgBlock().Header.PrevBlock))
+			require.NoError(t, ready.seq.MoveMiningAddr(int(block.Height()), ready.seq.GetCurrentMiningAddr()))
+			ready.setTip(int(block.Height()), *block.Hash())
+		case NTBlockDisconnected:
+			block := n.Data.(*btcutil.Block)
+			// Rebuild from the actual ancestor blocks, just like branch
+			// validation. Do not rewind or share the live sorter by height.
+			chain.chainLock.RLock()
+			view, err := chain.contractParentAssetViewLocked(block)
+			chain.chainLock.RUnlock()
+			require.NoError(t, err)
+			ready.seq = view.(*reconsiderPOSAssetView).seq
+			ready.setTip(int(block.Height()-1), block.MsgBlock().Header.PrevBlock)
+		}
+	})
+
+	prev := genesis
+	var first *btcutil.Block
+	var firstOuts, available, nextSpends []*testhelper.SpendableOut
+	var sideHashes []*chainhash.Hash
+	for height := int32(1); height <= 101; height++ {
+		block, outs := newReconsiderPOSBlock(t, chain, ready, key, prev, nextSpends)
+		main, orphan, err := chain.ProcessBlock(block, BFNone)
+		require.NoError(t, err, "connect reconsideration block %d", height)
+		require.True(t, main)
+		require.False(t, orphan)
+		prev = block
+		if height == 1 {
+			first = block
+			firstOuts = append([]*testhelper.SpendableOut(nil), outs...)
+		}
+		available = append(available, outs...)
+		available, nextSpends = randomSelect(available)
+		if height == chain.chainParams.POSV2Height {
+			// Guarantee a real P2TR coinbase spend in block 33 while
+			// retaining random spends throughout the rest of the chain.
+			for i, spend := range available {
+				if spend.PrevOut == outs[0].PrevOut {
+					nextSpends = append(nextSpends, spend)
+					available = append(available[:i], available[i+1:]...)
+					break
+				}
+			}
+		}
+		if sideBranch && height == chain.chainParams.POSV2Height-1 {
+			sideHashes, _, err = addBlocks(6, chain, first, firstOuts)
+			require.NoError(t, err)
+			require.Equal(t, *prev.Hash(), chain.BestSnapshot().Hash)
+		}
+	}
+	require.Equal(t, int32(101), chain.BestSnapshot().Height)
+	complete = true
+	return chain, sideHashes, teardown
+}
+
+func newReconsiderPOSBlock(t *testing.T, chain *BlockChain, ready *reconsiderPOSReadiness,
+	key *btcec.PrivateKey, prev *btcutil.Block, spends []*testhelper.SpendableOut) (*btcutil.Block, []*testhelper.SpendableOut) {
+	t.Helper()
+	block, outs, err := newBlock(chain, prev, spends)
+	require.NoError(t, err)
+	height := block.Height()
+	if !chain.chainParams.POSV2Active(height) {
+		return block, outs
+	}
+	msg := block.MsgBlock()
+	for _, tx := range msg.Transactions[1:] {
+		entry, err := chain.FetchUtxoEntry(tx.TxIn[0].PreviousOutPoint)
+		require.NoError(t, err)
+		require.NotNil(t, entry)
+		require.False(t, entry.IsSpent())
+		if txscript.IsPayToTaproot(entry.PkScript()) {
+			fetcher := txscript.NewCannedPrevOutputFetcher(entry.PkScript(), entry.Amount(), entry.TxAssets())
+			tx.TxIn[0].Witness, err = txscript.TaprootWitnessSignature(tx,
+				txscript.NewTxSigHashes(tx, fetcher), 0, entry.Amount(), entry.TxAssets(),
+				entry.PkScript(), txscript.SigHashDefault, key)
+			require.NoError(t, err)
+		}
+	}
+	coinbase := msg.Transactions[0]
+	sig := ecdsa.Sign(key, chainhash.HashB(scommon.GetScriptSignData(int(height), 0))).Serialize()
+	coinbase.TxIn[0].SignatureScript, err = txscript.NewScriptBuilder().
+		AddInt64(int64(height)).AddInt64(0).AddData(sig).Script()
+	require.NoError(t, err)
+	reward, err := ready.seq.POSReward(int(height), ready.bootstrap)
+	require.NoError(t, err)
+	address, err := btcutil.DecodeAddress(reward, chain.chainParams)
+	require.NoError(t, err)
+	coinbase.TxOut[0].PkScript, err = txscript.PayToAddrScript(address)
+	require.NoError(t, err)
+	coinbase.TxIn[0].Witness = wire.TxWitness{make([]byte, 32)}
+	coinbase.AddTxOut(wire.NewTxOut(0, nil, append(append([]byte(nil), WitnessMagicBytes...), make([]byte, 32)...)))
+	updatePOSCommitments(msg)
+	require.True(t, testhelper.SolveBlock(&msg.Header))
+	approval, err := signPOS(key)(scommon.POSApprovalMessage(chain.chainParams.Net, height, msg.BlockHash()))
+	require.NoError(t, err)
+	coinbase.TxIn[0].Witness = append(coinbase.TxIn[0].Witness, approval)
+	block = btcutil.NewBlock(msg)
+	block.SetHeight(height)
+	// Coinbase edits change its txid. Never spend the stale pre-POS outpoint.
+	for i, tx := range msg.Transactions {
+		out := testhelper.MakeSpendableOutForTx(tx, 0)
+		outs[i] = &out
+	}
+	return block, outs
 }
 
 func TestPOSMalformedCoinbaseNumbersReturnError(t *testing.T) {

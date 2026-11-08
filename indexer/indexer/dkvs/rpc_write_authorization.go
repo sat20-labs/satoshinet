@@ -30,8 +30,11 @@ const WalletWriteHeightTolerance = uint64(2)
 
 func validateWalletWriteHeight(issueHeight, tipHeight uint64) error {
 	// Subtraction follows the upper-bound check to avoid uint64 underflow.
-	if issueHeight > tipHeight || tipHeight-issueHeight > WalletWriteHeightTolerance {
-		return ErrStaleEndpoint
+	if issueHeight > tipHeight {
+		return ErrInvalidBlockHeight
+	}
+	if tipHeight-issueHeight > WalletWriteHeightTolerance {
+		return ErrHeightTooLow
 	}
 	return nil
 }

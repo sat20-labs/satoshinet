@@ -17,8 +17,8 @@ import (
 const (
 	pathSyncFilterType    = "path"
 	pathSyncMetaFlag      = uint32(1 << 31)
-	pathSyncMetaVersion   = uint32(2)
-	pathSyncCursorVersion = byte(3)
+	pathSyncMetaVersion   = uint32(1)
+	pathSyncCursorVersion = byte(1)
 	// offset + captured snapshot root. No height or node-local generation.
 	pathSyncCursorSize     = 1 + 8 + chainhash.HashSize
 	PathSyncRequestTimeout = 10 * time.Second

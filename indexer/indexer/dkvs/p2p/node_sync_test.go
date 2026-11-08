@@ -65,7 +65,7 @@ func TestNodeSyncRetainsWorkAcrossDisconnectAndFailedInstall(t *testing.T) {
 		t.Helper()
 		path := request.Filters[0].Target
 		rows, err := pathSnapshotWireRecords(&dkvs.PathSnapshot{Path: path,
-			PathMeta: &dkvs.PathMeta{Version: 3, Path: path, ViewHeight: 1}, ServerTimeMS: 1})
+			PathMeta: &dkvs.PathMeta{Version: 1, Path: path, ViewHeight: 1}, ServerTimeMS: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -161,7 +161,7 @@ func TestCapturedSnapshotLifetime(t *testing.T) {
 			defer peer.Close()
 			path := "/name/lifetime.btc"
 			store := &handlerTestStore{pathSnapshot: &dkvs.PathSnapshot{Path: path,
-				PathMeta: &dkvs.PathMeta{Version: 3, Path: path}, ServerTimeMS: 1}}
+				PathMeta: &dkvs.PathMeta{Version: 1, Path: path}, ServerTimeMS: 1}}
 			request := &wire.MsgDKVSSyncRequest{SessionID: 1, Filters: []wire.DKVSSyncFilter{{Type: pathSyncFilterType, Target: path}}}
 			if !peer.BeginServe(request) {
 				t.Fatal("serve not started")
@@ -202,7 +202,7 @@ func TestOldServeTimeoutCannotDiscardReplacementSnapshot(t *testing.T) {
 	peer := &PeerState{}
 	defer peer.Close()
 	path := "/name/lifetime.btc"
-	store := &handlerTestStore{pathSnapshot: &dkvs.PathSnapshot{Path: path, PathMeta: &dkvs.PathMeta{Version: 3, Path: path}, ServerTimeMS: 1}}
+	store := &handlerTestStore{pathSnapshot: &dkvs.PathSnapshot{Path: path, PathMeta: &dkvs.PathMeta{Version: 1, Path: path}, ServerTimeMS: 1}}
 	request := &wire.MsgDKVSSyncRequest{SessionID: 1, Filters: []wire.DKVSSyncFilter{{Type: pathSyncFilterType, Target: path}}}
 	peer.BeginServe(request)
 	old, err := peer.pathServeSnapshot(request, store, path)

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"sort"
 
 	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -32,10 +31,6 @@ func NewDKVSTopicCatalogStore(backend DKVSTopicCatalogBackend) *DKVSTopicCatalog
 	return &DKVSTopicCatalogStore{backend: backend}
 }
 
-func encodeTopicCatalogValue(value interface{}) ([]byte, error) {
-	return json.Marshal(value)
-}
-
 func (s *DKVSTopicCatalogStore) SaveTopic(meta TopicMeta, state TopicState, members []TopicMember) error {
 	if s == nil || s.backend == nil || meta.TopicName == "" || meta.OwnerAccount == "" || meta.ServiceCoreNode == "" {
 		return ErrMessageInvalidEnvelope
@@ -48,11 +43,11 @@ func (s *DKVSTopicCatalogStore) SaveTopic(meta TopicMeta, state TopicState, memb
 	if err != nil {
 		return err
 	}
-	metaValue, err := encodeTopicCatalogValue(meta)
+	metaValue, err := wire.SerializeTopicMeta(&meta)
 	if err != nil {
 		return err
 	}
-	stateValue, err := encodeTopicCatalogValue(state)
+	stateValue, err := wire.SerializeTopicState(&state)
 	if err != nil {
 		return err
 	}
@@ -65,7 +60,7 @@ func (s *DKVSTopicCatalogStore) SaveTopic(meta TopicMeta, state TopicState, memb
 		if err != nil {
 			return err
 		}
-		value, err := encodeTopicCatalogValue(member)
+		value, err := wire.SerializeTopicMember(&member)
 		if err != nil {
 			return err
 		}
@@ -105,26 +100,26 @@ func (s *DKVSTopicCatalogStore) LoadTopics() ([]TopicCatalogSnapshot, error) {
 		}
 		switch parsed.Segments[1] {
 		case "meta":
-			var meta TopicMeta
-			if err := json.Unmarshal(record.Value, &meta); err != nil || meta.TopicName != topicName {
+			meta, err := wire.DeserializeTopicMeta(record.Value)
+			if err != nil || meta.TopicName != topicName {
 				return nil, ErrMessageInvalidEnvelope
 			}
-			item.meta = &meta
+			item.meta = meta
 		case "state":
-			var state TopicState
-			if err := json.Unmarshal(record.Value, &state); err != nil {
+			state, err := wire.DeserializeTopicState(record.Value)
+			if err != nil {
 				return nil, ErrMessageInvalidEnvelope
 			}
-			item.state = &state
+			item.state = state
 		case "members":
 			if len(parsed.Segments) != 3 {
 				return nil, ErrMessageInvalidEnvelope
 			}
-			var member TopicMember
-			if err := json.Unmarshal(record.Value, &member); err != nil || member.AccountID != parsed.Segments[2] {
+			member, err := wire.DeserializeTopicMember(record.Value)
+			if err != nil || member.AccountID != parsed.Segments[2] {
 				return nil, ErrMessageInvalidEnvelope
 			}
-			item.members = append(item.members, member)
+			item.members = append(item.members, *member)
 		default:
 			return nil, ErrMessageInvalidEnvelope
 		}

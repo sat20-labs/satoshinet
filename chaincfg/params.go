@@ -162,14 +162,6 @@ const (
 // used by Bitcoin applications to differentiate networks as well as addresses
 // and keys for one network from those intended for use on another network.
 type Params struct {
-	// POSV2Height activates Bootstrap approval, substitute rewards and
-	// Anchor invoice output authorization and canonical transaction encoding together.
-	// Zero leaves the upgrade unscheduled. Set the same height on every node.
-	POSV2Height int32
-
-	// NativeAssetHeight schedules proof-backed native RGB11 mappings.
-	// Zero leaves admission disabled. Existing mapped assets may still exit.
-	NativeAssetHeight int32
 
 	// Name defines a human-readable identifier for the network.
 	Name string
@@ -208,6 +200,15 @@ type Params struct {
 	BIP0034Height int32
 	BIP0065Height int32
 	BIP0066Height int32
+
+	// POSV2Height activates Bootstrap approval, substitute rewards and
+	// Anchor invoice output authorization and canonical transaction encoding together.
+	// Zero leaves the upgrade unscheduled. Set the same height on every node.
+	POSV2Height int32
+
+	// NativeAssetHeight schedules proof-backed native RGB11 mappings.
+	// Zero leaves admission disabled. Existing mapped assets may still exit.
+	NativeAssetHeight int32
 
 	// CoinbaseMaturity is the number of blocks required before newly mined
 	// coins (coinbase transactions) can be spent.
@@ -461,6 +462,7 @@ var RegressionNetParams = Params{
 	BIP0034Height:            1,
 	BIP0065Height:            1,
 	BIP0066Height:            1,
+	POSV2Height: 			  32,
 	SubsidyReductionInterval: 210000,
 	TargetTimespan:           time.Hour * 24 * 14, // 14 days
 	TargetTimePerBlock:       2 * time.Second,     // POS production interval
@@ -923,6 +925,7 @@ var MainNetParams = Params{
 	BIP0034Height:            1, //
 	BIP0065Height:            1, //
 	BIP0066Height:            1, //
+	POSV2Height: 			  40300,
 	CoinbaseMaturity:         100,
 	SubsidyReductionInterval: 210000,
 	TargetTimespan:           time.Hour * 24 * 14, // 14 days
@@ -1037,6 +1040,7 @@ var TestNetParams = Params{
 	BIP0065Height:            1,
 	BIP0066Height:            1,
 	CoinbaseMaturity:         1,
+	POSV2Height:              3450,
 	SubsidyReductionInterval: 210000,
 	TargetTimespan:           time.Hour * 24 * 14, // 14 days
 	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes

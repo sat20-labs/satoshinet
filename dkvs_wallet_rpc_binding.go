@@ -17,7 +17,10 @@ func (r *serverMessageBindingResolver) installDKVSWalletAdmission() {
 	r.server.assetIndexer.SetDKVSWalletRPCAdmission(r.server.isRegisteredDKVSCore,
 		func(accountID string) (*wire.DKVSRecord, error) {
 			record, core, err := r.current(accountID)
-			if err != nil || core != r.server.miningPubKey {
+			if err != nil {
+				return nil, err
+			}
+			if core != r.server.miningPubKey {
 				return nil, ErrMessageNotBoundHere
 			}
 			return record, nil

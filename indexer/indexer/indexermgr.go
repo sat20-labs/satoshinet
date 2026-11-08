@@ -32,9 +32,10 @@ type RPCConfig struct {
 }
 
 type Config struct {
-	DataPath string
-	RPCCfg   *RPCConfig
-	DKVS     *DKVSIntegrationConfig
+	DataPath        string
+	RPCCfg          *RPCConfig
+	DKVS            *DKVSIntegrationConfig
+	SelfCheckHeight int32 // Optional one-shot trigger height; zero disables self-checks.
 }
 
 type coreNodeDKVSSystemVerifier struct{ fallback dkvs_indexer.SystemVerifier }
@@ -164,6 +165,9 @@ func (b *IndexerMgr) Init() {
 // initLocked initializes the indexer while connectMutex is already held.
 // It must not re-enter public ConnectBlock when seeding an empty database.
 func (b *IndexerMgr) initLocked() {
+	if b.cfg.SelfCheckHeight < 0 {
+		common.Log.Panicf("self-check height must not be negative")
+	}
 	err := b.initDB()
 	if err != nil {
 		common.Log.Panicf("initDB failed. %v", err)
@@ -176,10 +180,26 @@ func (b *IndexerMgr) initLocked() {
 	b.compiling.SetBlockCallback(b.processBlock)
 	b.lastCheckHeight = b.compiling.GetSyncHeight()
 
-	dbver := b.GetBaseDBVer()
+	version, versionErr := db.GetRawValueFromDB([]byte(base_indexer.BaseDBVerKey), b.baseDB)
+	if versionErr != nil && !errors.Is(versionErr, indexer.ErrKeyNotFound) {
+		common.Log.Panicf("read base DB version failed: %v", versionErr)
+	}
+	dbver := string(version)
 	common.Log.Infof("base db version: %s", dbver)
 	if dbver != "" && dbver != common.BASE_DB_VERSION {
 		common.Log.Panicf("DB version inconsistent. DB ver %s, but code base %s", dbver, common.BASE_DB_VERSION)
+	}
+	// The optional full audit must not own schema initialization. Only the live
+	// manager writes a missing/empty key; BaseIndexer.Init also serves read-only
+	// branch views. Other read errors must never be mistaken for an empty version.
+	if dbver == "" {
+		if err := db.SetRawValueToDB([]byte(base_indexer.BaseDBVerKey), []byte(common.BASE_DB_VERSION), b.baseDB); err != nil {
+			common.Log.Panicf("initialize base DB version failed: %v", err)
+		}
+	}
+	b.checkOnce = b.cfg.SelfCheckHeight > 0 && b.compiling.GetHeight() >= int(b.cfg.SelfCheckHeight)
+	if b.checkOnce {
+		common.Log.Infof("indexer self-check target %d already restored at height %d; skipping", b.cfg.SelfCheckHeight, b.compiling.GetHeight())
 	}
 
 	b.rpcService = base_indexer.NewRpcIndexer(b.compiling)
@@ -466,6 +486,14 @@ func (b *IndexerMgr) checkSelf() {
 	common.Log.Infof("IndexerMgr.checkSelf takes %v", time.Since(start))
 }
 
+// MiningReady waits for the current block application (including an optional
+// configured audit) to leave the serial indexer boundary before checking its tip.
+func (b *IndexerMgr) MiningReady(height int, hash *chainhash.Hash) bool {
+	b.connectMutex.RLock()
+	defer b.connectMutex.RUnlock()
+	return b.InternalTipReady(height, hash)
+}
+
 // Base has already committed before invoking this callback, as in L1.
 // 故障处理约定：任何索引写盘失败都 panic。修复根因后丢弃索引 DB 并从头同步，
 // 不保证部分提交后的自动恢复；不要为此改变回调职责或增加跨索引原子提交。
@@ -651,7 +679,23 @@ func (p *IndexerMgr) connectBlockOps() connectBlockOps {
 }
 
 func (p *IndexerMgr) connectBlockLocked(block *wire.MsgBlock, height, tip int) error {
-	return connectBlock(p.connectBlockOps(), block, height, tip)
+	previousHeight := p.compiling.GetHeight()
+	if err := connectBlock(p.connectBlockOps(), block, height, tip); err != nil {
+		return err
+	}
+	if p.cfg == nil || p.cfg.SelfCheckHeight <= 0 || p.checkOnce {
+		return nil
+	}
+	target := int(p.cfg.SelfCheckHeight)
+	appliedHeight := p.compiling.GetHeight()
+	if previousHeight < target && appliedHeight >= target {
+		// Preserve the normal delayed commit window. The Base audit covers the
+		// durable height; the Contract audit also checks its in-memory records.
+		common.Log.Infof("indexer self-check requested at %d: applied height %d, durable height %d", target, appliedHeight, p.compiling.GetSyncHeight())
+		p.checkSelf()
+		p.checkOnce = true
+	}
+	return nil
 }
 
 func ensureInternalTip(ops connectBlockOps, height int, hash *chainhash.Hash, tip int) error {
@@ -759,11 +803,6 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 			common.Log.Errorf("ConnectBlock catch-up failed: %v", err)
 			return
 		}
-		p.connectMutex.Lock()
-		defer p.connectMutex.Unlock()
-		if (height+1)%200 == 0 {
-			p.checkSelf()
-		}
 		return
 	}
 	p.connectMutex.Lock()
@@ -775,10 +814,6 @@ func (p *IndexerMgr) ConnectBlock(block *wire.MsgBlock, height, tip int) {
 	if err != nil {
 		common.Log.Errorf("ConnectBlock failed, %v", err)
 		return
-	}
-
-	if (height+1)%200 == 0 { // TODO 先多检查，以后稳定了再降低检查频率
-		p.checkSelf()
 	}
 }
 

@@ -548,6 +548,7 @@ func (g *BlkTmplGenerator) NewBlockTemplate(payToAddress btcutil.Address) (*Bloc
 	// Extend the most recently known best block.
 	best := g.chain.BestSnapshot()
 	nextBlockHeight := best.Height + 1
+	contractsActive := g.chainParams.ContractsActive(nextBlockHeight)
 
 	// Create a standard coinbase transaction paying to the provided
 	// address.  NOTE: The coinbase value will be updated to include the
@@ -621,6 +622,9 @@ mempoolLoop:
 		// A block can't have more than one coinbase or contain
 		// non-finalized transactions.
 		tx := txDesc.Tx
+		if !contractsActive && contractapi.IsContractTx(tx.MsgTx(), contractPrefix) {
+			continue
+		}
 		if blockchain.IsCoinBase(tx) {
 			log.Debugf("Skipping coinbase tx %s", tx.Hash())
 			continue
@@ -658,8 +662,10 @@ mempoolLoop:
 		// ordered below.
 		prioItem := &txPrioItem{tx: tx, anchorFundingUtxo: anchorFundingUtxo}
 		prioItem.protocolFeeCandidate = blockchain.IsAnchorTx(tx.MsgTx()) || blockchain.IsDeAnchorTx(tx.MsgTx())
-		prioItem.contractTx, prioItem.contractPriority, prioItem.contractTxType, prioItem.contractGasLimit = contractMiningInfo(
-			tx.MsgTx(), contractPrefix)
+		if contractsActive {
+			prioItem.contractTx, prioItem.contractPriority, prioItem.contractTxType, prioItem.contractGasLimit = contractMiningInfo(
+				tx.MsgTx(), contractPrefix)
+		}
 		for _, txIn := range tx.MsgTx().TxIn {
 			if anchorFundingUtxo != "" {
 				break
@@ -895,9 +901,9 @@ mempoolLoop:
 			continue
 		}
 		if !blockchain.IsAnchorTx(tx.MsgTx()) {
-			err = blockchain.ValidateTransactionScripts(tx, blockUtxos,
+			err = blockchain.ValidateTxScriptsAtHeight(tx, blockUtxos,
 				txscript.StandardVerifyFlags, g.sigCache,
-				g.hashCache)
+				g.hashCache, g.chainParams, nextBlockHeight)
 			if err != nil {
 				log.Debugf("Skipping tx %s due to error in "+
 					"ValidateTransactionScripts: %v", tx.Hash(), err)
@@ -967,7 +973,7 @@ mempoolLoop:
 	}
 
 	ts := medianAdjustedTime(best, g.timeSource)
-	if g.policy.ContractResultBuilder != nil {
+	if contractsActive && g.policy.ContractResultBuilder != nil {
 		addedWeight, addedSigOps, resultTxFees, resultTxSigOps,
 			addedFees, addedFeeAssets, err := g.addContractResultsToTemplate(
 			&blockTxns, coinbaseTx, blockUtxos, nextBlockHeight,
@@ -1122,8 +1128,8 @@ func (g *BlkTmplGenerator) addContractResultsToTemplate(blockTxns *[]*btcutil.Tx
 		if err != nil {
 			return 0, 0, nil, nil, 0, nil, fmt.Errorf("contract RESULT inputs: %w", err)
 		}
-		if err := blockchain.ValidateTransactionScripts(tx, blockUtxos,
-			txscript.StandardVerifyFlags, g.sigCache, g.hashCache); err != nil {
+		if err := blockchain.ValidateTxScriptsAtHeight(tx, blockUtxos,
+			txscript.StandardVerifyFlags, g.sigCache, g.hashCache, g.chainParams, nextBlockHeight); err != nil {
 			return 0, 0, nil, nil, 0, nil, fmt.Errorf("contract RESULT scripts: %w", err)
 		}
 		spendTransaction(blockUtxos, tx, nextBlockHeight)

@@ -1239,15 +1239,35 @@ func (s *Handle) getEVMSourceMetadata(c *gin.Context) {
 		BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"},
 	}
 	contractAddress := strings.TrimSpace(c.Param("contract"))
-	metadata, ok := s.model.GetEVMSourceMetadata(contractAddress)
-	if !ok {
+	metadata, err := s.model.GetEVMSourceMetadata(contractAddress)
+	if errors.Is(err, dkvsindexer.ErrRecordNotFound) {
 		resp.Code = -1
 		resp.Msg = "EVM source metadata not found"
 		c.JSON(http.StatusOK, resp)
 		return
 	}
+	if err != nil {
+		writeEVMSourceReadError(c, resp, err)
+		return
+	}
 	contractRespSetData(resp, metadata)
 	c.JSON(http.StatusOK, resp)
+}
+
+func writeEVMSourceReadError(c *gin.Context, resp *localwire.ContractResp, err error) {
+	resp.Code = -1
+	switch {
+	case errors.Is(err, dkvsindexer.ErrStorageUnavailable):
+		resp.Msg = dkvsindexer.ErrStorageUnavailable.Error()
+		c.JSON(dkvsHTTPStatus(err), resp)
+	case errors.Is(err, dkvsindexer.ErrInvalidKey):
+		resp.Msg = dkvsindexer.ErrInvalidKey.Error()
+		c.JSON(dkvsHTTPStatus(err), resp)
+	default:
+		common.Log.Errorf("read EVM source metadata: %v", err)
+		resp.Msg = "verified source record is unavailable"
+		c.JSON(http.StatusInternalServerError, resp)
+	}
 }
 
 func (s *Handle) putEVMSourceMetadata(c *gin.Context) {
@@ -1271,10 +1291,9 @@ func (s *Handle) putEVMSourceMetadata(c *gin.Context) {
 		c.JSON(dkvsHTTPStatus(err), resp)
 		return
 	}
-	metadata, ok := s.model.GetEVMSourceMetadata(address)
-	if !ok {
-		resp.Code, resp.Msg = -1, "verified source record is unavailable"
-		c.JSON(http.StatusInternalServerError, resp)
+	metadata, err := s.model.GetEVMSourceMetadata(address)
+	if err != nil {
+		writeEVMSourceReadError(c, resp, err)
 		return
 	}
 	contractRespSetData(resp, metadata)

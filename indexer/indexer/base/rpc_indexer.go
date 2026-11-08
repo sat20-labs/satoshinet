@@ -479,7 +479,9 @@ func (b *RpcIndexer) GetReferrer(address string) (*common.ReferrerInfo, error) {
 
 	referrer, err := stp.GetReferrerFromDB(b.db, address)
 	if err != nil {
-		common.Log.Errorf("GetReferrerFromDB %s failed, %v", address, err)
+		if !errors.Is(err, indexer.ErrKeyNotFound) {
+			common.Log.Errorf("GetReferrerFromDB %s failed, %v", address, err)
+		}
 		return nil, err
 	}
 	b.mutex.Lock()

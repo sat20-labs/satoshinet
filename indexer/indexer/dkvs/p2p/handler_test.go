@@ -286,7 +286,7 @@ func TestHandlerRebroadcastsRecordsAfterPathSnapshotRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := &wire.DKVSRecord{Version: dkvs.Version, Key: "/name/8888.btc", Seq: 1}
-	meta := &dkvs.PathMeta{Version: 3, Path: record.Key, Generation: 1, ViewHeight: 1}
+	meta := &dkvs.PathMeta{Version: 1, Path: record.Key, Generation: 1, ViewHeight: 1}
 	xorPathMetaRootForTest(&meta.StateRoot, record)
 	snapshot := &dkvs.PathSnapshot{
 		Path: record.Key, PathMeta: meta, Records: []*wire.DKVSRecord{record}, ServerTimeMS: 1,

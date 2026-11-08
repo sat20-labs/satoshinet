@@ -244,6 +244,7 @@ type server struct {
 	agentInvokeMu          sync.Mutex
 	agentInvokePending     map[string]struct{}
 	btcCpuMiner            *btclucky.Miner
+	btcMinerMu             sync.Mutex // Serializes delayed BTC startup with Stop.
 	posMiner               *posminer.POSMiner
 	modifyRebroadcastInv   chan interface{}
 	newPeers               chan *serverPeer
@@ -2984,16 +2985,8 @@ func (s *server) Start() {
 	go s.dkvsAntiEntropyHandler(time.Minute)
 
 	if s.btcCpuMiner != nil {
-		st := s.btcCpuMiner.Status()
-		srvrLog.Infof("BTC lucky miner runtime: starting enabled=%v backend=%s reward=%s miner_id=%s jobs=%d jobs_mode=%s low_priority=%v sleep=%s",
-			st.Enabled, st.Backend, st.RewardAddress, st.MinerID, st.Jobs, st.JobsMode, st.LowPriority, st.LowPrioritySleep)
-		if err := s.btcCpuMiner.Start(); err != nil {
-			srvrLog.Warnf("BTC lucky miner start failed: %v", err)
-		} else {
-			st = s.btcCpuMiner.Status()
-			srvrLog.Infof("BTC lucky miner runtime: start succeeded running=%v hashrate=%.2f H/s btc_height=%d job_id=%s",
-				st.Running, st.HashesPerSecond, st.BTCHeight, st.JobID)
-		}
+		s.wg.Add(1)
+		go s.startBTCLuckyMinerWhenSynced()
 	} else {
 		srvrLog.Infof("BTC lucky miner runtime: not started enabled=%v bootstrap=%v", cfg.BTCLuckyMining, isBTCLuckyBootstrapConfig())
 	}
@@ -3137,6 +3130,79 @@ func (s *server) Start() {
 	}
 }
 
+// btcLuckyMiningReady requires a handshaken block-serving peer, not just a
+// zero-height local chain or a temporarily absent selected sync peer.
+func (s *server) btcLuckyMiningReady() bool {
+	if !s.syncManager.IsCurrent() {
+		return false
+	}
+	peerTarget := int32(-1)
+	for _, rpcPeer := range (&rpcConnManager{server: s}).ConnectedPeers() {
+		p := rpcPeer.ToPeer()
+		if p == nil || !p.Connected() || !p.VersionKnown() || !p.VerAckReceived() {
+			continue
+		}
+		services := p.Services()
+		if !services.HasFlag(wire.SFNodeNetwork) && !services.HasFlag(wire.SFNodeNetworkLimited) {
+			continue
+		}
+		if height := p.LastBlock(); height > peerTarget {
+			peerTarget = height
+		}
+	}
+	best := s.chain.BestSnapshot()
+	if peerTarget < 0 || best.Height < peerTarget {
+		return false
+	}
+	if !s.assetIndexer.MiningReady(int(best.Height), &best.Hash) {
+		return false
+	}
+	// The chain may have advanced while the indexer read waited for a block.
+	current := s.chain.BestSnapshot()
+	return current.Height == best.Height && current.Hash == best.Hash
+}
+
+func (s *server) startBTCLuckyMinerWhenSynced() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	srvrLog.Infof("BTC lucky miner runtime: waiting for SatoshiNet chain and indexer sync")
+	for {
+		select {
+		case <-s.quit:
+			return
+		default:
+		}
+		if s.btcLuckyMiningReady() {
+			break
+		}
+		select {
+		case <-s.quit:
+			return
+		case <-ticker.C:
+		}
+	}
+
+	// Start and Stop must not race the miner's internal worker WaitGroup.
+	s.btcMinerMu.Lock()
+	defer s.btcMinerMu.Unlock()
+	select {
+	case <-s.quit:
+		return
+	default:
+	}
+	st := s.btcCpuMiner.Status()
+	srvrLog.Infof("BTC lucky miner runtime: starting enabled=%v backend=%s reward=%s miner_id=%s jobs=%d jobs_mode=%s low_priority=%v sleep=%s",
+		st.Enabled, st.Backend, st.RewardAddress, st.MinerID, st.Jobs, st.JobsMode, st.LowPriority, st.LowPrioritySleep)
+	if err := s.btcCpuMiner.Start(); err != nil {
+		srvrLog.Warnf("BTC lucky miner start failed: %v", err)
+		return
+	}
+	st = s.btcCpuMiner.Status()
+	srvrLog.Infof("BTC lucky miner runtime: start succeeded running=%v hashrate=%.2f H/s btc_height=%d job_id=%s",
+		st.Running, st.HashesPerSecond, st.BTCHeight, st.JobID)
+}
+
 func (s *server) getTipFromSyncPeer() int {
 	peerId := s.syncManager.SyncPeerID()
 	peer := s.GetPeerById(peerId)
@@ -3169,9 +3235,11 @@ func (s *server) Stop() error {
 	// after the delayed startup tasks and network callbacks have drained.
 	close(s.quit)
 
+	s.btcMinerMu.Lock()
 	if s.btcCpuMiner != nil {
 		s.btcCpuMiner.Stop()
 	}
+	s.btcMinerMu.Unlock()
 
 	s.assetIndexer.Stop()
 
@@ -3823,7 +3891,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 	dkvsCfg := nodeDKVSConfig(db, resolveIndexerBaseURL())
 	assetIndexer, err := indexerEntry.NewIndexerMgrWithDKVS(assetIndexerRPCDataPath, "",
 		assetIndexerRPCPort, cfg.RPCUser, cfg.RPCPass, !cfg.DisableTLS, chainParams,
-		interrupt, dkvsCfg)
+		interrupt, dkvsCfg, cfg.IndexerSelfCheckHeight)
 	if err != nil {
 		return nil, err
 	}

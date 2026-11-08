@@ -3,6 +3,7 @@ package dkvs
 import (
 	"bytes"
 	"errors"
+	"fmt"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
@@ -44,6 +45,9 @@ const (
 	ErrorCodeWriteConflict             ErrorCode = "DKVS_WRITE_CONFLICT"
 	ErrorCodeStaleGeneration           ErrorCode = "DKVS_STALE_GENERATION"
 	ErrorCodeStaleEndpoint             ErrorCode = "DKVS_STALE_ENDPOINT"
+	ErrorCodeInvalidBlockHeight        ErrorCode = "DKVS_INVALID_BLOCK_HEIGHT"
+	ErrorCodeHeightTooLow              ErrorCode = "DKVS_HEIGHT_TOO_LOW"
+	ErrorCodeStorageUnavailable        ErrorCode = "DKVS_STORAGE_UNAVAILABLE"
 	ErrorCodeEndpointMismatch          ErrorCode = "DKVS_ENDPOINT_MISMATCH"
 	ErrorCodeResetRequired             ErrorCode = "DKVS_RESET_REQUIRED"
 	ErrorCodePermissionDenied          ErrorCode = "DKVS_PERMISSION_DENIED"
@@ -59,6 +63,7 @@ const (
 
 var (
 	ErrInvalidRecord             = errors.New("invalid dkvs record")
+	ErrInvalidBlockHeight        = fmt.Errorf("%w: issue height exceeds node tip", ErrInvalidRecord)
 	ErrInvalidKey                = errors.New("invalid dkvs key")
 	ErrInvalidNamespace          = errors.New("invalid dkvs namespace")
 	ErrInvalidSignature          = errors.New("invalid dkvs signature")
@@ -78,6 +83,8 @@ var (
 	ErrWriteConflict             = errors.New("dkvs write conflict")
 	ErrStaleGeneration           = errors.New("dkvs stale generation")
 	ErrStaleEndpoint             = errors.New("dkvs stale endpoint")
+	ErrHeightTooLow              = errors.New("dkvs issue height too low")
+	ErrStorageUnavailable        = errors.New("dkvs storage unavailable")
 	ErrEndpointMismatch          = errors.New("dkvs endpoint mismatch")
 	ErrResetRequired             = errors.New("dkvs subscription reset required")
 	ErrInvalidSequence           = errors.New("dkvs invalid sequence")
@@ -96,12 +103,18 @@ func ErrorCodeOf(err error) ErrorCode {
 	switch {
 	case err == nil:
 		return ""
+	case errors.Is(err, ErrStorageUnavailable):
+		return ErrorCodeStorageUnavailable
 	case errors.Is(err, ErrEndpointMismatch):
 		return ErrorCodeEndpointMismatch
 	case errors.Is(err, ErrResetRequired):
 		return ErrorCodeResetRequired
 	case errors.Is(err, ErrStaleEndpoint):
 		return ErrorCodeStaleEndpoint
+	case errors.Is(err, ErrInvalidBlockHeight):
+		return ErrorCodeInvalidBlockHeight
+	case errors.Is(err, ErrHeightTooLow):
+		return ErrorCodeHeightTooLow
 	case errors.Is(err, ErrStaleGeneration), errors.Is(err, ErrPathGenerationGap):
 		return ErrorCodeStaleGeneration
 	case errors.Is(err, ErrInvalidSequence):

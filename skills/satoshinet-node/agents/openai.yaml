@@ -1,0 +1,4 @@
+interface:
+  display_name: "SatoshiNet Node"
+  short_description: "Deploy BTC, PoS, and private-channel service capabilities"
+  default_prompt: "Use $satoshinet-node to deploy or build a target: ordinary with BTC lucky mining, miner adding staking and SatoshiNet PoS, or core adding private-channel and channel-contract services."

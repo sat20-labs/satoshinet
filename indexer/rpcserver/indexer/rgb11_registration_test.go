@@ -30,8 +30,8 @@ func TestRGB11TechnicalRegistrationRejectsUnsignedOrWrongKey(t *testing.T) {
 	for _, record := range []*swire.DKVSRecord{
 		nil,
 		{Key: "/contract/rgb11/short"},
-		{Key: "/contract/rgb11/" + strings.Repeat("a", 64), Seq: 1, Value: []byte{2, 0}},
-		{Key: "/contract/rgb11/" + strings.Repeat("a", 64), Seq: 1, Value: []byte{1, 0}, PubKey: make([]byte, 33)},
+		{Key: "/contract/rgb11/" + strings.Repeat("a", 64), Seq: 1, Value: []byte{rgb11TechnicalValueVersion, 0}},
+		{Key: "/contract/rgb11/" + strings.Repeat("a", 64), Seq: 1, Value: []byte{rgb11TechnicalValueVersion + 1, 0}, PubKey: make([]byte, 33)},
 	} {
 		if _, err := validateRGB11TechnicalRecord(record); err == nil {
 			t.Fatalf("accepted malformed technical record: %+v", record)

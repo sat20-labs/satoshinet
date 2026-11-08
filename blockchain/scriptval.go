@@ -235,9 +235,6 @@ func newTxValidator(utxoView *UtxoViewpoint, flags txscript.ScriptFlags,
 	sigCache *txscript.SigCache, hashCache *txscript.HashCache,
 	contractPrefix string) *txValidator {
 
-	if contractPrefix == "" {
-		contractPrefix = contractcommon.TestnetContractPrefix
-	}
 	return &txValidator{
 		validateChan:   make(chan *txValidateItem),
 		quitChan:       make(chan struct{}),
@@ -251,8 +248,18 @@ func newTxValidator(utxoView *UtxoViewpoint, flags txscript.ScriptFlags,
 }
 
 func isContractPkScriptForPrefix(pkScript []byte, prefix string) bool {
+	if prefix == "" {
+		return false
+	}
 	_, ok, _ := contractcommon.ParseContractPkScript(pkScript, prefix)
 	return ok
+}
+
+func contractSpendPrefix(params *chaincfg.Params, height int32) string {
+	if !params.ContractsActive(height) {
+		return ""
+	}
+	return contractValidationPrefixForParams(params)
 }
 
 // ValidateTransactionScripts validates the scripts for the passed transaction
@@ -260,6 +267,20 @@ func isContractPkScriptForPrefix(pkScript []byte, prefix string) bool {
 func ValidateTransactionScripts(tx *btcutil.Tx, utxoView *UtxoViewpoint,
 	flags txscript.ScriptFlags, sigCache *txscript.SigCache,
 	hashCache *txscript.HashCache) error {
+
+	return validateTxScripts(tx, utxoView, flags, sigCache, hashCache, contractcommon.TestnetContractPrefix)
+}
+
+// ValidateTxScriptsAtHeight uses the contract spend rules for the candidate block.
+func ValidateTxScriptsAtHeight(tx *btcutil.Tx, utxoView *UtxoViewpoint,
+	flags txscript.ScriptFlags, sigCache *txscript.SigCache, hashCache *txscript.HashCache,
+	params *chaincfg.Params, height int32) error {
+
+	return validateTxScripts(tx, utxoView, flags, sigCache, hashCache, contractSpendPrefix(params, height))
+}
+
+func validateTxScripts(tx *btcutil.Tx, utxoView *UtxoViewpoint, flags txscript.ScriptFlags,
+	sigCache *txscript.SigCache, hashCache *txscript.HashCache, prefix string) error {
 
 	// First determine if segwit is active according to the scriptFlags. If
 	// it isn't then we don't need to interact with the HashCache.
@@ -303,7 +324,7 @@ func ValidateTransactionScripts(tx *btcutil.Tx, utxoView *UtxoViewpoint,
 	}
 
 	// Validate all of the inputs.
-	validator := newTxValidator(utxoView, flags, sigCache, hashCache, "")
+	validator := newTxValidator(utxoView, flags, sigCache, hashCache, prefix)
 	return validator.Validate(txValItems)
 }
 
@@ -372,7 +393,7 @@ func checkBlockScripts(block *btcutil.Block, utxoView *UtxoViewpoint,
 
 	// Validate all of the inputs.
 	validator := newTxValidator(utxoView, scriptFlags, sigCache, hashCache,
-		contractValidationPrefixForParams(params))
+		contractSpendPrefix(params, block.Height()))
 	start := time.Now()
 	if err := validator.Validate(txValItems); err != nil {
 		return err
