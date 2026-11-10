@@ -24,7 +24,7 @@ const (
 	AutopayCloseReservedOutputs    = 2
 	AutopayMaxCloseDelegateOutputs = AutopayMaxCloseOutputs - AutopayCloseReservedOutputs
 	AutopayMaxDelegates            = 10000
-	AutopayDefaultBlobKeyLimit     = uint32(1)
+	AutopayDefaultBlobKeyLimit     = uint32(10)
 	AutopayMaxBlobKeyLimit         = uint32(1024)
 )
 

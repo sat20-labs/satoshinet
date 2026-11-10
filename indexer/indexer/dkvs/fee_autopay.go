@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/sat20-labs/satoshinet/chaincfg"
+	templatecontract "github.com/sat20-labs/satoshinet/contract/template"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -388,7 +389,7 @@ func (v AutopayFeeVerifier) maxRecordsForState(state *AutopayContractState, paye
 	}
 	if IsBlobKey(parsed) {
 		if delegate.BlobKeyLimit == 0 {
-			return 1, nil
+			return uint64(templatecontract.AutopayDefaultBlobKeyLimit), nil
 		}
 		return uint64(delegate.BlobKeyLimit), nil
 	}

@@ -1,6 +1,9 @@
 package dkvs
 
-import "github.com/sat20-labs/satoshinet/wire"
+import (
+	templatecontract "github.com/sat20-labs/satoshinet/contract/template"
+	"github.com/sat20-labs/satoshinet/wire"
+)
 
 const (
 	// DKVS TTL is measured in SatoshiNet block heights. These defaults keep
@@ -22,7 +25,7 @@ const (
 	DefaultMailboxMaxShareTTL          = DefaultMailboxMaxShareTTLBlocks
 
 	DefaultBlobMaxValueSize              = wire.MaxDKVSBlobValueSize
-	DefaultBlobMaxFreeLocalKeysPerSigner = uint64(10)
+	DefaultBlobMaxFreeLocalKeysPerSigner = uint64(templatecontract.AutopayDefaultBlobKeyLimit)
 
 	DefaultTmpMaxTTL  = DefaultTmpMaxTTLBlocks
 	DefaultTmpMaxSize = MaxRecordValueSize

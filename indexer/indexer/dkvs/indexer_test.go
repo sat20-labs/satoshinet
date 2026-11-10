@@ -1229,7 +1229,9 @@ func TestRejectsUnknownFlagsAndFutureIssueHeight(t *testing.T) {
 	future := signedPersonalRecordWithKey(t, priv, 1, "value", 0)
 	future.IssueHeight = 2
 	signRecord(t, priv, future)
-	if _, err := idx.PutLocal(future); err != ErrInvalidRecord { t.Fatalf("future issue height err=%v", err) }
+	if _, err := idx.PutLocal(future); !errors.Is(err, ErrInvalidBlockHeight) {
+		t.Fatalf("future issue height err=%v", err)
+	}
 }
 
 func TestPruneExpiredRecords(t *testing.T) {

@@ -3167,6 +3167,7 @@ func (s *server) startBTCLuckyMinerWhenSynced() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	srvrLog.Infof("BTC lucky miner runtime: waiting for SatoshiNet chain and indexer sync")
+	var providerError string
 	for {
 		select {
 		case <-s.quit:
@@ -3174,7 +3175,18 @@ func (s *server) startBTCLuckyMinerWhenSynced() {
 		default:
 		}
 		if s.btcLuckyMiningReady() {
-			break
+			provider, err := anchortx.GetIndexerPubkey(cfg.MiningPubKey)
+			if err == nil {
+				if err := s.checkLuckyReward(provider); err != nil {
+					srvrLog.Errorf("BTC lucky miner disabled: %v", err)
+					return
+				}
+				break
+			}
+			if err.Error() != providerError {
+				srvrLog.Warnf("BTC lucky miner waiting for L1 indexer identity: %v", err)
+				providerError = err.Error()
+			}
 		}
 		select {
 		case <-s.quit:
@@ -3199,8 +3211,8 @@ func (s *server) startBTCLuckyMinerWhenSynced() {
 		return
 	}
 	st = s.btcCpuMiner.Status()
-	srvrLog.Infof("BTC lucky miner runtime: start succeeded running=%v hashrate=%.2f H/s btc_height=%d job_id=%s",
-		st.Running, st.HashesPerSecond, st.BTCHeight, st.JobID)
+	srvrLog.Infof("BTC lucky miner runtime: start succeeded running=%v hashrate=%.2f H/s btc_height=%d template_id=%s",
+		st.Running, st.HashesPerSecond, st.BTCHeight, st.TemplateID)
 }
 
 func (s *server) getTipFromSyncPeer() int {
@@ -4258,17 +4270,8 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 			indexerBaseURL := resolveBTCLuckyIndexerBaseURL()
 			srvrLog.Infof("BTC lucky miner runtime: initializing enabled=%v backend=%s network=%s indexer=%s reward=%s miner_id=%s jobs_mode=%s low_priority=%v sleep=%s",
 				minerCfg.Enabled, minerCfg.Backend, minerCfg.Network, indexerBaseURL, minerCfg.RewardAddr, minerCfg.MinerID, minerCfg.Jobs, minerCfg.LowPriority, minerCfg.LowPrioritySleep)
-			backend := btclucky.NewHTTPTemplateBackend(indexerBaseURL, 10*time.Second)
-			if backend != nil {
-				miner, err := btclucky.NewMiner(minerCfg, backend)
-				if err != nil {
-					srvrLog.Warnf("BTC lucky miner disabled: %v", err)
-				} else {
-					st := miner.Status()
-					srvrLog.Infof("BTC lucky miner runtime: initialized backend=%s network=%s reward=%s miner_id=%s jobs=%d jobs_mode=%s low_priority=%v sleep=%s",
-						st.Backend, minerCfg.Network, st.RewardAddress, st.MinerID, st.Jobs, st.JobsMode, st.LowPriority, st.LowPrioritySleep)
-					s.btcCpuMiner = miner
-				}
+			if err := s.initLuckyMiner(minerCfg, indexerBaseURL); err != nil {
+				srvrLog.Warnf("BTC lucky miner disabled: %v", err)
 			}
 		}
 	}
@@ -4488,6 +4491,45 @@ func resolveIndexerBaseURL() string {
 	return fmt.Sprintf("%s://%s/%s", scheme, host, proxy)
 }
 
+func (s *server) initLuckyMiner(minerCfg btclucky.BTCLuckyMinerConfig, url string) error {
+	backend := btclucky.NewHTTPTemplateBackend(url, 10*time.Second)
+	miner, err := btclucky.NewMiner(minerCfg, backend)
+	if err != nil {
+		return err
+	}
+	s.btcCpuMiner = miner
+	st := miner.Status()
+	srvrLog.Infof("BTC lucky miner runtime: initialized backend=%s reward=%s jobs=%d jobs_mode=%s low_priority=%v", st.Backend, st.RewardAddress, st.Jobs, st.JobsMode, st.LowPriority)
+	return nil
+}
+
+func (s *server) checkLuckyReward(providerHex string) error {
+	miner, err := hex.DecodeString(cfg.MiningPubKey)
+	if err != nil {
+		return err
+	}
+	provider, err := hex.DecodeString(providerHex)
+	if err != nil {
+		return err
+	}
+	bootstrap, err := hex.DecodeString(common.GetBootstrapPubKey())
+	if err != nil {
+		return err
+	}
+	signer, err := btclucky.RewardSigner(miner, provider, bootstrap, s.assetIndexer.IsCoreNode(cfg.MiningPubKey))
+	if err != nil {
+		return err
+	}
+	addr, err := getP2WSHAddress(miner, signer, s.chainParams)
+	if err != nil {
+		return err
+	}
+	if s.btcCpuMiner.Status().RewardAddress != addr.EncodeAddress() {
+		return fmt.Errorf("BTC lucky reward address does not match the service signer")
+	}
+	return nil
+}
+
 func resolveBTCLuckyRewardAddress(params *chaincfg.Params) (string, error) {
 	if len(cfg.miningAddrs) > 0 {
 		return cfg.miningAddrs[0].EncodeAddress(), nil
@@ -4499,18 +4541,19 @@ func resolveBTCLuckyRewardAddress(params *chaincfg.Params) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid miningpubkey: %w", err)
 	}
-	if cfg.ServerPubKey != "" {
-		serverPubKey, err := hex.DecodeString(cfg.ServerPubKey)
-		if err != nil {
-			return "", fmt.Errorf("invalid serverpubkey: %w", err)
-		}
-		addr, err := getP2WSHAddress(miningPubKey, serverPubKey, params)
-		if err != nil {
-			return "", err
-		}
-		return addr.EncodeAddress(), nil
+	key := cfg.ServerPubKey
+	if key == "" {
+		key = common.GetBootstrapPubKey()
 	}
-	return "", errors.New("btc lucky mining requires miningaddr or serverpubkey to resolve a channel reward address")
+	signer, err := hex.DecodeString(key)
+	if err != nil {
+		return "", fmt.Errorf("invalid BTC lucky signer: %w", err)
+	}
+	addr, err := getP2WSHAddress(miningPubKey, signer, params)
+	if err != nil {
+		return "", err
+	}
+	return addr.EncodeAddress(), nil
 }
 
 func configuredAgentRuntimeConfig(params *chaincfg.Params) (contractnode.AgentRuntimeConfig, error) {

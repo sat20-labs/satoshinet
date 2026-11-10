@@ -25,7 +25,6 @@ import (
 
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
-	"github.com/sat20-labs/indexer/share/btclucky"
 	"github.com/sat20-labs/satoshinet/anchortx"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
@@ -39,7 +38,7 @@ import (
 )
 
 // These opt-in gates use real node processes and newly generated regtest data.
-// The HTTP backend never supplies a Bitcoin job, so no BTC hash worker or
+// The HTTP backend never supplies a Bitcoin template, so no BTC hash worker or
 // submission can be started. They do not use an existing node or database.
 type syncMiningGateFixture struct {
 	executable      string
@@ -54,7 +53,10 @@ func newSyncMiningGateFixture(t *testing.T, blocks int) *syncMiningGateFixture {
 	previous := indexercommon.ENABLE_TESTING
 	indexercommon.ENABLE_TESTING = true
 	t.Cleanup(func() { indexercommon.ENABLE_TESTING = previous })
-	f := &syncMiningGateFixture{bootstrap: keyFromMnemonic(t, bootstrapMnemonic, 0), core: keyFromMnemonic(t, coreMnemonic, 0)}
+	f := &syncMiningGateFixture{
+		bootstrap: keyFromMnemonic(t, bootstrapMnemonic, 0),
+		core:      keyFromMnemonic(t, coreMnemonic, 0),
+	}
 	var err error
 	f.witness, f.locked, err = anchortx.GetP2WSHscript(f.bootstrap.PubKey().SerializeCompressed(), f.core.PubKey().SerializeCompressed())
 	require.NoError(t, err)
@@ -80,17 +82,18 @@ func newSyncMiningGateFixture(t *testing.T, blocks int) *syncMiningGateFixture {
 }
 
 type syncMiningGateL1 struct {
-	server              *httptest.Server
-	jobs, tips, submits atomic.Int64
-	firstJobReady       atomic.Bool
-	readyMu             sync.Mutex
-	readyAtJob          func() bool
+	server             *httptest.Server
+	templates, submits atomic.Int64
+	firstTemplateReady atomic.Bool
+	readyMu            sync.Mutex
+	readyAtTemplate    func() bool
 }
 
 func (f *syncMiningGateFixture) l1(t *testing.T) *syncMiningGateL1 {
 	t.Helper()
 	l := &syncMiningGateL1{}
-	pub := hex.EncodeToString(f.bootstrap.PubKey().SerializeCompressed())
+	indexerPub := hex.EncodeToString(f.core.PubKey().SerializeCompressed())
+	parentPub := hex.EncodeToString(f.bootstrap.PubKey().SerializeCompressed())
 	l.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		write := func(value any) {
@@ -100,32 +103,28 @@ func (f *syncMiningGateFixture) l1(t *testing.T) *syncMiningGateL1 {
 		}
 		switch r.URL.Path {
 		case "/testnet/v3/indexer/pubkey":
-			write(indexerwire.IndexerPubKeyResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}, PubKey: pub})
+			write(indexerwire.IndexerPubKeyResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}, PubKey: indexerPub})
 		case "/testnet/kv/register":
-			write(indexerwire.RegisterPubKeyResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}, PubKey: pub})
-		case "/testnet/btc/lucky/job":
-			jobNumber := l.jobs.Add(1)
+			write(indexerwire.RegisterPubKeyResp{BaseResp: indexerwire.BaseResp{Code: 0, Msg: "ok"}, PubKey: parentPub})
+		case "/testnet/btc/lucky/template":
+			templateNumber := l.templates.Add(1)
 			l.readyMu.Lock()
-			ready := l.readyAtJob
+			ready := l.readyAtTemplate
 			l.readyMu.Unlock()
-			if jobNumber == 1 {
+			if templateNumber == 1 {
 				if ready == nil || !ready() {
-					t.Error("BTC requested a job before the real chain and index reached the advertised target")
+					t.Error("BTC requested a template before the real chain and index reached the advertised target")
 				} else {
-					l.firstJobReady.Store(true)
+					l.firstTemplateReady.Store(true)
 				}
 			}
-			var request btclucky.JobRequest
-			if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&request) != nil || request.Network != "regtest" || request.Jobs != 1 || request.RewardAddress == "" {
-				t.Errorf("invalid real BTC job request: method=%s request=%+v", r.Method, request)
+			if r.Method != http.MethodGet || r.ContentLength != 0 {
+				t.Errorf("invalid Bitcoin template request: method=%s content_length=%d", r.Method, r.ContentLength)
 			}
-			write(map[string]any{"code": -1, "msg": "gate has no Bitcoin jobs", "data": nil})
-		case "/testnet/v3/bitcoin/tip":
-			l.tips.Add(1)
-			write(map[string]any{"code": 0, "msg": "ok", "data": map[string]any{"height": 100, "block_hash": strings.Repeat("1", 64)}})
-		case "/testnet/btc/lucky/submit":
+			write(map[string]any{"code": -1, "msg": "gate has no Bitcoin template", "data": nil})
+		case "/testnet/v3/bitcoin/block/submit":
 			l.submits.Add(1)
-			t.Error("gate must never submit a Bitcoin solution")
+			t.Error("gate must never submit a Bitcoin block")
 			write(map[string]any{"code": -1, "msg": "submission forbidden"})
 		default:
 			const prefix = "/testnet/v3/utxo/info/"
@@ -323,9 +322,9 @@ func syncMiningGateLog(t *testing.T, node *rpctest.Harness) string {
 	return string(data)
 }
 
-// Observe the real endpoints at the first job request, not only afterwards.
+// Observe the real endpoints at the first template request, not only afterwards.
 // Timeouts keep a premature miner request from deadlocking a blocked node.
-func syncMiningGateReadyAtJob(node *rpctest.Harness, height int32, hash *chainhash.Hash) bool {
+func syncMiningGateReadyForTemplate(node *rpctest.Harness, height int32, hash *chainhash.Hash) bool {
 	client := &http.Client{Timeout: 2 * time.Second}
 	req, err := http.NewRequest(http.MethodPost, "http://"+node.RPCAddress(),
 		strings.NewReader(`{"jsonrpc":"1.0","id":1,"method":"getbestblock","params":[]}`))
@@ -502,14 +501,14 @@ func TestNetworkBTCLuckyMinerWaitsForSatoshiNetSync(t *testing.T) {
 			l := f.l1(t)
 			node := f.node(t, l, false, args...)
 			l.readyMu.Lock()
-			l.readyAtJob = func() bool { return syncMiningGateReadyAtJob(node, 3, hash) }
+			l.readyAtTemplate = func() bool { return syncMiningGateReadyForTemplate(node, 3, hash) }
 			l.readyMu.Unlock()
 			require.Eventually(t, func() bool {
 				log := syncMiningGateLog(t, node)
 				return strings.Contains(log, "BTC lucky miner runtime: initialized") && strings.Contains(log, "waiting for SatoshiNet chain and indexer sync")
 			}, 15*time.Second, 100*time.Millisecond)
 			noStart := func() bool {
-				return l.jobs.Load() == 0 && l.tips.Load() == 0 && !strings.Contains(syncMiningGateLog(t, node), "BTC lucky miner runtime: starting")
+				return l.templates.Load() == 0 && !strings.Contains(syncMiningGateLog(t, node), "BTC lucky miner runtime: starting")
 			}
 			require.Never(t, func() bool { return !noStart() }, 7*time.Second, 100*time.Millisecond, "no peer must not imply synchronized")
 			peers, err := node.Client.GetPeerInfo()
@@ -535,7 +534,7 @@ func TestNetworkBTCLuckyMinerWaitsForSatoshiNetSync(t *testing.T) {
 				unblock()
 				syncMiningGateTip(t, node, 3, hash)
 				require.Eventually(t, func() bool {
-					return l.firstJobReady.Load() && strings.Contains(syncMiningGateLog(t, node), "start succeeded running=true")
+					return l.firstTemplateReady.Load() && strings.Contains(syncMiningGateLog(t, node), "start succeeded running=true")
 				}, 20*time.Second, 100*time.Millisecond)
 				log := syncMiningGateLog(t, node)
 				require.Equal(t, 1, strings.Count(log, "BTC lucky miner runtime: starting"))
@@ -549,13 +548,13 @@ func TestNetworkBTCLuckyMinerWaitsForSatoshiNetSync(t *testing.T) {
 			start := time.Now()
 			require.NoError(t, node.StopNode(), "owned node shutdown must cancel waiting or active miner")
 			require.Less(t, time.Since(start), 10*time.Second, "normal stop must not reach the harness kill fallback")
-			jobs, tips := l.jobs.Load(), l.tips.Load()
-			require.Never(t, func() bool { return l.jobs.Load() != jobs || l.tips.Load() != tips }, 1200*time.Millisecond, 100*time.Millisecond)
+			templates := l.templates.Load()
+			require.Never(t, func() bool { return l.templates.Load() != templates }, 1200*time.Millisecond, 100*time.Millisecond)
 			require.Zero(t, l.submits.Load())
 			if scenario == "stop-while-waiting" {
 				require.True(t, noStart())
 			}
-			t.Logf("miner gate scenario=%s owned_pid=%d stopped=true jobs=%d tips=%d submissions=0 raw_stdout=%s", scenario, pid, jobs, tips, node.LogFile())
+			t.Logf("miner gate scenario=%s owned_pid=%d stopped=true templates=%d submissions=0 raw_stdout=%s", scenario, pid, templates, node.LogFile())
 		})
 	}
 }

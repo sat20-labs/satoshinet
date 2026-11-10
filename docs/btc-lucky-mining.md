@@ -1,60 +1,59 @@
 # BTC Lucky Mining
 
-BTC Lucky Mining is an optional Bitcoin-native CPU mining module. SatoshiNet
-nodes and wallets both fetch compact BTC mining jobs from the L1 indexer, mine
-locally, and submit solutions back to the L1 indexer.
+SatoshiNet 节点和 PWA 钱包使用同一个 Go miner。节点原生运行，PWA 通过钱包
+SDK 的 WASM 入口运行。节点的 `btcluckymining` 独立控制 Bitcoin CPU 挖矿。
+普通矿工的 coinbase 支付给自己与 L1 服务节点的 2-of-2 地址。核心节点使用
+自己的 L1 indexer，以 bootstrap 为共签方。节点在聪网链和索引同步后校验身份。
+对普通矿工提供模板的 L1 indexer 需将配置顶层的 `pubkey` 设为实际服务核心节点的公钥。
+留空时 `/v3/indexer/pubkey` 返回 bootstrap 公钥，普通矿工会在启动前报告身份错误。
 
-## Scope
+## 模板、挖矿与广播
 
-- BTC Lucky Mining is controlled by `btcluckymining`, not by SatoshiNet PoS
-  mining or `generate`.
-- An ordinary wallet uses the channel address with its L1 indexer provider.
-  A core uses its own indexer for mining data and the channel address with the
-  bootstrap for co-signing. These are separate roles.
-- The Bitcoin coinbase input script only includes the `satoshinet` tag and the
-  extra nonce. Winner identity is determined by the coinbase reward address.
-- Bitcoin block, transaction, header, getblocktemplate, and submitblock handling
-  use `github.com/btcsuite/btcd/...` types, not SatoshiNet's extended wire
-  types.
-- The L1 indexer rebuilds the block from the cached job and submitted solution,
-  verifies the hash target and reward address, then calls Bitcoin Core
-  `submitblock`.
-- Found block metadata is recorded in the L1 indexer's local DB under the
-  `btclucky:found:` prefix.
+请求时，在包含 proxy 前缀的 L1 indexer 地址后拼接以下路径。
 
-## Flow
+1. 矿工从 L1 indexer 获取 `GET /btc/lucky/template`。同一模板的
+   响应对所有矿工相同，包含父块、版本、时间、bits、target、coinbase 金额、
+   witness commitment、按顺序排列的完整交易和 coinbase 的 Merkle 分支。
+   矿工轮询时发送上次的 ETag。模板相同，indexer 返回 HTTP 304。
+2. 矿工从随机的 64 位 extraNonce 起点给本地 worker 分配不同序列。
+   每个 worker 用高度、`satoshinet` 标记、extraNonce 和奖励地址构造
+   coinbase，沿 Merkle 分支更新根，再遍历区块头 nonce。获取下一份模板时，
+   已下载的模板仍可计算。父块变化后，旧模板可能失效。
+3. 命中后，矿工把包含 witness 的完整 Bitcoin 区块通过
+   `POST /v3/bitcoin/block/submit` 提交。请求采用 BIP22 的 JSON-RPC 2.0
+   `submitblock`，`params` 的第一个参数为完整区块的十六进制字符串。
+   接受时 `result` 为 `null`，拒绝时为原因字符串，RPC 错误放在 `error`。
+   indexer 无需查询 job 或模板，
+   直接调用 Bitcoin Core 的 `submitblock`。广播暂时不可达时，运行中的矿工
+   把同一完整块提交给备用 indexer。区块被明确拒绝时返回拒绝原因。
+   网关 503、响应截断、回执无法匹配、节点暂缺父块时，均尝试备用端。所有广播端暂不可达时保留完整块并重试。
+   收到接受或 duplicate 回执后，向同一个 indexer 核对 coinbase 高度的主链块哈希；侧链块不计入矿工的成功记录。
+   模板下载和完整块上传的默认总时限都是两分钟。停矿会取消正在传输的请求并释放内存中的候选块。
+4. 备用 indexer 可独立接收完整区块。原 indexer 恢复并同步后，
+   钱包通过 coinbase UTXO 发现奖励。`GET /btc/lucky/info` 的
+   近期中奖记录只包含经此 indexer 提交并接受的 Lucky 区块。
 
-```text
-Bitcoin Core / bitcoind
-        ^
-        | getblocktemplate / submitblock
-        |
-L1 indexer BTC lucky service
-        ^
-        | HTTP compact job / solution
-        |
-SatoshiNet node or wallet local miner
-```
-
-## SatoshiNet Configuration
+## 节点配置
 
 ```ini
 btcluckymining=0
 btcluckyminingjobs=1
 btcluckymininglowpriority=1
 btcluckymininglowprioritysleep=1ms
-```
 
-SatoshiNet nodes use the configured L1 indexer endpoint:
-
-```ini
 indexerscheme=http
 indexerhost=127.0.0.1:8009
 indexerproxy=testnet
 ```
 
-The template service runs in the L1 indexer. Mining start/stop on a node is
-controlled by its configuration.
+节点和 PWA 均通过 indexer 的 HTTP 接口提交完整区块。节点沿用上面的
+indexer 配置，`https://apiprd.ordx.market` 和 `https://apiprd.sat20.org`
+互为备用，保持同一网络路径。PWA 有 `SlaveIndexerL1` 时使用其中配置的
+备用 indexer。奖励公钥由提供模板的主 indexer 确定，启动前校验对应 STP 共签方已配置。PWA 固定以主钱包的第一个账户（账户索引 0）挖矿、接收和提取奖励。切换到其他钱包或子账户后，同一矿工继续运行。私网 PWA 在现有 `SlaveIndexerL1` 中指定内部备用服务。
+
+```json
+{"jsonrpc":"2.0","id":"block-hash","method":"submitblock","params":["完整区块hex"]}
+```
 
 ## 奖励提升与共签提取
 
@@ -71,7 +70,9 @@ L2 anchor 使用 `CONTENT_TYPE_BTC_LUCKY` 标识并复核其 L1 来源。无论�
 同样不能直接纳入通道或通过普通 L2 共签花费。相关汇总按请求过滤这些 UTXO，
 不建立独立负债或公共额度模型，也不新增持久化余额库。
 
-奖励发现复用 L1 地址 UTXO 与已有通道账本，不依赖最近中奖记录窗口。
+后台根据当前身份和 L1 已索引高度的区块哈希检查地址 UTXO，成功扫描后在下一次链尖或身份变化时再扫描。
+查询或广播暂时失败时，下一轮可重试；钱包重启后从当前 UTXO 重新发现奖励。奖励列表另外读取已有通道账本以展示历史。
+奖励校验要求交易报告的所属块哈希与同高度的 L1 主链哈希一致。
 原始 coinbase 保留在其原始 outpoint，不通过 splicing 找零替换；已映射奖励
 可通过既有通道账本继续发现。原始 L1 输出已花费或来源无法验证时，奖励条目
 显示错误并拒绝提取。
