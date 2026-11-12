@@ -154,10 +154,17 @@ func TestAscendQueryCannotClearCachedMinerStake(t *testing.T) {
 	require.NotNil(t, before)
 	require.Equal(t, name.String(), before.AssetName)
 	require.Equal(t, amount.String(), before.AssetAmt)
-	response := rpc.GetAscendData(funding)
+	response, err := rpc.GetAscendData(funding)
+	require.NoError(t, err)
 	require.NotNil(t, response)
 	// The existing /v3/ascend handler clears Assets for its response.
 	response.Assets = nil
 	require.Equal(t, before, rpc.GetMinerInfo(child))
-	require.Len(t, rpc.GetAscendData(funding).Assets, 1)
+	response, err = rpc.GetAscendData(funding)
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.Len(t, response.Assets, 1)
+	missing, err := rpc.GetAscendData(strings.Repeat("56", 32) + ":0")
+	require.ErrorIs(t, err, idxcommon.ErrKeyNotFound)
+	require.Nil(t, missing)
 }

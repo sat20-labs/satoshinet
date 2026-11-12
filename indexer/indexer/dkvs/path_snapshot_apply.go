@@ -10,6 +10,9 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
+// ErrLocalBinding means a mirror omitted this Core's signed binding authority.
+var ErrLocalBinding = errors.New("mirror snapshot omits the serving CoreNode's binding")
+
 // Originless installation only initializes empty state or verifies equality.
 // Authenticated P2P callers bind every page to one sync session/source and
 // provide the receiver-local baseline captured before downloading the snapshot.
@@ -99,6 +102,13 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 	// the visibility decision stable while the snapshot is installed.
 	replaceable := current[:0]
 	for _, record := range current {
+		if baseline != nil && incoming[record.Key] == nil && IsAccountMappingBindingKey(record.Key) {
+			// Absence at a mirror cannot revoke this Core's current authority.
+			_, _, binding, err := ValidateAccountMappingBindingRecord(record)
+			if err == nil && strings.EqualFold(binding.CoreNodeID, i.endpointID()) {
+				return 0, ErrLocalBinding
+			}
+		}
 		if incoming[record.Key] != nil || !i.isLocalOnlyRecord(record) {
 			replaceable = append(replaceable, record)
 		}

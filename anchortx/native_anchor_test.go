@@ -102,28 +102,24 @@ func signNativeAnchor(t *testing.T, tx *wire.MsgTx) {
 
 func TestNativeAnchorAdmissionAndHistoricalReplay(t *testing.T) {
 	tx, facts := nativeAnchor(t)
-	_, err := CheckAnchorTxValid(tx, true, false)
-	require.ErrorContains(t, err, "not active")
-	_, err = CheckAnchorTxValid(tx, true, false, false)
-	require.ErrorContains(t, err, "not active")
-	info, err := CheckAnchorTxValid(tx, true, false, true)
+	info, err := CheckAnchorTxValid(tx, true, false)
 	require.NoError(t, err)
 	require.Equal(t, tx.TxOut[0].Assets, info.TxAssets)
 	require.Zero(t, info.Value, "the BTC carrier remains on L1 for a native asset-only mapping")
 	_, err = CheckAnchorPkScript(tx.TxIn[0].SignatureScript, false, tx.TxOut, true)
 	require.ErrorContains(t, err, "complete native anchor proof")
 	facts.spent = true
-	_, err = CheckAnchorTxValid(tx, true, false, true)
+	_, err = CheckAnchorTxValid(tx, true, false)
 	require.ErrorContains(t, err, "currently unspent")
 	facts.outpointCalls = 0
-	_, err = CheckAnchorTxValid(tx, false, false, true)
+	_, err = CheckAnchorTxValid(tx, false, false)
 	require.NoError(t, err)
-	locked, err := GetLockedTxInfo(tx, false, false, true)
+	locked, err := GetLockedTxInfo(tx, false, false)
 	require.NoError(t, err)
 	require.Equal(t, info.Utxo, locked.Utxo)
 	require.Zero(t, facts.outpointCalls)
 	facts.archived = true
-	_, err = CheckAnchorTxValid(tx, false, false, true)
+	_, err = CheckAnchorTxValid(tx, false, false)
 	require.Error(t, err)
 }
 
@@ -149,7 +145,7 @@ func TestNativeAnchorProofAndInvoiceCannotBeSubstituted(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := tx.Copy()
 			test.mutate(mutated)
-			_, err := CheckAnchorTxValid(mutated, true, false, true)
+			_, err := CheckAnchorTxValid(mutated, true, false)
 			require.Error(t, err)
 		})
 	}
@@ -171,6 +167,6 @@ func TestNativeAnchorRejectsResignedPartialClaim(t *testing.T) {
 	tx.TxIn[0].SignatureScript, err = common.StandardAnchorScriptWithSig(info.Utxo, info.WitnessScript, info.Value, info.TxAssets, nil)
 	require.NoError(t, err)
 	signNativeAnchor(t, tx)
-	_, err = CheckAnchorTxValid(tx, true, false, true)
+	_, err = CheckAnchorTxValid(tx, true, false)
 	require.ErrorContains(t, err, "full validated source amount")
 }

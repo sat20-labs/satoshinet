@@ -1,5 +1,3 @@
-//go:build legacy_evm_e2e
-
 package main
 
 import (

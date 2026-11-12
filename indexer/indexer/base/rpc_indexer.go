@@ -30,6 +30,7 @@ type RpcIndexer struct {
 
 	// 接收前端api访问的实例，隔离内存访问
 	mutex              sync.RWMutex
+	holderCounts       sync.Map // asset name -> count for this RPC snapshot
 	addressIdMap       map[uint64]string
 	deletedUtxoMap     map[uint64]bool
 	bSearching         bool
@@ -327,27 +328,27 @@ func (b *RpcIndexer) GetBlockInfo(height int) (*common.BlockInfo, error) {
 }
 
 // only for RPC interface
-func (b *RpcIndexer) GetAscendData(fundingUtxo string) *common.AscendData {
+func (b *RpcIndexer) GetAscendData(fundingUtxo string) (*common.AscendData, error) {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
 
 	// Public callers may shape the response; keep the RPC index cache intact.
-	return cloneAscendData(b.getAscendData(fundingUtxo))
+	data, err := b.getAscendData(fundingUtxo)
+	if err != nil {
+		return nil, err
+	}
+	return cloneAscendData(data), nil
 }
 
 // only for RPC interface
-func (b *RpcIndexer) getAscendData(fundingUtxo string) *common.AscendData {
+func (b *RpcIndexer) getAscendData(fundingUtxo string) (*common.AscendData, error) {
 	info, ok := b.utxoIndex.AscendMap[fundingUtxo]
 	if ok {
-		return info
+		return info, nil
 	}
 
 	info, err := stp.GetAscendFromDB(b.db, fundingUtxo)
-	if err != nil {
-		//common.Log.Errorf("GetAscendFromDB %s failed, %v", fundingUtxo, err)
-		return nil
-	}
-	return info
+	return info, err
 }
 
 // only for RPC interface
@@ -607,7 +608,12 @@ func (b *RpcIndexer) GetMinerInfo(pubkey string) *common.MinerInfo {
 		}
 		ascendUtxo, ok := v.ChildMiners[pubkey]
 		if ok && ascendUtxo != nil {
-			data := b.getAscendData(ascendUtxo.AscendUtxo)
+			data, err := b.getAscendData(ascendUtxo.AscendUtxo)
+			if err != nil && !errors.Is(err, indexer.ErrKeyNotFound) {
+				b.mutex.RUnlock()
+				common.Log.Errorf("miner ascend data: %v", err)
+				return nil
+			}
 			if data != nil {
 				result := data.ToMinerInfo()
 				b.mutex.RUnlock()
@@ -689,6 +695,17 @@ func (b *RpcIndexer) GetTickerMap() map[string]*common.TickerInfo {
 		}
 	}
 	return tickInfoMap
+}
+
+// GetHolderCount shares the holder-list definition, skipping its response formatting and sort.
+func (b *RpcIndexer) GetHolderCount(name *common.TickerName) int {
+	key := name.String()
+	if count, ok := b.holderCounts.Load(key); ok {
+		return count.(int)
+	}
+	count := len(b.GetHoldersWithTick(name))
+	b.holderCounts.Store(key, count)
+	return count
 }
 
 func (b *RpcIndexer) GetHoldersWithTick(tickerName *common.TickerName) map[string]*indexer.Decimal {

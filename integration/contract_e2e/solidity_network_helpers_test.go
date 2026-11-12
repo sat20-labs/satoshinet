@@ -273,11 +273,9 @@ func sendTx(t *testing.T, node *rpctest.Harness, tx *wire.MsgTx) *chainhash.Hash
 
 func sendAndMineTx(t *testing.T, node *rpctest.Harness, nodes []*rpctest.Harness, tx *wire.MsgTx, minHeight int32) {
 	t.Helper()
-	txHash := sendTx(t, node, tx)
+	sendTx(t, node, tx)
 	generateOrWaitBlockAtLeast(t, node, nodes, minHeight)
-	verbose, err := node.Client.GetRawTransactionVerbose(txHash)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, verbose.Confirmations, uint64(1))
+	waitForPOSTx(t, node, nodes, tx)
 }
 
 func requireAssetSummaryAmount(t *testing.T, node *rpctest.Harness, address, assetName, amount string) {

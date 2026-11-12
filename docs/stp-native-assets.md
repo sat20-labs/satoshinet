@@ -6,18 +6,19 @@ derived from the RGB11 consignment validator. Indexer responses supply only
 Bitcoin raw transactions, confirmation status, canonical block headers and
 outspend facts through existing v3 endpoints.
 
-## Activation and compatibility
+## Admission and coordinated rollout
 
-`chaincfg.Params.NativeAssetHeight` is zero on every default network. A positive
-height explicitly enables native admission, independently of POS v2. Mempool,
-block admission and block indexing use the same height rule. Native invoices
-always bind their outputs, even before POS v2 activation. An anchor claiming
-RGB11 without a complete native proof is rejected. Existing anchors without
-native material retain their previous validation path.
+RGB11 proof presence selects the complete native validation path without a
+separate activation height. Mempool, block admission and block indexing all
+validate the proof, source allocation, signature and output binding. An anchor
+claiming RGB11 without a complete native proof is rejected. Existing anchors
+without native material retain their previous POS v2 validation rules.
 
-This activation controls new mappings. Ordinary transfers and descending
-transactions of assets already mapped are not gated by it. Asset-only RGB
-descending outputs may carry zero BTC; the BTC carrier remains on Bitcoin.
+Upgrade block producers, validators and indexers together before the first
+RGB11 anchor. PWA acceptance runs RGB11 operations after POS v2 activation;
+there is no additional RGB11 height setting. Native invoices always bind their
+outputs. Asset-only RGB descending outputs may carry zero BTC; the BTC carrier
+remains on Bitcoin.
 
 ## Proof transport and signing order
 

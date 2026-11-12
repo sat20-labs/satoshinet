@@ -1,6 +1,3 @@
-//go:build rpctest
-// +build rpctest
-
 package contract_e2e
 
 import (
@@ -86,7 +83,8 @@ func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), verbose.Confirmations)
 
-	blockHashes := generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 1)
+	generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 1)
+	waitForPOSTx(t, bootstrapNode, nodes, anchorTx)
 
 	verbose, err = bootstrapNode.Client.GetRawTransactionVerbose(txHash)
 	require.NoError(t, err)
@@ -97,7 +95,8 @@ func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
 	deployHash, err := bootstrapNode.Client.SendRawTransaction(deployTx, true)
 	require.NoError(t, err)
 	require.Equal(t, deployTx.TxHash(), *deployHash)
-	blockHashes = generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 2)
+	generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 2)
+	waitForPOSTx(t, bootstrapNode, nodes, deployTx)
 	deployVerboseAfterMine, err := bootstrapNode.Client.GetRawTransactionVerbose(deployHash)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), deployVerboseAfterMine.Confirmations)
@@ -110,7 +109,10 @@ func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
 	mempoolHashes, err := bootstrapNode.Client.GetRawMempool()
 	require.NoError(t, err)
 	require.NotEmpty(t, mempoolHashes)
-	blockHashes = generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 3)
+	for _, invokeTx := range invokeTxs {
+		waitForPOSTx(t, bootstrapNode, nodes, invokeTx)
+	}
+	blockHashes := generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 3)
 
 	bestHash, bestHeight, err := bootstrapNode.Client.GetBestBlock()
 	require.NoError(t, err)

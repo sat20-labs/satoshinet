@@ -158,7 +158,7 @@ func (b *IndexerMgr) GetTxOutputWithUtxo(utxo string) *common.TxOutput {
 	}
 }
 
-func (b *IndexerMgr) GetAscendData(fundingUtxo string) *common.AscendData {
+func (b *IndexerMgr) GetAscendData(fundingUtxo string) (*common.AscendData, error) {
 	return b.rpcService.GetAscendData(fundingUtxo)
 }
 
@@ -227,6 +227,10 @@ func (b *IndexerMgr) GetTickerMap(protocol string) map[string]*common.TickerInfo
 }
 
 // return: addressId -> asset amount
+func (b *IndexerMgr) GetHolderCount(name *common.TickerName) int {
+	return b.rpcService.GetHolderCount(name)
+}
+
 func (b *IndexerMgr) GetHoldersWithTick(tickerName *common.TickerName) map[string]*indexer.Decimal {
 	return b.rpcService.GetHoldersWithTick(tickerName)
 }

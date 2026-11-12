@@ -41,8 +41,7 @@ func (b *BaseIndexer) genAscendFromAnchorTx(tx *wire.MsgTx, height int32) (*comm
 		}
 		return b.genAscendFromAnchorPkScript(tx.TxIn[0].SignatureScript, tx.TxOut, b.chaincfgParam.POSV2Active(height))
 	}
-	ascend, err := anchortx.CheckAnchorTxValidWithCoreCheck(tx, false, b.chaincfgParam.POSV2Active(height),
-		b.chaincfgParam.NativeAssetsActive(height), b.isAnchorCoreNode)
+	ascend, err := anchortx.CheckAnchorTxValidWithCoreCheck(tx, false, b.chaincfgParam.POSV2Active(height), b.isAnchorCoreNode)
 	if err != nil {
 		return nil, err
 	}

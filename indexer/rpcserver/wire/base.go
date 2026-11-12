@@ -13,6 +13,9 @@ type BlockInfoData struct {
 	Data *common.BlockInfo `json:"info"`
 }
 
+// AscendNotFoundCode identifies an absent mapping, not a failed lookup.
+const AscendNotFoundCode = 404
+
 type AscendResp struct {
 	indexerwire.BaseResp
 	Data *common.AscendData `json:"data"`

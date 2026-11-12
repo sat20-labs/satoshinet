@@ -280,6 +280,8 @@ func TestValidAnchorWithMissingStakeAssetIndexesWithoutPanic(t *testing.T) {
 	info, err := reopened.GetUtxoInfo(anchor.TxID() + ":0")
 	require.NoError(t, err)
 	require.NotNil(t, info)
-	require.NotNil(t, NewRpcIndexer(reopened).GetAscendData(funding))
+	ascend, err := NewRpcIndexer(reopened).GetAscendData(funding)
+	require.NoError(t, err)
+	require.NotNil(t, ascend)
 	require.Equal(t, 1, reopened.stats.AscendCount)
 }

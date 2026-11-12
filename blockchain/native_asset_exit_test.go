@@ -15,9 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNativeAssetOnlyExitRemainsValidWithAdmissionDisabled(t *testing.T) {
+func TestNativeAssetOnlyExitRemainsValid(t *testing.T) {
 	params := chaincfg.TestNetParams
-	params.NativeAssetHeight = 0
 	channel, err := btcutil.NewAddressWitnessScriptHash(bytes.Repeat([]byte{7}, 32), &params)
 	require.NoError(t, err)
 	script, err := txscript.PayToAddrScript(channel)

@@ -206,10 +206,6 @@ type Params struct {
 	// Zero leaves the upgrade unscheduled. Set the same height on every node.
 	POSV2Height int32
 
-	// NativeAssetHeight schedules proof-backed native RGB11 mappings.
-	// Zero leaves admission disabled. Existing mapped assets may still exit.
-	NativeAssetHeight int32
-
 	// CoinbaseMaturity is the number of blocks required before newly mined
 	// coins (coinbase transactions) can be spent.
 	CoinbaseMaturity uint16

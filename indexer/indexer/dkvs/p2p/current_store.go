@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"errors"
 	"sort"
 
 	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -80,5 +81,15 @@ func (h Handler) applyCurrentPathSnapshot(snapshot *dkvs.PathSnapshot, action Sy
 		return dkvs.ErrInvalidSnapshot
 	}
 	_, err := h.Store.ApplyDKVSPathSnapshotFrom(snapshot, *action.Baseline)
+	if errors.Is(err, dkvs.ErrLocalBinding) {
+		// This binding owns a singleton path. Let the mirror learn its
+		// signed value and release the sync slot so notifications can drain.
+		record, readErr := h.Store.GetDKVSRecordForRelay(snapshot.Path)
+		if readErr != nil {
+			return readErr
+		}
+		h.send(NotifyForRecord(record))
+		return nil
+	}
 	return err
 }

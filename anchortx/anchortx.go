@@ -107,16 +107,15 @@ func Stop() {
 	}
 }
 
-func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool, nativeActive ...bool) (*AscendInfo, error) {
-	return CheckAnchorTxValidWithCoreCheck(tx, bCheckUtxoAssets, bindOutputs,
-		len(nativeActive) == 1 && nativeActive[0], IsCoreNode)
+func CheckAnchorTxValid(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool) (*AscendInfo, error) {
+	return CheckAnchorTxValidWithCoreCheck(tx, bCheckUtxoAssets, bindOutputs, IsCoreNode)
 }
 
 // CheckAnchorTxValidWithCoreCheck lets block indexing authenticate the complete
 // native witness using its already locked Core membership view.
-func CheckAnchorTxValidWithCoreCheck(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs, nativeActive bool,
+func CheckAnchorTxValidWithCoreCheck(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool,
 	isCoreNode func([]byte) bool) (*AscendInfo, error) {
-	lockedInfo, err := checkAnchorInput(tx, bCheckUtxoAssets, bindOutputs, nativeActive, isCoreNode)
+	lockedInfo, err := checkAnchorInput(tx, bCheckUtxoAssets, bindOutputs, isCoreNode)
 	if err != nil {
 		return nil, err
 	}
@@ -190,16 +189,15 @@ func checkAscendingTickerInfo(tx *wire.MsgTx, lockedInfo *AscendInfo) error {
 // The Anchor tx info is record in Anchor tx input script
 // return txscript.NewScriptBuilder().AddData(data).AddData(outputScript).
 // AddInt64(int64(amount)).AddInt64(int64(extraNonce)).Script()
-func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool, nativeActive ...bool) (*AnchorInfo, error) {
-	lockedTxInfo, err := checkAnchorInput(tx, bCheckUtxoAssets, bindOutputs,
-		len(nativeActive) == 1 && nativeActive[0], IsCoreNode)
+func GetLockedTxInfo(tx *wire.MsgTx, bCheckUtxoAssets, bindOutputs bool) (*AnchorInfo, error) {
+	lockedTxInfo, err := checkAnchorInput(tx, bCheckUtxoAssets, bindOutputs, IsCoreNode)
 	if err != nil {
 		return nil, err
 	}
 	return &lockedTxInfo.AnchorInfo, nil
 }
 
-func checkAnchorInput(tx *wire.MsgTx, current, bindOutputs, nativeActive bool,
+func checkAnchorInput(tx *wire.MsgTx, current, bindOutputs bool,
 	isCoreNode func([]byte) bool) (*AscendInfo, error) {
 	if tx == nil || len(tx.TxIn) != 1 || tx.TxIn[0] == nil {
 		return nil, fmt.Errorf("anchor requires one input")
@@ -207,9 +205,6 @@ func checkAnchorInput(tx *wire.MsgTx, current, bindOutputs, nativeActive bool,
 	proof, native, err := sindexer.NativeAssetProof(tx)
 	if err != nil {
 		return nil, err
-	}
-	if native && !nativeActive {
-		return nil, fmt.Errorf("native asset mapping is not active")
 	}
 	bindOutputs = bindOutputs || native
 	if bindOutputs {

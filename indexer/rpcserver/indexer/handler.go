@@ -755,13 +755,18 @@ func (s *Handle) getAscendData(c *gin.Context) {
 	result, err := s.model.GetAscend(utxo)
 	if err != nil {
 		resp.Code = -1
+		if errors.Is(err, indexercommon.ErrKeyNotFound) {
+			resp.Code = localwire.AscendNotFoundCode
+		}
 		resp.Msg = err.Error()
 		c.JSON(http.StatusOK, resp)
 		return
 	}
 
 	// TODO 因为Decimal json序列化的修改，暂时将资产列表清空，因为前端还没用到
-	result.Assets = nil
+	if result != nil {
+		result.Assets = nil
+	}
 
 	resp.Data = result
 	c.JSON(http.StatusOK, resp)

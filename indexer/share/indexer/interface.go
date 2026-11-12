@@ -32,6 +32,7 @@ type Indexer interface {
 
 	GetTickerMap(protocol string) map[string]*common.TickerInfo
 	GetTickerInfo(tickerName *common.TickerName) *common.TickerInfo
+	GetHolderCount(name *common.TickerName) int
 	GetHoldersWithTick(tickerName *common.TickerName) map[string]*indexer.Decimal
 	GetBindingSat(ticker *common.TickerName) int
 	GetAssetSummaryInAddressV3(address string) (map[common.TickerName]*indexer.Decimal, error)
@@ -40,7 +41,7 @@ type Indexer interface {
 	HasAssetInUtxo(utxo string) bool
 	GetTxOutputWithUtxo(utxo string) *common.TxOutput
 	GetTxOutputWithUtxoV3(utxo string) *indexer.AssetsInUtxo
-	GetAscendData(fundingUtxo string) *common.AscendData
+	GetAscendData(fundingUtxo string) (*common.AscendData, error)
 	GetBTCLuckyBlocks(pubkey string, start, limit int) (*common.BTCLuckyBlocks, error)
 	GetDescendData(nullDataUtxo string) *common.DescendData
 	GetChannelLedger(channel string) ([]*common.ChannelLedgerEntry, error)
