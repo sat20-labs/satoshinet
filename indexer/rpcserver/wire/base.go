@@ -3,6 +3,7 @@ package wire
 import (
 	"encoding/json"
 
+	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -91,9 +92,17 @@ type TickersResp struct {
 	Data  []*common.TickerInfo `json:"data"`
 }
 
+// TickerDetail shares the Bitcoin ticker wire format. Cross-layer totals
+// describe movements on SatoshiNet, not how much was issued on Bitcoin.
+type TickerDetail struct {
+	indexercommon.TickerInfo
+	TotalAscendAmt  *indexercommon.Decimal
+	TotalDescendAmt *indexercommon.Decimal
+}
+
 type TickerInfoResp struct {
 	indexerwire.BaseResp
-	Data *common.TickerInfo `json:"data"`
+	Data *TickerDetail `json:"data"`
 }
 
 type ContractResp struct {

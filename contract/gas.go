@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	MainnetGasAssetName = "brc20:f:sgas"
+	MainnetGasAssetName = "xap:f:gas"
 	TestnetGasAssetName = "brc20:f:sgas"
 
 	DeployBaseGas int64 = 5_000_000

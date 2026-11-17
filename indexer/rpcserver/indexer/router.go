@@ -74,6 +74,7 @@ func (s *Service) InitRouter(r *gin.Engine, proxy string) {
 	r.GET(proxy+"/v3/utxo/info/:utxo", s.handle.getUtxoInfoV3)
 	r.POST(proxy+"/v3/utxos/info", s.handle.getUtxoInfoListV3)
 	r.GET(proxy+"/v3/contracts", s.handle.getContracts)
+	r.GET(proxy+"/v3/contracts/market/prediction", s.handle.getPredictionMarket)
 	r.GET(proxy+"/v3/contracts/evm/compiler-config", s.handle.getEVMCompilerConfig)
 	r.POST(proxy+"/v3/contracts/evm/estimate-deploy", s.handle.estimateEVMDeploy)
 	r.POST(proxy+"/v3/contracts/prediction/review-ready", s.handle.reviewPredictionReady)

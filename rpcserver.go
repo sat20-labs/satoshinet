@@ -165,6 +165,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getcfilter":             handleGetCFilter,
 	"getcfilterheader":       handleGetCFilterHeader,
 	"getconnectioncount":     handleGetConnectionCount,
+	"getnodestats":           handleGetNodeStats,
 	"getcontract":            handleGetContract,
 	"estimateevmdeploy":      handleEstimateEVMDeploy,
 	"estimateevminvoke":      handleEstimateEVMInvoke,
@@ -3050,6 +3051,10 @@ func handleGetConnectionCount(s *rpcServer, cmd interface{}, closeChan <-chan st
 	return s.cfg.ConnMgr.ConnectedCount(), nil
 }
 
+func handleGetNodeStats(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	return s.cfg.NodeStats(), nil
+}
+
 // handleGetCurrentNet implements the getcurrentnet command.
 func handleGetCurrentNet(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	return s.cfg.ChainParams.Net, nil
@@ -5744,7 +5749,8 @@ type rpcserverConfig struct {
 	// provides the RPC server with a means to do things such as add,
 	// remove, connect, disconnect, and query peers as well as other
 	// connection-related data and tasks.
-	ConnMgr rpcserverConnManager
+	ConnMgr   rpcserverConnManager
+	NodeStats func() btcjson.GetNodeStatsResult
 
 	// SyncMgr defines the sync manager for the RPC server to use.
 	SyncMgr rpcserverSyncManager

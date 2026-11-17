@@ -1,12 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -159,5 +161,49 @@ func TestDirectAcceptanceCacheExpiresWithFreeLocalTTL(t *testing.T) {
 	}
 	if len(store.accepted) != 0 {
 		t.Fatalf("expired Direct acceptances=%d", len(store.accepted))
+	}
+}
+
+func TestDirectReceiptTTL(t *testing.T) {
+	senderPriv, sender := testAccount(t)
+	_, recipient := testAccount(t)
+	generatedAt := time.Now().Add(-defaultDirectAcceptanceTTL - time.Minute)
+	var raw [wire.MessageIDHexSize / 2]byte
+	binary.BigEndian.PutUint64(raw[:8], uint64(generatedAt.UnixMicro()))
+	copy(raw[8:], []byte("entropy!"))
+	message := &DirectMessage{
+		SenderAccount: sender, RecipientAccount: recipient, SenderMsgID: 0,
+		MessageID: hex.EncodeToString(raw[:]), Ciphertext: []byte("ciphertext"),
+	}
+	hash, err := directMessageSigningHash(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := schnorr.Sign(senderPriv, hash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	message.SenderSignature = signature.Serialize()
+	payload, err := MarshalDirectMessage(message, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelopeData, err := MarshalMessageEnvelope(&MessageEnvelope{
+		MessageType: MessageTypeDirect, SourceCoreNode: "core-a", Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(envelopeData)
+	store := newMemoryMessageAcceptanceStore()
+	if _, _, err := store.Accept(sender, 0, message.MessageID, digest, "core-b", envelopeData, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAck(sender, message.MessageID, 0, "core-b", MessageAckOK); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewMessageManager("core-a", &testMessageBindings{}, nil, &testMessageRouter{}, nil, store)
+	if manager.mailboxCommitted(message) {
+		t.Fatal("expired Direct acceptance reported committed")
 	}
 }

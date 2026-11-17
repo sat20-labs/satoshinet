@@ -129,7 +129,17 @@ func (s *Handle) getTickerInfo(c *gin.Context) {
 		c.JSON(http.StatusOK, resp)
 		return
 	}
-	resp.Data = tickerInfo
+	detail := &localwire.TickerDetail{
+		TickerInfo: indexercommon.TickerInfo{
+			AssetName: tickerInfo.AssetName, Divisibility: tickerInfo.Divisibility,
+			N: tickerInfo.N, HoldersCount: tickerInfo.HolderCount,
+		},
+		TotalAscendAmt: tickerInfo.TotalAscendAmt, TotalDescendAmt: tickerInfo.TotalDescendAmt,
+	}
+	if tickerInfo.MaxSupply != nil {
+		detail.MaxSupply = tickerInfo.MaxSupply.String()
+	}
+	resp.Data = detail
 	c.JSON(http.StatusOK, resp)
 }
 

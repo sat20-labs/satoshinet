@@ -22,6 +22,33 @@ func (s *NodeState) enqueuePathSyncLocked(path string) {
 	s.setReadyLocked(false)
 }
 
+// Complete discovery and publish its directory-name inventory under the same
+// lock that releases the active slot. A concurrent connection must not observe
+// an empty queue and start another discovery before these paths are visible.
+func (s *NodeState) finishDiscovery(peer *PeerState, paths []string) bool {
+	s.pendingMtx.Lock()
+	defer s.pendingMtx.Unlock()
+	if s.syncPeer != peer || s.syncPath != "" {
+		return false
+	}
+	s.discoveredPaths = paths
+	delete(s.pendingPathSyncSet, "")
+	s.syncPeer, s.syncPath = nil, ""
+	return true
+}
+
+func (s *NodeState) fillDiscoveredPathsLocked() {
+	for len(s.discoveredPaths) != 0 && len(s.pendingPathSyncSet) < MaxPendingChanges {
+		path := s.discoveredPaths[0]
+		s.discoveredPaths[0] = ""
+		s.discoveredPaths = s.discoveredPaths[1:]
+		s.enqueuePathSyncLocked(path)
+	}
+	if len(s.discoveredPaths) == 0 {
+		s.discoveredPaths = nil
+	}
+}
+
 // A directory remains outstanding until its complete snapshot is installed.
 // Failed transfers and closed sources put it back in the same node-wide queue.
 func (s *NodeState) finishSync(peer *PeerState, success bool) bool {
@@ -49,6 +76,7 @@ func (h Handler) queueNextNodeSync(skip string, skipFailed bool) bool {
 		s.pendingMtx.Unlock()
 		return false
 	}
+	s.fillDiscoveredPathsLocked()
 	index := -1
 	for n, path := range s.pendingPathSync {
 		if !skipFailed || path != skip {
@@ -93,7 +121,7 @@ func (h Handler) markReadyAndDrain() {
 	}
 	s := h.Node
 	s.pendingMtx.Lock()
-	if s.syncPeer != nil || len(s.pendingPathSyncSet) != 0 || s.draining {
+	if s.syncPeer != nil || len(s.pendingPathSyncSet) != 0 || len(s.discoveredPaths) != 0 || s.draining {
 		s.pendingMtx.Unlock()
 		return
 	}
@@ -102,7 +130,7 @@ func (h Handler) markReadyAndDrain() {
 	s.pendingMtx.Unlock()
 	for {
 		s.pendingMtx.Lock()
-		if s.syncPeer != nil || len(s.pendingPathSyncSet) != 0 {
+		if s.syncPeer != nil || len(s.pendingPathSyncSet) != 0 || len(s.discoveredPaths) != 0 {
 			s.draining = false
 			s.pendingMtx.Unlock()
 			h.queueNextPathSync()

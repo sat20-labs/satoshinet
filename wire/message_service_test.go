@@ -2,9 +2,36 @@ package wire
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestReceiptJSON(t *testing.T) {
+	encoded, err := json.Marshal(MessageServiceResponse{Code: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var absent map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &absent); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := absent["mailbox_committed"]; ok {
+		t.Fatalf("false mailbox receipt should be omitted: %s", encoded)
+	}
+
+	encoded, err = json.Marshal(MessageServiceResponse{Code: 0, MailboxCommitted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &present); err != nil {
+		t.Fatal(err)
+	}
+	if string(present["mailbox_committed"]) != "true" {
+		t.Fatalf("true mailbox receipt missing: %s", encoded)
+	}
+}
 
 func TestDirectMessageLargeCanonicalCodec(t *testing.T) {
 	message := &DirectMessage{

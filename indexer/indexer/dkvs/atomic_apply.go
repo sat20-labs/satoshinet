@@ -200,6 +200,7 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 		}
 		batch := i.db.NewWriteBatch()
 		touched := make([]*wire.DKVSRecord, 0, len(current)+len(ordered))
+		changedRecords := make([]*wire.DKVSRecord, 0)
 		retentionRemovals := make([]string, 0, len(current)+len(ordered))
 		for _, record := range ordered {
 			if prepared.retentions[record.Key] == nil {
@@ -252,6 +253,7 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 				break
 			}
 			touched = append(touched, record)
+			changedRecords = append(changedRecords, record)
 			applied++
 		}
 		if err == nil {
@@ -275,12 +277,16 @@ func (i *Indexer) applyRecordSetAtomic(records []*wire.DKVSRecord, replace []syn
 		}
 		batch.Close()
 		if err != nil {
+			i.resetQuotaUsageLocked()
 			i.mutex.Unlock()
 			return 0, err
 		}
 		if len(touched) != 0 {
-			i.resetFeeUsageLocked()
-			i.resetFreeLocalUsageLocked()
+			removedKeys := make([]string, 0, len(touched))
+			for _, record := range touched {
+				removedKeys = append(removedKeys, record.Key)
+			}
+			i.updateQuotaUsageLocked(removedKeys, changedRecords, height)
 			i.resetRecordExpiryLocked()
 			atomic.AddUint64(&i.generation, 1)
 		}

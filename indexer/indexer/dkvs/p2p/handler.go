@@ -316,7 +316,7 @@ func (h Handler) QueueSync(cursor []byte) {
 	h.Node.pendingMtx.Lock()
 	// Other connections join this synchronization round. Do not enqueue a
 	// duplicate discovery behind its directory snapshots.
-	if h.Node.syncPeer == nil && len(h.Node.pendingPathSyncSet) == 0 {
+	if h.Node.syncPeer == nil && len(h.Node.pendingPathSyncSet) == 0 && len(h.Node.discoveredPaths) == 0 {
 		h.Node.enqueuePathSyncLocked("")
 	}
 	h.Node.pendingMtx.Unlock()

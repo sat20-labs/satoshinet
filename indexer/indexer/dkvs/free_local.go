@@ -9,9 +9,11 @@ type freeLocalUsage struct {
 }
 
 type freeLocalUsageEntry struct {
-	signer string
-	bytes  uint64
-	blob   bool
+	signer  string
+	bytes   uint64
+	blob    bool
+	expiry  uint64
+	invalid bool
 }
 
 func normalizeFreeLocalCachePolicy(policy FreeLocalCachePolicy, allow bool) FreeLocalCachePolicy {
@@ -78,56 +80,41 @@ func freeLocalSigner(record *wire.DKVSRecord, parsed ParsedKey) (string, error) 
 }
 
 func (i *Indexer) resetFreeLocalUsageLocked() {
-	i.freeLocalUsageInitialized = false
+	i.quotaUsage.initialized = false
+	i.quotaUsage.freeInvalid, i.quotaUsage.freeOverfull = 0, 0
+	i.freeLocalMinExpiry = 0
 	i.freeLocalUsageBySigner = make(map[string]freeLocalUsage)
 	i.freeLocalUsageEntries = make(map[string]freeLocalUsageEntry)
 	i.freeLocalTotal = freeLocalUsage{}
 }
 
 func (i *Indexer) ensureFreeLocalUsageLocked(height, now uint64) error {
-	if i.freeLocalUsageInitialized {
-		return nil
-	}
-	i.resetFreeLocalUsageLocked()
-	records, _, _, err := i.scanLocked("", nil, 0, false, height, now)
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		if record == nil || IsExpired(record, height) || !isFreeLocalRecord(record) {
-			continue
-		}
-		parsed, err := ParseKey(record.Key)
-		if err != nil {
-			return err
-		}
-		signer, err := freeLocalSigner(record, parsed)
-		if err != nil {
-			return err
-		}
-		i.addFreeLocalUsageLocked(record, signer)
-	}
-	i.freeLocalUsageInitialized = true
-	return nil
+	return i.ensureQuotaUsageLocked(height, now)
 }
 
 func (i *Indexer) addFreeLocalUsageLocked(record *wire.DKVSRecord, signer string) {
 	if record == nil || signer == "" {
 		return
 	}
-	size := uint64(RecordSize(record))
+	entry := i.freeLocalContribution(record, signer)
 	usage := i.freeLocalUsageBySigner[signer]
+	wasOverfull := i.freeLocalSignerOverfull(usage)
 	usage.records++
-	usage.bytes += size
-	parsed, _ := ParseKey(record.Key)
-	blob := IsBlobKey(parsed)
-	if blob {
+	usage.bytes += entry.bytes
+	if entry.blob {
 		usage.blobKeys++
 	}
 	i.freeLocalUsageBySigner[signer] = usage
-	i.freeLocalUsageEntries[record.Key] = freeLocalUsageEntry{signer: signer, bytes: size, blob: blob}
+	i.freeLocalUsageEntries[record.Key] = entry
 	i.freeLocalTotal.records++
-	i.freeLocalTotal.bytes += size
+	i.freeLocalTotal.bytes += entry.bytes
+	i.quotaUsage.freeOverfull = adjustOverfull(i.quotaUsage.freeOverfull, wasOverfull, i.freeLocalSignerOverfull(usage))
+	if entry.invalid {
+		i.quotaUsage.freeInvalid++
+	}
+	if entry.expiry != 0 && (i.freeLocalMinExpiry == 0 || entry.expiry < i.freeLocalMinExpiry) {
+		i.freeLocalMinExpiry = entry.expiry
+	}
 }
 
 func (i *Indexer) removeFreeLocalUsageLocked(key string) {
@@ -137,6 +124,7 @@ func (i *Indexer) removeFreeLocalUsageLocked(key string) {
 	}
 	delete(i.freeLocalUsageEntries, key)
 	usage := i.freeLocalUsageBySigner[entry.signer]
+	wasOverfull := i.freeLocalSignerOverfull(usage)
 	if usage.records <= 1 {
 		usage.records = 0
 	} else {
@@ -149,6 +137,10 @@ func (i *Indexer) removeFreeLocalUsageLocked(key string) {
 	}
 	if entry.blob && usage.blobKeys > 0 {
 		usage.blobKeys--
+	}
+	i.quotaUsage.freeOverfull = adjustOverfull(i.quotaUsage.freeOverfull, wasOverfull, i.freeLocalSignerOverfull(usage))
+	if entry.invalid {
+		i.quotaUsage.freeInvalid--
 	}
 	if usage.records == 0 {
 		delete(i.freeLocalUsageBySigner, entry.signer)
@@ -165,20 +157,22 @@ func (i *Indexer) removeFreeLocalUsageLocked(key string) {
 	}
 }
 
-func (i *Indexer) replaceFreeLocalUsageLocked(record *wire.DKVSRecord, parsed ParsedKey) error {
-	if !i.freeLocalUsageInitialized {
-		return nil
+func (i *Indexer) expireFreeLocalUsageLocked(height uint64) {
+	if height == 0 || i.freeLocalMinExpiry == 0 || height < i.freeLocalMinExpiry {
+		return
 	}
-	i.removeFreeLocalUsageLocked(record.Key)
-	if !isFreeLocalRecord(record) {
-		return nil
+	var next uint64
+	for key, entry := range i.freeLocalUsageEntries {
+		if entry.expiry == 0 {
+			continue
+		}
+		if entry.expiry <= height {
+			i.removeFreeLocalUsageLocked(key)
+		} else if next == 0 || entry.expiry < next {
+			next = entry.expiry
+		}
 	}
-	signer, err := freeLocalSigner(record, parsed)
-	if err != nil {
-		return err
-	}
-	i.addFreeLocalUsageLocked(record, signer)
-	return nil
+	i.freeLocalMinExpiry = next
 }
 
 func (i *Indexer) validateFreeLocalCapacityLocked(record *wire.DKVSRecord, parsed ParsedKey, height, now uint64) error {

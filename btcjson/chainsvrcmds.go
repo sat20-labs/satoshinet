@@ -499,6 +499,9 @@ func NewGetChainTxStatsCmd(nBlocks *int32, blockHash *string) *GetChainTxStatsCm
 // GetConnectionCountCmd defines the getconnectioncount JSON-RPC command.
 type GetConnectionCountCmd struct{}
 
+// GetNodeStatsCmd queries access selection and recent node-count reports.
+type GetNodeStatsCmd struct{}
+
 // NewGetConnectionCountCmd returns a new instance which can be used to issue a
 // getconnectioncount JSON-RPC command.
 func NewGetConnectionCountCmd() *GetConnectionCountCmd {
@@ -1262,6 +1265,7 @@ func init() {
 	MustRegisterCmd("getchaintips", (*GetChainTipsCmd)(nil), flags)
 	MustRegisterCmd("getchaintxstats", (*GetChainTxStatsCmd)(nil), flags)
 	MustRegisterCmd("getconnectioncount", (*GetConnectionCountCmd)(nil), flags)
+	MustRegisterCmd("getnodestats", (*GetNodeStatsCmd)(nil), flags)
 	MustRegisterCmd("getcontract", (*GetContractCmd)(nil), flags)
 	MustRegisterCmd("getcontracthistory", (*GetContractHistoryCmd)(nil), flags)
 	MustRegisterCmd("getcontractstate", (*GetContractStateCmd)(nil), flags)

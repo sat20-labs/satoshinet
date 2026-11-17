@@ -55,22 +55,14 @@ func (h Handler) reconcileDiscoveredPaths(action SyncAction) {
 	for _, path := range action.DiscoveredPaths {
 		paths[path] = struct{}{}
 	}
-	if len(paths) > MaxPendingChanges {
-		h.warnf("too many DKVS current paths in one discovery")
-		h.finishFailedPathSync("", false)
-		return
-	}
 	ordered := make([]string, 0, len(paths))
 	for path := range paths {
 		ordered = append(ordered, path)
 	}
 	sort.Strings(ordered)
-	for _, path := range ordered {
-		h.Node.pendingMtx.Lock()
-		h.Node.enqueuePathSyncLocked(path)
-		h.Node.pendingMtx.Unlock()
+	if !h.Node.finishDiscovery(h.Peer, ordered) {
+		return
 	}
-	h.Node.finishSync(h.Peer, true)
 	if !h.queueNextPathSync() {
 		h.markReadyAndDrain()
 	}

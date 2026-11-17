@@ -16,6 +16,7 @@ import (
 	"github.com/sat20-labs/satoshinet/blockchain"
 	"github.com/sat20-labs/satoshinet/btcec"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/btcjson"
 	"github.com/sat20-labs/satoshinet/btcutil"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	scommon "github.com/sat20-labs/satoshinet/indexer/common"
@@ -178,6 +179,15 @@ func TestNetworkPOSV2MultiCoreMultiMinerOffline(t *testing.T) {
 	}
 	// Runs before node cleanup removes their logs, including newly joined nodes.
 	t.Cleanup(dumpFailure)
+	waitAccessStats(t, boot.node, "both cores report all four miners", func(s btcjson.GetNodeStatsResult) bool {
+		return s.CoreCount == 2 && s.ObservedNodes == 7
+	}, 30*time.Second)
+	for _, m := range sequence[1:] {
+		require.Equal(t, m.parent.pub, nodeAccessStats(t, m.node).AccessCore, m.name)
+		if m.parent == boot {
+			require.EqualValues(t, 2, nodeAccessStats(t, m.node).ChildCount, m.name)
+		}
+	}
 
 	// H2 is Bootstrap's activated slot. Each following block advances exactly
 	// one original slot, even when an ancestor produces on its behalf.
@@ -252,9 +262,15 @@ func TestNetworkPOSV2MultiCoreMultiMinerOffline(t *testing.T) {
 	if !t.Run("miner_offline_core_substitutes", func(t *testing.T) {
 		advanceTo(t, miner)
 		stop(t, miner)
+		waitAccessStats(t, boot.node, "offline miner removed from count", func(s btcjson.GetNodeStatsResult) bool {
+			return s.ObservedNodes == 6
+		}, 30*time.Second)
 		produce(t, core, miner.reward) // Miner–Core reward, not Core–Bootstrap.
 		produce(t, core.children[1], core.children[1].reward)
 		restart(t, miner)
+		waitAccessStats(t, boot.node, "restarted miner restores count", func(s btcjson.GetNodeStatsResult) bool {
+			return s.ObservedNodes == 7
+		}, 30*time.Second)
 		advanceTo(t, miner)
 		produce(t, miner, miner.reward) // Rejoined Miner produces its next slot.
 	}) {

@@ -36,34 +36,14 @@ func (h *feeExpiryHeap) Pop() interface{} {
 }
 
 func (i *Indexer) resetFeeUsageLocked() {
-	i.feeUsageInitialized = false
+	i.quotaUsage.initialized = false
 	i.feeUsageCounts = make(map[string]uint64)
 	i.feeUsageEntries = make(map[string]feeUsageEntry)
 	i.feeExpiryHeights = nil
 }
 
-func (i *Indexer) ensureFeeUsageLocked(verifier IndexedFeeCapacityVerifier, height, now uint64) error {
-	if i.feeUsageInitialized {
-		i.expireFeeUsageLocked(height)
-		return nil
-	}
-	i.resetFeeUsageLocked()
-	records, _, _, err := i.scanLocked("", nil, 0, false, height, now)
-	if err != nil {
-		return err
-	}
-	for _, record := range records {
-		if record == nil || IsTombstone(record.Flags) || IsExpired(record, height) {
-			continue
-		}
-		usageKey, err := verifier.FeeUsageKey(record)
-		if err != nil || usageKey == "" {
-			continue
-		}
-		i.addFeeUsageLocked(record, usageKey)
-	}
-	i.feeUsageInitialized = true
-	return nil
+func (i *Indexer) ensureFeeUsageLocked(_ IndexedFeeCapacityVerifier, height, now uint64) error {
+	return i.ensureQuotaUsageLocked(height, now)
 }
 
 func (i *Indexer) addFeeUsageLocked(record *wire.DKVSRecord, usageKey string) {
@@ -112,13 +92,5 @@ func (i *Indexer) expireFeeHeapLocked(items *feeExpiryHeap, current uint64) {
 			continue
 		}
 		i.removeFeeUsageLocked(item.recordKey)
-	}
-}
-
-func (i *Indexer) replaceFeeUsageLocked(verifier IndexedFeeCapacityVerifier, record *wire.DKVSRecord) {
-	i.removeFeeUsageLocked(record.Key)
-	usageKey, err := verifier.FeeUsageKey(record)
-	if err == nil && usageKey != "" {
-		i.addFeeUsageLocked(record, usageKey)
 	}
 }

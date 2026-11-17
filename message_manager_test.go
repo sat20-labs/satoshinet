@@ -404,6 +404,36 @@ func TestDKVSMessageRejectsAckFromUnexpectedCore(t *testing.T) {
 	}
 }
 
+func TestAckTypeMismatch(t *testing.T) {
+	senderPriv, sender := testAccount(t)
+	_, recipient := testAccount(t)
+	bindings := &testMessageBindings{bindings: map[string]string{sender: "core-a", recipient: "core-b"}}
+	manager := newTestMessageManager("core-a", bindings, &testMessageMailbox{}, &testMessageRouter{}, nil, nil)
+	message := signedTestDirect(t, senderPriv, sender, recipient, 0, "ciphertext")
+	if err := manager.SendDirectMessage(message); err != nil {
+		t.Fatal(err)
+	}
+	ackPayload := marshalTestMessageAck(t, "core-b", "core-a", &MessageAck{
+		OriginalType: MessageTypeTopicPublish, SenderAccount: sender, SenderMsgID: 0,
+		MessageID: message.MessageID, Status: MessageAckOK,
+	})
+	ackData, err := MarshalMessageEnvelope(&MessageEnvelope{
+		MessageType: MessageTypeAck, SourceCoreNode: "core-b", Payload: ackPayload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.HandleMessageNotify(&wire.MsgDKVSNotify{
+		Target: "core-a", EventType: wire.DKVSNotifyEventMessage, Data: ackData,
+	})
+	if !errors.Is(err, ErrMessageInvalidEnvelope) {
+		t.Fatalf("ACK type mismatch err=%v", err)
+	}
+	if manager.mailboxCommitted(message) {
+		t.Fatal("TopicPublish ACK marked Direct mailbox committed")
+	}
+}
+
 func TestDKVSMessageDirectAckOccursAfterMailboxCommitAndRetryIsIdempotent(t *testing.T) {
 	senderPriv, sender := testAccount(t)
 	_, recipient := testAccount(t)

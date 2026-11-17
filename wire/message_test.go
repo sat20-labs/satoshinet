@@ -93,7 +93,7 @@ func TestMessage(t *testing.T) {
 		{msgGetData, msgGetData, pver, MainNet, 25},
 		{msgNotFound, msgNotFound, pver, MainNet, 25},
 		{msgTx, msgTx, pver, MainNet, 34},
-		{msgPing, msgPing, pver, MainNet, 32},
+		{msgPing, msgPing, pver, MainNet, 45},
 		{msgPong, msgPong, pver, MainNet, 32},
 		{msgGetHeaders, msgGetHeaders, pver, MainNet, 61},
 		{msgHeaders, msgHeaders, pver, MainNet, 25},

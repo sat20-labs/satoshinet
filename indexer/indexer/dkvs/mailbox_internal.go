@@ -188,6 +188,7 @@ func (i *Indexer) PutInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 		err = batch.Flush()
 	}
 	if err != nil {
+		i.resetQuotaUsageLocked()
 		i.mutex.Unlock()
 		return false, err
 	}
@@ -195,10 +196,7 @@ func (i *Indexer) PutInternalMailbox(record *wire.DKVSRecord) (bool, error) {
 	if i.recordExpiryInitialized {
 		i.addRecordExpiryLocked(record)
 	}
-	if err := i.replaceFreeLocalUsageLocked(record, parsed); err != nil {
-		i.mutex.Unlock()
-		return false, err
-	}
+	i.updateQuotaUsageLocked(nil, []*wire.DKVSRecord{record}, height)
 	i.mutex.Unlock()
 	i.notifyPathMutation(record)
 	return true, nil

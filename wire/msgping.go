@@ -17,12 +17,15 @@ import (
 // For versions AFTER BIP0031Version it contains an identifier which can be
 // returned in the pong message to determine network timing.
 //
-// The payload for this message just consists of a nonce used for identifying
-// it later.
+// SatoshiNet's payload contains the nonce and node-access observations. Nodes
+// require NodeAccessVersion at handshake; there is no legacy ping fallback.
 type MsgPing struct {
 	// Unique value associated with message that is used to identify
 	// specific ping message.
-	Nonce uint64
+	Nonce      uint64
+	NodeID     uint64 // One random ID per running node, shared by its connections.
+	UseAsCore  bool   // The sender selects this peer as its access CoreNode.
+	ChildCount uint32 // A CoreNode's current distinct, live access clients.
 }
 
 // BtcDecode decodes r using the bitcoin protocol encoding into the receiver.
@@ -37,6 +40,9 @@ func (msg *MsgPing) BtcDecode(r io.Reader, pver uint32, enc MessageEncoding) err
 			return err
 		}
 		msg.Nonce = nonce
+		if err := readElements(r, &msg.NodeID, &msg.UseAsCore, &msg.ChildCount); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -53,6 +59,7 @@ func (msg *MsgPing) BtcEncode(w io.Writer, pver uint32, enc MessageEncoding) err
 		if err != nil {
 			return err
 		}
+		return writeElements(w, msg.NodeID, msg.UseAsCore, msg.ChildCount)
 	}
 
 	return nil
@@ -72,8 +79,8 @@ func (msg *MsgPing) MaxPayloadLength(pver uint32) uint32 {
 	// NOTE: > is not a mistake here.  The BIP0031 was defined as AFTER
 	// the version unlike most others.
 	if pver > BIP0031Version {
-		// Nonce 8 bytes.
-		plen += 8
+		// Nonce, node ID, access intent and child count.
+		plen += 21
 	}
 
 	return plen

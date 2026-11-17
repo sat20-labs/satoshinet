@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -53,6 +54,10 @@ type pendingMessageAcceptanceStore interface {
 	Pending() ([]acceptedMessage, error)
 }
 
+type acceptedMessageLookup interface {
+	LookupAccepted(senderAccount, messageID string) (acceptedMessage, bool, error)
+}
+
 type memoryMessageAcceptanceStore struct {
 	mu       sync.Mutex
 	next     map[string]uint64
@@ -71,6 +76,20 @@ func (s *memoryMessageAcceptanceStore) NextSenderMsgID(senderAccount string) uin
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.next[senderAccount]
+}
+
+func (s *memoryMessageAcceptanceStore) LookupAccepted(senderAccount, messageID string) (acceptedMessage, bool, error) {
+	if s == nil || !validateAccountID(senderAccount) || !wire.ValidMessageID(messageID) {
+		return acceptedMessage{}, false, ErrMessageInvalidEnvelope
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	message, ok := s.accepted[acceptedMessageKey(senderAccount, messageID)]
+	if !ok {
+		return acceptedMessage{}, false, nil
+	}
+	message.Data = append([]byte(nil), message.Data...)
+	return message, true, nil
 }
 
 func (s *memoryMessageAcceptanceStore) Accept(senderAccount string, senderMsgID uint64, messageID string, digest [32]byte, target string, data []byte, charge func() error) (acceptedMessage, bool, error) {
@@ -295,6 +314,37 @@ func (m *MessageManager) SendDirectMessage(message *DirectMessage) error {
 	return m.routeAccepted(accepted, duplicate)
 }
 
+func (m *MessageManager) mailboxCommitted(message *DirectMessage) bool {
+	if m == nil || m.accepted == nil || message == nil {
+		return false
+	}
+	lookup, ok := m.accepted.(acceptedMessageLookup)
+	if !ok {
+		return false
+	}
+	payload, err := MarshalDirectMessage(message, true)
+	if err != nil {
+		return false
+	}
+	envelopeData, err := MarshalMessageEnvelope(&MessageEnvelope{
+		MessageType: MessageTypeDirect, SourceCoreNode: m.localCore, Payload: payload,
+	})
+	if err != nil {
+		return false
+	}
+	digest := sha256.Sum256(envelopeData)
+	accepted, found, err := lookup.LookupAccepted(message.SenderAccount, message.MessageID)
+	if err != nil || !found || accepted.SenderAccount != message.SenderAccount ||
+		accepted.SenderMsgID != message.SenderMsgID || accepted.MessageID != message.MessageID ||
+		accepted.Digest != digest || !bytes.Equal(accepted.Data, envelopeData) ||
+		accepted.Target == "" || !accepted.Final || accepted.Status != MessageAckOK ||
+		acceptedDirectExpired(accepted, time.Now()) {
+		return false
+	}
+	envelope, err := UnmarshalMessageEnvelope(accepted.Data)
+	return err == nil && envelope.MessageType == MessageTypeDirect && envelope.SourceCoreNode == m.localCore
+}
+
 func (m *MessageManager) HandleMessageNotify(message *wire.MsgDKVSNotify) error {
 	if m == nil || message == nil || message.EventType != wire.DKVSNotifyEventMessage || message.Target != m.localCore {
 		return ErrMessageInvalidEnvelope
@@ -457,6 +507,19 @@ func (m *MessageManager) handleIncomingAck(envelope *MessageEnvelope) error {
 	case MessageTypeTopicFanout, MessageTypeTopicKeyFanout:
 		return m.topics.handleDeliveryAck(envelope.SourceCoreNode, ack)
 	default:
+		if lookup, ok := m.accepted.(acceptedMessageLookup); ok {
+			accepted, found, err := lookup.LookupAccepted(ack.SenderAccount, ack.MessageID)
+			if err != nil {
+				return err
+			}
+			if !found || accepted.SenderMsgID != ack.SenderMsgID {
+				return ErrMessageInvalidSequence
+			}
+			stored, err := UnmarshalMessageEnvelope(accepted.Data)
+			if err != nil || stored.MessageType != ack.OriginalType || stored.SourceCoreNode != m.localCore {
+				return ErrMessageInvalidEnvelope
+			}
+		}
 		m.recordRetryAdvice(ack)
 		return m.accepted.MarkAck(ack.SenderAccount, ack.MessageID, ack.SenderMsgID, envelope.SourceCoreNode, ack.Status)
 	}

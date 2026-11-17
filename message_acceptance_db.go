@@ -159,6 +159,36 @@ func (s *databaseMessageAcceptanceStore) NextSenderMsgID(senderAccount string) u
 	return next
 }
 
+func (s *databaseMessageAcceptanceStore) LookupAccepted(senderAccount, messageID string) (acceptedMessage, bool, error) {
+	if s == nil || s.db == nil || !validateAccountID(senderAccount) || !wire.ValidMessageID(messageID) {
+		return acceptedMessage{}, false, ErrMessageInvalidEnvelope
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var message acceptedMessage
+	var found bool
+	err := s.db.View(func(tx database.Tx) error {
+		_, acceptedBucket, err := messageBuckets(tx, false)
+		if err != nil || acceptedBucket == nil {
+			return err
+		}
+		encoded := acceptedBucket.Get(acceptedMessageDBKey(senderAccount, messageID))
+		if len(encoded) == 0 {
+			return nil
+		}
+		message, err = decodeAcceptedMessage(encoded)
+		if err != nil {
+			return err
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return acceptedMessage{}, false, err
+	}
+	return message, found, nil
+}
+
 func (s *databaseMessageAcceptanceStore) Accept(senderAccount string, senderMsgID uint64, messageID string, digest [32]byte, target string, data []byte, charge func() error) (acceptedMessage, bool, error) {
 	if s == nil || s.db == nil || !validateAccountID(senderAccount) || !wire.ValidMessageID(messageID) || target == "" || len(data) == 0 {
 		return acceptedMessage{}, false, ErrMessageInvalidEnvelope

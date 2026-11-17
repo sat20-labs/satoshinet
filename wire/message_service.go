@@ -55,12 +55,13 @@ type MessageServiceAuth struct {
 }
 
 type MessageServiceResponse struct {
-	Code            int    `json:"code"`
-	Msg             string `json:"msg,omitempty"`
-	ErrorCode       string `json:"error_code,omitempty"`
-	RetryAfterMS    uint64 `json:"retry_after_ms,omitempty"`
-	NextSenderMsgID uint64 `json:"next_sender_msg_id,omitempty"`
-	Payload         []byte `json:"payload,omitempty"`
+	Code             int    `json:"code"`
+	Msg              string `json:"msg,omitempty"`
+	ErrorCode        string `json:"error_code,omitempty"`
+	RetryAfterMS     uint64 `json:"retry_after_ms,omitempty"`
+	NextSenderMsgID  uint64 `json:"next_sender_msg_id,omitempty"`
+	Payload          []byte `json:"payload,omitempty"`
+	MailboxCommitted bool   `json:"mailbox_committed,omitempty"`
 }
 
 type DirectMessage struct {

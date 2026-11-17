@@ -26,15 +26,15 @@ type Indexer struct {
 	db                        indexercommon.KVDB
 	resolver                  DIDResolver
 	feeVerifier               FeeVerifier
-	feeUsageInitialized       bool
 	feeUsageCounts            map[string]uint64
 	feeUsageEntries           map[string]feeUsageEntry
 	feeExpiryHeights          feeExpiryHeap
 	freeLocal                 FreeLocalCachePolicy
-	freeLocalUsageInitialized bool
 	freeLocalUsageBySigner    map[string]freeLocalUsage
 	freeLocalUsageEntries     map[string]freeLocalUsageEntry
 	freeLocalTotal            freeLocalUsage
+	freeLocalMinExpiry        uint64
+	quotaUsage                quotaUsage
 	recordExpiryInitialized   bool
 	recordExpiryEntries       map[string]recordExpiryEntry
 	recordExpiryHeights       feeExpiryHeap
@@ -81,8 +81,7 @@ func New(db indexercommon.KVDB, cfg Config) *Indexer {
 		freeLocal: freeLocal, subs: newSubscriptionSet(), notify: cfg.Notify,
 		subNotify: cfg.Subscription, height: cfg.CurrentHeight, tipHeight: cfg.TipHeight, pathSignals: make(map[string]*pathWatchSignal),
 	}
-	indexer.resetFeeUsageLocked()
-	indexer.resetFreeLocalUsageLocked()
+	indexer.resetQuotaUsageLocked()
 	indexer.resetRecordExpiryLocked()
 	return indexer
 }
@@ -109,9 +108,8 @@ func (i *Indexer) SetFeeVerifier(verifier FeeVerifier) {
 		verifier = defaultFeeVerifier{}
 	}
 	i.feeVerifier = verifier
-	i.resetFeeUsageLocked()
+	i.resetQuotaUsageLocked()
 	paidRetentionCacheFor(i).replace(make(map[string]PaidRecordRetention))
-	i.resetFreeLocalUsageLocked()
 	atomic.AddUint64(&i.policyGeneration, 1)
 }
 func (i *Indexer) SetSystemVerifier(verifier SystemVerifier) {
@@ -469,6 +467,7 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 			return 0, err
 		}
 		if err := batch.Flush(); err != nil {
+			i.resetQuotaUsageLocked()
 			i.mutex.Unlock()
 			return 0, err
 		}
@@ -477,16 +476,11 @@ func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
 	removed := make([]string, 0, len(expiredRecords))
 	for _, record := range expiredRecords {
 		removed = append(removed, record.Key)
-		if i.freeLocalUsageInitialized {
-			i.removeFreeLocalUsageLocked(record.Key)
-		}
-		if i.feeUsageInitialized {
-			i.removeFeeUsageLocked(record.Key)
-		}
 		if i.recordExpiryInitialized {
 			delete(i.recordExpiryEntries, record.Key)
 		}
 	}
+	i.updateQuotaUsageLocked(removed, nil, height)
 	paidRetentionCacheFor(i).remove(removed)
 	i.mutex.Unlock()
 	if len(expiredRecords) != 0 {
@@ -668,17 +662,12 @@ func (i *Indexer) put(record *wire.DKVSRecord, remote bool) (bool, uint8, chainh
 		}
 		batch.Close()
 		if err != nil {
+			i.resetQuotaUsageLocked()
 			i.mutex.Unlock()
 			return false, 0, chainhash.Hash{}, false, err
 		}
 		atomic.AddUint64(&i.generation, 1)
-		if capacity.indexed != nil && i.feeUsageInitialized {
-			i.replaceFeeUsageLocked(capacity.indexed, record)
-		}
-		if err := i.replaceFreeLocalUsageLocked(record, parsed); err != nil {
-			i.mutex.Unlock()
-			return false, 0, chainhash.Hash{}, false, err
-		}
+		i.updateQuotaUsageLocked(nil, []*wire.DKVSRecord{record}, height)
 		if i.recordExpiryInitialized {
 			i.replaceRecordExpiryLocked(record)
 		}

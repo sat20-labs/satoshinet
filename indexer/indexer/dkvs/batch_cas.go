@@ -517,6 +517,18 @@ func (i *Indexer) validateBatchStateLocked(ready []preparedCASMutation, indexedH
 			}
 		}
 	}
+	// Built-in verifiers have local usage keys. Only the legacy custom
+	// interface that explicitly consumes all records needs a full projection.
+	needsRecords := false
+	for _, item := range ready {
+		if item.capacity.fallback != nil && !IsTombstone(item.mutation.Record.Flags) {
+			needsRecords = true
+			break
+		}
+	}
+	if !needsRecords {
+		return i.validateQuotaUsageProjectionLocked(ready, viewHeight, now)
+	}
 	records, err := i.projectedActiveRecordsLocked(ready, viewHeight, now)
 	if err != nil {
 		return err
@@ -674,11 +686,15 @@ func (i *Indexer) commitBatchCASLocked(ready []preparedCASMutation, height, now 
 		}
 	}
 	if err := batch.Flush(); err != nil {
+		i.resetQuotaUsageLocked()
 		return nil, nil, err
 	}
 	atomic.AddUint64(&i.generation, 1)
-	i.resetFeeUsageLocked()
-	i.resetFreeLocalUsageLocked()
+	changed := make([]*wire.DKVSRecord, 0, len(ready))
+	for _, item := range ready {
+		changed = append(changed, item.mutation.Record)
+	}
+	i.updateQuotaUsageLocked(nil, changed, height)
 	i.resetRecordExpiryLocked()
 	for _, item := range ready {
 		record := item.mutation.Record

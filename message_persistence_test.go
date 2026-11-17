@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"testing"
 
@@ -79,6 +80,11 @@ func TestDKVSMessagePersistentSenderSequencePendingAndRetarget(t *testing.T) {
 	}
 	if err := restarted.MarkAck(sender, messageID, 0, "core-c", MessageAckOK); err != nil {
 		t.Fatal(err)
+	}
+	committed, found, err := restarted.(acceptedMessageLookup).LookupAccepted(sender, messageID)
+	if err != nil || !found || !committed.Final || committed.Status != MessageAckOK ||
+		committed.Target != "core-c" || !bytes.Equal(committed.Data, data) {
+		t.Fatalf("committed lookup=%+v found=%v err=%v", committed, found, err)
 	}
 	pending, err = pendingStore.Pending()
 	if err != nil || len(pending) != 0 {

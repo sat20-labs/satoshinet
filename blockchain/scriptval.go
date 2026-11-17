@@ -346,6 +346,11 @@ func checkBlockScripts(block *btcutil.Block, utxoView *UtxoViewpoint,
 	}
 	txValItems := make([]*txValidateItem, 0, numInputs)
 	for _, tx := range block.Transactions() {
+		// CheckTransactionInputs validates the Anchor. Its synthetic input
+		// has no previous output for ordinary witness sighash calculation.
+		if IsAnchorTx(tx.MsgTx()) {
+			continue
+		}
 		hash := tx.Hash()
 
 		// If the HashCache is present, and it doesn't yet contain the

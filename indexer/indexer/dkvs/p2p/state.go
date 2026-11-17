@@ -42,6 +42,9 @@ type NodeState struct {
 	// One node-wide queue; the empty path is scope discovery.
 	pendingPathSync    []string
 	pendingPathSyncSet map[string]struct{}
+	// Completed discovery holds directory names only, not record bodies.
+	// It is fed into the bounded work queue as capacity becomes available.
+	discoveredPaths    []string
 	syncPeer           *PeerState
 	syncPath           string
 	draining           bool
@@ -51,7 +54,7 @@ func (s *NodeState) Ready() bool { return atomic.LoadUint32(&s.ready) != 0 }
 func (s *NodeState) SetReady(ready bool) {
 	s.pendingMtx.Lock()
 	defer s.pendingMtx.Unlock()
-	if ready && (s.syncPeer != nil || len(s.pendingPathSyncSet) != 0 || len(s.pending) != 0 || s.pendingOverflow || s.draining) {
+	if ready && (s.syncPeer != nil || len(s.pendingPathSyncSet) != 0 || len(s.discoveredPaths) != 0 || len(s.pending) != 0 || s.pendingOverflow || s.draining) {
 		ready = false
 	}
 	s.setReadyLocked(ready)
@@ -394,7 +397,8 @@ func (s *PeerState) AcceptSyncResponse(msg *wire.MsgDKVSSyncResponse, verify Mir
 		shouldStore = func(string) bool { return true }
 	}
 	if discovery {
-		// Authenticated inventory only supplies bounded directory hints. Its
+		// Authenticated inventory only supplies directory hints. Work-queue
+		// capacity does not limit the total number of discovered directories. Its
 		// records are never installed, retained, or used as deletion evidence.
 		if s.syncPaths == nil {
 			s.syncPaths = make(map[string]struct{})
@@ -409,10 +413,6 @@ func (s *PeerState) AcceptSyncResponse(msg *wire.MsgDKVSSyncResponse, verify Mir
 			}
 			if _, err := dkvs.NormalizeActiveScope(dkvs.ActiveScope{Prefix: path, Network: true}); err != nil {
 				continue
-			}
-			if _, exists := s.syncPaths[path]; !exists && len(s.syncPaths) >= MaxPendingChanges {
-				s.resetSyncLocked()
-				return action, ErrSyncStagingLimit
 			}
 			s.syncPaths[path] = struct{}{}
 		}

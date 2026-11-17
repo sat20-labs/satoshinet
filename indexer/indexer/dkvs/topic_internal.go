@@ -118,10 +118,12 @@ func (i *Indexer) PutInternalTopicValues(values map[string][]byte) (int, error) 
 		}
 	}
 	if err := batch.Flush(); err != nil {
+		i.resetQuotaUsageLocked()
 		i.mutex.Unlock()
 		return 0, err
 	}
 	atomic.AddUint64(&i.generation, 1)
+	i.updateQuotaUsageLocked(nil, changed, height)
 	i.mutex.Unlock()
 	i.notifyPathMutations(changed)
 	return len(changed), nil

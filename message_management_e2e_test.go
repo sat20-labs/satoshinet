@@ -2,11 +2,16 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
 
 	dbpkg "github.com/sat20-labs/indexer/indexer/db"
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -241,6 +246,102 @@ func TestDKVSMessageE2EDirectViaBootstrapAckLossAndAccountBoundMailbox(t *testin
 	third := newMessageE2EIndexer(t)
 	if _, err := third.AcceptRemoteRecord(stored, "core-b"); err == nil {
 		t.Fatal("ordinary DKVS remote apply accepted AccountBound mailbox")
+	}
+}
+
+func TestDirectReceiptAfterAckLoss(t *testing.T) {
+	senderPriv, sender := testAccount(t)
+	_, recipient := testAccount(t)
+	coreAKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreBKey, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreA := hex.EncodeToString(coreAKey.PubKey().SerializeCompressed())
+	coreB := hex.EncodeToString(coreBKey.PubKey().SerializeCompressed())
+	bindings := &testMessageBindings{bindings: map[string]string{sender: coreA, recipient: coreB}}
+	network := newMessageE2ENetwork("bootstrap", coreA, "bootstrap", coreB)
+	network.connect(coreA, "bootstrap")
+	network.connect("bootstrap", coreB)
+	idxA := newMessageE2EIndexer(t)
+	idxB := newMessageE2EIndexer(t)
+	makeManager := func(node *messageE2ENode, key *btcec.PrivateKey, mailbox MessageMailboxStore, accepted MessageAcceptanceStore) *MessageManager {
+		manager := NewMessageManager(node.id, bindings, mailbox, messageE2ERouter{node: node}, nil, accepted)
+		manager.SetCoreSigner(func(payload []byte) ([]byte, error) {
+			return ecdsa.Sign(key, chainhash.HashB(payload)).Serialize(), nil
+		})
+		node.manager = manager
+		return manager
+	}
+	managerA := makeManager(network.nodes[coreA], coreAKey, e2eMailbox(idxA), newDatabaseMessageAcceptanceStore(testMessageDatabase(t)))
+	makeManager(network.nodes[coreB], coreBKey, e2eMailbox(idxB), nil)
+	service := &server{miningPubKey: coreA, messageBindingResolver: bindings}
+	serverMessageManagers.Store(service, managerA)
+	t.Cleanup(func() { serverMessageManagers.Delete(service) })
+
+	message := signedTestDirect(t, senderPriv, sender, recipient, 0, "receipt-through-bootstrap")
+	call := func() ([]byte, *wire.MessageServiceResponse) {
+		t.Helper()
+		request, err := json.Marshal(&wire.MessageServiceRequest{Action: wire.MessageServiceActionSendDirect, Direct: message})
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := service.handleMessageServiceJSON(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response wire.MessageServiceResponse
+		if err := json.Unmarshal(encoded, &response); err != nil {
+			t.Fatal(err)
+		}
+		return encoded, &response
+	}
+
+	network.dropNextAck = true
+	firstJSON, first := call()
+	if first.Code != 0 || first.MailboxCommitted {
+		t.Fatalf("first response=%+v", first)
+	}
+	var firstFields map[string]json.RawMessage
+	if err := json.Unmarshal(firstJSON, &firstFields); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := firstFields["mailbox_committed"]; ok {
+		t.Fatalf("unconfirmed response included mailbox receipt: %s", firstJSON)
+	}
+	pending, err := managerA.accepted.(pendingMessageAcceptanceStore).Pending()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("first pending=%d err=%v", len(pending), err)
+	}
+
+	secondJSON, second := call()
+	if second.Code != 0 || !second.MailboxCommitted {
+		t.Fatalf("retry response=%+v", second)
+	}
+	var secondFields map[string]json.RawMessage
+	if err := json.Unmarshal(secondJSON, &secondFields); err != nil {
+		t.Fatal(err)
+	}
+	if string(secondFields["mailbox_committed"]) != "true" {
+		t.Fatalf("confirmed response missing true receipt: %s", secondJSON)
+	}
+	pending, err = managerA.accepted.(pendingMessageAcceptanceStore).Pending()
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("retry pending=%d err=%v", len(pending), err)
+	}
+	key, err := dkvs.MailMsgKey(recipient, sender, message.MessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := idxB.Get(key); err != nil {
+		t.Fatalf("recipient mailbox missing after ACK: %v", err)
+	}
+	_, total, err := idxB.ListPrefix("/mail/"+recipient, 0, 100)
+	if err != nil || total != 1 {
+		t.Fatalf("mailbox total=%d err=%v", total, err)
 	}
 }
 

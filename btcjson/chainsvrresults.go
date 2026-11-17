@@ -432,6 +432,19 @@ type GetPeerInfoResult struct {
 	SyncNode       bool    `json:"syncnode"`
 }
 
+// GetNodeStatsResult reports recent observations, not a consensus node census.
+type GetNodeStatsResult struct {
+	NodeID        string `json:"nodeid"`
+	PreferredCore string `json:"preferredcore"`
+	PreferredAddr string `json:"preferredaddr"`
+	AccessCore    string `json:"accesscore"`
+	ChildCount    uint32 `json:"childcount"`
+	CoreCount     uint32 `json:"corecount"`
+	ObservedNodes uint64 `json:"observednodes"`
+	WindowSeconds int64  `json:"windowseconds"`
+	IsBootstrap   bool   `json:"isbootstrap"`
+}
+
 // GetRawMempoolVerboseResult models the data returned from the getrawmempool
 // command when the verbose flag is set.  When the verbose flag is not set,
 // getrawmempool returns an array of transaction hashes.

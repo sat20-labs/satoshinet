@@ -100,11 +100,31 @@ Key observations:
 
 This means peers are not just anonymous Bitcoin nodes; they can participate in a validator/miner topology.
 
+#### 首选 CoreNode 与在线节点观测
+
+节点要求 P2P 版本 `70017`。`ping` 负载由 8 字节扩展为 21 字节：原有 `Nonce uint64`，加上 `NodeID uint64`、`UseAsCore bool`、`ChildCount uint32`。`version`、`addr`、`pong` 格式不变。旧协议节点在握手阶段被拒绝，因此节点部署需要协调升级。
+
+普通节点从已连接、且被本地聪网索引器识别为 core 的出站连接中随机选择一个首选节点；连接及心跳正常时不重新选择。首选公钥及观测到的地址以紧凑字节保存在现有节点数据库中。重启时在正常建立的连接中优先复用该 core；失联后保留 10 分钟选择等待期，期满允许选择其他有新鲜心跳的 core。挖矿节点沿用配置或索引器中的上级，core 的上级为 bootstrap。
+
+首选 core 只影响 ping 中的接入声明，不创建、取消或断开连接，也不暂停地址发现。`--connect`、`--addpeer` 及 RPC 添加的连接都沿用原连接管理器的行为，选择等待期不阻止连接其他节点。当前选中的 core 被索引器移除时清除首选记录；若它已断线，允许等待窗口结束后再重新选择。
+
+每个进程生成一个随机 `NodeID`，所有连接共享，重启后重新生成。节点只向选中的上级发送 `UseAsCore=true`；相关连接每 20 秒发送 ping。core 按最近 60 秒的声明和存活连接统计子节点，并按 `NodeID` 去重，通过给 bootstrap 的 ping 报告 `ChildCount`。bootstrap 按索引器登记的 core 公钥去重后汇总，不累计多个连接上的重复报告。
+
+RPC `getnodestats` 返回 `preferredcore`、`preferredaddr`、`accesscore`、`childcount`、`corecount`、`observednodes` 等字段。`observednodes` 仅在 bootstrap 上汇总：bootstrap 自身 + 直接选择它的普通/挖矿节点 + 在线 core + core 上报的子节点。
+
+该值是有时间窗口的在线观测数。正常变化按心跳刷新；无断开通知的失联最多经历 60 秒声明过期和下一次上报。core 失联时其子树暂不可见；节点切换上级时也可能短暂重复或遗漏。`ValidatorId` 和上报数沿用现有信任方式，不构成身份认证、反女巫计数或共识依据。
+
+端到端覆盖位于 `integration/contract_e2e/node_access_e2e_test.go`，使用真实节点、连接和数据库验证选择、重启复用首选、多配置连接不受影响、故障切换、bootstrap 重启、去重及过期；`TestNetworkPOSV2MultiCoreMultiMinerOffline` 同时验证多 core、多矿工的统计和正常出块。
+
+连接生命周期用例等待真实的 10 分钟选择窗口，并验证显式配置连接在长时间停机后恢复，运行时使用 `go test ./integration/contract_e2e -run '^TestNetworkNodeAccessLifecycle$' -count=1 -timeout=18m -v`。`TestAccessCoreExit` 使用双方签名的真实退押交易，验证 core 仍保持 P2P 连接时的重新选择及持久化。
+
 Relevant files:
 
 - `wire/msgversion.go`
 - `peer/peer.go`
 - `server.go`
+- `server_node_access.go`
+- `wire/msgping.go`
 
 ### 6. Custom mining / validator message flow
 

@@ -261,6 +261,7 @@ type server struct {
 	timeSource             blockchain.MedianTimeSource
 	services               wire.ServiceFlag
 	miningPubKey           string
+	access                 nodeAccessState
 	messageBindingResolver MessageBindingResolver
 
 	// The following fields are used for optional indexes.  They will be nil
@@ -316,6 +317,10 @@ type serverPeer struct {
 	txProcessed    chan struct{}
 	blockProcessed chan struct{}
 	dkvsState      dkvsp2p.PeerState
+	accessNodeID   uint64
+	accessUse      bool
+	accessCount    uint32
+	accessSeen     time.Time
 }
 
 // newServerPeer returns a new serverPeer instance. The peer needs to be set by
@@ -528,10 +533,11 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		addrManager.SetServices(remoteAddr, msg.Services)
 	}
 
-	// Ignore peers that have a protocol version that is too old.  The peer
-	// negotiation logic will disconnect it after this callback returns.
-	if msg.ProtocolVersion < int32(peer.MinAcceptableProtocolVersion) {
-		return nil
+	// The access ping has a fixed 21-byte payload. Reject older nodes during
+	// negotiation rather than sending them an unsupported ping afterwards.
+	if msg.ProtocolVersion < int32(wire.NodeAccessVersion) {
+		return wire.NewMsgReject(msg.Command(), wire.RejectObsolete,
+			fmt.Sprintf("protocol version must be %d or greater", wire.NodeAccessVersion))
 	}
 
 	// Reject outbound peers that are not full nodes.
@@ -713,6 +719,10 @@ func (sp *serverPeer) OnPing(_ *peer.Peer, msg *wire.MsgPing) {
 	}
 
 	sp.Peer.HandlePingMsg(msg)
+	select {
+	case sp.server.query <- recvAccessPingMsg{peer: sp, ping: *msg}:
+	case <-sp.server.quit:
+	}
 }
 
 // OnPong is invoked when a peer receives a pong message.  It
@@ -2295,6 +2305,26 @@ type removeNodeMsg struct {
 // goroutines related to peer state.
 func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	switch msg := querymsg.(type) {
+	case recvAccessPingMsg:
+		s.handleAccessPing(msg)
+
+	case newAccessPingMsg:
+		ping := wire.NewMsgPing(msg.nonce)
+		ping.NodeID = s.access.nodeID
+		ping.UseAsCore = s.access.selected == msg.peer
+		interval := 2 * time.Minute
+		if ping.UseAsCore || msg.peer.accessUse ||
+			(s.services&wire.SFNodeMiner != 0 && msg.peer.Services()&wire.SFNodeMiner != 0) {
+			interval = accessPingInterval
+		}
+		if msg.peer.ValidatorId() == common.GetBootstrapPubKey() {
+			ping.ChildCount = s.accessChildCount(state, time.Now())
+		}
+		msg.reply <- accessPingReply{message: ping, interval: interval}
+
+	case nodeStatsMsg:
+		msg.reply <- s.accessSnapshot(state)
+
 	case getConnCountMsg:
 		nconnected := int32(0)
 		state.forAllPeers(func(sp *serverPeer) {
@@ -2544,6 +2574,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 		NewestBlock:         sp.newestBlock,
 		HostToNetAddress:    sp.server.addrManager.HostToNetAddress,
 		ValidatorId:         sp.server.miningPubKey,
+		NewPing:             sp.newAccessPing,
 		Proxy:               cfg.Proxy,
 		UserAgentName:       userAgentName,
 		UserAgentVersion:    userAgentVersion,
@@ -2651,6 +2682,8 @@ func (s *server) peerHandler() {
 			})
 	}
 	go s.connManager.Start()
+	accessTick := time.NewTicker(time.Second)
+	defer accessTick.Stop()
 
 out:
 	for {
@@ -2658,10 +2691,15 @@ out:
 		// New peers connected to the server.
 		case p := <-s.newPeers:
 			s.handleAddPeerMsg(state, p)
+			s.updateNodeAccess(state, time.Now())
 
 		// Disconnected peers.
 		case p := <-s.donePeers:
 			s.handleDonePeerMsg(state, p)
+			s.updateNodeAccess(state, time.Now())
+
+		case now := <-accessTick.C:
+			s.updateNodeAccess(state, now)
 
 		// Block accepted in mainchain or orphan, update peer height.
 		case umsg := <-s.peerHeightsUpdate:
@@ -3957,6 +3995,9 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 		agentWhitelist:       agentWhitelist,
 		BtcdDir:              homeDir,
 	}
+	if err := s.initNodeAccess(); err != nil {
+		return nil, fmt.Errorf("initialize node access: %w", err)
+	}
 	if strings.TrimSpace(s.miningPubKey) != "" {
 		if err := assetIndexer.SetDKVSEndpointID(s.miningPubKey); err != nil {
 			return nil, fmt.Errorf("bind DKVS endpoint to CoreNode identity: %w", err)
@@ -4377,6 +4418,7 @@ func newServer(listenAddrs, agentBlacklist, agentWhitelist, peers []string,
 			Listeners:   rpcListeners,
 			StartupTime: s.startupTime,
 			ConnMgr:     &rpcConnManager{&s},
+			NodeStats:   s.NodeStats,
 			SyncMgr:     &rpcSyncMgr{&s, s.syncManager},
 			TimeSource:  s.timeSource,
 			Chain:       s.chain,

@@ -375,6 +375,18 @@ var helpDescsEnUS = map[string]string{
 	"getconnectioncount--synopsis": "Returns the number of active connections to other peers.",
 	"getconnectioncount--result0":  "The number of connections",
 
+	// GetNodeStatsCmd help.
+	"getnodestats--synopsis":           "Returns the preferred CoreNode and recent access-node observations.",
+	"getnodestatsresult-nodeid":        "Random identity of this running node instance.",
+	"getnodestatsresult-preferredcore": "Persisted preferred CoreNode public key.",
+	"getnodestatsresult-preferredaddr": "Persisted preferred CoreNode P2P address.",
+	"getnodestatsresult-accesscore":    "Currently selected connected access CoreNode.",
+	"getnodestatsresult-childcount":    "Distinct live nodes selecting this CoreNode.",
+	"getnodestatsresult-corecount":     "Distinct CoreNodes with fresh reports, on Bootstrap only.",
+	"getnodestatsresult-observednodes": "Bootstrap plus fresh CoreNodes and their reported children; Bootstrap only.",
+	"getnodestatsresult-windowseconds": "Seconds before an access declaration or report expires.",
+	"getnodestatsresult-isbootstrap":   "Whether this node aggregates network observations.",
+
 	// GetCurrentNetCmd help.
 	"getcurrentnet--synopsis": "Get bitcoin network the server is running on.",
 	"getcurrentnet--result0":  "The network identifier",
@@ -955,6 +967,7 @@ var rpcResultTypes = map[string][]interface{}{
 	"getcfilter":             {(*string)(nil)},
 	"getcfilterheader":       {(*string)(nil)},
 	"getconnectioncount":     {(*int32)(nil)},
+	"getnodestats":           {(*btcjson.GetNodeStatsResult)(nil)},
 	"getcontract":            {(*btcjson.ContractInfoResult)(nil)},
 	"getcontracthistory":     {(*btcjson.ContractHistoryResult)(nil)},
 	"getcontractstate":       {(*btcjson.ContractInfoResult)(nil)},

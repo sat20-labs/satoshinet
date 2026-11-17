@@ -47,6 +47,7 @@ func (s *server) messageServiceResponse(req *wire.MessageServiceRequest) *wire.M
 		if err := manager.SendDirectMessage(req.Direct); err != nil {
 			return fail(err)
 		}
+		response.MailboxCommitted = manager.mailboxCommitted(req.Direct)
 	case wire.MessageServiceActionCreateTopic:
 		request, err := UnmarshalTopicCreateRequest(req.Payload)
 		if err != nil {

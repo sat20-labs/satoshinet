@@ -238,7 +238,6 @@ func (i *Indexer) refreshPaidRetentionAt(ctx context.Context, height uint64, sco
 			return ErrConcurrentUpdate
 		}
 		paidRetentionCacheFor(i).replace(make(map[string]PaidRecordRetention))
-		i.resetFreeLocalUsageLocked()
 		return nil
 	}
 	// Retain only keys and hashes across provider I/O, never directory values.
@@ -397,9 +396,8 @@ func (i *Indexer) refreshPaidRetentionAt(ctx context.Context, height uint64, sco
 	for key, retention := range updates {
 		cache.set(key, retention)
 	}
-	// AUTOPAY records that stop paying become local cache entries. Rebuild free
-	// cache accounting lazily on the next FREE_LOCAL capacity check.
-	i.resetFreeLocalUsageLocked()
+	// Relay eligibility does not change the explicit FREE_LOCAL proof mode
+	// or the current stored rows counted by admission quotas.
 	return firstErr
 }
 
@@ -489,22 +487,18 @@ func (i *Indexer) PruneExpiredAutopayAt(height uint64) (int, error) {
 		return 0, err
 	}
 	if err := batch.Flush(); err != nil {
+		i.resetQuotaUsageLocked()
 		i.mutex.Unlock()
 		return 0, err
 	}
 	removedKeys := make([]string, 0, len(removed))
 	for _, record := range removed {
 		removedKeys = append(removedKeys, record.Key)
-		if i.feeUsageInitialized {
-			i.removeFeeUsageLocked(record.Key)
-		}
-		if i.freeLocalUsageInitialized {
-			i.removeFreeLocalUsageLocked(record.Key)
-		}
 		if i.recordExpiryInitialized {
 			delete(i.recordExpiryEntries, record.Key)
 		}
 	}
+	i.updateQuotaUsageLocked(removedKeys, nil, height)
 	paidRetentionCacheFor(i).remove(removedKeys)
 	atomic.AddUint64(&i.generation, 1)
 	i.mutex.Unlock()

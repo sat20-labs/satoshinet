@@ -36,7 +36,7 @@ func TestPing(t *testing.T) {
 	}
 
 	// Ensure max payload is expected value for latest protocol version.
-	wantPayload := uint32(8)
+	wantPayload := uint32(21)
 	maxPayload := msg.MaxPayloadLength(pver)
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+
@@ -140,7 +140,7 @@ func TestPingWire(t *testing.T) {
 		{
 			MsgPing{Nonce: 123123}, // 0x1e0f3
 			MsgPing{Nonce: 123123}, // 0x1e0f3
-			[]byte{0xf3, 0xe0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00},
+			append([]byte{0xf3, 0xe0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00}, make([]byte, 13)...),
 			ProtocolVersion,
 			BaseEncoding,
 		},
@@ -149,7 +149,7 @@ func TestPingWire(t *testing.T) {
 		{
 			MsgPing{Nonce: 456456}, // 0x6f708
 			MsgPing{Nonce: 456456}, // 0x6f708
-			[]byte{0x08, 0xf7, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00},
+			append([]byte{0x08, 0xf7, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00}, make([]byte, 13)...),
 			BIP0031Version + 1,
 			BaseEncoding,
 		},

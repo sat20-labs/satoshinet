@@ -75,11 +75,11 @@ func (i *Indexer) commitDeleteLocked(parsed ParsedKey, record, command *wire.DKV
 		return chainhash.Hash{}, err
 	}
 	if err := batch.Flush(); err != nil {
+		i.resetQuotaUsageLocked()
 		return chainhash.Hash{}, err
 	}
 	paidRetentionCacheFor(i).remove([]string{record.Key})
-	i.resetFeeUsageLocked()
-	i.resetFreeLocalUsageLocked()
+	i.updateQuotaUsageLocked([]string{record.Key}, nil, height)
 	i.resetRecordExpiryLocked()
 	if command != nil {
 		return RecordHash(command), nil

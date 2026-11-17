@@ -147,6 +147,7 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 	batch := i.db.NewWriteBatch()
 	defer batch.Close()
 	removed := make([]string, 0)
+	changedRecords := make([]*wire.DKVSRecord, 0)
 
 	for _, record := range current {
 		next := incoming[record.Key]
@@ -183,6 +184,7 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 		if err := i.markChangedRecordBatch(batch, validated.path, record.Key, meta.EndpointGeneration); err != nil {
 			return 0, err
 		}
+		changedRecords = append(changedRecords, record)
 	}
 
 	if err := putPathMetaBatch(batch, meta); err != nil {
@@ -194,6 +196,7 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 		return 0, err
 	}
 	if err := batch.Flush(); err != nil {
+		i.resetQuotaUsageLocked()
 		return 0, err
 	}
 
@@ -201,8 +204,7 @@ func (i *Indexer) applyCurrentPathSnapshot(snapshot *PathSnapshot, baseline *Act
 	if changed {
 		atomic.AddUint64(&i.generation, 1)
 	}
-	i.resetFeeUsageLocked()
-	i.resetFreeLocalUsageLocked()
+	i.updateQuotaUsageLocked(removed, changedRecords, height)
 	i.resetRecordExpiryLocked()
 	cache := paidRetentionCacheFor(i)
 	cache.remove(removed)

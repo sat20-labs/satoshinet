@@ -29,7 +29,7 @@ import (
 
 const (
 	// MaxProtocolVersion is the max protocol version the peer supports.
-	MaxProtocolVersion = wire.AddrV2Version
+	MaxProtocolVersion = wire.ProtocolVersion
 
 	// DefaultTrickleInterval is the min time between attempts to send an
 	// inv message to a peer.
@@ -244,6 +244,10 @@ type Config struct {
 	HostToNetAddress HostToNetAddrFunc
 
 	ValidatorId string // local mining pubkey
+
+	// NewPing supplies node access metadata and the next ping interval.
+	// It must return a fresh message; RPC broadcasts share their input message.
+	NewPing func(uint64) (*wire.MsgPing, time.Duration)
 
 	// Proxy indicates a proxy is being used for connections.  The only
 	// effect this has is to prevent leaking the tor proxy address, so it
@@ -463,6 +467,7 @@ type Peer struct {
 	addr    string
 	cfg     Config
 	inbound bool
+	pingNow chan struct{}
 
 	flagsMtx             sync.Mutex // protects the peer flags below
 	na                   *wire.NetAddressV2
@@ -2050,6 +2055,9 @@ out:
 	for {
 		select {
 		case msg := <-p.sendQueue:
+			if ping, ok := msg.msg.(*wire.MsgPing); ok && ping.NodeID == 0 && p.cfg.NewPing != nil {
+				msg.msg, _ = p.cfg.NewPing(ping.Nonce)
+			}
 			switch m := msg.msg.(type) {
 			case *wire.MsgPing:
 				// Only expects a pong message in later protocol
@@ -2128,23 +2136,51 @@ func (p *Peer) pingHandler() {
 		d = MinerPingInterval
 	}
 
-	pingTicker := time.NewTicker(d)
-	defer pingTicker.Stop()
+	firstPing := d
+	if p.cfg.NewPing != nil {
+		firstPing = 0
+	}
+	pingTimer := time.NewTimer(firstPing)
+	defer pingTimer.Stop()
 
 out:
 	for {
 		select {
-		case <-pingTicker.C:
+		case <-pingTimer.C:
 			nonce, err := wire.RandomUint64()
 			if err != nil {
 				log.Errorf("Not sending ping to %s: %v", p, err)
+				pingTimer.Reset(d)
 				continue
 			}
-			p.QueueMessage(wire.NewMsgPing(nonce), nil)
+			msg := wire.NewMsgPing(nonce)
+			interval := d
+			if p.cfg.NewPing != nil {
+				msg, interval = p.cfg.NewPing(nonce)
+			}
+			p.QueueMessage(msg, nil)
+			pingTimer.Reset(interval)
+
+		case <-p.pingNow:
+			if !pingTimer.Stop() {
+				select {
+				case <-pingTimer.C:
+				default:
+				}
+			}
+			pingTimer.Reset(0)
 
 		case <-p.quit:
 			break out
 		}
+	}
+}
+
+// RequestPing schedules an immediate ping without blocking the peer manager.
+func (p *Peer) RequestPing() {
+	select {
+	case p.pingNow <- struct{}{}:
+	default:
 	}
 }
 
@@ -2664,6 +2700,7 @@ func newPeerBase(origCfg *Config, inbound bool) *Peer {
 		queueQuit:        make(chan struct{}),
 		outQuit:          make(chan struct{}),
 		quit:             make(chan struct{}),
+		pingNow:          make(chan struct{}, 1),
 		cfg:              cfg, // Copy so caller can't mutate.
 		services:         cfg.Services,
 		protocolVersion:  cfg.ProtocolVersion,
