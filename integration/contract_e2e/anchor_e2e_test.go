@@ -109,10 +109,10 @@ func TestNetworkAscendFromFakeL1Indexer(t *testing.T) {
 	mempoolHashes, err := bootstrapNode.Client.GetRawMempool()
 	require.NoError(t, err)
 	require.NotEmpty(t, mempoolHashes)
+	blockHashes := generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 3)
 	for _, invokeTx := range invokeTxs {
 		waitForPOSTx(t, bootstrapNode, nodes, invokeTx)
 	}
-	blockHashes := generateOrWaitBlockAtLeast(t, bootstrapNode, nodes, 3)
 
 	bestHash, bestHeight, err := bootstrapNode.Client.GetBestBlock()
 	require.NoError(t, err)

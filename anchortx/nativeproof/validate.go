@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	btcwire "github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -96,8 +97,7 @@ func Validate(raw []byte, source Source, resolver consignment.BitcoinResolver, m
 		return nil, fmt.Errorf("native asset identity does not match RGB11 genesis")
 	}
 	genesis, _ := container.Value.Field("genesis")
-	schema, _ := container.Value.Field("schema")
-	types, _ := container.Value.Field("types")
+	schema, types := container.SchemaValues()
 	metadata, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
 	if err != nil {
 		return nil, err
@@ -196,12 +196,48 @@ func bitcoinNetwork(genesis strict_types.Value, expected string) (string, error)
 	return actual, nil
 }
 
+// CheckBitcoinChainNet binds the committed network to a fact from the same
+// Bitcoin source used for validation. Signets share a genesis and require
+// additional challenge evidence; configuration names alone cannot prove them.
+func CheckBitcoinChainNet(value strict_types.Value, genesisHash string) error {
+	value = value.Unwrap()
+	if value.Kind != strict_types.ValueEnum {
+		return consignment.ErrChainNetUnverified
+	}
+	var expected *chainhash.Hash
+	switch value.Tag {
+	case 0:
+		expected = chaincfg.MainNetParams.GenesisHash
+	case 1:
+		expected = chaincfg.TestNet3Params.GenesisHash
+	case 2:
+		expected = chaincfg.TestNet4Params.GenesisHash
+	case 4:
+		expected = chaincfg.RegressionNetParams.GenesisHash
+	default:
+		return fmt.Errorf("%w: network %s requires unsupported evidence", consignment.ErrChainNetUnverified, value.Name)
+	}
+	actual, err := chainhash.NewHashFromStr(genesisHash)
+	if len(genesisHash) != 64 || err != nil || *actual != *expected {
+		return fmt.Errorf("%w: Bitcoin genesis does not match the contract network", consignment.ErrChainNetUnverified)
+	}
+	return nil
+}
+
 // A validation call has one immutable snapshot per transaction. Historical
 // validation uses raw mined witnesses and never asks for today's UTXO state.
 type minedResolver struct {
 	inner     consignment.BitcoinResolver
 	witnesses map[[32]byte]consignment.WitnessEvidence
 	invalid   error
+}
+
+func (r *minedResolver) CheckRGB11ChainNet(value strict_types.Value) error {
+	checker, ok := r.inner.(consignment.ChainNetResolver)
+	if !ok {
+		return consignment.ErrChainNetUnverified
+	}
+	return checker.CheckRGB11ChainNet(value)
 }
 
 func (r *minedResolver) ResolveRGB11Witness(txid [32]byte) (consignment.WitnessEvidence, error) {

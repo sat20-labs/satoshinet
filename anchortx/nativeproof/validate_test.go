@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	btcwire "github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -17,15 +18,21 @@ import (
 	"github.com/sat20-labs/rgb11/operations"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
+	"github.com/sat20-labs/rgb11/strict_types"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
 
 type proofFacts struct {
 	witnesses     map[[32]byte]consignment.WitnessEvidence
+	genesisHash   string
 	spent         bool
 	unknown       bool
 	outpointCalls int
+}
+
+func (r *proofFacts) CheckRGB11ChainNet(value strict_types.Value) error {
+	return CheckBitcoinChainNet(value, r.genesisHash)
 }
 
 func (r *proofFacts) ResolveRGB11Witness(txid [32]byte) (consignment.WitnessEvidence, error) {
@@ -85,7 +92,8 @@ func issuedProof(t *testing.T, kind schemas.Kind) ([]byte, Source, *proofFacts, 
 	source := Source{Outpoint: (&btcwire.OutPoint{Hash: hash, Index: 0}).String(), PkScript: script,
 		Value: 0, BitcoinNetwork: "regtest", Assets: wire.TxAssets{{Name: wire.AssetName{Protocol: ProtocolRGB11,
 			Type: indexer.ASSET_TYPE_FT, Ticker: hex.EncodeToString(id[:])}, Amount: *indexer.NewDecimalWithScale(amount, int(precision))}}}
-	facts := &proofFacts{witnesses: map[[32]byte]consignment.WitnessEvidence{[32]byte(hash): minedFact(t, funding)}}
+	facts := &proofFacts{witnesses: map[[32]byte]consignment.WitnessEvidence{[32]byte(hash): minedFact(t, funding)},
+		genesisHash: chaincfg.RegressionNetParams.GenesisHash.String()}
 	return proof, source, facts, issued.Container
 }
 
@@ -114,6 +122,32 @@ func TestNativeRGB11FullSourceAndHistoricalAuthority(t *testing.T) {
 
 func TestNativeRGB11RejectsMismatchedClaims(t *testing.T) {
 	proof, source, facts, _ := issuedProof(t, schemas.NIA)
+	t.Run("independent chain identity", func(t *testing.T) {
+		wrongChain := *facts
+		wrongChain.genesisHash = chaincfg.TestNet4Params.GenesisHash.String()
+		_, err := Validate(proof, source, &wrongChain, Current)
+		require.ErrorIs(t, err, consignment.ErrChainNetUnverified)
+		// A wrapper that omits chain identity must not gain authority from the
+		// invoice network label or from otherwise valid transaction evidence.
+		withoutIdentity := struct{ consignment.BitcoinResolver }{facts}
+		_, err = Validate(proof, source, withoutIdentity, Current)
+		require.ErrorIs(t, err, consignment.ErrChainNetUnverified)
+	})
+	t.Run("supported chain facts", func(t *testing.T) {
+		for _, network := range []struct {
+			tag    uint8
+			params *chaincfg.Params
+		}{{0, &chaincfg.MainNetParams}, {1, &chaincfg.TestNet3Params},
+			{2, &chaincfg.TestNet4Params}, {4, &chaincfg.RegressionNetParams}} {
+			value := strict_types.Value{Kind: strict_types.ValueEnum, Tag: network.tag}
+			require.NoError(t, CheckBitcoinChainNet(value, network.params.GenesisHash.String()))
+			require.ErrorIs(t, CheckBitcoinChainNet(value, strings.Repeat("0", 64)), consignment.ErrChainNetUnverified)
+		}
+		for _, tag := range []uint8{3, 5, 6, 7} {
+			value := strict_types.Value{Kind: strict_types.ValueEnum, Tag: tag}
+			require.ErrorIs(t, CheckBitcoinChainNet(value, chaincfg.SigNetParams.GenesisHash.String()), consignment.ErrChainNetUnverified)
+		}
+	})
 	for _, test := range []struct {
 		name string
 		edit func(*Source)

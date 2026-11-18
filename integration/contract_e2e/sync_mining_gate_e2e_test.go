@@ -370,6 +370,9 @@ func syncMiningGateTip(t *testing.T, node *rpctest.Harness, height int32, hash *
 	url, err := node.IndexerURL("regtest")
 	require.NoError(t, err)
 	client := &http.Client{Timeout: 2 * time.Second}
+	// A fresh audit follower replays the index from genesis even after its
+	// chain tip is current. Budget for that history as well as peer startup.
+	replayWait := 90*time.Second + time.Duration(height)*time.Second
 	require.Eventually(t, func() bool {
 		got, h, err := node.Client.GetBestBlock()
 		if err != nil || h != height || *got != *hash {
@@ -387,7 +390,7 @@ func syncMiningGateTip(t *testing.T, node *rpctest.Harness, height int32, hash *
 			} `json:"data"`
 		}
 		return json.NewDecoder(response.Body).Decode(&state) == nil && state.Code == 0 && state.Data.Height == height
-	}, 90*time.Second, 100*time.Millisecond, "chain hash/height and published index height must catch up")
+	}, replayWait, 100*time.Millisecond, "chain hash/height and published index height must catch up")
 	// The public index API exposes height/block statistics, not its private tip
 	// hash. Compare the actual final block's index row as a separate witness.
 	response, err := client.Get(fmt.Sprintf("%s/height/%d", url, height))

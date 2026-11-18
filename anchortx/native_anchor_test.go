@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	btcchaincfg "github.com/btcsuite/btcd/chaincfg"
 	btcchainhash "github.com/btcsuite/btcd/chaincfg/chainhash"
 	btcwire "github.com/btcsuite/btcd/wire"
 	indexer "github.com/sat20-labs/indexer/common"
@@ -14,6 +15,7 @@ import (
 	"github.com/sat20-labs/rgb11/issuance"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
+	"github.com/sat20-labs/rgb11/strict_types"
 	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/chaincfg"
@@ -29,6 +31,10 @@ type nativeAnchorFacts struct {
 	spent         bool
 	archived      bool
 	outpointCalls int
+}
+
+func (f *nativeAnchorFacts) CheckRGB11ChainNet(value strict_types.Value) error {
+	return nativeproof.CheckBitcoinChainNet(value, btcchaincfg.TestNet4Params.GenesisHash.String())
 }
 
 func (f *nativeAnchorFacts) ResolveRGB11Witness(txid [32]byte) (consignment.WitnessEvidence, error) {

@@ -12,6 +12,7 @@ import (
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
 	"github.com/sat20-labs/rgb11/consensus"
 	"github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/operations"
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/strict_types"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
@@ -154,7 +155,7 @@ func validateRGB11TechnicalRecord(record *swire.DKVSRecord) (string, error) {
 	}
 	for _, field := range container.Value.Fields {
 		switch field.Name {
-		case "version", "transfer", "schema", "types", "scripts", "genesis":
+		case "version", "transfer", "genesis":
 		case "terminals":
 			v := rgb11PublicUnwrap(&field.Value)
 			if v == nil || v.Kind != strict_types.ValueMap || len(v.Entries) != 0 {
@@ -184,17 +185,15 @@ func validateRGB11TechnicalRecord(record *swire.DKVSRecord) (string, error) {
 			return "", invalid
 		}
 		for _, item := range items.Items {
-			allocation := rgb11PublicUnwrap(&item)
-			if allocation == nil || allocation.Kind != strict_types.ValueUnion ||
-				allocation.Name != "confidentialSeal" || allocation.Inner == nil {
+			kind, _, _, err := operations.AssignmentParts(item)
+			if err != nil || kind != "confidentialSeal" {
 				return "", invalid
 			}
 		}
 	}
-	schema, schemaOK := container.Value.Field("schema")
-	types, typesOK := container.Value.Field("types")
+	schema, types := container.SchemaValues()
 	genesisValue, genesisOK := container.Value.Field("genesis")
-	if !schemaOK || !typesOK || !genesisOK {
+	if !genesisOK {
 		return "", invalid
 	}
 	metadata, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesisValue)

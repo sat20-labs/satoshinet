@@ -9,10 +9,23 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	btcwire "github.com/btcsuite/btcd/wire"
 	"github.com/sat20-labs/rgb11/consignment"
+	"github.com/sat20-labs/rgb11/strict_types"
+	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	"github.com/sat20-labs/satoshinet/httpclient"
 )
 
 type indexerBitcoinResolver struct{ client *httpclient.IndexerClient }
+
+func (r *indexerBitcoinResolver) CheckRGB11ChainNet(value strict_types.Value) error {
+	if r == nil || r.client == nil {
+		return consignment.ErrChainNetUnverified
+	}
+	header, err := r.client.GetBitcoinBlockHeader(0)
+	if err != nil {
+		return err
+	}
+	return nativeproof.CheckBitcoinChainNet(value, header.Hash)
+}
 
 func (r *indexerBitcoinResolver) ResolveRGB11Witness(txid [32]byte) (consignment.WitnessEvidence, error) {
 	id := chainhash.Hash(txid).String()
