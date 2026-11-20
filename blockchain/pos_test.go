@@ -138,9 +138,9 @@ func (r *reconsiderPOSReadiness) NewValidationAssetView() (ContractAssetIndexVie
 	}, nil
 }
 
-// reconsiderPOSChain preserves the 101-block reconsideration fixture and the
-// real regtest activation height. A legacy side branch must already exist
-// before activation, when ordinary competing branches are still accepted.
+// reconsiderPOSChain crosses the real regtest activation height and includes
+// an approved coinbase spend. Seed legacy forks before activation, when
+// ordinary competing branches are still accepted.
 func reconsiderPOSChain(t *testing.T, name string, sideBranch bool) (*BlockChain, []*chainhash.Hash, func()) {
 	t.Helper()
 	chain, _, teardown := utxoCacheTestChain(name)
@@ -151,6 +151,7 @@ func reconsiderPOSChain(t *testing.T, name string, sideBranch bool) (*BlockChain
 		}
 	}()
 	require.Equal(t, int32(32), chain.chainParams.POSV2Height)
+	lastHeight := chain.chainParams.POSV2Height + 3
 	genesis := btcutil.NewBlock(chain.chainParams.GenesisBlock)
 	genesis.SetHeight(0)
 	key, _ := btcec.PrivKeyFromBytes(bytes.Repeat([]byte{1}, 32))
@@ -189,7 +190,7 @@ func reconsiderPOSChain(t *testing.T, name string, sideBranch bool) (*BlockChain
 	var first *btcutil.Block
 	var firstOuts, available, nextSpends []*testhelper.SpendableOut
 	var sideHashes []*chainhash.Hash
-	for height := int32(1); height <= 101; height++ {
+	for height := int32(1); height <= lastHeight; height++ {
 		block, outs := newReconsiderPOSBlock(t, chain, ready, key, prev, nextSpends)
 		main, orphan, err := chain.ProcessBlock(block, BFNone)
 		require.NoError(t, err, "connect reconsideration block %d", height)
@@ -219,7 +220,7 @@ func reconsiderPOSChain(t *testing.T, name string, sideBranch bool) (*BlockChain
 			require.Equal(t, *prev.Hash(), chain.BestSnapshot().Hash)
 		}
 	}
-	require.Equal(t, int32(101), chain.BestSnapshot().Height)
+	require.Equal(t, lastHeight, chain.BestSnapshot().Height)
 	complete = true
 	return chain, sideHashes, teardown
 }

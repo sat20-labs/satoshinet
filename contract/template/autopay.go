@@ -568,8 +568,9 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 		}
 		state.AutopayData().AutopayCloseStarted = true
 		processed := 0
+		delegateLimit := contractframework.ResultOutputLimit() - AutopayCloseReservedOutputs
 		for _, address := range c.sortedDelegateAddresses(state.AutopayData()) {
-			if processed >= AutopayMaxCloseDelegateOutputs {
+			if processed >= delegateLimit {
 				break
 			}
 			delegate := state.AutopayData().AutopayDelegates[address]

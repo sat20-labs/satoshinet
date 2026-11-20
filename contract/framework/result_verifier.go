@@ -171,7 +171,7 @@ func VerifyCanonicalResultTx(req CanonicalResultVerifyRequest) error {
 	if req.ResultTx == nil {
 		return fmt.Errorf("missing result transaction")
 	}
-	if len(req.ResultTx.TxOut) > MaxContractResultOutputs {
+	if len(req.ResultTx.TxOut) > ResultOutputLimit() {
 		return fmt.Errorf("too many contract result outputs: %d", len(req.ResultTx.TxOut))
 	}
 	if req.ResultTx.Version != 2 {

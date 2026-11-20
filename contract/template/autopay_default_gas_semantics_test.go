@@ -314,7 +314,7 @@ func autopayDefaultGasRequest(runtime *ContractRuntime, actor, gasAssetName, cal
 	}
 }
 
-func applyAutopayDelegateConfigForTest(t *testing.T, runtime *ContractRuntime, actor, callID string,
+func applyAutopayDelegateConfigForTest(t testing.TB, runtime *ContractRuntime, actor, callID string,
 	height int64, amountPerBlock, gasAssetName string, funding ContractOutput) *InvokeItem {
 	t.Helper()
 	param, err := (&AutopayConfigInvokeParam{AmountPerBlock: amountPerBlock}).Encode()

@@ -21,6 +21,7 @@ type contractResultPart struct {
 }
 
 func buildContractResultParts(req ResultTxBuildRequest, opts ResultTxBuildOptions) ([]contractResultPart, error) {
+	outputLimit := ResultOutputLimit()
 	plans := CloneResultPlans(req.Plans)
 	// Capture counts before merging, including engine-specific ItemID counts.
 	for n := range plans {
@@ -70,7 +71,7 @@ func buildContractResultParts(req ResultTxBuildRequest, opts ResultTxBuildOption
 			part.InputUTXOs = available
 			// Reserve metadata first. A carry takes a slot only when the
 			// selected inputs actually leave change.
-			nonFinal := len(remaining) > MaxContractResultOutputs-1
+			nonFinal := len(remaining) > outputLimit-1
 			consumed := len(remaining)
 			var carry *ResultOutput
 			if nonFinal {
@@ -82,7 +83,7 @@ func buildContractResultParts(req ResultTxBuildRequest, opts ResultTxBuildOption
 				var fundingErr error
 				// Prefer the largest legal prefix. Reducing it can avoid a
 				// partial-binding boundary in change, or make room for carry.
-				for consumed = MaxContractResultOutputs - 1; consumed > 0; consumed-- {
+				for consumed = outputLimit - 1; consumed > 0; consumed-- {
 					outputs := remaining[:consumed]
 					selected, fundingErr = selectResultFunding(view, outputs, "", nil, 0, nil)
 					if fundingErr != nil {
@@ -103,7 +104,7 @@ func buildContractResultParts(req ResultTxBuildRequest, opts ResultTxBuildOption
 					}
 					change := ResultOutput{To: plan.Contract, Value: value, Assets: assets}
 					if !ResultOutputIsZero(change) {
-						if consumed+2 > MaxContractResultOutputs {
+						if consumed+2 > outputLimit {
 							continue
 						}
 						carry = &change

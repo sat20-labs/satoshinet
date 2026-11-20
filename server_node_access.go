@@ -13,11 +13,14 @@ import (
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
-const (
-	accessPingInterval = 20 * time.Second
-	accessExpiry       = 60 * time.Second
-	accessSelectWait   = 10 * time.Minute
-)
+type accessTiming struct {
+	ping, idlePing, expiry, selectionWait time.Duration
+}
+
+var accessTimers = nodeAccessTiming(accessTiming{
+	ping: 20 * time.Second, idlePing: 2 * time.Minute,
+	expiry: 60 * time.Second, selectionWait: 10 * time.Minute,
+})
 
 var accessCoreKey = []byte("preferred-core")
 
@@ -95,7 +98,7 @@ func (s *server) initNodeAccess() error {
 		}
 		s.access.coreKey = hex.EncodeToString(data[:33])
 		s.access.coreAddr = addr
-		s.access.selectAfter = time.Now().Add(accessSelectWait)
+		s.access.selectAfter = time.Now().Add(accessTimers.selectionWait)
 		return nil
 	})
 }
@@ -145,13 +148,13 @@ func (s *server) updateNodeAccess(state *peerState, now time.Time) {
 		selected.RequestPing()
 	}
 	if selected := s.access.selected; selected != nil {
-		if selected.Connected() && now.Sub(selected.accessSeen) < accessExpiry {
+		if selected.Connected() && now.Sub(selected.accessSeen) < accessTimers.expiry {
 			return
 		}
 		s.access.selected = nil
 		selected.RequestPing()
 		if s.autoAccess() {
-			s.access.selectAfter = now.Add(accessSelectWait)
+			s.access.selectAfter = now.Add(accessTimers.selectionWait)
 		}
 	}
 
@@ -177,7 +180,7 @@ func (s *server) updateNodeAccess(state *peerState, now time.Time) {
 		// Idle backup connections ping less often. Wait for a fresh report
 		// before selecting one, without disconnecting it or changing retries.
 		if !sp.Connected() || sp.ValidatorId() == s.miningPubKey ||
-			sp.accessSeen.IsZero() || now.Sub(sp.accessSeen) >= accessExpiry {
+			sp.accessSeen.IsZero() || now.Sub(sp.accessSeen) >= accessTimers.expiry {
 			return
 		}
 		if parent != "" {
@@ -217,7 +220,7 @@ func (s *server) accessChildCount(state *peerState, now time.Time) uint32 {
 	}
 	ids := make(map[uint64]struct{})
 	state.forAllPeers(func(sp *serverPeer) {
-		if !sp.Connected() || !sp.accessUse || sp.accessNodeID == 0 || now.Sub(sp.accessSeen) >= accessExpiry {
+		if !sp.Connected() || !sp.accessUse || sp.accessNodeID == 0 || now.Sub(sp.accessSeen) >= accessTimers.expiry {
 			return
 		}
 		typ := s.accessType(sp.ValidatorId())
@@ -233,13 +236,13 @@ func (sp *serverPeer) newAccessPing(nonce uint64) (*wire.MsgPing, time.Duration)
 	select {
 	case sp.server.query <- newAccessPingMsg{peer: sp, nonce: nonce, reply: reply}:
 	case <-sp.server.quit:
-		return wire.NewMsgPing(nonce), accessPingInterval
+		return wire.NewMsgPing(nonce), accessTimers.ping
 	}
 	select {
 	case result := <-reply:
 		return result.message, result.interval
 	case <-sp.server.quit:
-		return wire.NewMsgPing(nonce), accessPingInterval
+		return wire.NewMsgPing(nonce), accessTimers.ping
 	}
 }
 
@@ -263,7 +266,7 @@ func (s *server) accessSnapshot(state *peerState) btcjson.GetNodeStatsResult {
 	result := btcjson.GetNodeStatsResult{
 		NodeID:        fmt.Sprintf("%016x", s.access.nodeID),
 		PreferredCore: s.access.coreKey, PreferredAddr: s.access.coreAddr,
-		ChildCount: s.accessChildCount(state, now), WindowSeconds: int64(accessExpiry / time.Second),
+		ChildCount: s.accessChildCount(state, now), WindowSeconds: int64(accessTimers.expiry / time.Second),
 		IsBootstrap: s.accessType(s.miningPubKey) == common.NODE_TYPE_BOOTSTRAP,
 	}
 	if sp := s.access.selected; sp != nil && sp.Connected() {
@@ -274,7 +277,7 @@ func (s *server) accessSnapshot(state *peerState) btcjson.GetNodeStatsResult {
 	}
 	cores := make(map[string]*serverPeer)
 	state.forAllPeers(func(sp *serverPeer) {
-		if !sp.Connected() || sp.accessNodeID == 0 || now.Sub(sp.accessSeen) >= accessExpiry ||
+		if !sp.Connected() || sp.accessNodeID == 0 || now.Sub(sp.accessSeen) >= accessTimers.expiry ||
 			s.accessType(sp.ValidatorId()) != common.NODE_TYPE_CORE {
 			return
 		}

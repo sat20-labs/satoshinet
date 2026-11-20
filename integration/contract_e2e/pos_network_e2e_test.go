@@ -26,7 +26,7 @@ import (
 // separate verifier's submitblock entry, and a killed/restarted Bootstrap.
 func TestNetworkPOSV2ActivationApprovalAndRestart(t *testing.T) {
 	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", "2")
-	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "5")
+	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "2")
 	t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "5")
 	fixture := newTemplateNetworkFixture(t, nil)
 	bootstrap := fixture.bootstrapNode

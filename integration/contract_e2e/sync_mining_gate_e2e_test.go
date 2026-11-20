@@ -39,22 +39,27 @@ import (
 // The HTTP backend never supplies a Bitcoin template, so no BTC hash worker or
 // submission can be started. They do not use an existing node or database.
 type syncMiningGateFixture struct {
+	params          chaincfg.Params
 	executable      string
 	bootstrap, core *btcec.PrivateKey
 	witness, locked []byte
 	utxos           map[string]*indexercommon.AssetsInUtxo
 }
 
-func newSyncMiningGateFixture(t *testing.T, blocks int) *syncMiningGateFixture {
+func newSyncMiningGateFixture(t *testing.T, blocks int, posV2Height int32) *syncMiningGateFixture {
 	t.Helper()
-	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", strconv.Itoa(int(chaincfg.RegressionNetParams.POSV2Height)))
+	// Only this fixture's node processes, anchor signer and producer use this
+	// height. Do not mutate the regression network params shared by other tests.
+	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", strconv.Itoa(int(posV2Height)))
 	previous := indexercommon.ENABLE_TESTING
 	indexercommon.ENABLE_TESTING = true
 	t.Cleanup(func() { indexercommon.ENABLE_TESTING = previous })
 	f := &syncMiningGateFixture{
+		params:    chaincfg.RegressionNetParams,
 		bootstrap: keyFromMnemonic(t, bootstrapMnemonic, 0),
 		core:      keyFromMnemonic(t, coreMnemonic, 0),
 	}
+	f.params.POSV2Height = posV2Height
 	var err error
 	f.witness, f.locked, err = anchortx.GetP2WSHscript(f.bootstrap.PubKey().SerializeCompressed(), f.core.PubKey().SerializeCompressed())
 	require.NoError(t, err)
@@ -235,11 +240,11 @@ func (f *syncMiningGateFixture) node(t *testing.T, l *syncMiningGateL1, producer
 	generate := producer
 	for _, arg := range extra {
 		if arg == "--generate" {
-			generate = true // The self-check gate reuses its zero node as Core.
+			generate = true
 		}
 	}
 	args = append(args, extra...)
-	n := newContractE2EHarness(t, &chaincfg.RegressionNetParams, args, f.executable,
+	n := newContractE2EHarness(t, &f.params, args, f.executable,
 		[]string{"SATOSHINET_RPCTEST_NODE_ROLE=" + role, "SATOSHINET_RPCTEST_STP_MNEMONIC=" + mnemonic, "SATOSHINET_RPCTEST_STP_PASSWORD=rpctest"}, "127.0.0.1")
 	n.MaxConnRetries, n.ConnectionRetryTimeout = 100, 100*time.Millisecond
 	require.NoError(t, n.SetUp(false, 0))
@@ -271,7 +276,7 @@ func (f *syncMiningGateFixture) produce(t *testing.T, node, core *rpctest.Harnes
 		anchor := buildNetworkAnchorTx(t, templateLockedOutPoint("sync-mining-gate", h), 200000,
 			testWireAsset("brc20:f:sgas", 100000), "brc20:f:sgas-100000-0-0", f.witness, f.bootstrap, f.locked, int32(h))
 		sendTx(t, node, anchor)
-		v2 := chaincfg.RegressionNetParams.POSV2Active(int32(h))
+		v2 := f.params.POSV2Active(int32(h))
 		if v2 {
 			if !scheduled {
 				require.NotNil(t, core, "POS v2 requires the connected Core producer")
@@ -281,7 +286,7 @@ func (f *syncMiningGateFixture) produce(t *testing.T, node, core *rpctest.Harnes
 				}
 			}
 			// Submit one anchor at a time and use the real scheduled producer
-			// and Bootstrap approval path, never discrete generate after H32.
+			// and Bootstrap approval path, never discrete generate after activation.
 			require.Eventually(t, func() bool {
 				_, height, err := node.Client.GetBestBlock()
 				return err == nil && height >= int32(h)
@@ -307,7 +312,7 @@ func (f *syncMiningGateFixture) produce(t *testing.T, node, core *rpctest.Harnes
 			sig, err := ecdsa.ParseDERSignature(witness[1])
 			require.NoError(t, err)
 			require.True(t, anchortx.VerifyMessage(f.bootstrap.PubKey(),
-				scommon.POSApprovalMessage(chaincfg.RegressionNetParams.Net, int32(h), *hash), sig), "height=%d", h)
+				scommon.POSApprovalMessage(f.params.Net, int32(h), *hash), sig), "height=%d", h)
 		}
 	}
 	return hash
@@ -411,7 +416,10 @@ func syncMiningGateTip(t *testing.T, node *rpctest.Harness, height int32, hash *
 }
 
 func TestNetworkIndexerSelfCheckHeightOnce(t *testing.T) {
-	f := newSyncMiningGateFixture(t, 401)
+	// H10 exercises the trigger; H79 has real delayed commits. H199 is the
+	// former (height+1)%200 boundary for both live connect and startup catch-up.
+	const early, persisted, legacyBoundary = 10, 79, 199
+	f := newSyncMiningGateFixture(t, legacyBoundary, legacyBoundary+1)
 	for _, value := range []string{"-1", "2147483648"} {
 		t.Run("reject-height-"+value, func(t *testing.T) {
 			dir := t.TempDir()
@@ -444,56 +452,80 @@ func TestNetworkIndexerSelfCheckHeightOnce(t *testing.T) {
 		})
 	}
 	source := f.node(t, f.l1(t), true)
-	// Reuse the zero-check node as the wallet-backed Core required for
-	// scheduled POS v2. The audit follower still replays the frozen history.
-	zero := f.node(t, f.l1(t), false, "--generate", "--indexerselfcheckheight=0")
-	require.NoError(t, rpctest.ConnectNode(zero, source))
-	hash := f.produce(t, source, zero, 1, 199)
-	// An ordinary audit follower must not replace the active Core's peer
-	// entry by advertising the same validator identity.
-	once := f.node(t, f.l1(t), false, "--indexerselfcheckheight=200", "--miningpubkey=")
-	require.NoError(t, rpctest.ConnectNode(once, source))
-	for _, n := range []*rpctest.Harness{zero, once} {
-		syncMiningGateTip(t, n, 199, hash)
-		require.NotContains(t, syncMiningGateLog(t, n), "IndexerMgr.checkSelf takes")
+	follower := func(target int) *rpctest.Harness {
+		t.Helper()
+		n := f.node(t, f.l1(t), false, "--indexerselfcheckheight="+strconv.Itoa(target), "--miningpubkey=")
+		require.NoError(t, rpctest.ConnectNode(n, source))
+		return n
 	}
-	hash = f.produce(t, source, zero, 200, 200)
-	syncMiningGateTip(t, once, 200, hash)
-	require.Eventually(t, func() bool { return strings.Count(syncMiningGateLog(t, once), "IndexerMgr.checkSelf takes") == 1 }, 30*time.Second, 100*time.Millisecond)
-	audit := syncMiningGateLog(t, once)
-	match := regexp.MustCompile(`indexer self-check requested at 200: applied height (\d+), durable height (-?\d+)`).FindStringSubmatch(audit)
-	require.Len(t, match, 3)
-	require.Equal(t, "200", match[1])
-	durable, err := strconv.Atoi(match[2])
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, durable, 40, "the gate must exercise a real durable Base audit")
-	require.LessOrEqual(t, durable, 200) // Never force a flush to the trigger height.
-	require.Contains(t, audit, "DB checked successfully")
-	hash = f.produce(t, source, zero, 201, 401)
+	completed := "IndexerMgr.checkSelf takes"
+	checkOnce := func(n *rpctest.Harness, target int) int {
+		t.Helper()
+		require.Eventually(t, func() bool { return strings.Count(syncMiningGateLog(t, n), completed) == 1 }, 30*time.Second, 100*time.Millisecond)
+		log := syncMiningGateLog(t, n)
+		needle := fmt.Sprintf("indexer self-check requested at %d: applied height %d, durable height ", target, target)
+		require.Equal(t, 1, strings.Count(log, "indexer self-check requested"))
+		match := regexp.MustCompile(regexp.QuoteMeta(needle) + `(-?\d+)`).FindStringSubmatch(log)
+		require.Len(t, match, 2)
+		durable, err := strconv.Atoi(match[1])
+		require.NoError(t, err)
+		return durable
+	}
+
+	zero, short := follower(0), follower(early)
+	hash := f.produce(t, source, nil, 1, early-1)
+	syncMiningGateTip(t, short, early-1, hash)
+	require.NotContains(t, syncMiningGateLog(t, short), completed)
+	hash = f.produce(t, source, nil, early, early)
+	syncMiningGateTip(t, short, early, hash)
+	checkOnce(short, early) // An empty durable Base here is not a full DB audit.
+	hash = f.produce(t, source, nil, early+1, early+1)
+	syncMiningGateTip(t, short, early+1, hash)
+	checkOnce(short, early)
+	require.NoError(t, short.StopNode())
+
+	hash = f.produce(t, source, nil, early+2, persisted-1)
+	once := follower(persisted)
+	syncMiningGateTip(t, once, persisted-1, hash)
+	require.NotContains(t, syncMiningGateLog(t, once), completed)
+	hash = f.produce(t, source, nil, persisted, persisted)
+	syncMiningGateTip(t, once, persisted, hash)
+	durable := checkOnce(once, persisted)
+	require.GreaterOrEqual(t, durable, 40, "must audit a populated durable Base")
+	require.Less(t, durable, persisted, "the audit must not force a flush")
+	require.Contains(t, syncMiningGateLog(t, once), "DB checked successfully")
+
+	hash = f.produce(t, source, nil, persisted+1, legacyBoundary)
 	for _, n := range []*rpctest.Harness{source, zero, once} {
-		syncMiningGateTip(t, n, 401, hash)
+		syncMiningGateTip(t, n, legacyBoundary, hash)
 	}
 	for _, n := range []*rpctest.Harness{source, zero} {
+		require.NoError(t, n.StopNode()) // Join processing before checking for absent log entries.
 		log := syncMiningGateLog(t, n)
 		require.NotContains(t, log, "BaseIndexer->checkSelf")
 		require.NotContains(t, log, "IndexerMgr.checkSelf takes")
 	}
-	require.Equal(t, 1, strings.Count(syncMiningGateLog(t, once), "indexer self-check requested at 200:"))
-	require.Equal(t, 1, strings.Count(syncMiningGateLog(t, once), "IndexerMgr.checkSelf takes"))
+	checkOnce(once, persisted)
 	before := len(syncMiningGateLog(t, once))
 	require.NoError(t, once.Restart(false)) // Same private data, no copy or forced flush.
-	syncMiningGateTip(t, once, 401, hash)
+	syncMiningGateTip(t, once, legacyBoundary, hash)
+	require.NoError(t, once.StopNode()) // Startup catch-up must have finished, including any late audit.
 	restarted := syncMiningGateLog(t, once)[before:]
-	require.Regexp(t, `indexer self-check target 200 already restored at height \d+; skipping`, restarted)
+	restored := regexp.MustCompile(fmt.Sprintf(`indexer self-check target %d already restored at height (\d+); skipping`, persisted)).FindStringSubmatch(restarted)
+	require.Len(t, restored, 2)
+	restoredHeight, err := strconv.Atoi(restored[1])
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, restoredHeight, persisted)
+	require.Less(t, restoredHeight, legacyBoundary, "restart must catch up through the old boundary")
 	require.NotContains(t, restarted, "indexer self-check requested")
 	require.NotContains(t, restarted, "IndexerMgr.checkSelf takes")
 	// This deliberately does not promise persistence of checkOnce: a crash
 	// restoring the index below H may run the audit again on replay through H.
-	t.Logf("self-check H=200 applied=200 durable=%d checks=1 omitted_and_zero_checks=0 final_height=401 restart_restored_target_skipped=true", durable)
+	t.Logf("self-check H%d/H%d fired once; durable=%d, omitted/zero disabled, restarted H%d -> H%d without rechecking", early, persisted, durable, restoredHeight, legacyBoundary)
 }
 
 func TestNetworkBTCLuckyMinerWaitsForSatoshiNetSync(t *testing.T) {
-	f := newSyncMiningGateFixture(t, 3)
+	f := newSyncMiningGateFixture(t, 3, chaincfg.RegressionNetParams.POSV2Height)
 	source := f.node(t, f.l1(t), true)
 	hash := f.produce(t, source, nil, 1, 3)
 	args := []string{"--btcluckymining", "--btcluckyminingjobs=1", "--serverpubkey=" + hex.EncodeToString(f.bootstrap.PubKey().SerializeCompressed())}

@@ -259,78 +259,95 @@ func decodeTemplateJSONBaseline(data []byte) (*RuntimeStore, error) {
 	return store, nil
 }
 
-func TestCompactTemplateStatePerformance(t *testing.T) {
+func TestCompactTemplateRoundTrip(t *testing.T) {
 	for _, count := range []int{20, 500, 1001} {
 		for _, pending := range []int{0, 20} {
 			t.Run(fmt.Sprintf("delegates_%d_pending_%d", count, pending), func(t *testing.T) {
-				runtime, state := compactAutopayFixture(t, count, pending)
-				raw, err := encodeTemplateRuntimeState(state)
-				require.NoError(t, err)
-				legacy, err := json.Marshal(state)
-				require.NoError(t, err)
-				var jsonState TemplateRuntimeState
-				require.NoError(t, jsonState.UnmarshalJSON(legacy))
-				binaryState, err := decodeTemplateRuntimeState(raw)
-				require.NoError(t, err)
-				require.Equal(t, jsonState, binaryState)
-				require.Equal(t, bufferedTemplateBinaryRoot(runtime, jsonState), runtime.StateRoot())
-				store := runtimeStoreWith(runtime)
-				storeBytes, err := store.MarshalBinary()
-				require.NoError(t, err)
-				legacyStore := store.Clone()
-				legacyRuntime, ok := legacyStore.Get(runtime.Address())
-				require.True(t, ok)
-				legacyRuntime.base.state[runtimeStateKey] = bytes.Clone(legacy)
-				legacyStoreBytes, err := marshalTemplateJSONBaseline(legacyStore)
-				require.NoError(t, err)
-				restoredStore, err := DecodeRuntimeStore(storeBytes, nil)
-				require.NoError(t, err)
-				require.Equal(t, store.StateRoot(), restoredStore.StateRoot())
-				oldStore, err := decodeTemplateJSONBaseline(legacyStoreBytes)
-				require.NoError(t, err)
-				oldRuntime, ok := oldStore.Get(runtime.Address())
-				require.True(t, ok)
-				var oldState TemplateRuntimeState
-				require.NoError(t, oldState.UnmarshalJSON(oldRuntime.base.state[runtimeStateKey]))
-				require.Equal(t, binaryState, oldState)
-				require.Equal(t, runtime.StateRoot(), bufferedTemplateBinaryRoot(oldRuntime, oldState))
-				codecs := []struct {
-					scope  string
-					name   string
-					encode func() ([]byte, error)
-					decode func() error
-					size   int
-				}{
-					{"state", "json", func() ([]byte, error) { return json.Marshal(state) }, func() error { var out TemplateRuntimeState; return out.UnmarshalJSON(legacy) }, len(legacy)},
-					{"state", "compact", func() ([]byte, error) { return encodeTemplateRuntimeState(state) }, func() error { _, err := decodeTemplateRuntimeState(raw); return err }, len(raw)},
-					{"store", "json", func() ([]byte, error) { return marshalTemplateJSONBaseline(legacyStore) }, func() error { _, err := decodeTemplateJSONBaseline(legacyStoreBytes); return err }, len(legacyStoreBytes)},
-					{"store", "compact", store.MarshalBinary, func() error { _, err := DecodeRuntimeStore(storeBytes, nil); return err }, len(storeBytes)},
-				}
-				for _, codec := range codecs {
-					for _, op := range []string{"encode", "decode"} {
-						result := testing.Benchmark(func(b *testing.B) {
-							b.ReportAllocs()
-							for i := 0; i < b.N; i++ {
-								var err error
-								if op == "encode" {
-									_, err = codec.encode()
-								} else {
-									err = codec.decode()
-								}
-								if err != nil {
-									b.Fatal(err)
-								}
+				compactStateCodecs(t, count, pending)
+			})
+		}
+	}
+}
+
+func BenchmarkCompactTemplateState(b *testing.B) {
+	for _, count := range []int{20, 500, 1001} {
+		for _, pending := range []int{0, 20} {
+			b.Run(fmt.Sprintf("delegates_%d_pending_%d", count, pending), func(b *testing.B) {
+				for _, codec := range compactStateCodecs(b, count, pending) {
+					b.Run(codec.scope+"/"+codec.name+"/encode", func(b *testing.B) {
+						b.ReportAllocs()
+						for b.Loop() {
+							if _, err := codec.encode(); err != nil {
+								b.Fatal(err)
 							}
-						})
-						t.Logf("METRIC delegates=%d pending=%d scope=%s codec=%s op=%s bytes=%d ns_op=%d B_op=%d allocs_op=%d", count, pending, codec.scope, codec.name, op, codec.size, result.NsPerOp(), result.AllocedBytesPerOp(), result.AllocsPerOp())
-					}
+						}
+						b.ReportMetric(float64(codec.size), "encoded-B")
+					})
+					b.Run(codec.scope+"/"+codec.name+"/decode", func(b *testing.B) {
+						b.ReportAllocs()
+						for b.Loop() {
+							if err := codec.decode(); err != nil {
+								b.Fatal(err)
+							}
+						}
+						b.ReportMetric(float64(codec.size), "encoded-B")
+					})
 				}
 			})
 		}
 	}
 }
 
-func compactAutopayFixture(t *testing.T, count, pending int) (*ContractRuntime, TemplateRuntimeState) {
+type compactStateCodec struct {
+	scope  string
+	name   string
+	encode func() ([]byte, error)
+	decode func() error
+	size   int
+}
+
+func compactStateCodecs(t testing.TB, count, pending int) []compactStateCodec {
+	t.Helper()
+	runtime, state := compactAutopayFixture(t, count, pending)
+	raw, err := encodeTemplateRuntimeState(state)
+	require.NoError(t, err)
+	legacy, err := json.Marshal(state)
+	require.NoError(t, err)
+	var jsonState TemplateRuntimeState
+	require.NoError(t, jsonState.UnmarshalJSON(legacy))
+	binaryState, err := decodeTemplateRuntimeState(raw)
+	require.NoError(t, err)
+	require.Equal(t, jsonState, binaryState)
+	require.Equal(t, bufferedTemplateBinaryRoot(runtime, jsonState), runtime.StateRoot())
+	store := runtimeStoreWith(runtime)
+	storeBytes, err := store.MarshalBinary()
+	require.NoError(t, err)
+	legacyStore := store.Clone()
+	legacyRuntime, ok := legacyStore.Get(runtime.Address())
+	require.True(t, ok)
+	legacyRuntime.base.state[runtimeStateKey] = bytes.Clone(legacy)
+	legacyStoreBytes, err := marshalTemplateJSONBaseline(legacyStore)
+	require.NoError(t, err)
+	restoredStore, err := DecodeRuntimeStore(storeBytes, nil)
+	require.NoError(t, err)
+	require.Equal(t, store.StateRoot(), restoredStore.StateRoot())
+	oldStore, err := decodeTemplateJSONBaseline(legacyStoreBytes)
+	require.NoError(t, err)
+	oldRuntime, ok := oldStore.Get(runtime.Address())
+	require.True(t, ok)
+	var oldState TemplateRuntimeState
+	require.NoError(t, oldState.UnmarshalJSON(oldRuntime.base.state[runtimeStateKey]))
+	require.Equal(t, binaryState, oldState)
+	require.Equal(t, runtime.StateRoot(), bufferedTemplateBinaryRoot(oldRuntime, oldState))
+	return []compactStateCodec{
+		{"state", "json", func() ([]byte, error) { return json.Marshal(state) }, func() error { var out TemplateRuntimeState; return out.UnmarshalJSON(legacy) }, len(legacy)},
+		{"state", "compact", func() ([]byte, error) { return encodeTemplateRuntimeState(state) }, func() error { _, err := decodeTemplateRuntimeState(raw); return err }, len(raw)},
+		{"store", "json", func() ([]byte, error) { return marshalTemplateJSONBaseline(legacyStore) }, func() error { _, err := decodeTemplateJSONBaseline(legacyStoreBytes); return err }, len(legacyStoreBytes)},
+		{"store", "compact", store.MarshalBinary, func() error { _, err := DecodeRuntimeStore(storeBytes, nil); return err }, len(storeBytes)},
+	}
+}
+
+func compactAutopayFixture(t testing.TB, count, pending int) (*ContractRuntime, TemplateRuntimeState) {
 	t.Helper()
 	runtime := testAutopayRuntime(t, "recipient", DefaultGasConfig().GasAssetName, "2000")
 	for i := 0; i < pending; i++ {

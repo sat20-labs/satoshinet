@@ -13,10 +13,13 @@ import (
 // Every delegate is created by a signed, mined config transaction. This crosses
 // the real Result output limit without seeding private runtime state or storage.
 func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
+	const outputLimit = 10
+	const delegateLimit = outputLimit - tmplcontract.AutopayCloseReservedOutputs
+	t.Setenv("SATOSHINET_RPCTEST_RESULT_OUTPUT_LIMIT", "10")
 	f := newTemplateNetworkFixture(t, nil)
 	f.traderAActor = signedTemplateActor(t, f.traderA)
 	gas := tmplcontract.DefaultGasConfig().GasAssetName
-	count := tmplcontract.AutopayMaxCloseDelegateOutputs + 3
+	count := delegateLimit + 3
 	actors := make([]*templateNetworkActor, count)
 	amounts, values := []int64{40000000}, []int64{50000}
 	recipients := []*templateNetworkActor{f.traderAActor}
@@ -28,6 +31,10 @@ func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
 		recipients = append(recipients, actors[i])
 	}
 	fundingInputs := f.splitAssetTo(t, f.gasAnchor, gas, amounts, values, f.traderA, recipients)
+	// splitAssetTo waited for confirmation. Fetch this large shared parent once,
+	// not once per delegate; each input still selects and verifies its own vout.
+	parent, err := f.bootstrapNode.Client.GetRawTransaction(&fundingInputs[0].Hash)
+	require.NoError(t, err)
 	address := scenarioDeploy(t, f, tmplcontract.NewAutopayContract("batch-close", f.traderAActor.address, gas, "2000"),
 		"autopay-batch", 0, scenarioFunding(t, 0, map[string]int64{gas: 50}))
 	works := make([]*wire.MsgTx, len(actors))
@@ -44,7 +51,7 @@ func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
 			Funding: scenarioFunding(t, 0, map[string]int64{gas: 1050}),
 		})
 		require.NoError(t, err)
-		signScenarioInputsWithChange(t, f, tx, actor.key, contractcommon.InvokeBaseGas, 0)
+		signScenarioInputsWithParent(t, f, tx, actor.key, contractcommon.InvokeBaseGas, 0, parent)
 		sendTx(t, f.bootstrapNode, tx)
 		works[i] = tx
 		if (i+1)%20 == 0 || i == len(actors)-1 {
@@ -85,12 +92,12 @@ func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
 		require.NoError(t, err)
 		block, err := f.bootstrapNode.Client.GetBlock(hash)
 		require.NoError(t, err)
-		paid := false
+		paid := 0
 		for _, tx := range block.Transactions {
 			if _, err := contractframework.ResultPayloadFromTx(tx, "template"); err != nil {
 				continue
 			}
-			require.LessOrEqual(t, len(tx.TxOut), contractframework.MaxContractResultOutputs, "each batch must respect the consensus output limit")
+			require.LessOrEqual(t, len(tx.TxOut), outputLimit, "each Result must respect the test network's output limit")
 			outputs, err := contractframework.ResultOutputsFromTx(tx, tmplcontract.TestnetContractPrefix,
 				contractcommon.ParseContractPkScript, testnetScriptRecipient)
 			require.NoError(t, err)
@@ -101,10 +108,13 @@ func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
 				}
 				require.Equal(t, "1000", amount, "delegate refund must contain the complete principal exactly once")
 				refunded[recipient] += 1000
-				paid = true
+				paid++
 			}
 		}
-		if paid {
+		if paid > 0 {
+			if refundBlocks == 0 {
+				require.Equal(t, delegateLimit, paid, "the first block fills its delegate refund batch")
+			}
 			refundBlocks++
 		}
 	}

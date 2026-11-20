@@ -32,9 +32,11 @@ import (
 // injected. Offline cases stop processes, rather than merely pausing mining.
 func TestNetworkPOSV2MultiCoreMultiMinerOffline(t *testing.T) {
 	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", "2")
-	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "5")
-	t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "5")
-	configureFastPOSTimers(t)
+	// Keep a grace period for ancestor substitution with shorter test slots.
+	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "1")
+	t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "2")
+	t.Setenv("SATOSHINET_POS_CHECKING_INTERVAL", "1")
+	t.Setenv("SATOSHINET_RPCTEST_FAST_ACCESS", "1")
 	previousTesting := indexercommon.ENABLE_TESTING
 	indexercommon.ENABLE_TESTING = true
 	t.Cleanup(func() { indexercommon.ENABLE_TESTING = previousTesting })
@@ -277,21 +279,24 @@ func TestNetworkPOSV2MultiCoreMultiMinerOffline(t *testing.T) {
 		return
 	}
 	if !t.Run("core_offline_miners_still_online", func(t *testing.T) {
-		advanceTo(t, core)
+		// The recovered Miner just produced in the first group. Exercise the
+		// next group here so we do not mine an extra rotation to the first Core.
+		target := boot.children[1]
+		advanceTo(t, target)
 		// Keep children on the network through another Core. That Core is a
 		// gossip peer, not their parent or an eligible substitute for this group.
-		for _, child := range core.children {
-			require.NoError(t, rpctest.ConnectNode(child.node, boot.children[1].node))
+		for _, child := range target.children {
+			require.NoError(t, rpctest.ConnectNode(child.node, core.node))
 		}
-		stop(t, core)
-		produce(t, boot, core.reward)
-		for range core.children {
-			produce(t, boot, core.reward) // Bootstrap pays Core–Bootstrap for child slots.
+		stop(t, target)
+		produce(t, boot, target.reward)
+		for range target.children {
+			produce(t, boot, target.reward) // Bootstrap pays Core–Bootstrap for child slots.
 		}
-		restart(t, core)
-		advanceTo(t, core)
-		produce(t, core, core.reward)
-		for _, child := range core.children {
+		restart(t, target)
+		advanceTo(t, target)
+		produce(t, target, target.reward)
+		for _, child := range target.children {
 			produce(t, child, child.reward)
 		}
 	}) {

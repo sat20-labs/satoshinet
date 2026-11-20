@@ -17,9 +17,37 @@ const scenarioAssetA = "ordx:f:scenarioa"
 const scenarioAssetB = "ordx:f:scenariob"
 
 func TestNetworkTemplateLifecycleMatrix(t *testing.T) {
-	for _, name := range []string{tmplcontract.TemplateLimitOrder, tmplcontract.TemplateAMM, tmplcontract.TemplateExchange, tmplcontract.TemplateAutopay} {
-		t.Run(name, func(t *testing.T) {
-			f := newSignedTemplateFixture(t, map[string]int64{scenarioAssetA: 10000, scenarioAssetB: 10000})
+	names := []string{tmplcontract.TemplateLimitOrder, tmplcontract.TemplateAMM, tmplcontract.TemplateExchange, tmplcontract.TemplateAutopay}
+	// Only the processes/chain are shared. Fund a different signed owner and
+	// non-owner for every template before running any scenario: coin selection,
+	// change and contract state from one case cannot fund or mask another.
+	assets := map[string]int64{scenarioAssetA: 10000 * int64(len(names)), scenarioAssetB: 10000 * int64(len(names))}
+	network := newTemplateNetworkFixture(t, assets)
+	actors := make([]*templateNetworkActor, 2*len(names))
+	for i := range actors {
+		actors[i] = signedTemplateActor(t, keyFromMnemonic(t, bootstrapMnemonic, uint32(i+10)))
+	}
+	fundActors := func(anchor *wire.MsgTx, asset string, total int64) {
+		t.Helper()
+		amounts, values := make([]int64, len(actors)), make([]int64, len(actors))
+		for i := range actors {
+			amounts[i], values[i] = total/int64(len(actors)), 100000/int64(len(actors))
+		}
+		network.splitAssetTo(t, anchor, asset, amounts, values, network.traderA, actors)
+	}
+	fundActors(network.gasAnchor, tmplcontract.DefaultGasConfig().GasAssetName, 80000000)
+	for _, asset := range sortedTemplateAssets(assets) {
+		fundActors(network.assetAnchors[asset], asset, assets[asset])
+	}
+	var permanent []string
+	postRestart := make(map[string]func(*testing.T), len(names))
+	for i, name := range names {
+		if !t.Run(name, func(t *testing.T) {
+			a, b := actors[2*i], actors[2*i+1]
+			f := &templateNetworkFixture{
+				bootstrapNode: network.bootstrapNode, coreNode: network.coreNode, nodes: network.nodes,
+				traderA: a.key, traderB: b.key, traderAActor: a, traderBActor: b,
+			}
 			makeContract := func() tmplcontract.Contract {
 				switch name {
 				case tmplcontract.TemplateLimitOrder:
@@ -85,23 +113,28 @@ func TestNetworkTemplateLifecycleMatrix(t *testing.T) {
 					reject(t, action, param, false)
 				})
 			}
-			t.Run("non_closable_flag_survives_restart", func(t *testing.T) {
+			if !t.Run("non_closable_rejects_close", func(t *testing.T) {
 				address = scenarioDeploy(t, f, makeContract(), name+"-permanent", contractcommon.ContractFlagNonClosable, scenarioFunding(t, 0, map[string]int64{gas: 10000}))
 				reject(t, tmplcontract.InvokeAPIClose, nil, true)
-				before := scenarioState(t, f.coreNode, address)
-				require.NoError(t, f.coreNode.Restart(false))
-				require.NoError(t, rpctest.ConnectNode(f.coreNode, f.bootstrapNode))
-				require.NoError(t, rpctest.JoinNodes(f.nodes, rpctest.Blocks))
-				after := scenarioState(t, f.coreNode, address)
-				delete(before, "currentBlock")
-				delete(after, "currentBlock")
-				require.Equal(t, before, after, "cold node must recover the template runtime")
+			}) {
+				return
+			}
+			permanent = append(permanent, address.MustEncode())
+			postRestart[name] = func(t *testing.T) {
 				reject(t, tmplcontract.InvokeAPIClose, nil, true)
-			})
-			t.Run("RPC_list_and_history", func(t *testing.T) { requireScenarioQueries(t, f, address, name) })
-			f.requireNodesSynced(t)
-		})
+				requireScenarioQueries(t, f, address, name)
+				f.requireNodesSynced(t)
+			}
+		}) {
+			return
+		}
 	}
+	t.Run("non_closable_survives_restart", func(t *testing.T) {
+		requireContractStateAfterCoreRestart(t, network.coreNode, network.bootstrapNode, network.nodes, permanent...)
+		for _, name := range names {
+			t.Run(name, postRestart[name])
+		}
+	})
 }
 
 func TestNetworkTemplateLimitOrderScenarioMatrix(t *testing.T) {
@@ -330,23 +363,21 @@ func TestNetworkTemplateExchangeScenarioMatrix(t *testing.T) {
 	t.Run("height_threshold_switches_price", func(t *testing.T) {
 		height, err := f.bootstrapNode.Client.GetBlockCount()
 		require.NoError(t, err)
-		threshold := height + 6
+		threshold := height + 3 // deployment, one trade before the boundary, one at it
 		address := scenarioDeploy(t, f, tmplcontract.NewExchangeContract(scenarioAssetA, scenarioAssetB, tmplcontract.ExchangePriceModeHeight,
 			[]tmplcontract.ExchangePriceStep{{Threshold: "0", BPerA: "2"}, {Threshold: fmt.Sprint(threshold), BPerA: "3"}}), "height-boundary", 0,
 			scenarioFunding(t, 0, map[string]int64{gas: 10000, scenarioAssetA: 100}))
 		outputs := scenarioInvoke(t, f, f.traderB, address, "", nil, scenarioFunding(t, 0, map[string]int64{scenarioAssetB: 20}))
 		requireTemplateResultAssetAmount(t, outputs, f.traderBActor.address, scenarioAssetA, "10")
-		for {
-			current, err := f.bootstrapNode.Client.GetBlockCount()
-			require.NoError(t, err)
-			if current >= threshold {
-				break
-			}
-			scenarioMineBlocks(t, f, 1)
-		}
+		current, err := f.bootstrapNode.Client.GetBlockCount()
+		require.NoError(t, err)
+		require.Equal(t, threshold-1, current)
 		outputs = scenarioInvoke(t, f, f.traderB, address, "", nil, scenarioFunding(t, 0, map[string]int64{scenarioAssetB: 18}))
 		requireTemplateResultAssetAmount(t, outputs, f.traderBActor.address, scenarioAssetA, "6")
 		requireTemplateResultAssetAmount(t, outputs, f.traderAActor.address, scenarioAssetB, "18")
+		current, err = f.bootstrapNode.Client.GetBlockCount()
+		require.NoError(t, err)
+		require.Equal(t, threshold, current)
 	})
 	t.Run("satoshi_payment_and_change", func(t *testing.T) {
 		address := scenarioDeploy(t, f, tmplcontract.NewExchangeContract(scenarioAssetA, tmplcontract.SatoshiAssetName, tmplcontract.ExchangePriceModeHeight,
@@ -380,7 +411,7 @@ func TestNetworkTemplateAutopayScenarioMatrix(t *testing.T) {
 		require.EqualValues(t, 1, view.Delegates[f.traderBActor.address].BlobKeyLimit)
 	})
 	t.Run("principal_never_pays_operating_gas", func(t *testing.T) {
-		waitBlocks(t, 2)
+		waitBlocks(t, 1)
 		view := scenarioAutopayView(t, f.bootstrapNode, address)
 		require.Zero(t, view.PaidBlocks)
 		require.Equal(t, "1000", view.FeeBalance)
@@ -423,7 +454,7 @@ func TestNetworkTemplateAutopayScenarioMatrix(t *testing.T) {
 		require.Equal(t, "10", view.Delegates[f.traderBActor.address].TotalPaid)
 	})
 	t.Run("exhaustion_pauses_and_survives_restart", func(t *testing.T) {
-		waitBlocks(t, 2)
+		waitBlocks(t, 1)
 		before := scenarioAutopayView(t, f.coreNode, address)
 		require.Equal(t, scenarioAutopayView(t, f.bootstrapNode, address), before)
 		require.NoError(t, f.coreNode.Restart(false))

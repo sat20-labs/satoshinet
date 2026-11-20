@@ -43,7 +43,8 @@ run_in() {
 
 case "$variant" in
   all)
-    run "$GO_BIN" test ./... "$go_test_timeout" -count=1
+    # Enable per-case limits for the in-process contract boundary tests.
+    run "$GO_BIN" test -tags=rpctest ./... "$go_test_timeout" -count=1
     run_in btcec "$GO_BIN" test ./... "$go_test_timeout" -count=1
     run_in btcutil "$GO_BIN" test ./... "$go_test_timeout" -count=1
     run_in btcutil/psbt "$GO_BIN" test ./... "$go_test_timeout" -count=1
@@ -52,7 +53,7 @@ case "$variant" in
     run "$GO_BIN" test ./blockchain/... "$go_test_timeout" -count=1
     ;;
   contract)
-    run "$GO_BIN" test ./contract/... "$go_test_timeout" -count=1
+    run "$GO_BIN" test -tags=rpctest ./contract/... "$go_test_timeout" -count=1
     ;;
   dkvs)
     run "$GO_BIN" test ./indexer/indexer/dkvs "$go_test_timeout" -count=1
@@ -69,7 +70,7 @@ case "$variant" in
     run "$GO_BIN" test -tags=rpctest ./integration/contract_e2e "$go_test_timeout" -count=1
 
     # Legacy in-process EVM/Solidity E2E tests use a separate build tag.
-    run "$GO_BIN" test -tags=legacy_evm_e2e . "$go_test_timeout" -count=1
+    run "$GO_BIN" test -tags=rpctest,legacy_evm_e2e . "$go_test_timeout" -count=1
     ;;
   *)
     print -u2 "unsupported SatoshiNet test variant: $variant"

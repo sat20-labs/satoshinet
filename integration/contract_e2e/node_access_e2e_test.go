@@ -180,6 +180,9 @@ func waitAccessPeers(t *testing.T, node *rpctest.Harness, addresses ...string) {
 // Real nodes own all discovery, selection, disk state and aggregation. Two
 // protocol clients additionally exercise duplicate IDs and expiry over TCP.
 func TestNetworkNodeAccessLifecycle(t *testing.T) {
+	const selectionWait = 3 * time.Second
+	const expiry = 8 * time.Second
+	t.Setenv("SATOSHINET_RPCTEST_FAST_ACCESS", "1")
 	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", "100000")
 	configureFastPOSTimers(t)
 	previous := common.ENABLE_TESTING
@@ -277,25 +280,35 @@ func TestNetworkNodeAccessLifecycle(t *testing.T) {
 	waitAccessPeers(t, ordinary, first.P2PAddress(), boot.P2PAddress())
 
 	// An existing second Core connection must not replace a healthy primary,
-	// but becomes eligible after the primary's ten-minute selection wait.
+	// but becomes eligible after the primary's selection wait.
 	require.NoError(t, rpctest.ConnectNode(ordinary, second))
+	waitAccessPeers(t, ordinary, second.P2PAddress(), boot.P2PAddress())
 	require.Equal(t, corePub, nodeAccessStats(t, ordinary).AccessCore)
 	lostAt := time.Now()
 	require.NoError(t, first.StopNode())
-	waitAccessPeers(t, ordinary, second.P2PAddress(), boot.P2PAddress())
+	earliest := lostAt.Add(selectionWait)
+	require.True(t, time.Now().Before(earliest), "must observe the protected window")
+	for time.Now().Before(earliest) {
+		stats := nodeAccessStats(t, ordinary)
+		if !time.Now().Before(earliest) {
+			break // An RPC response may straddle the window boundary.
+		}
+		require.Equal(t, corePub, stats.PreferredCore, "must preserve the failed primary during maintenance")
+		require.NotEqual(t, secondPub, stats.AccessCore, "must not select the backup early")
+		time.Sleep(100 * time.Millisecond)
+	}
 	waitAccessStats(t, ordinary, "failed preferred core is replaced", func(s btcjson.GetNodeStatsResult) bool {
 		return s.AccessCore == secondPub && s.PreferredAddr == second.P2PAddress()
-	}, 12*time.Minute)
-	require.GreaterOrEqual(t, time.Since(lostAt), 10*time.Minute, "maintenance window must not be shortened")
+	}, 20*time.Second)
 	waitAccessStats(t, boot, "offline core is removed from total", func(s btcjson.GetNodeStatsResult) bool {
 		return s.CoreCount == 1 && s.ObservedNodes == 3
 	}, 30*time.Second)
 	waitAccessPeers(t, ordinary, second.P2PAddress(), boot.P2PAddress())
 	require.NoError(t, first.Restart(false))
 	require.NoError(t, rpctest.ConnectNode(first, boot))
-	waitAccessStats(t, pinned, "configured core reconnects after ten-minute outage", func(s btcjson.GetNodeStatsResult) bool {
+	waitAccessStats(t, pinned, "configured core reconnects after the maintenance window", func(s btcjson.GetNodeStatsResult) bool {
 		return s.AccessCore == corePub
-	}, 2*time.Minute)
+	}, 30*time.Second)
 	waitAccessStats(t, boot, "configured peer recovery restores count", func(s btcjson.GetNodeStatsResult) bool {
 		return s.CoreCount == 2 && s.ObservedNodes == 5
 	}, 30*time.Second)
@@ -334,9 +347,10 @@ func TestNetworkNodeAccessLifecycle(t *testing.T) {
 	}
 	probeOne := probe(second, 12345678, true, 0, wire.ProtocolVersion)
 	probeTwo := probe(second, 12345678, true, 0, wire.ProtocolVersion)
-	waitAccessStats(t, second, "duplicate node IDs count once", func(s btcjson.GetNodeStatsResult) bool {
+	stats := waitAccessStats(t, second, "duplicate node IDs count once", func(s btcjson.GetNodeStatsResult) bool {
 		return s.ChildCount == 2
 	}, 10*time.Second)
+	require.EqualValues(t, expiry/time.Second, stats.WindowSeconds)
 	probeOne.Disconnect()
 	require.Eventually(t, func() bool { return !probeOne.Connected() }, 5*time.Second, 100*time.Millisecond)
 	require.EqualValues(t, 2, nodeAccessStats(t, second).ChildCount)
@@ -349,7 +363,7 @@ func TestNetworkNodeAccessLifecycle(t *testing.T) {
 		"old ping protocol must be rejected at handshake")
 	waitAccessStats(t, second, "stale access declaration expires", func(s btcjson.GetNodeStatsResult) bool {
 		return s.ChildCount == 1
-	}, 70*time.Second)
+	}, expiry+5*time.Second)
 	require.True(t, probeTwo.Connected(), "expiry must not rely on TCP disconnection")
 	waitAccessStats(t, boot, "expired child removed from aggregate", func(s btcjson.GetNodeStatsResult) bool {
 		return s.ObservedNodes == 4

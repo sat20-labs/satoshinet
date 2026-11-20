@@ -129,13 +129,28 @@ func scenarioInvoke(t *testing.T, f *templateNetworkFixture, signer *btcec.Priva
 func signScenarioInputsWithChange(t *testing.T, f *templateNetworkFixture, tx *wire.MsgTx,
 	signer *btcec.PrivateKey, baseGas, feeSats int64) {
 	t.Helper()
+	signScenarioInputsWithParent(t, f, tx, signer, baseGas, feeSats, nil)
+}
+
+// A caller spending many outputs of one confirmed transaction can reuse its
+// real RPC result. Only prevout retrieval changes, never fee or script checks.
+func signScenarioInputsWithParent(t *testing.T, f *templateNetworkFixture, tx *wire.MsgTx,
+	signer *btcec.PrivateKey, baseGas, feeSats int64, parent *btcutil.Tx) {
+	t.Helper()
 	actor := f.actorForSigner(t, signer)
 	fetcher := txscript.NewMultiPrevOutFetcher(nil)
 	var assets wire.TxAssets
 	var value int64
 	for _, input := range tx.TxIn {
-		previous, err := f.bootstrapNode.Client.GetRawTransaction(&input.PreviousOutPoint.Hash)
-		require.NoError(t, err)
+		previous := parent
+		if previous == nil {
+			var err error
+			previous, err = f.bootstrapNode.Client.GetRawTransaction(&input.PreviousOutPoint.Hash)
+			require.NoError(t, err)
+		} else {
+			require.Equal(t, input.PreviousOutPoint.Hash, *previous.Hash(), "input must spend the cached split")
+		}
+		require.Less(t, uint64(input.PreviousOutPoint.Index), uint64(len(previous.MsgTx().TxOut)))
 		output := previous.MsgTx().TxOut[input.PreviousOutPoint.Index]
 		require.Equal(t, actor.pkScript, output.PkScript, "scenario input must belong to the signer")
 		fetcher.AddPrevOut(input.PreviousOutPoint, output)

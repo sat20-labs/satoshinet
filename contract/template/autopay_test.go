@@ -416,7 +416,7 @@ func TestAutopayDelegateLimit(t *testing.T) {
 	require.NoError(t, checkAutopayDelegateCapacity(contract, state, "delegate-1"))
 }
 
-func testAutopayRuntime(t *testing.T, recipient, feeAsset, minAmount string) *ContractRuntime {
+func testAutopayRuntime(t testing.TB, recipient, feeAsset, minAmount string) *ContractRuntime {
 	t.Helper()
 	contract := NewAutopayContract("dkvs", recipient, feeAsset, minAmount)
 	content, err := contract.Encode()

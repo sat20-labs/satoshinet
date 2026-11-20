@@ -2312,10 +2312,10 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		ping := wire.NewMsgPing(msg.nonce)
 		ping.NodeID = s.access.nodeID
 		ping.UseAsCore = s.access.selected == msg.peer
-		interval := 2 * time.Minute
+		interval := accessTimers.idlePing
 		if ping.UseAsCore || msg.peer.accessUse ||
 			(s.services&wire.SFNodeMiner != 0 && msg.peer.Services()&wire.SFNodeMiner != 0) {
-			interval = accessPingInterval
+			interval = accessTimers.ping
 		}
 		if msg.peer.ValidatorId() == common.GetBootstrapPubKey() {
 			ping.ChildCount = s.accessChildCount(state, time.Now())

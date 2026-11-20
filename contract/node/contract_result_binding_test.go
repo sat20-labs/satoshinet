@@ -20,13 +20,15 @@ import (
 )
 
 func TestContractResultBindingFragmentsConserveRealInputs(t *testing.T) {
+	t.Setenv("SATOSHINET_RPCTEST_RESULT_OUTPUT_LIMIT", "10")
+	limit := framework.ResultOutputLimit()
 	for _, tc := range []struct {
 		count   int
 		binding uint32
 		mixed   bool
 	}{
-		{999, 2, false}, {1000, 2, false}, {1001, 2, false}, {2001, 2, false},
-		{1001, 0, false}, {1001, 1, false}, {1001, 2, true},
+		{limit - 1, 2, false}, {limit, 2, false}, {limit + 1, 2, false}, {2*limit + 1, 2, false},
+		{limit + 1, 0, false}, {limit + 1, 1, false}, {limit + 1, 2, true},
 	} {
 		t.Run(fmt.Sprintf("outputs_%d_binding_%d_mixed_%v", tc.count, tc.binding, tc.mixed), func(t *testing.T) {
 			addr := testNodeAutopayRuntime(t, "recipient", "ordx:f:fee", "1").Address()
@@ -57,13 +59,19 @@ func TestContractResultBindingFragmentsConserveRealInputs(t *testing.T) {
 				plan.Outputs = append(plan.Outputs, framework.ResultOutput{To: fmt.Sprintf("refund-%04d", n), Value: value, Assets: wire.TxAssets{fee}})
 			}
 			require.NoError(t, blockchain.CheckTransactionSanity(btcutil.NewTx(pool)), "every predecessor output obeys partial binding semantics")
+			poolHash := pool.TxHash()
 			for n, out := range pool.TxOut {
-				point := framework.OutPoint{TxID: pool.TxHash().String(), Vout: uint32(n)}
+				point := framework.OutPoint{TxID: poolHash.String(), Vout: uint32(n)}
 				plan.Inputs = append(plan.Inputs, point)
 				plan.InputUTXOs = append(plan.InputUTXOs, framework.UTXOFromTxOutput(point, addr, 99, out))
 			}
 			txs, err := framework.BuildContractResultTxs(framework.ResultTxBuildRequest{Status: contract.ResultStatusSuccess, Plans: []framework.ResultPlan{plan}, ResolveScript: resolve}, framework.ResultTxBuildOptions{UseInputUTXOs: true})
 			require.NoError(t, err)
+			if tc.count < limit {
+				require.Len(t, txs, 1)
+			} else {
+				require.Greater(t, len(txs), 1)
+			}
 			verify := func(actual []*wire.MsgTx) error {
 				return framework.VerifyContractResultTxs(framework.ContractResultVerifyRequest{ResultTxs: actual, CanonicalResultVerifyRequest: framework.CanonicalResultVerifyRequest{
 					Label: "template", Status: contract.ResultStatusSuccess, Plans: []framework.ResultPlan{plan}, GasAssetName: gasName, ResolveScript: resolve, UseInputUTXO: true, CheckPayload: true}})
@@ -75,7 +83,7 @@ func TestContractResultBindingFragmentsConserveRealInputs(t *testing.T) {
 			refunds := make(map[string]int)
 			actualGas := scommon.NewDefaultDecimal(0)
 			for _, tx := range txs {
-				require.LessOrEqual(t, len(tx.TxOut), 1000, "all outputs count, including metadata and carry")
+				require.LessOrEqual(t, len(tx.TxOut), limit, "all outputs count, including metadata and carry")
 				require.NoError(t, blockchain.CheckTransactionSanity(btcutil.NewTx(tx)))
 				available, err := ledger.Provider(addr)
 				require.NoError(t, err)
@@ -120,7 +128,7 @@ func TestContractResultBindingFragmentsConserveRealInputs(t *testing.T) {
 				require.Equal(t, 1, count)
 			}
 			for n := range pool.TxOut {
-				require.True(t, seenInputs[wire.OutPoint{Hash: pool.TxHash(), Index: uint32(n)}])
+				require.True(t, seenInputs[wire.OutPoint{Hash: poolHash, Index: uint32(n)}])
 			}
 			remaining, err := ledger.Provider(addr)
 			require.NoError(t, err)

@@ -25,7 +25,7 @@ import (
 func TestNetworkPOSV2ActivationBoundaryAndLegacyReplay(t *testing.T) {
 	const activationHeight int32 = 6
 	t.Setenv("SATOSHINET_RPCTEST_POS_V2_HEIGHT", strconv.Itoa(int(activationHeight)))
-	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "5")
+	t.Setenv("SATOSHINET_POS_MINER_INTERVAL", "2")
 	t.Setenv("SATOSHINET_POS_PREWARNING_INTERVAL", "5")
 	fixture := newTemplateNetworkFixture(t, nil)
 	bootKey := keyFromMnemonic(t, bootstrapMnemonic, 0)

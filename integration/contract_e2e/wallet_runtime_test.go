@@ -34,8 +34,9 @@ func contractE2EExecutablePath(t *testing.T) string {
 	}
 
 	pluginPath := filepath.Join(buildDir, "wallet.so")
+	// The plugin and node must use the same rpctest code in shared packages.
 	runBuild(t, walletPluginDir,
-		"go", "build", "-buildmode=plugin", "-o", pluginPath, "main.go",
+		"go", "build", "-tags=rpctest", "-buildmode=plugin", "-o", pluginPath, "main.go",
 	)
 
 	executablePath := filepath.Join(buildDir, "satoshinet")

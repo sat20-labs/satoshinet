@@ -127,7 +127,7 @@ func resultReviewBlock(t *testing.T, store *template.RuntimeStore, ledger *frame
 		if err := blockchain.CheckTransactionSanity(btcutil.NewTx(tx)); err != nil {
 			return built, err
 		}
-		require.LessOrEqual(t, len(tx.TxOut), framework.MaxContractResultOutputs)
+		require.LessOrEqual(t, len(tx.TxOut), framework.ResultOutputLimit())
 	}
 	for _, tx := range txs {
 		require.NoError(t, ledger.ApplyTx(tx, height))
@@ -180,9 +180,11 @@ func resultReviewBlock(t *testing.T, store *template.RuntimeStore, ledger *frame
 }
 
 func TestAutopayResultPerContractAcrossBlocks(t *testing.T) {
+	t.Setenv("SATOSHINET_RPCTEST_RESULT_OUTPUT_LIMIT", "10")
+	limit := framework.ResultOutputLimit()
 	store := template.NewRuntimeStore()
 	ledger := framework.NewContractUTXOOverlay(framework.ContractUTXOOverlayConfig{})
-	a := resultReviewAutopay(t, store, ledger, 1, 2000)
+	a := resultReviewAutopay(t, store, ledger, 1, 2*limit)
 	b := resultReviewAutopay(t, store, ledger, 2, 1)
 	// B's same-block GAS call creates its retained output before its first payment.
 	first, err := resultReviewBlock(t, store, ledger, 100,
@@ -190,14 +192,14 @@ func TestAutopayResultPerContractAcrossBlocks(t *testing.T) {
 		resultReviewInvoke(t, b, contract.ContractInvokeAPIDefault, "deployer", 2))
 	require.NoError(t, err)
 	require.Len(t, first.ResultTxs, 2, "each contract must have its own Result")
-	require.Equal(t, 1000, len(first.ResultTxs[0].TxOut)+len(first.ResultTxs[1].TxOut)-2)
+	require.Equal(t, limit, len(first.ResultTxs[0].TxOut)+len(first.ResultTxs[1].TxOut)-2)
 	second, err := resultReviewBlock(t, store, ledger, 101)
 	require.NoError(t, err, "independent contract Results must not share an output limit")
 	require.Len(t, second.ResultTxs, 2)
-	require.Equal(t, 1001, len(second.ResultTxs[0].TxOut)+len(second.ResultTxs[1].TxOut)-2)
+	require.Equal(t, limit+1, len(second.ResultTxs[0].TxOut)+len(second.ResultTxs[1].TxOut)-2)
 	spendsPreviousResult := false
 	for _, tx := range second.ResultTxs {
-		require.LessOrEqual(t, len(tx.TxOut), framework.MaxContractResultOutputs)
+		require.LessOrEqual(t, len(tx.TxOut), limit)
 		for _, input := range tx.TxIn {
 			for _, parent := range first.ResultTxs {
 				if input.PreviousOutPoint.Hash == parent.TxHash() {
@@ -228,11 +230,13 @@ func TestAutopayResultPerContractAcrossBlocks(t *testing.T) {
 }
 
 func TestAutopayResultSplitsSingleContractRefunds(t *testing.T) {
+	t.Setenv("SATOSHINET_RPCTEST_RESULT_OUTPUT_LIMIT", "10")
+	count := framework.ResultOutputLimit() + 1
 	store := template.NewRuntimeStore()
 	ledger := framework.NewContractUTXOOverlay(framework.ContractUTXOOverlayConfig{})
-	addr := resultReviewAutopay(t, store, ledger, 4, 1001)
+	addr := resultReviewAutopay(t, store, ledger, 4, count)
 	var work []*wire.MsgTx
-	for n := 0; n < 1001; n++ {
+	for n := 0; n < count; n++ {
 		work = append(work, resultReviewInvoke(t, addr, template.InvokeAPICancel, fmt.Sprintf("payer-4-%04d", n), uint64(n+1)))
 	}
 	work = append(work, resultReviewInvoke(t, addr, template.InvokeAPIClose, "deployer", 2000))
@@ -256,7 +260,7 @@ func TestAutopayResultSplitsSingleContractRefunds(t *testing.T) {
 			}
 		}
 	}
-	require.Equal(t, "1001", refunded.String(), "every principal refunded exactly once")
+	require.Equal(t, fmt.Sprint(count), refunded.String(), "every principal refunded exactly once")
 	require.Equal(t, "100", gasRefund.String(), "splitting must not charge gas again or retain a temporary carry")
 	runtime, ok := store.Get(addr)
 	require.True(t, ok)
@@ -359,11 +363,13 @@ func TestAutopayCancelCloseLeavesNoResultOnFollowingBlocks(t *testing.T) {
 }
 
 func TestAutopayFragmentFailureDoesNotCommitClose(t *testing.T) {
+	t.Setenv("SATOSHINET_RPCTEST_RESULT_OUTPUT_LIMIT", "10")
+	count := framework.ResultOutputLimit() + 1
 	store := template.NewRuntimeStore()
 	ledger := framework.NewContractUTXOOverlay(framework.ContractUTXOOverlayConfig{})
-	addr := resultReviewAutopay(t, store, ledger, 6, 1001)
+	addr := resultReviewAutopay(t, store, ledger, 6, count)
 	var work []*wire.MsgTx
-	for n := 0; n < 1001; n++ {
+	for n := 0; n < count; n++ {
 		work = append(work, resultReviewInvoke(t, addr, template.InvokeAPICancel, fmt.Sprintf("payer-6-%04d", n), uint64(n+1)))
 	}
 	work = append(work, resultReviewInvoke(t, addr, template.InvokeAPIClose, "deployer", 2000))
@@ -373,7 +379,7 @@ func TestAutopayFragmentFailureDoesNotCommitClose(t *testing.T) {
 		GasConfig: resultReviewGas(), ContractUTXOs: ledger.Provider, AssetPrecision: func(string) (int, bool) { return 8, true },
 		ResolveInvoker: func(tx *wire.MsgTx, _ contract.Tx) (string, error) { return string(tx.TxIn[0].SignatureScript), nil },
 		ResolveScript: func(output framework.ResultOutput) ([]byte, error) {
-			if output.To == "payer-6-1000" {
+			if output.To == fmt.Sprintf("payer-6-%04d", count-1) {
 				return nil, fmt.Errorf("injected final fragment failure")
 			}
 			if address, err := contract.DecodeContractAddress(output.To); err == nil {
