@@ -249,6 +249,10 @@ func TestNetworkPOSV2MultiCoreMultiMinerOffline(t *testing.T) {
 		m.online = true
 		require.NoError(t, rpctest.ConnectNode(m.node, m.parent.node))
 		require.NoError(t, rpctest.JoinNodes(onlineNodes(), rpctest.Blocks))
+		require.Eventually(t, func() bool {
+			mining, err := m.node.Client.GetGenerate()
+			return err == nil && mining
+		}, 25*time.Second, 100*time.Millisecond, "%s mining runtime did not restart", m.name)
 	}
 
 	if !t.Run("all_online_full_round", func(t *testing.T) {
