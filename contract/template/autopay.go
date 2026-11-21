@@ -13,6 +13,7 @@ import (
 const (
 	AutopayStatusFunding = "funding"
 	AutopayStatusActive  = "active"
+	AutopayStatusClosing = "closing"
 	AutopayStatusExpired = "expired"
 	AutopayStatusClosed  = "closed"
 
@@ -480,8 +481,8 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 		state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
 		return plan, nil
 	}
-	if state.AutopayData().Closed || state.AutopayData().AutopayStatus == AutopayStatusClosed ||
-		state.AutopayData().AutopayStatus == AutopayStatusExpired {
+	autopay := state.AutopayData()
+	if autopay.Closed || autopay.AutopayStatus == AutopayStatusClosed || autopay.AutopayStatus == AutopayStatusExpired {
 		return plan, nil
 	}
 
@@ -490,18 +491,12 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 	if err != nil {
 		return nil, err
 	}
-	next := state.AutopayData().NextPayHeight
-	if next == 0 {
-		state.AutopayData().ActiveHeight = height
-		state.AutopayData().NextPayHeight = height + 1
-		next = state.AutopayData().NextPayHeight
+	if autopay.NextPayHeight == 0 {
+		autopay.ActiveHeight = height
+		autopay.NextPayHeight = height + 1
 	}
-	if height < next {
-		state.AutopayData().AutopayStatus = c.autopayFundingStatus(state, gasConfig, height, assetPrecision)
-		return plan, nil
-	}
-	if decimalOrZero(state.AutopayData().GasBalance).Cmp(triggerGasFee) < 0 {
-		state.AutopayData().AutopayStatus = AutopayStatusFunding
+	if height < autopay.NextPayHeight || decimalOrZero(autopay.GasBalance).Cmp(triggerGasFee) < 0 {
+		autopay.AutopayStatus = c.autopayFundingStatus(state, gasConfig, height, assetPrecision)
 		return plan, nil
 	}
 	total, err := c.collectAutopayFees(state, height)
@@ -509,21 +504,21 @@ func (c *AutopayContract) settleAutopay(runtime *ContractRuntime, state *Templat
 		return nil, err
 	}
 	if total.Sign() <= 0 {
-		state.AutopayData().AutopayStatus = AutopayStatusFunding
+		autopay.AutopayStatus = c.autopayFundingStatus(state, gasConfig, height, assetPrecision)
 		return plan, nil
 	}
-	state.AutopayData().GasBalance = decimalSubAllowNil(state.AutopayData().GasBalance, triggerGasFee)
+	autopay.GasBalance = decimalSubAllowNil(autopay.GasBalance, triggerGasFee)
 	plan.GasFee = triggerGasFee.Clone()
 	transfer, err := c.autopayPaymentTransfer(total)
 	if err != nil {
 		return nil, err
 	}
 	plan.Transfers = append(plan.Transfers, transfer)
-	state.AutopayData().PaidBlockCount++
-	state.AutopayData().LastPayHeight = height
-	state.AutopayData().NextPayHeight = height + 1
-	state.AutopayData().FeeBalance = c.totalDelegateBalance(state.AutopayData())
-	state.AutopayData().AutopayStatus = c.autopayFundingStatus(state, gasConfig, height, assetPrecision)
+	autopay.PaidBlockCount++
+	autopay.LastPayHeight = height
+	autopay.NextPayHeight = height + 1
+	autopay.FeeBalance = c.totalDelegateBalance(autopay)
+	autopay.AutopayStatus = c.autopayFundingStatus(state, gasConfig, height, assetPrecision)
 	return plan, nil
 }
 
@@ -596,8 +591,6 @@ func (c *AutopayContract) applyAutopayClose(runtime *ContractRuntime, state *Tem
 			state.AutopayData().Closed = true
 			state.AutopayData().AutopayStatus = AutopayStatusClosed
 			item.Done = ItemStatusDealt
-		} else {
-			state.AutopayData().AutopayStatus = AutopayStatusActive
 		}
 		return true, nil
 	}
@@ -659,7 +652,7 @@ func (c *AutopayContract) autopayFundingStatus(state *TemplateRuntimeState, gasC
 	if err != nil {
 		return AutopayStatusFunding
 	}
-	if decimalOrZero(state.AutopayData().GasBalance).Cmp(gasFee) >= 0 && c.hasActiveDelegate(state.AutopayData()) {
+	if decimalOrZero(state.AutopayData().GasBalance).Cmp(gasFee) >= 0 {
 		return AutopayStatusActive
 	}
 	return AutopayStatusFunding
@@ -668,7 +661,8 @@ func (c *AutopayContract) autopayFundingStatus(state *TemplateRuntimeState, gasC
 func (c *AutopayContract) requiredGasReserve(state *TemplateRuntimeState, gasConfig GasConfig, height int64,
 	assetPrecision contractframework.AssetPrecisionResolver) (*scommon.Decimal, error) {
 	next := state.AutopayData().NextPayHeight
-	if next == 0 {
+	// An idle contract can retain a scheduled height that has already passed.
+	if next <= height {
 		next = height + 1
 	}
 	return autopayTriggerGasFee(gasConfig, next, assetPrecision)
@@ -740,18 +734,6 @@ func (c *AutopayContract) sortedDelegateAddresses(running *AutopayRunningData) [
 	}
 	sort.Strings(addresses)
 	return addresses
-}
-
-func (c *AutopayContract) hasActiveDelegate(running *AutopayRunningData) bool {
-	if running == nil {
-		return false
-	}
-	for _, delegate := range running.AutopayDelegates {
-		if decimalOrZero(delegate.Balance).Cmp(decimalOrZero(delegate.AmountPerBlock)) >= 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *AutopayContract) hasPendingDelegateBalance(running *AutopayRunningData) bool {

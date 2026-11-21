@@ -141,7 +141,10 @@ func (r *ContractRuntime) StateView(ctx contractframework.StateViewContext) (int
 	case *AutopayContract:
 		running := state.AutopayData()
 		status := running.AutopayStatus
-		if status == "" {
+		switch {
+		case running.AutopayCloseStarted && !running.Closed:
+			status = AutopayStatusClosing
+		case status == "":
 			status = AutopayStatusFunding
 		}
 		view := AutopayStateView{

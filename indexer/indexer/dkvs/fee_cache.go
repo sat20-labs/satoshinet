@@ -4,6 +4,8 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+
+	templatecontract "github.com/sat20-labs/satoshinet/contract/template"
 )
 
 // HeightCachedAutopayStateProvider reuses contract state within one indexed
@@ -64,9 +66,10 @@ func normalizeAutopayStateForPaidRetention(state *AutopayContractState, indexedH
 	if indexedHeight > uint64(state.CurrentBlock) {
 		state.CurrentBlock = int64(indexedHeight)
 	}
-	// A confirmed terminal state is known at the indexed view too. Preserve
-	// its closed status and payment history without activating any delegate.
-	if state.Closed || strings.EqualFold(state.Status, "closed") || strings.EqualFold(state.Status, "expired") {
+	// Preserve the lifecycle of contracts that have stopped settling payments.
+	if state.Closed || strings.EqualFold(state.Status, templatecontract.AutopayStatusClosing) ||
+		strings.EqualFold(state.Status, templatecontract.AutopayStatusClosed) ||
+		strings.EqualFold(state.Status, templatecontract.AutopayStatusExpired) {
 		return state
 	}
 	active := false

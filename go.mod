@@ -22,7 +22,7 @@ require (
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/lestrrat-go/file-rotatelogs v2.4.0+incompatible
 	github.com/sat20-labs/indexer v0.3.0-20240926
-	github.com/sat20-labs/rgb11 v1.0.1-0.20261117144426-f22213b0aaf7
+	github.com/sat20-labs/rgb11 v1.0.1-0.20261120161554-b2db359450c0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/files v1.0.1

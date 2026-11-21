@@ -49,7 +49,8 @@ func TestAutopayPaysDelegatedFeesFromNextBlock(t *testing.T) {
 	require.Len(t, plan.Transfers, 1)
 	state, err = runtime.RuntimeState()
 	require.NoError(t, err)
-	require.Equal(t, AutopayStatusFunding, state.AutopayData().AutopayStatus)
+	require.Equal(t, AutopayStatusActive, state.AutopayData().AutopayStatus)
+	require.Equal(t, AutopayStatusFunding, state.AutopayData().AutopayDelegates["deployer-address"].Status)
 	requireDecimalString(t, "0", state.AutopayData().FeeBalance)
 	require.Equal(t, int64(2), state.AutopayData().PaidBlockCount)
 }

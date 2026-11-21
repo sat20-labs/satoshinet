@@ -73,9 +73,14 @@ func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
 	param, err := (&tmplcontract.AutopayConfigInvokeParam{GasFundingAmount: "500"}).Encode()
 	require.NoError(t, err)
 	scenarioInvoke(t, f, f.traderA, address, tmplcontract.InvokeAPIConfig, param, scenarioFunding(t, 0, map[string]int64{gas: 550}))
+	require.Equal(t, tmplcontract.AutopayStatusActive, scenarioAutopayView(t, f.bootstrapNode, address).Status)
 	start, err := f.bootstrapNode.Client.GetBlockCount()
 	require.NoError(t, err)
 	scenarioInvoke(t, f, f.traderA, address, tmplcontract.InvokeAPIClose, nil, scenarioFunding(t, 0, map[string]int64{gas: 50}))
+	view = scenarioAutopayView(t, f.bootstrapNode, address)
+	require.Equal(t, tmplcontract.AutopayStatusClosing, view.Status)
+	require.False(t, view.Closed)
+	require.Equal(t, view, scenarioAutopayView(t, f.coreNode, address))
 	for i := 0; i < 3 && !scenarioAutopayView(t, f.bootstrapNode, address).Closed; i++ {
 		scenarioMineBlocks(t, f, 1)
 	}
@@ -124,6 +129,7 @@ func TestNetworkTemplateAutopayCloseAcrossOutputLimit(t *testing.T) {
 	}
 	view = scenarioAutopayView(t, f.bootstrapNode, address)
 	require.True(t, view.Closed)
+	require.Equal(t, tmplcontract.AutopayStatusClosed, view.Status)
 	require.Contains(t, []string{"", "0"}, view.FeeBalance)
 	for _, delegate := range view.Delegates {
 		require.Equal(t, tmplcontract.AutopayStatusClosed, delegate.Status)

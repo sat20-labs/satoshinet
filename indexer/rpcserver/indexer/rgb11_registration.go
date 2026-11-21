@@ -156,11 +156,6 @@ func validateRGB11TechnicalRecord(record *swire.DKVSRecord) (string, error) {
 	for _, field := range container.Value.Fields {
 		switch field.Name {
 		case "version", "transfer", "genesis":
-		case "terminals":
-			v := rgb11PublicUnwrap(&field.Value)
-			if v == nil || v.Kind != strict_types.ValueMap || len(v.Entries) != 0 {
-				return "", invalid
-			}
 		case "bundles":
 			v := rgb11PublicUnwrap(&field.Value)
 			if v == nil || v.Kind != strict_types.ValueList || len(v.Items) != 0 {
