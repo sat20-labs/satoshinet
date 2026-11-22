@@ -273,10 +273,6 @@ github.com/sat20-labs/btcd v0.24.3-beta-rc1 h1:dqKhZybYnvSZxa/t/oIyOf8SMgrOeesUP
 github.com/sat20-labs/btcd v0.24.3-beta-rc1/go.mod h1:zHK7t7sw8XbsCkD64WePHE3r3k9/XoGAcf6mXV14c64=
 github.com/sat20-labs/btcd/btcutil v1.1.7 h1:aJDdf48dLZ9ouQWEhNHs5HlJRBgu4QqVxWPiryv7af0=
 github.com/sat20-labs/btcd/btcutil v1.1.7/go.mod h1:9dFymx8HpuLqBnsPELrImQeTQfKBQqzqGbbV3jK55aE=
-github.com/sat20-labs/rgb11 v1.0.0 h1:xJ6sB/JRcJplwReLyTAqTJG5bAniyazm09WJxFkqR0Y=
-github.com/sat20-labs/rgb11 v1.0.0/go.mod h1:hLB9/8omKXpYQBcOm8QdFgUZa1AGlYXGqqrU+daDKYg=
-github.com/sat20-labs/rgb11 v1.0.1-0.20261117144426-f22213b0aaf7 h1:jrWp+rS8nN0S6MGJXm28dn5U1uMQFoFPy55Zrla2cOU=
-github.com/sat20-labs/rgb11 v1.0.1-0.20261117144426-f22213b0aaf7/go.mod h1:hLB9/8omKXpYQBcOm8QdFgUZa1AGlYXGqqrU+daDKYg=
 github.com/sat20-labs/rgb11 v1.0.1-0.20261120161554-b2db359450c0 h1:yVwsfhK9W0hJPZi5mBTzkxThKGDezAcJcG1MiTx3zMs=
 github.com/sat20-labs/rgb11 v1.0.1-0.20261120161554-b2db359450c0/go.mod h1:hLB9/8omKXpYQBcOm8QdFgUZa1AGlYXGqqrU+daDKYg=
 github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible h1:Bn1aCHHRnjv4Bl16T8rcaFjYSrGrIZvpiGO6P3Q4GpU=
