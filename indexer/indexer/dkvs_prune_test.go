@@ -94,8 +94,8 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 		cfg:           &Config{},
 		chaincfgParam: &chaincfg.MainNetParams,
 	}
-	if mainnetMgr.dkvsConfig().AllowFreeLocal {
-		t.Fatalf("mainnet dkvs config should not allow free local writes")
+	if cfg := mainnetMgr.dkvsConfig(); !cfg.AllowFreeLocal || !cfg.FreeLocalCache.Enabled {
+		t.Fatal("mainnet dkvs config should enable the default free-local cache")
 	}
 	renamedMainnet := chaincfg.MainNetParams
 	renamedMainnet.Name = "renamed-mainnet"
@@ -103,8 +103,8 @@ func TestDKVSConfigMergesExternalIntegrations(t *testing.T) {
 		cfg:           &Config{},
 		chaincfgParam: &renamedMainnet,
 	}
-	if renamedMainnetMgr.dkvsConfig().AllowFreeLocal {
-		t.Fatalf("renamed mainnet dkvs config should not allow free local writes")
+	if !renamedMainnetMgr.dkvsConfig().AllowFreeLocal {
+		t.Fatal("renaming mainnet must preserve free-local writes")
 	}
 	if defaults := dkvs.NetworkDefaultsForParams(&renamedMainnet); defaults.Enabled {
 		t.Fatalf("renamed mainnet must not inherit testnet DKVS defaults: %+v", defaults)
