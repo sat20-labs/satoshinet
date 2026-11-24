@@ -356,7 +356,7 @@ func TestHandlerQueuesDistinctPathRepairsWithoutReplacingActiveSession(t *testin
 	peer.resetSyncLocked()
 	peer.syncMtx.Unlock()
 	node.finishSync(&peer, true)
-	handler.queueNextPathSync()
+	handler.ResumeSync()
 	if len(sent) != 2 {
 		t.Fatalf("queued request not started: sent=%d", len(sent))
 	}
@@ -385,7 +385,7 @@ func TestPathSyncTimeoutAdvancesQueuedPathAndRequeuesTimedOutPath(t *testing.T) 
 	if !peer.TimeoutPathSyncRequest(first.SessionID, first.Cursor) {
 		t.Fatal("exact outstanding path request did not time out")
 	}
-	handler.queueNextPathSync()
+	handler.ResumeSync()
 	if len(sent) != 2 {
 		t.Fatalf("queued path did not advance: sent=%d", len(sent))
 	}

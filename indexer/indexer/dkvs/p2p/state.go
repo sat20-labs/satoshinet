@@ -119,6 +119,7 @@ type PeerState struct {
 	notifyFilters      []wire.DKVSSyncFilter
 	notifyFiltersKnown bool
 	syncMtx            sync.Mutex
+	noSyncSigner       bool
 	syncSession        uint64
 	syncCursor         []byte
 	syncFilters        []wire.DKVSSyncFilter
@@ -293,6 +294,9 @@ func (s *PeerState) StartSync(cursor []byte, localMiner bool, filters []wire.DKV
 	starting := len(cursor) == 0
 	s.syncMtx.Lock()
 	defer s.syncMtx.Unlock()
+	if s.noSyncSigner {
+		return SyncStart{}, nil
+	}
 	if starting {
 		if s.syncActive && !syncSessionExpired(s.syncUpdated, now) {
 			return SyncStart{}, nil

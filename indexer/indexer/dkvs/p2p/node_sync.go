@@ -4,6 +4,12 @@ import (
 	"time"
 )
 
+func (s *NodeState) enqueuePathSync(path string) {
+	s.pendingMtx.Lock()
+	defer s.pendingMtx.Unlock()
+	s.enqueuePathSyncLocked(path)
+}
+
 func (s *NodeState) enqueuePathSyncLocked(path string) {
 	if s.pendingPathSyncSet == nil {
 		s.pendingPathSyncSet = make(map[string]struct{})
@@ -67,7 +73,7 @@ func (s *NodeState) finishSync(peer *PeerState, success bool) bool {
 }
 
 func (h Handler) queueNextNodeSync(skip string, skipFailed bool) bool {
-	if !h.valid() || !h.allowedPathSnapshotSource() || h.Peer.Closed() {
+	if !h.ShouldRequestSync() {
 		return false
 	}
 	s := h.Node
@@ -133,7 +139,7 @@ func (h Handler) markReadyAndDrain() {
 		if s.syncPeer != nil || len(s.pendingPathSyncSet) != 0 || len(s.discoveredPaths) != 0 {
 			s.draining = false
 			s.pendingMtx.Unlock()
-			h.queueNextPathSync()
+			h.ResumeSync()
 			return
 		}
 		if s.pendingOverflow {
@@ -142,7 +148,7 @@ func (h Handler) markReadyAndDrain() {
 			s.draining = false
 			s.pendingMtx.Unlock()
 			h.warnf("DKVS notify cache overflowed; synchronize all directories again")
-			h.queueNextPathSync()
+			h.ResumeSync()
 			return
 		}
 		if len(s.pending) == 0 {

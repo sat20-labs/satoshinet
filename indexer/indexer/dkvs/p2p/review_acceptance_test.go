@@ -1,11 +1,111 @@
 package p2p
 
 import (
+	"bytes"
+	"encoding/hex"
 	"testing"
 	"time"
 
+	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
+	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
+	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/wire"
+	"github.com/stretchr/testify/require"
 )
+
+func TestDKVSNoSignerHandoff(t *testing.T) {
+	const path = "/svc/handoff.btc"
+	for _, job := range []string{"discovery", "directory"} {
+		t.Run(job, func(t *testing.T) {
+			key, err := btcec.NewPrivateKey()
+			require.NoError(t, err)
+			store := &nodeCurrentTestStore{handlerTestStore: &handlerTestStore{}}
+			a := NewHandler(store, nil, nil, nil)
+			a.TrustedSource, a.ValidatorID = true, hex.EncodeToString(key.PubKey().SerializeCompressed())
+			b := a
+			b.Peer = &PeerState{}
+			source := NewHandler(&handlerTestStore{pathSnapshot: &dkvs.PathSnapshot{
+				Path: path, PathMeta: &dkvs.PathMeta{Version: 1, Path: path}, ServerTimeMS: 1,
+			}}, nil, nil, nil)
+			source.MirrorAuthority = true
+			signed := source
+			signed.Peer = &PeerState{}
+			for _, p := range []*PeerState{a.Peer, b.Peer, source.Peer, signed.Peer} {
+				t.Cleanup(p.Close)
+			}
+			signed.Sign = func(payload []byte) ([]byte, error) {
+				return ecdsa.Sign(key, chainhash.HashB(payload)).Serialize(), nil
+			}
+			b.Send = func(m wire.Message) { signed.OnSyncRequest(m.(*wire.MsgDKVSSyncRequest)) }
+			signed.Send = func(m wire.Message) { b.OnSyncResponse(m.(*wire.MsgDKVSSyncResponse)) }
+			attempts := 0
+			a.Send = func(m wire.Message) {
+				attempts++
+				source.OnSyncRequest(m.(*wire.MsgDKVSSyncRequest))
+			}
+			source.Send = func(m wire.Message) {
+				var buf bytes.Buffer
+				require.NoError(t, wire.WriteMessage(&buf, m, wire.ProtocolVersion, wire.MainNet))
+				response, _, err := wire.ReadMessage(&buf, wire.ProtocolVersion, wire.MainNet)
+				require.NoError(t, err)
+				reject := response.(*wire.MsgReject)
+				require.False(t, b.OnSyncReject(reject), "idle endpoint sharing the public key")
+				require.True(t, a.OnSyncReject(reject))
+			}
+			a.RequestPathRepair = func(p string) {
+				if job == "discovery" {
+					require.Empty(t, p)
+				} else {
+					require.Equal(t, path, p)
+				}
+				require.True(t, b.ResumeSync())
+			}
+			if job == "discovery" {
+				a.QueueSync(nil)
+			} else {
+				a.QueuePathSync(path)
+				require.NotNil(t, store.appliedPathSnapshot)
+			}
+			require.True(t, a.Node.Ready())
+			require.True(t, b.ShouldRequestSync())
+			require.False(t, a.ShouldRequestSync())
+			a.QueueSync(nil)
+			a.QueuePathSync(path)
+			require.Equal(t, 1, attempts)
+			if job == "discovery" {
+				t.Run("repair_while_source_offline", func(t *testing.T) {
+					b.Peer.Close()
+					a.LocalServices = wire.SFNodeMiner
+					a.RequestPathRepair = func(p string) {
+						require.Equal(t, path, p)
+						require.False(t, a.Node.Ready(), "repair must be queued before selecting a peer")
+					}
+					record, err := dkvs.NewRecord(path+"/item", []byte("value"),
+						key.PubKey().SerializeCompressed(), dkvs.RecordOptions{Seq: 2, IssueHeight: 1})
+					require.NoError(t, err)
+					hash := dkvs.SigningHash(record)
+					record.Signature = ecdsa.Sign(key, hash[:]).Serialize()
+					a.Peer.TrackRequest(&wire.MsgDKVSGet{Keys: []string{record.Key}}, time.Now())
+					a.OnData(&wire.MsgDKVSData{Records: []*wire.DKVSRecord{record}})
+					require.False(t, a.Node.Ready())
+					require.Equal(t, 1, attempts)
+
+					b.Peer = &PeerState{}
+					t.Cleanup(b.Peer.Close)
+					b.QueueSync(nil)
+					require.NotNil(t, store.appliedPathSnapshot)
+					require.Equal(t, path, store.appliedPathSnapshot.Path)
+					require.True(t, b.Node.Ready())
+				})
+			}
+			reconnected := a
+			reconnected.Peer = &PeerState{}
+			defer reconnected.Peer.Close()
+			require.True(t, reconnected.ShouldRequestSync())
+		})
+	}
+}
 
 // A stays connected but never answers. The existing repair callback represents
 // the server's selection of another eligible, connected source; no new scheduler

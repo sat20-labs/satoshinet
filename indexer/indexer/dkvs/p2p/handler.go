@@ -109,10 +109,12 @@ func (h Handler) warnf(format string, args ...interface{}) {
 }
 
 func (h Handler) ShouldRequestSync() bool {
-	if !h.valid() {
+	if !h.valid() || !h.allowedPathSnapshotSource() || h.Peer.Closed() {
 		return false
 	}
-	return h.allowedPathSnapshotSource()
+	h.Peer.syncMtx.Lock()
+	defer h.Peer.syncMtx.Unlock()
+	return !h.Peer.noSyncSigner
 }
 
 func (h Handler) OnNotify(msg *wire.MsgDKVSNotify) {
@@ -261,6 +263,10 @@ func (h Handler) OnSyncRequest(msg *wire.MsgDKVSSyncRequest) {
 	if !h.valid() || msg == nil || msg.SessionID == 0 {
 		return
 	}
+	if h.Sign == nil {
+		h.send(wire.NewMsgReject(wire.CmdDKVSSyncRequest, wire.RejectDKVSNoSigner, "DKVS snapshot signer unavailable"))
+		return
+	}
 	// Network DKVS contains only globally relayable current state. Any peer may
 	// bootstrap that public view, but only a Core/Bootstrap mirror authority
 	// may serve the signed sync session.
@@ -281,17 +287,11 @@ func (h Handler) OnSyncRequest(msg *wire.MsgDKVSSyncRequest) {
 		return
 	}
 	response := &wire.MsgDKVSSyncResponse{SessionID: msg.SessionID, Records: records, NextCursor: next, Done: done, CheckpointRoot: root}
-	if h.MirrorAuthority {
-		if h.Sign == nil {
-			h.Peer.CancelServe()
-			return
-		}
-		response.SourceSignature, err = h.Sign(SyncAuthPayload(h.Net, msg.Cursor, msg.Filters, response))
-		if err != nil {
-			h.Peer.CancelServe()
-			h.warnf("sign DKVS sync response failed: %v", err)
-			return
-		}
+	response.SourceSignature, err = h.Sign(SyncAuthPayload(h.Net, msg.Cursor, msg.Filters, response))
+	if err != nil {
+		h.Peer.CancelServe()
+		h.warnf("sign DKVS sync response failed: %v", err)
+		return
 	}
 	h.send(response)
 	if done {
@@ -299,8 +299,30 @@ func (h Handler) OnSyncRequest(msg *wire.MsgDKVSSyncRequest) {
 	}
 }
 
+// OnSyncReject only disables the connection that owns an outstanding request.
+func (h Handler) OnSyncReject(msg *wire.MsgReject) bool {
+	if msg == nil || msg.Cmd != wire.CmdDKVSSyncRequest || msg.Code != wire.RejectDKVSNoSigner || !h.valid() {
+		return false
+	}
+	p := h.Peer
+	p.syncMtx.Lock()
+	if !p.syncActive {
+		p.syncMtx.Unlock()
+		return false
+	}
+	path, _ := pathSyncFilter(p.syncFilters)
+	p.noSyncSigner = true
+	p.resetSyncLocked()
+	p.cancelSync("request")
+	p.syncMtx.Unlock()
+	if h.Node.finishSync(p, false) && h.RequestPathRepair != nil {
+		h.RequestPathRepair(path)
+	}
+	return true
+}
+
 func (h Handler) QueueSync(cursor []byte) {
-	if !h.ShouldRequestSync() || h.Peer.Closed() {
+	if !h.ShouldRequestSync() {
 		return
 	}
 	if len(cursor) != 0 {
@@ -320,7 +342,7 @@ func (h Handler) QueueSync(cursor []byte) {
 		h.Node.enqueuePathSyncLocked("")
 	}
 	h.Node.pendingMtx.Unlock()
-	h.queueNextPathSync()
+	h.ResumeSync()
 }
 
 func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
@@ -385,7 +407,7 @@ func (h Handler) OnSyncResponse(msg *wire.MsgDKVSSyncResponse) {
 			}
 		}
 		h.Node.finishSync(h.Peer, true)
-		if !h.queueNextPathSync() {
+		if !h.ResumeSync() {
 			h.markReadyAndDrain()
 		}
 		return

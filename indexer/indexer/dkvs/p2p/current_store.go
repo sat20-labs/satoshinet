@@ -63,7 +63,7 @@ func (h Handler) reconcileDiscoveredPaths(action SyncAction) {
 	if !h.Node.finishDiscovery(h.Peer, ordered) {
 		return
 	}
-	if !h.queueNextPathSync() {
+	if !h.ResumeSync() {
 		h.markReadyAndDrain()
 	}
 }

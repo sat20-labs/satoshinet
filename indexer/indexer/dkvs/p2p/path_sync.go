@@ -252,7 +252,7 @@ func (s *PeerState) startPathSyncLocked(path string, now time.Time) (SyncStart, 
 func (s *PeerState) StartPathSync(path string, now time.Time) (SyncStart, error) {
 	s.syncMtx.Lock()
 	defer s.syncMtx.Unlock()
-	if s.Closed() {
+	if s.noSyncSigner || s.Closed() {
 		return SyncStart{}, nil
 	}
 	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
@@ -323,7 +323,7 @@ func (h Handler) sendPathSyncRequestAttempt(request *wire.MsgDKVSSyncRequest, at
 				path, _ := pathSyncFilter(request.Filters)
 				h.RequestPathRepair(path)
 			} else {
-				h.queueNextPathSync()
+				h.ResumeSync()
 			}
 		}
 	})
@@ -343,30 +343,29 @@ func (h Handler) finishFailedPathSync(path string, retry bool) {
 		return
 	}
 	if retry && !h.Peer.Closed() {
-		h.Peer.scheduleSync("retry:"+path, PathSyncRetryDelay, func() { h.queueNextPathSync() })
+		h.Peer.scheduleSync("retry:"+path, PathSyncRetryDelay, func() { h.ResumeSync() })
 	} else if h.RequestPathRepair != nil {
 		h.RequestPathRepair(path)
 	}
 }
 
-func (h Handler) queueNextPathSync() bool { return h.queueNextNodeSync("", false) }
+// ResumeSync dispatches pending node work to this peer without adding a job.
+func (h Handler) ResumeSync() bool { return h.queueNextNodeSync("", false) }
 
 func (h Handler) QueuePathSync(path string) {
-	if !h.valid() || !h.allowedPathSnapshotSource() || h.Peer.Closed() {
+	if !h.ShouldRequestSync() {
 		return
 	}
 	path = strings.TrimSuffix(strings.TrimSpace(path), "/")
 	if path == "" {
 		return
 	}
-	h.Node.pendingMtx.Lock()
-	h.Node.enqueuePathSyncLocked(path)
-	h.Node.pendingMtx.Unlock()
-	h.queueNextPathSync()
+	h.Node.enqueuePathSync(path)
+	h.ResumeSync()
 }
 
 func (h Handler) queuePathRepair(record *wire.DKVSRecord, err error) bool {
-	if record == nil || err == nil {
+	if !h.valid() || record == nil || err == nil {
 		return false
 	}
 	if !errors.Is(err, dkvs.ErrPathGenerationGap) && !errors.Is(err, dkvs.ErrStaleEndpoint) && !errors.Is(err, dkvs.ErrPathDiverged) {
@@ -376,8 +375,10 @@ func (h Handler) queuePathRepair(record *wire.DKVSRecord, err error) bool {
 	if pathErr != nil {
 		return false
 	}
-	if h.allowedPathSnapshotSource() {
-		h.QueuePathSync(path)
+	// Keep the repair pending even if no eligible source is connected.
+	h.Node.enqueuePathSync(path)
+	if h.ShouldRequestSync() {
+		h.ResumeSync()
 	} else if h.RequestPathRepair != nil {
 		h.RequestPathRepair(path)
 	}
@@ -402,10 +403,6 @@ func (h Handler) servePathSync(msg *wire.MsgDKVSSyncRequest) bool {
 		return true
 	}
 	response := &wire.MsgDKVSSyncResponse{SessionID: msg.SessionID, Records: records, NextCursor: next, Done: done, CheckpointRoot: snapshot.PathMeta.StateRoot}
-	if h.Sign == nil {
-		h.Peer.CancelServe()
-		return true
-	}
 	response.SourceSignature, err = h.Sign(SyncAuthPayload(h.Net, msg.Cursor, msg.Filters, response))
 	if err != nil {
 		h.Peer.CancelServe()

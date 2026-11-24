@@ -146,8 +146,8 @@ func btcdMain(serverChan chan<- *server) (returnErr error) {
 		anchorLog.Infof("anchor manager shutdown complete")
 	}()
 
+	var localPubKey []byte
 	if cfg.Generate {
-		var localPubKey []byte
 		// 挖矿就必须对出块签名，需要stp模块提供钱包签名
 		err = stp.LoadSTP(cfg.HomeDir)
 		if err != nil {
@@ -427,6 +427,9 @@ func btcdMain(serverChan chan<- *server) (returnErr error) {
 		srvrLog.Infof("Server shutdown complete")
 	}()
 
+	if len(localPubKey) != 0 && strings.EqualFold(hex.EncodeToString(localPubKey), server.miningPubKey) {
+		server.dkvsSign = stp.SignMsg
+	}
 	server.Start()
 	if serverChan != nil {
 		serverChan <- server

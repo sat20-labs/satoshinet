@@ -261,6 +261,7 @@ type server struct {
 	timeSource             blockchain.MedianTimeSource
 	services               wire.ServiceFlag
 	miningPubKey           string
+	dkvsSign               dkvsp2p.SignFunc
 	access                 nodeAccessState
 	messageBindingResolver MessageBindingResolver
 
@@ -1669,7 +1670,7 @@ func (sp *serverPeer) dkvsHandler() dkvsp2p.Handler {
 			sp.server.BroadcastMessage(msg, sp)
 		},
 		RequestPathRepair: func(path string) { sp.server.requestDKVSPathRepair(path, sp) },
-		Sign:              stp.SignMsg,
+		Sign:              sp.server.dkvsSign,
 		Penalize: func(persistent, transient uint32, reason string) {
 			sp.addBanScore(persistent, transient, reason)
 		},
@@ -1688,6 +1689,16 @@ func (sp *serverPeer) OnDKVSSyncRequest(_ *peer.Peer, msg *wire.MsgDKVSSyncReque
 
 func (sp *serverPeer) OnDKVSSyncResponse(_ *peer.Peer, msg *wire.MsgDKVSSyncResponse) {
 	sp.withDKVSHandler(func(h dkvsp2p.Handler) { h.OnSyncResponse(msg) })
+}
+
+func (sp *serverPeer) OnReject(_ *peer.Peer, msg *wire.MsgReject) {
+	if msg.Cmd == wire.CmdDKVSSyncRequest && msg.Code == wire.RejectDKVSNoSigner {
+		sp.withDKVSHandler(func(h dkvsp2p.Handler) {
+			if h.OnSyncReject(msg) {
+				peerLog.Infof("Skipping DKVS snapshots from peer %s (id %d): no signer", sp.Addr(), sp.ID())
+			}
+		})
+	}
 }
 
 func (sp *serverPeer) queueDKVSSyncRequest(cursor []byte) {
@@ -2381,38 +2392,27 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 		msg.reply <- result
 
 	case requestDKVSSyncMsg:
-		for _, sp := range state.minerPeers {
+		state.forAllPeers(func(sp *serverPeer) {
 			if sp != nil && sp.Connected() && sp.shouldRequestDKVSSyncFromPeer() {
 				if sp.isTrustedDKVSMirrorSource() {
 					s.dkvsState.MarkTrusted(time.Now())
 				}
 				sp.queueDKVSSyncRequest(nil)
 			}
-		}
+		})
 
 	case requestDKVSPathRepairMsg:
-		var fallback *serverPeer
-		for _, sp := range state.minerPeers {
-			if sp == nil || !sp.Connected() || !sp.isTrustedDKVSMirrorSource() {
-				continue
+		var source *serverPeer
+		state.forAllPeers(func(sp *serverPeer) {
+			if source != nil && source != msg.failed {
+				return
 			}
-			if sp == msg.failed {
-				fallback = sp
-				continue
+			if sp != nil && sp.Connected() && sp.shouldRequestDKVSSyncFromPeer() {
+				source = sp
 			}
-			if msg.path == "" {
-				sp.dkvsHandler().QueueSync(nil)
-			} else {
-				sp.dkvsHandler().QueuePathSync(msg.path)
-			}
-			return
-		}
-		if fallback != nil {
-			if msg.path == "" {
-				fallback.dkvsHandler().QueueSync(nil)
-			} else {
-				fallback.dkvsHandler().QueuePathSync(msg.path)
-			}
+		})
+		if source != nil {
+			source.dkvsHandler().ResumeSync()
 			return
 		}
 		peerLog.Warnf("no authorized DKVS path snapshot source is connected for %s", msg.path)
@@ -2569,6 +2569,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 			OnDKVSGet:          sp.OnDKVSGet,
 			OnDKVSData:         sp.OnDKVSData,
 			OnDKVSSyncRequest:  sp.OnDKVSSyncRequest,
+			OnReject:           sp.OnReject,
 			OnDKVSSyncResponse: sp.OnDKVSSyncResponse,
 		},
 		NewestBlock:         sp.newestBlock,
