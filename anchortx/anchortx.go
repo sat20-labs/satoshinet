@@ -19,6 +19,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	"github.com/sat20-labs/satoshinet/httpclient"
 	sindexer "github.com/sat20-labs/satoshinet/indexer/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/mining/posminer/bootstrapnode"
 	"github.com/sat20-labs/satoshinet/txscript"
 	"github.com/sat20-labs/satoshinet/wire"
@@ -218,6 +219,13 @@ func checkAnchorInput(tx *wire.MsgTx, current, bindOutputs bool,
 		return nil, err
 	}
 	if !native {
+		for _, asset := range info.TxAssets {
+			if asset.Name.Protocol == nativeproof.ProtocolRGB11 {
+				if _, err := dkvs.RGB11NameKey(asset.Name.Ticker); err == nil {
+					return nil, fmt.Errorf("RGB11 chain name requires a native Anchor proof")
+				}
+			}
+		}
 		return info, nil
 	}
 	config := anchorManager.anchorConfig
@@ -237,7 +245,7 @@ func checkAnchorInput(tx *wire.MsgTx, current, bindOutputs bool,
 		mode = nativeproof.Current
 	}
 	_, err = nativeproof.Validate(proof, nativeproof.Source{Outpoint: info.Utxo, PkScript: pkScript,
-		Value: info.Value, Assets: info.TxAssets, BitcoinNetwork: config.ChainParams.Name}, resolver, mode)
+		Value: info.Value, Assets: info.TxAssets, BitcoinNetwork: config.ChainParams.Name, VerifyName: dkvs.VerifyRGB11Name}, resolver, mode)
 	if err != nil {
 		return nil, fmt.Errorf("invalid native anchor proof: %w", err)
 	}

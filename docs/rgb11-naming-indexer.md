@@ -1,127 +1,51 @@
-# Contract storage and RGB11 registration boundaries
+# RGB11 registration and SatoshiNet asset names
 
-## SatoshiNet contract storage
+The public contract registry retains the complete RGB11 ContractID. Public
+Transcend uses `rgb11:f:<normalized_ticker>@<contract_id_suffix>` in its signed
+deployment content, contract path, and SatoshiNet deposit Anchor. The suffix is
+the last four characters of the canonical 64-character lowercase hexadecimal
+ContractID. Leading zeros are retained. The Bitcoin RGB wallet continues to
+key balances and proofs by the full ContractID.
 
-DKVS stores opaque application bytes. The DKVS subsystem does not define or
-decode RGB registrations, Genesis, tickers, asset types, names or ordinals.
-The separate STP native anchor verifier uses the RGB11 engine to validate
-proof-backed asset mappings; see [STP native assets](stp-native-assets.md).
+## DKVS records
 
-The directory layout remains:
+| Path | Value |
+| --- | --- |
+| `/contract/rgb11/<contract_id>` | Version byte `1` and a CompactSize-prefixed standard public RGB contract file. |
+| `/contract/rgb11-name/<normalized_ticker>/<contract_id_suffix>` | Version byte `1` and the 32-byte full ContractID. |
+| `/contract/evm/source/<contract_address>` | EVM source record managed by the EVM source verifier. |
 
-```text
-/contract/rgb11/<contract_id>
-/contract/evm/source/<contract_address>
-```
+The Core authority signs the RGB records. The storage envelope has `TTL=0`,
+zero flags, no fee proof, and a compressed signer key. A public contract uses
+`Seq=1`. A short name uses `Seq=1` to claim the key atomically. After reading
+back the matching claim from the same registry, Core signs and publishes
+`Seq=2` for the same key and value. Only `Seq=2` is valid in an Anchor. A retry
+with the same value can complete a previously committed claim. Two full
+ContractIDs producing the same short ticker conflict at the immutable key.
+Generic wallet DKVS writes and deletes cannot alter either record.
 
-The first path is chosen and interpreted by the Wallet SDK. Generic DKVS contract
-keys allow application directory segments and a final identifier. Only the SDK
-requires the RGB identifier to be a nonzero, full lowercase 64-character hex
-ContractID. The wire value limit for contract paths is 1 MiB.
+## Registration and deployment
 
-Authority-managed contract slots require a signed record from the configured
-CoreNode authority. Their storage envelope has `Seq=1`, `TTL=0`, no flags, no
-FeeProof, a compressed public key and a nonempty value. Ordinary wallet writes,
-CAS writes and deletes cannot create or modify these records. Equal values may
-have a refreshed trusted envelope; different values are always rejected, even
-when the incoming envelope is older and would otherwise lose generic merge
-ordering. Replacement snapshots cannot omit an existing permanent value.
+`POST /v3/rgb11/contracts/register` on the STP Core accepts the public RGB
+contract under `contract_consignment_base64`. A request with `register_name`
+set to `true` also registers the deterministic SatoshiNet name. Core verifies
+the public Genesis, asset type, and Bitcoin network, then computes the name
+from the Genesis ticker and full ID. The public contract path also serves
+wallet recovery and can be populated independently.
 
-The EVM source verifier remains in `indexer/indexer/evmsource`. It validates
-confirmed canonical deployment data, source compilation and the source signer
-through the existing verifier hook. Its storage slot keeps its original
-per-contract collection and immutability rules.
+The wallet resolves the name before constructing the deployment request. The
+Core validates the registered name on the Transcend deployment entry points.
+The Anchor's native proof carries the signed binding and RGB history. Nodes
+validate the signature, independently derive the expected name from the proof,
+and check that the proof's full ContractID matches the binding. An RGB-only
+public Anchor credits zero sats on SatoshiNet.
 
-Opaque authority contracts use their parent directory as the DKVS collection.
-For RGB that directory is `/contract/rgb11`. Signature checks, record commits,
-PathMeta, change delivery and P2P synchronization are ordinary DKVS operations;
-none parse business fields.
+The SatoshiNet `/v3/tick/info/:ticker` response exposes the on-chain name in
+`name` and `displayname`. It includes `contract_id`
+when the node can verify the signed DKVS name binding.
 
-## Internal storage API
-
-`IndexerMgr.PutDKVSInternalContract` / `Indexer.PutInternalContract` accept one
-signed generic DKVS record through the in-process backend. This internal write
-operation is not exposed as an HTTP route.
-
-This is a trusted storage API, not an RGB registration API. A caller must validate
-its business operation before signing the bytes. The node's former RGB-specific
-registration and query routes are removed; unpublished legacy routes and
-formats have no compatibility layer.
-
-## Wallet SDK business representation
-
-`sdk/wallet/rgb11/registry.go` owns the compact RGB value:
-
-1. version byte `1`;
-2. CompactSize-prefixed UTF-8 `provider_did`;
-3. CompactSize-prefixed normalized `ticker`;
-4. CompactSize `ordinal`;
-5. CompactSize-prefixed standard binary RGB contract file (`RGB\0CON`).
-
-The bytes and path have not changed. Unknown versions, nonminimal lengths,
-trailing bytes, invalid Genesis, a mismatched ContractID or ticker, and noncanonical
-contract encoding are rejected by the SDK. ContractID and FT/NFT type derive
-from Genesis and are not duplicated in storage. The RGB engine contains no
-SAT20 naming or DKVS business format.
-
-The registered name remains `rgb11:<type>:<ticker>[_ordinal]@<provider_did>`.
-FT `f` and NFT `o` share the same `(provider_did, ticker)` ordinal sequence.
-Balance, proof and transfer identity remains the full ContractID. Local names
-and mutable Primary DID metadata do not rename an existing registration.
-
-Ordinary wallet reads authenticate the signed DKVS record using the locally
-configured CoreNode authority, then validate its RGB contents in the SDK.
-Registered-name caches retain signed records and repeat this validation during
-restore. A serving endpoint cannot select the authority key. Authentication of
-one record does not establish collection completeness or global ordinal order.
-
-DKVS transport and synchronization remain owned by `wallet.dkvsManager`; RGB
-business codecs and name projection do not create clients or background workers.
-The account service capability bitmap is opaque to the node. The Wallet SDK owns
-the meaning of the direct-RGB capability bit.
-
-## Single registration authority
-
-`wallet.RGB11Registrar` is instantiated once by the selected CoreNode registration
-service against its local authoritative `RGB11RegistryBackend`. All registrations
-must use that instance and authority key. It serializes identity validation,
-reading the committed collection, ordinal allocation, signing and committing.
-
-The provider public key must come from an authenticated service request. The
-registrar verifies the DID's current active identity and signer ownership. The
-calling bridge service must first validate Genesis ownership and bridge/channel
-evidence; accepting an arbitrary caller-supplied public key is not authentication.
-
-The registrar validates the full committed RGB collection before allocation:
-canonical contracts, authoritative signatures, unique ContractIDs, unique
-ordinals and a gap-free sequence beginning at 1. A repeated registration returns
-the same result; conflicting provider or contract contents are rejected. A failed
-commit consumes no ordinal. Restart reconstructs the next ordinal from the same
-authoritative database. No counter, reverse index or registration log is added.
-
-This is a single-writer operational boundary. Separate registrar instances,
-processes or nodes must not concurrently allocate ordinals. Generic per-key CAS
-cannot serialize allocations for different ContractIDs. DKVS replicas authenticate
-opaque records and preserve their bytes; they deliberately do not enforce RGB
-ordinal rules. Future support for independent concurrent authorities requires a
-separate coordination design.
-
-## Validation and remaining integration
-
-Node tests cover opaque bytes, authority and internal storage boundaries,
-wire size limits, ordinary-write rejection, immutable values, atomic rejection,
-snapshot omissions, P2P state and database reopen behavior.
-
-SDK tests cover the unchanged compact codec, contract and ticker identity,
-untrusted/modified responses, full collection gaps/collisions, mixed FT/NFT
-allocation, concurrent requests through one registrar, failed commits, retries,
-restart, current DID ownership and registered-name recovery.
-
-The existing SDK and PWA RGB E2E suites continue to exercise actual wallet,
-proof, balance, transfer and backup behavior. Execution status is recorded in
-`sat20wallet/docs/rgb11-mainline-integration-2026-10-08.md`.
-
-Transcend does not yet call this registrar in a production RGB deposit/withdraw
-flow. Custody, ingress proof validation, channel splicing and L2 RGB balance
-credit/debit remain deferred. This refactor provides the SDK authority operation
-and generic node storage; it does not claim those bridge flows are implemented.
+For `TRGB241`, the full ContractID
+`8650c89a895329747b8140166be3296432e8c0205a2ac838e097d154c53f0e8a`
+yields `rgb11:f:trgb241@0e8a`. The old testnet deployment used the full
+hexadecimal ID in the ticker field and requires a new deployment under the
+canonical name.

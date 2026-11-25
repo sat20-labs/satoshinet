@@ -11,6 +11,7 @@ import (
 
 	"github.com/sat20-labs/rgb11/consignment"
 	"github.com/sat20-labs/rgb11/seals"
+	"github.com/sat20-labs/satoshinet/wire"
 )
 
 const (
@@ -30,6 +31,7 @@ type Proof struct {
 	Protocol    string
 	Consignment []byte
 	Reveals     [][]byte
+	NameRecord  *wire.DKVSRecord
 }
 
 // IsProof identifies the native envelope without accepting its contents.
@@ -79,7 +81,7 @@ func BuildRGB11(raw []byte, reveals [][]byte) ([]byte, error) {
 // Decode checks canonical envelope framing and confinement. It does not
 // validate the RGB graph or grant current or historical ownership.
 func Decode(raw []byte) (*Proof, error) {
-	if len(raw) < 12 || len(raw) > MaxProofSize || !IsProof(raw) || raw[4] != 1 || raw[5] != 1 {
+	if len(raw) < 12 || len(raw) > MaxProofSize || !IsProof(raw) || (raw[4] != 1 && raw[4] != 2) || raw[5] != 1 {
 		return nil, fmt.Errorf("unsupported or malformed native proof")
 	}
 	n := int(binary.LittleEndian.Uint32(raw[6:10]))
@@ -112,10 +114,32 @@ func Decode(raw []byte) (*Proof, error) {
 		result.Reveals = append(result.Reveals, append([]byte(nil), reveal...))
 		cursor += size
 	}
-	if cursor != len(raw) {
+	if raw[4] == 2 {
+		record, err := wire.DeserializeDKVSRecord(raw[cursor:])
+		if err != nil {
+			return nil, fmt.Errorf("invalid RGB11 name record: %w", err)
+		}
+		result.NameRecord = record
+	} else if cursor != len(raw) {
 		return nil, fmt.Errorf("trailing native proof data")
 	}
 	return result, nil
+}
+
+// WithRGB11Name adds an authority-signed binding to the original RGB proof.
+// Both the binding and the RGB history are validated when spending the Anchor.
+func WithRGB11Name(raw []byte, record *wire.DKVSRecord) ([]byte, error) {
+	proof, err := Decode(raw)
+	if err != nil || proof.NameRecord != nil || record == nil {
+		return nil, fmt.Errorf("invalid RGB11 native proof for name binding")
+	}
+	encoded, err := wire.SerializeDKVSRecord(record)
+	if err != nil || len(raw)+len(encoded) > MaxProofSize {
+		return nil, fmt.Errorf("invalid RGB11 name proof size")
+	}
+	named := append(append([]byte(nil), raw...), encoded...)
+	named[4] = 2
+	return named, nil
 }
 
 func checkReveal(raw []byte) error {

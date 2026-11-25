@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -39,10 +40,12 @@ type Source struct {
 	Value          int64
 	Assets         wire.TxAssets
 	BitcoinNetwork string
+	VerifyName     func(*wire.DKVSRecord, string) (string, error)
 }
 
 // Result contains the canonical contract identity and FULL source amount.
-// Asset.Name is rgb11:f:<32-byte lower-case contract id>, Asset.Amount.Precision
+// Asset.Name is the authenticated chain name when a name record is present.
+// Otherwise it is the full local Contract ID key. Asset.Amount.Precision
 // comes from genesis, and Asset.BindingSat is always zero. Only Mode Current
 // establishes current source ownership; no mode authorizes replay by itself.
 type Result struct {
@@ -93,14 +96,24 @@ func Validate(raw []byte, source Source, resolver consignment.BitcoinResolver, m
 		return nil, err
 	}
 	name := wire.AssetName{Protocol: ProtocolRGB11, Type: indexer.ASSET_TYPE_FT, Ticker: hex.EncodeToString(contractID[:])}
-	if name != claim.Name {
-		return nil, fmt.Errorf("native asset identity does not match RGB11 genesis")
-	}
 	genesis, _ := container.Value.Field("genesis")
 	schema, types := container.SchemaValues()
 	metadata, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
 	if err != nil {
 		return nil, err
+	}
+	if proof.NameRecord != nil {
+		if source.VerifyName == nil {
+			return nil, fmt.Errorf("no RGB11 name authority")
+		}
+		registeredID, err := source.VerifyName(proof.NameRecord, claim.Name.Ticker)
+		if err != nil || registeredID != name.Ticker || claim.Name.Ticker != RGB11ShortTicker(metadata.Ticker, contractID) || source.Value != 0 {
+			return nil, fmt.Errorf("invalid public RGB11 name binding or Anchor value")
+		}
+		name.Ticker = claim.Name.Ticker
+	}
+	if name != claim.Name {
+		return nil, fmt.Errorf("native asset identity does not match RGB11 genesis")
 	}
 	if claim.Amount.Precision != int(metadata.Precision) {
 		return nil, fmt.Errorf("native amount precision does not match RGB11 genesis")
@@ -177,6 +190,33 @@ func Validate(raw []byte, source Source, resolver consignment.BitcoinResolver, m
 	return &Result{Mode: mode, ContractID: container.ContractID, SchemaID: container.SchemaID,
 		Asset:    wire.AssetInfo{Name: name, Amount: indexer.Decimal{Precision: int(metadata.Precision), Value: amount}, BindingSat: 0},
 		Outpoint: source.Outpoint, Value: value, PkScript: append([]byte(nil), script...), BitcoinNetwork: network, History: history}, nil
+}
+
+const RGB11SuffixLen = 4
+
+// RGB11ShortTicker uses the last four hexadecimal digits of the Contract ID.
+func RGB11ShortTicker(ticker string, id [32]byte) string {
+	return RGB11BaseTicker(ticker) + "@" + hex.EncodeToString(id[len(id)-RGB11SuffixLen/2:])
+}
+
+// RGB11BaseTicker canonicalizes the human-readable part of a chain name.
+func RGB11BaseTicker(ticker string) string {
+	var base strings.Builder
+	lastDash := false
+	for i := 0; i < len(ticker); i++ {
+		char := ticker[i]
+		if char >= 'A' && char <= 'Z' {
+			char += 'a' - 'A'
+		}
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
+			base.WriteByte(char)
+			lastDash = false
+		} else if base.Len() > 0 && !lastDash {
+			base.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.TrimSuffix(base.String(), "-")
 }
 
 func bitcoinNetwork(genesis strict_types.Value, expected string) (string, error) {

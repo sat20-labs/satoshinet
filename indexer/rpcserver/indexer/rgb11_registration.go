@@ -44,38 +44,31 @@ func (s *Handle) registerRGB11Contract(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, resp)
 		return
 	}
-	id, err := validateRGB11TechnicalRecord(req.Record)
+	id, err := validateRGB11RegistryRecord(req.Record)
 	if err != nil {
 		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
 		c.JSON(http.StatusBadRequest, resp)
 		return
 	}
-	// An existing identical public value is idempotent. A different value for
-	// the same full ContractID is a conflict, never a replacement.
+	// Identical public values are idempotent. An existing registration key
+	// keeps its original value when another value is submitted.
 	existing, err := s.model.indexer.GetDKVSRecord(req.Record.Key)
+	write := false
 	if err == nil {
-		if _, err = validateRGB11TechnicalRecord(existing); err == nil {
-			if bytes.Equal(existing.Value, req.Record.Value) {
-				resp.ContractID = id
-				c.JSON(http.StatusOK, resp)
-				return
+		if _, err = validateRGB11RegistryRecord(existing); err == nil {
+			if !bytes.Equal(existing.Value, req.Record.Value) {
+				err = dkvsindexer.ErrWriteConflict
+			} else {
+				write = existing.Seq < req.Record.Seq
 			}
-			err = dkvsindexer.ErrWriteConflict
 		}
 	} else if errors.Is(err, dkvsindexer.ErrRecordNotFound) {
-		_, err = s.model.indexer.PutDKVSInternalContract(req.Record)
-		// A concurrent submitter may have installed the same immutable public
-		// contract after our initial read. Verify that record before treating the
-		// operation as an idempotent success.
-		if errors.Is(err, dkvsindexer.ErrWriteConflict) {
-			stored, readErr := s.model.indexer.GetDKVSRecord(req.Record.Key)
-			if readErr == nil {
-				_, readErr = validateRGB11TechnicalRecord(stored)
-			}
-			if readErr == nil && bytes.Equal(stored.Value, req.Record.Value) {
-				err = nil
-			}
+		if req.Record.Seq == 1 {
+			write, err = true, nil
 		}
+	}
+	if write {
+		_, err = s.model.indexer.PutDKVSInternalContract(req.Record)
 	}
 	if err != nil {
 		setDKVSError(&resp.BaseResp, &resp.ErrorCode, err)
@@ -86,9 +79,9 @@ func (s *Handle) registerRGB11Contract(c *gin.Context) {
 	// caller can query by full ContractID after an uncertain HTTP outcome.
 	stored, err := s.model.indexer.GetDKVSRecord(req.Record.Key)
 	if err == nil {
-		_, err = validateRGB11TechnicalRecord(stored)
+		_, err = validateRGB11RegistryRecord(stored)
 	}
-	if err == nil && !bytes.Equal(stored.Value, req.Record.Value) {
+	if err == nil && (!bytes.Equal(stored.Value, req.Record.Value) || stored.Seq < req.Record.Seq) {
 		err = dkvsindexer.ErrWriteConflict
 	}
 	if err != nil {
@@ -98,6 +91,15 @@ func (s *Handle) registerRGB11Contract(c *gin.Context) {
 	}
 	resp.ContractID = id
 	c.JSON(http.StatusOK, resp)
+}
+
+func validateRGB11RegistryRecord(record *swire.DKVSRecord) (string, error) {
+	if record != nil {
+		if ticker, ok := dkvsindexer.RGB11NameFromKey(record.Key); ok {
+			return dkvsindexer.VerifyRGB11NameRecord(record, ticker)
+		}
+	}
+	return validateRGB11TechnicalRecord(record)
 }
 
 func rgb11PublicUnwrap(v *strict_types.Value) *strict_types.Value {

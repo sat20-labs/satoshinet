@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	indexercommon "github.com/sat20-labs/indexer/common"
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractcommon "github.com/sat20-labs/satoshinet/contract"
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -138,6 +139,15 @@ func (s *Handle) getTickerInfo(c *gin.Context) {
 	}
 	if tickerInfo.MaxSupply != nil {
 		detail.MaxSupply = tickerInfo.MaxSupply.String()
+	}
+	if tickerInfo.Protocol == nativeproof.ProtocolRGB11 && tickerInfo.Type == indexercommon.ASSET_TYPE_FT {
+		ticker := tickerInfo.Ticker
+		if key, err := dkvsindexer.RGB11NameKey(ticker); err == nil {
+			detail.DisplayName = tickerInfo.AssetName.String()
+			if record, err := s.model.GetDKVSRecord(key); err == nil {
+				detail.ContractID, _ = dkvsindexer.VerifyRGB11Name(record, ticker)
+			}
+		}
 	}
 	resp.Data = detail
 	c.JSON(http.StatusOK, resp)

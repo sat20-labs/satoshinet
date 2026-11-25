@@ -3,6 +3,7 @@ package dkvs
 import (
 	"bytes"
 	"errors"
+	"strings"
 
 	"github.com/sat20-labs/satoshinet/wire"
 )
@@ -14,7 +15,10 @@ func IsAuthorityContractKey(parsed ParsedKey) bool {
 }
 
 func validateContractEnvelope(record *wire.DKVSRecord) error {
-	if record == nil || record.Seq != 1 || record.TTL != 0 || record.Flags != 0 || len(record.FeeProof) != 0 || len(record.PubKey) != 33 || len(record.Value) == 0 {
+	if record == nil || record.TTL != 0 || record.Flags != 0 || len(record.FeeProof) != 0 || len(record.PubKey) != 33 || len(record.Value) == 0 {
+		return ErrInvalidRecord
+	}
+	if record.Seq != 1 && !(record.Seq == RGB11NameProofSeq && strings.HasPrefix(record.Key, rgb11NamePrefix)) {
 		return ErrInvalidRecord
 	}
 	return nil

@@ -468,9 +468,13 @@ func ReadDataFromNullDataScript(script []byte) (uint8, []byte, error) {
 
 func GenTickerInfo(data []byte) (*TickerInfo, error) {
 	var result TickerInfo
-	parts := strings.Split(string(data), "-")
-	if len(parts) != 4 {
-		return nil, fmt.Errorf("invalid ascending payload %s", string(data))
+	parts := [4]string{string(data)}
+	for i := len(parts) - 1; i > 0; i-- {
+		cut := strings.LastIndexByte(parts[0], '-')
+		if cut == -1 {
+			return nil, fmt.Errorf("invalid ascending payload %s", string(data))
+		}
+		parts[0], parts[i] = parts[0][:cut], parts[0][cut+1:]
 	}
 	divisibility, err := strconv.Atoi(parts[2])
 	if err != nil {
