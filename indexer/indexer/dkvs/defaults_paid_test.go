@@ -6,10 +6,10 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 )
 
-func TestDefaultFreeLocalCacheTTLIsOneSatoshiNetDay(t *testing.T) {
+func TestDefaultFreeLocalCacheTTL(t *testing.T) {
 	policy := DefaultFreeLocalCachePolicy()
-	if policy.MaxTTL != 7200 {
-		t.Fatalf("FREE_LOCAL max TTL=%d, want 7200 blocks", policy.MaxTTL)
+	if policy.MaxTTL != 72000 {
+		t.Fatalf("FREE_LOCAL max TTL=%d, want 72000 blocks", policy.MaxTTL)
 	}
 }
 

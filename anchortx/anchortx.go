@@ -218,14 +218,14 @@ func checkAnchorInput(tx *wire.MsgTx, current, bindOutputs bool,
 	if err != nil {
 		return nil, err
 	}
-	if !native {
-		for _, asset := range info.TxAssets {
-			if asset.Name.Protocol == nativeproof.ProtocolRGB11 {
-				if _, err := dkvs.RGB11NameKey(asset.Name.Ticker); err == nil {
-					return nil, fmt.Errorf("RGB11 chain name requires a native Anchor proof")
-				}
+	for _, asset := range info.TxAssets {
+		if asset.Name.Protocol == nativeproof.ProtocolRGB11 {
+			if _, err := dkvs.RGB11NameKey(asset.Name.Ticker); !native || err != nil || info.Value != 0 {
+				return nil, fmt.Errorf("RGB11 Anchor requires a registered asset name, native proof and zero value")
 			}
 		}
+	}
+	if !native {
 		return info, nil
 	}
 	config := anchorManager.anchorConfig

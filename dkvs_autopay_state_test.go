@@ -261,9 +261,14 @@ func TestDKVSAutopayMissingRuntimeDirectMailbox(t *testing.T) {
 			mailDB := indexerdb.NewKVDB(t.TempDir())
 			require.NotNil(t, mailDB)
 			t.Cleanup(func() { _ = mailDB.Close() })
-			idx := dkvs.New(mailDB, dkvs.Config{CurrentHeight: func() uint64 { return height }})
+			idx := dkvs.New(mailDB, dkvs.Config{
+				AllowFreeLocal: true,
+				FreeLocalCache: dkvs.DefaultFreeLocalCachePolicy(),
+				CurrentHeight:  func() uint64 { return height },
+			})
+			freePolicy := idx.FreeLocalCachePolicy()
 			mailbox := NewDKVSMessageMailboxStoreWithRetention(e2eMailboxWriter{idx: idx},
-				func() uint64 { return height }, func(string) uint64 { return 25 }, nil, authorizer)
+				func() uint64 { return height }, func(string) uint64 { return freePolicy.MaxTTL }, nil, authorizer)
 			message := signedTestDirect(t, senderPriv, sender, recipient, 0, "test-direct")
 			key, err := dkvs.MailMsgKey(recipient, sender, message.MessageID)
 			require.NoError(t, err)
@@ -290,7 +295,7 @@ func TestDKVSAutopayMissingRuntimeDirectMailbox(t *testing.T) {
 			require.NoError(t, receiver.HandleMessageNotify(notify))
 			stored, err := idx.Get(key)
 			require.NoError(t, err)
-			require.Equal(t, uint64(25), stored.TTL)
+			require.Equal(t, uint64(72000), stored.TTL)
 			require.Equal(t, uint64(100), stored.IssueHeight)
 			proof, err := dkvs.ParseFeeProof(stored.FeeProof)
 			require.NoError(t, err)
@@ -363,6 +368,13 @@ func TestDKVSAutopayMissingRuntimeDirectMailbox(t *testing.T) {
 			state, err = cached.GetAutopayState(addr.String())
 			require.NoError(t, err)
 			require.NotNil(t, state)
+
+			height = stored.IssueHeight + 7200
+			_, err = idx.Get(key)
+			require.NoError(t, err, "free Direct mail must survive the old cutoff")
+			height = stored.IssueHeight + 72000
+			_, err = idx.Get(key)
+			require.ErrorIs(t, err, dkvs.ErrRecordNotFound)
 		})
 	}
 }

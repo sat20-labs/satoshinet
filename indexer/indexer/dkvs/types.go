@@ -30,7 +30,7 @@ const (
 	MaxNamespaceSize     = 16
 	MaxRecordValueSize   = wire.MaxDKVSValueSize
 	// Wall-clock duration depends on actual block cadence.
-	DefaultFreeLocalMaxTTLBlocks = uint64(24 * 60 * 60 / 12)
+	DefaultFreeLocalMaxTTLBlocks = uint64(10 * 24 * 60 * 60 / 12)
 	MaxBatchCASMutations         = 64
 	MaxBatchCASTotalSize         = 8 * 1024 * 1024
 	MaxPrefixesPerTerminal       = 16

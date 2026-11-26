@@ -21,6 +21,7 @@ import (
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	common "github.com/sat20-labs/satoshinet/indexer/common"
+	dkvs "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +53,7 @@ func (f *nativeAnchorFacts) ResolveRGB11Outpoint(point consignment.Outpoint) (co
 	return consignment.OutpointEvidence{Known: true, Exists: point.TxID == f.txid && point.Vout == 0, Spent: f.spent}, nil
 }
 
-func nativeAnchor(t *testing.T) (*wire.MsgTx, *nativeAnchorFacts) {
+func nativeAnchor(t *testing.T, named bool) (*wire.MsgTx, *nativeAnchorFacts) {
 	t.Helper()
 	core, peer := testAnchorKeys(t)
 	witness, channelScript, err := GetP2WSHscript(core.PubKey().SerializeCompressed(), peer.PubKey().SerializeCompressed())
@@ -73,6 +74,27 @@ func nativeAnchor(t *testing.T) (*wire.MsgTx, *nativeAnchorFacts) {
 	require.NoError(t, err)
 	assets := wire.TxAssets{{Name: wire.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT,
 		Ticker: hex.EncodeToString(id[:])}, Amount: *indexer.NewDecimalWithScale(12_345, 2)}}
+	if named {
+		fullID := assets[0].Name.Ticker
+		ticker, err := dkvs.RGB11NameTicker("NAT", fullID)
+		require.NoError(t, err)
+		require.Equal(t, "nat@fabd", ticker)
+		key, err := dkvs.RGB11NameKey(ticker)
+		require.NoError(t, err)
+		value, err := dkvs.RGB11NameValue(fullID)
+		require.NoError(t, err)
+		pubkey, err := hex.DecodeString(indexer.GetCoreNodePubKey())
+		require.NoError(t, err)
+		record, err := dkvs.NewRecord(key, value, pubkey,
+			dkvs.RecordOptions{Seq: dkvs.RGB11NameProofSeq, IssueHeight: 10})
+		require.NoError(t, err)
+		// The fixed synthetic Core signed this deterministic fixture record.
+		record.Signature, err = hex.DecodeString("3045022100b33d7bbc91e23cbcf2e29a2622872202fc4b4d1084f0f76220f16a321dcd99a902206280f79245f69c95f16060a582ae11bd897e0b3e5c88268bdcf364a3a77c2b3f")
+		require.NoError(t, err)
+		proof, err = nativeproof.WithRGB11Name(proof, record)
+		require.NoError(t, err)
+		assets[0].Name.Ticker = ticker
+	}
 	var serialized bytes.Buffer
 	require.NoError(t, funding.Serialize(&serialized))
 	facts := &nativeAnchorFacts{txid: [32]byte(hash), raw: serialized.Bytes()}
@@ -107,7 +129,14 @@ func signNativeAnchor(t *testing.T, tx *wire.MsgTx) {
 }
 
 func TestNativeAnchorAdmissionAndHistoricalReplay(t *testing.T) {
-	tx, facts := nativeAnchor(t)
+	t.Run("full contract ID", func(t *testing.T) {
+		tx, _ := nativeAnchor(t, false)
+		for _, current := range []bool{true, false} {
+			_, err := CheckAnchorTxValid(tx, current, false)
+			require.ErrorContains(t, err, "RGB11 Anchor requires a registered asset name")
+		}
+	})
+	tx, facts := nativeAnchor(t, true)
 	info, err := CheckAnchorTxValid(tx, true, false)
 	require.NoError(t, err)
 	require.Equal(t, tx.TxOut[0].Assets, info.TxAssets)
@@ -130,7 +159,7 @@ func TestNativeAnchorAdmissionAndHistoricalReplay(t *testing.T) {
 }
 
 func TestNativeAnchorProofAndInvoiceCannotBeSubstituted(t *testing.T) {
-	tx, _ := nativeAnchor(t)
+	tx, _ := nativeAnchor(t, true)
 	for _, test := range []struct {
 		name   string
 		mutate func(*wire.MsgTx)
@@ -165,7 +194,7 @@ func TestNativeAnchorProofAndInvoiceCannotBeSubstituted(t *testing.T) {
 }
 
 func TestNativeAnchorRejectsResignedPartialClaim(t *testing.T) {
-	tx, _ := nativeAnchor(t)
+	tx, _ := nativeAnchor(t, true)
 	info, err := ParseAnchorScript(tx.TxIn[0].SignatureScript)
 	require.NoError(t, err)
 	info.TxAssets[0].Amount = *indexer.NewDecimalWithScale(12_000, 2)
