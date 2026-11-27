@@ -3,7 +3,9 @@ package blockchain
 import (
 	"fmt"
 
+	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	contract "github.com/sat20-labs/satoshinet/contract"
+	"github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
 	"github.com/sat20-labs/satoshinet/wire"
 )
 
@@ -17,6 +19,11 @@ func checkAssetOutput(output *wire.TxOut) error {
 	for _, asset := range output.Assets {
 		if asset.Name == (wire.AssetName{}) {
 			return ruleError(ErrBadTxOutValue, "satoshi (::) must use value, not TxAssets")
+		}
+		if asset.Name.Protocol == nativeproof.ProtocolRGB11 {
+			if _, err := dkvs.RGB11NameKey(asset.Name.Ticker); err != nil {
+				return ruleError(ErrBadTxOutValue, "RGB11 output requires a canonical short ticker")
+			}
 		}
 	}
 	carrier, err := contract.RequiredBindingSats(output.Assets)

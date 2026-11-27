@@ -14,7 +14,9 @@ import (
 	"github.com/sat20-labs/rgb11/schemas"
 	"github.com/sat20-labs/rgb11/seals"
 	"github.com/sat20-labs/rgb11/strict_types"
+	"github.com/sat20-labs/satoshinet/indexer/common"
 	dkvsindexer "github.com/sat20-labs/satoshinet/indexer/indexer/dkvs"
+	share "github.com/sat20-labs/satoshinet/indexer/share/indexer"
 	swire "github.com/sat20-labs/satoshinet/wire"
 	"github.com/stretchr/testify/require"
 )
@@ -99,4 +101,44 @@ func TestRGB11TechnicalRegistrationRejectsUnsignedOrWrongKey(t *testing.T) {
 			}
 		}
 	})
+}
+
+type rgb11TickerQueryIndexer struct {
+	share.Indexer
+	tickers map[string]*common.TickerInfo
+}
+
+func (i *rgb11TickerQueryIndexer) GetTickerMap(string) map[string]*common.TickerInfo {
+	return i.tickers
+}
+
+func (i *rgb11TickerQueryIndexer) GetTickerInfo(name *common.TickerName) *common.TickerInfo {
+	return i.tickers[name.String()]
+}
+
+func TestRGB11TickerQueryRejectsFullContractID(t *testing.T) {
+	canonical := "rgb11:f:token@aaaa"
+	legacy := "rgb11:f:" + strings.Repeat("a", 64)
+	other := "ordx:f:token"
+	index := &rgb11TickerQueryIndexer{tickers: make(map[string]*common.TickerInfo)}
+	for _, name := range []string{canonical, legacy, other} {
+		index.tickers[name] = &common.TickerInfo{AssetName: *swire.NewAssetNameFromString(name)}
+	}
+	model := NewModel(index)
+	for _, name := range []string{legacy, "rgb11:token@aaaa", "rgb11:f:Token@AAAA", "rgb11:f:token@aaaa:extra"} {
+		_, err := model.GetTickerInfo(name)
+		require.ErrorContains(t, err, "RGB11 queries require")
+		_, _, err = model.GetHolderListV3(name, 0, 1)
+		require.ErrorContains(t, err, "RGB11 queries require")
+		_, _, err = model.GetUtxosWithAssetNameV3("address", name, 0, 1)
+		require.ErrorContains(t, err, "RGB11 queries require")
+	}
+	for _, name := range []string{canonical, other} {
+		info, err := model.GetTickerInfo(name)
+		require.NoError(t, err)
+		require.Equal(t, name, info.AssetName.String())
+	}
+	list, total := model.GetTickerList("*", 0, 10)
+	require.Equal(t, 2, total)
+	require.Equal(t, []*common.TickerInfo{index.tickers[other], index.tickers[canonical]}, list)
 }

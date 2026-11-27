@@ -5,9 +5,9 @@
 package blockchain
 
 import (
-	"strings"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,6 +174,16 @@ func TestCheckTransactionSanityRejectsNonCanonicalTxAssets(t *testing.T) {
 		wantErr     bool
 		wantMessage string
 	}{
+		{
+			name:   "canonical RGB11 short name",
+			assets: wire.TxAssets{asset("rgb11", "f", "rgb@1234")},
+		},
+		{
+			name:        "legacy RGB11 full ID",
+			assets:      wire.TxAssets{asset("rgb11", "f", strings.Repeat("a", 64))},
+			wantErr:     true,
+			wantMessage: "RGB11 output requires a canonical short ticker",
+		},
 		{
 			name:   "canonical order",
 			assets: wire.TxAssets{assetA, assetB, assetC},

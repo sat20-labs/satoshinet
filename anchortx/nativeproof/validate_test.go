@@ -91,18 +91,20 @@ func issuedProof(t *testing.T, kind schemas.Kind) ([]byte, Source, *proofFacts, 
 	}
 	source := Source{Outpoint: (&btcwire.OutPoint{Hash: hash, Index: 0}).String(), PkScript: script,
 		Value: 0, BitcoinNetwork: "regtest", Assets: wire.TxAssets{{Name: wire.AssetName{Protocol: ProtocolRGB11,
-			Type: indexer.ASSET_TYPE_FT, Ticker: hex.EncodeToString(id[:])}, Amount: *indexer.NewDecimalWithScale(amount, int(precision))}}}
+			Type: indexer.ASSET_TYPE_FT, Ticker: RGB11ShortTicker(spec.Ticker, id)}, Amount: *indexer.NewDecimalWithScale(amount, int(precision))}}}
 	facts := &proofFacts{witnesses: map[[32]byte]consignment.WitnessEvidence{[32]byte(hash): minedFact(t, funding)},
 		genesisHash: chaincfg.RegressionNetParams.GenesisHash.String()}
 	return proof, source, facts, issued.Container
 }
 
 func TestNativeRGB11FullSourceAndHistoricalAuthority(t *testing.T) {
-	proof, source, facts, _ := issuedProof(t, schemas.NIA)
+	proof, source, facts, contract := issuedProof(t, schemas.NIA)
+	source.Value = 600 // A local Bitcoin carrier is not an asset-only SatoshiNet Anchor.
 	result, err := Validate(proof, source, facts, Current)
 	require.NoError(t, err)
 	require.Equal(t, Current, result.Mode)
 	require.Equal(t, source.Assets[0].Name, result.Asset.Name)
+	require.Equal(t, contract.ContractID, result.ContractID)
 	require.Equal(t, 2, result.Asset.Amount.Precision)
 	require.Equal(t, "13000", result.Asset.Amount.Value.String())
 	require.Equal(t, uint32(0), result.Asset.BindingSat)
@@ -121,7 +123,9 @@ func TestNativeRGB11FullSourceAndHistoricalAuthority(t *testing.T) {
 }
 
 func TestNativeRGB11RejectsMismatchedClaims(t *testing.T) {
-	proof, source, facts, _ := issuedProof(t, schemas.NIA)
+	proof, source, facts, contract := issuedProof(t, schemas.NIA)
+	id, err := consensus.ParseContractID(contract.ContractID)
+	require.NoError(t, err)
 	t.Run("independent chain identity", func(t *testing.T) {
 		wrongChain := *facts
 		wrongChain.genesisHash = chaincfg.TestNet4Params.GenesisHash.String()
@@ -155,7 +159,7 @@ func TestNativeRGB11RejectsMismatchedClaims(t *testing.T) {
 		{"partial amount", func(s *Source) { s.Assets[0].Amount = *indexer.NewDecimalWithScale(12_000, 2) }},
 		{"excess amount", func(s *Source) { s.Assets[0].Amount = *indexer.NewDecimalWithScale(13_001, 2) }},
 		{"precision", func(s *Source) { s.Assets[0].Amount = *indexer.NewDecimalWithScale(1_300, 1) }},
-		{"identity", func(s *Source) { s.Assets[0].Name.Ticker = strings.Repeat("a", 64) }},
+		{"full ContractID as ticker", func(s *Source) { s.Assets[0].Name.Ticker = hex.EncodeToString(id[:]) }},
 		{"uppercase identity", func(s *Source) { s.Assets[0].Name.Ticker = strings.ToUpper(s.Assets[0].Name.Ticker) }},
 		{"binding", func(s *Source) { s.Assets[0].BindingSat = 1 }},
 		{"missing asset", func(s *Source) { s.Assets = nil }},

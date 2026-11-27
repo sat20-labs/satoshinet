@@ -4,8 +4,9 @@ The public contract registry retains the complete RGB11 ContractID. Public
 Transcend uses `rgb11:f:<normalized_ticker>@<contract_id_suffix>` in its signed
 deployment content, contract path, and SatoshiNet deposit Anchor. The suffix is
 the last four characters of the canonical 64-character lowercase hexadecimal
-ContractID. Leading zeros are retained. The Bitcoin RGB wallet continues to
-key balances and proofs by the full ContractID.
+ContractID. Leading zeros are retained. Where a name is required, the Bitcoin
+RGB wallet uses the same short format. Proofs and public contract lookup
+retain the full ContractID separately.
 
 ## DKVS records
 
@@ -40,12 +41,12 @@ validate the signature, independently derive the expected name from the proof,
 and check that the proof's full ContractID matches the binding. An RGB-only
 public Anchor credits zero sats on SatoshiNet.
 
-The SatoshiNet `/v3/tick/info/:ticker` response exposes the on-chain name in
-`name` and `displayname`. It includes `contract_id`
-when the node can verify the signed DKVS name binding.
+SatoshiNet ticker, holder, and named UTXO queries take the canonical short
+asset name. The `/v3/tick/info/:ticker` response exposes the on-chain name in
+`name` and `displayname`. It includes a separate `contract_id` when the node
+can verify the signed DKVS name binding. Raw transaction history is unchanged.
 
 For `TRGB241`, the full ContractID
 `8650c89a895329747b8140166be3296432e8c0205a2ac838e097d154c53f0e8a`
-yields `rgb11:f:trgb241@0e8a`. The old testnet deployment used the full
-hexadecimal ID in the ticker field and requires a new deployment under the
-canonical name.
+yields `rgb11:f:trgb241@0e8a`. A full hexadecimal ID is not accepted in the
+ticker field.

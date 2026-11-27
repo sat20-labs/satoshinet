@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	indexerwire "github.com/sat20-labs/indexer/rpcserver/wire"
+	"github.com/sat20-labs/satoshinet/anchortx/nativeproof"
 	"github.com/sat20-labs/satoshinet/chaincfg/chainhash"
 	contractengine "github.com/sat20-labs/satoshinet/contract/engine"
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -34,11 +35,29 @@ func NewModel(indexer shareIndexer.Indexer) *Model {
 	}
 }
 
+func isCanonicalTickerName(name *swire.AssetName) bool {
+	if name.Protocol != nativeproof.ProtocolRGB11 {
+		return true
+	}
+	_, err := dkvsindexer.RGB11NameKey(name.Ticker)
+	return name.Type == indexer.ASSET_TYPE_FT && err == nil
+}
+
+func validateTickerQuery(raw string, name *swire.AssetName) error {
+	if strings.HasPrefix(raw, nativeproof.ProtocolRGB11+":") &&
+		(name == nil || name.String() != raw || !isCanonicalTickerName(name)) {
+		return fmt.Errorf("RGB11 queries require rgb11:f:<ticker>@<suffix>")
+	}
+	return nil
+}
+
 func (s *Model) GetTickerList(protocol string, start, limit int) ([]*common.TickerInfo, int) {
 	tickmap := s.indexer.GetTickerMap(protocol)
 	mid := make([]*common.TickerInfo, 0)
 	for _, v := range tickmap {
-		mid = append(mid, v)
+		if isCanonicalTickerName(&v.AssetName) {
+			mid = append(mid, v)
+		}
 	}
 	sort.Slice(mid, func(i, j int) bool {
 		return mid[i].AssetName.String() < mid[j].AssetName.String()
@@ -57,8 +76,12 @@ func (s *Model) GetTickerList(protocol string, start, limit int) ([]*common.Tick
 }
 
 func (s *Model) GetTickerInfo(tickerName string) (*common.TickerInfo, error) {
-	ticker := s.indexer.GetTickerInfo(indexer.NewAssetNameFromString(tickerName))
-	if ticker == nil {
+	name := indexer.NewAssetNameFromString(tickerName)
+	if err := validateTickerQuery(tickerName, name); err != nil {
+		return nil, err
+	}
+	ticker := s.indexer.GetTickerInfo(name)
+	if ticker == nil || !isCanonicalTickerName(&ticker.AssetName) {
 		return nil, fmt.Errorf("can't find ticker %s", tickerName)
 	}
 
@@ -68,6 +91,9 @@ func (s *Model) GetTickerInfo(tickerName string) (*common.TickerInfo, error) {
 func (s *Model) GetHolderListV3(tickName string, start, limit uint64) ([]*indexerwire.HolderV3, uint64, error) {
 
 	assetName := indexer.NewAssetNameFromString(tickName)
+	if err := validateTickerQuery(tickName, assetName); err != nil {
+		return nil, 0, err
+	}
 	holders := s.indexer.GetHoldersWithTick(assetName)
 
 	result := make([]*indexerwire.HolderV3, 0, len(holders))
@@ -548,6 +574,9 @@ func (s *Model) GetAddressUtxosV3(address string, start, limit int) ([]*indexer.
 func (s *Model) GetUtxosWithAssetNameV3(address, name string, start, limit int) ([]*indexer.AssetsInUtxo, int, error) {
 	result := make([]*indexer.AssetsInUtxo, 0)
 	assetName := swire.NewAssetNameFromString(name)
+	if err := validateTickerQuery(name, assetName); err != nil {
+		return nil, 0, err
+	}
 	outputMap, err := s.indexer.GetAssetUTXOsInAddressWithTickV3(address, assetName)
 	if err != nil {
 		return nil, 0, err

@@ -10,9 +10,10 @@ outspend facts through existing v3 endpoints.
 
 RGB11 proof presence selects the complete native validation path without a
 separate activation height. Mempool, block admission and block indexing all
-validate the proof, source allocation, signature and output binding. An anchor
-claiming RGB11 without a complete native proof is rejected. Existing anchors
-without native material retain their previous POS v2 validation rules.
+validate the proof, source allocation, Core signature and output binding. RGB11
+Anchors also require a signed public name binding, including during historical
+validation. A complete ContractID is not an asset ticker. Non-RGB11 Anchors
+without native material retain their existing POS v2 validation rules.
 
 Upgrade block producers, validators and indexers together before the first
 RGB11 anchor. PWA acceptance runs RGB11 operations after POS v2 activation;
@@ -24,16 +25,18 @@ remains on Bitcoin.
 
 `anchortx/nativeproof.BuildRGB11(consignment, reveals)` accepts a real RGB11
 contract or transfer and canonical disclosed graph seals. It normalizes the
-consignment to the standard binary container. The bounded STPN version 1
-envelope contains that container and strictly ordered, unique seal reveals.
+consignment to the standard binary container. The envelope contains the
+container and strictly ordered, unique seal reveals. The local-only proof has
+no public name record.
 
-1. Construct the canonical unsigned anchor and all settlement outputs.
-2. Call `indexer/common.SetNativeAssetProof(tx, proof)`. The helper installs one
+1. Construct the canonical unsigned Anchor using the short asset name.
+2. Add the Core's signed name proof with `nativeproof.WithRGB11Name`.
+3. Call `indexer/common.SetNativeAssetProof(tx, proof)`. The helper installs one
    witness item and one zero-value, assetless native metadata output carrying
    SHA256 of the complete proof. It rejects an already signed invoice.
-3. Obtain `indexer/common.AnchorInvoice(tx, bindOutputs)` and sign it. Native
+4. Obtain `indexer/common.AnchorInvoice(tx, bindOutputs)` and sign it. Native
    proof presence automatically forces output binding.
-4. Insert the signature with `StandardAnchorScriptWithSig`.
+5. Insert the signature with `StandardAnchorScriptWithSig`.
 
 The witness body, digest and output distribution cannot be substituted without
 invalidating proof or invoice validation. Proofs remain in ordinary persisted
@@ -43,11 +46,13 @@ transactions; no parallel native ledger or alternate replay key is introduced.
 
 `nativeproof.Validate(proof, Source, resolver, mode)` returns canonical asset
 identity, genesis precision, full source amount, source output and the RGB11
-core history report. `Source.Assets` must claim exactly one `rgb11:f:<contractid>`
-asset, use the complete lower-case 32-byte contract ID, and set `BindingSat=0`.
-All token allocations at the source outpoint are summed. Partial claims,
-coasset claims, NFTs, control rights, incorrect precision and mismatched
-genesis networks fail.
+core history report. `Source.Assets` must claim exactly one
+`rgb11:f:<ticker>@<suffix>` asset and set `BindingSat=0`. The result exposes
+the complete `ContractID` separately. Anchor callers supply `VerifyName` to
+check the signed registry binding against the same full ID. A proof without
+this binding can validate local Bitcoin evidence, not an Anchor. All token
+allocations at the source outpoint are summed. Partial claims, coasset claims,
+NFTs, control rights, incorrect precision and mismatched genesis networks fail.
 
 | Mode | Evidence requirement | Authority |
 | --- | --- | --- |

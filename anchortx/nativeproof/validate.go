@@ -30,10 +30,11 @@ const (
 )
 
 // Source is the exact invoice claim. Assets must contain the complete RGB11
-// fungible allocation at Outpoint, with the genesis precision and BindingSat 0.
-// BitcoinNetwork, when set, binds the genesis chain to the caller's network;
-// node admission always sets it. Recognized names are mainnet, testnet3,
-// testnet4 (also testnet), signet and regtest.
+// fungible allocation at Outpoint, with the canonical short name, genesis
+// precision and BindingSat 0. BitcoinNetwork binds genesis to the caller's
+// network when set. VerifyName must be set for SatoshiNet Anchors, including
+// historical replay: it requires a signed name record and a zero-value claim.
+// Leave it unset only to validate unsigned local Bitcoin proof material.
 type Source struct {
 	Outpoint       string
 	PkScript       []byte
@@ -43,10 +44,10 @@ type Source struct {
 	VerifyName     func(*wire.DKVSRecord, string) (string, error)
 }
 
-// Result contains the canonical contract identity and FULL source amount.
-// Asset.Name is the authenticated chain name when a name record is present.
-// Otherwise it is the full local Contract ID key. Asset.Amount.Precision
-// comes from genesis, and Asset.BindingSat is always zero. Only Mode Current
+// Result contains the full ContractID separately from Asset.Name, which always
+// uses the canonical short ticker. A local proof derives the name from genesis
+// without proving public registration. The amount is the full source amount
+// with its genesis precision, and BindingSat is always zero. Only Mode Current
 // establishes current source ownership; no mode authorizes replay by itself.
 type Result struct {
 	Mode           Mode
@@ -95,25 +96,26 @@ func Validate(raw []byte, source Source, resolver consignment.BitcoinResolver, m
 	if err != nil {
 		return nil, err
 	}
-	name := wire.AssetName{Protocol: ProtocolRGB11, Type: indexer.ASSET_TYPE_FT, Ticker: hex.EncodeToString(contractID[:])}
 	genesis, _ := container.Value.Field("genesis")
 	schema, types := container.SchemaValues()
 	metadata, err := schemas.ExtractGenesisAssetMetadata(schema, types, genesis)
 	if err != nil {
 		return nil, err
 	}
-	if proof.NameRecord != nil {
-		if source.VerifyName == nil {
-			return nil, fmt.Errorf("no RGB11 name authority")
+	ticker := RGB11ShortTicker(metadata.Ticker, contractID)
+	if ticker[0] == '@' || claim.Name.Ticker != ticker {
+		return nil, fmt.Errorf("native asset identity does not match the canonical RGB11 name")
+	}
+	if source.VerifyName != nil {
+		if proof.NameRecord == nil {
+			return nil, fmt.Errorf("RGB11 name binding is required")
 		}
-		registeredID, err := source.VerifyName(proof.NameRecord, claim.Name.Ticker)
-		if err != nil || registeredID != name.Ticker || claim.Name.Ticker != RGB11ShortTicker(metadata.Ticker, contractID) || source.Value != 0 {
+		registeredID, err := source.VerifyName(proof.NameRecord, ticker)
+		if err != nil || registeredID != hex.EncodeToString(contractID[:]) || source.Value != 0 {
 			return nil, fmt.Errorf("invalid public RGB11 name binding or Anchor value")
 		}
-		name.Ticker = claim.Name.Ticker
-	}
-	if name != claim.Name {
-		return nil, fmt.Errorf("native asset identity does not match RGB11 genesis")
+	} else if proof.NameRecord != nil {
+		return nil, fmt.Errorf("no RGB11 name authority")
 	}
 	if claim.Amount.Precision != int(metadata.Precision) {
 		return nil, fmt.Errorf("native amount precision does not match RGB11 genesis")
@@ -188,7 +190,7 @@ func Validate(raw []byte, source Source, resolver consignment.BitcoinResolver, m
 		return nil, fmt.Errorf("native source value or locking script does not match invoice")
 	}
 	return &Result{Mode: mode, ContractID: container.ContractID, SchemaID: container.SchemaID,
-		Asset:    wire.AssetInfo{Name: name, Amount: indexer.Decimal{Precision: int(metadata.Precision), Value: amount}, BindingSat: 0},
+		Asset:    wire.AssetInfo{Name: claim.Name, Amount: indexer.Decimal{Precision: int(metadata.Precision), Value: amount}, BindingSat: 0},
 		Outpoint: source.Outpoint, Value: value, PkScript: append([]byte(nil), script...), BitcoinNetwork: network, History: history}, nil
 }
 
