@@ -431,33 +431,58 @@ func (i *Indexer) ApplySnapshot(snapshot *Snapshot) (int, error) {
 }
 func (i *Indexer) PruneExpired() (int, error) { return i.PruneExpiredAt(i.currentHeight()) }
 func (i *Indexer) PruneExpiredAt(height uint64) (int, error) {
+	return i.pruneExpiredAt(height, false)
+}
+
+// PruneExpiredTmp and PruneExpiredTmpAt implement the node's automatic deletion policy. Only temporary
+// records may be physically pruned; expiry checks on reads are unchanged.
+func (i *Indexer) PruneExpiredTmp() (int, error) { return i.PruneExpiredTmpAt(i.currentHeight()) }
+
+func (i *Indexer) PruneExpiredTmpAt(height uint64) (int, error) {
+	return i.pruneExpiredAt(height, true)
+}
+
+func (i *Indexer) pruneExpiredAt(height uint64, tmpOnly bool) (int, error) {
 	now := currentUnixMilli()
 	i.mutex.Lock()
-	if err := i.ensureRecordExpiryLocked(height, now); err != nil {
-		i.mutex.Unlock()
-		return 0, err
-	}
 	expiredRecords := make([]*wire.DKVSRecord, 0)
-	batch := i.db.NewWriteBatch()
-	defer batch.Close()
-	for _, key := range i.expiredRecordKeysLocked(height) {
-		record, err := i.getRaw(key)
-		if errors.Is(err, ErrRecordNotFound) {
-			continue
-		}
+	if tmpOnly {
+		records, _, _, err := i.scanLocked("/tmp/", nil, 0, false, height, now)
 		if err != nil {
 			i.mutex.Unlock()
 			return 0, err
 		}
-		if !IsExpired(record, height) {
-			i.addRecordExpiryLocked(record)
-			continue
+		for _, record := range records {
+			if strings.HasPrefix(record.Key, "/tmp/") && IsExpired(record, height) && !IsTombstone(record.Flags) {
+				expiredRecords = append(expiredRecords, record)
+			}
 		}
-		if IsTombstone(record.Flags) {
-			continue
+	} else {
+		if err := i.ensureRecordExpiryLocked(height, now); err != nil {
+			i.mutex.Unlock()
+			return 0, err
 		}
-		expiredRecords = append(expiredRecords, record)
+		for _, key := range i.expiredRecordKeysLocked(height) {
+			record, err := i.getRaw(key)
+			if errors.Is(err, ErrRecordNotFound) {
+				continue
+			}
+			if err != nil {
+				i.mutex.Unlock()
+				return 0, err
+			}
+			if !IsExpired(record, height) {
+				i.addRecordExpiryLocked(record)
+				continue
+			}
+			if IsTombstone(record.Flags) {
+				continue
+			}
+			expiredRecords = append(expiredRecords, record)
+		}
 	}
+	batch := i.db.NewWriteBatch()
+	defer batch.Close()
 	var result expiryCommitResult
 	if len(expiredRecords) != 0 {
 		var err error

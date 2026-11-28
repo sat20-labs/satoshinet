@@ -5,6 +5,7 @@ import (
 
 	dbpkg "github.com/sat20-labs/indexer/indexer/db"
 	"github.com/sat20-labs/satoshinet/btcec"
+	"github.com/sat20-labs/satoshinet/btcec/ecdsa"
 	"github.com/sat20-labs/satoshinet/btcec/schnorr"
 	"github.com/sat20-labs/satoshinet/chaincfg"
 	"github.com/sat20-labs/satoshinet/indexer/common"
@@ -20,38 +21,58 @@ func TestPruneExpiredDKVSOnBlock(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 
-	idx := dkvs.New(database, dkvs.Config{AllowFreeLocal: true, CurrentHeight: func() uint64 { return 1 }})
+	height := uint64(1)
+	idx := dkvs.New(database, dkvs.Config{AllowFreeLocal: true, CurrentHeight: func() uint64 { return height }})
 	mgr := &IndexerMgr{dkvsIndexer: idx}
 	priv, err := btcec.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := signedDKVSTestPersonalRecord(t, priv, 1)
-	signDKVSTestRecord(t, priv, record)
-	if _, err := idx.PutLocal(record); err != nil {
-		t.Fatal(err)
+	personal := signedDKVSTestPersonalRecord(t, priv, 1)
+	signDKVSTestRecord(t, priv, personal)
+	tmp := func(key string, ttl uint64) *wire.DKVSRecord {
+		t.Helper()
+		record, err := dkvs.NewRecord(key, []byte("value"), priv.PubKey().SerializeCompressed(), dkvs.RecordOptions{
+			Seq: 1, IssueHeight: 1, TTL: ttl,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash := dkvs.SigningHash(record)
+		record.Signature = ecdsa.Sign(priv, hash[:]).Serialize()
+		return record
+	}
+	expiredTmp, liveTmp := tmp("/tmp/expired", 1), tmp("/tmp/live", dkvsPruneIntervalBlocks)
+	for _, record := range []*wire.DKVSRecord{personal, expiredTmp, liveTmp} {
+		if _, err := idx.PutLocal(record); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	mgr.pruneExpiredDKVSOnBlock(&common.Block{Height: dkvsPruneIntervalBlocks - 1})
-	if pruned, err := idx.PruneExpiredAt(uint64(dkvsPruneIntervalBlocks - 1)); err != nil || pruned != 1 {
-		t.Fatalf("manual prune before interval pruned=%d err=%v", pruned, err)
+	if _, err := idx.GetByHash(dkvs.RecordHash(expiredTmp)); err != nil {
+		t.Fatalf("temporary record removed before prune interval: %v", err)
 	}
 
-	record = signedDKVSTestPersonalRecord(t, priv, 2)
-	signDKVSTestRecord(t, priv, record)
-	if _, err := idx.PutLocal(record); err != nil {
-		t.Fatal(err)
-	}
+	height = dkvsPruneIntervalBlocks
 	mgr.pruneExpiredDKVSOnBlock(&common.Block{Height: dkvsPruneIntervalBlocks})
 	if mgr.lastDKVSPruneHeight != dkvsPruneIntervalBlocks {
 		t.Fatalf("last prune height=%d", mgr.lastDKVSPruneHeight)
 	}
-	if _, err := idx.GetByHash(dkvs.RecordHash(record)); err != dkvs.ErrRecordNotFound {
-		t.Fatalf("expired hash after auto prune err=%v", err)
+	if _, err := idx.Get(personal.Key); err != dkvs.ErrRecordNotFound {
+		t.Fatalf("expired personal record must still be hidden from active reads: %v", err)
 	}
-	if pruned, err := idx.PruneExpiredAt(uint64(dkvsPruneIntervalBlocks)); err != nil || pruned != 0 {
-		t.Fatalf("manual prune after auto pruned=%d err=%v", pruned, err)
+	// Rewind the read height to distinguish physical deletion from TTL filtering.
+	height = 1
+	if _, err := idx.GetByHash(dkvs.RecordHash(expiredTmp)); err != dkvs.ErrRecordNotFound {
+		t.Fatalf("expired temporary record was not deleted: %v", err)
 	}
+	for _, record := range []*wire.DKVSRecord{personal, liveTmp} {
+		if _, err := idx.GetByHash(dkvs.RecordHash(record)); err != nil {
+			t.Fatalf("record %q was not retained: %v", record.Key, err)
+		}
+	}
+
 	mgr.pruneExpiredDKVSOnBlock(&common.Block{Height: dkvsPruneIntervalBlocks})
 	if mgr.lastDKVSPruneHeight != dkvsPruneIntervalBlocks {
 		t.Fatalf("repeat prune changed height=%d", mgr.lastDKVSPruneHeight)
