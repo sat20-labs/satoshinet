@@ -22,7 +22,7 @@ func TestNativeAssetOnlyExitRemainsValid(t *testing.T) {
 	script, err := txscript.PayToAddrScript(channel)
 	require.NoError(t, err)
 	assets := wire.TxAssets{{Name: wire.AssetName{Protocol: "rgb11", Type: indexer.ASSET_TYPE_FT,
-		Ticker: strings.Repeat("a", 64)}, Amount: *indexer.NewDecimalWithScale(12345, 2)}}
+		Ticker: "exit@aaaa"}, Amount: *indexer.NewDecimalWithScale(12345, 2)}}
 	payload, err := common.EncodeDescendPayloadV2(strings.Repeat("b", 64), common.DESCEND_OP_CLOSE, nil)
 	require.NoError(t, err)
 	descending, err := common.NullDataScript(common.CONTENT_TYPE_DESCENDING, payload)
