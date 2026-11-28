@@ -78,9 +78,6 @@ func (h Handler) send(msg wire.Message) {
 	if msg == nil || h.Send == nil {
 		return
 	}
-	if request, ok := msg.(*wire.MsgDKVSSyncRequest); ok && !h.prepareCurrentRequest(request) {
-		return
-	}
 	h.Send(msg)
 }
 func (h Handler) broadcast(record *wire.DKVSRecord) {

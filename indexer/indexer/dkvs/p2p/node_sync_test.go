@@ -15,8 +15,9 @@ import (
 // Reuse the Handler fixture, supplying just the current-state admission hooks.
 type nodeCurrentTestStore struct {
 	*handlerTestStore
-	accept     func(*wire.DKVSRecord)
-	applyError error
+	accept         func(*wire.DKVSRecord)
+	applyError     error
+	baselineErrors chan error
 }
 
 func (s *nodeCurrentTestStore) AcceptDKVSCurrentRecord(r *wire.DKVSRecord) (bool, error) {
@@ -26,6 +27,11 @@ func (s *nodeCurrentTestStore) AcceptDKVSCurrentRecord(r *wire.DKVSRecord) (bool
 	return s.handlerTestStore.AcceptDKVSCurrentRecord(r)
 }
 func (s *nodeCurrentTestStore) DKVSNetworkSyncBaseline(path string) (dkvs.ActiveMeta, error) {
+	select {
+	case err := <-s.baselineErrors:
+		return dkvs.ActiveMeta{}, err
+	default:
+	}
 	return dkvs.ActiveMeta{Scope: dkvs.ActiveScope{Prefix: path, Network: true}}, nil
 }
 func (s *nodeCurrentTestStore) ApplyDKVSPathSnapshotFrom(p *dkvs.PathSnapshot, _ dkvs.ActiveMeta) (int, error) {
@@ -35,6 +41,47 @@ func (s *nodeCurrentTestStore) ApplyDKVSPathSnapshotFrom(p *dkvs.PathSnapshot, _
 	return s.ApplyDKVSPathSnapshot(p)
 }
 func (s *nodeCurrentTestStore) DKVSNetworkPaths() ([]string, error) { return nil, nil }
+
+func TestNodeSyncRequeuesPathWhenBaselineCaptureFails(t *testing.T) {
+	const path = "/svc/startup-race.btc"
+	key, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &nodeCurrentTestStore{
+		handlerTestStore: &handlerTestStore{},
+		baselineErrors:   make(chan error, 1),
+	}
+	store.baselineErrors <- dkvs.ErrConcurrentUpdate
+	node, peer := &NodeState{}, &PeerState{}
+	defer peer.Close()
+	requests := make(chan *wire.MsgDKVSSyncRequest, 2)
+	h := Handler{Store: store, Node: node, Peer: peer, TrustedSource: true,
+		ValidatorID: hex.EncodeToString(key.PubKey().SerializeCompressed()),
+		Send:        func(msg wire.Message) { requests <- msg.(*wire.MsgDKVSSyncRequest) }}
+	h.QueuePathSync(path)
+	peer.syncLifecycle.mu.Lock()
+	_, hasPageTimeout := peer.syncLifecycle.timers["request"]
+	peer.syncLifecycle.mu.Unlock()
+	if hasPageTimeout || len(requests) != 0 {
+		t.Fatal("a request without a baseline must not be sent or start a page timeout")
+	}
+
+	select {
+	case req := <-requests:
+		if target, ok := pathSyncFilter(req.Filters); !ok || target != path {
+			t.Fatalf("wrong path requeued: %v", req.Filters)
+		}
+		peer.syncMtx.Lock()
+		baseline := peer.syncBaseline
+		peer.syncMtx.Unlock()
+		if baseline == nil || baseline.Scope.Prefix != path {
+			t.Fatal("retried path request did not capture a fresh baseline")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the failed path was not retried")
+	}
+}
 
 func TestNodeSyncRetainsWorkAcrossDisconnectAndFailedInstall(t *testing.T) {
 	key, err := btcec.NewPrivateKey()

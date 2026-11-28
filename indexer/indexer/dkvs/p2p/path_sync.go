@@ -301,10 +301,20 @@ func (h Handler) sendPathSyncRequest(request *wire.MsgDKVSSyncRequest) {
 }
 
 func (h Handler) sendPathSyncRequestAttempt(request *wire.MsgDKVSSyncRequest, attempt int) {
-	if !h.valid() || request == nil || h.Peer.Closed() {
+	if !h.valid() || request == nil || h.Send == nil || h.Peer.Closed() {
 		return
 	}
 	session, cursor := request.SessionID, append([]byte(nil), request.Cursor...)
+	// A first page may only be sent (or timed for resend) after capturing
+	// the installation baseline. If capture fails, restart the queued path
+	// in a new session rather than resending a request that never went out.
+	if attempt == 1 && !h.prepareCurrentRequest(request) {
+		if h.Peer.TimeoutPathSyncRequest(session, cursor) {
+			path, _ := pathSyncFilter(request.Filters)
+			h.Peer.scheduleSync("retry:"+path, PathSyncRetryDelay, func() { h.ResumeSync() })
+		}
+		return
+	}
 	h.Peer.syncMtx.Lock()
 	if !h.Peer.syncActive || h.Peer.syncSession != session || !bytes.Equal(h.Peer.syncCursor, cursor) {
 		h.Peer.syncMtx.Unlock()
@@ -328,12 +338,8 @@ func (h Handler) sendPathSyncRequestAttempt(request *wire.MsgDKVSSyncRequest, at
 		}
 	})
 	h.Peer.syncMtx.Unlock()
-	if attempt == 1 {
-		h.send(request)
-	} else if h.Send != nil {
-		// Resending does not recapture the receiver's installation baseline.
-		h.Send(request)
-	}
+	// A resend retains the baseline captured for this session.
+	h.send(request)
 }
 
 func (h Handler) finishFailedPathSync(path string, retry bool) {
